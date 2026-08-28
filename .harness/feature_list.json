@@ -1,0 +1,66 @@
+{
+  "project": "rpa_core",
+  "version": "0.2",
+  "features": [
+    {
+      "id": "project-harness",
+      "title": "Lightweight architecture and quality harness",
+      "passes": true
+    },
+    {
+      "id": "protocol-models",
+      "title": "Workflow AST, command manifest, result and event protocols",
+      "passes": true
+    },
+    {
+      "id": "catalog-compiler",
+      "title": "Immutable catalog and static workflow compiler",
+      "passes": true
+    },
+    {
+      "id": "orchestrator",
+      "title": "Cancellation-aware orchestrator with terminal run evidence",
+      "passes": true
+    },
+    {
+      "id": "browser-playwright",
+      "title": "Explicit-session Playwright browser executor",
+      "passes": true
+    },
+    {
+      "id": "python-worker",
+      "title": "Isolated Python worker for data commands",
+      "passes": true
+    },
+    {
+      "id": "vertical-slice",
+      "title": "Deterministic search-and-save CLI workflow",
+      "passes": true
+    },
+    {
+      "id": "runtime-correctness",
+      "title": "Stable errors, cancellation cleanup, bounded retry, and reliable evidence",
+      "passes": true
+    },
+    {
+      "id": "effect-contract",
+      "title": "Typed side effects, idempotency, and replay policy",
+      "passes": true
+    },
+    {
+      "id": "desktop-vertical-slice",
+      "title": "Explicit-session Windows desktop executor and deterministic E2E",
+      "passes": false
+    },
+    {
+      "id": "legacy-element-importer",
+      "title": "One-way typed import of legacy element data",
+      "passes": false
+    },
+    {
+      "id": "checkpoint-recovery",
+      "title": "Safe node-boundary checkpoints and recovery semantics",
+      "passes": false
+    }
+  ]
+}

@@ -1,0 +1,17 @@
+{
+  "id": "data.writeJson",
+  "version": "1.0.0",
+  "executor": "python.worker",
+  "kind": "action",
+  "risk": "workflow-edit",
+  "capabilities": ["workspace.write"],
+  "resources": ["workspace.filesystem"],
+  "stability": "stable",
+  "effect": {"kind": "idempotent-write", "replay": "idempotent", "idempotency": "derived"},
+  "input_schema": {"type": "object", "required": ["workspace", "path", "data"], "properties": {"workspace": {"type": "string", "minLength": 1}, "path": {"type": "string", "minLength": 1}, "data": {}}, "additionalProperties": false},
+  "output_schema": {"type": "object", "required": ["path"], "properties": {"path": {"type": "string"}}, "additionalProperties": false},
+  "errors": ["CAPABILITY_DENIED", "SCRIPT_FAILED", "TIMEOUT", "CANCELLED"],
+  "implementation": {"handler": "python.worker:write_json"},
+  "default_timeout_seconds": 15,
+  "retryable": false
+}

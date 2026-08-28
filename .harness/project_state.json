@@ -1,0 +1,42 @@
+{
+  "project": "rpa_core",
+  "phase": "desktop-driver-validation",
+  "status": "active",
+  "completed_milestone": "M1.2-effect-contract",
+  "active_milestone": "M2-windows-desktop",
+  "active_plan": ".harness/tasks/M2-desktop.md",
+  "active_feature": "desktop-vertical-slice",
+  "next_milestone": "M2.1-legacy-element-importer",
+  "later_milestones": [
+    "M2-windows-desktop",
+    "M2.1-legacy-element-importer",
+    "M3-checkpoint-recovery",
+    "M4-pause-resume"
+  ],
+  "task_index": ".harness/tasks/BACKLOG.md",
+  "scope": {
+    "in": [
+      "stable runtime errors",
+      "executor cancellation cleanup",
+      "bounded retry policy",
+      "reliable run evidence",
+      "effect contract",
+      "Windows desktop executor validation",
+      "legacy element data import",
+      "checkpoint and recovery design"
+    ],
+    "out": [
+      "FastAPI",
+      "database",
+      "React UI",
+      "DSH plugin",
+      "MCP",
+      "scheduler",
+      "installer",
+      "distributed workers",
+      "exactly-once guarantees",
+      "online command generation"
+    ]
+  },
+  "decision_gate": "Complete M1.1 before expanding command coverage; prove effect semantics and a second executor before durable recovery work."
+}

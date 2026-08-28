@@ -1,0 +1,17 @@
+{
+  "id": "desktop.findElement",
+  "version": "1.0.0",
+  "executor": "desktop.uia",
+  "kind": "query",
+  "risk": "read",
+  "capabilities": ["desktop.control"],
+  "resources": ["desktop.session", "desktop.element"],
+  "stability": "stable",
+  "effect": {"kind": "read", "replay": "safe", "idempotency": "none"},
+  "input_schema": {"type": "object", "required": ["sessionId", "locator"], "properties": {"sessionId": {"type": "string", "minLength": 1}, "locator": {"type": "object", "minProperties": 1, "properties": {"automationId": {"type": "string", "minLength": 1}, "controlType": {"type": "string", "minLength": 1}, "name": {"type": "string", "minLength": 1}}, "additionalProperties": false}, "timeoutMs": {"type": "integer", "minimum": 1}}, "additionalProperties": false},
+  "output_schema": {"type": "object", "required": ["elementId", "matchedCount"], "properties": {"elementId": {"type": "string"}, "matchedCount": {"type": "integer", "minimum": 1}}, "additionalProperties": false},
+  "errors": ["ELEMENT_NOT_FOUND", "ELEMENT_AMBIGUOUS", "SESSION_NOT_FOUND", "SESSION_LOST", "TIMEOUT", "CANCELLED", "EXECUTOR_FAILED"],
+  "implementation": {"handler": "desktop.uia:find_element"},
+  "default_timeout_seconds": 15,
+  "retryable": true
+}

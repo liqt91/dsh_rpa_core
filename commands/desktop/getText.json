@@ -1,0 +1,17 @@
+{
+  "id": "desktop.getText",
+  "version": "1.0.0",
+  "executor": "desktop.uia",
+  "kind": "query",
+  "risk": "read",
+  "capabilities": ["desktop.control"],
+  "resources": ["desktop.session", "desktop.element"],
+  "stability": "stable",
+  "effect": {"kind": "read", "replay": "safe", "idempotency": "none"},
+  "input_schema": {"type": "object", "required": ["sessionId", "elementId"], "properties": {"sessionId": {"type": "string", "minLength": 1}, "elementId": {"type": "string", "minLength": 1}, "timeoutMs": {"type": "integer", "minimum": 1}}, "additionalProperties": false},
+  "output_schema": {"type": "object", "required": ["value"], "properties": {"value": {"type": "string"}}, "additionalProperties": false},
+  "errors": ["ELEMENT_NOT_FOUND", "SESSION_NOT_FOUND", "SESSION_LOST", "TIMEOUT", "CANCELLED", "EXECUTOR_FAILED"],
+  "implementation": {"handler": "desktop.uia:get_text"},
+  "default_timeout_seconds": 15,
+  "retryable": true
+}

@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>RPA Core Test Site</title>
+  <style>
+    body { font-family: sans-serif; max-width: 720px; margin: 48px auto; padding: 0 20px; }
+    form { display: flex; gap: 8px; }
+    input { flex: 1; padding: 10px; }
+    button { padding: 10px 18px; }
+    li { margin: 12px 0; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Deterministic Search</h1>
+    <form id="search-form">
+      <label for="query">Keyword</label>
+      <input id="query" name="query" autocomplete="off">
+      <button type="submit">Search</button>
+    </form>
+    <p id="status">Ready</p>
+    <ul id="results"></ul>
+  </main>
+  <script>
+    const records = ["Typed workflow", "Explicit browser session", "Structured result"];
+    document.querySelector("#search-form").addEventListener("submit", (event) => {
+      event.preventDefault();
+      const query = document.querySelector("#query").value.trim();
+      document.querySelector("#status").textContent = "Searching";
+      document.querySelector("#results").replaceChildren();
+      setTimeout(() => {
+        const fragment = document.createDocumentFragment();
+        records.forEach((record, index) => {
+          const item = document.createElement("li");
+          item.className = "result";
+          item.textContent = `${query}: ${index + 1}. ${record}`;
+          fragment.appendChild(item);
+        });
+        document.querySelector("#results").appendChild(fragment);
+        document.querySelector("#status").textContent = `Found ${records.length}`;
+      }, 150);
+    });
+  </script>
+</body>
+</html>

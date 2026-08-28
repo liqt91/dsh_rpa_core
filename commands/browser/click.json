@@ -1,0 +1,17 @@
+{
+  "id": "browser.click",
+  "version": "1.0.0",
+  "executor": "browser.playwright",
+  "kind": "action",
+  "risk": "browser-control",
+  "capabilities": ["browser.control"],
+  "resources": ["browser.session"],
+  "stability": "stable",
+  "effect": {"kind": "unsafe-write", "replay": "unsafe", "idempotency": "none"},
+  "input_schema": {"type": "object", "required": ["sessionId", "selector"], "properties": {"sessionId": {"type": "string"}, "selector": {"type": "string", "minLength": 1}, "timeoutMs": {"type": "integer", "minimum": 1}}, "additionalProperties": false},
+  "output_schema": {"type": "object", "required": ["matchedCount", "sessionId"], "properties": {"matchedCount": {"type": "integer", "minimum": 1}, "sessionId": {"type": "string"}}, "additionalProperties": false},
+  "errors": ["ELEMENT_NOT_FOUND", "SESSION_NOT_FOUND", "TIMEOUT", "CANCELLED", "EXECUTOR_FAILED"],
+  "implementation": {"handler": "browser.playwright:click"},
+  "default_timeout_seconds": 15,
+  "retryable": false
+}
