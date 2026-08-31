@@ -23,7 +23,7 @@ namespace RpaCoreDesktopTest
         public TestForm()
         {
             Name = "mainWindow";
-            Text = "RPA Core Desktop Test";
+            Text = "RPA Core Desktop Demo";
             ClientSize = new Size(440, 220);
             StartPosition = FormStartPosition.CenterScreen;
             FormBorderStyle = FormBorderStyle.FixedDialog;
@@ -39,15 +39,15 @@ namespace RpaCoreDesktopTest
 
             nameInput = new TextBox
             {
-                Name = "nameInput",
+                Name = "queryInput",
                 Location = new Point(100, 26),
                 Width = 300
             };
 
             var generateButton = new Button
             {
-                Name = "generateButton",
-                Text = "Generate greeting",
+                Name = "submitButton",
+                Text = "Submit",
                 Location = new Point(100, 72),
                 Width = 160
             };
@@ -71,7 +71,7 @@ namespace RpaCoreDesktopTest
 
         private void GenerateGreeting(object sender, EventArgs args)
         {
-            resultText.Text = "Hello, " + nameInput.Text;
+            resultText.Text = nameInput.Text;
         }
     }
 }

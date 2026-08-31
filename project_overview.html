@@ -1,0 +1,333 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>rpa_core 项目总览</title>
+  <style>
+    :root {
+      --bg: #07111f;
+      --panel: rgba(14, 22, 42, 0.92);
+      --panel2: rgba(13, 20, 36, 0.95);
+      --text: #eaf1ff;
+      --muted: #a6b7d9;
+      --accent: #7da8ff;
+      --accent2: #67e8c8;
+      --warning: #ffcb6b;
+      --border: rgba(135, 160, 215, 0.16);
+      --code: #07101c;
+      --shadow: 0 16px 40px rgba(0, 0, 0, 0.22);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: Inter, "PingFang SC", "Microsoft YaHei", Segoe UI, Roboto, Arial, sans-serif;
+      background:
+        radial-gradient(circle at top left, rgba(125,168,255,.20), transparent 28%),
+        radial-gradient(circle at top right, rgba(103,232,200,.10), transparent 22%),
+        linear-gradient(180deg, #06101c 0%, #091222 100%);
+      color: var(--text);
+      line-height: 1.5;
+    }
+    .wrap { max-width: 1240px; margin: 0 auto; padding: 28px 18px 64px; }
+    h1, h2, h3 { line-height: 1.15; margin: 0 0 12px; }
+    h1 { font-size: clamp(2rem, 3.4vw, 3.2rem); letter-spacing: -0.02em; }
+    h2 { font-size: 1.25rem; margin-top: 30px; }
+    h3 { font-size: 1rem; color: var(--accent2); }
+    p, li { color: var(--muted); }
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    .topbar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 18px;
+      flex-wrap: wrap;
+    }
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .logo {
+      width: 42px;
+      height: 42px;
+      border-radius: 14px;
+      background: linear-gradient(135deg, rgba(125,168,255,.95), rgba(103,232,200,.9));
+      box-shadow: 0 8px 24px rgba(125,168,255,.24);
+      display: grid;
+      place-items: center;
+      color: #06101c;
+      font-weight: 800;
+    }
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 12px;
+      border-radius: 999px;
+      background: rgba(125,168,255,.10);
+      border: 1px solid rgba(125,168,255,.18);
+      color: var(--text);
+      font-size: .88rem;
+    }
+    .lead {
+      margin: 12px 0 24px;
+      padding: 18px 18px 18px;
+      background: linear-gradient(180deg, rgba(125,168,255,.10), rgba(103,232,200,.05));
+      border: 1px solid rgba(125,168,255,.18);
+      border-radius: 18px;
+      box-shadow: var(--shadow);
+    }
+    .grid { display: grid; gap: 16px; }
+    .grid.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .grid.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    @media (max-width: 900px) { .grid.two, .grid.three { grid-template-columns: 1fr; } }
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 18px;
+      padding: 18px;
+      box-shadow: var(--shadow);
+    }
+    .diagram {
+      background: var(--code);
+      border: 1px solid #26304b;
+      border-radius: 14px;
+      padding: 16px;
+      overflow-x: auto;
+      white-space: pre;
+      font: 13px/1.45 Consolas, Monaco, 'Courier New', monospace;
+      color: #d8e3ff;
+    }
+    .pipeline {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 10px;
+      align-items: stretch;
+    }
+    .node {
+      padding: 14px 12px;
+      border-radius: 14px;
+      background: linear-gradient(180deg, rgba(125,168,255,.18), rgba(125,168,255,.08));
+      border: 1px solid rgba(125,168,255,.24);
+      text-align: center;
+      min-height: 78px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 600;
+      color: #edf3ff;
+    }
+    .arrow {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--accent2);
+      font-weight: 700;
+    }
+    .pathlist { columns: 2 280px; gap: 24px; }
+    .pathlist code { color: #dbe6ff; }
+    ul { margin: 8px 0 0 20px; }
+    code.inline { background: rgba(255,255,255,.06); padding: 2px 6px; border-radius: 6px; color: #d8e3ff; }
+    .small { font-size: .94rem; }
+    .muted { color: var(--muted); }
+    .tag {
+      display: inline-block;
+      padding: 3px 8px;
+      border-radius: 999px;
+      background: rgba(124,240,200,.12);
+      color: var(--accent2);
+      font-size: .78rem;
+      letter-spacing: .02em;
+      margin-right: 6px;
+    }
+    .tag.warn { background: rgba(255,203,107,.12); color: var(--warning); }
+    .nav {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin: 8px 0 0;
+    }
+    .nav a {
+      display: inline-block;
+      padding: 7px 10px;
+      border-radius: 10px;
+      background: rgba(255,255,255,.04);
+      border: 1px solid rgba(255,255,255,.06);
+      color: var(--text);
+      font-size: .9rem;
+    }
+    .kpi {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+      margin-top: 10px;
+    }
+    @media (max-width: 900px) { .kpi { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+    @media (max-width: 540px) { .kpi { grid-template-columns: 1fr; } }
+    .kpi .box {
+      padding: 14px;
+      border-radius: 14px;
+      background: rgba(255,255,255,.035);
+      border: 1px solid rgba(255,255,255,.06);
+    }
+    .kpi .box b { display: block; font-size: 1.1rem; margin-bottom: 4px; color: #fff; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="topbar">
+      <div class="brand">
+        <div class="logo">R</div>
+        <div>
+          <h1>rpa_core 项目总览</h1>
+          <div class="muted">从入口、调用链、桌面双后端到旧元素导入，一页看懂项目。</div>
+        </div>
+      </div>
+      <div class="badge">离线可打开 · 自包含 HTML</div>
+    </div>
+    <div class="lead">
+      <span class="tag">高层概览</span>
+      这是一个 clean-room 的 RPA 运行时实验，核心目标是：<b>显式工作流语义</b>、<b>隔离执行器</b>、<b>类型化结果</b>、<b>可复现运行</b>。
+      当前仓库已经有三条执行主线：<code class="inline">browser.playwright</code>、<code class="inline">python.worker</code>、以及拆成 <code class="inline">desktop.uia</code> / <code class="inline">desktop.win32</code> 的桌面自动化。
+      <div class="nav">
+        <a href="#structure">仓库结构</a>
+        <a href="#pipeline">运行管线</a>
+        <a href="#desktop">桌面后端</a>
+        <a href="#notepad">记事本流程</a>
+        <a href="#importer">旧元素导入</a>
+        <a href="#entrypoints">关键入口</a>
+      </div>
+    </div>
+
+    <h2 id="structure">1. 仓库结构</h2>
+    <div class="card">
+<div class="diagram">rpa_core/
+├─ src/rpa_core/
+│  ├─ cli.py                  命令入口：validate / run
+│  ├─ catalog/                读取命令 manifest
+│  ├─ compiler/               Workflow -> ExecutionPlan
+│  ├─ runtime/                orchestrator / resolver / events
+│  ├─ executors/              browser / python / desktop.uia / desktop.win32
+│  ├─ importer/               旧元素静态导入
+│  └─ model/                  workflow / command / runtime / desktop 模型
+├─ commands/                  命令契约（manifest）
+├─ examples/                  示例 workflow / fixture
+├─ tests/                     单测、契约测试、E2E
+└─ .harness/                  里程碑、任务、ADR、门禁</div>
+    </div>
+
+    <div class="kpi">
+      <div class="box"><b>入口</b><span class="muted">`src/rpa_core/cli.py` 负责 validate / run。</span></div>
+      <div class="box"><b>契约</b><span class="muted">`commands/` 里的 manifest 定义 executor、schema 和 effect policy。</span></div>
+      <div class="box"><b>运行</b><span class="muted">`runtime/` 负责编排、引用解析、事件与结果落盘。</span></div>
+      <div class="box"><b>执行</b><span class="muted">`executors/` 负责真正的浏览器、Python、桌面动作。</span></div>
+    </div>
+
+    <h2 id="pipeline">2. 运行管线</h2>
+    <div class="card">
+      <div class="pipeline">
+        <div class="node">workflow.json</div>
+        <div class="arrow">→</div>
+        <div class="node">WorkflowCompiler</div>
+        <div class="arrow">→</div>
+        <div class="node">ExecutionPlan</div>
+        <div class="arrow">→</div>
+        <div class="node">Orchestrator</div>
+        <div class="arrow">→</div>
+        <div class="node">ExecutorRegistry</div>
+        <div class="arrow">→</div>
+        <div class="node">CommandExecutor</div>
+      </div>
+      <p class="small">编排器会先按 manifest 校验输入和输出，再解析引用、路由到指定 executor，最后持久化 <code class="inline">events.jsonl</code> 和 <code class="inline">result.json</code>。</p>
+    </div>
+
+    <h2>3. 核心调用链</h2>
+    <div class="card">
+<div class="diagram">CLI
+  └─ load_catalog(commands/)
+  └─ compile(workflow)
+  └─ Orchestrator.run(plan)
+     ├─ 校验 manifest + schema
+     ├─ 解析 inputs / steps / loop vars
+     ├─ 根据 manifest.executor 选择执行器
+     ├─ executor.execute(invocation)
+     └─ 写入 events.jsonl + result.json</div>
+    </div>
+
+    <h2 id="desktop">4. 桌面双后端</h2>
+    <div class="grid two">
+      <div class="card">
+        <h3>UIA 路径</h3>
+        <div class="diagram">desktop.uia
+  ├─ pywinauto backend = uia
+  ├─ session 绑定 processId + windowHandle
+  ├─ locator: automationId / controlType / name
+  └─ 适合 WinForms / WPF / 语义控件</div>
+      </div>
+      <div class="card">
+        <h3>Win32 路径</h3>
+        <div class="diagram">desktop.win32
+  ├─ pywinauto backend = win32
+  ├─ session 绑定 processId + windowHandle
+  ├─ locator: title / className / handle / controlId / menuPath / foundIndex
+  └─ 适合记事本、菜单、对话框、经典 HWND 控件</div>
+      </div>
+    </div>
+
+    <h2 id="notepad">5. 记事本流程</h2>
+    <div class="card">
+<div class="diagram">attachMain (win32)
+  → menuSelect 文件 → 打开
+  → attachDialog (win32)
+  → findFileNameInput
+  → inputPath
+  → hotkey Enter
+  → attachOpened (win32)
+  → close sessions</div>
+      <p class="small">这个切片展示了为什么项目要拆成两个显式桌面后端，而不是一个“自动猜”的统一驱动。</p>
+    </div>
+
+    <h2 id="importer">6. 旧元素导入器</h2>
+    <div class="card">
+<div class="diagram">tests/fixtures/legacy-elements/elements.json
+  → LegacyElementImporter
+  → ImportedElementCatalog
+  → ImportedElement + DesktopLocator
+  → diagnostics（忽略 / 缺失 / 歧义）</div>
+      <p class="small">导入器只处理静态数据：把旧元素记录转换成类型化 locator 和 provenance，不导入或执行任何 <code class="inline">rpa_script</code> runtime 模块。</p>
+    </div>
+
+    <h2 id="entrypoints">7. 先看哪些文件</h2>
+    <div class="card pathlist">
+      <ul>
+        <li><code>src/rpa_core/model/workflow.py</code> 工作流 AST</li>
+        <li><code>src/rpa_core/compiler/compiler.py</code> 静态校验 / 计划生成</li>
+        <li><code>src/rpa_core/runtime/orchestrator.py</code> 执行与落盘</li>
+        <li><code>src/rpa_core/executors/browser.py</code> 浏览器执行器</li>
+        <li><code>src/rpa_core/executors/python_worker.py</code> Python worker 执行器</li>
+        <li><code>src/rpa_core/executors/desktop.py</code> UIA 桌面执行器</li>
+        <li><code>src/rpa_core/executors/desktop_win32.py</code> Win32 桌面执行器</li>
+      </ul>
+      <ul>
+        <li><code>commands/browser/</code> 浏览器命令契约</li>
+        <li><code>commands/desktop/</code> UIA 命令契约</li>
+        <li><code>commands/desktop_win32/</code> Win32 命令契约</li>
+        <li><code>examples/windows-desktop/workflow.json</code> 记事本示例</li>
+        <li><code>tests/unit/test_legacy_element_importer.py</code> 导入器契约</li>
+        <li><code>.harness/</code> 任务、门禁、ADR</li>
+      </ul>
+    </div>
+
+    <h2>8. 心智模型</h2>
+    <div class="card">
+      <p><span class="tag">模型层</span> 数据结构和协议定义在 <code class="inline">model/</code>。</p>
+      <p><span class="tag">契约层</span> <code class="inline">commands/</code> 里的 manifest 定义 executor、schema、effect policy 和错误形状。</p>
+      <p><span class="tag">运行层</span> compiler / orchestrator 保持通用，不嵌 Windows 专用分支。</p>
+      <p><span class="tag">执行层</span> executors 负责 OS 相关逻辑、清理和超时。</p>
+    </div>
+  </div>
+</body>
+</html>

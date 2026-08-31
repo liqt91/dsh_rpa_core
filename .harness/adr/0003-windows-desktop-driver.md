@@ -25,14 +25,16 @@ M2 的目的不是覆盖全部桌面应用，而是验证 rpa_core 的 executor 
 
 ## 决策
 
-M2 使用 `pywinauto` 的 `uia` backend，作为 Windows 桌面的第一层语义驱动。
+M2 使用 `pywinauto` 的 `uia` backend 处理标准语义控件，同时补充 `win32` backend 处理经典窗口、菜单和模态对话框。
 
 - 依赖仅在 `sys_platform == 'win32'` 时安装。
 - 所有操作要求显式 `sessionId`，session 绑定 `processId + nativeWindowHandle`。
-- Locator 是结构化字段：`automationId`、`controlType`、`name`，至少一个字段必须存在。
-- `desktop.attachWindow` 要求精确 title 和可选 processId。零匹配返回 `ELEMENT_NOT_FOUND`，多匹配返回 `AMBIGUOUS_MATCH`。
-- `desktop.findElement` 同样要求唯一匹配，并返回 session 内部的 `elementId`。Element reference 不得跨 session 使用。
-- 输入优先 Value Pattern/`set_edit_text`；点击优先 Invoke Pattern/`invoke`；不移动鼠标、不发送全局键盘输入、不依赖当前前台窗口。
+- Locator 分为两类：
+  - UIA: `automationId`、`controlType`、`name`
+  - Win32: `title`、`className`、`handle`、`controlId`、`menuPath`、`foundIndex`
+- `desktop.attachWindow` / `desktop.win32.attachWindow` 要求显式 backend，匹配规则由 backend 决定。零匹配返回 `ELEMENT_NOT_FOUND`，多匹配返回 `AMBIGUOUS_MATCH`。
+- `desktop.findElement` / `desktop.win32.findElement` 同样要求唯一匹配，并返回 session 内部的 `elementId`。Element reference 不得跨 session 使用。
+- UIA 输入优先 Value Pattern/`set_edit_text`；点击优先 Invoke Pattern/`invoke`；Win32 菜单/对话框优先 `menu_select`、`click_input`、消息级方法。两条路径都不应该静默降级。
 - UIA 操作由每个 executor 实例的单线程池串行执行，避免同一 session 的 COM/UIA 调用并发交错。
 - asyncio task 取消不能强杀已经进入底层 COM 的线程。每次 UIA 查询使用底层 timeout；外层超时后 session 标记为丢失，后续操作返回 `SESSION_LOST`。本里程碑不宣称可以安全中止任意卡死的第三方 provider。
 - `desktop.closeSession` 只释放 rpa_core session 和 element reference，不关闭目标应用。
@@ -76,6 +78,6 @@ M2 使用 `pywinauto` 的 `uia` backend，作为 Windows 桌面的第一层语�
 
 ## 后果
 
-- M2 能覆盖一大类标准企业桌面应用，但不承诺所有 Windows GUI 均可自动化。
+- M2 能覆盖一大类标准企业桌面应用和经典 Win32 菜单/对话框，但不承诺所有 Windows GUI 均可自动化。
 - 图像识别/OCR 继续后置，避免在结构化驱动尚未稳定时引入元素图片库、坐标系和置信度模型。
 - pywinauto/pywin32 是 Windows 专用依赖；跨平台稳定性由 manifest capability 和 executor registration 保证，而不是在非 Windows 上模拟桌面行为。

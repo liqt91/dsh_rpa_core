@@ -1,0 +1,117 @@
+{
+  "schema_version": "1.0",
+  "id": "windows-desktop-slice",
+  "name": "Windows desktop deterministic control slice",
+  "inputs": {
+    "title": "无标题 - 记事本",
+    "dialogTitle": "打开",
+    "menuPath": ["文件(&F)", "打开(O)...\tCtrl+O"],
+    "filePath": "D:/Users/Administrator/Documents/代码/rpa_core/test.txt",
+    "openedTitle": "test.txt - 记事本"
+  },
+  "root": {
+    "type": "sequence",
+    "id": "root",
+    "children": [
+      {
+        "type": "action",
+        "id": "attachMain",
+        "command": "desktop.win32.attachWindow",
+        "with": {
+          "title": "${inputs.title}",
+          "className": "Notepad"
+        }
+      },
+      {
+        "type": "action",
+        "id": "openDialog",
+        "command": "desktop.win32.menuSelect",
+        "with": {
+          "sessionId": "${steps.attachMain.outputs.sessionId}",
+          "menuPath": ["文件(&F)", "打开(O)...\tCtrl+O"]
+        }
+      },
+      {
+        "type": "action",
+        "id": "attachDialog",
+        "command": "desktop.win32.attachWindow",
+        "with": {
+          "title": "${inputs.dialogTitle}",
+          "className": "#32770",
+          "processId": "${steps.attachMain.outputs.processId}"
+        }
+      },
+      {
+        "type": "action",
+        "id": "findFileNameInput",
+        "command": "desktop.win32.findElement",
+        "with": {
+          "sessionId": "${steps.attachDialog.outputs.sessionId}",
+          "locator": {
+            "backend": "win32",
+            "className": "Edit",
+            "controlId": 1148,
+            "foundIndex": 0
+          }
+        }
+      },
+      {
+        "type": "action",
+        "id": "inputPath",
+        "command": "desktop.win32.input",
+        "with": {
+          "sessionId": "${steps.attachDialog.outputs.sessionId}",
+          "elementId": "${steps.findFileNameInput.outputs.elementId}",
+          "text": "${inputs.filePath}"
+        }
+      },
+      {
+        "type": "action",
+        "id": "confirmOpen",
+        "command": "desktop.win32.hotkey",
+        "with": {
+          "sessionId": "${steps.attachDialog.outputs.sessionId}",
+          "keys": "{ENTER}"
+        }
+      },
+      {
+        "type": "action",
+        "id": "attachOpened",
+        "command": "desktop.win32.attachWindow",
+        "with": {
+          "className": "Notepad",
+          "processId": "${steps.attachMain.outputs.processId}"
+        }
+      },
+      {
+        "type": "action",
+        "id": "closeDialog",
+        "command": "desktop.win32.closeSession",
+        "with": {
+          "sessionId": "${steps.attachDialog.outputs.sessionId}"
+        }
+      },
+      {
+        "type": "action",
+        "id": "closeMain",
+        "command": "desktop.win32.closeSession",
+        "with": {
+          "sessionId": "${steps.attachMain.outputs.sessionId}"
+        }
+      },
+      {
+        "type": "action",
+        "id": "closeOpened",
+        "command": "desktop.win32.closeSession",
+        "with": {
+          "sessionId": "${steps.attachOpened.outputs.sessionId}"
+        }
+      },
+      {
+        "type": "return",
+        "id": "return",
+        "value": "${steps.attachOpened.outputs.workWindowId}"
+      }
+    ]
+  }
+}

@@ -14,10 +14,9 @@ from .base import CommandExecutor
 
 @dataclass
 class _DesktopSession:
-    window: Any
     process_id: int
     window_handle: int
-    elements: dict[str, Any]
+    elements: dict[str, dict[str, Any]]
 
 
 class DesktopExecutor(CommandExecutor):
@@ -27,6 +26,7 @@ class DesktopExecutor(CommandExecutor):
         self._lock = asyncio.Lock()
         self._thread_pool: ThreadPoolExecutor | None = None
         self._closed = False
+        self._worker_loop = None
 
     @property
     def active_session_count(self) -> int:
@@ -66,151 +66,194 @@ class DesktopExecutor(CommandExecutor):
             return CommandResult.failure(ErrorCode.EXECUTOR_FAILED, str(exc))
 
     def _execute_sync(self, invocation: CommandInvocation) -> CommandResult:
+        import pythoncom
         from pywinauto import Desktop
 
-        command = invocation.command_id
-        inputs = invocation.inputs
-        if command == "desktop.attachWindow":
-            title = str(inputs["title"])
-            process_id = inputs.get("processId")
-            windows = Desktop(backend="uia").windows(title=title)
-            if process_id is not None:
-                windows = [window for window in windows if window.process_id() == process_id]
-            if len(windows) == 0:
-                return CommandResult.failure(
-                    ErrorCode.ELEMENT_NOT_FOUND,
-                    "Desktop window did not match",
-                    details={"title": title, "matchedCount": 0},
-                )
-            if len(windows) > 1:
-                return CommandResult.failure(
-                    ErrorCode.ELEMENT_AMBIGUOUS,
-                    "Desktop window matched multiple targets",
-                    details={"title": title, "matchedCount": len(windows)},
-                )
-            window = windows[0]
-            session_id = str(uuid.uuid4())
-            handle = int(window.handle)
-            pid = int(window.process_id())
-            self._sessions[session_id] = _DesktopSession(window, pid, handle, {})
-            return CommandResult.success(
-                outputs={
-                    "sessionId": session_id,
-                    "processId": pid,
-                    "workWindowId": str(handle),
-                },
-                effects=[
-                    EffectRecord.committed(
-                        invocation,
-                        kind=EffectKind.SESSION,
-                        resource=f"desktop.session:{session_id}:window:{handle}",
-                        details={"operation": "attachWindow", "processId": pid},
+        pythoncom.CoInitialize()
+        try:
+            command = invocation.command_id
+            inputs = invocation.inputs
+            if command == "desktop.attachWindow":
+                title = str(inputs["title"])
+                process_id = inputs.get("processId")
+                windows = Desktop(backend="uia").windows(title=title)
+                if process_id is not None:
+                    windows = [window for window in windows if window.process_id() == process_id]
+                if len(windows) == 0:
+                    return CommandResult.failure(
+                        ErrorCode.ELEMENT_NOT_FOUND,
+                        "Desktop window did not match",
+                        details={"title": title, "matchedCount": 0},
                     )
-                ],
-            )
+                if len(windows) > 1:
+                    return CommandResult.failure(
+                        ErrorCode.ELEMENT_AMBIGUOUS,
+                        "Desktop window matched multiple targets",
+                        details={"title": title, "matchedCount": len(windows)},
+                    )
+                window = windows[0]
+                session_id = str(uuid.uuid4())
+                handle = int(window.handle)
+                pid = int(window.process_id())
+                self._sessions[session_id] = _DesktopSession(pid, handle, {})
+                return CommandResult.success(
+                    outputs={
+                        "sessionId": session_id,
+                        "processId": pid,
+                        "workWindowId": str(handle),
+                    },
+                    effects=[
+                        EffectRecord.committed(
+                            invocation,
+                            kind=EffectKind.SESSION,
+                            resource=f"desktop.session:{session_id}:window:{handle}",
+                            details={"operation": "attachWindow", "processId": pid},
+                        )
+                    ],
+                )
 
-        session_id = str(inputs.get("sessionId") or "")
-        session = self._sessions.get(session_id)
-        if session is None:
-            return CommandResult.failure(ErrorCode.SESSION_NOT_FOUND, "Desktop session not found")
-        if command == "desktop.closeSession":
-            self._sessions.pop(session_id, None)
-            return CommandResult.success(
-                effects=[
-                    EffectRecord.committed(
-                        invocation,
-                        kind=EffectKind.SESSION,
-                        resource=f"desktop.session:{session_id}:window:{session.window_handle}",
-                        details={"operation": "closeSession"},
+            session_id = str(inputs.get("sessionId") or "")
+            session = self._sessions.get(session_id)
+            if session is None:
+                return CommandResult.failure(
+                    ErrorCode.SESSION_NOT_FOUND, "Desktop session not found"
+                )
+            if command == "desktop.closeSession":
+                self._sessions.pop(session_id, None)
+                return CommandResult.success(
+                    effects=[
+                        EffectRecord.committed(
+                            invocation,
+                            kind=EffectKind.SESSION,
+                            resource=f"desktop.session:{session_id}:window:{session.window_handle}",
+                            details={"operation": "closeSession"},
+                        )
+                    ]
+                )
+            if command == "desktop.findElement":
+                locator = DesktopLocator.model_validate(inputs["locator"])
+                window = self._window_by_handle(session.window_handle)
+                if window is None:
+                    return CommandResult.failure(
+                        ErrorCode.SESSION_NOT_FOUND, "Desktop window not found"
                     )
-                ]
-            )
-        if command == "desktop.findElement":
-            locator = DesktopLocator.model_validate(inputs["locator"])
-            matches = self._find(session.window, locator)
+                matches = self._find(window, locator)
+                if len(matches) == 0:
+                    return CommandResult.failure(
+                        ErrorCode.ELEMENT_NOT_FOUND,
+                        "Desktop element did not match",
+                        details={"locator": locator.model_dump(by_alias=True), "matchedCount": 0},
+                    )
+                if len(matches) > 1:
+                    return CommandResult.failure(
+                        ErrorCode.ELEMENT_AMBIGUOUS,
+                        "Desktop element matched multiple targets",
+                        details={
+                            "locator": locator.model_dump(by_alias=True),
+                            "matchedCount": len(matches),
+                        },
+                    )
+                element_id = str(uuid.uuid4())
+                session.elements[element_id] = locator.model_dump(by_alias=True)
+                return CommandResult.success(
+                    outputs={"elementId": element_id, "matchedCount": 1},
+                    effects=[
+                        EffectRecord.committed(
+                            invocation,
+                            kind=EffectKind.READ,
+                            resource=f"desktop.session:{session_id}:element:{element_id}",
+                            details={"operation": "findElement"},
+                        )
+                    ],
+                )
+            element_id = str(inputs.get("elementId") or "")
+            locator_data = session.elements.get(element_id)
+            if locator_data is None:
+                return CommandResult.failure(
+                    ErrorCode.ELEMENT_NOT_FOUND, "Desktop element not found"
+                )
+            resource = f"desktop.session:{session_id}:element:{element_id}"
+            window = self._window_by_handle(session.window_handle)
+            if window is None:
+                return CommandResult.failure(
+                    ErrorCode.SESSION_NOT_FOUND, "Desktop window not found"
+                )
+            element_locator = DesktopLocator.model_validate(locator_data)
+            matches = self._find(window, element_locator)
             if len(matches) == 0:
                 return CommandResult.failure(
-                    ErrorCode.ELEMENT_NOT_FOUND,
-                    "Desktop element did not match",
-                    details={"locator": locator.model_dump(by_alias=True), "matchedCount": 0},
+                    ErrorCode.ELEMENT_NOT_FOUND, "Desktop element not found"
                 )
-            if len(matches) > 1:
-                return CommandResult.failure(
-                    ErrorCode.ELEMENT_AMBIGUOUS,
-                    "Desktop element matched multiple targets",
-                    details={
-                        "locator": locator.model_dump(by_alias=True),
-                        "matchedCount": len(matches),
-                    },
+            element = matches[0]
+            if command == "desktop.input":
+                element.set_edit_text(str(inputs["text"]))
+                return CommandResult.success(
+                    effects=[
+                        EffectRecord.committed(
+                            invocation,
+                            kind=EffectKind.UNSAFE_WRITE,
+                            resource=resource,
+                            details={"operation": "input"},
+                        )
+                    ]
                 )
-            element_id = str(uuid.uuid4())
-            session.elements[element_id] = matches[0]
-            return CommandResult.success(
-                outputs={"elementId": element_id, "matchedCount": 1},
-                effects=[
-                    EffectRecord.committed(
-                        invocation,
-                        kind=EffectKind.READ,
-                        resource=f"desktop.session:{session_id}:element:{element_id}",
-                        details={"operation": "findElement"},
-                    )
-                ],
+            if command == "desktop.click":
+                element.invoke()
+                return CommandResult.success(
+                    effects=[
+                        EffectRecord.committed(
+                            invocation,
+                            kind=EffectKind.UNSAFE_WRITE,
+                            resource=resource,
+                            details={"operation": "click"},
+                        )
+                    ]
+                )
+            if command == "desktop.getText":
+                value = element.window_text()
+                return CommandResult.success(
+                    value=value,
+                    outputs={"value": value},
+                    effects=[
+                        EffectRecord.committed(
+                            invocation,
+                            kind=EffectKind.READ,
+                            resource=resource,
+                            details={"operation": "getText"},
+                        )
+                    ],
+                )
+            return CommandResult.failure(
+                ErrorCode.COMMAND_NOT_FOUND, f"Unsupported command: {command}"
             )
-        element_id = str(inputs.get("elementId") or "")
-        element = session.elements.get(element_id)
-        if element is None:
-            return CommandResult.failure(ErrorCode.ELEMENT_NOT_FOUND, "Desktop element not found")
-        resource = f"desktop.session:{session_id}:element:{element_id}"
-        if command == "desktop.input":
-            element.set_edit_text(str(inputs["text"]))
-            return CommandResult.success(
-                effects=[
-                    EffectRecord.committed(
-                        invocation,
-                        kind=EffectKind.UNSAFE_WRITE,
-                        resource=resource,
-                        details={"operation": "input"},
-                    )
-                ]
-            )
-        if command == "desktop.click":
-            element.invoke()
-            return CommandResult.success(
-                effects=[
-                    EffectRecord.committed(
-                        invocation,
-                        kind=EffectKind.UNSAFE_WRITE,
-                        resource=resource,
-                        details={"operation": "click"},
-                    )
-                ]
-            )
-        if command == "desktop.getText":
-            value = element.window_text()
-            return CommandResult.success(
-                value=value,
-                outputs={"value": value},
-                effects=[
-                    EffectRecord.committed(
-                        invocation,
-                        kind=EffectKind.READ,
-                        resource=resource,
-                        details={"operation": "getText"},
-                    )
-                ],
-            )
-        return CommandResult.failure(ErrorCode.COMMAND_NOT_FOUND, f"Unsupported command: {command}")
+        finally:
+            pythoncom.CoUninitialize()
 
     @staticmethod
     def _find(window: Any, locator: DesktopLocator) -> list[Any]:
         criteria = {}
-        if locator.automation_id:
-            criteria["auto_id"] = locator.automation_id
         if locator.control_type:
             criteria["control_type"] = locator.control_type
         if locator.name:
             criteria["title"] = locator.name
-        return window.descendants(**criteria)
+        matches = window.descendants(**criteria)
+        if locator.automation_id:
+            matches = [
+                match
+                for match in matches
+                if getattr(match.element_info, "automation_id", None)
+                == locator.automation_id
+            ]
+        return matches
+
+    @staticmethod
+    def _window_by_handle(handle: int) -> Any | None:
+        from pywinauto import Desktop
+
+        windows = Desktop(backend="uia").windows(handle=handle)
+        if len(windows) != 1:
+            return None
+        return windows[0]
 
     async def close(self) -> None:
         async with self._lock:

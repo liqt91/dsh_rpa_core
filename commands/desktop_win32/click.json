@@ -1,0 +1,17 @@
+{
+  "id": "desktop.win32.click",
+  "version": "1.0.0",
+  "executor": "desktop.win32",
+  "kind": "action",
+  "risk": "desktop-control",
+  "capabilities": ["desktop.control"],
+  "resources": ["desktop.session", "desktop.element"],
+  "stability": "stable",
+  "effect": {"kind": "unsafe-write", "replay": "unsafe", "idempotency": "none"},
+  "input_schema": {"type": "object", "required": ["sessionId", "elementId"], "properties": {"sessionId": {"type": "string", "minLength": 1}, "elementId": {"type": "string", "minLength": 1}, "timeoutMs": {"type": "integer", "minimum": 1}}, "additionalProperties": false},
+  "output_schema": {"type": "object", "additionalProperties": false},
+  "errors": ["ELEMENT_NOT_FOUND", "SESSION_NOT_FOUND", "SESSION_LOST", "TIMEOUT", "CANCELLED", "EXECUTOR_FAILED"],
+  "implementation": {"handler": "desktop.win32:click"},
+  "default_timeout_seconds": 15,
+  "retryable": false
+}

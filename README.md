@@ -8,7 +8,7 @@ The first milestone proves one vertical slice:
 
 ```text
 Workflow AST -> validation/compiler -> execution plan -> orchestrator
--> Playwright browser executor / isolated Python worker
+-> Playwright browser executor / isolated Python worker / desktop.uia / desktop.win32
 -> typed results + events.jsonl + result.json
 ```
 
@@ -16,10 +16,10 @@ Included initially:
 
 - Native workflow AST: sequence, action, if, forEach, try, return.
 - Versioned command manifests loaded into an immutable catalog snapshot.
-- Explicit executors for browser and Python commands.
+- Explicit executors for browser, Python, and desktop commands.
 - Strongly typed command results and stable error codes.
 - Run cancellation, step timeouts, event logs, and terminal run results.
-- A deterministic local test site and CLI-driven end-to-end example.
+- A deterministic local test site, CLI-driven end-to-end example, and Win32 desktop slice.
 
 Explicitly excluded from the first milestone:
 

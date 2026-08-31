@@ -1,0 +1,66 @@
+@startuml
+left to right direction
+skinparam shadowing false
+skinparam linetype ortho
+skinparam packageStyle rectangle
+skinparam defaultTextAlignment center
+skinparam ArrowColor #4D6FFF
+skinparam ArrowFontColor #4D6FFF
+skinparam RectangleBackgroundColor #F8FAFF
+skinparam RectangleBorderColor #6C7A99
+skinparam ActorBackgroundColor #FFF7E8
+skinparam ActorBorderColor #C58F20
+skinparam ActorFontColor #2B2B2B
+
+title rpa_core 系统上下文图（C4 - System Context）
+
+actor "项目维护者\n(Developer / Maintainer)" as maintainer
+actor "业务操作员\n(Operator)" as operator
+
+rectangle "rpa_core\n系统边界" as system_boundary {
+  rectangle "rpa_core\nPython RPA Runtime" as rpa_core #DDEBFF {
+    note bottom
+      核心能力：
+      - workflow 解析与编译
+      - 命令契约校验
+      - 编排与重试/超时
+      - 浏览器 / Python worker / 桌面双后端执行
+      - 事件与结果持久化
+    end note
+  }
+}
+
+rectangle "Chromium / Edge / Browser Apps\n(Playwright)" as browser #E9FFF3
+rectangle "Windows Desktop Applications\n(Notepad / WinForms / WPF / Enterprise Apps)" as desktop_apps #FFF0F0
+rectangle "Python Subprocess Worker\n(rpa_core.workers.python_worker)" as py_worker #F2F0FF
+rectangle "Local Filesystem\n(workflows / commands / artifacts / fixtures)" as fs #F8F4FF
+rectangle "Legacy rpa_script Data\n(probe/*.json / elements.json)" as legacy_data #FFFBEA
+rectangle "Windows Runtime APIs\n(pywinauto / pywin32 / comtypes)" as windows_api #EEF7FF
+
+maintainer --> rpa_core : 编写 / 校验 / 运行 workflow\n读取 result.json / events.jsonl
+operator --> rpa_core : 发起自动化任务\n提供运行参数
+
+rpa_core --> browser : browser.playwright 命令\n导航 / 输入 / 点击 / 读回文本
+rpa_core --> desktop_apps : desktop.uia / desktop.win32 命令\n窗口 / 菜单 / 对话框 / 控件操作
+rpa_core --> py_worker : python.worker 任务\n隔离执行用户 Python 代码
+rpa_core --> fs : 读取 workflow.json / manifests\n写入 run_artifacts / result.json
+rpa_core --> legacy_data : 导入旧元素数据\n静态盘点 / provenance / locator 规范化
+rpa_core --> windows_api : 通过执行器调用\nUIA / Win32 / COM / 消息 API
+
+browser --> rpa_core : 浏览器状态 / 结果\n页面文本 / 选择器匹配数
+desktop_apps --> rpa_core : 窗口标题 / 控件文本\n菜单与对话框状态
+py_worker --> rpa_core : JSON CommandResult\n标准输出 / 标准错误
+fs --> rpa_core : workflow / catalog / legacy fixtures\nrun evidence
+legacy_data --> rpa_core : 旧元素结构\n静态 JSON 数据
+windows_api --> desktop_apps : 进程 / 窗口 / 控件交互\n系统级 GUI 调用
+
+note right of rpa_core
+主要运行链：
+workflow AST → compiler → execution plan → orchestrator → executor → events/result
+
+桌面双后端：
+UIA 适合语义控件
+Win32 适合菜单 / 对话框 / 经典窗口
+end note
+
+@enduml

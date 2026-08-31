@@ -13,4 +13,5 @@ Format: `YYYY-MM-DD | feature | status | evidence`
 2026-08-28 | resolver-contract | done | whole-token references, fail-fast malformed references, mapping-only paths, condition tests, and nested compiler scope propagation; 15 tests + full gate passed
 2026-08-28 | runtime-correctness | done | stable errors/context, timeout and subprocess cleanup, bounded retry/deadline, persistence failure semantics; 24 tests + full gate passed
 2026-08-28 | effect-contract | done | typed effect/replay/idempotency policy, unsafe retry rejection, committed and unknown evidence, browser/worker E2E; 30 tests + full gate passed
-2026-08-28 | M2-desktop | active | 完成 Win32/UIA 适用边界调研、pywinauto 0.6.9 与 WinForms 控件树技术验证、ADR 0003、6 个 desktop manifest、DesktopLocator 和 DesktopExecutor 初版；真实桌面 E2E 与 M2 验收尚未完成
+2026-08-31 | M2-desktop | active | 新增 desktop.win32 独立后端与记事本 Win32 垂直切片，桌面 locator 扩展 backend/className/controlId/foundIndex/menuPath，Win32 记事本 E2E 与合同测试已通过；UIA 主线保留待后续 WinForms 验证
+2026-08-31 | M2.1-legacy-element-importer | active | 旧元素静态盘点文档、LegacyElementImporter、provenance/diagnostic 模型与确定性导入测试已补齐；导入器仅处理静态数据，不触及 rpa_script runtime

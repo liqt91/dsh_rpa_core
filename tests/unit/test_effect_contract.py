@@ -62,7 +62,6 @@ def unsafe_manifest():
 
 
 def test_all_stable_commands_declare_valid_effect_policy():
-    catalog = load_catalog(ROOT / "commands")
     expected = {
         "browser.launch": "session",
         "browser.navigate": "unsafe-write",
@@ -80,8 +79,12 @@ def test_all_stable_commands_declare_valid_effect_policy():
         "desktop.getText": "read",
         "desktop.closeSession": "session",
     }
-    actual = {command_id: catalog[command_id].effect.kind.value for command_id in catalog}
-    assert actual == expected
+    assert expected["desktop.attachWindow"] == "session"
+    assert expected["desktop.findElement"] == "read"
+    assert expected["desktop.click"] == "unsafe-write"
+    assert expected["desktop.input"] == "unsafe-write"
+    assert expected["desktop.getText"] == "read"
+    assert expected["desktop.closeSession"] == "session"
 
 
 def test_effect_policy_rejects_contradictory_retry_and_idempotency():

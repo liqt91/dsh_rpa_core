@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "source": "legacy-elements.json",
+  "elements": [
+    {
+      "id": "web-search",
+      "element_type": "web",
+      "candidates": [{"kind": "css", "selector": "#query"}],
+      "extra_field": "ignored"
+    },
+    {
+      "id": "desk-name",
+      "element_type": "uia",
+      "uia_path": [
+        {"automation_id": "root", "control_type": "WindowControl", "name": "Root"},
+        {"automation_id": "nameInput", "control_type": "Edit", "name": ""}
+      ]
+    },
+    {
+      "id": "desk-open",
+      "element_type": "win32",
+      "win32_path": [
+        {"class_name": "#32770", "title": "打开", "control_id": 0},
+        {"class_name": "Edit", "title": "", "control_id": 1148, "index": 0}
+      ],
+      "unexpected": true
+    }
+  ]
+}

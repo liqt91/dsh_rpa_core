@@ -10,6 +10,7 @@ from rpa_core.executors import (
     ExecutorRegistry,
     PlaywrightExecutor,
     PythonWorkerExecutor,
+    Win32DesktopExecutor,
 )
 from rpa_core.model.workflow import Workflow
 from rpa_core.runtime import Orchestrator
@@ -55,6 +56,7 @@ def main() -> int:
             {
                 "browser.playwright": browser,
                 "desktop.uia": DesktopExecutor(),
+                "desktop.win32": Win32DesktopExecutor(),
                 "python.worker": PythonWorkerExecutor(),
             }
         )

@@ -3,9 +3,9 @@
   "phase": "desktop-driver-validation",
   "status": "active",
   "completed_milestone": "M1.2-effect-contract",
-  "active_milestone": "M2-windows-desktop",
-  "active_plan": ".harness/tasks/M2-desktop.md",
-  "active_feature": "desktop-vertical-slice",
+  "active_milestone": "M2.1-legacy-element-importer",
+  "active_plan": ".harness/tasks/M2.1-element-importer.md",
+  "active_feature": "legacy-element-importer",
   "next_milestone": "M2.1-legacy-element-importer",
   "later_milestones": [
     "M2-windows-desktop",
