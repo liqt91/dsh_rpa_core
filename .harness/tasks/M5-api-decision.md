@@ -1,6 +1,6 @@
 # M5 API 面决策
 
-状态：`active`
+状态：`planned`
 
 ## 目标
 

@@ -71,6 +71,11 @@
       "id": "api-surface-decision",
       "title": "First API surface decision recorded as an accepted ADR",
       "passes": false
+    },
+    {
+      "id": "data-commands",
+      "title": "Plain-text file output and list truncation data commands",
+      "passes": true
     }
   ]
 }

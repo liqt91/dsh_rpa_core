@@ -22,7 +22,7 @@ def workflow(root):
 def test_catalog_is_loaded_and_digest_is_stable():
     first = catalog()
     second = catalog()
-    assert len(first) == 23
+    assert len(first) == 25
     assert first.digest == second.digest
     with pytest.raises(TypeError):
         first._commands["x"] = None

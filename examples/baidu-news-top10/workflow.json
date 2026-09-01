@@ -51,16 +51,21 @@
       },
       {
         "type": "action",
+        "id": "limitTitles",
+        "command": "data.limit",
+        "with": {
+          "items": "${steps.grabTitles.outputs.items}",
+          "count": 10
+        }
+      },
+      {
+        "type": "action",
         "id": "saveTitles",
-        "command": "data.writeJson",
+        "command": "data.writeText",
         "with": {
           "workspace": "${inputs.workspace}",
           "path": "baidu-top10.txt",
-          "data": {
-            "query": "${inputs.query}",
-            "note": "top 10 result titles from page 1",
-            "titles": "${steps.grabTitles.outputs.items}"
-          }
+          "lines": "${steps.limitTitles.outputs.items}"
         }
       },
       {

@@ -12,15 +12,43 @@ from rpa_core.model.command import (
 from rpa_core.model.errors import ErrorCode
 
 
+def _resolve_output_path(inputs: dict) -> tuple[Path, Path]:
+    workspace = Path(str(inputs["workspace"])).resolve()
+    raw_path = Path(str(inputs["path"]))
+    if raw_path.is_absolute():
+        output_path = raw_path.resolve()
+    else:
+        output_path = (workspace / raw_path).resolve()
+    return workspace, output_path
+
+
+def _within_workspace(workspace: Path, output_path: Path) -> bool:
+    return output_path == workspace or workspace in output_path.parents
+
+
+def _write_effect(
+    invocation: CommandInvocation, operation: str, output_path: Path
+) -> CommandResult:
+    normalized_path = str(output_path)
+    idempotency_key = hashlib.sha256(normalized_path.encode("utf-8")).hexdigest()
+    return CommandResult.success(
+        outputs={"path": normalized_path},
+        effects=[
+            EffectRecord.committed(
+                invocation,
+                kind=EffectKind.IDEMPOTENT_WRITE,
+                resource=f"file:{normalized_path}",
+                idempotency_key=idempotency_key,
+                details={"operation": operation},
+            )
+        ],
+    )
+
+
 def execute(invocation: CommandInvocation) -> CommandResult:
     if invocation.command_id == "data.writeJson":
-        workspace = Path(str(invocation.inputs["workspace"])).resolve()
-        raw_path = Path(str(invocation.inputs["path"]))
-        if raw_path.is_absolute():
-            output_path = raw_path.resolve()
-        else:
-            output_path = (workspace / raw_path).resolve()
-        if output_path != workspace and workspace not in output_path.parents:
+        workspace, output_path = _resolve_output_path(invocation.inputs)
+        if not _within_workspace(workspace, output_path):
             return CommandResult.failure(
                 ErrorCode.CAPABILITY_DENIED,
                 "Output path must stay inside workspace",
@@ -30,19 +58,28 @@ def execute(invocation: CommandInvocation) -> CommandResult:
             json.dumps(invocation.inputs.get("data"), ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
-        normalized_path = str(output_path)
-        idempotency_key = hashlib.sha256(normalized_path.encode("utf-8")).hexdigest()
+        return _write_effect(invocation, "writeJson", output_path)
+    if invocation.command_id == "data.writeText":
+        workspace, output_path = _resolve_output_path(invocation.inputs)
+        if not _within_workspace(workspace, output_path):
+            return CommandResult.failure(
+                ErrorCode.CAPABILITY_DENIED,
+                "Output path must stay inside workspace",
+            )
+        if "text" in invocation.inputs:
+            content = str(invocation.inputs["text"])
+        else:
+            content = "\n".join(str(line) for line in invocation.inputs["lines"])
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(content, encoding="utf-8")
+        return _write_effect(invocation, "writeText", output_path)
+    if invocation.command_id == "data.limit":
+        items = invocation.inputs["items"]
+        count = int(invocation.inputs["count"])
+        sliced = list(items)[:count]
         return CommandResult.success(
-            outputs={"path": normalized_path},
-            effects=[
-                EffectRecord.committed(
-                    invocation,
-                    kind=EffectKind.IDEMPOTENT_WRITE,
-                    resource=f"file:{normalized_path}",
-                    idempotency_key=idempotency_key,
-                    details={"operation": "writeJson"},
-                )
-            ],
+            value=sliced,
+            outputs={"items": sliced, "count": len(sliced)},
         )
     return CommandResult.failure(
         ErrorCode.COMMAND_NOT_FOUND,

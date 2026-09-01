@@ -4,14 +4,15 @@
 
 ## 当前任务
 
-- [ ] M5 API 面决策（`active`）
-  - 计划：`M5-api-decision.md`
-  - 完成门槛：ADR 已接受、公开入口契约测试覆盖运行约束、排除清单是否放行有结论。
+- [ ] M4.5 数据命令补齐（`active`）
+  - 计划：`M4.5-data-commands.md`
+  - 完成门槛：`data.writeText` + `data.limit` 契约与测试、百度示例升级为纯文本产物、全门禁通过。
 
 ## 后续任务
 
-- [ ] M5 决策之后的实施里程碑（`planned`）
-  - 仅在 API 面决策 ADR 通过后按其结论编写详细计划。
+- [ ] M5 API 面决策（`planned`）
+  - 计划：`M5-api-decision.md`
+  - 带倾向起草：进程内 Python API 先行为主方案，HTTP 论证后明确结论。
 
 ## 远期任务
 

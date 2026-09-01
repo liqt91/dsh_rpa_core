@@ -51,3 +51,79 @@ def test_python_worker_resolves_relative_path_against_workspace(tmp_path):
     escaping = asyncio.run(run("../escape.txt"))
     assert escaping.status == "error"
     assert escaping.error.code == "CAPABILITY_DENIED"
+
+
+def test_python_worker_write_text_lines_inside_workspace(tmp_path):
+    workspace = tmp_path / "工作区"
+    output = workspace / "reports" / "top10.txt"
+
+    async def run():
+        executor = PythonWorkerExecutor()
+        invocation = CommandInvocation(
+            command_id="data.writeText",
+            command_version="1.0.0",
+            run_id="run",
+            step_id="save",
+            inputs={
+                "workspace": str(workspace),
+                "path": str(output),
+                "lines": ["新闻", "央视新闻", "澎湃新闻"],
+            },
+        )
+        return await executor.execute(invocation, asyncio.Event())
+
+    result = asyncio.run(run())
+    assert result.status == "success"
+    content = output.read_text(encoding="utf-8")
+    assert content == "新闻\n央视新闻\n澎湃新闻"
+    assert result.effects[0].details["operation"] == "writeText"
+
+
+def test_python_worker_write_text_string_and_rejects_escape(tmp_path):
+    workspace = tmp_path / "ws"
+
+    async def run(path, payload):
+        executor = PythonWorkerExecutor()
+        invocation = CommandInvocation(
+            command_id="data.writeText",
+            command_version="1.0.0",
+            run_id="run",
+            step_id="save",
+            inputs={"workspace": str(workspace), "path": path, **payload},
+        )
+        return await executor.execute(invocation, asyncio.Event())
+
+    result = asyncio.run(run("note.txt", {"text": "标题：新闻"}))
+    assert result.status == "success"
+    assert (workspace / "note.txt").read_text(encoding="utf-8") == "标题：新闻"
+
+    escaping = asyncio.run(run("..\\escape.txt", {"text": "x"}))
+    assert escaping.status == "error"
+    assert escaping.error.code == "CAPABILITY_DENIED"
+
+
+def test_python_worker_limit_truncates_and_counts(tmp_path):
+    async def run(items, count):
+        executor = PythonWorkerExecutor()
+        invocation = CommandInvocation(
+            command_id="data.limit",
+            command_version="1.0.0",
+            run_id="run",
+            step_id="pick",
+            inputs={"items": items, "count": count},
+        )
+        return await executor.execute(invocation, asyncio.Event())
+
+    result = asyncio.run(run(["a", "b", "c", "d"], 2))
+    assert result.status == "success"
+    assert result.outputs == {"items": ["a", "b"], "count": 2}
+    assert result.value == ["a", "b"]
+
+    empty = asyncio.run(run([], 5))
+    assert empty.outputs == {"items": [], "count": 0}
+
+    zero = asyncio.run(run(["a"], 0))
+    assert zero.outputs == {"items": [], "count": 0}
+
+    exact = asyncio.run(run(["a", "b"], 10))
+    assert exact.outputs == {"items": ["a", "b"], "count": 2}
