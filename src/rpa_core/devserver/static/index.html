@@ -25,6 +25,9 @@ h2 { font-size: 13px; color: var(--muted); margin: 0 0 8px; font-weight: 600; }
 #canvas { list-style: none; margin: 0; padding: 0; max-width: 640px; }
 #canvas li { display: flex; align-items: center; gap: 8px; border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; margin-bottom: 6px; cursor: pointer; background: #fff; }
 #canvas li.selected { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+#canvas li.dragging { opacity: 0.4; }
+#canvas li.drop-above { box-shadow: 0 -3px 0 0 var(--accent); }
+#canvas li.drop-below { box-shadow: 0 3px 0 0 var(--accent); }
 #canvas li.hint { cursor: default; color: var(--muted); border-style: dashed; }
 #canvas .idx { color: var(--muted); width: 22px; flex-shrink: 0; }
 #canvas .cmd { font-weight: 600; white-space: nowrap; }
@@ -64,7 +67,7 @@ footer { border-top: 1px solid var(--border); padding: 8px 12px; max-height: 180
   <section id="canvas-wrap">
     <h2>画布 · sequence root</h2>
     <ol id="canvas"></ol>
-    <p class="hint">点击左侧命令追加节点；引用语法 ${inputs.x}、${steps.节点.outputs.键}、${loop.item}</p>
+    <p class="hint">点击左侧命令追加节点，或拖拽到画布任意位置插入；拖拽画布节点调整顺序。引用语法 ${inputs.x}、${steps.节点.outputs.键}、${loop.item}</p>
   </section>
   <aside id="props">
     <h2>属性</h2>
@@ -76,6 +79,8 @@ footer { border-top: 1px solid var(--border); padding: 8px 12px; max-height: 180
 "use strict";
 const $ = (id) => document.getElementById(id);
 const state = { catalog: [], workflow: null, selected: -1, dirty: false };
+let dragState = null;
+let pendingDrop = null;
 const NAME_PATTERN = /^[A-Za-z][A-Za-z0-9_-]*$/;
 const REFERENCE_HINT = "支持引用：${inputs.x} / ${steps.节点.outputs.键} / ${loop.item} / ${error.code}";
 
@@ -151,21 +156,42 @@ function renderPalette() {
     kindSpan.textContent = manifest.kind;
     li.appendChild(idSpan);
     li.appendChild(kindSpan);
+    li.draggable = true;
+    li.addEventListener("dragstart", (e) => {
+      dragState = { type: "new", command: manifest.id };
+      e.dataTransfer.effectAllowed = "copy";
+    });
+    li.addEventListener("dragend", handleDragEnd);
     li.addEventListener("click", () => appendAction(manifest.id));
     list.appendChild(li);
   }
 }
 
 function appendAction(command) {
+  insertAction(command, state.workflow.root.children.length);
+}
+
+function insertAction(command, index) {
   const children = state.workflow.root.children;
   const base = command.split(".").pop();
   let id = base;
   let n = 2;
   while (children.some((c) => c.id === id)) { id = `${base}${n}`; n += 1; }
-  children.push({ type: "action", id, command, with: {} });
-  state.selected = children.length - 1;
+  children.splice(index, 0, { type: "action", id, command, with: {} });
+  state.selected = index;
   markDirty();
   render();
+}
+
+function moveNodeTo(from, to) {
+  const children = state.workflow.root.children;
+  if (to < 0) to = 0;
+  if (to > children.length) to = children.length;
+  const insertAt = to > from ? to - 1 : to;
+  if (insertAt === from) return;
+  const [node] = children.splice(from, 1);
+  children.splice(insertAt, 0, node);
+  state.selected = insertAt;
 }
 
 function moveNode(index, delta) {
@@ -186,6 +212,52 @@ function removeNode(index) {
   else if (state.selected > index) state.selected -= 1;
   markDirty();
   render();
+}
+
+function clearDropMarkers() {
+  for (const li of document.querySelectorAll("#canvas li[data-node]")) {
+    li.classList.remove("drop-above", "drop-below");
+  }
+}
+
+function handleDragEnd() {
+  dragState = null;
+  pendingDrop = null;
+  clearDropMarkers();
+}
+
+function handleCanvasDragOver(e) {
+  if (!dragState) return;
+  e.preventDefault();
+  e.dataTransfer.dropEffect = dragState.type === "new" ? "copy" : "move";
+  const li = e.target.closest("#canvas li[data-node]");
+  const children = state.workflow.root.children;
+  if (!li) {
+    pendingDrop = children.length;
+    clearDropMarkers();
+    return;
+  }
+  const index = children.findIndex((c) => c.id === li.dataset.node);
+  if (index < 0) return;
+  const rect = li.getBoundingClientRect();
+  const before = e.clientY < rect.top + rect.height / 2;
+  pendingDrop = before ? index : index + 1;
+  clearDropMarkers();
+  li.classList.add(before ? "drop-above" : "drop-below");
+}
+
+function handleCanvasDrop(e) {
+  if (!dragState || pendingDrop === null) return;
+  e.preventDefault();
+  if (dragState.type === "new") {
+    insertAction(dragState.command, pendingDrop);
+  } else {
+    moveNodeTo(dragState.from, pendingDrop);
+    markDirty();
+    render();
+  }
+  pendingDrop = null;
+  clearDropMarkers();
 }
 
 function render() {
@@ -232,6 +304,16 @@ function renderCanvas() {
     li.appendChild(cmd);
     li.appendChild(args);
     li.appendChild(ops);
+    li.draggable = true;
+    li.addEventListener("dragstart", (e) => {
+      dragState = { type: "move", from: index };
+      e.dataTransfer.effectAllowed = "move";
+      li.classList.add("dragging");
+    });
+    li.addEventListener("dragend", () => {
+      li.classList.remove("dragging");
+      handleDragEnd();
+    });
     li.addEventListener("click", () => { state.selected = index; render(); });
     list.appendChild(li);
   });
@@ -487,6 +569,12 @@ async function init() {
   await refreshOpenList();
   newWorkflow();
   $("palette-filter").addEventListener("input", renderPalette);
+  const canvas = $("canvas");
+  canvas.addEventListener("dragover", handleCanvasDragOver);
+  canvas.addEventListener("drop", handleCanvasDrop);
+  canvas.addEventListener("dragleave", (e) => {
+    if (e.target === canvas) clearDropMarkers();
+  });
   $("btn-new").addEventListener("click", () => { newWorkflow(); showCompileMessage("已新建草稿", true); });
   $("open-select").addEventListener("change", (e) => { if (e.target.value) openWorkflow(e.target.value); });
   $("btn-save").addEventListener("click", saveWorkflow);

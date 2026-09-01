@@ -25,6 +25,12 @@ def _read_workflow(base: str, name: str) -> dict:
         return json.loads(response.read().decode("utf-8"))
 
 
+def _canvas_order(page) -> list[str]:
+    return page.eval_on_selector_all(
+        "#canvas li[data-node]", "els => els.map(e => e.dataset.node)"
+    )
+
+
 def test_editor_vertical_slice(server):
     base = f"http://127.0.0.1:{server.port}"
     with sync_playwright() as p:
@@ -39,6 +45,19 @@ def test_editor_vertical_slice(server):
         page.wait_for_selector('#canvas li[data-node="launch"]')
         page.click('[data-command="browser.navigate"]')
         page.wait_for_selector('#canvas li[data-node="navigate"]')
+
+        page.locator('[data-command="browser.close"]').drag_to(
+            page.locator('#canvas li[data-node="launch"]'),
+            target_position={"x": 30, "y": 3},
+        )
+        page.wait_for_selector('#canvas li[data-node="close"]')
+        assert _canvas_order(page) == ["close", "launch", "navigate"]
+
+        page.locator('#canvas li[data-node="navigate"]').drag_to(
+            page.locator('#canvas li[data-node="launch"]'),
+            target_position={"x": 30, "y": 3},
+        )
+        assert _canvas_order(page) == ["close", "navigate", "launch"]
 
         page.click('#canvas li[data-node="navigate"]')
         url_field = page.locator('#props-body input[data-field="url"]')
@@ -63,10 +82,11 @@ def test_editor_vertical_slice(server):
         page.wait_for_selector('[data-command="browser.launch"]')
         page.select_option("#open-select", "editor-e2e")
         page.wait_for_selector('#canvas li[data-node="navigate"]')
-        assert page.locator("#canvas li[data-node]").count() == 2
+        assert page.locator("#canvas li[data-node]").count() == 3
+        assert _canvas_order(page) == ["close", "navigate", "launch"]
         browser.close()
 
     doc = _read_workflow(base, "editor-e2e")
-    assert doc["root"]["children"][0]["command"] == "browser.launch"
-    assert doc["root"]["children"][1]["command"] == "browser.navigate"
+    commands = [child["command"] for child in doc["root"]["children"]]
+    assert commands == ["browser.close", "browser.navigate", "browser.launch"]
     assert doc["root"]["children"][1]["with"]["url"] == "http://127.0.0.1:9/"
