@@ -30,3 +30,4 @@ Format: `YYYY-MM-DD | feature | status | evidence`
 2026-09-01 | capture-extension-research | added | 复核调研 chrome-relay（Native Messaging 免弹窗、Python host 可行）与 Playwright MCP --extension（核实默认每连接批准 + profile 唯一 token 绕过 + 标签组隔离）；修正"扩展=零弹窗"误判；降级链定稿：M10a 持久 profile → M10b chrome-inspect-ws（S1 通过）→ M10c 自研扩展（token 配对，立项不实装）；Panerelay/MCP 传输降记录备查，capture-transport.md §2.3-§2.5/§3 与 ADR 0007 §4 已更新
 2026-09-01 | M9.1-editor-dnd | done | 编辑器拖拽：命令面板拖入画布任意位置插入（上/下半区落点指示）+ 画布节点拖拽排序，HTML5 DnD 零依赖；E2E 扩展拖入插入与重排断言 3 连跑稳定；87 tests + full gate 全绿
 2026-09-01 | M11-editor-tree | active | 结构化树形画布立项：范式决策（树形非 DAG、快照撤销 50 步、静态拆分 allowlist）、拖拽先行验证片为显式确认门；实现由独立 agent 按 M11 任务单执行
+2026-09-02 | M11-editor-tree | slice0+1 done | 切片 0（/static/{name} 硬编码 allowlist 路由 + 面板分组数据源）与切片 1（路径寻址树模型/全树唯一 id/禁止移入自身子树、递归缩进色带渲染、控制流分组、DnD v2 子树拖拽+空容器落点+48px 边缘自动滚动、schema default 构造）完成；静态文件拆分 index.html/app.js/styles.css；嵌套拖入保存读回 E2E ×3 稳定 + /static 合同测试 2 项；90 tests + full gate 全绿；**暂停等待维护者确认拖拽体验**

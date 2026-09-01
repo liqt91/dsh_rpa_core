@@ -90,3 +90,52 @@ def test_editor_vertical_slice(server):
     commands = [child["command"] for child in doc["root"]["children"]]
     assert commands == ["browser.close", "browser.navigate", "browser.launch"]
     assert doc["root"]["children"][1]["with"]["url"] == "http://127.0.0.1:9/"
+
+
+def test_editor_nested_containers(server):
+    base = f"http://127.0.0.1:{server.port}"
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
+        page.goto(f"{base}/")
+        page.wait_for_selector('[data-command="browser.launch"]')
+
+        # 拖入 if 容器（空画布落点）
+        page.locator('[data-flow="if"]').drag_to(page.locator("#canvas li.hint"))
+        page.wait_for_selector('#canvas li[data-node="if"]')
+
+        # then 空分支落点拖入 launch，else 空分支落点拖入 navigate
+        page.locator('[data-command="browser.launch"]').drag_to(
+            page.locator('li[data-node="if"] li.drop-empty').first
+        )
+        page.wait_for_selector('li[data-node="if"] li[data-node="launch"]')
+        page.locator('[data-command="browser.navigate"]').drag_to(
+            page.locator('li[data-node="if"] li.drop-empty').first
+        )
+        page.wait_for_selector('li[data-node="if"] li[data-node="navigate"]')
+
+        # 嵌套 forEach 拖入 then 分支 launch 之后
+        page.locator('[data-flow="forEach"]').drag_to(
+            page.locator('li[data-node="if"] li[data-node="launch"]'),
+            target_position={"x": 60, "y": 30},
+        )
+        page.wait_for_selector('li[data-node="if"] li[data-node="forEach"]')
+
+        page.fill("#file-name", "nested-e2e")
+        page.click("#btn-save")
+        page.wait_for_selector("#compile-panel .ok")
+
+        page.reload()
+        page.wait_for_selector('[data-command="browser.launch"]')
+        page.select_option("#open-select", "nested-e2e")
+        page.wait_for_selector('li[data-node="if"] li[data-node="launch"]')
+        page.wait_for_selector('li[data-node="if"] li[data-node="navigate"]')
+        page.wait_for_selector('li[data-node="if"] li[data-node="forEach"]')
+        browser.close()
+
+    doc = _read_workflow(base, "nested-e2e")
+    if_node = doc["root"]["children"][0]
+    assert if_node["type"] == "if"
+    assert if_node["then"][0]["command"] == "browser.launch"
+    assert if_node["then"][1]["type"] == "forEach"
+    assert if_node["else"][0]["command"] == "browser.navigate"

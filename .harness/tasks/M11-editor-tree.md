@@ -14,17 +14,17 @@
 
 ## 前置（切片 0）
 
-- [ ] Harness 交接：本任务单置 active（M10-capture 回 planned，S1 证据保留）、feature_list/project_state/BACKLOG/PROGRESS 同步
-- [ ] ADR 0008 增补：dev server 静态资源允许多文件——`GET /static/{name}`，server.py 内**硬编码 allowlist**（app.js/styles.css），无目录列举、无路径遍历面，仍零构建
-- [ ] 命令面板分组数据源：按 manifest id 首段前缀分组（browser/data/desktop/desktop_win32/…）+ "控制流"分组（sequence/if/forEach/try/return）
+- [x] Harness 交接：本任务单置 active（M10-capture 回 planned，S1 证据保留）、feature_list/project_state/BACKLOG/PROGRESS 同步
+- [x] ADR 0008 增补：dev server 静态资源允许多文件——`GET /static/{name}`，server.py 内**硬编码 allowlist**（app.js/styles.css），无目录列举、无路径遍历面，仍零构建
+- [x] 命令面板分组数据源：按 manifest id 首段前缀分组（browser/data/desktop/desktop_win32/…）+ "控制流"分组（sequence/if/forEach/try/return）
 
 ## 切片 1（先行验证片，完成后暂停等确认）
 
-- [ ] 树模型层（app.js）：路径寻址 `find(path)`/`insert(path,node)`/`removeSubtree(path)`/`moveSubtree(src,dstPath,dstIndex)`；**id 全树唯一**（编译器全局查重，新建/粘贴生成 id 时必须查全树，不得只查兄弟层）；子树移动禁止落入自身子树
-- [ ] 树形渲染：递归渲染缩进色带（每层彩色背景带）、容器行左侧竖线 + 类型徽标 + 参数摘要、return 节点终止样式；现有线性 workflow 向后兼容渲染
-- [ ] 面板：控制流分组（sequence/if/forEach/try/return 可拖入画布）；点击/拖拽双通道保留
-- [ ] DnD v2：子树整体拖拽（grip 手柄）；落点 = 行上/下半区（插入线指示）+ **空容器落点指示**；拖拽边缘自动滚动（阈值 48px + rAF）；拖入命令时按 input_schema default 构造 with；拖入容器节点时自动带标准子结构（if→condition+then/else 空数组，try→catch 空数组）
-- [ ] E2E：拖入容器、嵌套结构保存读回一致
+- [x] 树模型层（app.js）：路径寻址 `find(path)`/`insert(path,node)`/`removeSubtree(path)`/`moveSubtree(src,dstPath,dstIndex)`；**id 全树唯一**（编译器全局查重，新建/粘贴生成 id 时必须查全树，不得只查兄弟层）；子树移动禁止落入自身子树
+- [x] 树形渲染：递归渲染缩进色带（每层彩色背景带）、容器行左侧竖线 + 类型徽标 + 参数摘要、return 节点终止样式；现有线性 workflow 向后兼容渲染
+- [x] 面板：控制流分组（sequence/if/forEach/try/return 可拖入画布）；点击/拖拽双通道保留
+- [x] DnD v2：子树整体拖拽（grip 手柄）；落点 = 行上/下半区（插入线指示）+ **空容器落点指示**；拖拽边缘自动滚动（阈值 48px + rAF）；拖入命令时按 input_schema default 构造 with；拖入容器节点时自动带标准子结构（if→condition+then/else 空数组，try→catch 空数组）
+- [x] E2E：拖入容器、嵌套结构保存读回一致
 - [ ] **暂停点：请维护者操作确认拖拽体验，确认后继续**
 
 ## 切片 2-5（确认后依次执行）

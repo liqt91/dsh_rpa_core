@@ -206,6 +206,37 @@ def test_editor_page_no_static_leak(server):
         assert payload["error"] == "NOT_FOUND"
 
 
+def test_static_assets_served_from_allowlist(server):
+    base = f"http://127.0.0.1:{server.port}"
+    for name, content_type in (
+        ("app.js", "text/javascript"),
+        ("styles.css", "text/css"),
+    ):
+        request = urllib.request.Request(f"{base}/static/{name}")
+        with urllib.request.urlopen(request) as response:
+            assert response.status == 200
+            assert response.headers["Content-Type"].startswith(content_type)
+            assert response.read()
+
+
+def test_static_assets_reject_unknown_and_traversal(server):
+    base = f"http://127.0.0.1:{server.port}"
+    for path in (
+        "/static/nope.js",
+        "/static/index.html",
+        "/static/..%2Fserver.py",
+        "/static/..%2F..%2Fpyproject.toml",
+        "/static/sub%2Fapp.js",
+    ):
+        status, payload = _request("GET", path, base=base)
+        assert status == 404
+        assert payload["error"] == "NOT_FOUND"
+
+    status, payload = _request("POST", "/static/app.js", {}, base=base)
+    assert status == 405
+    assert payload["error"] == "METHOD_NOT_ALLOWED"
+
+
 def test_editor_page_rejects_post(server):
     base = f"http://127.0.0.1:{server.port}"
     status, payload = _request("POST", "/", {}, base=base)

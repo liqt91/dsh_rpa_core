@@ -16,6 +16,14 @@ _JSON_TYPE = "application/json; charset=utf-8"
 
 _WORKFLOW_SEGMENT_PREFIX = "/api/workflows/"
 _CAPTURE_PREFIX = "/api/capture/"
+_STATIC_PREFIX = "/static/"
+
+# ADR 0008 §4：硬编码静态资源 allowlist，不开放任意路径、不做目录列举。
+_STATIC_FILES = {
+    "app.js": "text/javascript; charset=utf-8",
+    "styles.css": "text/css; charset=utf-8",
+}
+_STATIC_ROOT = Path(__file__).resolve().parent / "static"
 
 
 class _RequestHandler(BaseHTTPRequestHandler):
@@ -56,8 +64,22 @@ class _RequestHandler(BaseHTTPRequestHandler):
             if method != "GET":
                 raise ApiError(405, "METHOD_NOT_ALLOWED", "use GET for the editor page")
             return 200, self.editor_html, "text/html; charset=utf-8"
+        if path.startswith(_STATIC_PREFIX):
+            if method != "GET":
+                raise ApiError(405, "METHOD_NOT_ALLOWED", "use GET for static assets")
+            return self._route_static(path)
         payload = self._route_api(method, path)
         return 200, _encode(payload), _JSON_TYPE
+
+    def _route_static(self, path: str) -> tuple[int, bytes, str]:
+        name = path[len(_STATIC_PREFIX) :]
+        content_type = _STATIC_FILES.get(name)
+        if content_type is None:
+            raise ApiError(404, "NOT_FOUND", f"no route for {path}")
+        file_path = _STATIC_ROOT / name
+        if file_path.resolve().parent != _STATIC_ROOT:
+            raise ApiError(403, "FORBIDDEN", f"no route for {path}")
+        return 200, file_path.read_bytes(), content_type
 
     def _route_api(self, method: str, path: str) -> dict:
         if path == "/api/catalog":
