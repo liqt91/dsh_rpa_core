@@ -53,8 +53,14 @@ class PlaywrightExecutor(CommandExecutor):
         try:
             if command == "browser.launch":
                 runtime = await self._ensure_runtime()
-                browser = await runtime.chromium.launch(headless=bool(inputs.get("headless", True)))
-                context = await browser.new_context()
+                user_agent = inputs.get("userAgent")
+                browser = await runtime.chromium.launch(
+                    headless=bool(inputs.get("headless", True)),
+                    ignore_default_args=["--enable-automation"],
+                )
+                context = await browser.new_context(
+                    user_agent=str(user_agent) if user_agent else None
+                )
                 page = await context.new_page()
                 session_id = str(uuid.uuid4())
                 self._sessions[session_id] = (browser, context, page)

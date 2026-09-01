@@ -14,8 +14,12 @@ from rpa_core.model.errors import ErrorCode
 
 def execute(invocation: CommandInvocation) -> CommandResult:
     if invocation.command_id == "data.writeJson":
-        output_path = Path(str(invocation.inputs["path"])).resolve()
         workspace = Path(str(invocation.inputs["workspace"])).resolve()
+        raw_path = Path(str(invocation.inputs["path"]))
+        if raw_path.is_absolute():
+            output_path = raw_path.resolve()
+        else:
+            output_path = (workspace / raw_path).resolve()
         if output_path != workspace and workspace not in output_path.parents:
             return CommandResult.failure(
                 ErrorCode.CAPABILITY_DENIED,

@@ -1,0 +1,76 @@
+{
+  "schema_version": "1.0",
+  "id": "baidu-news-top10",
+  "name": "Baidu search news and save top 10 result titles",
+  "inputs": {
+    "query": "新闻",
+    "resultSelector": "#content_left h3",
+    "workspace": "D:/Users/Administrator/Documents/代码/rpa_core/run_artifacts"
+  },
+  "root": {
+    "type": "sequence",
+    "id": "root",
+    "children": [
+      {
+        "type": "action",
+        "id": "launch",
+        "command": "browser.launch",
+        "with": {
+          "headless": false,
+          "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+        }
+      },
+      {
+        "type": "action",
+        "id": "openHome",
+        "command": "browser.navigate",
+        "with": {
+          "sessionId": "${steps.launch.outputs.sessionId}",
+          "url": "https://www.baidu.com/s?wd=%E6%96%B0%E9%97%BB",
+          "timeoutMs": 20000
+        }
+      },
+      {
+        "type": "action",
+        "id": "waitForResults",
+        "command": "browser.waitFor",
+        "with": {
+          "sessionId": "${steps.launch.outputs.sessionId}",
+          "selector": "${inputs.resultSelector}",
+          "timeoutMs": 15000
+        }
+      },
+      {
+        "type": "action",
+        "id": "grabTitles",
+        "command": "browser.queryAll",
+        "with": {
+          "sessionId": "${steps.launch.outputs.sessionId}",
+          "selector": "${inputs.resultSelector}"
+        }
+      },
+      {
+        "type": "action",
+        "id": "saveTitles",
+        "command": "data.writeJson",
+        "with": {
+          "workspace": "${inputs.workspace}",
+          "path": "baidu-top10.txt",
+          "data": {
+            "query": "${inputs.query}",
+            "note": "top 10 result titles from page 1",
+            "titles": "${steps.grabTitles.outputs.items}"
+          }
+        }
+      },
+      {
+        "type": "action",
+        "id": "close",
+        "command": "browser.close",
+        "with": {
+          "sessionId": "${steps.launch.outputs.sessionId}"
+        }
+      }
+    ]
+  }
+}

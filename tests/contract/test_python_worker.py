@@ -28,3 +28,26 @@ def test_python_worker_writes_only_inside_workspace(tmp_path):
     assert effect.status.value == "committed"
     assert effect.resource == f"file:{output.resolve()}"
     assert effect.idempotency_key is not None
+
+
+def test_python_worker_resolves_relative_path_against_workspace(tmp_path):
+    workspace = tmp_path / "ws"
+
+    async def run(path):
+        executor = PythonWorkerExecutor()
+        invocation = CommandInvocation(
+            command_id="data.writeJson",
+            command_version="1.0.0",
+            run_id="run",
+            step_id="save",
+            inputs={"workspace": str(workspace), "path": path, "data": {"ok": True}},
+        )
+        return await executor.execute(invocation, asyncio.Event())
+
+    inside = asyncio.run(run("out/report.json"))
+    assert inside.status == "success"
+    assert (workspace / "out" / "report.json").exists()
+
+    escaping = asyncio.run(run("../escape.txt"))
+    assert escaping.status == "error"
+    assert escaping.error.code == "CAPABILITY_DENIED"
