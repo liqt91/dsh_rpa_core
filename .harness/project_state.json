@@ -2,17 +2,12 @@
   "project": "rpa_core",
   "phase": "desktop-driver-validation",
   "status": "active",
-  "completed_milestone": "M1.2-effect-contract",
-  "active_milestone": "M2.1-legacy-element-importer",
-  "active_plan": ".harness/tasks/M2.1-element-importer.md",
-  "active_feature": "legacy-element-importer",
-  "next_milestone": "M2.1-legacy-element-importer",
-  "later_milestones": [
-    "M2-windows-desktop",
-    "M2.1-legacy-element-importer",
-    "M3-checkpoint-recovery",
-    "M4-pause-resume"
-  ],
+  "completed_milestone": "M2.2-uia-winforms",
+  "active_milestone": "M5-api-decision",
+  "active_plan": ".harness/tasks/M5-api-decision.md",
+  "active_feature": "api-surface-decision",
+  "next_milestone": "M5-api-decision",
+  "later_milestones": [],
   "task_index": ".harness/tasks/BACKLOG.md",
   "scope": {
     "in": [

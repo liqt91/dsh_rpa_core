@@ -1,0 +1,498 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>rpa_core 运行时链路图</title>
+  <style>
+    :root {
+      --bg: #07111f;
+      --panel: rgba(14, 22, 42, 0.92);
+      --text: #eaf1ff;
+      --muted: #a6b7d9;
+      --accent: #7da8ff;
+      --accent2: #67e8c8;
+      --warning: #ffcb6b;
+      --danger: #ff8f8f;
+      --border: rgba(135, 160, 215, 0.16);
+      --code: #07101c;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: Inter, "PingFang SC", "Microsoft YaHei", Segoe UI, Roboto, Arial, sans-serif;
+      background:
+        radial-gradient(circle at top left, rgba(125,168,255,.18), transparent 30%),
+        radial-gradient(circle at top right, rgba(103,232,200,.10), transparent 24%),
+        linear-gradient(180deg, #06101c 0%, #091222 100%);
+      color: var(--text);
+      line-height: 1.6;
+      padding: 40px 24px 64px;
+    }
+    main { max-width: 1000px; margin: 0 auto; }
+    h1 { font-size: 26px; margin: 0 0 6px; }
+    h1 span { color: var(--accent2); }
+    p.sub { color: var(--muted); margin: 0 0 30px; }
+    h2 { font-size: 18px; margin: 44px 0 14px; color: var(--accent); border-left: 3px solid var(--accent); padding-left: 10px; }
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 16px 20px;
+      margin-bottom: 14px;
+      box-shadow: 0 10px 28px rgba(0,0,0,.18);
+    }
+    .card-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 8px; }
+    .num {
+      font-family: Consolas, monospace; font-size: 12px; color: var(--accent2);
+      border: 1px solid rgba(103,232,200,.4); border-radius: 6px; padding: 1px 7px;
+    }
+    .card-head b { font-size: 15.5px; }
+    .card-head .en { font-family: Consolas, "Cascadia Mono", monospace; color: var(--accent); font-size: 12.5px; }
+    .card-head .file { margin-left: auto; font-size: 11.5px; color: var(--muted); font-family: Consolas, monospace; }
+    .does { margin: 6px 0 10px; padding-left: 0; list-style: none; }
+    .does li {
+      font-size: 13.5px; padding: 2.5px 0 2.5px 20px; position: relative; color: #dbe6ff;
+    }
+    .does li::before { content: "▸"; position: absolute; left: 4px; color: var(--accent2); }
+    .does .en, code {
+      font-family: Consolas, "Cascadia Mono", monospace; font-size: 12px;
+      color: var(--accent2);
+    }
+    .does code {
+      background: var(--code); border: 1px solid var(--border);
+      border-radius: 5px; padding: 0 5px;
+    }
+    .io {
+      font-size: 12.5px; color: var(--muted);
+      background: rgba(7,16,28,.6); border-radius: 8px; padding: 6px 12px;
+    }
+    .io b { color: var(--accent); font-weight: 600; }
+    .why {
+      margin-top: 8px;
+      font-size: 12px; color: #cfeee2;
+      border-left: 2px solid rgba(103, 232, 200, .55);
+      background: rgba(103, 232, 200, .06);
+      border-radius: 0 8px 8px 0;
+      padding: 4px 12px;
+    }
+    .why b { color: var(--accent2); font-weight: 600; }
+    .flow-arrow { text-align: center; color: var(--muted); font-size: 12px; margin: -4px 0 12px; }
+    .flow-arrow::before { content: "▼"; color: var(--accent); display: block; font-size: 11px; }
+    .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .grid4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+    .grid4 .card { margin-bottom: 0; padding: 13px 15px; }
+    .grid4 .does li { font-size: 12.5px; }
+    .term {
+      background: rgba(23,34,60,.85);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 12px 15px;
+    }
+    .term b { font-size: 14px; }
+    .term .en { font-family: Consolas, monospace; color: var(--accent); font-size: 12px; margin-left: 6px; }
+    .term p { margin: 5px 0 0; font-size: 12.8px; color: #dbe6ff; }
+    .term .sim { color: var(--accent2); }
+    .term .loc { display: block; margin-top: 5px; font-family: Consolas, monospace; font-size: 11px; color: var(--muted); }
+    .state-row { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 12px; }
+    .state {
+      border-radius: 10px; padding: 8px 14px; font-size: 13px; flex: 1 1 260px;
+      border: 1px solid var(--border); background: rgba(23,34,60,.85);
+    }
+    .state small { display: block; color: var(--muted); font-size: 11.5px; margin-top: 2px; }
+    .state.ok { border-color: rgba(103,232,200,.5); }
+    .state.warn { border-color: rgba(255,203,107,.55); }
+    .state.bad { border-color: rgba(255,143,143,.5); }
+    .gate { display: flex; flex-direction: column; gap: 6px; }
+    .gate .step {
+      background: rgba(23,34,60,.85); border: 1px solid rgba(125,168,255,.35);
+      border-radius: 8px; padding: 7px 12px; font-size: 13px;
+    }
+    .gate .step small { color: var(--muted); display: block; font-size: 11.5px; }
+    footer { margin-top: 44px; color: var(--muted); font-size: 12.5px; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>rpa_core <span>运行时链路图</span></h1>
+  <p class="sub">
+    全文用一个厨房类比贯穿：workflow 是菜谱，orchestrator 是厨师长，executor 是各工种厨师。
+    每个环节列出「做了什么」的具体动作，末尾一行保留设计原因。
+  </p>
+
+  <h2>⓪ 名词速查（先看这页再往下读）</h2>
+  <div class="grid2">
+    <div class="term">
+      <b>workflow（工作流）</b><span class="en">model/workflow.py</span>
+      <p>一份 JSON 写的自动化剧本：先做什么、遇到条件怎么办、循环几次。≈ <span class="sim">菜谱</span>。包含唯一 id、默认输入 inputs 和一棵节点树 root。</p>
+    </div>
+    <div class="term">
+      <b>AST（workflow AST）</b><span class="en">model/workflow.py</span>
+      <p>Abstract Syntax Tree，抽象语法树：workflow JSON 加载进内存后的<b>树状结构</b>——「sequence 依次做」是父节点，if / forEach 是分支 / 循环节点，action（调一条命令）是叶子。运行时不逐字读 JSON，而是<b>递归遍历这棵树</b>来执行。≈ <span class="sim">把菜谱拆成有嵌套关系的步骤树</span>。</p>
+    </div>
+    <div class="term">
+      <b>manifest（命令清单）</b><span class="en">commands/*.json</span>
+      <p>每条命令的「操作规范卡」：叫什么（id 如 <code>browser.click</code>）、哪个执行器接活、输入输出长什么样（JSON Schema）、对外部世界有什么影响（effect）、能不能重试。≈ <span class="sim">每道工序的工艺卡</span>。</p>
+    </div>
+    <div class="term">
+      <b>catalog（命令目录）</b><span class="en">catalog/loader.py</span>
+      <p>启动时把 commands/ 下全部 manifest 加载成的<b>只读总表</b>：命令 id → 规范。附带 sha256 <b>digest（指纹）</b>——内容变一个字节指纹就变，用于检测「恢复时契约是否还是当初那份」。≈ <span class="sim">整本装订好的规范册 + 封条编号</span>。</p>
+    </div>
+    <div class="term">
+      <b>compiler（编译器）</b><span class="en">compiler/compiler.py</span>
+      <p>开跑前的<b>静态检查员</b>：遍历 workflow 树，查引用是否存在、命令是否在 catalog 里、能力是否被授权、危险命令有没有配重试。检查通过才发「执行单」。≈ <span class="sim">开灶前对照规范册逐项核对食材和工具</span>。</p>
+    </div>
+    <div class="term">
+      <b>ExecutionPlan（执行计划）</b><span class="en">compiler/plan.py</span>
+      <p>检查通过后冻结的执行依据：workflow 树 + catalog 指纹 + 所需能力。之后 orchestrator 只认这份单据，不再回头翻 JSON。≈ <span class="sim">盖章封存的单子，中途不许改</span>。</p>
+    </div>
+    <div class="term">
+      <b>orchestrator（编排器）</b><span class="en">runtime/orchestrator.py</span>
+      <p>整个运行的<b>总指挥</b>：拿着执行单从树根开始走，把每个 action 派给对应执行器；管超时、重试、取消、进度检查点和终态判定。它自己<b>不直接操作浏览器/窗口/文件</b>。≈ <span class="sim">厨师长：只派活、看表、记账，不掌勺</span>。</p>
+    </div>
+    <div class="term">
+      <b>executor（执行器）</b><span class="en">executors/</span>
+      <p>真正<b>动手干活的组件</b>：browser.playwright 开浏览器点页面、desktop.uia / desktop.win32 操作 Windows 窗口控件、python.worker 在子进程里跑用户 Python。输入一条 <code>CommandInvocation</code>（这次调用谁、参数是什么），回一张 <code>CommandResult</code>（结果回执），仅此而已。≈ <span class="sim">各工种厨师</span>。</p>
+    </div>
+    <div class="term">
+      <b>ExecutorRegistry（执行器注册表）</b><span class="en">executors/registry.py</span>
+      <p>一张<b>排班表</b>：执行器名字 → 执行器实例（如 <code>"browser.playwright" → PlaywrightExecutor</code>）。orchestrator 从 manifest 里读到「这活归 browser.playwright」，就按名字来这里要人。CLI 启动时组装一次。</p>
+    </div>
+    <div class="term">
+      <b>CommandResult / CommandInvocation</b><span class="en">model/command.py</span>
+      <p>厨师长派活的<b>工单</b>（Invocation：命令、参数、第几次尝试）和厨师交回的<b>回执</b>（Result：成功与否、产出值、副作用证据 effects、诊断信息）。规则：厨师只填回执，绝不直接改厨师长的账本。</p>
+    </div>
+    <div class="term">
+      <b>scopes（变量作用域）/ resolver（解析器）</b><span class="en">runtime/resolver.py</span>
+      <p>运行中的<b>备菜台</b>：<code>inputs</code> 放用户原料、<code>steps</code> 放每步产出、<code>loop</code> 放当前循环轮次。workflow 里写 <code>${steps.step1.outputs.title}</code>，resolver 负责整牌替换——按这个取料牌去备菜台取值，找不到立刻报错。</p>
+    </div>
+    <div class="term">
+      <b>effect / replay / idempotency（副作用契约）</b><span class="en">model/command.py</span>
+      <p>每条命令声明三件事：<b>effect.kind</b> 对外界的影响类型（只读 / 幂等写 / 危险写 / 会话）；<b>replay</b> 重做一次是否安全；<b>idempotency</b> 幂等键从哪来。失败回执里若带 <code>unknown</code> 副作用证据 = 「做没做成不知道」，运行时绝不自动重试。≈ <span class="sim">工艺卡上的风险等级</span>。</p>
+    </div>
+    <div class="term">
+      <b>events.jsonl / result.json（运行证据）</b><span class="en">runtime/events.py</span>
+      <p>流水线日志（每动一下追加一行）和最终质检报告（run 的终态、产出、错误）。两个都落盘 run 才算成功。≈ <span class="sim">操作日志 + 质检单</span>。</p>
+    </div>
+    <div class="term">
+      <b>checkpoint（检查点）</b><span class="en">runtime/checkpoint.py</span>
+      <p>每个 action 干完后拍的<b>进度快照</b>：哪些步骤确认完成、备菜台上是什么值。进程崩了或想接着跑，就从最近一份快照恢复，已完成的活不再重做。≈ <span class="sim">阶段完工拍照存档</span>。</p>
+    </div>
+    <div class="term">
+      <b>cancellation（取消）/ deadline（截止时间）</b>
+      <p>叫停铃和总时限。取消用 asyncio Event 传播：先通知执行器自行收尾清理，等它退出再终判。deadline 到点整棵执行树判超时。每次重试前都会查「还来不来得及」。</p>
+    </div>
+    <div class="term">
+      <b>RunHandle / RunResult</b><span class="en">model/runtime.py</span>
+      <p>RunHandle 是启动后拿到的<b>遥控器</b>（cancel / wait）；RunResult 是终态<b>成绩单</b>（状态、起止时间、outputs、返回值、错误、digest）。</p>
+    </div>
+  </div>
+
+  <h2>① 名词关系图（谁持有谁、谁调用谁）</h2>
+  <div class="panel" style="overflow-x:auto">
+    <svg viewBox="0 0 960 600" width="100%" style="min-width:900px" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <marker id="arw" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="#7da8ff"/>
+        </marker>
+        <marker id="arwW" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="#ffcb6b"/>
+        </marker>
+      </defs>
+
+      <text x="20" y="28" fill="#a6b7d9" font-size="12">编译期（run 之前）</text>
+      <text x="20" y="224" fill="#a6b7d9" font-size="12">运行期（run 之中）</text>
+
+      <!-- 编译期：文件 → 内存对象 → 执行单 -->
+      <rect x="20" y="44" width="140" height="48" rx="8" fill="rgba(103,232,200,.07)" stroke="rgba(103,232,200,.45)"/>
+      <text x="30" y="64" fill="#eaf1ff" font-size="12.5" font-weight="bold">workflow.json</text>
+      <text x="30" y="80" fill="#a6b7d9" font-size="10.5">菜谱（落盘文件）</text>
+      <line x1="160" y1="68" x2="196" y2="68" stroke="#7da8ff" stroke-width="1.4" marker-end="url(#arw)"/>
+      <text x="163" y="60" fill="#a6b7d9" font-size="10">加载</text>
+
+      <rect x="200" y="38" width="180" height="60" rx="8" fill="rgba(23,34,60,.9)" stroke="rgba(125,168,255,.5)"/>
+      <text x="210" y="58" fill="#eaf1ff" font-size="12.5" font-weight="bold">Workflow · AST 树</text>
+      <text x="210" y="74" fill="#a6b7d9" font-size="10.5">内存中的步骤树</text>
+      <text x="210" y="89" fill="#a6b7d9" font-size="10">sequence / if / forEach / action</text>
+
+      <rect x="20" y="130" width="140" height="48" rx="8" fill="rgba(103,232,200,.07)" stroke="rgba(103,232,200,.45)"/>
+      <text x="30" y="150" fill="#eaf1ff" font-size="12.5" font-weight="bold">commands/*.json</text>
+      <text x="30" y="166" fill="#a6b7d9" font-size="10.5">23 张工艺卡文件</text>
+      <line x1="160" y1="154" x2="196" y2="154" stroke="#7da8ff" stroke-width="1.4" marker-end="url(#arw)"/>
+
+      <rect x="200" y="130" width="170" height="48" rx="8" fill="rgba(23,34,60,.9)" stroke="rgba(125,168,255,.5)"/>
+      <text x="210" y="150" fill="#eaf1ff" font-size="12.5" font-weight="bold">CommandManifest</text>
+      <text x="210" y="166" fill="#a6b7d9" font-size="10.5">规范卡（校验后驻内存）</text>
+      <line x1="370" y1="154" x2="426" y2="154" stroke="#7da8ff" stroke-width="1.4" marker-end="url(#arw)"/>
+
+      <rect x="430" y="130" width="180" height="48" rx="8" fill="rgba(23,34,60,.9)" stroke="rgba(125,168,255,.5)"/>
+      <text x="440" y="150" fill="#eaf1ff" font-size="12.5" font-weight="bold">CommandCatalog</text>
+      <text x="440" y="166" fill="#a6b7d9" font-size="10.5">只读总表 + sha256 digest</text>
+
+      <rect x="430" y="40" width="130" height="60" rx="8" fill="rgba(23,34,60,.9)" stroke="rgba(255,203,107,.55)"/>
+      <text x="440" y="62" fill="#eaf1ff" font-size="12.5" font-weight="bold">compiler</text>
+      <text x="440" y="78" fill="#a6b7d9" font-size="10.5">静态检查（编译器）</text>
+      <line x1="380" y1="66" x2="426" y2="66" stroke="#7da8ff" stroke-width="1.4" marker-end="url(#arw)"/>
+      <line x1="520" y1="128" x2="506" y2="103" stroke="#7da8ff" stroke-width="1.4" marker-end="url(#arw)"/>
+
+      <rect x="620" y="40" width="190" height="60" rx="8" fill="rgba(23,34,60,.9)" stroke="rgba(125,168,255,.5)"/>
+      <text x="630" y="60" fill="#eaf1ff" font-size="12.5" font-weight="bold">ExecutionPlan 执行单</text>
+      <text x="630" y="76" fill="#a6b7d9" font-size="10.5">冻结：AST 树 + digest + 能力</text>
+      <line x1="560" y1="70" x2="616" y2="70" stroke="#7da8ff" stroke-width="1.4" marker-end="url(#arw)"/>
+      <line x1="610" y1="148" x2="672" y2="103" stroke="#7da8ff" stroke-width="1" stroke-dasharray="3 3" marker-end="url(#arw)"/>
+      <text x="616" y="132" fill="#a6b7d9" font-size="9.5">digest 写入</text>
+
+      <line x1="715" y1="100" x2="600" y2="236" stroke="#7da8ff" stroke-width="1.4" marker-end="url(#arw)"/>
+
+      <!-- 运行期 -->
+      <rect x="360" y="240" width="230" height="110" rx="10" fill="rgba(23,34,60,.9)" stroke="rgba(125,168,255,.75)" stroke-width="1.6"/>
+      <text x="372" y="262" fill="#eaf1ff" font-size="13" font-weight="bold">orchestrator 编排器（厨师长）</text>
+      <text x="372" y="280" fill="#a6b7d9" font-size="10.5">走 AST · 派单 · 收回执</text>
+      <text x="372" y="296" fill="#a6b7d9" font-size="10.5">超时 / 重试 / 取消 / 检查点</text>
+      <text x="372" y="312" fill="#a6b7d9" font-size="10.5">终态判定 + 落证据</text>
+      <text x="372" y="328" fill="#a6b7d9" font-size="10.5">start / resume</text>
+
+      <rect x="40" y="240" width="210" height="60" rx="8" fill="rgba(23,34,60,.9)" stroke="rgba(125,168,255,.5)"/>
+      <text x="50" y="262" fill="#eaf1ff" font-size="12.5" font-weight="bold">ExecutorRegistry 排班表</text>
+      <text x="50" y="278" fill="#a6b7d9" font-size="10.5">执行器名 → 执行器实例</text>
+      <line x1="358" y1="278" x2="254" y2="278" stroke="#7da8ff" stroke-width="1.4" marker-end="url(#arw)"/>
+      <text x="278" y="270" fill="#a6b7d9" font-size="10">按名字要人</text>
+
+      <rect x="700" y="240" width="230" height="110" rx="10" fill="rgba(23,34,60,.9)" stroke="rgba(125,168,255,.75)" stroke-width="1.6"/>
+      <text x="712" y="260" fill="#eaf1ff" font-size="13" font-weight="bold">executor × 4（真正掌勺）</text>
+      <text x="712" y="280" fill="#a6b7d9" font-size="10.5">browser.playwright</text>
+      <text x="712" y="296" fill="#a6b7d9" font-size="10.5">desktop.uia / desktop.win32</text>
+      <text x="712" y="312" fill="#a6b7d9" font-size="10.5">python.worker</text>
+      <text x="712" y="332" fill="#a6b7d9" font-size="10.5">入参工单 → 只回 CommandResult</text>
+      <line x1="592" y1="275" x2="696" y2="275" stroke="#7da8ff" stroke-width="1.4" marker-end="url(#arw)"/>
+      <text x="616" y="267" fill="#a6b7d9" font-size="10">派单 →</text>
+      <line x1="696" y1="320" x2="592" y2="320" stroke="#7da8ff" stroke-width="1.4" marker-end="url(#arw)"/>
+      <text x="628" y="340" fill="#a6b7d9" font-size="10">← 回执</text>
+
+      <rect x="40" y="356" width="210" height="96" rx="8" fill="rgba(23,34,60,.9)" stroke="rgba(125,168,255,.5)"/>
+      <text x="50" y="376" fill="#eaf1ff" font-size="12.5" font-weight="bold">scopes 备菜台</text>
+      <text x="50" y="394" fill="#a6b7d9" font-size="10.5">inputs 原料 / steps 各步产出</text>
+      <text x="50" y="410" fill="#a6b7d9" font-size="10.5">loop 当前轮次</text>
+      <text x="50" y="430" fill="#67e8c8" font-size="10.5">resolver 按 ${...} 取值</text>
+      <line x1="356" y1="342" x2="254" y2="392" stroke="#7da8ff" stroke-width="1.4" marker-start="url(#arw)" marker-end="url(#arw)"/>
+      <text x="286" y="360" fill="#a6b7d9" font-size="10">读写</text>
+
+      <rect x="360" y="392" width="110" height="48" rx="8" fill="rgba(23,34,60,.9)" stroke="rgba(125,168,255,.5)"/>
+      <text x="368" y="410" fill="#eaf1ff" font-size="11.5" font-weight="bold">RunHandle</text>
+      <text x="368" y="426" fill="#a6b7d9" font-size="10">遥控器 cancel/wait</text>
+      <line x1="415" y1="350" x2="413" y2="388" stroke="#7da8ff" stroke-width="1.4" marker-end="url(#arw)"/>
+
+      <rect x="520" y="392" width="150" height="48" rx="8" fill="rgba(23,34,60,.9)" stroke="rgba(125,168,255,.5)"/>
+      <text x="530" y="410" fill="#eaf1ff" font-size="11.5" font-weight="bold">RunResult 成绩单</text>
+      <text x="530" y="426" fill="#a6b7d9" font-size="10">终态 + outputs + error</text>
+      <line x1="535" y1="350" x2="585" y2="388" stroke="#7da8ff" stroke-width="1.4" marker-end="url(#arw)"/>
+
+      <rect x="700" y="380" width="230" height="34" rx="7" fill="rgba(103,232,200,.07)" stroke="rgba(103,232,200,.45)"/>
+      <text x="710" y="402" fill="#eaf1ff" font-size="11.5" font-weight="bold">events.jsonl（流水线日志）</text>
+      <rect x="700" y="424" width="230" height="34" rx="7" fill="rgba(103,232,200,.07)" stroke="rgba(103,232,200,.45)"/>
+      <text x="710" y="446" fill="#eaf1ff" font-size="11.5" font-weight="bold">result.json（终态质检单）</text>
+      <rect x="700" y="468" width="230" height="34" rx="7" fill="rgba(103,232,200,.07)" stroke="rgba(103,232,200,.45)"/>
+      <text x="710" y="490" fill="#eaf1ff" font-size="11.5" font-weight="bold">checkpoint.json（进度快照）</text>
+      <path d="M 480 350 L 480 470 L 696 486" fill="none" stroke="#7da8ff" stroke-width="1.4" marker-end="url(#arw)"/>
+      <text x="492" y="462" fill="#a6b7d9" font-size="10">追加 / 落盘</text>
+
+      <path d="M 700 487 C 540 552, 420 516, 418 354" fill="none" stroke="#ffcb6b" stroke-width="1.4" stroke-dasharray="5 4" marker-end="url(#arwW)"/>
+      <text x="432" y="548" fill="#ffcb6b" font-size="11">resume：崩溃 / 失败后过 5 道门，从快照继续</text>
+
+      <text x="20" y="588" fill="#a6b7d9" font-size="11">图例：蓝箭头 = 调用 / 数据流 · 绿框 = 落盘文件 · 黄虚线 = 恢复路径 · 橙框 = 编译期检查员</text>
+    </svg>
+  </div>
+
+  <h2>② 一次 run 从启动到结束，每个环节做了什么</h2>
+
+  <div class="card">
+    <div class="card-head"><span class="num">1</span><b>CLI 入口</b><span class="en">validate / run / resume</span><span class="file">src/rpa_core/cli.py</span></div>
+    <ul class="does">
+      <li><span class="en">validate</span>：只编译不执行，打印 <code>{"valid": true, "catalogDigest": ...}</code></li>
+      <li><span class="en">run</span>：创建 4 个执行器 → 组装 <code>ExecutorRegistry</code>（排班表）→ <code>orchestrator.run(plan)</code> → 打印结果 JSON → 状态非 succeeded 退出码 1</li>
+      <li><span class="en">resume</span>：同上但调 <code>orchestrator.resume(plan, --run-id)</code>；checkpoint/恢复拒绝时打印错误并退出码 2；<code>--allow-indeterminate</code> 是人工确认开关</li>
+    </ul>
+    <div class="io"><b>输入</b>：workflow 路径、<code>--artifacts</code> 工件根目录　<b>输出</b>：控制台 JSON + 退出码</div>
+    <div class="why"><b>为什么：</b>先做垂直切片，不引入服务化复杂度。规则 10</div>
+  </div>
+  <div class="flow-arrow"></div>
+
+  <div class="card">
+    <div class="card-head"><span class="num">2</span><b>加载命令目录</b><span class="en">load_catalog</span><span class="file">src/rpa_core/catalog/loader.py</span></div>
+    <ul class="does">
+      <li>读 <code>commands/</code> 下所有 <code>*.json</code>，逐个用 pydantic 校验成 <code>CommandManifest</code>（id 格式、版本号、effect policy 三维自洽）</li>
+      <li>检查：id 与文件名一致、id 不重复、input/output schema 本身是合法 JSON Schema</li>
+      <li>把全部 manifest 规范化排序 → JSON 序列化 → 算 sha256 作为 <code>catalog.digest</code></li>
+      <li>返回只读映射 <code>{命令id → manifest}</code>，运行期间内容不变</li>
+    </ul>
+    <div class="io"><b>输入</b>：commands 目录　<b>输出</b>：<code>CommandCatalog</code>（含 digest）</div>
+    <div class="why"><b>为什么：</b>一次运行一份契约快照；digest 之后用于恢复门槛。规则 7 / 不变量 10</div>
+  </div>
+  <div class="flow-arrow"></div>
+
+  <div class="card">
+    <div class="card-head"><span class="num">3</span><b>编译工作流（≈ 开灶前核对）</b><span class="en">WorkflowCompiler.compile</span><span class="file">src/rpa_core/compiler/compiler.py</span></div>
+    <ul class="does">
+      <li>把 workflow JSON 校验成 <code>Workflow</code> 模型（节点按 <code>type</code> 判别，形成 AST）</li>
+      <li>递归遍历 AST 做静态检查：节点 id 不重复；action 引用的命令必须存在于 catalog；<code>${...}</code> 引用——inputs 键必须存在、<code>steps.*</code> 不能向前引用、loop 变量必须在作用域内、try 错误变量必须先声明</li>
+      <li><code>replay=unsafe</code> 的命令禁止配 <code>retry_count &gt; 0</code></li>
+      <li>汇总所有命令需要的 capabilities，与授权集合比对，缺一个就拒绝</li>
+      <li>全部通过 → 产出冻结的 <code>ExecutionPlan</code>（盖章执行单）</li>
+    </ul>
+    <div class="io"><b>输入</b>：Workflow + catalog + 授权能力　<b>输出</b>：<code>ExecutionPlan</code>（workflow + digest + capabilities，不可变）</div>
+    <div class="why"><b>为什么：</b>所有能提前发现的错误都在 run 之前拒绝；plan 冻结后恢复时才能与 checkpoint 对账。不变量 10</div>
+  </div>
+  <div class="flow-arrow"></div>
+
+  <div class="card">
+    <div class="card-head"><span class="num">4</span><b>启动运行（厨师长接班）</b><span class="en">Orchestrator.start / resume</span><span class="file">src/rpa_core/runtime/orchestrator.py</span></div>
+    <ul class="does">
+      <li><span class="en">start</span>：生成 uuid 形式的 <code>run_id</code> → 建 asyncio task + 取消 <code>Event</code> → 返回 <code>RunHandle</code>（遥控器：可 <code>cancel()</code> / <code>wait()</code>）</li>
+      <li><span class="en">resume</span>：先过 5 道恢复门（见 ③），全过之后同样建 task，但 scopes / 已完成步骤从 checkpoint 恢复</li>
+      <li>准备工作目录、写初始 scopes（备菜台）：<code>inputs = workflow 默认输入 + 用户传参</code>、<code>steps = {}</code>、<code>loop = {}</code></li>
+      <li>写第一条事件：<code>runStarted</code>（或 <code>runResumed</code> + 已完成步骤清单）</li>
+    </ul>
+    <div class="io"><b>输入</b>：ExecutionPlan（+ 恢复时 checkpoint）　<b>输出</b>：<code>RunHandle</code>，最终 <code>await</code> 到 <code>RunResult</code></div>
+    <div class="why"><b>为什么：</b>取消用 Event 传播而不是杀进程——执行器要先自行清理资源。规则 11</div>
+  </div>
+  <div class="flow-arrow"></div>
+
+  <div class="card">
+    <div class="card-head"><span class="num">5</span><b>遍历执行 AST（按步骤树走单）</b><span class="en">_execute_node</span><span class="file">orchestrator.py</span></div>
+    <ul class="does">
+      <li>每次进入节点先做两件事：取消信号置位 → 立即中止；节点路径键 ∈ <code>completedSteps</code> → 直接跳过（恢复时用）</li>
+      <li><span class="en">sequence</span>：按顺序执行 children</li>
+      <li><span class="en">if</span>：resolver 求条件值 → 走 then 或 else 分支</li>
+      <li><span class="en">forEach</span>：解析 items（必须是 list/tuple）→ 每轮设置 <code>loop.item / loop.index</code> → 执行 children → 结束后恢复原 loop</li>
+      <li><span class="en">try</span>：执行 children，出错（取消除外）→ 把错误对象存进错误变量 → 执行 catch → 结束恢复变量</li>
+      <li><span class="en">return</span>：解析返回值 → 以异常方式终止整棵树</li>
+    </ul>
+    <div class="io"><b>输入</b>：当前节点 + 路径 + scopes　<b>输出</b>：无（状态都写进 scopes）</div>
+    <div class="why"><b>为什么：</b>路径键带 <code>#i</code> 迭代段，forEach 才能按轮恢复，不会误跳过未跑的轮次。ADR 0004</div>
+  </div>
+  <div class="flow-arrow"></div>
+
+  <div class="card">
+    <div class="card-head"><span class="num">6</span><b>执行单条命令（派单 → 收回执 → 记账）</b><span class="en">_execute_action</span><span class="file">orchestrator.py</span></div>
+    <ul class="does">
+      <li>从 catalog 取该命令的 manifest；unsafe 命令配了重试 → 直接拒绝</li>
+      <li>解析 <code>with</code> 参数（resolver 按取料牌去备菜台取值）→ jsonschema 校验输入，失败 <code>INVALID_INPUT</code></li>
+      <li>写 <code>stepStarted</code> 事件</li>
+      <li>重试循环（最多 <code>retry_count+1</code> 次）：每次检查 workflow deadline 余量 → 计算 attempt 超时 → 把 <code>CommandInvocation</code>（工单）交给执行器 → 收 <code>CommandResult</code>（回执）→ 成功跳出；失败且可重试 → 指数退避后重试；带 unknown effect 的失败 → <b>绝不重试</b>，直接进 <code>indeterminate</code></li>
+      <li>成功后校验回执：非 pure 命令必须有 kind 匹配、status=committed 的 effect 证据（否则 <code>INVALID_OUTPUT</code>）；输出过 jsonschema</li>
+      <li>写 <code>scopes["steps"][节点id] = {value, outputs, effects, diagnostics}</code>（后续节点用 <code>${steps.节点id.outputs...}</code> 引用）</li>
+      <li>checkpoint 原子落盘（临时文件+replace），<b>成功后才</b>把路径键记入已完成 → 写 <code>stepCompleted</code> 事件</li>
+    </ul>
+    <div class="io"><b>输入</b>：ActionNode + scopes + 执行器　<b>输出</b>：scopes 更新 + checkpoint + 事件</div>
+    <div class="why"><b>为什么：</b>执行器只回 <code>CommandResult</code>、状态单向流经 scopes（可测试、可审计）；checkpoint 先于事件落盘，崩溃窗口最多只丢一条事件、绝不重放副作用。规则 3 / ADR 0004</div>
+  </div>
+  <div class="flow-arrow"></div>
+
+  <div class="card">
+    <div class="card-head"><span class="num">7</span><b>四个执行器（真正掌勺的人）</b><span class="en">executors/</span><span class="file">src/rpa_core/executors/</span></div>
+    <div class="grid4">
+      <div class="card">
+        <div class="card-head"><b>browser.playwright</b></div>
+        <ul class="does">
+          <li><code>launch</code> 起浏览器并生成 UUID sessionId</li>
+          <li>其余操作必须带 sessionId，在对应页面上导航/点击/输入/等待/读文本/查询元素</li>
+        </ul>
+      </div>
+      <div class="card">
+        <div class="card-head"><b>desktop.uia</b></div>
+        <ul class="does">
+          <li><code>attachWindow</code> 按标题/类名/进程绑窗口 → sessionId</li>
+          <li>UIA 语义定位控件，执行点击/输入/读文本</li>
+        </ul>
+      </div>
+      <div class="card">
+        <div class="card-head"><b>desktop.win32</b></div>
+        <ul class="does">
+          <li>同上，但走 Win32 消息/句柄路线</li>
+          <li>额外支持 <code>hotkey</code>、<code>menuSelect</code>（菜单/对话框）</li>
+        </ul>
+      </div>
+      <div class="card">
+        <div class="card-head"><b>python.worker</b></div>
+        <ul class="does">
+          <li>起子进程跑 <code>workers/python_worker.py</code>，stdin/stdout 传 JSON</li>
+          <li>限定 workspace 目录内读写</li>
+        </ul>
+      </div>
+    </div>
+    <div class="io" style="margin-top:10px"><b>共同契约</b>：收到取消尽快退出并清理资源；返回 <code>CommandResult</code>（回执）；绝不触碰编排器内部状态</div>
+    <div class="why"><b>为什么：</b>用户 Python 只进子进程（崩溃不伤主进程）；浏览器/桌面操作必须显式 session 防串扰。规则 4/5/6</div>
+  </div>
+  <div class="flow-arrow"></div>
+
+  <div class="card">
+    <div class="card-head"><span class="num">8</span><b>落证据（日志 + 质检单）</b><span class="en">EventWriter + result.json</span><span class="file">src/rpa_core/runtime/events.py</span></div>
+    <ul class="does">
+      <li><code>events.jsonl</code>：每次状态变化追加一行（seq 递增）：<code>runStarted → stepStarted → stepAttemptStarted → stepCompleted/stepFailed/stepRetried → runFinished</code></li>
+      <li><code>result.json</code>：终态时写一次完整 <code>RunResult</code>（状态、起止时间、outputs、返回值、error、digest）</li>
+      <li>写事件失败 → <code>RunPersistenceError</code> 立即中止 run（证据比执行优先）；写 result.json 失败 → 绝不返回 success，改判 <code>PERSISTENCE_FAILED</code></li>
+    </ul>
+    <div class="io"><b>输出</b>：<code>run_artifacts/&lt;run_id&gt;/</code> 下的 events.jsonl + result.json + checkpoint.json</div>
+    <div class="why"><b>为什么：</b>runFinished + result.json 都落盘 run 才算成功（规则 12）；事件流让崩溃后能回答"崩在哪一步"。</div>
+  </div>
+  <div class="flow-arrow"></div>
+
+  <div class="card">
+    <div class="card-head"><span class="num">9</span><b>终态收口（交班结算）</b><span class="en">_run_to_terminal</span><span class="file">orchestrator.py</span></div>
+    <ul class="does">
+      <li>算 workflow deadline = 当前时间 + <code>workflow.timeout_seconds</code>，用 <code>asyncio.timeout_at</code> 包住整棵执行树</li>
+      <li>按异常类型映射终态：<code>WorkflowReturn</code>→succeeded；unknown effect→<code>indeterminate</code>；checkpoint 写失败→<code>recovery_required</code>；超时→failed+TIMEOUT；取消→cancelled；命令错误→failed；意外异常→failed+INTERNAL</li>
+      <li>写 <code>runFinished</code> 事件 + <code>result.json</code></li>
+      <li>最后补写一次最终 checkpoint（失败忽略——终态证据已落盘，恢复时用上一份边界 checkpoint）</li>
+    </ul>
+    <div class="io"><b>输出</b>：<code>RunResult</code>（正常 run 和恢复 run 走同一条收口路径，证据格式完全一致）</div>
+    <div class="why"><b>为什么：</b>每个 run 必达终态（规则 8）；收口统一防止两条路径证据不一致。</div>
+  </div>
+
+  <h2>③ checkpoint 里有什么，恢复时每道门检查什么</h2>
+  <div class="card">
+    <div class="card-head"><b>checkpoint.json（version=1）</b><span class="file">src/rpa_core/runtime/checkpoint.py</span></div>
+    <ul class="does">
+      <li><code>version / workflowId / catalogDigest</code>——格式版本与归属标识</li>
+      <li><code>completedSteps</code>——已完成 action 的路径键列表（如 <code>loop/#0/step</code>）</li>
+      <li><code>scopes</code>——<code>inputs / steps / loop</code> 的值快照（恢复后所有 <code>${...}</code> 引用从这里取值）</li>
+      <li><code>returnValue</code>——workflow 已 return 时的返回值，平时是 null</li>
+    </ul>
+    <div class="io"><b>写入时机</b>：每个 action 成功后、<code>stepCompleted</code> 事件之前，原子写（临时文件 + replace）</div>
+  </div>
+  <div class="card">
+    <div class="card-head"><b>resume 的 5 道门（每道做什么）</b></div>
+    <div class="gate">
+      <div class="step">1. 读文件 + version/结构校验<small>文件缺失、JSON 损坏、版本不是 1、字段缺失/类型错 → 抛 <code>CheckpointError</code></small></div>
+      <div class="step">2. workflowId 与 plan 一致<small>防止把 A 工作流的进度套到 B 工作流上</small></div>
+      <div class="step">3. catalogDigest 与重新编译的 plan 一致<small>命令契约改过 → 旧 checkpoint 作废，必须重跑</small></div>
+      <div class="step">4. result.json 状态门<small>上次终态是 <code>indeterminate</code> 且未传 <code>allow_indeterminate=True</code> → 拒绝，要求人工确认</small></div>
+      <div class="step">5. 恢复执行<small>scopes/completedSteps 从 checkpoint 取；deadline 重新按 <code>timeout_seconds</code> 计算（monotonic 时间跨进程无意义）；重走 AST，已完成路径键直接跳过，其余照常执行</small></div>
+    </div>
+    <div class="why"><b>为什么逐门拒绝：</b>checkpoint 损坏时"猜状态续跑"等于在未知进度上执行副作用，明确失败让人介入更安全。ADR 0004</div>
+  </div>
+
+  <h2>④ 各状态什么时候出现，出现后发生什么</h2>
+  <div class="card">
+    <div class="state-row">
+      <div class="state ok"><b>succeeded</b><small>何时：所有节点执行完或 return 触发。之后：runFinished + result.json 落盘，退出码 0</small></div>
+      <div class="state bad"><b>failed</b><small>何时：命令失败/超时/意外异常且结果确定。之后：可 resume，未完成的步骤会重新执行</small></div>
+      <div class="state bad"><b>cancelled</b><small>何时：调用了 cancel()。之后：执行器清理完资源再收口，已完成步骤保留可续跑</small></div>
+      <div class="state warn"><b>indeterminate</b><small>何时：命令失败且带 unknown effect（外部可能已生效）。之后：绝不自动重试，resume 必须人工 ack</small></div>
+      <div class="state warn"><b>recovery_required</b><small>何时：action 边界的 checkpoint 写入失败。之后：run 证据完整，但快照可能落后，恢复需人工确认副作用安全</small></div>
+      <div class="state warn"><b>paused</b><small>何时：RunHandle.pause() 在 action 边界生效。之后：证据落盘、进程结束；非终态驻留，必须被 resume 或显式放弃（ADR 0005）</small></div>
+      <div class="state bad"><b>abandoned</b><small>何时：显式放弃（预留终态）</small></div>
+    </div>
+    <div class="why"><b>为什么 failed 不够用：</b>"失败"和"外部结果未知"风险不同——后者自动重跑可能重复提交表单/扣款；折叠进 failed 调度层就会当普通失败重跑。ADR 0002 / 0004</div>
+    <div class="why"><b>暂停优先级：</b>取消 &gt; 暂停 &gt; 超时——暂停只在 action 入口与每次新 attempt 前生效，不打断进行中的命令；workflow deadline 在 attempt 进行中触发仍判 failed(TIMEOUT)。ADR 0005</div>
+  </div>
+
+  <footer>
+    相关文件：<code>src/rpa_core/runtime/orchestrator.py</code> ·
+    <code>src/rpa_core/runtime/checkpoint.py</code> ·
+    <code>src/rpa_core/cli.py</code> ·
+    系统上下文（C4）见 <code>docs/system_context.puml</code>
+  </footer>
+</main>
+</body>
+</html>

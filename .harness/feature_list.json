@@ -50,16 +50,26 @@
     {
       "id": "desktop-vertical-slice",
       "title": "Explicit-session Windows desktop executor and deterministic E2E",
-      "passes": false
+      "passes": true
     },
     {
       "id": "legacy-element-importer",
       "title": "One-way typed import of legacy element data",
-      "passes": false
+      "passes": true
     },
     {
       "id": "checkpoint-recovery",
       "title": "Safe node-boundary checkpoints and recovery semantics",
+      "passes": true
+    },
+    {
+      "id": "pause-resume",
+      "title": "Deliberate node-boundary pause and continuation of a run",
+      "passes": true
+    },
+    {
+      "id": "api-surface-decision",
+      "title": "First API surface decision recorded as an accepted ADR",
       "passes": false
     }
   ]
