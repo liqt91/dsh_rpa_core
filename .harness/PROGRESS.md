@@ -22,3 +22,4 @@ Format: `YYYY-MM-DD | feature | status | evidence`
 2026-09-01 | M4.5-data-commands | done | data.writeText（text/lines 二选一，workspace 包含校验，UTF-8）与 data.limit（前 N 条截断，pure/safe）入册，catalog 25 条；百度示例升级为纯文本产物（limit 10 + 按行输出）；65 tests + full gate passed
 2026-09-01 | M5-api-decision | done | ADR 0006：进程内 Python API 冻结为 v1（不建 facade）、HTTP 推迟并附重估条件、排除清单结论、三个待定问题全部结案；公开签名契约测试 4 项；工作区分批提交完成（M3+M4 / M2.2 / baidu / harness / M4.5）；69 tests + full gate passed
 2026-09-01 | M6-api-usage | done | docs/api-usage.md（四步模式、状态机消费指引、恢复/暂停语义）+ examples/api-usage 可运行示例（run → 读证据 → pause → resume 实测）+ README 链接；70 tests + full gate passed
+2026-09-01 | M7-command-surface | done | win32 timeoutMs 对称（findElement 声明未实现一并修复）、data.format（{name} 占位符 fail-fast）入册 catalog 26 条、UIA COM 繁忙轮询容错；S0 实验：Chrome 152 封锁默认 profile CDP 端口 → 捕获传输定为扩展为主/持久 profile 为辅（决策并入 ADR 0007）；72 tests × 3 轮 + full gate passed

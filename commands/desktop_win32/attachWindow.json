@@ -8,7 +8,7 @@
   "resources": ["desktop.session", "desktop.window"],
   "stability": "stable",
   "effect": {"kind": "session", "replay": "unsafe", "idempotency": "none"},
-  "input_schema": {"type": "object", "properties": {"title": {"type": "string", "minLength": 1}, "className": {"type": "string", "minLength": 1}, "handle": {"type": "integer", "minimum": 1}, "processId": {"type": "integer", "minimum": 1}}, "additionalProperties": false},
+  "input_schema": {"type": "object", "properties": {"title": {"type": "string", "minLength": 1}, "className": {"type": "string", "minLength": 1}, "handle": {"type": "integer", "minimum": 1}, "processId": {"type": "integer", "minimum": 1}, "timeoutMs": {"type": "integer", "minimum": 1}}, "additionalProperties": false},
   "output_schema": {"type": "object", "required": ["sessionId", "processId", "workWindowId"], "properties": {"sessionId": {"type": "string"}, "processId": {"type": "integer"}, "workWindowId": {"type": "string"}}, "additionalProperties": false},
   "errors": ["ELEMENT_NOT_FOUND", "ELEMENT_AMBIGUOUS", "TIMEOUT", "CANCELLED", "PLATFORM_UNSUPPORTED", "EXECUTOR_FAILED"],
   "implementation": {"handler": "desktop.win32:attach_window"},

@@ -1,5 +1,6 @@
 import hashlib
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -10,6 +11,8 @@ from rpa_core.model.command import (
     EffectRecord,
 )
 from rpa_core.model.errors import ErrorCode
+
+_TEMPLATE_PLACEHOLDER = re.compile(r"\{([A-Za-z_]\w*)\}")
 
 
 def _resolve_output_path(inputs: dict) -> tuple[Path, Path]:
@@ -81,6 +84,29 @@ def execute(invocation: CommandInvocation) -> CommandResult:
             value=sliced,
             outputs={"items": sliced, "count": len(sliced)},
         )
+    if invocation.command_id == "data.format":
+        template = str(invocation.inputs["template"])
+        values = invocation.inputs["values"]
+        missing = sorted(
+            {
+                match
+                for match in _TEMPLATE_PLACEHOLDER.findall(template)
+                if match not in values
+            }
+        )
+        if missing:
+            return CommandResult.failure(
+                ErrorCode.INVALID_INPUT,
+                "Template placeholders missing from values",
+                details={"missing": missing},
+            )
+
+        def _replace(match: re.Match) -> str:
+            value = values[match.group(1)]
+            return value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
+
+        text = _TEMPLATE_PLACEHOLDER.sub(_replace, template)
+        return CommandResult.success(value=text, outputs={"text": text})
     return CommandResult.failure(
         ErrorCode.COMMAND_NOT_FOUND,
         f"Unsupported Python worker command: {invocation.command_id}",

@@ -127,3 +127,33 @@ def test_python_worker_limit_truncates_and_counts(tmp_path):
 
     exact = asyncio.run(run(["a", "b"], 10))
     assert exact.outputs == {"items": ["a", "b"], "count": 2}
+
+
+def test_python_worker_format_renders_placeholders(tmp_path):
+    async def run(template, values):
+        executor = PythonWorkerExecutor()
+        invocation = CommandInvocation(
+            command_id="data.format",
+            command_version="1.0.0",
+            run_id="run",
+            step_id="fmt",
+            inputs={"template": template, "values": values},
+        )
+        return await executor.execute(invocation, asyncio.Event())
+
+    result = asyncio.run(
+        run("搜索词：{query}（{total} 条）", {"query": "新闻", "total": 10})
+    )
+    assert result.status == "success"
+    assert result.outputs == {"text": "搜索词：新闻（10 条）"}
+
+    passthrough = asyncio.run(run("no placeholders here", {"query": "x"}))
+    assert passthrough.outputs == {"text": "no placeholders here"}
+
+    list_value = asyncio.run(run("titles={titles}", {"titles": ["a", "b"]}))
+    assert list_value.outputs == {"text": 'titles=["a", "b"]'}
+
+    missing = asyncio.run(run("{query} / {lang}", {"query": "新闻"}))
+    assert missing.status == "error"
+    assert missing.error.code == "INVALID_INPUT"
+    assert missing.error.details["missing"] == ["lang"]

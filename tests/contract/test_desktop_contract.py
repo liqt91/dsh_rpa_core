@@ -104,6 +104,25 @@ def test_uia_attach_unknown_window_reports_element_not_found():
         assert result.error.code == "PLATFORM_UNSUPPORTED"
 
 
+def test_win32_attach_timeout_reports_element_not_found():
+    async def run():
+        executor = Win32DesktopExecutor()
+        return await executor.execute(
+            invocation(
+                "desktop.win32.attachWindow",
+                {"title": "no-such-window-rpa-core-probe", "timeoutMs": 200},
+            ),
+            asyncio.Event(),
+        )
+
+    result = asyncio.run(run())
+    if sys.platform == "win32":
+        assert result.error.code == "ELEMENT_NOT_FOUND"
+        assert result.error.details["matchedCount"] == 0
+    else:
+        assert result.error.code == "PLATFORM_UNSUPPORTED"
+
+
 def test_uia_find_unknown_element_reports_element_not_found():
     async def run():
         executor = DesktopExecutor()
@@ -143,6 +162,9 @@ def test_desktop_backend_manifests_share_lifecycle_contract():
         if name == "attachWindow":
             assert set(uia["output_schema"]["required"]) == set(attach_outputs)
             assert set(win32["output_schema"]["required"]) == set(attach_outputs)
+        if name in ("attachWindow", "findElement"):
+            assert "timeoutMs" in uia["input_schema"]["properties"], name
+            assert "timeoutMs" in win32["input_schema"]["properties"], name
 
 
 def test_uia_and_win32_command_sets_diverge_only_in_win32_extras():

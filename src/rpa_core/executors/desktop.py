@@ -69,6 +69,7 @@ class DesktopExecutor(CommandExecutor):
 
     def _execute_sync(self, invocation: CommandInvocation) -> CommandResult:
         import pythoncom
+        from comtypes import COMError
         from pywinauto import Desktop
 
         pythoncom.CoInitialize()
@@ -81,11 +82,14 @@ class DesktopExecutor(CommandExecutor):
                 timeout_ms = int(inputs.get("timeoutMs") or 0)
                 deadline = time.monotonic() + timeout_ms / 1000.0
                 while True:
-                    windows = Desktop(backend="uia").windows(title=title)
-                    if process_id is not None:
-                        windows = [
-                            window for window in windows if window.process_id() == process_id
-                        ]
+                    try:
+                        windows = Desktop(backend="uia").windows(title=title)
+                        if process_id is not None:
+                            windows = [
+                                window for window in windows if window.process_id() == process_id
+                            ]
+                    except COMError:
+                        windows = []
                     if not windows:
                         windows = self._windows_by_title_fallback(title, process_id)
                     if len(windows) == 1:
@@ -152,7 +156,10 @@ class DesktopExecutor(CommandExecutor):
                 timeout_ms = int(inputs.get("timeoutMs") or 0)
                 deadline = time.monotonic() + timeout_ms / 1000.0
                 while True:
-                    matches = self._find(window, locator)
+                    try:
+                        matches = self._find(window, locator)
+                    except COMError:
+                        matches = []
                     if len(matches) == 1:
                         break
                     if len(matches) > 1:

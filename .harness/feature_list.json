@@ -80,6 +80,11 @@
     {
       "id": "command-surface-extensions",
       "title": "Win32 timeoutMs symmetry and data.format template rendering",
+      "passes": true
+    },
+    {
+      "id": "devserver-foundation",
+      "title": "Design-time dev server with catalog, compile, and workflow file APIs",
       "passes": false
     },
     {

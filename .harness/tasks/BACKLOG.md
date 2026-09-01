@@ -4,21 +4,26 @@
 
 ## 当前任务
 
-- [ ] M7 命令面小扩展（`active`）
-  - 计划：`M7-command-surface.md`
-  - 完成门槛：win32 timeoutMs 对称、data.format fail-fast 模板渲染、全门禁。
+- [ ] M8 设计期服务与编辑器架构决策（`active`）
+  - 计划：`M8-devserver.md`
+  - 完成门槛：ADR 0007（含捕获传输契约与 S0 实测证据）、dev server 骨架、curl 走通、架构检查覆盖新包。
 
 ## 后续任务
 
-- [ ] M8（`planned`）
-  - 依实际调用方需求再立项。
+- [ ] M9 编辑器 v1：零构建单页（线性画布 + schema 表单 + 编译回显）（`planned`）
+- [ ] M10 元素捕获：桌面 UIA hit-test + 浏览器扩展/持久 profile 双通道（`planned`）
+- [ ] M11 树形编辑（if/forEach/try 嵌套）与元素库评估（`planned`）
 
 ## 远期任务
 
 - [ ] UI、DSH、MCP、调度器和安装器集成（`planned`）
-  - 逐项放行与否以 ADR 0006 结论为准；HTTP 已明确推迟并附重估条件。
+  - 逐项放行与否以 ADR 0006 结论为准；操控型 HTTP 推迟不变。
 
 ## 已完成
+
+- [x] M7 命令面小扩展（`done`）
+  - 计划：`M7-command-surface.md`
+  - 证据：win32 timeoutMs 对称（findElement 此前声明未实现一并修复）、data.format fail-fast 模板渲染、UIA COM 繁忙容错；S0 实验确认 Chrome 152 封锁默认 profile CDP；72 tests × 3 轮 + 全门禁。
 
 - [x] M6 API 调用方入门契约（`done`）
   - 计划：`M6-api-usage.md`

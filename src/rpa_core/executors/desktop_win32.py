@@ -1,5 +1,6 @@
 import asyncio
 import sys
+import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
@@ -71,30 +72,40 @@ class Win32DesktopExecutor(CommandExecutor):
             class_name = inputs.get("className")
             handle = inputs.get("handle")
             process_id = inputs.get("processId")
-            if handle is not None:
-                windows = Desktop(backend="win32").windows(handle=int(handle))
-            else:
-                windows = (
-                    Desktop(backend="win32").windows(title=title)
-                    if title
-                    else Desktop(backend="win32").windows()
-                )
-                if class_name:
-                    windows = [window for window in windows if window.class_name() == class_name]
-                if process_id is not None:
-                    windows = [window for window in windows if window.process_id() == process_id]
-            if len(windows) == 0:
-                return CommandResult.failure(
-                    ErrorCode.ELEMENT_NOT_FOUND,
-                    "Desktop window did not match",
-                    details={"title": title, "matchedCount": 0},
-                )
-            if len(windows) > 1:
-                return CommandResult.failure(
-                    ErrorCode.ELEMENT_AMBIGUOUS,
-                    "Desktop window matched multiple targets",
-                    details={"title": title, "matchedCount": len(windows)},
-                )
+            timeout_ms = int(inputs.get("timeoutMs") or 0)
+            deadline = time.monotonic() + timeout_ms / 1000.0
+            while True:
+                if handle is not None:
+                    windows = Desktop(backend="win32").windows(handle=int(handle))
+                else:
+                    windows = (
+                        Desktop(backend="win32").windows(title=title)
+                        if title
+                        else Desktop(backend="win32").windows()
+                    )
+                    if class_name:
+                        windows = [
+                            window for window in windows if window.class_name() == class_name
+                        ]
+                    if process_id is not None:
+                        windows = [
+                            window for window in windows if window.process_id() == process_id
+                        ]
+                if len(windows) == 1:
+                    break
+                if len(windows) > 1:
+                    return CommandResult.failure(
+                        ErrorCode.ELEMENT_AMBIGUOUS,
+                        "Desktop window matched multiple targets",
+                        details={"title": title, "matchedCount": len(windows)},
+                    )
+                if time.monotonic() >= deadline:
+                    return CommandResult.failure(
+                        ErrorCode.ELEMENT_NOT_FOUND,
+                        "Desktop window did not match",
+                        details={"title": title, "matchedCount": 0},
+                    )
+                time.sleep(0.1)
             window = windows[0]
             session_id = str(uuid.uuid4())
             native_handle = int(window.handle)
@@ -172,22 +183,28 @@ class Win32DesktopExecutor(CommandExecutor):
 
         if command == "desktop.win32.findElement":
             locator = DesktopLocator.model_validate(inputs["locator"])
-            matches = self._find(window, locator)
-            if len(matches) == 0:
-                return CommandResult.failure(
-                    ErrorCode.ELEMENT_NOT_FOUND,
-                    "Desktop element did not match",
-                    details={"locator": locator.model_dump(by_alias=True), "matchedCount": 0},
-                )
-            if len(matches) > 1:
-                return CommandResult.failure(
-                    ErrorCode.ELEMENT_AMBIGUOUS,
-                    "Desktop element matched multiple targets",
-                    details={
-                        "locator": locator.model_dump(by_alias=True),
-                        "matchedCount": len(matches),
-                    },
-                )
+            timeout_ms = int(inputs.get("timeoutMs") or 0)
+            deadline = time.monotonic() + timeout_ms / 1000.0
+            while True:
+                matches = self._find(window, locator)
+                if len(matches) == 1:
+                    break
+                if len(matches) > 1:
+                    return CommandResult.failure(
+                        ErrorCode.ELEMENT_AMBIGUOUS,
+                        "Desktop element matched multiple targets",
+                        details={
+                            "locator": locator.model_dump(by_alias=True),
+                            "matchedCount": len(matches),
+                        },
+                    )
+                if time.monotonic() >= deadline:
+                    return CommandResult.failure(
+                        ErrorCode.ELEMENT_NOT_FOUND,
+                        "Desktop element did not match",
+                        details={"locator": locator.model_dump(by_alias=True), "matchedCount": 0},
+                    )
+                time.sleep(0.1)
             element_id = str(uuid.uuid4())
             session.elements[element_id] = locator.model_dump(by_alias=True)
             return CommandResult.success(
