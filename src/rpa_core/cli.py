@@ -5,6 +5,7 @@ from pathlib import Path
 
 from rpa_core.catalog import load_catalog
 from rpa_core.compiler import WorkflowCompiler
+from rpa_core.devserver import DevServer
 from rpa_core.executors import (
     DesktopExecutor,
     ExecutorRegistry,
@@ -38,17 +39,44 @@ def _compile(path: Path):
     return root, catalog, plan
 
 
+def _serve(args) -> int:
+    root = Path(__file__).resolve().parents[2]
+    server = DevServer(
+        commands_root=root / "commands",
+        workflows_root=args.workflows,
+        port=args.port,
+    )
+    print(
+        json.dumps(
+            {"listening": f"http://{server.host}:{server.port}", "workflows": str(args.workflows)},
+            indent=2,
+        ),
+        flush=True,
+    )
+    try:
+        server.serve()
+    except KeyboardInterrupt:
+        pass
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(prog="rpa-core")
     subparsers = parser.add_subparsers(dest="action", required=True)
-    for action in ("validate", "run", "resume"):
+    for action in ("validate", "run", "resume", "devserver"):
         sub = subparsers.add_parser(action)
+        if action == "devserver":
+            sub.add_argument("--port", type=int, default=8765)
+            sub.add_argument("--workflows", type=Path, default=Path("workflows"))
+            continue
         sub.add_argument("workflow", type=Path)
         sub.add_argument("--artifacts", type=Path, default=Path("run_artifacts"))
         if action == "resume":
             sub.add_argument("--run-id", required=True)
             sub.add_argument("--allow-indeterminate", action="store_true")
     args = parser.parse_args()
+    if args.action == "devserver":
+        return _serve(args)
     _root, catalog, plan = _compile(args.workflow)
     if args.action == "validate":
         print(json.dumps({"valid": True, "catalogDigest": catalog.digest}, indent=2))

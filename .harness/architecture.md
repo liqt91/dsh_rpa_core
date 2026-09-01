@@ -9,7 +9,8 @@ model
   |-- executors
   |-- compiler <- catalog
   |-- runtime  <- compiler + catalog + executors
-  `-- cli      <- runtime + compiler + catalog + executors
+  |-- devserver <- compiler + catalog (design-time only, never runtime)
+  `-- cli      <- runtime + compiler + catalog + executors + devserver
 
 workers are subprocess entry points and may depend on model only.
 ```
@@ -23,6 +24,7 @@ Allowed package dependencies:
 | `compiler` | `model`, `catalog` |
 | `executors` | `model` |
 | `runtime` | `model`, `catalog`, `compiler`, `executors` |
+| `devserver` | `model`, `catalog`, `compiler` (ADR 0007: never `runtime`/`executors`) |
 | `workers` | `model` |
 | `cli` | all public packages |
 

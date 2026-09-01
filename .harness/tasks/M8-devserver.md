@@ -15,21 +15,21 @@
 
 ## 任务
 
-- [ ] 编写 ADR 0007：dev server 定位（设计期工具，不承载 run）、新顶层包 `rpa_core.devserver` 与架构边界（只读复用 catalog/编译器，绝不共享运行进程）、workflow 文件目录约定（受限根目录）、浏览器捕获传输契约（按 `docs/capture-transport.md` 决策矩阵与 S1 结论）、桌面捕获契约
-- [ ] 执行 S1 验证（`docs/capture-transport.md` §4 协议）：chrome://inspect 授权开关的 WebSocket 连接、登录态断言、picker 注入回验、开关持久性
-- [ ] 实现 dev server 骨架（stdlib `http.server`，零新依赖）：`GET /api/catalog`（manifest 元数据：id/version/kind/effect/input_schema/output_schema/errors）、`POST /api/compile`（dry-run：`{valid, errors[]}`）、`GET /api/workflows`、`GET/PUT /api/workflows/{name}`（受限目录内读写）
-- [ ] 捕获端点骨架：`POST /api/capture/desktop/start|pick|cancel`（UIA hit-test）与 `POST /api/capture/browser/*`（含 `transport` 参数，M10 实装，本里程碑先定义契约与 501 占位）
-- [ ] dev server 安全边界：目录逃逸拒绝、仅监听 127.0.0.1、请求体大小限制
-- [ ] 合同测试：catalog 端点与 `load_catalog` 一致、compile 端点对合法/非法 workflow 的响应、workflow 文件读写的包含校验
-- [ ] 手册：dev server 启动命令与端点速查（`docs/devserver.md`）
-- [ ] 完整 harness 门禁通过（架构检查覆盖新包）
+- [x] 编写 ADR 0007：dev server 定位（设计期工具，不承载 run）、新顶层包 `rpa_core.devserver` 与架构边界（只读复用 catalog/编译器，绝不共享运行进程）、workflow 文件目录约定（受限根目录）、浏览器捕获传输契约（按 `docs/capture-transport.md` 决策矩阵与 S1 结论）、桌面捕获契约
+- [ ] 执行 S1 验证（`docs/capture-transport.md` §4 协议）：chrome://inspect 授权开关的 WebSocket 连接、登录态断言、picker 注入回验、开关持久性（需真实 Chrome 登录态会话，待人工协作执行；不阻塞下方四条验收标准）
+- [x] 实现 dev server 骨架（stdlib `http.server`，零新依赖）：`GET /api/catalog`（manifest 元数据：id/version/kind/effect/input_schema/output_schema/errors）、`POST /api/compile`（dry-run：`{valid, errors[]}`）、`GET /api/workflows`、`GET/PUT /api/workflows/{name}`（受限目录内读写）
+- [x] 捕获端点骨架：`POST /api/capture/desktop/start|pick|cancel`（UIA hit-test）与 `POST /api/capture/browser/*`（含 `transport` 参数，M10 实装，本里程碑先定义契约与 501 占位）
+- [x] dev server 安全边界：目录逃逸拒绝、仅监听 127.0.0.1、请求体大小限制
+- [x] 合同测试：catalog 端点与 `load_catalog` 一致、compile 端点对合法/非法 workflow 的响应、workflow 文件读写的包含校验
+- [x] 手册：dev server 启动命令与端点速查（`docs/devserver.md`）
+- [x] 完整 harness 门禁通过（架构检查覆盖新包）
 
 ## 验收标准
 
-- [ ] ADR 0007 已接受，捕获传输契约含 S0 实测证据
-- [ ] curl 可走通 catalog → compile → workflow 存取全流程
-- [ ] dev server 不 import runtime（架构检查断言），无运行时进程依赖
-- [ ] 完整门禁通过
+- [x] ADR 0007 已接受，捕获传输契约含 S0 实测证据
+- [x] curl 可走通 catalog → compile → workflow 存取全流程
+- [x] dev server 不 import runtime（架构检查断言），无运行时进程依赖
+- [x] 完整门禁通过
 
 ## 范围外
 
@@ -38,11 +38,17 @@
 - 捕获实现细节（M10，本里程碑只定契约）
 - 认证 / 多用户
 
-## 待定问题
+## 待定问题（已结案，结论并入 ADR 0007）
 
-- workflow 目录默认放 `workflows/`（仓库根）还是用户目录？（倾向仓库根 `workflows/`，git 管理）
-- 捕获会话状态（桌面 hit-test 的 hook）放 dev server 进程还是独立子进程？（倾向独立子进程，避免 UIA 污染服务进程 COM 状态）
+- workflow 目录默认放 `workflows/`（仓库根）还是用户目录？→ **仓库根 `workflows/`**（git 管理）
+- 捕获会话状态（桌面 hit-test 的 hook）放 dev server 进程还是独立子进程？→ **独立子进程**（避免 UIA 污染服务进程 COM 状态）
 
 ## 完成证据
 
-仅在全部验收标准通过后填写。
+- ADR 0007（`.harness/adr/0007-devserver-capture.md`）已接受，捕获契约引用 `docs/capture-transport.md` S0 实测结论。
+- dev server 骨架：`src/rpa_core/devserver/`（store.py / app.py / server.py，stdlib http.server 零新依赖），CLI 入口 `rpa-core devserver --port --workflows`，默认 `127.0.0.1:8765` + 仓库根 `workflows/`。
+- curl 实测走通：catalog（digest `8edc7e3d…`，26 条）→ compile（合法 workflow `valid=true`）→ PUT/GET/list workflow 存取 → capture 端点契约（browser start 缺 transport=400、合法 transport=501、desktop start=501）。
+- 架构检查新增 devserver 隔离断言（禁 import runtime/executors/workers/cli），33 python files + 26 manifests 通过。
+- 合同测试 `tests/contract/test_devserver.py` 11 项（catalog 一致性、compile 合法/非法、读写往返与越界 403/404、501 占位、413 体限、回环绑定、404/405）。
+- Full gate：83 tests passed + ruff + architecture + task check 全绿（2026-09-01）。
+- 剩余项：S1 验证（chrome://inspect WebSocket 实测，需登录态 Chrome，按 §4 协议人工协作执行）。

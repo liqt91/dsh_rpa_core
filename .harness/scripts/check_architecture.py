@@ -48,6 +48,20 @@ def check_import_direction(errors):
                     errors.append(f"model imports higher package at {path}:{node.lineno}")
 
 
+def check_devserver_isolation(errors):
+    devserver = SRC / "devserver"
+    forbidden = ("rpa_core.runtime", "rpa_core.executors", "rpa_core.workers", "rpa_core.cli")
+    for path in devserver.rglob("*.py"):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import | ast.ImportFrom):
+                names = [alias.name for alias in node.names]
+                if any(
+                    name.startswith(prefix) for name in names for prefix in forbidden
+                ):
+                    errors.append(f"devserver imports forbidden package at {path}:{node.lineno}")
+
+
 def check_manifests(errors):
     ids = set()
     for path in sorted(COMMANDS.rglob("*.json")):
@@ -80,6 +94,7 @@ def main():
     errors = []
     check_forbidden_calls(errors)
     check_import_direction(errors)
+    check_devserver_isolation(errors)
     check_manifests(errors)
     if errors:
         print("ARCHITECTURE CHECK FAILED")
