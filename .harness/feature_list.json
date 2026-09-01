@@ -85,6 +85,16 @@
     {
       "id": "devserver-foundation",
       "title": "Design-time dev server with catalog, compile, and workflow file APIs",
+      "passes": true
+    },
+    {
+      "id": "editor-v1",
+      "title": "Zero-build single-page editor with linear canvas and compile echo",
+      "passes": true
+    },
+    {
+      "id": "element-capture",
+      "title": "Desktop UIA hit-test and browser element capture with S1-verified transport",
       "passes": false
     },
     {

@@ -1,6 +1,6 @@
 # M8 设计期服务与编辑器架构决策
 
-状态：`active`
+状态：`done`
 
 ## 目标
 
@@ -16,8 +16,9 @@
 ## 任务
 
 - [x] 编写 ADR 0007：dev server 定位（设计期工具，不承载 run）、新顶层包 `rpa_core.devserver` 与架构边界（只读复用 catalog/编译器，绝不共享运行进程）、workflow 文件目录约定（受限根目录）、浏览器捕获传输契约（按 `docs/capture-transport.md` 决策矩阵与 S1 结论）、桌面捕获契约
-- [ ] 执行 S1 验证（`docs/capture-transport.md` §4 协议）：chrome://inspect 授权开关的 WebSocket 连接、登录态断言、picker 注入回验、开关持久性（需真实 Chrome 登录态会话，待人工协作执行；不阻塞下方四条验收标准）
 - [x] 实现 dev server 骨架（stdlib `http.server`，零新依赖）：`GET /api/catalog`（manifest 元数据：id/version/kind/effect/input_schema/output_schema/errors）、`POST /api/compile`（dry-run：`{valid, errors[]}`）、`GET /api/workflows`、`GET/PUT /api/workflows/{name}`（受限目录内读写）
+
+> S1 验证（chrome://inspect WebSocket 实测）原列于本里程碑，因 `docs/capture-transport.md` 将其定位为 M10 前置且需真实登录态 Chrome 人工协作，已移入 `M10-capture.md` 计划单；不阻塞本里程碑四条验收标准。
 - [x] 捕获端点骨架：`POST /api/capture/desktop/start|pick|cancel`（UIA hit-test）与 `POST /api/capture/browser/*`（含 `transport` 参数，M10 实装，本里程碑先定义契约与 501 占位）
 - [x] dev server 安全边界：目录逃逸拒绝、仅监听 127.0.0.1、请求体大小限制
 - [x] 合同测试：catalog 端点与 `load_catalog` 一致、compile 端点对合法/非法 workflow 的响应、workflow 文件读写的包含校验
@@ -51,4 +52,3 @@
 - 架构检查新增 devserver 隔离断言（禁 import runtime/executors/workers/cli），33 python files + 26 manifests 通过。
 - 合同测试 `tests/contract/test_devserver.py` 11 项（catalog 一致性、compile 合法/非法、读写往返与越界 403/404、501 占位、413 体限、回环绑定、404/405）。
 - Full gate：83 tests passed + ruff + architecture + task check 全绿（2026-09-01）。
-- 剩余项：S1 验证（chrome://inspect WebSocket 实测，需登录态 Chrome，按 §4 协议人工协作执行）。

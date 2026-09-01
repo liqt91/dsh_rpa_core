@@ -12,6 +12,7 @@ from .store import WorkflowStore
 
 MAX_BODY_BYTES = 1024 * 1024
 _DEFAULT_PORT = 8765
+_JSON_TYPE = "application/json; charset=utf-8"
 
 _WORKFLOW_SEGMENT_PREFIX = "/api/workflows/"
 _CAPTURE_PREFIX = "/api/capture/"
@@ -24,6 +25,10 @@ class _RequestHandler(BaseHTTPRequestHandler):
     @property
     def app(self) -> DevServerApp:
         return self.server.app  # type: ignore[attr-defined]
+
+    @property
+    def editor_html(self) -> bytes:
+        return self.server.editor_html  # type: ignore[attr-defined]
 
     def do_GET(self) -> None:
         self._handle("GET")
@@ -39,34 +44,42 @@ class _RequestHandler(BaseHTTPRequestHandler):
 
     def _handle(self, method: str) -> None:
         try:
-            status, payload = self._route(method)
+            status, body, content_type = self._route(method)
         except ApiError as exc:
-            self._send(exc.status, {"error": exc.code, "message": exc.message})
+            self._send_json(exc.status, {"error": exc.code, "message": exc.message})
             return
-        self._send(status, payload)
+        self._send(status, body, content_type)
 
-    def _route(self, method: str) -> tuple[int, dict]:
+    def _route(self, method: str) -> tuple[int, bytes, str]:
         path = unquote(urlparse(self.path).path)
+        if path == "/":
+            if method != "GET":
+                raise ApiError(405, "METHOD_NOT_ALLOWED", "use GET for the editor page")
+            return 200, self.editor_html, "text/html; charset=utf-8"
+        payload = self._route_api(method, path)
+        return 200, _encode(payload), _JSON_TYPE
+
+    def _route_api(self, method: str, path: str) -> dict:
         if path == "/api/catalog":
             if method != "GET":
                 raise ApiError(405, "METHOD_NOT_ALLOWED", "use GET for /api/catalog")
-            return 200, self.app.catalog_overview()
+            return self.app.catalog_overview()
         if path == "/api/compile":
             if method != "POST":
                 raise ApiError(405, "METHOD_NOT_ALLOWED", "use POST for /api/compile")
-            return 200, self.app.compile(self._read_json(required=True))
+            return self.app.compile(self._read_json(required=True))
         if path == "/api/workflows":
             if method != "GET":
                 raise ApiError(405, "METHOD_NOT_ALLOWED", "use GET for /api/workflows")
-            return 200, self.app.list_workflows()
+            return self.app.list_workflows()
         if path.startswith(_WORKFLOW_SEGMENT_PREFIX):
             name = path[len(_WORKFLOW_SEGMENT_PREFIX) :]
             if "/" in name or not name:
                 raise ApiError(404, "NOT_FOUND", f"no route for {path}")
             if method == "GET":
-                return 200, self.app.get_workflow(name)
+                return self.app.get_workflow(name)
             if method == "PUT":
-                return 200, self.app.put_workflow(name, self._read_json(required=True))
+                return self.app.put_workflow(name, self._read_json(required=True))
             raise ApiError(405, "METHOD_NOT_ALLOWED", "use GET or PUT for workflow resources")
         if path.startswith(_CAPTURE_PREFIX):
             if method != "POST":
@@ -77,9 +90,9 @@ class _RequestHandler(BaseHTTPRequestHandler):
             kind, action = segments
             body = self._read_json(required=False)
             if kind == "desktop":
-                return 200, self.app.capture_desktop(action)
+                return self.app.capture_desktop(action)
             if kind == "browser":
-                return 200, self.app.capture_browser(action, body)
+                return self.app.capture_browser(action, body)
             raise ApiError(404, "NOT_FOUND", f"no route for {path}")
         raise ApiError(404, "NOT_FOUND", f"no route for {path}")
 
@@ -107,15 +120,21 @@ class _RequestHandler(BaseHTTPRequestHandler):
         except (json.JSONDecodeError, UnicodeDecodeError) as exc:
             raise ApiError(400, "BAD_REQUEST", "request body is not valid JSON") from exc
 
-    def _send(self, status: int, payload: dict) -> None:
-        body = json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
+    def _send_json(self, status: int, payload: dict) -> None:
+        self._send(status, _encode(payload), _JSON_TYPE)
+
+    def _send(self, status: int, body: bytes, content_type: str) -> None:
         self.send_response(status)
-        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
         if status >= 400:
             self.close_connection = True
         self.end_headers()
         self.wfile.write(body)
+
+
+def _encode(payload: dict) -> bytes:
+    return json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
 
 
 class DevServer:
@@ -131,8 +150,11 @@ class DevServer:
         if catalog is None:
             catalog = load_catalog(commands_root)
         self.app = DevServerApp(catalog, WorkflowStore(workflows_root), capabilities)
+        editor_path = Path(__file__).resolve().parent / "static" / "index.html"
+        self.editor_html = editor_path.read_bytes()
         self._httpd = ThreadingHTTPServer(("127.0.0.1", port), _RequestHandler)
         self._httpd.app = self.app  # type: ignore[attr-defined]
+        self._httpd.editor_html = self.editor_html  # type: ignore[attr-defined]
         self._thread: threading.Thread | None = None
 
     @property

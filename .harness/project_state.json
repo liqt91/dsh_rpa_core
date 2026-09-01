@@ -1,12 +1,12 @@
 {
   "project": "rpa_core",
-  "phase": "desktop-driver-validation",
+  "phase": "element-capture",
   "status": "active",
-  "completed_milestone": "M7-command-surface",
-  "active_milestone": "M8-devserver",
-  "active_plan": ".harness/tasks/M8-devserver.md",
-  "active_feature": "devserver-foundation",
-  "next_milestone": "M8-devserver",
+  "completed_milestone": "M9-editor",
+  "active_milestone": "M10-capture",
+  "active_plan": ".harness/tasks/M10-capture.md",
+  "active_feature": "element-capture",
+  "next_milestone": "M10-capture",
   "later_milestones": [],
   "task_index": ".harness/tasks/BACKLOG.md",
   "scope": {

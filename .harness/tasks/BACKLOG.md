@@ -4,14 +4,11 @@
 
 ## 当前任务
 
-- [ ] M8 设计期服务与编辑器架构决策（`active`）
-  - 计划：`M8-devserver.md`
-  - 完成门槛：ADR 0007（含捕获传输契约与 S0 实测证据）、dev server 骨架、curl 走通、架构检查覆盖新包。
+- [ ] M10 元素捕获：桌面 UIA hit-test + 浏览器双通道，含 S1 验证（`active`，计划 `M10-capture.md`）
+  - 完成门槛：S1 结论补录 ADR 0007、桌面/浏览器捕获各一条真实 E2E、捕获端点 501 → 实装、完整门禁。S1 需真实登录态 Chrome 人工协作。
 
 ## 后续任务
 
-- [ ] M9 编辑器 v1：零构建单页（线性画布 + schema 表单 + 编译回显）（`planned`）
-- [ ] M10 元素捕获：桌面 UIA hit-test + 浏览器扩展/持久 profile 双通道（`planned`）
 - [ ] M11 树形编辑（if/forEach/try 嵌套）与元素库评估（`planned`）
 
 ## 远期任务
@@ -20,6 +17,14 @@
   - 逐项放行与否以 ADR 0006 结论为准；操控型 HTTP 推迟不变。
 
 ## 已完成
+
+- [x] M9 编辑器 v1：零构建单页（`done`）
+  - 计划：`M9-editor.md`
+  - 证据：ADR 0008 放行 + `devserver/static/index.html` 单页（命令面板/线性画布/schema 表单/编译回显/打开保存闭环）+ `GET /` 唯一静态路由 + Playwright Chromium E2E 与 3 项合同测试；87 tests + 全门禁。
+
+- [x] M8 设计期服务与编辑器架构决策（`done`）
+  - 计划：`M8-devserver.md`
+  - 证据：ADR 0007（devserver 隔离边界/捕获契约/待定问题结案）+ `rpa_core.devserver` 骨架（catalog/compile/workflows CRUD + 捕获 501 占位，零新依赖）+ CLI devserver 子命令 + 架构检查隔离断言 + 11 项合同测试；curl 全流程实测；83 tests + 全门禁。S1 验证移入 `M10-capture.md`。
 
 - [x] M7 命令面小扩展（`done`）
   - 计划：`M7-command-surface.md`

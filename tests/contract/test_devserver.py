@@ -185,3 +185,29 @@ def test_request_body_size_limit(server):
     status, payload = _request("POST", "/api/compile", bloated, base=base)
     assert status == 413
     assert payload["error"] == "PAYLOAD_TOO_LARGE"
+
+
+def test_editor_page_served_at_root(server):
+    base = f"http://127.0.0.1:{server.port}"
+    request = urllib.request.Request(f"{base}/")
+    with urllib.request.urlopen(request) as response:
+        assert response.status == 200
+        assert response.headers["Content-Type"].startswith("text/html")
+        body = response.read().decode("utf-8")
+    assert body.startswith("<!DOCTYPE html>")
+    assert "rpa_core 编辑器" in body
+
+
+def test_editor_page_no_static_leak(server):
+    base = f"http://127.0.0.1:{server.port}"
+    for path in ("/static/index.html", "/..%2Fpyproject.toml", "/editor", "/index.html"):
+        status, payload = _request("GET", path, base=base)
+        assert status == 404
+        assert payload["error"] == "NOT_FOUND"
+
+
+def test_editor_page_rejects_post(server):
+    base = f"http://127.0.0.1:{server.port}"
+    status, payload = _request("POST", "/", {}, base=base)
+    assert status == 405
+    assert payload["error"] == "METHOD_NOT_ALLOWED"

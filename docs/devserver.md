@@ -1,4 +1,4 @@
-# dev server 手册（M8）
+# dev server 手册（M8/M9）
 
 设计期 HTTP 工具，为编辑器（M9）与捕获（M10）提供 catalog / compile / workflow 文件 API。定位与边界见 ADR 0007：**不承载 run**，进程内无 orchestrator / registry；仅复用 `catalog` 与 `compiler`（架构检查断言不 import `runtime` / `executors`）。
 
@@ -8,6 +8,10 @@
 uv run python -m rpa_core.cli devserver            # 默认 127.0.0.1:8765，workflow 目录 = 仓库根 workflows/
 uv run python -m rpa_core.cli devserver --port 9000 --workflows D:\tmp\workflows
 ```
+
+启动后浏览器打开 `http://127.0.0.1:8765/` 即编辑器单页（M9，ADR 0008：零构建 vanilla HTML/JS，无 npm/打包器/CDN；`GET /` 是唯一静态路由，不开放其他文件路径）。
+
+编辑器用法：左侧命令面板（可过滤）点击追加节点 → 画布选中节点 → 右侧属性表单按 input_schema 生成字段（值支持 `${inputs.x}` 引用）→「编译」回显 `errors[]` → 填文件名「保存」（草稿可保存，不要求编译通过）。「打开」下拉列出 workflows 目录现有文件。
 
 安全边界（ADR 0007 §6）：仅监听 `127.0.0.1`、请求体上限 1 MiB（`PAYLOAD_TOO_LARGE`）、workflow 名限 `[A-Za-z][A-Za-z0-9_-]*` 且 resolve 后必须在根目录内（越界 `FORBIDDEN`）。无认证——设计期本地工具，远程/多用户需新 ADR。
 
