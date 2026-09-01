@@ -1,6 +1,6 @@
 # 浏览器元素捕获传输方案
 
-状态：方案定稿（S1 验证待执行）
+状态：方案定稿（S1 已验证通过，2026-09-01，Edge 152）
 关联：M8（ADR 0007 依据）、M10（实装）、S0 实测结论（M7 任务单）
 
 ## 1. 问题定义
@@ -20,12 +20,17 @@
 - 代价：与日常浏览器是两份登录态（每站点登录一次）；profile 同一时刻只能被一个浏览器实例使用。
 - 定位：**主路线**，零外部依赖，M10a。
 
-### 2.2 chrome://inspect 用户授权调试开关（S0 后新发现，实测进行中）
+### 2.2 chrome://inspect 用户授权调试开关（S1 已验证通过）
 
-- 机制：Chrome 新增 `chrome://inspect/#remote-debugging` 页面，用户手动开启 "Allow remote debugging for this browser instance"。
-- 本机实测（Chrome 152）：开启后 9222 端口开始监听，HTTP 服务响应存在，但**经典 `/json/*` 发现端点全部 404**——刻意的防扫描设计，连接需要显式 WebSocket URL（预期带会话 token，待从页面 UI 读取确认）。
-- 若走通：官方 UI 授权、零扩展、零第三方、标准 CDP——**登录态页面捕获的最优载体**。
-- 待验证（S1）：WebSocket URL 获取方式（UI 展示 / 本地枚举）、Playwright `connect_over_cdp` 兼容性、开关持久性（是否跨重启）、小红书登录态断言与 picker 注入回验。
+- 机制：Chromium 新增 `chrome://inspect/#remote-debugging`（Edge 为 `edge://inspect/#remote-debugging`）页面，用户手动开启 "Allow remote debugging for this browser instance"。
+- S1 实测（2026-09-01，Edge 152.0.4191.53，用户日常浏览器 + 手动开启开关）：
+  - 开关开启后 `DevToolsActivePort` 文件出现在用户数据目录（`%LOCALAPPDATA%\Microsoft\Edge\User Data\DevToolsActivePort`），首行端口 9222、次行浏览器 UUID 路径；**WebSocket URL = `ws://127.0.0.1:<port><path>`，从该文件读取即可，无需页面 UI 交互**。
+  - `/json/version` 等 HTTP 发现端点 404（防扫描），与 S0 结论一致；显式 WS URL 直连成功。
+  - Playwright `connect_over_cdp` 全链路可用：枚举 contexts/pages（用户真实标签页可见）、新开标签页导航/输入/读取、picker 注入（CSS selector 生成 + querySelectorAll 命中数回验 + 高亮渲染）、原生 CDP session（`Runtime.evaluate`）。
+  - 连接断开不关闭浏览器；测试标签页可单独关闭，用户标签页不受影响。
+  - 运维备注：百度首页搜索框被验证页隐藏（`#kw` not visible），搜索 URL 直达（`/s?wd=`）可靠——M10 捕获脚本优先用 URL 直达模式。
+- 待验证：开关跨重启持久性（用户重启 Edge 后重读 `DevToolsActivePort` 即可确认）。
+- 定位：官方 UI 授权、零扩展、零第三方、标准 CDP——**登录态页面捕获的最优载体**，已证实可行。
 
 ### 2.3 Panerelay（第三方桥，MIT）
 
@@ -60,20 +65,20 @@
 | 优先级 | 传输 | 场景 | 状态 |
 |---|---|---|---|
 | 主（M10a） | 持久 profile | 公共页 + 可接受登录一次的站点 | 已定 |
-| 次（M10b） | chrome://inspect 授权开关（S1 验证） | 登录态页面、零重登录 | S1 待验证 |
-| 备选一 | Panerelay | 同上，若 2.2 失败 | S1 备选 |
+| 次（M10b） | chrome://inspect 授权开关（DevToolsActivePort WS URL） | 登录态页面、零重登录 | S1 已验证通过 |
+| 备选一 | Panerelay | 同上，若 2.2 失效 | S1 备选（未启用） |
 | 备选二 | Playwright MCP 扩展 evaluate 链路 | 同上 | 远期 |
 | 兜底 | 自研扩展 | 完全自主可控 | 远期 |
 
-dev server 端点契约（M8 定义）：`POST /api/capture/browser/start {transport: "persistent" | "user-browser", ...}`，`user-browser` 的子类型由 S1 结论确定（chrome-inspect-ws / panerelay / mcp-extension）。
+dev server 端点契约（M8 定义）：`POST /api/capture/browser/start {transport: "persistent" | "user-browser", ...}`；`user-browser` 子类型定案为 **`chrome-inspect-ws`**（`userBrowserType` 参数），Panerelay/MCP 仅作降级备选记录。
 
-## 4. S1 验证协议（M10 前置）
+## 4. S1 验证协议（已执行，2026-09-01）
 
-1. 读取 chrome://inspect 页面展示的调试连接信息（WebSocket URL / token）
-2. Playwright `connect_over_cdp(<url>)` → 枚举 contexts/pages → 定位 xiaohongshu 标签页
-3. 断言登录态（头像等登录后元素）→ 注入 picker → hover 高亮 + 点击 → selector 生成并回验命中数
-4. 重启 Chrome → 验证开关持久性（常驻传输 vs 捕获会话手动开启）
-5. 结论写入 ADR 0007：传输子类型、运维方式（UI 提示流程）、降级链（2.2 → 2.3 → 2.4 → 2.5）
+1. ~~读取 chrome://inspect 页面展示的调试连接信息~~ → **实际更优**：开关开启后 `DevToolsActivePort` 文件落盘于 User Data 目录，直接读取端口 + 浏览器 UUID 构造 WS URL，零 UI 交互
+2. ~~Playwright `connect_over_cdp(<url>)` 枚举~~ → 通过（Edge 152，1 context / 12 真实标签页，新标签页全可控）
+3. ~~登录态断言 + picker 注入~~ → 登录态断言改期（用户未登录小红书）；picker 链路在 example.com 完整验证（selector 生成 → 命中回验 → 高亮）；百度搜索经 URL 直达操作并读回结果
+4. 开关持久性：待用户重启 Edge 后重读 `DevToolsActivePort` 确认（唯一遗留项）
+5. 结论已写入 ADR 0007 §4：`user-browser` 子类型定案 `chrome-inspect-ws`，运维方式 = 用户在 `edge://inspect` 开启开关 + 服务端读 `DevToolsActivePort`；降级链 2.3 → 2.4 → 2.5 保持记录但暂不启用
 
 ## 5. 顺带产出
 
