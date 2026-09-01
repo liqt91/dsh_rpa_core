@@ -6,6 +6,7 @@ __pycache__/
 dist/
 build/
 run_artifacts/
+examples/api-usage/artifacts/
 playwright-report/
 test-results/
 .DS_Store

@@ -75,6 +75,11 @@
     {
       "id": "api-usage-contract",
       "title": "Caller-facing API usage documentation with runnable example",
+      "passes": true
+    },
+    {
+      "id": "command-surface-extensions",
+      "title": "Win32 timeoutMs symmetry and data.format template rendering",
       "passes": false
     },
     {
@@ -84,4 +89,3 @@
     }
   ]
 }
-

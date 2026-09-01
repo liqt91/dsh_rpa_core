@@ -46,4 +46,14 @@ Run the complete local gate:
 uv run python .harness/scripts/check_all.py
 ```
 
+## API usage (v1)
+
+Call rpa_core from Python directly — no server needed (ADR 0006):
+
+```powershell
+uv run python examples/api-usage/run_workflow.py
+```
+
+See `docs/api-usage.md` for the four-step calling pattern, artifacts conventions, and run-state consumption rules.
+
 从 `.harness/tasks/BACKLOG.md` 和 `.harness/project_state.json` 指向的当前计划开始工作。面向维护者的任务与计划文档使用中文；代码标识、错误码和机器协议字段保留英文。修改核心协议前先阅读 `.harness/architecture.md`、`.harness/invariants.md` 和 `.harness/feature_list.json`。

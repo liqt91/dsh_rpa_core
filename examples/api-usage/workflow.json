@@ -1,0 +1,34 @@
+{
+  "schema_version": "1.0",
+  "id": "api-usage-demo",
+  "name": "API usage caller demo",
+  "inputs": {
+    "workspace": ""
+  },
+  "root": {
+    "type": "sequence",
+    "id": "root",
+    "children": [
+      {
+        "type": "action",
+        "id": "writeHello",
+        "command": "data.writeText",
+        "with": {
+          "workspace": "${inputs.workspace}",
+          "path": "hello.txt",
+          "text": "hello from rpa_core"
+        }
+      },
+      {
+        "type": "action",
+        "id": "writeBye",
+        "command": "data.writeText",
+        "with": {
+          "workspace": "${inputs.workspace}",
+          "path": "bye.txt",
+          "text": "run finished"
+        }
+      }
+    ]
+  }
+}

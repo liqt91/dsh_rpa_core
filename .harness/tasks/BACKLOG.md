@@ -4,14 +4,14 @@
 
 ## 当前任务
 
-- [ ] M6 API 调用方入门契约（`active`）
-  - 计划：`M6-api-usage.md`
-  - 完成门槛：`docs/api-usage.md` + 可运行最小示例 + README 链接 + 全门禁。
+- [ ] M7 命令面小扩展（`active`）
+  - 计划：`M7-command-surface.md`
+  - 完成门槛：win32 timeoutMs 对称、data.format fail-fast 模板渲染、全门禁。
 
 ## 后续任务
 
-- [ ] M7（`planned`）
-  - 依调用方实际需求再立项（候选：win32 timeoutMs 对称、data.format 模板化）。
+- [ ] M8（`planned`）
+  - 依实际调用方需求再立项。
 
 ## 远期任务
 
@@ -19,6 +19,10 @@
   - 逐项放行与否以 ADR 0006 结论为准；HTTP 已明确推迟并附重估条件。
 
 ## 已完成
+
+- [x] M6 API 调用方入门契约（`done`）
+  - 计划：`M6-api-usage.md`
+  - 证据：`docs/api-usage.md` + `examples/api-usage/` 可运行示例（run/pause/resume 全链路实测）+ README 链接；70 tests + 全门禁通过。
 
 - [x] M5 API 面决策（`done`）
   - 计划：`M5-api-decision.md`
