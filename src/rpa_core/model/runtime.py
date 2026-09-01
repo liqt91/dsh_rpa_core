@@ -11,6 +11,9 @@ class RunStatus(StrEnum):
     FAILED = "failed"
     CANCELLED = "cancelled"
     ABANDONED = "abandoned"
+    RECOVERY_REQUIRED = "recovery_required"
+    INDETERMINATE = "indeterminate"
+    PAUSED = "paused"
 
 
 class EventRecord(BaseModel):

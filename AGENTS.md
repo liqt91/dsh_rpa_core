@@ -24,7 +24,7 @@ CLI:         uv run python -m rpa_core.cli
 5. User Python never runs in the orchestrator process.
 6. No `eval`, `exec`, dynamic module hot replacement, or online source editing.
 7. One run uses one immutable command catalog snapshot.
-8. Every run reaches a terminal state: succeeded, failed, cancelled, or abandoned.
+8. Every run reaches a terminal state (succeeded, failed, cancelled, or abandoned) or the persisted `paused` state; a paused run must later be resumed or explicitly abandoned.
 9. Cross-platform support means stable contracts plus capability-aware drivers, not identical desktop behavior on every OS.
 10. Do not add FastAPI, a database, UI, MCP, scheduling, or installation concerns before the first vertical slice passes its acceptance tests.
 11. Executors must propagate task cancellation and release attempt-owned resources before `execute()` exits.

@@ -170,7 +170,7 @@ def test_failed_unknown_effect_is_preserved_in_failure_evidence(tmp_path):
     )
     runner, plan = build_unsafe_run(tmp_path, executor)
     result = asyncio.run(runner.run(plan))
-    assert result.status.value == "failed"
+    assert result.status.value == "indeterminate"
     effects = result.error["details"]["effects"]
     assert effects[0]["status"] == "unknown"
     events_path = tmp_path / "runs" / result.run_id / "events.jsonl"

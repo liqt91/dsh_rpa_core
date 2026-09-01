@@ -255,3 +255,27 @@ def test_event_failure_stops_execution_and_propagates(tmp_path, monkeypatch):
     with pytest.raises(RunPersistenceError):
         asyncio.run(runner.run(plan))
     assert executor.calls == 0
+
+
+def test_resume_skips_completed_steps_and_reuses_checkpoint(tmp_path):
+    executor = ScriptedExecutor([CommandResult.success(outputs={"value": "first"})])
+    runner, plan = build(tmp_path, action_workflow(), executor)
+    result = asyncio.run(runner.run(plan))
+    assert result.status.value == "succeeded"
+
+    checkpoint = tmp_path / "runs" / result.run_id / "checkpoint.json"
+    assert checkpoint.exists()
+
+    resumed_executor = ScriptedExecutor([CommandResult.success(outputs={"value": "second"})])
+    resumed_runner = Orchestrator(
+        runner.catalog,
+        ExecutorRegistry({"scripted": resumed_executor}),
+        tmp_path / "runs",
+    )
+
+    async def resume():
+        return await resumed_runner.resume(plan, result.run_id).wait()
+
+    resumed = asyncio.run(resume())
+    assert resumed.status.value == "succeeded"
+    assert resumed_executor.calls == 0
