@@ -1,5 +1,7 @@
 import asyncio
+import ctypes
 import sys
+import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
@@ -76,21 +78,31 @@ class DesktopExecutor(CommandExecutor):
             if command == "desktop.attachWindow":
                 title = str(inputs["title"])
                 process_id = inputs.get("processId")
-                windows = Desktop(backend="uia").windows(title=title)
-                if process_id is not None:
-                    windows = [window for window in windows if window.process_id() == process_id]
-                if len(windows) == 0:
-                    return CommandResult.failure(
-                        ErrorCode.ELEMENT_NOT_FOUND,
-                        "Desktop window did not match",
-                        details={"title": title, "matchedCount": 0},
-                    )
-                if len(windows) > 1:
-                    return CommandResult.failure(
-                        ErrorCode.ELEMENT_AMBIGUOUS,
-                        "Desktop window matched multiple targets",
-                        details={"title": title, "matchedCount": len(windows)},
-                    )
+                timeout_ms = int(inputs.get("timeoutMs") or 0)
+                deadline = time.monotonic() + timeout_ms / 1000.0
+                while True:
+                    windows = Desktop(backend="uia").windows(title=title)
+                    if process_id is not None:
+                        windows = [
+                            window for window in windows if window.process_id() == process_id
+                        ]
+                    if not windows:
+                        windows = self._windows_by_title_fallback(title, process_id)
+                    if len(windows) == 1:
+                        break
+                    if len(windows) > 1:
+                        return CommandResult.failure(
+                            ErrorCode.ELEMENT_AMBIGUOUS,
+                            "Desktop window matched multiple targets",
+                            details={"title": title, "matchedCount": len(windows)},
+                        )
+                    if time.monotonic() >= deadline:
+                        return CommandResult.failure(
+                            ErrorCode.ELEMENT_NOT_FOUND,
+                            "Desktop window did not match",
+                            details={"title": title, "matchedCount": 0},
+                        )
+                    time.sleep(0.1)
                 window = windows[0]
                 session_id = str(uuid.uuid4())
                 handle = int(window.handle)
@@ -137,22 +149,31 @@ class DesktopExecutor(CommandExecutor):
                     return CommandResult.failure(
                         ErrorCode.SESSION_NOT_FOUND, "Desktop window not found"
                     )
-                matches = self._find(window, locator)
-                if len(matches) == 0:
-                    return CommandResult.failure(
-                        ErrorCode.ELEMENT_NOT_FOUND,
-                        "Desktop element did not match",
-                        details={"locator": locator.model_dump(by_alias=True), "matchedCount": 0},
-                    )
-                if len(matches) > 1:
-                    return CommandResult.failure(
-                        ErrorCode.ELEMENT_AMBIGUOUS,
-                        "Desktop element matched multiple targets",
-                        details={
-                            "locator": locator.model_dump(by_alias=True),
-                            "matchedCount": len(matches),
-                        },
-                    )
+                timeout_ms = int(inputs.get("timeoutMs") or 0)
+                deadline = time.monotonic() + timeout_ms / 1000.0
+                while True:
+                    matches = self._find(window, locator)
+                    if len(matches) == 1:
+                        break
+                    if len(matches) > 1:
+                        return CommandResult.failure(
+                            ErrorCode.ELEMENT_AMBIGUOUS,
+                            "Desktop element matched multiple targets",
+                            details={
+                                "locator": locator.model_dump(by_alias=True),
+                                "matchedCount": len(matches),
+                            },
+                        )
+                    if time.monotonic() >= deadline:
+                        return CommandResult.failure(
+                            ErrorCode.ELEMENT_NOT_FOUND,
+                            "Desktop element did not match",
+                            details={
+                                "locator": locator.model_dump(by_alias=True),
+                                "matchedCount": 0,
+                            },
+                        )
+                    time.sleep(0.1)
                 element_id = str(uuid.uuid4())
                 session.elements[element_id] = locator.model_dump(by_alias=True)
                 return CommandResult.success(
@@ -245,6 +266,37 @@ class DesktopExecutor(CommandExecutor):
                 == locator.automation_id
             ]
         return matches
+
+    @staticmethod
+    def _windows_by_title_fallback(title: str, process_id: int | None) -> list[Any]:
+        from pywinauto.controls.uiawrapper import UIAWrapper
+        from pywinauto.uia_element_info import UIAElementInfo
+
+        user32 = ctypes.windll.user32
+        handles: list[int] = []
+
+        def _on_window(hwnd: Any, _lparam: Any) -> bool:
+            buffer = ctypes.create_unicode_buffer(512)
+            user32.GetWindowTextW(hwnd, buffer, 512)
+            if buffer.value != title or not user32.IsWindowVisible(hwnd):
+                return True
+            owner_pid = ctypes.c_ulong()
+            user32.GetWindowThreadProcessId(hwnd, ctypes.byref(owner_pid))
+            if process_id is None or owner_pid.value == process_id:
+                handles.append(int(hwnd) if isinstance(hwnd, int) else int(str(hwnd), 0))
+            return True
+
+        callback = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)(
+            _on_window
+        )
+        user32.EnumWindows(callback, None)
+        windows: list[Any] = []
+        for handle in handles:
+            try:
+                windows.append(UIAWrapper(UIAElementInfo(handle)))
+            except Exception:
+                continue
+        return windows
 
     @staticmethod
     def _window_by_handle(handle: int) -> Any | None:

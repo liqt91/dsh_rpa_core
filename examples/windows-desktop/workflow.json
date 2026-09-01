@@ -4,7 +4,6 @@
   "name": "Windows desktop deterministic control slice",
   "inputs": {
     "title": "无标题 - 记事本",
-    "dialogTitle": "打开",
     "menuPath": ["文件(&F)", "打开(O)...\tCtrl+O"],
     "filePath": "D:/Users/Administrator/Documents/代码/rpa_core/test.txt",
     "openedTitle": "test.txt - 记事本"
@@ -36,7 +35,6 @@
         "id": "attachDialog",
         "command": "desktop.win32.attachWindow",
         "with": {
-          "title": "${inputs.dialogTitle}",
           "className": "#32770",
           "processId": "${steps.attachMain.outputs.processId}"
         }

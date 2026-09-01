@@ -1,0 +1,184 @@
+{
+  "schema_version": "1.0",
+  "id": "uia-desktop-slice",
+  "name": "Windows UIA deterministic control slice",
+  "inputs": {
+    "title": "RPA Core Desktop Demo",
+    "dialogTitle": "RPA Core Desktop Dialog",
+    "greeting": "hello rpa",
+    "dialogReply": "world"
+  },
+  "root": {
+    "type": "sequence",
+    "id": "root",
+    "children": [
+      {
+        "type": "action",
+        "id": "attachMain",
+        "command": "desktop.attachWindow",
+        "with": {
+          "title": "${inputs.title}",
+          "timeoutMs": 5000
+        }
+      },
+      {
+        "type": "action",
+        "id": "findInput",
+        "command": "desktop.findElement",
+        "with": {
+          "sessionId": "${steps.attachMain.outputs.sessionId}",
+          "locator": {"automationId": "queryInput", "controlType": "Edit"}
+        }
+      },
+      {
+        "type": "action",
+        "id": "typeGreeting",
+        "command": "desktop.input",
+        "with": {
+          "sessionId": "${steps.attachMain.outputs.sessionId}",
+          "elementId": "${steps.findInput.outputs.elementId}",
+          "text": "${inputs.greeting}"
+        }
+      },
+      {
+        "type": "action",
+        "id": "findSubmit",
+        "command": "desktop.findElement",
+        "with": {
+          "sessionId": "${steps.attachMain.outputs.sessionId}",
+          "locator": {"automationId": "submitButton", "controlType": "Button"}
+        }
+      },
+      {
+        "type": "action",
+        "id": "submit",
+        "command": "desktop.click",
+        "with": {
+          "sessionId": "${steps.attachMain.outputs.sessionId}",
+          "elementId": "${steps.findSubmit.outputs.elementId}"
+        }
+      },
+      {
+        "type": "action",
+        "id": "findResult",
+        "command": "desktop.findElement",
+        "with": {
+          "sessionId": "${steps.attachMain.outputs.sessionId}",
+          "locator": {"automationId": "resultText"}
+        }
+      },
+      {
+        "type": "action",
+        "id": "readResult",
+        "command": "desktop.getText",
+        "with": {
+          "sessionId": "${steps.attachMain.outputs.sessionId}",
+          "elementId": "${steps.findResult.outputs.elementId}"
+        }
+      },
+      {
+        "type": "action",
+        "id": "findDialogButton",
+        "command": "desktop.findElement",
+        "with": {
+          "sessionId": "${steps.attachMain.outputs.sessionId}",
+          "locator": {"automationId": "dialogButton", "controlType": "Button"}
+        }
+      },
+      {
+        "type": "action",
+        "id": "openDialog",
+        "command": "desktop.click",
+        "with": {
+          "sessionId": "${steps.attachMain.outputs.sessionId}",
+          "elementId": "${steps.findDialogButton.outputs.elementId}"
+        }
+      },
+      {
+        "type": "action",
+        "id": "attachDialog",
+        "command": "desktop.attachWindow",
+        "with": {
+          "title": "${inputs.dialogTitle}",
+          "timeoutMs": 5000
+        }
+      },
+      {
+        "type": "action",
+        "id": "findDialogInput",
+        "command": "desktop.findElement",
+        "with": {
+          "sessionId": "${steps.attachDialog.outputs.sessionId}",
+          "locator": {"automationId": "dialogInput", "controlType": "Edit"}
+        }
+      },
+      {
+        "type": "action",
+        "id": "typeReply",
+        "command": "desktop.input",
+        "with": {
+          "sessionId": "${steps.attachDialog.outputs.sessionId}",
+          "elementId": "${steps.findDialogInput.outputs.elementId}",
+          "text": "${inputs.dialogReply}"
+        }
+      },
+      {
+        "type": "action",
+        "id": "findAccept",
+        "command": "desktop.findElement",
+        "with": {
+          "sessionId": "${steps.attachDialog.outputs.sessionId}",
+          "locator": {"automationId": "acceptButton", "controlType": "Button"}
+        }
+      },
+      {
+        "type": "action",
+        "id": "acceptDialog",
+        "command": "desktop.click",
+        "with": {
+          "sessionId": "${steps.attachDialog.outputs.sessionId}",
+          "elementId": "${steps.findAccept.outputs.elementId}"
+        }
+      },
+      {
+        "type": "action",
+        "id": "closeDialogSession",
+        "command": "desktop.closeSession",
+        "with": {
+          "sessionId": "${steps.attachDialog.outputs.sessionId}"
+        }
+      },
+      {
+        "type": "action",
+        "id": "findResultAgain",
+        "command": "desktop.findElement",
+        "with": {
+          "sessionId": "${steps.attachMain.outputs.sessionId}",
+          "locator": {"automationId": "resultText"}
+        }
+      },
+      {
+        "type": "action",
+        "id": "readFinal",
+        "command": "desktop.getText",
+        "with": {
+          "sessionId": "${steps.attachMain.outputs.sessionId}",
+          "elementId": "${steps.findResultAgain.outputs.elementId}"
+        }
+      },
+      {
+        "type": "action",
+        "id": "closeMainSession",
+        "command": "desktop.closeSession",
+        "with": {
+          "sessionId": "${steps.attachMain.outputs.sessionId}"
+        }
+      },
+      {
+        "type": "return",
+        "id": "done",
+        "value": "${steps.readFinal.outputs.value}"
+      }
+    ]
+  }
+}
