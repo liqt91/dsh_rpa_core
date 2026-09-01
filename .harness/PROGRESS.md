@@ -20,3 +20,4 @@ Format: `YYYY-MM-DD | feature | status | evidence`
 2026-09-01 | M2.2-uia-winforms | done | WinForms 测试应用全链路 UIA E2E（输入/提交/读回 + 对话框双 session，3 连跑一致）、timeoutMs 轮询与 EnumWindows 兜底修复 owned 弹窗枚举盲区、manifest 对称合同测试、docs/desktop_backends.md；60 tests + full gate passed
 2026-09-01 | baidu-news-example | added | 真实站点示例 examples/baidu-news-top10（百度搜索"新闻"保存首页结果标题到 run_artifacts/baidu-top10.txt）；browser.launch 扩展 userAgent 参数并移除 automation 标志（headless 被百度安全验证拦截，headed + 正常 UA 放行）；python worker 修复相对 path 按 workspace 解析（补越界拒绝测试）；61 tests + full gate passed
 2026-09-01 | M4.5-data-commands | done | data.writeText（text/lines 二选一，workspace 包含校验，UTF-8）与 data.limit（前 N 条截断，pure/safe）入册，catalog 25 条；百度示例升级为纯文本产物（limit 10 + 按行输出）；65 tests + full gate passed
+2026-09-01 | M5-api-decision | done | ADR 0006：进程内 Python API 冻结为 v1（不建 facade）、HTTP 推迟并附重估条件、排除清单结论、三个待定问题全部结案；公开签名契约测试 4 项；工作区分批提交完成（M3+M4 / M2.2 / baidu / harness / M4.5）；69 tests + full gate passed

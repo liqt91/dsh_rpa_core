@@ -4,22 +4,29 @@
 
 ## 当前任务
 
-- [ ] M4.5 数据命令补齐（`active`）
-  - 计划：`M4.5-data-commands.md`
-  - 完成门槛：`data.writeText` + `data.limit` 契约与测试、百度示例升级为纯文本产物、全门禁通过。
+- [ ] M6 API 调用方入门契约（`active`）
+  - 计划：`M6-api-usage.md`
+  - 完成门槛：`docs/api-usage.md` + 可运行最小示例 + README 链接 + 全门禁。
 
 ## 后续任务
 
-- [ ] M5 API 面决策（`planned`）
-  - 计划：`M5-api-decision.md`
-  - 带倾向起草：进程内 Python API 先行为主方案，HTTP 论证后明确结论。
+- [ ] M7（`planned`）
+  - 依调用方实际需求再立项（候选：win32 timeoutMs 对称、data.format 模板化）。
 
 ## 远期任务
 
 - [ ] UI、DSH、MCP、调度器和安装器集成（`planned`）
-  - 逐项放行与否以 M5 ADR 结论为准。
+  - 逐项放行与否以 ADR 0006 结论为准；HTTP 已明确推迟并附重估条件。
 
 ## 已完成
+
+- [x] M5 API 面决策（`done`）
+  - 计划：`M5-api-decision.md`
+  - 证据：ADR 0006（进程内 API 先行、HTTP 推迟、排除清单结论）+ 公开签名冻结契约测试 4 项；69 tests + 全门禁通过。
+
+- [x] M4.5 数据命令补齐（`done`）
+  - 计划：`M4.5-data-commands.md`
+  - 证据：`data.writeText` + `data.limit` 契约与合同测试、百度示例纯文本产物（limit 10）；65 tests + 全门禁通过。
 
 - [x] M2.2 Windows 桌面 UIA 主线验证（`done`）
   - 计划：`M2.2-uia-winforms.md`
