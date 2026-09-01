@@ -32,22 +32,35 @@
 - 待验证：开关跨重启持久性（用户重启 Edge 后重读 `DevToolsActivePort` 即可确认）。
 - 定位：官方 UI 授权、零扩展、零第三方、标准 CDP——**登录态页面捕获的最优载体**，已证实可行。
 
-### 2.3 Panerelay（第三方桥，MIT）
+### 2.3 Panerelay（第三方桥，MIT）——降为记录备查
 
 - 机制：Web Store 现成扩展 + 本地 Node Bridge（Native Messaging）→ 对外暴露 CDP 兼容端点（`/cdp/playwright`），扩展经 `chrome.debugger` API 操作授权标签页——扩展权限的 CDP 不受 136 封锁影响。
 - 优点：现成上架、授权边界完善（按 tab 授权、cookies 不外泄）、`playwright-cli attach` 官方支持其端点。
-- 风险：个人维护项目（31★）；需 Node 20+；Python `connect_over_cdp` 兼容性需 S1 实测。
-- 定位：2.2 不可用时的**次选**。
+- 降级原因（2026-09-01 复评）：个人维护项目（31★）；需 Node 20+（违背仓库 Python/stdlib 取向）；能力被 M10c 自研扩展路线完全覆盖。**其按 tab 授权 UX 保留借鉴**。
 
-### 2.4 Playwright MCP 官方扩展
+### 2.4 Playwright MCP 官方扩展（机制已核实，作为 M10c 设计借鉴）
 
-- 机制：微软官方扩展（`microsoft/playwright` 仓库 `packages/extension`）连接运行中浏览器；传输形态是 **MCP 工具调用**（`browser_evaluate` 等），非 CDP 端点。
-- 定位：2.2 与 2.3 均不可用时的替代载体（捕获脚本经 MCP `browser_evaluate` 注入）；链路较绕，远期备选。
+- 机制（2026-09-01 核实 `microsoft/playwright-mcp` README + `packages/extension`）：官方扩展（Chrome Web Store 上架）+ MCP server `--extension` 模式；扩展服务 worker **反向 WebSocket 连出**至 MCP server。
+- **弹窗机制**：默认每次连接需在浏览器内批准；可把扩展 UI 展示的 profile 唯一 `PLAYWRIGHT_MCP_EXTENSION_TOKEN` 配置进客户端后自动重连、免弹窗——**token 配对是"每会话弹窗"的轻量正解，微软官方验证**。
+- 多客户端隔离：每客户端一个标签组（颜色区分），只有组内标签页可达；拖拽进出改变授权范围；状态页可查看与逐个断开连接。
+- 定位修订：**token 配对与标签组隔离 UX 并入 M10c 自研扩展设计**；MCP 工具调用形态本身不作为 rpa_core 传输链路（与进程内 API 定位不符、链路绕）。
 
-### 2.5 自研 MV3 扩展（旧项目路线）
+### 2.5 自研 MV3 捕获扩展（M10c，已立项设计）
 
-- 机制：content script 捕获 + service worker 回传 dev server（旧项目 95KB runner 的精简版，全新写约 300 行）。
-- 定位：**远期备选**——仅当 2.2/2.3/2.4 全部不可用时启动；好处是完全自主可控。
+- 佐证：chrome-relay（MIT，2026-09 调研）与 Playwright MCP 官方扩展证明"扩展 attach 真实浏览器"是行业收敛答案；我们 M7 S0 结论（"live 复用登录态只有扩展路线"）与之一致。
+- 两种子传输：
+  - **主设计：扩展反连 dev server 的 WebSocket + token 配对**（Playwright MCP 机制）——dev server 已是本地 HTTP 服务，扩展 UI 展示 token、编辑器配置一次，机械量最小；
+  - 备选：Native Messaging host（chrome-relay 机制）——零开放端口、Chrome 双向强制扩展 ID 白名单；host 协议仅为 stdin/stdout 长度前缀 JSON，**可用 Python 写**并消化进 `rpa_core`（dev server 子进程），但需注册 native-messaging manifest。
+- 弹窗成本矩阵（定稿）：
+
+  | 方案 | 连接批准成本 | 安装成本 |
+  |---|---|---|
+  | chrome-inspect-ws | 每次连接弹窗（不可绕过） | 零 |
+  | 扩展默认（无 token） | 每次连接弹窗 | 装扩展 |
+  | 扩展 + token 配对 | 一次配置，之后自动 | 装扩展 + 贴 token |
+  | Native Messaging 配对 | 零弹窗 | 装扩展 + 注册 host |
+
+- 定位：**M10c 立项设计、不在 M10 实装**——触发条件：M10b 的每会话弹窗在真实使用中构成疲劳，或需要零开放端口。
 
 ### 2.6 已排除路线
 
@@ -65,12 +78,12 @@
 | 优先级 | 传输 | 场景 | 状态 |
 |---|---|---|---|
 | 主（M10a） | 持久 profile | 公共页 + 可接受登录一次的站点 | 已定 |
-| 次（M10b） | chrome://inspect 授权开关（DevToolsActivePort WS URL） | 登录态页面、零重登录 | S1 已验证通过 |
-| 备选一 | Panerelay | 同上，若 2.2 失效 | S1 备选（未启用） |
-| 备选二 | Playwright MCP 扩展 evaluate 链路 | 同上 | 远期 |
-| 兜底 | 自研扩展 | 完全自主可控 | 远期 |
+| 次（M10b） | chrome-inspect-ws（DevToolsActivePort WS URL） | 登录态页面、零重登录；每会话一次连接批准 = 行业默认体验 | S1 已验证通过 |
+| 三（M10c） | 自研捕获扩展：token 配对反连 dev server（主）/ Native Messaging（备） | 弹窗疲劳、高频捕获会话、零开放端口需求 | 已立项设计，不实装 |
+| 记录备查 | Panerelay | —— | 降级（Node 依赖，被 M10c 覆盖） |
+| 记录备查 | Playwright MCP 扩展传输 | —— | 不作为传输（token 机制与标签组隔离 UX 并入 M10c） |
 
-dev server 端点契约（M8 定义）：`POST /api/capture/browser/start {transport: "persistent" | "user-browser", ...}`；`user-browser` 子类型定案为 **`chrome-inspect-ws`**（`userBrowserType` 参数），Panerelay/MCP 仅作降级备选记录。
+dev server 端点契约（M8 定义）：`POST /api/capture/browser/start {transport: "persistent" | "user-browser", ...}`；`user-browser` 子类型定案为 **`chrome-inspect-ws`**（`userBrowserType` 参数）；M10c 落地后扩充 `extension-ws` 子类型（预留给自研扩展）。
 
 ## 4. S1 验证协议（已执行，2026-09-01）
 

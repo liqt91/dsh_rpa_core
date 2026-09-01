@@ -44,7 +44,7 @@ M7 S0 实测（Chrome 152 封锁默认 profile CDP 端口）已在 `docs/capture
 
 - `POST /api/capture/browser/start` body 必含 `transport`，取值 `"persistent"`（专用持久 profile，M10a 主路线）或 `"user-browser"`（复用登录态）。
 - **S1 结论（2026-09-01，Edge 152.0.4191.53 实测）**：`user-browser` 子类型定案为 **`chrome-inspect-ws`**（`userBrowserType` 参数）——用户在 `edge://inspect/#remote-debugging` 手动开启授权开关后，服务端读取 User Data 目录下 `DevToolsActivePort` 文件（首行端口 + 次行浏览器 UUID 路径）构造 `ws://127.0.0.1:<port><path>` 直连；`/json/*` 发现端点 404（防扫描）不可用。`connect_over_cdp`、picker 注入、原生 CDP session 均已实测通过（证据见 `docs/capture-transport.md` §2.2/§4）。开关跨重启持久性待重启确认。
-- Panerelay / Playwright MCP / 自研扩展维持降级备选记录，暂不启用。
+- **降级链（2026-09-01 复核定稿）**：M10a 持久 profile（主）→ M10b `chrome-inspect-ws`（次，S1 已验证）→ M10c 自研捕获扩展（三，token 配对反连 dev server 为主设计 / Native Messaging 为备选，已立项不实装）；Panerelay 与 Playwright MCP 扩展传输降为记录备查（弹窗成本矩阵与依据见 `docs/capture-transport.md` §2.3–§2.5、§3）。
 - 持久 profile 模式所需的 `browser.launch` manifest 扩展（`userDataDir`）随 M10a 实装。
 
 ### 5. 桌面捕获契约（待定问题结案）
