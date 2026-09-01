@@ -1,12 +1,12 @@
 {
   "project": "rpa_core",
-  "phase": "element-capture",
+  "phase": "editor-tree-interactions",
   "status": "active",
   "completed_milestone": "M9-editor",
-  "active_milestone": "M10-capture",
-  "active_plan": ".harness/tasks/M10-capture.md",
-  "active_feature": "element-capture",
-  "next_milestone": "M10-capture",
+  "active_milestone": "M11-editor-tree",
+  "active_plan": ".harness/tasks/M11-editor-tree.md",
+  "active_feature": "editor-tree-interactions",
+  "next_milestone": "M11-editor-tree",
   "later_milestones": [],
   "task_index": ".harness/tasks/BACKLOG.md",
   "scope": {

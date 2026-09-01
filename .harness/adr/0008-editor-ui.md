@@ -28,6 +28,10 @@ M8 dev server 交付了 catalog / compile / workflows 三组设计期 API，编�
 - 编辑器页面是 dev server（设计期包）的一部分，不触碰 `runtime`/`executors`；架构检查的 devserver 隔离断言继续覆盖。
 - 编辑器对 workflow 的读写一律走 HTTP API（与外部调用方同权），不读盘直连。
 
+### 4. 静态资源拆分（M11 修订）
+
+- 编辑器单页允许拆分为多个静态文件（index.html / app.js / styles.css），由 dev server 的 `GET /static/{name}` 提供；**server.py 硬编码文件名 allowlist**，不开放任意路径、不做目录列举（维持 ADR 0007 安全边界）。零构建约束不变：无框架、无打包器、无 CDN 外链。
+
 ## 后果
 
 - M9 可以启动，交付物为 `devserver` 托管的单页编辑器。

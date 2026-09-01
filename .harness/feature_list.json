@@ -98,6 +98,11 @@
       "passes": false
     },
     {
+      "id": "editor-tree-interactions",
+      "title": "Structured tree canvas with nested drag-drop, multi-select, copy-paste, and snapshot undo",
+      "passes": false
+    },
+    {
       "id": "data-commands",
       "title": "Plain-text file output and list truncation data commands",
       "passes": true
