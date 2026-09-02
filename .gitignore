@@ -10,3 +10,5 @@ examples/api-usage/artifacts/
 playwright-report/
 test-results/
 .DS_Store
+
+_tmp_*/
