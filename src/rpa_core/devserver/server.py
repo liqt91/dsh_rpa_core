@@ -8,14 +8,13 @@ from urllib.parse import unquote, urlparse
 from rpa_core.catalog import CommandCatalog, load_catalog
 
 from .app import ApiError, DevServerApp
-from .store import WorkflowStore
+from .store import WorkflowDirStore
 
 MAX_BODY_BYTES = 1024 * 1024
 _DEFAULT_PORT = 8765
 _JSON_TYPE = "application/json; charset=utf-8"
 
 _WORKFLOW_SEGMENT_PREFIX = "/api/workflows/"
-_ELEMENT_SEGMENT_PREFIX = "/api/elements/"
 _CAPTURE_PREFIX = "/api/capture/"
 _STATIC_PREFIX = "/static/"
 
@@ -101,35 +100,38 @@ class _RequestHandler(BaseHTTPRequestHandler):
                 raise ApiError(405, "METHOD_NOT_ALLOWED", "use GET for /api/workflows")
             return self.app.list_workflows()
         if path.startswith(_WORKFLOW_SEGMENT_PREFIX):
-            name = path[len(_WORKFLOW_SEGMENT_PREFIX) :]
-            if "/" in name or not name:
+            segments = path[len(_WORKFLOW_SEGMENT_PREFIX):].split("/")
+            if not segments[0] or any(segment == "" for segment in segments):
                 raise ApiError(404, "NOT_FOUND", f"no route for {path}")
-            if method == "GET":
-                return self.app.get_workflow(name)
-            if method == "PUT":
-                return self.app.put_workflow(name, self._read_json(required=True))
-            raise ApiError(405, "METHOD_NOT_ALLOWED", "use GET or PUT for workflow resources")
-        if path == "/api/elements":
-            if method != "GET":
-                raise ApiError(405, "METHOD_NOT_ALLOWED", "use GET for /api/elements")
-            return self.app.list_elements()
-        if path.startswith(_ELEMENT_SEGMENT_PREFIX):
-            raw = path[len(_ELEMENT_SEGMENT_PREFIX) :]
-            if raw.endswith("/verify"):
-                name = raw[: -len("/verify")]
-                if method != "POST":
-                    raise ApiError(405, "METHOD_NOT_ALLOWED", "use POST for element verify")
-                return self.app.verify_element(name)
-            name = raw
-            if "/" in name or not name:
-                raise ApiError(404, "NOT_FOUND", f"no route for {path}")
-            if method == "GET":
-                return self.app.get_element(name)
-            if method == "POST":
-                return self.app.put_element(name, self._read_json(required=True))
-            if method == "DELETE":
-                return self.app.delete_element(name)
-            raise ApiError(405, "METHOD_NOT_ALLOWED", "use GET/POST/DELETE for element resources")
+            name = segments[0]
+            if len(segments) == 1:
+                if method == "GET":
+                    return self.app.get_workflow(name)
+                if method == "PUT":
+                    return self.app.put_workflow(name, self._read_json(required=True))
+                raise ApiError(405, "METHOD_NOT_ALLOWED", "use GET or PUT for workflow resources")
+            if len(segments) >= 2 and segments[1] == "elements":
+                rest = segments[2:]
+                if not rest:
+                    if method != "GET":
+                        raise ApiError(405, "METHOD_NOT_ALLOWED", "use GET for element listing")
+                    return self.app.list_elements(name)
+                element = rest[0]
+                if len(rest) == 2 and rest[1] == "verify":
+                    if method != "POST":
+                        raise ApiError(405, "METHOD_NOT_ALLOWED", "use POST for element verify")
+                    return self.app.verify_element(name, element)
+                if len(rest) == 1:
+                    if method == "GET":
+                        return self.app.get_element(name, element)
+                    if method == "POST":
+                        return self.app.put_element(name, element, self._read_json(required=True))
+                    if method == "DELETE":
+                        return self.app.delete_element(name, element)
+                    raise ApiError(
+                        405, "METHOD_NOT_ALLOWED", "use GET/POST/DELETE for element resources"
+                    )
+            raise ApiError(404, "NOT_FOUND", f"no route for {path}")
         if path.startswith(_CAPTURE_PREFIX):
             if method != "POST":
                 raise ApiError(405, "METHOD_NOT_ALLOWED", "use POST for capture endpoints")
@@ -206,22 +208,14 @@ class DevServer:
         capabilities: set[str] | None = None,
         browser_capture_factory=None,
         desktop_capture_factory=None,
-        elements_root: Path | None = None,
     ):
         if catalog is None:
             catalog = load_catalog(commands_root)
-        # 元素是捕获工作数据，独立于 workflow 定义目录（缺省为 workflows/ 的兄弟目录 elements/）
-        elements_root = (
-            elements_root
-            if elements_root is not None
-            else workflows_root.resolve().parent / "elements"
-        )
-        element_store = WorkflowStore(elements_root)
+        # 每流程一个目录：<workflows>/<flow>/workflow.json + <flow>/elements/ 元素资产
         self.app = DevServerApp(
             catalog,
-            WorkflowStore(workflows_root),
+            WorkflowDirStore(workflows_root),
             capabilities,
-            element_store=element_store,
             browser_capture_factory=browser_capture_factory,
             desktop_capture_factory=desktop_capture_factory,
         )

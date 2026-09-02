@@ -43,14 +43,12 @@ class DevServerApp:
         catalog: CommandCatalog,
         store: WorkflowStore,
         capabilities: set[str] | None = None,
-        element_store: WorkflowStore | None = None,
         browser_capture_factory=None,
         desktop_capture_factory=None,
     ):
         self._catalog = catalog
         self._store = store
         self._capabilities = frozenset(capabilities) if capabilities else DEFAULT_CAPABILITIES
-        self._element_store = element_store
         self._browser_capture_factory = browser_capture_factory
         self._desktop_capture_factory = desktop_capture_factory
         self._browser_sessions: dict[str, Any] = {}
@@ -86,6 +84,17 @@ class DevServerApp:
         if factory is None:
             raise ApiError(501, "NOT_IMPLEMENTED", f"{label} backend is not configured")
         return factory
+
+    def _element_store(self, flow: str) -> WorkflowStore:
+        """流程目录下的元素资产根：<workflows>/<flow>/elements（不自动建目录）。"""
+        folder = self._store.directory(flow)
+        return WorkflowStore(folder / "elements", create=False)
+
+    def _flow_from_body(self, body: dict, *, require: bool) -> str | None:
+        flow = str(body.get("flow") or "")
+        if require and not flow:
+            raise ApiError(400, "BAD_REQUEST", "missing 'flow' (workflow name)")
+        return flow or None
 
     def catalog_overview(self) -> dict:
         commands = []
@@ -175,7 +184,8 @@ class DevServerApp:
             timeout = float(body.get("timeoutSeconds", 90))
             result = session.pick(timeout_seconds=timeout)
             if result.get("kind") == "desktop" and body.get("saveAs"):
-                result.update(self._save_element(result, str(body["saveAs"])))
+                flow = self._flow_from_body(body, require=True)
+                result.update(self._save_element(flow, result, str(body["saveAs"])))
             return result
         session_id = self._capture_session_id(self._desktop_sessions, body)
         self._desktop_sessions.pop(session_id, None).cancel()
@@ -226,7 +236,8 @@ class DevServerApp:
                 click_css=body.get("clickCss"),
             )
             if result.get("kind") == "browser" and body.get("saveAs"):
-                result.update(self._save_element(result, str(body["saveAs"])))
+                flow = self._flow_from_body(body, require=True)
+                result.update(self._save_element(flow, result, str(body["saveAs"])))
             return result
         session_id = self._capture_session_id(self._browser_sessions, body)
         session = self._browser_sessions.pop(session_id)
@@ -234,28 +245,26 @@ class DevServerApp:
         session.close()
         return {"cancelled": True, "sessionId": session_id}
 
-    def _save_element(self, descriptor: dict, save_as: str) -> dict:
-        if self._element_store is None:
-            raise ApiError(501, "NOT_IMPLEMENTED", "element store is not configured")
+    def _save_element(self, flow: str, descriptor: dict, save_as: str) -> dict:
+        store = self._element_store(flow)
         element = ElementDescriptor(
             kind=descriptor["kind"],
             selector=descriptor["selector"],
             verify_count=descriptor.get("verifyCount", 0),
             metadata=descriptor.get("metadata", {}),
         )
-        self._element_store.write(save_as, element.document())
-        return {"savedAs": save_as}
+        store.write(save_as, element.document())
+        return {"savedAs": save_as, "flow": flow}
 
-    def list_elements(self) -> dict:
-        if self._element_store is None:
-            raise ApiError(501, "NOT_IMPLEMENTED", "element store is not configured")
-        return {"elements": self._element_store.list()}
-
-    def get_element(self, name: str) -> dict:
-        if self._element_store is None:
-            raise ApiError(501, "NOT_IMPLEMENTED", "element store is not configured")
+    def list_elements(self, flow: str) -> dict:
         try:
-            return self._element_store.read(name)
+            return {"elements": self._element_store(flow).list()}
+        except WorkflowNameError as exc:
+            raise ApiError(403, "FORBIDDEN", str(exc)) from exc
+
+    def get_element(self, flow: str, name: str) -> dict:
+        try:
+            return self._element_store(flow).read(name)
         except WorkflowNotFoundError as exc:
             raise ApiError(404, "NOT_FOUND", str(exc)) from exc
         except WorkflowNameError as exc:
@@ -263,34 +272,33 @@ class DevServerApp:
         except WorkflowStoreError as exc:
             raise ApiError(400, "BAD_REQUEST", str(exc)) from exc
 
-    def put_element(self, name: str, body: Any) -> dict:
-        if self._element_store is None:
-            raise ApiError(501, "NOT_IMPLEMENTED", "element store is not configured")
+    def put_element(self, flow: str, name: str, body: Any) -> dict:
         if not isinstance(body, dict):
             raise ApiError(400, "BAD_REQUEST", "element document must be a JSON object")
         element = _validate_element_document(body)
-        self._element_store.write(name, element.document())
-        return {"name": name}
-
-    def delete_element(self, name: str) -> dict:
-        if self._element_store is None:
-            raise ApiError(501, "NOT_IMPLEMENTED", "element store is not configured")
         try:
-            self._element_store.delete(name)
+            self._element_store(flow).write(name, element.document())
+        except WorkflowNameError as exc:
+            raise ApiError(403, "FORBIDDEN", str(exc)) from exc
+        return {"name": name, "flow": flow}
+
+    def delete_element(self, flow: str, name: str) -> dict:
+        try:
+            self._element_store(flow).delete(name)
         except WorkflowNotFoundError as exc:
             raise ApiError(404, "NOT_FOUND", str(exc)) from exc
         except WorkflowNameError as exc:
             raise ApiError(403, "FORBIDDEN", str(exc)) from exc
-        return {"name": name, "deleted": True}
+        return {"name": name, "flow": flow, "deleted": True}
 
-    def verify_element(self, name: str) -> dict:
+    def verify_element(self, flow: str, name: str) -> dict:
         """结构校验：描述符模型 + selector 语义。活体验证需捕获会话内完成。"""
-        if self._element_store is None:
-            raise ApiError(501, "NOT_IMPLEMENTED", "element store is not configured")
         try:
-            document = self._element_store.read(name)
+            document = self._element_store(flow).read(name)
         except WorkflowNotFoundError as exc:
             raise ApiError(404, "NOT_FOUND", str(exc)) from exc
+        except WorkflowNameError as exc:
+            raise ApiError(403, "FORBIDDEN", str(exc)) from exc
         errors: list[dict] = []
         try:
             element = _validate_element_document(document)

@@ -25,6 +25,8 @@ M7 S0 实测（Chrome 152 封锁默认 profile CDP 端口）已在 `docs/capture
 - 受限根目录：所有读写 `resolve()` 后必须仍位于根目录内，越界一律拒绝。
 - PUT 语义：只要求 body 是合法 JSON 对象并原样落盘（编辑器需保存编译不过的草稿）；静态校验走 `POST /api/compile`。
 
+> **2026-09-02 修订（每流程一个目录 + 元素即流程资产）**：目录形态改为**每流程一个目录**——`<workflows_root>/<流程名>/workflow.json`（实现 `WorkflowDirStore`，list 只统计含 `workflow.json` 的子目录，delete 空目录一并移除）。**捕获元素作为该流程的元素资产**存放 `<流程名>/elements/<元素>.json`（可入版本库），不再有全局 `elements/` 根；元素端点嵌套于流程资源：`/api/workflows/{name}/elements[/{element}[/verify]]`。capture `pick` 的 `saveAs` 需同时带 `flow`。workflow 名正则、越界拒绝、原子写等安全不变式保持不变；根目录遗留的平铺 `<name>.json` 不再识别。
+
 ### 3. 端点契约
 
 统一响应：JSON；错误形态 `{"error": <CODE>, "message": <str>}`。默认监听 `127.0.0.1:8765`。

@@ -370,7 +370,7 @@ def test_editor_multi_action_bar(server):
 def test_editor_element_library_insert(server):
     base = f"http://127.0.0.1:{server.port}"
     _request_json(
-        base, "POST", "/api/elements/searchBox",
+        base, "POST", "/api/workflows/element-e2e/elements/searchBox",
         {
             "kind": "browser",
             "selector": {"css": "#kw"},
@@ -385,6 +385,7 @@ def test_editor_element_library_insert(server):
         page.goto(f"{base}/")
         page.wait_for_selector('[data-command="browser.click"]')
 
+        page.fill("#file-name", "element-e2e")
         page.wait_for_selector("#elements-list li.element-item")
         assert "searchBox" in page.locator("#elements-list").inner_text()
 
@@ -395,7 +396,6 @@ def test_editor_element_library_insert(server):
         item.locator("button", has_text="插入").click()
         page.wait_for_selector('#props-body input[data-field="selector"]')
 
-        page.fill("#file-name", "element-e2e")
         page.click("#btn-save")
         page.wait_for_selector("#compile-panel .ok")
         browser.close()
@@ -407,7 +407,7 @@ def test_editor_element_library_insert(server):
 def test_editor_element_library_delete(server):
     base = f"http://127.0.0.1:{server.port}"
     _request_json(
-        base, "POST", "/api/elements/tmpEl",
+        base, "POST", "/api/workflows/del-flow/elements/tmpEl",
         {"kind": "browser", "selector": {"css": "#x"}, "verifyCount": 1, "metadata": {}},
     )
     with sync_playwright() as p:
@@ -415,6 +415,8 @@ def test_editor_element_library_delete(server):
         page = browser.new_page()
         page.on("dialog", lambda dialog: dialog.accept())
         page.goto(f"{base}/")
+        page.wait_for_selector('[data-command="browser.click"]')
+        page.fill("#file-name", "del-flow")
         page.wait_for_selector("#elements-list li.element-item")
         item = page.locator("#elements-list li.element-item", has_text="tmpEl")
         item.locator("button", has_text="✕").click()
@@ -422,5 +424,5 @@ def test_editor_element_library_delete(server):
             "() => !document.querySelector('#elements-list li.element-item')"
         )
         browser.close()
-    listing = _request_json(base, "GET", "/api/elements")
+    listing = _request_json(base, "GET", "/api/workflows/del-flow/elements")
     assert listing == {"elements": []}

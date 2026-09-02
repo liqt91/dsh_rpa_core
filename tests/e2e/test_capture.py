@@ -80,13 +80,19 @@ def test_browser_persistent_capture_end_to_end(server):
     status, payload = _request(
         "POST",
         "/api/capture/browser/pick",
-        {"sessionId": session_id, "clickCss": "#go", "saveAs": "goButton", "timeoutSeconds": 15},
+        {
+            "sessionId": session_id,
+            "clickCss": "#go",
+            "saveAs": "goButton",
+            "flow": "demo",
+            "timeoutSeconds": 15,
+        },
         base=base,
     )
     assert status == 200
     assert payload["savedAs"] == "goButton"
 
-    status, element = _request("GET", "/api/elements/goButton", base=base)
+    status, element = _request("GET", "/api/workflows/demo/elements/goButton", base=base)
     assert status == 200
     assert element["kind"] == "browser"
     assert element["selector"] == {"css": "#go"}
@@ -161,7 +167,12 @@ def test_desktop_capture_end_to_end_verifies_hit(server, tmp_path):
         status, payload = _request(
             "POST",
             "/api/capture/desktop/pick",
-            {"sessionId": session_id, "saveAs": "submitButton", "timeoutSeconds": 30},
+            {
+                "sessionId": session_id,
+                "saveAs": "submitButton",
+                "flow": "demo",
+                "timeoutSeconds": 30,
+            },
             base=base,
         )
         assert status == 200
@@ -211,7 +222,7 @@ def test_desktop_capture_end_to_end_verifies_hit(server, tmp_path):
         assert found.status == "success", found.model_dump_json()
         assert found.outputs["matchedCount"] == 1
 
-        status, element = _request("GET", "/api/elements/submitButton", base=base)
+        status, element = _request("GET", "/api/workflows/demo/elements/submitButton", base=base)
         assert status == 200
         assert element["kind"] == "desktop"
     finally:

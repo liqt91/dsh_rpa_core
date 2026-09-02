@@ -60,16 +60,15 @@ rpa_core/
 │  ├─ capture/                # 桌面 UIA hit-test、浏览器 picker 注入
 │  └─ devserver/              # 设计期 HTTP 服务 + 静态编辑器（见 docs/devserver.md）
 ├─ commands/                  # 命令 manifest（JSON，id 如 browser.launch / desktop.win32.click）
-├─ workflows/                 # workflow 定义（可入版本库，当前仅占位）
-├─ elements/                  # 捕获元素工作数据（独立工作目录，默认 gitignore）
-├─ run_artifacts/             # 运行证据（gitignore）
+├─ workflows/                 # 每流程一个目录 <流程名>/workflow.json（可入版本库），
+│                             #   捕获元素作为流程资产存 <流程名>/elements/*.json
 ├─ examples/                  # 可运行示例（见下）
 ├─ docs/                      # 使用手册与设计文档（见"文档导航"）
 ├─ testsite/  testapps/       # 确定性本地站点（E2E 浏览器目标）与桌面测试应用
 └─ .harness/                  # 架构检查、任务计划、ADR、feature 门禁
 ```
 
-目录职责分离：`workflows/` = 定义、`elements/` = 捕获工作数据、`run_artifacts/` = 运行证据。
+目录职责分离：`workflows/` = 流程定义与元素资产（每流程一目录）；`run_artifacts/` = 运行证据（gitignore）。
 
 ### workflow 形态（一个片段）
 
@@ -118,7 +117,7 @@ uv run python .harness/scripts/check_all.py
 uv run python -m rpa_core.cli validate examples/search-and-save/workflow.json
 uv run python -m rpa_core.cli run     examples/search-and-save/workflow.json [--artifacts DIR]
 uv run python -m rpa_core.cli resume  workflow.json --run-id <run_id> [--allow-indeterminate]
-uv run python -m rpa_core.cli devserver [--port 8765] [--workflows DIR] [--elements DIR]
+uv run python -m rpa_core.cli devserver [--port 8765] [--workflows DIR]
 ```
 
 - `resume` 需 `--run-id`（见该 run 的 `result.json`），`indeterminate` 终态的人工续跑需 `--allow-indeterminate`。
@@ -154,10 +153,10 @@ uv run python -m rpa_core.cli devserver
 
 元素捕获（M10，`docs/devserver.md` 有 PowerShell 全流程）：
 
-- 桌面：`POST /api/capture/desktop/start` → 鼠标移到目标控件按 F9 → `pick`（可 `saveAs` 落库）。
+- 桌面：`POST /api/capture/desktop/start` → 鼠标移到目标控件按 F9 → `pick`（`saveAs` + `flow` 存入当前流程元素资产）。
 - 浏览器：`persistent`（专用持久 profile，登录一次后 cookies 保留）或 `user-browser`（复用日常 Chrome/Edge 登录态，chrome-inspect-ws）。
 
-元素库（M13）：编辑器右侧「元素库」面板浏览已捕获元素 → 插入到选中节点字段 → 结构校验（verify）→ 保存；对应 `POST/DELETE/verify /api/elements/*` 端点。
+元素库（M13 + 流程目录）：编辑器元素库面板显示**当前流程**（文件名框）的元素资产 `workflows/<流程名>/elements/` → 浏览/插入到选中节点字段 → 结构校验（verify）→ 删除；端点嵌套于流程：`/api/workflows/<流程名>/elements[/<元素>[/verify]]`。
 
 端点与编辑器用法详见 `docs/devserver.md`。
 

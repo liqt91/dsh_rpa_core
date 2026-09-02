@@ -126,6 +126,11 @@
       "id": "capture-extension",
       "title": "Self-built capture extension with token pairing",
       "passes": false
+    },
+    {
+      "id": "flow-dir-assets",
+      "title": "Per-flow workflow directories with elements as flow assets",
+      "passes": true
     }
   ]
 }

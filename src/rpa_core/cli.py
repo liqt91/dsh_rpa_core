@@ -48,7 +48,6 @@ def _serve(args) -> int:
         port=args.port,
         browser_capture_factory=BrowserCaptureSession,
         desktop_capture_factory=DesktopCaptureSession,
-        elements_root=args.elements,
     )
     print(
         json.dumps(
@@ -72,7 +71,6 @@ def main() -> int:
         if action == "devserver":
             sub.add_argument("--port", type=int, default=8765)
             sub.add_argument("--workflows", type=Path, default=Path("workflows"))
-            sub.add_argument("--elements", type=Path, default=None)
             continue
         sub.add_argument("workflow", type=Path)
         sub.add_argument("--artifacts", type=Path, default=Path("run_artifacts"))

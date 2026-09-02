@@ -12,4 +12,4 @@ test-results/
 .DS_Store
 
 _tmp_*/
-elements/
+/elements/

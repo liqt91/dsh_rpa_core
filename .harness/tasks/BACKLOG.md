@@ -6,6 +6,7 @@
 
 - [ ] M14 自研捕获扩展（`active`）
   - 计划：`M14-extension.md`
+  - 并入切片：**元素库「＋捕获」入口**（browser 扩展为主/persistent 兜底 + desktop 热键流程提示），捕获结果存当前流程元素资产。
   - 完成门槛：token 配对反连 dev server 零弹窗、标签页授权、登录态页面捕获回验命中。
 
 ## 后续任务
@@ -16,6 +17,7 @@
 - [ ] M16 混合捕获 auto 模式（`planned`）
   - Chrome 窗口检测 → 扩展路由（M14 落地后）→ DPI 坐标换算；降级路径待 M14 后立。
 - [ ] M11 后续：变量补全、全屏编辑器、运行状态高亮（进阶项，按需另立）
+- [ ] 运行控制（backlog，不立项）：前端 run + cancel + 看 events/result（最小范围）；子进程 run host + `/api/runs/{id}` + 新 ADR 放行 devserver 代理型操控 HTTP；pause/resume/indeterminate 对话后置。
 
 ## 远期任务
 
@@ -24,6 +26,9 @@
 
 ## 已完成
 
+- [x] M13.1 流程目录化与元素即流程资产（`done`）
+  - 计划：`M13.1-flow-dir-assets.md`
+  - 证据：每流程一个目录 `<name>/workflow.json` + 元素资产 `<name>/elements/*.json`（可入版本库）；元素端点嵌套 `/api/workflows/{name}/elements[/{el}[/verify]]`；capture pick saveAs 需 flow；前端元素库按当前流程；122 tests 全门禁。
 - [x] M13 编辑器元素库（`done`）
   - 计划：`M13-element-library.md`
   - 证据：元素库面板 + 插入到节点 + 删除 + 结构校验（verify）+ selector 捕获按钮；POST/DELETE/verify 端点；110 tests 全门禁。

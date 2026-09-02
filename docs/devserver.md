@@ -1,4 +1,4 @@
-# dev server 手册（M8/M9）
+﻿# dev server 手册（M8/M9）
 
 设计期 HTTP 工具，为编辑器（M9）与捕获（M10）提供 catalog / compile / workflow 文件 API。定位与边界见 ADR 0007：**不承载 run**，进程内无 orchestrator / registry；仅复用 `catalog` 与 `compiler`（架构检查断言不 import `runtime` / `executors`）。
 
@@ -6,14 +6,14 @@
 
 ```powershell
 uv run python -m rpa_core.cli devserver            # 默认 127.0.0.1:8765
-uv run python -m rpa_core.cli devserver --port 9000 --workflows D:\tmp\workflows --elements D:\tmp\elements
+uv run python -m rpa_core.cli devserver --port 9000 --workflows D:\tmp\workflows
 ```
 
-**目录约定**：`workflows/` = workflow 定义文件（可入版本库）；`elements/` = 捕获元素的工作数据目录（默认与 workflows/ 同级，gitignore，不入库）；`run_artifacts/` = 运行证据（gitignore）。三者职责分离。
+**目录约定（每流程一个目录，2026-09-02）**：`workflows/` = 流程定义根，**每个流程一个目录** `<流程名>/`，主文件 `workflow.json`，可随目录带附属资产——**捕获元素作为流程资产放在 `<流程名>/elements/*.json`**（可入版本库）。`run_artifacts/` = 运行证据（gitignore）。三者职责分离：workflows 根内的 `.json` 平铺旧文件不再识别（遗留手工迁移）。
 
 启动后浏览器打开 `http://127.0.0.1:8765/` 即编辑器单页（M9，ADR 0008：零构建 vanilla HTML/JS，无 npm/打包器/CDN；`GET /` 是唯一静态路由，不开放其他文件路径）。
 
-编辑器用法：左侧命令面板（可过滤）点击追加节点 → 画布选中节点 → 右侧属性表单按 input_schema 生成字段（值支持 `${inputs.x}` 引用）→「编译」回显 `errors[]` → 填文件名「保存」（草稿可保存，不要求编译通过）。「打开」下拉列出 workflows 目录现有文件。
+编辑器用法：左侧命令面板（可过滤）点击追加节点 → 画布选中节点 → 右侧属性表单按 input_schema 生成字段（值支持 `${inputs.x}` 引用）→「编译」回显 `errors[]` → 在文件名框填**流程名**（= `workflows/<名>/`）→「保存」（草稿可保存，不要求编译通过）。「打开」下拉列出 workflows 根下含 `workflow.json` 的目录。**元素库面板只显示当前流程名的元素资产**（流程名变化即刷新；未命名时提示）。
 
 安全边界（ADR 0007 §6）：仅监听 `127.0.0.1`、请求体上限 1 MiB（`PAYLOAD_TOO_LARGE`）、workflow 名限 `[A-Za-z][A-Za-z0-9_-]*` 且 resolve 后必须在根目录内（越界 `FORBIDDEN`）。无认证——设计期本地工具，远程/多用户需新 ADR。
 
@@ -23,14 +23,13 @@ uv run python -m rpa_core.cli devserver --port 9000 --workflows D:\tmp\workflows
 |---|---|---|
 | `/api/catalog` | GET | `{digest, commands[]}`，每条含 `id/version/kind/effect/input_schema/output_schema/errors` |
 | `/api/compile` | POST | body `{"workflow": {...}, "capabilities": [...]?}`（缺省 = CLI 五项能力）→ `{valid, errors[], catalog_digest}` |
-| `/api/workflows` | GET | 根目录内 workflow 名列表 |
-| `/api/workflows/{name}` | GET / PUT | 读 / 写（原子落盘）；PUT 只要求合法 JSON 对象（草稿可保存），静态校验走 compile |
+| `/api/workflows` | GET | 根目录内流程名列表（含 `workflow.json` 的目录） |
+| `/api/workflows/{name}` | GET / PUT | 读 / 写流程（原子落盘到 `<name>/workflow.json`）；PUT 只要求合法 JSON 对象（草稿可保存），静态校验走 compile |
+| `/api/workflows/{name}/elements` | GET | 该流程元素资产列表（`{elements: []}`） |
+| `/api/workflows/{name}/elements/{el}` | GET / POST / DELETE | 读 / 保存（model 校验）/ 删除流程元素 |
+| `/api/workflows/{name}/elements/{el}/verify` | POST | 元素结构校验（M13：ElementDescriptor 模型 + selector/locator 语义；活体验证需捕获会话内完成） |
 | `/api/capture/desktop/{start,pick,cancel}` | POST | 桌面 UIA 捕获（M10 实装，见下） |
 | `/api/capture/browser/{start,pick,cancel}` | POST | 浏览器捕获（M10 实装，见下）；start 需 `{"transport": "persistent" \| "user-browser"}` |
-| `/api/elements` | GET | 已捕获元素列表 |
-| `/api/elements/{name}` | GET / POST | 读单个元素描述符 / 保存（含编辑后保存，model 校验） |
-| `/api/elements/{name}` | DELETE | 删除单个元素（M13） |
-| `/api/elements/{name}/verify` | POST | 结构校验（M13：ElementDescriptor 模型 + selector/locator 语义；活体验证需捕获会话内完成） |
 
 错误形态统一为 `{"error": <CODE>, "message": <str>}`：`BAD_REQUEST`(400)、`FORBIDDEN`(403)、`NOT_FOUND`(404)、`METHOD_NOT_ALLOWED`(405)、`PAYLOAD_TOO_LARGE`(413)、`NOT_IMPLEMENTED`(501)。
 
@@ -46,7 +45,7 @@ curl -X POST http://127.0.0.1:8765/api/compile `
 curl http://127.0.0.1:8765/api/workflows           # 列表
 curl -X PUT http://127.0.0.1:8765/api/workflows/demo `
   -H "Content-Type: application/json" `
-  -d (Get-Content examples/search-and-save/workflow.json -Raw)   # 保存 → workflows/demo.json
+  -d (Get-Content examples/search-and-save/workflow.json -Raw)   # 保存 → workflows/demo/workflow.json
 curl http://127.0.0.1:8765/api/workflows/demo      # 读回
 ```
 
@@ -65,8 +64,8 @@ $s = Invoke-RestMethod -Method Post -Uri "$base/api/capture/desktop/start" `
 # → {"sessionId":"desktop-1","mode":"hotkey"}；把鼠标放到目标控件上按 F9
 Invoke-RestMethod -Method Post -Uri "$base/api/capture/desktop/pick" `
   -ContentType "application/json" `
-  -Body (@{sessionId=$s.sessionId; saveAs="myControl"; timeoutSeconds=90} | ConvertTo-Json)
-# → 元素描述符（selector.locator 可回验命中）并落库 elements/myControl.json
+  -Body (@{sessionId=$s.sessionId; saveAs="myControl"; flow="myFlow"; timeoutSeconds=90} | ConvertTo-Json)
+# → 元素描述符（selector.locator 可回验命中）并存入 workflows/myFlow/elements/myControl.json
 ```
 
 **浏览器捕获 — persistent**（弹出专用浏览器，站点登录一次后 cookies 持久）：
@@ -78,7 +77,7 @@ $s = Invoke-RestMethod -Method Post -Uri "$base/api/capture/browser/start" `
 # 在弹出的浏览器里点到目标元素：
 Invoke-RestMethod -Method Post -Uri "$base/api/capture/browser/pick" `
   -ContentType "application/json" `
-  -Body (@{sessionId=$s.sessionId; timeoutSeconds=60; saveAs="searchBox"} | ConvertTo-Json)
+  -Body (@{sessionId=$s.sessionId; timeoutSeconds=60; saveAs="searchBox"; flow="myFlow"} | ConvertTo-Json)
 ```
 
 **浏览器捕获 — user-browser**（复用日常 Chrome/Edge 登录态；先在 `chrome://inspect/#remote-debugging` 开启"允许远程调试"，S1/重启持久性均已验证）：
@@ -90,14 +89,14 @@ $s = Invoke-RestMethod -Method Post -Uri "$base/api/capture/browser/start" `
 # 到你日常浏览器的目标标签页里点击元素（页面会出现高亮框）：
 Invoke-RestMethod -Method Post -Uri "$base/api/capture/browser/pick" `
   -ContentType "application/json" `
-  -Body (@{sessionId=$s.sessionId; timeoutSeconds=60; saveAs="loginPageEl"} | ConvertTo-Json)
+  -Body (@{sessionId=$s.sessionId; timeoutSeconds=60; saveAs="loginPageEl"; flow="myFlow"} | ConvertTo-Json)
 ```
 
 行为说明：
 
 - `pick` 会**阻塞**直到你在页面里点击元素 / 按下热键 / 超时（默认 browser 60s、desktop 90s）
 - 浏览器 pick 注入高亮覆盖层，鼠标悬停即高亮，点击即采集（生成 CSS selector 并当场回验命中数）；`Esc` 取消本次
-- `saveAs` 可选——指定后描述符落库 `elements/{name}.json`（工作数据目录，默认不入库），可用 `GET /api/elements/{name}` 读回
+- `saveAs` 可选——指定后描述符落库到该 `flow` 流程的元素资产 `<流程名>/elements/{name}.json`（需同时传 `flow`，缺省 400），可用 `GET /api/workflows/{flow}/elements/{name}` 读回
 - `cancel` 结束会话：桌面会终止 agent 子进程，浏览器会清理注入并断开（不关闭你的浏览器）
 - 桌面捕获优先级：`windowHandle` > 前台窗口 > 屏幕级 hit-test（窗口作用域可免疫安全软件覆盖层，见 `docs/capture-transport.md`）
 

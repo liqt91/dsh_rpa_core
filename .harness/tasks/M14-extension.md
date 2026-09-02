@@ -22,6 +22,7 @@ chrome-inspect-ws（chrome://inspect 授权开关）已验证可用且开关跨�
 - [ ] 反连机制：扩展启动后主动 WebSocket 连 dev server（`ws://127.0.0.1:8765/capture-extension`），持 token 配对；token 在扩展 popup 展示，编辑器侧配置一次存入 dev server
 - [ ] 授权边界：标签页粒度授权（借鉴 Playwright MCP 标签组 UX——哪个 tab 可达由用户拖拽/选择决定，默认仅当前 tab）
 - [ ] dev server 新增 WebSocket 接入点与扩展消息路由（`capture/browser/*` 增加 `extension-ws` transport）
+- [ ] 元素库「＋捕获」入口（并入切片，接 M13.1 flow 作用域）：面板顶部按钮 → browser（扩展为主/persistent 兜底）/ desktop（F9 热键提示）二选 → 捕获结果直接存入当前流程元素资产
 - [ ] 图标与清单（manifest.json、16/48/128 图标）
 - [ ] 合同测试：扩展消息协议 mock（无真实浏览器）、token 校验、标签页授权范围
 - [ ] 实机验收：小红书登录态页面捕获（用户已登录）→ 描述符命中回验

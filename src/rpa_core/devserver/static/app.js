@@ -363,6 +363,7 @@ function newWorkflow() {
   $("file-name").value = "";
   clearDirty();
   render();
+  loadElements();
 }
 
 async function refreshOpenList(selectedValue) {
@@ -1283,6 +1284,7 @@ async function openWorkflow(name) {
     $("file-name").value = name;
     clearDirty();
     render();
+    loadElements();
     showCompileMessage(`已打开 ${name}`, true);
   } catch (err) {
     showCompileMessage(String(err.message || err), false);
@@ -1303,7 +1305,8 @@ async function saveWorkflow() {
   }
   clearDirty();
   await refreshOpenList(name);
-  showCompileMessage(`已保存 workflows/${name}.json`, true);
+  loadElements();
+  showCompileMessage(`已保存 workflows/${name}/workflow.json`, true);
 }
 
 async function compileWorkflow() {
@@ -1353,20 +1356,41 @@ function elementSummary(element) {
   return JSON.stringify(element.selector || {});
 }
 
-async function loadElements() {
-  let data;
-  try {
-    data = await api("GET", "/api/elements");
-  } catch (err) {
-    renderElements([]);
-    return;
-  }
-  renderElements(data.elements || []);
+function currentFlow() {
+  const name = $("file-name").value.trim();
+  return NAME_PATTERN.test(name) ? name : "";
 }
 
-function renderElements(names) {
+function elementsBasePath(flow) {
+  return `/api/workflows/${encodeURIComponent(flow)}/elements`;
+}
+
+async function loadElements() {
+  const flow = currentFlow();
+  if (!flow) {
+    renderElements([], false);
+    return;
+  }
+  let data;
+  try {
+    data = await api("GET", elementsBasePath(flow));
+  } catch (err) {
+    renderElements([], false);
+    return;
+  }
+  renderElements(data.elements || [], true);
+}
+
+function renderElements(names, hasFlow) {
   const list = $("elements-list");
   list.textContent = "";
+  if (!hasFlow) {
+    const empty = document.createElement("li");
+    empty.className = "elements-empty";
+    empty.textContent = "先命名或打开流程，显示其元素资产";
+    list.appendChild(empty);
+    return;
+  }
   if (!names.length) {
     const empty = document.createElement("li");
     empty.className = "elements-empty";
@@ -1374,6 +1398,7 @@ function renderElements(names) {
     list.appendChild(empty);
     return;
   }
+  const flow = currentFlow();
   for (const name of names) {
     const li = document.createElement("li");
     li.className = "element-item";
@@ -1398,7 +1423,7 @@ function renderElements(names) {
     li.appendChild(del);
     list.appendChild(li);
     // 异步补摘要
-    api("GET", `/api/elements/${encodeURIComponent(name)}`).then((element) => {
+    api("GET", `${elementsBasePath(flow)}/${encodeURIComponent(name)}`).then((element) => {
       const sub = document.createElement("span");
       sub.className = "element-sub";
       sub.textContent = `${elementKindLabel(element.kind)} · ${elementSummary(element)}`;
@@ -1407,13 +1432,21 @@ function renderElements(names) {
   }
 }
 
+function requireFlow() {
+  const flow = currentFlow();
+  if (!flow) showCompileMessage("先命名或打开一个流程再操作元素库", false);
+  return flow;
+}
+
 function insertElement(name) {
   const node = state.selected ? findNode(state.selected) : null;
   if (!node || node.type !== "action") {
     showCompileMessage("先选中一个 action 节点再插入元素", false);
     return;
   }
-  api("GET", `/api/elements/${encodeURIComponent(name)}`).then((element) => {
+  const flow = requireFlow();
+  if (!flow) return;
+  api("GET", `${elementsBasePath(flow)}/${encodeURIComponent(name)}`).then((element) => {
     const manifest = manifestOf(node.command);
     const properties = manifest && manifest.input_schema ? manifest.input_schema.properties || {} : {};
     if (element.kind === "browser" && properties.selector) {
@@ -1434,8 +1467,13 @@ function insertElement(name) {
 }
 
 async function verifyElement(name) {
+  const flow = requireFlow();
+  if (!flow) return;
   try {
-    const result = await api("POST", `/api/elements/${encodeURIComponent(name)}/verify`);
+    const result = await api(
+      "POST",
+      `${elementsBasePath(flow)}/${encodeURIComponent(name)}/verify`,
+    );
     if (result.valid) {
       showCompileMessage(`元素「${name}」结构校验通过`, true);
     } else {
@@ -1448,9 +1486,11 @@ async function verifyElement(name) {
 }
 
 async function deleteElement(name) {
+  const flow = requireFlow();
+  if (!flow) return;
   if (!confirm(`删除元素「${name}」？`)) return;
   try {
-    await api("DELETE", `/api/elements/${encodeURIComponent(name)}`);
+    await api("DELETE", `${elementsBasePath(flow)}/${encodeURIComponent(name)}`);
     showCompileMessage(`已删除元素「${name}」`, true);
     loadElements();
   } catch (err) {
@@ -1459,6 +1499,8 @@ async function deleteElement(name) {
 }
 
 async function captureIntoField(node, key) {
+  const flow = requireFlow();
+  if (!flow) return;
   showCompileMessage("正在启动捕获浏览器…", true);
   let sessionId;
   try {
@@ -1479,21 +1521,25 @@ async function captureIntoField(node, key) {
     });
     if (result.kind === "browser" && result.selector && result.selector.css) {
       setWith(node, key, result.selector.css);
-      const saveAs = prompt("元素已捕获，可选输入名字保存到元素库（留空跳过）：");
+      const saveAs = prompt("元素已捕获，可选输入名字保存到当前流程元素库（留空跳过）：");
       if (saveAs) {
-        await api("POST", `/api/elements/${encodeURIComponent(saveAs)}`, {
-          kind: "browser",
-          selector: result.selector,
-          verifyCount: result.verifyCount,
-          metadata: result.metadata,
-        });
+        await api(
+          "POST",
+          `${elementsBasePath(flow)}/${encodeURIComponent(saveAs)}`,
+          {
+            kind: "browser",
+            selector: result.selector,
+            verifyCount: result.verifyCount,
+            metadata: result.metadata,
+          },
+        );
         loadElements();
       }
       markDirty();
       render();
       showCompileMessage(
         `已捕获 selector（命中 ${result.verifyCount}）` +
-          (saveAs ? ` 并保存为「${saveAs}」` : ""),
+          (saveAs ? ` 并存入「${saveAs}」` : ""),
         true,
       );
     } else if (result.cancelled) {
@@ -1532,6 +1578,7 @@ async function init() {
   $("btn-copy").addEventListener("click", copySelection);
   $("btn-delete").addEventListener("click", batchDelete);
   $("btn-elements-refresh").addEventListener("click", loadElements);
+  $("file-name").addEventListener("input", loadElements);
   window.addEventListener("keydown", handleEditorKeydown);
   window.addEventListener("beforeunload", (e) => {
     if (state.dirty) { e.preventDefault(); e.returnValue = ""; }

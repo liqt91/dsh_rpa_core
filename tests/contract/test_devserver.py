@@ -115,6 +115,41 @@ def test_workflow_roundtrip(server):
     assert listing == {"workflows": ["search-and-save"]}
 
 
+def test_workflow_stored_as_directory_with_element_assets(server):
+    base = f"http://127.0.0.1:{server.port}"
+    status, payload = _request(
+        "PUT", "/api/workflows/demo-flow", VALID_WORKFLOW, base=base
+    )
+    assert status == 200
+    root = server.app._store.root
+    assert (root / "demo-flow" / "workflow.json").is_file()
+    assert not (root / "demo-flow.json").exists()
+
+    element = {
+        "kind": "browser",
+        "selector": {"css": "#result"},
+        "verifyCount": 1,
+        "metadata": {},
+    }
+    status, payload = _request(
+        "POST", "/api/workflows/demo-flow/elements/btn", element, base=base
+    )
+    assert status == 200
+    assert (root / "demo-flow" / "elements" / "btn.json").is_file()
+
+
+def test_workflow_list_ignores_stray_root_files(server):
+    base = f"http://127.0.0.1:{server.port}"
+    root = server.app._store.root
+    (root / "stray.json").write_text("{}", encoding="utf-8")
+    (root / "no-doc-dir").mkdir()
+    (root / "no-doc-dir" / "elements").mkdir()
+    status, payload = _request("PUT", "/api/workflows/ok-flow", VALID_WORKFLOW, base=base)
+    assert status == 200
+    status, listing = _request("GET", "/api/workflows", base=base)
+    assert listing == {"workflows": ["ok-flow"]}
+
+
 def test_workflow_name_rejects_path_traversal(server):
     base = f"http://127.0.0.1:{server.port}"
     status, payload = _request("PUT", "/api/workflows/..", VALID_WORKFLOW, base=base)
@@ -154,7 +189,7 @@ def test_capture_endpoints_without_backend_are_501(server):
     assert bad[0] == 400
     assert bad[1]["error"] == "BAD_REQUEST"
 
-    status, payload = _request("GET", "/api/elements", base=base)
+    status, payload = _request("GET", "/api/workflows/no-such-flow/elements", base=base)
     assert status == 200
     assert payload == {"elements": []}
 

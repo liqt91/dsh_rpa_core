@@ -8,6 +8,7 @@
 - 建立目录约定：workflows=定义、elements=捕获工作数据（独立工作目录 + gitignore）、run_artifacts=运行证据。
 - 评估 WorkBuddy 五种入驻形态：定 CLI+Skill 主路径（M15 任务单）；扩展捕获（M14）提前实装。
 - 当前 active：M14 自研捕获扩展。
+- 完成 M13.1 流程目录化与元素即流程资产：每流程一个目录 `workflows/<name>/workflow.json`（WorkflowDirStore），捕获元素作为流程资产存 `<name>/elements/*.json`（可入版本库）；元素端点嵌套 `/api/workflows/{name}/elements[/{el}[/verify]]`，capture `pick` 的 saveAs 需带 flow；去掉全局 elements 根与 CLI --elements；前端元素库按当前流程名加载并即时刷新。运行控制结论记 BACKLOG（最小范围，不立项）。full gate 122 tests。
 
 ## 2026-09-01
 
