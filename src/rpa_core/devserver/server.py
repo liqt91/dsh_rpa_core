@@ -22,6 +22,8 @@ _STATIC_PREFIX = "/static/"
 _STATIC_FILES = {
     "app.js": "text/javascript; charset=utf-8",
     "styles.css": "text/css; charset=utf-8",
+    "i18n.js": "text/javascript; charset=utf-8",
+    "icons.js": "text/javascript; charset=utf-8",
 }
 _STATIC_ROOT = Path(__file__).resolve().parent / "static"
 
@@ -118,6 +120,14 @@ class _RequestHandler(BaseHTTPRequestHandler):
             raise ApiError(404, "NOT_FOUND", f"no route for {path}")
         raise ApiError(404, "NOT_FOUND", f"no route for {path}")
 
+    def _drain_body(self, length: int) -> None:
+        remaining = length
+        while remaining > 0:
+            chunk = self.rfile.read(min(remaining, 65536))
+            if not chunk:
+                break
+            remaining -= len(chunk)
+
     def _read_json(self, required: bool) -> Any:
         raw_length = self.headers.get("Content-Length")
         if raw_length is None:
@@ -131,6 +141,7 @@ class _RequestHandler(BaseHTTPRequestHandler):
         if length < 0:
             raise ApiError(400, "BAD_REQUEST", "invalid Content-Length header")
         if length > MAX_BODY_BYTES:
+            self._drain_body(length)
             raise ApiError(413, "PAYLOAD_TOO_LARGE", f"request body exceeds {MAX_BODY_BYTES} bytes")
         if length == 0:
             if required:

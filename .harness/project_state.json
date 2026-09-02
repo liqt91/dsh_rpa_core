@@ -2,7 +2,7 @@
   "project": "rpa_core",
   "phase": "editor-tree-interactions",
   "status": "active",
-  "completed_milestone": "M11-editor-tree",
+  "completed_milestone": "M12-editor-polish",
   "active_milestone": "M10-capture",
   "active_plan": ".harness/tasks/M10-capture.md",
   "active_feature": "element-capture",

@@ -270,3 +270,86 @@ def test_editor_multi_select_batch(server):
         )
         assert _canvas_order(page) == ["launch"]
         browser.close()
+
+
+def test_editor_chinese_display_and_no_horizontal_scroll(server):
+    base = f"http://127.0.0.1:{server.port}"
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
+        page.goto(f"{base}/")
+        page.wait_for_selector('[data-command="browser.launch"]')
+
+        # 命令面板：中文名 + 英文副标；无横向滚动条
+        palette_text = page.locator("#palette-list").inner_text()
+        assert "启动浏览器" in palette_text
+        assert "browser.launch" in palette_text
+        overflow = page.evaluate(
+            "() => { const el = document.getElementById('palette-list');"
+            " return el.scrollWidth - el.clientWidth; }"
+        )
+        assert overflow <= 1
+
+        # 画布节点：中文标题 + 英文副标
+        page.click('[data-command="browser.launch"]')
+        page.wait_for_selector('#canvas li[data-node="launch"] .item-title')
+        title = page.locator('#canvas li[data-node="launch"] .item-title')
+        assert title.inner_text() == "启动浏览器"
+        sub = page.locator('#canvas li[data-node="launch"] .item-sub')
+        assert "browser.launch" in sub.inner_text()
+
+        # 控制流分支标签中文化
+        page.click('[data-flow="if"]')
+        page.wait_for_selector('#canvas li[data-node="if"]')
+        branch_labels = page.locator("#canvas .branch-label").all_inner_texts()
+        assert branch_labels == ["满足时", "否则"]
+
+        # 属性面板字段中文化（命令参数的英文键降为副标）
+        page.click('[data-command="browser.navigate"]')
+        page.wait_for_selector('#canvas li[data-node="navigate"]')
+        labels = page.locator("#props-body .field label").all_inner_texts()
+        assert any(label.startswith("网址") for label in labels)
+        assert any("url" in label for label in labels)
+
+        # if 条件操作符下拉中文
+        page.click('#canvas li[data-node="if"]')
+        op_options = page.locator(
+            '#props-body select[data-field="条件操作符"] option'
+        ).all_inner_texts()
+        assert "等于" in op_options
+        assert "为真（非空）" in op_options
+
+        # 术语表存在且含关键术语
+        page.locator("#glossary summary").click()
+        glossary_text = page.locator("#glossary-list").inner_text()
+        assert "执行器" in glossary_text
+        assert "副作用" in glossary_text
+        browser.close()
+
+
+def test_editor_multi_action_bar(server):
+    base = f"http://127.0.0.1:{server.port}"
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
+        page.goto(f"{base}/")
+        page.wait_for_selector('[data-command="browser.launch"]')
+
+        # 无选中时悬浮条隐藏
+        assert page.locator("#multi-bar").is_hidden()
+
+        page.click('[data-command="browser.launch"]')
+        page.click('[data-command="browser.navigate"]')
+        page.wait_for_selector('#canvas li[data-node="navigate"]')
+
+        # 单选时出现，含批量按钮
+        page.click('#canvas li[data-node="launch"]')
+        assert page.locator("#multi-bar").is_visible()
+        assert page.locator("#multi-count").inner_text() == "1 个已选"
+
+        # 悬浮条复制按钮复制选中子树，随后粘贴产生 id 重映射的副本
+        page.click("#btn-copy")
+        page.keyboard.press("Control+V")
+        page.wait_for_selector('#canvas li[data-node="launch2"]')
+        assert _canvas_order(page) == ["launch", "launch2", "navigate"]
+        browser.close()

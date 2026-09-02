@@ -18,9 +18,6 @@
   <span class="toolbar-sep"></span>
   <button id="btn-undo" title="撤销（Ctrl+Z）" disabled>↶ 撤销</button>
   <button id="btn-redo" title="重做（Ctrl+Y）" disabled>↷ 重做</button>
-  <button id="btn-up" title="上移选中节点" disabled>上移</button>
-  <button id="btn-down" title="下移选中节点" disabled>下移</button>
-  <button id="btn-delete" title="删除选中节点（Delete）" disabled>删除</button>
   <span id="valid-badge" class="hidden"></span>
 </header>
 <main>
@@ -32,13 +29,28 @@
     <h2>画布 · sequence root</h2>
     <ol id="canvas"></ol>
     <p class="hint">点击左侧命令/控制流追加节点，或拖拽到画布任意位置插入；拖拽节点 grip（⠿）移动子树。引用语法 ${inputs.x}、${steps.节点.outputs.键}、${loop.item}</p>
+    <div id="multi-bar" class="hidden">
+      <span id="multi-count"></span>
+      <button id="btn-up" title="上移选中节点">上移</button>
+      <button id="btn-down" title="下移选中节点">下移</button>
+      <button id="btn-copy" title="复制选中子树（Ctrl+C）">复制</button>
+      <button id="btn-delete" title="删除选中节点（Delete）">删除</button>
+    </div>
   </section>
   <aside id="props">
     <h2>属性</h2>
     <div id="props-body"></div>
   </aside>
 </main>
-<footer id="compile-panel"><span class="hint">点击「编译」校验当前工作流（保存草稿不要求编译通过）</span></footer>
+<footer>
+  <div id="compile-panel"><span class="hint">点击「编译」校验当前工作流（保存草稿不要求编译通过）</span></div>
+  <details id="glossary">
+    <summary>术语表</summary>
+    <dl id="glossary-list"></dl>
+  </details>
+</footer>
+<script src="/static/i18n.js"></script>
+<script src="/static/icons.js"></script>
 <script src="/static/app.js"></script>
 </body>
 </html>

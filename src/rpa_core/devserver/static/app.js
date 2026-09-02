@@ -28,7 +28,7 @@ const CONTAINER_LISTS = {
   if: ["then", "else"],
   try: ["children", "catch"],
 };
-const BRANCH_LABELS = { children: "主体", then: "then", else: "else", catch: "catch" };
+const BRANCH_LABELS = { children: "主体", then: "满足时", else: "否则", catch: "出错时" };
 const FLOW_ITEMS = [
   { type: "sequence", label: "sequence 顺序容器" },
   { type: "if", label: "if 条件分支" },
@@ -36,7 +36,6 @@ const FLOW_ITEMS = [
   { type: "try", label: "try 异常捕获" },
   { type: "return", label: "return 返回" },
 ];
-const FLOW_LABELS = Object.fromEntries(FLOW_ITEMS.map((f) => [f.type, f.label]));
 
 function listOf(node, key) {
   if (key === "else") return node["else"];
@@ -384,28 +383,60 @@ async function refreshOpenList(selectedValue) {
 }
 
 // ---------------------------------------------------------------------------
-// 命令面板：控制流分组 + 按 manifest id 首段前缀分组
+// 命令面板：控制流分组 + 按 manifest id 首段前缀分组（中文显示名 + 英文副标）
 // ---------------------------------------------------------------------------
 
-function paletteGroup(name, items, list) {
+const I18N = window.RPA_I18N;
+const ICONS = window.RPA_ICONS;
+const commandName = (id) => (I18N && I18N.commands[id]) || id;
+const kindName = (kind) => (I18N && I18N.kinds[kind]) || kind;
+const flowName = (type) => (I18N && I18N.flow[type]) || type;
+const GROUP_ICONS = { browser: "browser", data: "data", desktop: "desktop", desktop_win32: "window", flow: "branch" };
+const KIND_ICON = { action: "play", query: "browser", transform: "transform", lifecycle: "window" };
+const FLOW_ICON = { sequence: "play", if: "branch", forEach: "loop", try: "shield", return: "back" };
+
+function iconSvg(name) {
+  const span = document.createElement("span");
+  span.className = "icon";
+  span.innerHTML = ICONS ? ICONS.get(name) : "";
+  return span;
+}
+
+function paletteGroup(name, items, list, icon) {
   if (!items.length) return;
   const header = document.createElement("li");
   header.className = "palette-group";
-  header.textContent = name;
+  if (icon) header.appendChild(iconSvg(icon));
+  const text = document.createElement("span");
+  text.textContent = name;
+  header.appendChild(text);
   list.appendChild(header);
   for (const item of items) list.appendChild(item);
 }
 
 function flowPaletteItem(flow, filter) {
-  if (filter && !flow.label.toLowerCase().includes(filter) && !flow.type.includes(filter)) return null;
+  const zh = flowName(flow.type);
+  if (filter && !zh.toLowerCase().includes(filter) && !flow.type.includes(filter) && !flow.label.toLowerCase().includes(filter)) return null;
   const li = document.createElement("li");
   li.dataset.flow = flow.type;
+  li.className = "palette-item";
+  const iconWrap = iconSvg(FLOW_ICON[flow.type] || "play");
+  iconWrap.classList.add("icon-block", "kind-flow");
+  const texts = document.createElement("div");
+  texts.className = "item-texts";
   const label = document.createElement("span");
-  label.textContent = flow.label;
+  label.className = "item-title";
+  label.textContent = zh;
+  const sub = document.createElement("span");
+  sub.className = "item-sub";
+  sub.textContent = flow.type;
+  texts.appendChild(label);
+  texts.appendChild(sub);
+  li.appendChild(iconWrap);
+  li.appendChild(texts);
   const kind = document.createElement("span");
   kind.className = "kind";
   kind.textContent = "控制流";
-  li.appendChild(label);
   li.appendChild(kind);
   li.draggable = true;
   li.addEventListener("dragstart", (e) => {
@@ -419,16 +450,30 @@ function flowPaletteItem(flow, filter) {
 }
 
 function commandPaletteItem(manifest, filter) {
-  if (filter && !manifest.id.toLowerCase().includes(filter)) return null;
+  const zh = commandName(manifest.id);
+  if (filter && !manifest.id.toLowerCase().includes(filter) && !zh.toLowerCase().includes(filter)) return null;
   const li = document.createElement("li");
   li.dataset.command = manifest.id;
-  const idSpan = document.createElement("span");
-  idSpan.textContent = manifest.id;
-  const kindSpan = document.createElement("span");
-  kindSpan.className = "kind";
-  kindSpan.textContent = manifest.kind;
-  li.appendChild(idSpan);
-  li.appendChild(kindSpan);
+  li.className = "palette-item";
+  const iconWrap = iconSvg(KIND_ICON[manifest.kind] || "data");
+  iconWrap.classList.add("icon-block", `kind-${manifest.kind}`);
+  const texts = document.createElement("div");
+  texts.className = "item-texts";
+  const label = document.createElement("span");
+  label.className = "item-title";
+  label.textContent = zh;
+  const sub = document.createElement("span");
+  sub.className = "item-sub";
+  sub.textContent = manifest.id;
+  texts.appendChild(label);
+  texts.appendChild(sub);
+  li.appendChild(iconWrap);
+  li.appendChild(texts);
+  const kind = document.createElement("span");
+  kind.className = "kind";
+  kind.textContent = kindName(manifest.kind);
+  kind.title = I18N && I18N.glossary[manifest.kind];
+  li.appendChild(kind);
   li.draggable = true;
   li.addEventListener("dragstart", (e) => {
     dragState = { type: "new", command: manifest.id };
@@ -445,7 +490,7 @@ function renderPalette() {
   const list = $("palette-list");
   list.textContent = "";
   const flowItems = FLOW_ITEMS.map((f) => flowPaletteItem(f, filter)).filter(Boolean);
-  paletteGroup("控制流", flowItems, list);
+  paletteGroup("控制流", flowItems, list, "branch");
   const groups = new Map();
   for (const manifest of state.catalog) {
     const prefix = manifest.id.split(".")[0];
@@ -453,7 +498,7 @@ function renderPalette() {
     const item = commandPaletteItem(manifest, filter);
     if (item) groups.get(prefix).push(item);
   }
-  for (const [prefix, items] of groups) paletteGroup(prefix, items, list);
+  for (const [prefix, items] of groups) paletteGroup(prefix, items, list, GROUP_ICONS[prefix]);
 }
 
 // ---------------------------------------------------------------------------
@@ -709,7 +754,8 @@ function summarize(node) {
   }
   if (node.type === "if") {
     const c = node.condition || {};
-    return [c.left, c.op, c.right].filter((v) => v !== undefined && v !== null && v !== "").join(" ");
+    const op = (I18N && I18N.ops[c.op]) || c.op || "";
+    return [c.left, op, c.right].filter((v) => v !== undefined && v !== null && v !== "").join(" ");
   }
   if (node.type === "forEach") return `${node.item_var || "item"} ∈ ${JSON.stringify(node.items)}`;
   if (node.type === "try") return `error → ${node.error_var || "error"}`;
@@ -761,15 +807,36 @@ function renderNode(node, path, index) {
   row.appendChild(grip);
   row.appendChild(idx);
   if (node.type === "action") {
-    const cmd = document.createElement("span");
-    cmd.className = "cmd";
-    cmd.textContent = node.command;
-    row.appendChild(cmd);
+    const manifest = manifestOf(node.command);
+    const iconWrap = iconSvg(KIND_ICON[(manifest && manifest.kind) || "action"] || "play");
+    iconWrap.classList.add("icon-block", `kind-${(manifest && manifest.kind) || "action"}`);
+    row.appendChild(iconWrap);
+    const texts = document.createElement("div");
+    texts.className = "item-texts";
+    const title = document.createElement("span");
+    title.className = "item-title";
+    title.textContent = commandName(node.command);
+    const sub = document.createElement("span");
+    sub.className = "item-sub";
+    sub.textContent = node.command;
+    texts.appendChild(title);
+    texts.appendChild(sub);
+    row.appendChild(texts);
   } else {
-    const badge = document.createElement("span");
-    badge.className = `badge ${node.type}`;
-    badge.textContent = FLOW_LABELS[node.type] || node.type;
-    row.appendChild(badge);
+    const iconWrap = iconSvg(FLOW_ICON[node.type] || "play");
+    iconWrap.classList.add("icon-block", "kind-flow");
+    row.appendChild(iconWrap);
+    const texts = document.createElement("div");
+    texts.className = "item-texts";
+    const title = document.createElement("span");
+    title.className = "item-title";
+    title.textContent = flowName(node.type);
+    const sub = document.createElement("span");
+    sub.className = "item-sub";
+    sub.textContent = node.type;
+    texts.appendChild(title);
+    texts.appendChild(sub);
+    row.appendChild(texts);
   }
   const args = document.createElement("span");
   args.className = "args";
@@ -804,7 +871,9 @@ function renderNode(node, path, index) {
       if (lists.length > 1) {
         const label = document.createElement("div");
         label.className = "branch-label";
-        label.textContent = key === "children" && node.type === "try" ? "try" : BRANCH_LABELS[key];
+        const branchKey = `${node.type}:${key}`;
+        label.textContent =
+          (I18N && I18N.branchLabels[branchKey]) || BRANCH_LABELS[key] || key;
         li.appendChild(label);
       }
       const sub = document.createElement("ol");
@@ -843,10 +912,16 @@ function render() {
 function renderToolbar() {
   $("btn-undo").disabled = !state.undo.length;
   $("btn-redo").disabled = !state.redo.length;
-  $("btn-up").disabled = !batchCanMove(-1);
-  $("btn-down").disabled = !batchCanMove(1);
-  const hasSelection = state.multi.length > 0 || !!state.selected;
-  $("btn-delete").disabled = !hasSelection;
+  const bar = $("multi-bar");
+  const hasSelection = state.multi.length >= 1;
+  bar.classList.toggle("hidden", !hasSelection);
+  if (hasSelection) {
+    $("multi-count").textContent = `${state.multi.length} 个已选`;
+    $("btn-up").disabled = !batchCanMove(-1);
+    $("btn-down").disabled = !batchCanMove(1);
+    $("btn-copy").disabled = false;
+    $("btn-delete").disabled = false;
+  }
 }
 
 function renderCanvas() {
@@ -1011,26 +1086,29 @@ function setWith(node, key, value) {
 
 function schemaField(node, key, propSchema, required) {
   const value = node["with"] ? node["with"][key] : undefined;
+  const label = fieldLabel(key);
   if (propSchema.enum) {
-    return selectField(key, propSchema, required, value, (v) => setWith(node, key, v));
+    return selectField(label, propSchema, required, value, (v) => setWith(node, key, v), key);
   }
   const type = propSchema.type;
   if (type === "boolean") {
-    return checkboxField(key, required, Boolean(value), (v) => setWith(node, key, v));
+    return checkboxField(label, required, Boolean(value), (v) => setWith(node, key, v), key);
   }
   if (type === "integer" || type === "number") {
-    return numberField(key, value, (v) => setWith(node, key, v), required);
+    return numberField(label, value, (v) => setWith(node, key, v), required, key);
   }
   if (type === "array" || type === "object") {
-    return jsonField(key, value, (v) => setWith(node, key, v), required);
+    return jsonField(label, value, (v) => setWith(node, key, v), required, key);
   }
-  return textField(key, value === undefined ? "" : String(value), (v) => setWith(node, key, v), required);
+  return textField(label, value === undefined ? "" : String(value), (v) => setWith(node, key, v), required, key);
 }
 
-function wrapField(labelText, required, input, hint) {
+const fieldLabel = (key) => (I18N && I18N.fields[key]) || key;
+
+function wrapField(labelText, required, input, hint, rawKey) {
   const wrap = document.createElement("div");
   wrap.className = "field";
-  input.dataset.field = labelText;
+  input.dataset.field = rawKey || labelText;
   const label = document.createElement("label");
   label.textContent = labelText;
   if (required) {
@@ -1039,13 +1117,19 @@ function wrapField(labelText, required, input, hint) {
     star.textContent = " *";
     label.appendChild(star);
   }
+  if (rawKey && rawKey !== labelText) {
+    const keySpan = document.createElement("span");
+    keySpan.className = "field-key";
+    keySpan.textContent = ` ${rawKey}`;
+    label.appendChild(keySpan);
+  }
   if (hint) input.title = hint;
   wrap.appendChild(label);
   wrap.appendChild(input);
   return wrap;
 }
 
-function textField(labelText, value, onChange, required) {
+function textField(labelText, value, onChange, required, rawKey) {
   const input = document.createElement("input");
   input.type = "text";
   input.value = value;
@@ -1055,11 +1139,11 @@ function textField(labelText, value, onChange, required) {
     input.style.borderColor = "";
     onChange(input.value.trim());
   });
-  return wrapField(labelText, required, input, REFERENCE_HINT);
+  return wrapField(labelText, required, input, REFERENCE_HINT, rawKey);
 }
 
 // 条件左值/右值：${...} 引用保持字符串，其余按 JSON 字面量解析（数组/对象/数字/布尔）。
-function literalField(labelText, value, onChange, required) {
+function literalField(labelText, value, onChange, required, rawKey) {
   const input = document.createElement("input");
   input.type = "text";
   input.value = typeof value === "string" || value === undefined ? value ?? "" : JSON.stringify(value);
@@ -1075,10 +1159,10 @@ function literalField(labelText, value, onChange, required) {
     }
     onChange(raw);
   });
-  return wrapField(labelText, required, input, "引用 ${...} 或 JSON 字面量");
+  return wrapField(labelText, required, input, "引用 ${...} 或 JSON 字面量", rawKey);
 }
 
-function numberField(labelText, value, onChange, required) {
+function numberField(labelText, value, onChange, required, rawKey) {
   const input = document.createElement("input");
   input.type = "number";
   input.step = "any";
@@ -1091,18 +1175,18 @@ function numberField(labelText, value, onChange, required) {
     if (Number.isNaN(parsed)) { input.style.borderColor = "var(--bad)"; return; }
     onChange(parsed);
   });
-  return wrapField(labelText, required, input);
+  return wrapField(labelText, required, input, undefined, rawKey);
 }
 
-function checkboxField(labelText, required, value, onChange) {
+function checkboxField(labelText, required, value, onChange, rawKey) {
   const input = document.createElement("input");
   input.type = "checkbox";
   input.checked = value;
   input.addEventListener("change", () => { pushUndo(); onChange(input.checked); });
-  return wrapField(labelText, required, input);
+  return wrapField(labelText, required, input, undefined, rawKey);
 }
 
-function selectField(labelText, propSchema, required, value, onChange) {
+function selectField(labelText, propSchema, required, value, onChange, rawKey) {
   const input = document.createElement("select");
   const empty = document.createElement("option");
   empty.value = "";
@@ -1111,7 +1195,7 @@ function selectField(labelText, propSchema, required, value, onChange) {
   for (const option of propSchema.enum) {
     const element = document.createElement("option");
     element.value = String(option);
-    element.textContent = String(option);
+    element.textContent = (I18N && I18N.ops[option]) || String(option);
     input.appendChild(element);
   }
   input.value = value === undefined ? "" : String(value);
@@ -1119,10 +1203,10 @@ function selectField(labelText, propSchema, required, value, onChange) {
     pushUndo();
     onChange(input.value === "" ? null : input.value);
   });
-  return wrapField(labelText, required, input);
+  return wrapField(labelText, required, input, undefined, rawKey);
 }
 
-function jsonField(labelText, value, onChange, required) {
+function jsonField(labelText, value, onChange, required, rawKey) {
   const input = document.createElement("textarea");
   input.value = value === undefined || value === null ? "" : JSON.stringify(value, null, 2);
   input.placeholder = "{}";
@@ -1136,7 +1220,7 @@ function jsonField(labelText, value, onChange, required) {
       input.style.borderColor = "var(--bad)";
     }
   });
-  return wrapField(labelText, required, input, "JSON 对象；值支持 ${...} 引用");
+  return wrapField(labelText, required, input, "JSON 对象；值支持 ${...} 引用", rawKey);
 }
 
 // ---------------------------------------------------------------------------
@@ -1226,10 +1310,25 @@ async function compileWorkflow() {
 // 初始化
 // ---------------------------------------------------------------------------
 
+function renderGlossary() {
+  const list = $("glossary-list");
+  if (!list || !I18N) return;
+  list.textContent = "";
+  for (const [term, explanation] of Object.entries(I18N.glossary)) {
+    const dt = document.createElement("dt");
+    dt.textContent = term;
+    const dd = document.createElement("dd");
+    dd.textContent = explanation;
+    list.appendChild(dt);
+    list.appendChild(dd);
+  }
+}
+
 async function init() {
   const data = await api("GET", "/api/catalog");
   state.catalog = data.commands;
   renderPalette();
+  renderGlossary();
   await refreshOpenList();
   newWorkflow();
   $("palette-filter").addEventListener("input", renderPalette);
@@ -1248,6 +1347,7 @@ async function init() {
   $("btn-redo").addEventListener("click", redo);
   $("btn-up").addEventListener("click", () => batchMove(-1));
   $("btn-down").addEventListener("click", () => batchMove(1));
+  $("btn-copy").addEventListener("click", copySelection);
   $("btn-delete").addEventListener("click", batchDelete);
   window.addEventListener("keydown", handleEditorKeydown);
   window.addEventListener("beforeunload", (e) => {
