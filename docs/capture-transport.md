@@ -29,8 +29,8 @@
   - Playwright `connect_over_cdp` 全链路可用：枚举 contexts/pages（用户真实标签页可见）、新开标签页导航/输入/读取、picker 注入（CSS selector 生成 + querySelectorAll 命中数回验 + 高亮渲染）、原生 CDP session（`Runtime.evaluate`）。
   - 连接断开不关闭浏览器；测试标签页可单独关闭，用户标签页不受影响。
   - 运维备注：百度首页搜索框被验证页隐藏（`#kw` not visible），搜索 URL 直达（`/s?wd=`）可靠——M10 捕获脚本优先用 URL 直达模式。
-- 待验证：开关跨重启持久性（用户重启 Edge 后重读 `DevToolsActivePort` 即可确认）。
-- 定位：官方 UI 授权、零扩展、零第三方、标准 CDP——**登录态页面捕获的最优载体**，已证实可行。
+- 待验证：~~开关跨重启持久性~~ **已确认（2026-09-02，Chrome 152 重启实测）**：开关持久（无需每次手动开启）；但浏览器 UUID 路径每次启动轮换（旧 WS URL 失效）——捕获服务端必须在每次会话启动时重新读取 `DevToolsActivePort`（M10 实装即为此方式，`devtools_active_port_url()` 每次读文件）。
+- 定位：官方 UI 授权、零扩展、零第三方、标准 CDP——**登录态页面捕获的最优载体**，已证实可行且常驻可用。
 
 ### 2.3 Panerelay（第三方桥，MIT）——降为记录备查
 

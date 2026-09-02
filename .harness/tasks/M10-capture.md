@@ -8,7 +8,7 @@
 
 ## 任务
 
-- [x] 执行 S1 验证（`docs/capture-transport.md` §4 协议，M10 前置，自 M8 移入）：2026-09-01 于用户日常 Edge 152.0.4191.53 实测通过——WS URL 从 `DevToolsActivePort` 文件读取（页面 UI 无需交互）、`/json/*` 404 防扫描确认、`connect_over_cdp` 枚举真实标签页、picker 注入回验 + 高亮、原生 CDP session 可用；`user-browser` 子类型定案 `chrome-inspect-ws` 并补录 ADR 0007 §4。遗留：开关跨重启持久性（待用户重启 Edge 确认）、小红书登录态断言（用户未登录，顺延至 M10b 实装时）
+- [x] 执行 S1 验证（`docs/capture-transport.md` §4 协议，M10 前置，自 M8 移入）：2026-09-01 于用户日常 Edge 152.0.4191.53 实测通过——WS URL 从 `DevToolsActivePort` 文件读取（页面 UI 无需交互）、`/json/*` 404 防扫描确认、`connect_over_cdp` 枚举真实标签页、picker 注入回验 + 高亮、原生 CDP session 可用；`user-browser` 子类型定案 `chrome-inspect-ws` 并补录 ADR 0007 §4。遗留项已闭环（2026-09-02 Chrome 152 重启实测）：开关跨重启持久、UUID 路径每次启动轮换（服务端每次会话重读文件，实装即为此方式）；小红书登录态断言（用户未登录，顺延至实际使用时验证，机制已在 example.com 全链路验证）
 - [x] `browser.launch` manifest 扩展 `userDataDir`（持久 profile 模式，M10a 主路线前置）；执行器适配 `launch_persistent_context`（close 时 context.close）
 - [x] 桌面捕获子进程协议：UIA hit-test hook、stdout JSON 通信（与 `python.worker` 同构隔离模式）、dev server 端点实装（start/pick/cancel）；**窗口作用域 hit-test**（在被测窗口 UIA 子树内找包含点且面积最小的后代）免疫安全软件覆盖层劫持；测试模式 `--point` + `--window-handle`
 - [x] 浏览器捕获实装：persistent 与 user-browser（chrome-inspect-ws，读 DevToolsActivePort 构造 WS URL）传输的 picker 注入、selector 生成与回验
