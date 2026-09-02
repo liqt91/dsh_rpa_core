@@ -78,12 +78,14 @@
 | 优先级 | 传输 | 场景 | 状态 |
 |---|---|---|---|
 | 主（M10a） | 持久 profile | 公共页 + 可接受登录一次的站点 | 已定 |
-| 次（M10b） | chrome-inspect-ws（DevToolsActivePort WS URL） | 登录态页面、零重登录；每会话一次连接批准 = 行业默认体验 | S1 已验证通过 |
-| 三（M10c） | 自研捕获扩展：token 配对反连 dev server（主）/ Native Messaging（备） | 弹窗疲劳、高频捕获会话、零开放端口需求 | 已立项设计，不实装 |
-| 记录备查 | Panerelay | —— | 降级（Node 依赖，被 M10c 覆盖） |
-| 记录备查 | Playwright MCP 扩展传输 | —— | 不作为传输（token 机制与标签组隔离 UX 并入 M10c） |
+| **优先（M14）** | **自研捕获扩展（token 配对反连）** | 登录态页面、高频捕获、零弹窗 | **提前实装**（见下） |
+| 次（M10b） | chrome-inspect-ws（DevToolsActivePort WS URL） | 登录态页面、零重登录 | S1 已验证通过；**每连接弹窗确认，高频场景降级为备选** |
+| 记录备查 | Panerelay | —— | 降级（Node 依赖） |
+| 记录备查 | Playwright MCP 扩展传输 | —— | 不作为传输（机制已借鉴进 M14） |
 
-dev server 端点契约（M8 定义）：`POST /api/capture/browser/start {transport: "persistent" | "user-browser", ...}`；`user-browser` 子类型定案为 **`chrome-inspect-ws`**（`userBrowserType` 参数）；M10c 落地后扩充 `extension-ws` 子类型（预留给自研扩展）。
+**2026-09-02 修订**：chrome-inspect-ws 虽开关跨重启持久，但**每次 WebSocket 连接都弹窗确认**，高频捕获下疲劳成本不可接受；M10c（自研扩展 token 配对）提前为 M14 实装，`extension-ws` 成为登录态捕获的优先传输，chrome-inspect-ws 降为"扩展未安装时的无安装成本备选"。
+
+dev server 端点契约（M8 定义）：`POST /api/capture/browser/start {transport: "persistent" | "user-browser", ...}`；`user-browser` 子类型现有 **`chrome-inspect-ws`**（弹窗式）与 M14 实装的 **`extension-ws`**（免弹窗）。
 
 ## 4. S1 验证协议（已执行，2026-09-01）
 

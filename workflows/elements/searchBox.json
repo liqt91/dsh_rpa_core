@@ -1,0 +1,21 @@
+{
+  "kind": "browser",
+  "selector": {
+    "css": "#s_top_wrap > div:nth-of-type(2)"
+  },
+  "verifyCount": 1,
+  "name": null,
+  "metadata": {
+    "tag": "div",
+    "id": "",
+    "classes": "s-center-box",
+    "text": "",
+    "rect": {
+      "x": 0,
+      "y": 0,
+      "w": 1265,
+      "h": 60
+    }
+  },
+  "capturedAt": "2026-09-02T06:13:57.965505Z"
+}

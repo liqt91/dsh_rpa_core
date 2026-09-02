@@ -12,9 +12,10 @@ M10 捕获产物（元素描述符）已有落库约定（`GET /api/elements[/na
 
 - [ ] 元素库面板：编辑器右侧或底部新增「元素库」区，列出 `/api/elements`（中文名 = name，副标 = kind + selector 摘要），支持刷新
 - [ ] 元素插入：选中元素 → 写入当前选中节点的对应字段（browser → `with.selector`；desktop → `with.locator`），写入后标记未保存
+- [ ] **编辑校验三段式**：pick 不带 `saveAs` → 描述符仅返回不落库 → 编辑器草稿编辑 → 回验（`POST /api/elements/verify`：把改过的 locator/selector 拿回活目标再验命中数）→ 保存（`POST /api/elements`）
 - [ ] 画布内一键捕获入口（评估后实施）：属性面板「捕获」按钮 → 调 `/api/capture/browser/start(persistent)` 或 `/api/capture/desktop/start`（需窗口句柄时提示用户）→ pick（超时 60s）→ 描述符直接填入字段并入库
 - [ ] 元素删除端点（`DELETE /api/elements/{name}`）+ 合同测试
-- [ ] E2E：元素库列表渲染 + 插入到节点 + 保存读回
+- [ ] E2E：元素库列表渲染 + 插入到节点 + 编辑后回验 + 保存读回
 - [ ] 完整门禁
 
 ## 验收标准

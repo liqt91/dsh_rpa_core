@@ -1,0 +1,192 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>rpa_core 后端架构 · ELI5（程序员版）</title>
+  <style>
+    :root {
+      --bg: #07111f;
+      --panel: rgba(14, 22, 42, 0.92);
+      --text: #eaf1ff;
+      --muted: #a6b7d9;
+      --accent: #7da8ff;
+      --accent2: #67e8c8;
+      --warning: #ffcb6b;
+      --bad: #ff8f8f;
+      --border: rgba(135, 160, 215, 0.16);
+      --code: #07101c;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: Inter, "PingFang SC", "Microsoft YaHei", Segoe UI, Roboto, Arial, sans-serif;
+      background:
+        radial-gradient(circle at top left, rgba(125,168,255,.18), transparent 30%),
+        radial-gradient(circle at top right, rgba(103,232,200,.10), transparent 24%),
+        linear-gradient(180deg, #06101c 0%, #091222 100%);
+      color: var(--text);
+      line-height: 1.65;
+      padding: 40px 24px 64px;
+    }
+    main { max-width: 880px; margin: 0 auto; }
+    h1 { font-size: 26px; margin: 0 0 4px; }
+    h1 span { color: var(--accent2); }
+    .sub { color: var(--muted); margin: 0 0 28px; }
+    h2 { font-size: 17px; margin: 36px 0 12px; color: var(--accent); border-left: 3px solid var(--accent); padding-left: 10px; }
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 16px 20px;
+      margin-bottom: 14px;
+      box-shadow: 0 10px 28px rgba(0,0,0,.18);
+    }
+    .card h3 { margin: 0 0 4px; font-size: 15px; }
+    .card h3 .en { font-family: Consolas, monospace; color: var(--accent2); font-size: 12.5px; font-weight: 400; margin-left: 8px; }
+    .card p { margin: 6px 0; font-size: 13.5px; color: #dbe6ff; }
+    .card .analogy {
+      font-size: 12.5px; color: var(--warning);
+      border-left: 2px solid rgba(255,203,107,.5);
+      padding: 2px 10px; margin-top: 8px;
+    }
+    .card .analogy b { color: var(--warning); font-weight: 600; }
+    .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+    .flow {
+      font-family: Consolas, monospace; font-size: 12.5px;
+      background: var(--code); border: 1px solid var(--border);
+      border-radius: 10px; padding: 14px 16px; overflow-x: auto;
+      color: #dbe6ff; white-space: pre;
+    }
+    .flow .dim { color: var(--muted); }
+    .flow .ok { color: var(--accent2); }
+    .flow .warn { color: var(--warning); }
+    table { border-collapse: collapse; width: 100%; font-size: 13px; }
+    th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--border); }
+    th { color: var(--accent); font-weight: 600; font-size: 12.5px; }
+    td code { font-size: 12px; }
+    code {
+      font-family: Consolas, "Cascadia Mono", monospace; font-size: 12.5px;
+      background: var(--code); border: 1px solid var(--border);
+      border-radius: 5px; padding: 1px 6px; color: var(--accent2);
+    }
+    .tag { display: inline-block; font-size: 11px; padding: 1px 8px; border-radius: 999px; border: 1px solid var(--border); color: var(--muted); margin-left: 6px; }
+    footer { margin-top: 44px; color: var(--muted); font-size: 12.5px; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>rpa_core 后端架构 <span>· ELI5（程序员版）</span></h1>
+  <p class="sub">给懂代码的人讲的架构：只讲职责边界、数据流和为什么这样切。</p>
+
+  <h2>① 一句话总览</h2>
+  <div class="card">
+    <p>一份 JSON 菜谱（workflow）经过静态检查变成不可变的执行单（plan），厨师长（orchestrator）按单依次派活给各工种执行器，每一步的产出写进备菜台（scopes）、拍一张进度快照（checkpoint）、记一行日志（events.jsonl），最后交一份质检单（result.json）。</p>
+  </div>
+
+  <h2>② 分层依赖（单向，禁止反向）</h2>
+  <div class="flow">model <span class="dim">（纯协议：pydantic 类型，谁都不 import）</span>
+  ▲
+  ├─ catalog <span class="dim">（命令目录加载 + 不可变快照 + sha256 digest）</span>
+  ├─ compiler <span class="dim">（AST 静态校验 → 冻结的 ExecutionPlan）</span>
+  ├─ executors <span class="dim">（浏览器 / 桌面 / 子进程干活，只回 CommandResult）</span>
+  ├─ runtime <span class="dim">（编排器：状态机、取消、超时、重试、checkpoint、证据）</span>
+  ├─ devserver <span class="dim">（设计期工具：只读复用 catalog/compiler，不承载 run）</span>
+  └─ cli <span class="dim">（入口）</span></div>
+  <div class="card">
+    <p><b>为什么单向：</b>依赖箭头永远指向更底层——<code>model</code> 是纯类型，谁都能依赖它；<code>runtime</code> 不知道有 <code>devserver</code> 存在。这条规则由 <code>check_architecture.py</code> 机械检查（import 方向分析），改不动。</p>
+  </div>
+
+  <h2>③ 各层职责（配厨房类比）</h2>
+  <div class="grid2">
+    <div class="card">
+      <h3>catalog <span class="en">catalog/loader.py</span></h3>
+      <p>启动时读 <code>commands/*.json</code> 成 manifest，算 sha256 digest 封存。运行期间内容不可变。</p>
+      <p class="analogy"><b>类比：</b>装订成册的工艺规范 + 封条编号。恢复时拿 digest 对账，目录变一个字节就拒绝续跑。</p>
+    </div>
+    <div class="card">
+      <h3>compiler <span class="en">compiler/compiler.py</span></h3>
+      <p>开跑前静态检查：节点 id 查重、命令存在性、<code>${...}</code> 引用是否可解析、能力授权、unsafe 命令禁重试。通过才产出冻结的 <code>ExecutionPlan</code>。</p>
+      <p class="analogy"><b>类比：</b>开灶前核对食材和授权，通过盖章，单子封存不许改。</p>
+    </div>
+    <div class="card">
+      <h3>orchestrator <span class="en">runtime/orchestrator.py</span></h3>
+      <p>递归走 AST、派单给执行器、收 <code>CommandResult</code> 回执。管取消（Event 传播）、attempt 级超时竞争、退避重试、路径键完成集合、checkpoint 原子写入、终态收口。</p>
+      <p class="analogy"><b>类比：</b>厨师长——只派活、看表、记账，不掌勺。</p>
+    </div>
+    <div class="card">
+      <h3>executors <span class="en">executors/</span></h3>
+      <p>四类：Playwright 浏览器、UIA 桌面、Win32 桌面、Python 子进程。输入 <code>CommandInvocation</code>，返回 <code>CommandResult</code>（value/outputs/effects/diagnostics/error），绝不触碰编排器状态。</p>
+      <p class="analogy"><b>类比：</b>各工种厨师——接单干活交回执，不改菜单。</p>
+    </div>
+  </div>
+
+  <h2>④ 关键设计决策（工程权衡）</h2>
+  <div class="card">
+    <table>
+      <tr><th>决策</th><th>原因</th><th>代价</th></tr>
+      <tr>
+        <td>无 FastAPI / 无框架（stdlib <code>http.server</code>）</td>
+        <td>设计期工具无需 Web 框架；ADR 0006 明排，依赖面为零</td>
+        <td>没有现成的路由/校验/并发基础设施，全部手写（已覆盖 405/413/403 等边界）</td>
+      </tr>
+      <tr>
+        <td>catalog 不可变 + digest</td>
+        <td>一次运行一份契约快照；digest 是 resume 的合法性门槛</td>
+        <td>运行中改 manifest 必须重跑（恢复时直接拒绝）</td>
+      </tr>
+      <tr>
+        <td>handler 只回 <code>CommandResult</code></td>
+        <td>执行器不改编排器状态 → 状态单向流动、可测试、可换实现</td>
+        <td>多一次 JSON 往返的开销</td>
+      </tr>
+      <tr>
+        <td>用户 Python 走子进程</td>
+        <td>崩溃/恶意代码不伤编排器进程</td>
+        <td>进程启动开销 + stdin/stdout 序列化</td>
+      </tr>
+      <tr>
+        <td>checkpoint 写在 <code>stepCompleted</code> 事件之前</td>
+        <td>崩溃窗口语义：进度权威优先于日志——宁可丢一行日志，不可重放副作用</td>
+        <td>日志可能缺行，审计时需注意</td>
+      </tr>
+      <tr>
+        <td>unknown effect → <code>indeterminate</code> 终态</td>
+        <td>失败和"外部结果未知"是两种风险等级，绝不自动重试</td>
+        <td>调用方必须处理这个状态，不能折叠进 failed</td>
+      </tr>
+      <tr>
+        <td>devserver 不承载 run</td>
+        <td>设计期工具与运行时隔离（ADR 0007），UI 崩了不影响已提交的 run</td>
+        <td>运行态和控制态分离，跨进程看结果要读 artifacts 文件</td>
+      </tr>
+      <tr>
+        <td>桌面捕获走独立 agent 子进程</td>
+        <td>UIA/COM 状态不污染 devserver；崩溃隔离</td>
+        <td>每次 pick 一个进程生命周期</td>
+      </tr>
+    </table>
+  </div>
+
+  <h2>⑤ 一次 run 的数据流</h2>
+  <div class="flow">workflow.json <span class="dim">→</span> Workflow <span class="dim">→</span> <span class="ok">compile</span> <span class="dim">→</span> ExecutionPlan<span class="dim">（冻结）</span>
+      <span class="dim">↓</span>
+Orchestrator<span class="dim">.run()</span> <span class="dim">→</span> _execute_node <span class="dim">→</span> _execute_action
+      <span class="dim">↓ 每次 attempt</span>
+  Executor.execute(CommandInvocation) <span class="dim">→</span> <span class="ok">CommandResult</span>
+      <span class="dim">↓ 成功且校验通过</span>
+  scopes[steps][id] 记账 <span class="dim">→</span> <span class="warn">checkpoint.json 原子写</span> <span class="dim">→</span> stepCompleted 事件
+      <span class="dim">↓ 所有节点走完或异常</span>
+  终态收口 <span class="dim">→</span> <span class="ok">runFinished 事件 + result.json</span> <span class="dim">→</span> 最终 checkpoint</div>
+
+  <h2>⑥ So what（对你意味着什么）</h2>
+  <div class="card">
+    <p>改代码时记三条线：<b>状态只经 scopes 单向流动</b>（任何 executor 直接改 orchestrator 状态 = 违规）；<b>崩溃恢复只在节点边界</b>（路径键完成集合，forEach 按迭代跳过）；<b>证据比执行优先</b>（写日志失败立刻中止 run，绝不假成功）。违反这三条的 PR 会被合同测试拦住。</p>
+  </div>
+
+  <footer>
+    配套阅读：<code>docs/runtime_flow.html</code>（链路图）· <code>.harness/adr/</code>（0001-0008 决策记录）· <code>.harness/invariants.md</code>（机械不变量）
+  </footer>
+</main>
+</body>
+</html>
