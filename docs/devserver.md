@@ -28,7 +28,9 @@ uv run python -m rpa_core.cli devserver --port 9000 --workflows D:\tmp\workflows
 | `/api/capture/desktop/{start,pick,cancel}` | POST | 桌面 UIA 捕获（M10 实装，见下） |
 | `/api/capture/browser/{start,pick,cancel}` | POST | 浏览器捕获（M10 实装，见下）；start 需 `{"transport": "persistent" \| "user-browser"}` |
 | `/api/elements` | GET | 已捕获元素列表 |
-| `/api/elements/{name}` | GET | 读取单个元素描述符 |
+| `/api/elements/{name}` | GET / POST | 读单个元素描述符 / 保存（含编辑后保存，model 校验） |
+| `/api/elements/{name}` | DELETE | 删除单个元素（M13） |
+| `/api/elements/{name}/verify` | POST | 结构校验（M13：ElementDescriptor 模型 + selector/locator 语义；活体验证需捕获会话内完成） |
 
 错误形态统一为 `{"error": <CODE>, "message": <str>}`：`BAD_REQUEST`(400)、`FORBIDDEN`(403)、`NOT_FOUND`(404)、`METHOD_NOT_ALLOWED`(405)、`PAYLOAD_TOO_LARGE`(413)、`NOT_IMPLEMENTED`(501)。
 
