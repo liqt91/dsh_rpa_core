@@ -29,6 +29,7 @@ CLI:         uv run python -m rpa_core.cli
 10. Do not add FastAPI, a database, UI, MCP, scheduling, or installation concerns before the first vertical slice passes its acceptance tests.
 11. Executors must propagate task cancellation and release attempt-owned resources before `execute()` exits.
 12. A run is successful only after both `runFinished` and `result.json` persist successfully.
+13. Commit locally only; never `git push` unless the user explicitly asks for it in the current message.
 
 ## Documentation language
 
