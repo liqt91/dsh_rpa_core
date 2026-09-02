@@ -92,3 +92,19 @@ footer { border-top: 1px solid var(--border); padding: 8px 12px; max-height: 180
 .ok { color: var(--ok); }
 .bad { color: var(--bad); }
 .error-line { font-family: Consolas, monospace; font-size: 12px; }
+
+/* 元素库面板 */
+.props-sep { border-top: 1px solid var(--border); margin: 14px 0 10px; }
+#elements-head { display: flex; align-items: center; justify-content: space-between; }
+#elements-head h2 { margin: 0; }
+#elements-head button { padding: 1px 8px; }
+#elements-list { list-style: none; margin: 8px 0 0; padding: 0; }
+#elements-list li.element-item {
+  border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px;
+  margin-bottom: 6px; display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+}
+#elements-list .element-name { font-weight: 500; }
+#elements-list .element-sub { flex-basis: 100%; font-family: Consolas, monospace; font-size: 11px; color: var(--faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#elements-list .element-item button { padding: 0 7px; font-size: 12px; }
+#elements-list li.elements-empty { color: var(--muted); font-size: 12px; border-style: dashed; padding: 8px; text-align: center; }
+.capture-btn { margin-top: 6px; font-size: 12px; }

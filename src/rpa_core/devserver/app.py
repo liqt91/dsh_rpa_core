@@ -263,6 +263,47 @@ class DevServerApp:
         except WorkflowStoreError as exc:
             raise ApiError(400, "BAD_REQUEST", str(exc)) from exc
 
+    def put_element(self, name: str, body: Any) -> dict:
+        if self._element_store is None:
+            raise ApiError(501, "NOT_IMPLEMENTED", "element store is not configured")
+        if not isinstance(body, dict):
+            raise ApiError(400, "BAD_REQUEST", "element document must be a JSON object")
+        element = _validate_element_document(body)
+        self._element_store.write(name, element.document())
+        return {"name": name}
+
+    def delete_element(self, name: str) -> dict:
+        if self._element_store is None:
+            raise ApiError(501, "NOT_IMPLEMENTED", "element store is not configured")
+        try:
+            self._element_store.delete(name)
+        except WorkflowNotFoundError as exc:
+            raise ApiError(404, "NOT_FOUND", str(exc)) from exc
+        except WorkflowNameError as exc:
+            raise ApiError(403, "FORBIDDEN", str(exc)) from exc
+        return {"name": name, "deleted": True}
+
+    def verify_element(self, name: str) -> dict:
+        """结构校验：描述符模型 + selector 语义。活体验证需捕获会话内完成。"""
+        if self._element_store is None:
+            raise ApiError(501, "NOT_IMPLEMENTED", "element store is not configured")
+        try:
+            document = self._element_store.read(name)
+        except WorkflowNotFoundError as exc:
+            raise ApiError(404, "NOT_FOUND", str(exc)) from exc
+        errors: list[dict] = []
+        try:
+            element = _validate_element_document(document)
+        except ApiError as exc:
+            return {"valid": False, "errors": [{"message": exc.message}], "verifyCount": None}
+        errors.extend(_selector_errors(element))
+        return {
+            "valid": not errors,
+            "errors": errors,
+            "verifyCount": None,
+            "note": "结构校验；活体验证（命中数）需在捕获会话内完成",
+        }
+
     def _compile_result(self, valid: bool, errors: list[dict]) -> dict:
         return {"valid": valid, "errors": errors, "catalog_digest": self._catalog.digest}
 
@@ -272,4 +313,34 @@ def _validation_errors(exc: ValidationError) -> list[dict]:
     for error in exc.errors():
         location = ".".join(str(part) for part in error["loc"]) or "<root>"
         errors.append({"path": location, "message": error["msg"]})
+    return errors
+
+
+def _validate_element_document(body: dict) -> ElementDescriptor:
+    try:
+        return ElementDescriptor.model_validate(body)
+    except ValidationError as exc:
+        detail = _validation_errors(exc)[0]
+        raise ApiError(400, "BAD_REQUEST", f"{detail['path']}: {detail['message']}") from exc
+
+
+def _selector_errors(element: ElementDescriptor) -> list[dict]:
+    errors: list[dict] = []
+    if element.kind == "browser":
+        css = element.selector.get("css")
+        if not isinstance(css, str) or not css.strip():
+            errors.append({"path": "selector.css", "message": "browser 元素需要非空 css selector"})
+    elif element.kind == "desktop":
+        locator = element.selector.get("locator")
+        if not isinstance(locator, dict):
+            errors.append({"path": "selector.locator", "message": "desktop 元素需要 locator 对象"})
+            return errors
+        try:
+            from rpa_core.model.desktop import DesktopLocator
+
+            DesktopLocator.model_validate(locator)
+        except ValidationError as exc:
+            for error in exc.errors():
+                location = ".".join(str(part) for part in error["loc"]) or "<root>"
+                errors.append({"path": f"selector.locator.{location}", "message": error["msg"]})
     return errors

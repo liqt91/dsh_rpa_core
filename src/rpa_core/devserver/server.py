@@ -50,6 +50,9 @@ class _RequestHandler(BaseHTTPRequestHandler):
     def do_PUT(self) -> None:
         self._handle("PUT")
 
+    def do_DELETE(self) -> None:
+        self._handle("DELETE")
+
     def log_message(self, format: str, *args) -> None:  # noqa: A002
         pass
 
@@ -111,12 +114,22 @@ class _RequestHandler(BaseHTTPRequestHandler):
                 raise ApiError(405, "METHOD_NOT_ALLOWED", "use GET for /api/elements")
             return self.app.list_elements()
         if path.startswith(_ELEMENT_SEGMENT_PREFIX):
-            name = path[len(_ELEMENT_SEGMENT_PREFIX) :]
+            raw = path[len(_ELEMENT_SEGMENT_PREFIX) :]
+            if raw.endswith("/verify"):
+                name = raw[: -len("/verify")]
+                if method != "POST":
+                    raise ApiError(405, "METHOD_NOT_ALLOWED", "use POST for element verify")
+                return self.app.verify_element(name)
+            name = raw
             if "/" in name or not name:
                 raise ApiError(404, "NOT_FOUND", f"no route for {path}")
-            if method != "GET":
-                raise ApiError(405, "METHOD_NOT_ALLOWED", "use GET for element resources")
-            return self.app.get_element(name)
+            if method == "GET":
+                return self.app.get_element(name)
+            if method == "POST":
+                return self.app.put_element(name, self._read_json(required=True))
+            if method == "DELETE":
+                return self.app.delete_element(name)
+            raise ApiError(405, "METHOD_NOT_ALLOWED", "use GET/POST/DELETE for element resources")
         if path.startswith(_CAPTURE_PREFIX):
             if method != "POST":
                 raise ApiError(405, "METHOD_NOT_ALLOWED", "use POST for capture endpoints")

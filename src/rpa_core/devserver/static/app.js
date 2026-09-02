@@ -1087,20 +1087,28 @@ function setWith(node, key, value) {
 function schemaField(node, key, propSchema, required) {
   const value = node["with"] ? node["with"][key] : undefined;
   const label = fieldLabel(key);
+  let field;
   if (propSchema.enum) {
-    return selectField(label, propSchema, required, value, (v) => setWith(node, key, v), key);
+    field = selectField(label, propSchema, required, value, (v) => setWith(node, key, v), key);
+  } else if (propSchema.type === "boolean") {
+    field = checkboxField(label, required, Boolean(value), (v) => setWith(node, key, v), key);
+  } else if (propSchema.type === "integer" || propSchema.type === "number") {
+    field = numberField(label, value, (v) => setWith(node, key, v), required, key);
+  } else if (propSchema.type === "array" || propSchema.type === "object") {
+    field = jsonField(label, value, (v) => setWith(node, key, v), required, key);
+  } else {
+    field = textField(label, value === undefined ? "" : String(value), (v) => setWith(node, key, v), required, key);
   }
-  const type = propSchema.type;
-  if (type === "boolean") {
-    return checkboxField(label, required, Boolean(value), (v) => setWith(node, key, v), key);
+  if (key === "selector") {
+    const captureBtn = document.createElement("button");
+    captureBtn.type = "button";
+    captureBtn.className = "capture-btn";
+    captureBtn.textContent = "捕获";
+    captureBtn.title = "打开浏览器，在页面里点击元素捕获 selector";
+    captureBtn.addEventListener("click", () => captureIntoField(node, key));
+    field.appendChild(captureBtn);
   }
-  if (type === "integer" || type === "number") {
-    return numberField(label, value, (v) => setWith(node, key, v), required, key);
-  }
-  if (type === "array" || type === "object") {
-    return jsonField(label, value, (v) => setWith(node, key, v), required, key);
-  }
-  return textField(label, value === undefined ? "" : String(value), (v) => setWith(node, key, v), required, key);
+  return field;
 }
 
 const fieldLabel = (key) => (I18N && I18N.fields[key]) || key;
@@ -1324,6 +1332,180 @@ function renderGlossary() {
   }
 }
 
+// ---------------------------------------------------------------------------
+// 元素库面板：列表 / 插入到选中节点 / 删除 / 回验
+// ---------------------------------------------------------------------------
+
+function elementKindLabel(kind) {
+  return kind === "browser" ? "网页" : kind === "desktop" ? "桌面" : kind;
+}
+
+function elementSummary(element) {
+  if (element.kind === "browser") return element.selector && element.selector.css;
+  if (element.kind === "desktop") {
+    const locator = element.selector && element.selector.locator;
+    if (locator) {
+      return [locator.automationId, locator.controlType, locator.name]
+        .filter(Boolean)
+        .join(" · ");
+    }
+  }
+  return JSON.stringify(element.selector || {});
+}
+
+async function loadElements() {
+  let data;
+  try {
+    data = await api("GET", "/api/elements");
+  } catch (err) {
+    renderElements([]);
+    return;
+  }
+  renderElements(data.elements || []);
+}
+
+function renderElements(names) {
+  const list = $("elements-list");
+  list.textContent = "";
+  if (!names.length) {
+    const empty = document.createElement("li");
+    empty.className = "elements-empty";
+    empty.textContent = "空 · 用捕获存入元素";
+    list.appendChild(empty);
+    return;
+  }
+  for (const name of names) {
+    const li = document.createElement("li");
+    li.className = "element-item";
+    const title = document.createElement("span");
+    title.className = "element-name";
+    title.textContent = name;
+    li.appendChild(title);
+    const insert = document.createElement("button");
+    insert.textContent = "插入";
+    insert.title = "插入到当前选中节点";
+    insert.addEventListener("click", () => insertElement(name));
+    const verify = document.createElement("button");
+    verify.textContent = "验";
+    verify.title = "结构校验";
+    verify.addEventListener("click", () => verifyElement(name));
+    const del = document.createElement("button");
+    del.textContent = "✕";
+    del.title = "删除";
+    del.addEventListener("click", () => deleteElement(name));
+    li.appendChild(insert);
+    li.appendChild(verify);
+    li.appendChild(del);
+    list.appendChild(li);
+    // 异步补摘要
+    api("GET", `/api/elements/${encodeURIComponent(name)}`).then((element) => {
+      const sub = document.createElement("span");
+      sub.className = "element-sub";
+      sub.textContent = `${elementKindLabel(element.kind)} · ${elementSummary(element)}`;
+      li.appendChild(sub);
+    }).catch(() => {});
+  }
+}
+
+function insertElement(name) {
+  const node = state.selected ? findNode(state.selected) : null;
+  if (!node || node.type !== "action") {
+    showCompileMessage("先选中一个 action 节点再插入元素", false);
+    return;
+  }
+  api("GET", `/api/elements/${encodeURIComponent(name)}`).then((element) => {
+    const manifest = manifestOf(node.command);
+    const properties = manifest && manifest.input_schema ? manifest.input_schema.properties || {} : {};
+    if (element.kind === "browser" && properties.selector) {
+      setWith(node, "selector", element.selector.css);
+    } else if (element.kind === "desktop" && properties.locator) {
+      setWith(node, "locator", element.selector.locator);
+    } else {
+      showCompileMessage(
+        `元素类型 ${elementKindLabel(element.kind)} 与命令 ${node.command} 不匹配`,
+        false,
+      );
+      return;
+    }
+    markDirty();
+    render();
+    showCompileMessage(`已插入元素「${name}」到 ${node.command}`, true);
+  }).catch((err) => showCompileMessage(String(err.message || err), false));
+}
+
+async function verifyElement(name) {
+  try {
+    const result = await api("POST", `/api/elements/${encodeURIComponent(name)}/verify`);
+    if (result.valid) {
+      showCompileMessage(`元素「${name}」结构校验通过`, true);
+    } else {
+      const detail = (result.errors || []).map((e) => `${e.path}: ${e.message}`).join("；");
+      showCompileMessage(`元素「${name}」校验失败：${detail}`, false);
+    }
+  } catch (err) {
+    showCompileMessage(String(err.message || err), false);
+  }
+}
+
+async function deleteElement(name) {
+  if (!confirm(`删除元素「${name}」？`)) return;
+  try {
+    await api("DELETE", `/api/elements/${encodeURIComponent(name)}`);
+    showCompileMessage(`已删除元素「${name}」`, true);
+    loadElements();
+  } catch (err) {
+    showCompileMessage(String(err.message || err), false);
+  }
+}
+
+async function captureIntoField(node, key) {
+  showCompileMessage("正在启动捕获浏览器…", true);
+  let sessionId;
+  try {
+    const start = await api("POST", "/api/capture/browser/start", {
+      transport: "persistent",
+      headless: false,
+    });
+    sessionId = start.sessionId;
+  } catch (err) {
+    showCompileMessage(`捕获启动失败：${err.message || err}`, false);
+    return;
+  }
+  showCompileMessage("捕获中：请在打开的浏览器里点击目标元素（Esc 取消）", true);
+  try {
+    const result = await api("POST", "/api/capture/browser/pick", {
+      sessionId,
+      timeoutSeconds: 90,
+    });
+    if (result.kind === "browser" && result.selector && result.selector.css) {
+      setWith(node, key, result.selector.css);
+      const saveAs = prompt("元素已捕获，可选输入名字保存到元素库（留空跳过）：");
+      if (saveAs) {
+        await api("POST", `/api/elements/${encodeURIComponent(saveAs)}`, {
+          kind: "browser",
+          selector: result.selector,
+          verifyCount: result.verifyCount,
+          metadata: result.metadata,
+        });
+        loadElements();
+      }
+      markDirty();
+      render();
+      showCompileMessage(
+        `已捕获 selector（命中 ${result.verifyCount}）` +
+          (saveAs ? ` 并保存为「${saveAs}」` : ""),
+        true,
+      );
+    } else if (result.cancelled) {
+      showCompileMessage("已取消捕获", false);
+    } else if (result.timeout) {
+      showCompileMessage("捕获超时", false);
+    }
+  } catch (err) {
+    showCompileMessage(`捕获失败：${err.message || err}`, false);
+  }
+}
+
 async function init() {
   const data = await api("GET", "/api/catalog");
   state.catalog = data.commands;
@@ -1349,10 +1531,12 @@ async function init() {
   $("btn-down").addEventListener("click", () => batchMove(1));
   $("btn-copy").addEventListener("click", copySelection);
   $("btn-delete").addEventListener("click", batchDelete);
+  $("btn-elements-refresh").addEventListener("click", loadElements);
   window.addEventListener("keydown", handleEditorKeydown);
   window.addEventListener("beforeunload", (e) => {
     if (state.dirty) { e.preventDefault(); e.returnValue = ""; }
   });
+  loadElements();
 }
 
 // 输入框聚焦时快捷键不劫持（复制粘贴/撤销留给文本编辑）。

@@ -35,3 +35,4 @@ Format: `YYYY-MM-DD | feature | status | evidence`
 2026-09-01 | M11-editor-tree | active | 结构化树形画布立项：范式决策（树形非 DAG、快照撤销 50 步、静态拆分 allowlist）、拖拽先行验证片为显式确认门；实现由独立 agent 按 M11 任务单执行
 2026-09-02 | M11-editor-tree | slice0+1 done | 切片 0（/static/{name} 硬编码 allowlist 路由 + 面板分组数据源）与切片 1（路径寻址树模型/全树唯一 id/禁止移入自身子树、递归缩进色带渲染、控制流分组、DnD v2 子树拖拽+空容器落点+48px 边缘自动滚动、schema default 构造）完成；静态文件拆分 index.html/app.js/styles.css；嵌套拖入保存读回 E2E ×3 稳定 + /static 合同测试 2 项；90 tests + full gate 全绿；**暂停等待维护者确认拖拽体验**
 2026-09-02 | plan-adjustment | done | 维护者决策：M13 编辑器元素库扩展为捕获→编辑→回验→保存三段式；chrome-inspect-ws 每次连接弹窗成本不可接受，M10c 自研捕获扩展提前为 M14 实装（token 配对免弹窗），chrome-inspect-ws 降为备选；混合 auto 捕获顺延 M15
+2026-09-02 | M13-element-library | done | 元素库面板+插入到节点+删除+结构校验(verify)+selector 捕获按钮；POST/DELETE/verify 端点与 do_DELETE handler；合同+3、E2E+2；110 tests + full gate passed

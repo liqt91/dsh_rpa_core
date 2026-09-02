@@ -115,11 +115,16 @@
     {
       "id": "element-library-ui",
       "title": "Editor element library browsing and insertion of captured descriptors",
-      "passes": false
+      "passes": true
     },
     {
       "id": "workbuddy-connector",
       "title": "WorkBuddy CLI connector with auth trio and skill package",
+      "passes": false
+    },
+    {
+      "id": "capture-extension",
+      "title": "Self-built capture extension with token pairing",
       "passes": false
     }
   ]

@@ -190,6 +190,71 @@ def test_element_store_rejects_bad_names(capture_server):
     assert status == 403
     assert payload["error"] == "FORBIDDEN"
 
+
+def test_element_put_verify_delete_roundtrip(capture_server):
+    base = f"http://127.0.0.1:{capture_server.port}"
+
+    browser_doc = {
+        "kind": "browser",
+        "selector": {"css": "#result"},
+        "verifyCount": 1,
+        "name": None,
+        "metadata": {"tag": "div"},
+    }
+    status, payload = _request("POST", "/api/elements/homeBtn", browser_doc, base=base)
+    assert status == 200
+    assert payload == {"name": "homeBtn"}
+
+    status, payload = _request("POST", "/api/elements/homeBtn/verify", {}, base=base)
+    assert status == 200
+    assert payload["valid"] is True
+    assert payload["verifyCount"] is None
+
+    status, element = _request("GET", "/api/elements/homeBtn", base=base)
+    assert status == 200
+    assert element["selector"] == {"css": "#result"}
+
+    status, payload = _request("DELETE", "/api/elements/homeBtn", base=base)
+    assert status == 200
+    assert payload == {"name": "homeBtn", "deleted": True}
+
+    status, payload = _request("GET", "/api/elements/homeBtn", base=base)
+    assert status == 404
+
+
+def test_element_verify_flags_bad_selector_and_descriptor(capture_server):
+    base = f"http://127.0.0.1:{capture_server.port}"
+
+    bad_css = {
+        "kind": "browser",
+        "selector": {"css": ""},
+        "verifyCount": 0,
+        "metadata": {},
+    }
+    _request("POST", "/api/elements/bad", bad_css, base=base)
+    status, payload = _request("POST", "/api/elements/bad/verify", {}, base=base)
+    assert status == 200
+    assert payload["valid"] is False
+    assert any("css" in err["path"] for err in payload["errors"])
+
+    bad_desktop = {
+        "kind": "desktop",
+        "selector": {"locator": {"backend": "uia", "controlType": "Button", "bogus": 1}},
+        "verifyCount": 0,
+        "metadata": {},
+    }
+    _request("POST", "/api/elements/badDesktop", bad_desktop, base=base)
+    status, payload = _request("POST", "/api/elements/badDesktop/verify", {}, base=base)
+    assert status == 200
+    assert payload["valid"] is False
+
+
+def test_element_put_rejects_invalid_document(capture_server):
+    base = f"http://127.0.0.1:{capture_server.port}"
+    status, payload = _request("POST", "/api/elements/broken", {"kind": "nope"}, base=base)
+    assert status == 400
+    assert payload["error"] == "BAD_REQUEST"
+
     status, payload = _request(
         "POST",
         "/api/capture/browser/pick",

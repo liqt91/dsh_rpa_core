@@ -25,6 +25,18 @@ def _read_workflow(base: str, name: str) -> dict:
         return json.loads(response.read().decode("utf-8"))
 
 
+def _request_json(base: str, method: str, path: str, payload=None) -> dict:
+    data = json.dumps(payload).encode("utf-8") if payload is not None else None
+    request = urllib.request.Request(
+        f"{base}{path}",
+        data=data,
+        method=method,
+        headers={"Content-Type": "application/json"} if data else {},
+    )
+    with urllib.request.urlopen(request) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
 def _canvas_order(page) -> list[str]:
     return page.eval_on_selector_all(
         "#canvas li[data-node]", "els => els.map(e => e.dataset.node)"
@@ -353,3 +365,62 @@ def test_editor_multi_action_bar(server):
         page.wait_for_selector('#canvas li[data-node="launch2"]')
         assert _canvas_order(page) == ["launch", "launch2", "navigate"]
         browser.close()
+
+
+def test_editor_element_library_insert(server):
+    base = f"http://127.0.0.1:{server.port}"
+    _request_json(
+        base, "POST", "/api/elements/searchBox",
+        {
+            "kind": "browser",
+            "selector": {"css": "#kw"},
+            "verifyCount": 1,
+            "metadata": {"tag": "input"},
+        },
+    )
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
+        page.goto(f"{base}/")
+        page.wait_for_selector('[data-command="browser.click"]')
+
+        page.wait_for_selector("#elements-list li.element-item")
+        assert "searchBox" in page.locator("#elements-list").inner_text()
+
+        page.click('[data-command="browser.click"]')
+        page.wait_for_selector('#canvas li[data-node="click"]')
+
+        item = page.locator("#elements-list li.element-item", has_text="searchBox")
+        item.locator("button", has_text="插入").click()
+        page.wait_for_selector('#props-body input[data-field="selector"]')
+
+        page.fill("#file-name", "element-e2e")
+        page.click("#btn-save")
+        page.wait_for_selector("#compile-panel .ok")
+        browser.close()
+
+    doc = _read_workflow(base, "element-e2e")
+    assert doc["root"]["children"][0]["with"]["selector"] == "#kw"
+
+
+def test_editor_element_library_delete(server):
+    base = f"http://127.0.0.1:{server.port}"
+    _request_json(
+        base, "POST", "/api/elements/tmpEl",
+        {"kind": "browser", "selector": {"css": "#x"}, "verifyCount": 1, "metadata": {}},
+    )
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
+        page.on("dialog", lambda dialog: dialog.accept())
+        page.goto(f"{base}/")
+        page.wait_for_selector("#elements-list li.element-item")
+        item = page.locator("#elements-list li.element-item", has_text="tmpEl")
+        item.locator("button", has_text="✕").click()
+        page.wait_for_function(
+            "() => !document.querySelector('#elements-list li.element-item')"
+        )
+        browser.close()
+    listing = _request_json(base, "GET", "/api/elements")
+    assert listing == {"elements": []}

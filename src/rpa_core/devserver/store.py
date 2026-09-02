@@ -58,6 +58,12 @@ class WorkflowStore:
             raise
         return len(encoded)
 
+    def delete(self, name: str) -> None:
+        path = self._resolve(name)
+        if not path.is_file():
+            raise WorkflowNotFoundError(f"workflow not found: {name}")
+        path.unlink()
+
     def _resolve(self, name: str) -> Path:
         if not _NAME.fullmatch(name):
             raise WorkflowNameError(f"invalid workflow name: {name!r}")

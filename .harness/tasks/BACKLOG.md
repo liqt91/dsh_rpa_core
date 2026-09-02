@@ -4,15 +4,12 @@
 
 ## 当前任务
 
-- [ ] M13 编辑器元素库（`active`）
-  - 计划：`M13-element-library.md`
-  - 完成门槛：捕获 → 入库 → 插入节点 → 保存全流程在编辑器内闭环；门禁通过。
+- [ ] M14 自研捕获扩展（`active`）
+  - 计划：`M14-extension.md`
+  - 完成门槛：token 配对反连 dev server 零弹窗、标签页授权、登录态页面捕获回验命中。
 
 ## 后续任务
 
-- [ ] M14 自研捕获扩展（`planned`）
-  - 计划：`M14-extension.md`
-  - 动机：chrome-inspect-ws 每次连接弹窗，高频捕获疲劳；token 配对一次配置免弹窗。
 - [ ] M15 WorkBuddy 连接器入驻（`planned`）
   - 计划：`M15-workbuddy-connector.md`
   - 决策：CLI+Skill 主路径（2026-09-02 评估五种入驻形态）；MCP 化、专家包装后置。
@@ -26,6 +23,10 @@
   - 逐项放行与否以 ADR 0006 结论为准；操控型 HTTP 推迟不变。
 
 ## 已完成
+
+- [x] M13 编辑器元素库（`done`）
+  - 计划：`M13-element-library.md`
+  - 证据：元素库面板 + 插入到节点 + 删除 + 结构校验（verify）+ selector 捕获按钮；POST/DELETE/verify 端点；110 tests 全门禁。
 
 - [x] M12 编辑器美化与中文化（`done`）
   - 计划：`M12-editor-polish.md`
