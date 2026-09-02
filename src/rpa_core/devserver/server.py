@@ -193,10 +193,17 @@ class DevServer:
         capabilities: set[str] | None = None,
         browser_capture_factory=None,
         desktop_capture_factory=None,
+        elements_root: Path | None = None,
     ):
         if catalog is None:
             catalog = load_catalog(commands_root)
-        element_store = WorkflowStore(workflows_root / "elements")
+        # 元素是捕获工作数据，独立于 workflow 定义目录（缺省为 workflows/ 的兄弟目录 elements/）
+        elements_root = (
+            elements_root
+            if elements_root is not None
+            else workflows_root.resolve().parent / "elements"
+        )
+        element_store = WorkflowStore(elements_root)
         self.app = DevServerApp(
             catalog,
             WorkflowStore(workflows_root),

@@ -5,9 +5,11 @@
 ## 启动
 
 ```powershell
-uv run python -m rpa_core.cli devserver            # 默认 127.0.0.1:8765，workflow 目录 = 仓库根 workflows/
-uv run python -m rpa_core.cli devserver --port 9000 --workflows D:\tmp\workflows
+uv run python -m rpa_core.cli devserver            # 默认 127.0.0.1:8765
+uv run python -m rpa_core.cli devserver --port 9000 --workflows D:\tmp\workflows --elements D:\tmp\elements
 ```
+
+**目录约定**：`workflows/` = workflow 定义文件（可入版本库）；`elements/` = 捕获元素的工作数据目录（默认与 workflows/ 同级，gitignore，不入库）；`run_artifacts/` = 运行证据（gitignore）。三者职责分离。
 
 启动后浏览器打开 `http://127.0.0.1:8765/` 即编辑器单页（M9，ADR 0008：零构建 vanilla HTML/JS，无 npm/打包器/CDN；`GET /` 是唯一静态路由，不开放其他文件路径）。
 
@@ -93,7 +95,7 @@ Invoke-RestMethod -Method Post -Uri "$base/api/capture/browser/pick" `
 
 - `pick` 会**阻塞**直到你在页面里点击元素 / 按下热键 / 超时（默认 browser 60s、desktop 90s）
 - 浏览器 pick 注入高亮覆盖层，鼠标悬停即高亮，点击即采集（生成 CSS selector 并当场回验命中数）；`Esc` 取消本次
-- `saveAs` 可选——指定后描述符落库 `workflows/elements/{name}.json`，可用 `GET /api/elements/{name}` 读回
+- `saveAs` 可选——指定后描述符落库 `elements/{name}.json`（工作数据目录，默认不入库），可用 `GET /api/elements/{name}` 读回
 - `cancel` 结束会话：桌面会终止 agent 子进程，浏览器会清理注入并断开（不关闭你的浏览器）
 - 桌面捕获优先级：`windowHandle` > 前台窗口 > 屏幕级 hit-test（窗口作用域可免疫安全软件覆盖层，见 `docs/capture-transport.md`）
 

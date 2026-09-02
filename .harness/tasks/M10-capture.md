@@ -13,7 +13,7 @@
 - [x] 桌面捕获子进程协议：UIA hit-test hook、stdout JSON 通信（与 `python.worker` 同构隔离模式）、dev server 端点实装（start/pick/cancel）；**窗口作用域 hit-test**（在被测窗口 UIA 子树内找包含点且面积最小的后代）免疫安全软件覆盖层劫持；测试模式 `--point` + `--window-handle`
 - [x] 浏览器捕获实装：persistent 与 user-browser（chrome-inspect-ws，读 DevToolsActivePort 构造 WS URL）传输的 picker 注入、selector 生成与回验
 - [x] M10c 立项：自研捕获扩展设计记录——token 配对反连 dev server 为主传输（借鉴 Playwright MCP 的 `PLAYWRIGHT_MCP_EXTENSION_TOKEN` 机制与标签组隔离 UX）、Native Messaging Python host 为备选（借鉴 chrome-relay）；弹窗成本矩阵定稿于 `docs/capture-transport.md` §2.5。仅设计记录，不在本里程碑实装
-- [x] 元素描述符模型（`model/capture.py` ElementDescriptor）与落库约定（`workflows_root/elements/` + `GET /api/elements[/name]`，编辑器元素库契约）
+- [x] 元素描述符模型（`model/capture.py` ElementDescriptor）与落库约定（`elements/` 工作数据目录 + `GET /api/elements[/name]`，编辑器元素库契约）
 - [x] 合同/E2E 测试与完整门禁
 
 ## 验收标准
