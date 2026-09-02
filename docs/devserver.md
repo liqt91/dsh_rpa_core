@@ -23,8 +23,10 @@ uv run python -m rpa_core.cli devserver --port 9000 --workflows D:\tmp\workflows
 | `/api/compile` | POST | body `{"workflow": {...}, "capabilities": [...]?}`（缺省 = CLI 五项能力）→ `{valid, errors[], catalog_digest}` |
 | `/api/workflows` | GET | 根目录内 workflow 名列表 |
 | `/api/workflows/{name}` | GET / PUT | 读 / 写（原子落盘）；PUT 只要求合法 JSON 对象（草稿可保存），静态校验走 compile |
-| `/api/capture/desktop/{start,pick,cancel}` | POST | M10 实装，当前 501 `NOT_IMPLEMENTED` |
-| `/api/capture/browser/{start,pick,cancel}` | POST | M10 实装；start 需 `{"transport": "persistent" \| "user-browser"}`（非法 400，合法 501） |
+| `/api/capture/desktop/{start,pick,cancel}` | POST | 桌面 UIA 捕获（M10 实装，见下） |
+| `/api/capture/browser/{start,pick,cancel}` | POST | 浏览器捕获（M10 实装，见下）；start 需 `{"transport": "persistent" \| "user-browser"}` |
+| `/api/elements` | GET | 已捕获元素列表 |
+| `/api/elements/{name}` | GET | 读取单个元素描述符 |
 
 错误形态统一为 `{"error": <CODE>, "message": <str>}`：`BAD_REQUEST`(400)、`FORBIDDEN`(403)、`NOT_FOUND`(404)、`METHOD_NOT_ALLOWED`(405)、`PAYLOAD_TOO_LARGE`(413)、`NOT_IMPLEMENTED`(501)。
 
@@ -45,6 +47,55 @@ curl http://127.0.0.1:8765/api/workflows/demo      # 读回
 ```
 
 编译不过的草稿可以保存（PUT 不校验 Workflow 模型）；`POST /api/compile` 返回的 `errors[]` 逐条给出 `path` + `message`（pydantic 错误）或 `message`（编译器错误）。
+
+## 元素捕获（M10 实装）
+
+PowerShell 全流程（`$base = "http://127.0.0.1:8765"`）：
+
+**桌面控件捕获**（把鼠标移到目标控件上，按 F9）：
+
+```powershell
+$base = "http://127.0.0.1:8765"
+$s = Invoke-RestMethod -Method Post -Uri "$base/api/capture/desktop/start" `
+  -ContentType "application/json" -Body '{"hotkey":"F9","timeoutSeconds":60}'
+# → {"sessionId":"desktop-1","mode":"hotkey"}；把鼠标放到目标控件上按 F9
+Invoke-RestMethod -Method Post -Uri "$base/api/capture/desktop/pick" `
+  -ContentType "application/json" `
+  -Body (@{sessionId=$s.sessionId; saveAs="myControl"; timeoutSeconds=90} | ConvertTo-Json)
+# → 元素描述符（selector.locator 可回验命中）并落库 elements/myControl.json
+```
+
+**浏览器捕获 — persistent**（弹出专用浏览器，站点登录一次后 cookies 持久）：
+
+```powershell
+$s = Invoke-RestMethod -Method Post -Uri "$base/api/capture/browser/start" `
+  -ContentType "application/json" `
+  -Body (@{transport="persistent"; headless=$false; startUrl="https://www.baidu.com"} | ConvertTo-Json)
+# 在弹出的浏览器里点到目标元素：
+Invoke-RestMethod -Method Post -Uri "$base/api/capture/browser/pick" `
+  -ContentType "application/json" `
+  -Body (@{sessionId=$s.sessionId; timeoutSeconds=60; saveAs="searchBox"} | ConvertTo-Json)
+```
+
+**浏览器捕获 — user-browser**（复用日常 Chrome/Edge 登录态；先在 `chrome://inspect/#remote-debugging` 开启"允许远程调试"，S1/重启持久性均已验证）：
+
+```powershell
+$s = Invoke-RestMethod -Method Post -Uri "$base/api/capture/browser/start" `
+  -ContentType "application/json" `
+  -Body (@{transport="user-browser"; browserType="chrome"} | ConvertTo-Json)
+# 到你日常浏览器的目标标签页里点击元素（页面会出现高亮框）：
+Invoke-RestMethod -Method Post -Uri "$base/api/capture/browser/pick" `
+  -ContentType "application/json" `
+  -Body (@{sessionId=$s.sessionId; timeoutSeconds=60; saveAs="loginPageEl"} | ConvertTo-Json)
+```
+
+行为说明：
+
+- `pick` 会**阻塞**直到你在页面里点击元素 / 按下热键 / 超时（默认 browser 60s、desktop 90s）
+- 浏览器 pick 注入高亮覆盖层，鼠标悬停即高亮，点击即采集（生成 CSS selector 并当场回验命中数）；`Esc` 取消本次
+- `saveAs` 可选——指定后描述符落库 `workflows/elements/{name}.json`，可用 `GET /api/elements/{name}` 读回
+- `cancel` 结束会话：桌面会终止 agent 子进程，浏览器会清理注入并断开（不关闭你的浏览器）
+- 桌面捕获优先级：`windowHandle` > 前台窗口 > 屏幕级 hit-test（窗口作用域可免疫安全软件覆盖层，见 `docs/capture-transport.md`）
 
 ## 捕获契约（M10 前占位）
 
