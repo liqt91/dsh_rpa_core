@@ -13,7 +13,10 @@
 - [ ] M14 自研捕获扩展（`planned`）
   - 计划：`M14-extension.md`
   - 动机：chrome-inspect-ws 每次连接弹窗，高频捕获疲劳；token 配对一次配置免弹窗。
-- [ ] M15 混合捕获 auto 模式（`planned`）
+- [ ] M15 WorkBuddy 连接器入驻（`planned`）
+  - 计划：`M15-workbuddy-connector.md`
+  - 决策：CLI+Skill 主路径（2026-09-02 评估五种入驻形态）；MCP 化、专家包装后置。
+- [ ] M16 混合捕获 auto 模式（`planned`）
   - Chrome 窗口检测 → 扩展路由（M14 落地后）→ DPI 坐标换算；降级路径待 M14 后立。
 - [ ] M11 后续：变量补全、全屏编辑器、运行状态高亮（进阶项，按需另立）
 
