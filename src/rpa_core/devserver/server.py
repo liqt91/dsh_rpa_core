@@ -15,6 +15,7 @@ _DEFAULT_PORT = 8765
 _JSON_TYPE = "application/json; charset=utf-8"
 
 _WORKFLOW_SEGMENT_PREFIX = "/api/workflows/"
+_ELEMENT_SEGMENT_PREFIX = "/api/elements/"
 _CAPTURE_PREFIX = "/api/capture/"
 _STATIC_PREFIX = "/static/"
 
@@ -105,6 +106,17 @@ class _RequestHandler(BaseHTTPRequestHandler):
             if method == "PUT":
                 return self.app.put_workflow(name, self._read_json(required=True))
             raise ApiError(405, "METHOD_NOT_ALLOWED", "use GET or PUT for workflow resources")
+        if path == "/api/elements":
+            if method != "GET":
+                raise ApiError(405, "METHOD_NOT_ALLOWED", "use GET for /api/elements")
+            return self.app.list_elements()
+        if path.startswith(_ELEMENT_SEGMENT_PREFIX):
+            name = path[len(_ELEMENT_SEGMENT_PREFIX) :]
+            if "/" in name or not name:
+                raise ApiError(404, "NOT_FOUND", f"no route for {path}")
+            if method != "GET":
+                raise ApiError(405, "METHOD_NOT_ALLOWED", "use GET for element resources")
+            return self.app.get_element(name)
         if path.startswith(_CAPTURE_PREFIX):
             if method != "POST":
                 raise ApiError(405, "METHOD_NOT_ALLOWED", "use POST for capture endpoints")
@@ -114,7 +126,7 @@ class _RequestHandler(BaseHTTPRequestHandler):
             kind, action = segments
             body = self._read_json(required=False)
             if kind == "desktop":
-                return self.app.capture_desktop(action)
+                return self.app.capture_desktop(action, body)
             if kind == "browser":
                 return self.app.capture_browser(action, body)
             raise ApiError(404, "NOT_FOUND", f"no route for {path}")
@@ -179,10 +191,20 @@ class DevServer:
         port: int = _DEFAULT_PORT,
         catalog: CommandCatalog | None = None,
         capabilities: set[str] | None = None,
+        browser_capture_factory=None,
+        desktop_capture_factory=None,
     ):
         if catalog is None:
             catalog = load_catalog(commands_root)
-        self.app = DevServerApp(catalog, WorkflowStore(workflows_root), capabilities)
+        element_store = WorkflowStore(workflows_root / "elements")
+        self.app = DevServerApp(
+            catalog,
+            WorkflowStore(workflows_root),
+            capabilities,
+            element_store=element_store,
+            browser_capture_factory=browser_capture_factory,
+            desktop_capture_factory=desktop_capture_factory,
+        )
         editor_path = Path(__file__).resolve().parent / "static" / "index.html"
         self.editor_html = editor_path.read_bytes()
         self._httpd = ThreadingHTTPServer(("127.0.0.1", port), _RequestHandler)
@@ -205,6 +227,7 @@ class DevServer:
         self._thread.start()
 
     def stop(self) -> None:
+        self.app.close()
         self._httpd.shutdown()
         self._httpd.server_close()
         if self._thread is not None:

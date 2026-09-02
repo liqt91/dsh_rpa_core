@@ -4,7 +4,9 @@
 
 ## 当前任务
 
-- [ ] M10 元素捕获：桌面 UIA hit-test + 浏览器双通道，含 S1 验证（`active`，计划 `M10-capture.md`；S1 已完成，余实装）
+- [ ] M13 编辑器元素库（`active`）
+  - 计划：`M13-element-library.md`
+  - 完成门槛：捕获 → 入库 → 插入节点 → 保存全流程在编辑器内闭环；门禁通过。
 
 ## 后续任务
 
@@ -20,12 +22,14 @@
 - [x] M12 编辑器美化与中文化（`done`）
   - 计划：`M12-editor-polish.md`
   - 证据：i18n 映射层 + 防漂移门禁、命令面板两行卡片（滚动条根除）、节点卡片中文重构、属性面板中文 + 术语表、悬浮操作条；99 tests 全门禁。
-
+- [x] M10 元素捕获（`done`）
+  - 计划：`M10-capture.md`
+  - 证据：桌面 UIA 窗口作用域 hit-test（免疫覆盖层劫持）+ 浏览器 persistent/chrome-inspect-ws 双传输、ElementDescriptor 落库、真实 E2E（浏览器合成点击 + 桌面执行器回验 matchedCount == 1）、M10c 立项设计；105 tests 全门禁。
 - [x] M11 编辑器交互升级：结构化树形画布（`done`）
   - 计划：`M11-editor-tree.md`
   - 证据：维护者确认切片 1 拖拽体验；切片 2-5（控制节点表单、多选批量、复制粘贴 id 重映射、快照撤销）；93 tests 全门禁。
 
-## 已完成
+## 已完成（早期）
 
 - [x] M9 编辑器 v1：零构建单页（`done`）
   - 计划：`M9-editor.md`

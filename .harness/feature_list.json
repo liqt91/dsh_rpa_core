@@ -95,7 +95,7 @@
     {
       "id": "element-capture",
       "title": "Desktop UIA hit-test and browser element capture with S1-verified transport",
-      "passes": false
+      "passes": true
     },
     {
       "id": "editor-tree-interactions",
@@ -111,6 +111,11 @@
       "id": "editor-polish-i18n",
       "title": "Editor visual polish with Chinese display layer",
       "passes": true
+    },
+    {
+      "id": "element-library-ui",
+      "title": "Editor element library browsing and insertion of captured descriptors",
+      "passes": false
     }
   ]
 }

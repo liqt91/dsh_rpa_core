@@ -3,6 +3,7 @@ import asyncio
 import json
 from pathlib import Path
 
+from rpa_core.capture import BrowserCaptureSession, DesktopCaptureSession
 from rpa_core.catalog import load_catalog
 from rpa_core.compiler import WorkflowCompiler
 from rpa_core.devserver import DevServer
@@ -45,6 +46,8 @@ def _serve(args) -> int:
         commands_root=root / "commands",
         workflows_root=args.workflows,
         port=args.port,
+        browser_capture_factory=BrowserCaptureSession,
+        desktop_capture_factory=DesktopCaptureSession,
     )
     print(
         json.dumps(

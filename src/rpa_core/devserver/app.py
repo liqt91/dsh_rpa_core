@@ -1,9 +1,11 @@
+import threading
 from typing import Any
 
 from pydantic import ValidationError
 
 from rpa_core.catalog import CommandCatalog
 from rpa_core.compiler.compiler import WorkflowCompileError, WorkflowCompiler
+from rpa_core.model.capture import ElementDescriptor
 from rpa_core.model.workflow import Workflow
 
 from .store import (
@@ -41,10 +43,49 @@ class DevServerApp:
         catalog: CommandCatalog,
         store: WorkflowStore,
         capabilities: set[str] | None = None,
+        element_store: WorkflowStore | None = None,
+        browser_capture_factory=None,
+        desktop_capture_factory=None,
     ):
         self._catalog = catalog
         self._store = store
         self._capabilities = frozenset(capabilities) if capabilities else DEFAULT_CAPABILITIES
+        self._element_store = element_store
+        self._browser_capture_factory = browser_capture_factory
+        self._desktop_capture_factory = desktop_capture_factory
+        self._browser_sessions: dict[str, Any] = {}
+        self._desktop_sessions: dict[str, Any] = {}
+        self._capture_lock = threading.RLock()
+        self._capture_seq = 0
+
+    def close(self) -> None:
+        with self._capture_lock:
+            sessions = list(self._browser_sessions.values()) + list(
+                self._desktop_sessions.values()
+            )
+            self._browser_sessions.clear()
+            self._desktop_sessions.clear()
+        for session in sessions:
+            try:
+                session.close()
+            except Exception:
+                pass
+
+    def _next_capture_id(self, prefix: str) -> str:
+        with self._capture_lock:
+            self._capture_seq += 1
+            return f"{prefix}-{self._capture_seq}"
+
+    def _capture_session_id(self, registry: dict, body: dict) -> str:
+        session_id = str(body.get("sessionId") or "")
+        if not session_id or session_id not in registry:
+            raise ApiError(404, "NOT_FOUND", f"capture session not found: {session_id}")
+        return session_id
+
+    def _require_capture(self, factory, label: str):
+        if factory is None:
+            raise ApiError(501, "NOT_IMPLEMENTED", f"{label} backend is not configured")
+        return factory
 
     def catalog_overview(self) -> dict:
         commands = []
@@ -106,23 +147,121 @@ class DevServerApp:
             raise ApiError(400, "BAD_REQUEST", str(exc)) from exc
         return {"name": name, "bytes": size}
 
-    def capture_desktop(self, action: str) -> dict:
+    def capture_desktop(self, action: str, body: Any) -> dict:
         if action not in _CAPTURE_ACTIONS:
             raise ApiError(404, "NOT_FOUND", f"unknown capture action: {action}")
-        raise ApiError(501, "NOT_IMPLEMENTED", "desktop capture is delivered in M10 (ADR 0007)")
+        body = body if isinstance(body, dict) else {}
+        factory = self._require_capture(self._desktop_capture_factory, "desktop capture")
+        if action == "start":
+            kwargs: dict[str, Any] = {}
+            if body.get("hotkey"):
+                kwargs["hotkey"] = str(body["hotkey"])
+            if body.get("timeoutSeconds"):
+                kwargs["timeout_seconds"] = float(body["timeoutSeconds"])
+            if isinstance(body.get("point"), dict):
+                kwargs["point"] = body["point"]
+            if body.get("windowHandle"):
+                kwargs["window_handle"] = int(body["windowHandle"])
+            with self._capture_lock:
+                session_id = self._next_capture_id("desktop")
+                self._desktop_sessions[session_id] = factory(**kwargs)
+            return {
+                "sessionId": session_id,
+                "mode": "point" if kwargs.get("point") else "hotkey",
+            }
+        if action == "pick":
+            session_id = self._capture_session_id(self._desktop_sessions, body)
+            session = self._desktop_sessions[session_id]
+            timeout = float(body.get("timeoutSeconds", 90))
+            result = session.pick(timeout_seconds=timeout)
+            if result.get("kind") == "desktop" and body.get("saveAs"):
+                result.update(self._save_element(result, str(body["saveAs"])))
+            return result
+        session_id = self._capture_session_id(self._desktop_sessions, body)
+        self._desktop_sessions.pop(session_id, None).cancel()
+        return {"cancelled": True, "sessionId": session_id}
 
     def capture_browser(self, action: str, body: Any) -> dict:
         if action not in _CAPTURE_ACTIONS:
             raise ApiError(404, "NOT_FOUND", f"unknown capture action: {action}")
+        body = body if isinstance(body, dict) else {}
+        transport = body.get("transport") if action == "start" else "persistent"
+        if action == "start" and transport not in _BROWSER_TRANSPORTS:
+            raise ApiError(
+                400,
+                "BAD_REQUEST",
+                "'transport' must be one of: persistent, user-browser",
+            )
+        factory = self._require_capture(self._browser_capture_factory, "browser capture")
         if action == "start":
-            transport = body.get("transport") if isinstance(body, dict) else None
-            if transport not in _BROWSER_TRANSPORTS:
-                raise ApiError(
-                    400,
-                    "BAD_REQUEST",
-                    "'transport' must be one of: persistent, user-browser",
-                )
-        raise ApiError(501, "NOT_IMPLEMENTED", "browser capture is delivered in M10 (ADR 0007)")
+            kwargs: dict[str, Any] = {"transport": transport}
+            if transport == "persistent":
+                if body.get("userDataDir"):
+                    kwargs["user_data_dir"] = str(body["userDataDir"])
+                kwargs["headless"] = bool(body.get("headless", False))
+            else:
+                kwargs["browser_type"] = str(body.get("browserType", "edge"))
+                if body.get("userDataDir"):
+                    kwargs["user_data_dir"] = str(body["userDataDir"])
+                if body.get("pageUrl"):
+                    kwargs["page_url"] = str(body["pageUrl"])
+            if body.get("startUrl"):
+                kwargs["start_url"] = str(body["startUrl"])
+            with self._capture_lock:
+                session_id = self._next_capture_id("browser")
+                session = self._browser_sessions[session_id] = factory(**kwargs)
+            try:
+                pages = session.start()
+            except Exception as exc:
+                self._browser_sessions.pop(session_id, None)
+                session.close()
+                raise ApiError(502, "CAPTURE_START_FAILED", str(exc)) from exc
+            return {"sessionId": session_id, "pages": pages}
+        if action == "pick":
+            session_id = self._capture_session_id(self._browser_sessions, body)
+            session = self._browser_sessions[session_id]
+            timeout = float(body.get("timeoutSeconds", 60))
+            result = session.pick(
+                timeout_seconds=timeout,
+                click_css=body.get("clickCss"),
+            )
+            if result.get("kind") == "browser" and body.get("saveAs"):
+                result.update(self._save_element(result, str(body["saveAs"])))
+            return result
+        session_id = self._capture_session_id(self._browser_sessions, body)
+        session = self._browser_sessions.pop(session_id)
+        session.cancel()
+        session.close()
+        return {"cancelled": True, "sessionId": session_id}
+
+    def _save_element(self, descriptor: dict, save_as: str) -> dict:
+        if self._element_store is None:
+            raise ApiError(501, "NOT_IMPLEMENTED", "element store is not configured")
+        element = ElementDescriptor(
+            kind=descriptor["kind"],
+            selector=descriptor["selector"],
+            verify_count=descriptor.get("verifyCount", 0),
+            metadata=descriptor.get("metadata", {}),
+        )
+        self._element_store.write(save_as, element.document())
+        return {"savedAs": save_as}
+
+    def list_elements(self) -> dict:
+        if self._element_store is None:
+            raise ApiError(501, "NOT_IMPLEMENTED", "element store is not configured")
+        return {"elements": self._element_store.list()}
+
+    def get_element(self, name: str) -> dict:
+        if self._element_store is None:
+            raise ApiError(501, "NOT_IMPLEMENTED", "element store is not configured")
+        try:
+            return self._element_store.read(name)
+        except WorkflowNotFoundError as exc:
+            raise ApiError(404, "NOT_FOUND", str(exc)) from exc
+        except WorkflowNameError as exc:
+            raise ApiError(403, "FORBIDDEN", str(exc)) from exc
+        except WorkflowStoreError as exc:
+            raise ApiError(400, "BAD_REQUEST", str(exc)) from exc
 
     def _compile_result(self, valid: bool, errors: list[dict]) -> dict:
         return {"valid": valid, "errors": errors, "catalog_digest": self._catalog.digest}

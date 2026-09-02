@@ -4,9 +4,10 @@
 
 - 修复 2026-08-31 旧条目的编码乱码（上个会话编码问题，从 PROGRESS.md 语义还原）。
 - 完成 M11 切片 2-5（维护者已确认切片 1 拖拽体验）：控制节点属性表单（if 条件/循环/异常/返回）、多选 + 工具栏批量操作（连续性校验）、Ctrl+C/V 子树复制粘贴（全树 id 重映射）、快照式撤销/重做（50 步上限、输入按 focus 粒度入栈）。
-- 结构变更后选中集改用"节点对象身份重寻"（比下标修正稳）；E2E 新增 3 个测试，93 tests 全门禁通过。
 - 完成 M12 编辑器美化与中文化（`docs/editor-design.md` 方案落地）：i18n.js 中文映射层 + icons.js 零构建图标、防漂移合同测试（catalog 全量覆盖 + 枚举对齐 + required 字段标签）、命令面板两行卡片（滚动条根除）、节点卡片中文重构、属性面板中文化 + 页脚术语表、悬浮操作条；修复 devserver 413 未排空 body 的 Windows RST 缺口。
-- 下一里程碑切至 M10 元素捕获（S1 已完成，余实装）。
+- 完成 M10 元素捕获：桌面 UIA 窗口作用域 hit-test（免疫安全软件覆盖层劫持）+ 浏览器 persistent/chrome-inspect-ws 双传输 + picker 注入与 selector 回验 + ElementDescriptor 落库（/api/elements）；browser.launch 扩展 userDataDir；真实 E2E ×2（浏览器合成点击全链路 + 桌面 WinForms 执行器回验命中）。
+- 过程修复：devserver 会话注册表 RLock 死锁、agent stdout 编码（cp936→UTF-8 reconfigure）、UIA 首次枚举抖动重试。
+- 下一里程碑切至 M13 编辑器元素库（捕获闭环消费端）。
 
 ## 2026-09-01
 

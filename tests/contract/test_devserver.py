@@ -137,32 +137,26 @@ def test_workflow_put_rejects_non_object(server):
     assert payload["error"] == "BAD_REQUEST"
 
 
-def test_capture_endpoints_are_contract_placeholders(server):
+def test_capture_endpoints_without_backend_are_501(server):
     base = f"http://127.0.0.1:{server.port}"
 
     status, payload = _request("POST", "/api/capture/desktop/start", {}, base=base)
     assert status == 501
     assert payload["error"] == "NOT_IMPLEMENTED"
 
-    status, payload = _request("POST", "/api/capture/browser/start", {}, base=base)
-    assert status == 400
-    assert payload["error"] == "BAD_REQUEST"
-
-    status, payload = _request(
-        "POST", "/api/capture/browser/start", {"transport": "cookie-magic"}, base=base
-    )
-    assert status == 400
-
-    status, payload = _request(
-        "POST", "/api/capture/browser/start", {"transport": "persistent"}, base=base
-    )
+    start_body = {"transport": "persistent"}
+    status, payload = _request("POST", "/api/capture/browser/start", start_body, base=base)
     assert status == 501
     assert payload["error"] == "NOT_IMPLEMENTED"
 
-    status, payload = _request(
-        "POST", "/api/capture/browser/pick", {"transport": "persistent"}, base=base
-    )
-    assert status == 501
+    # 请求体校验（400）优先于后端配置检查（501）
+    bad = _request("POST", "/api/capture/browser/start", {"transport": "cookie-magic"}, base=base)
+    assert bad[0] == 400
+    assert bad[1]["error"] == "BAD_REQUEST"
+
+    status, payload = _request("GET", "/api/elements", base=base)
+    assert status == 200
+    assert payload == {"elements": []}
 
 
 def test_unknown_routes_and_methods(server):
