@@ -1,6 +1,6 @@
 # M10 元素捕获：桌面 UIA hit-test + 浏览器双通道
 
-状态：`planned`
+状态：`active`
 
 ## 目标
 

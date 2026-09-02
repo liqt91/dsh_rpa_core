@@ -100,7 +100,7 @@
     {
       "id": "editor-tree-interactions",
       "title": "Structured tree canvas with nested drag-drop, multi-select, copy-paste, and snapshot undo",
-      "passes": false
+      "passes": true
     },
     {
       "id": "data-commands",

@@ -32,6 +32,10 @@ h2 { font-size: 13px; color: var(--muted); margin: 0 0 8px; font-weight: 600; }
 #canvas ol.children.depth-5 { border-left-color: #0a7ea4; background: #f0f9fc; }
 #canvas li { border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; margin-bottom: 6px; cursor: pointer; background: #fff; }
 #canvas li.selected { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+#canvas li.multi-selected { border-color: var(--accent); background: #eef4ff; }
+button:disabled { opacity: .45; cursor: default; }
+.toolbar-sep { width: 1px; height: 20px; background: var(--border); margin: 0 2px; }
+#canvas .branch-label { font-size: 11px; font-weight: 600; color: var(--muted); margin: 6px 0 2px 2px; }
 #canvas li.dragging { opacity: 0.4; }
 #canvas li.drop-above > .row { box-shadow: 0 -3px 0 0 var(--accent); }
 #canvas li.drop-below > .row { box-shadow: 0 3px 0 0 var(--accent); }

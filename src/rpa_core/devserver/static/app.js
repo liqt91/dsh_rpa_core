@@ -1,11 +1,21 @@
 "use strict";
 
 const $ = (id) => document.getElementById(id);
-const state = { catalog: [], workflow: null, selected: null, dirty: false };
+const state = {
+  catalog: [],
+  workflow: null,
+  selected: null,
+  multi: [],
+  undo: [],
+  redo: [],
+  clipboard: null,
+  dirty: false,
+};
 let dragState = null; // {type:"new", command} | {type:"new", flow} | {type:"move", path}
 let pendingDrop = null; // {containerPath, key, index}
 const NAME_PATTERN = /^[A-Za-z][A-Za-z0-9_-]*$/;
 const REFERENCE_HINT = "支持引用：${inputs.x} / ${steps.节点.outputs.键} / ${loop.item} / ${error.code}";
+const UNDO_LIMIT = 50;
 
 // ---------------------------------------------------------------------------
 // 树模型层：路径 = [{key, index}...]，从 workflow.root 出发；
@@ -128,6 +138,157 @@ function findPathOf(target) {
 }
 
 // ---------------------------------------------------------------------------
+// 快照式撤销/重做：每次变更前压栈（workflow + 选中态），上限 50 步。
+// ---------------------------------------------------------------------------
+
+function takeSnapshot() {
+  return {
+    workflow: structuredClone(state.workflow),
+    selected: state.selected ? structuredClone(state.selected) : null,
+    multi: structuredClone(state.multi),
+  };
+}
+
+function pushUndo(preSnapshot) {
+  state.undo.push(preSnapshot || takeSnapshot());
+  if (state.undo.length > UNDO_LIMIT) state.undo.shift();
+  state.redo = [];
+}
+
+function applySnapshot(snap) {
+  state.workflow = snap.workflow;
+  state.selected = snap.selected;
+  state.multi = snap.multi;
+  markDirty();
+  render();
+}
+
+function undo() {
+  if (!state.undo.length) return;
+  state.redo.push(takeSnapshot());
+  applySnapshot(state.undo.pop());
+}
+
+function redo() {
+  if (!state.redo.length) return;
+  state.undo.push(takeSnapshot());
+  applySnapshot(state.redo.pop());
+}
+
+// ---------------------------------------------------------------------------
+// 选中集（state.multi）：多选以主选中 state.selected 为锚点。
+// ---------------------------------------------------------------------------
+
+function pathIn(pathList, path) {
+  return pathList.some((p) => pathEquals(p, path));
+}
+
+function selectSingle(path) {
+  state.selected = path;
+  state.multi = [path];
+}
+
+function toggleMulti(path) {
+  if (pathIn(state.multi, path)) {
+    state.multi = state.multi.filter((p) => !pathEquals(p, path));
+    if (state.selected && pathEquals(state.selected, path)) {
+      state.selected = state.multi.length ? state.multi[state.multi.length - 1] : null;
+    }
+  } else {
+    state.multi.push(path);
+    state.selected = path;
+  }
+  if (!state.multi.length) state.selected = null;
+}
+
+function rangeSelect(path) {
+  const anchor = state.selected;
+  if (!anchor) return selectSingle(path);
+  const aLast = anchor[anchor.length - 1];
+  const pLast = path[path.length - 1];
+  const sameList =
+    anchor.length === path.length &&
+    pathEquals(anchor.slice(0, -1), path.slice(0, -1)) &&
+    aLast.key === pLast.key;
+  if (!sameList) return selectSingle(path);
+  const [lo, hi] = [Math.min(aLast.index, pLast.index), Math.max(aLast.index, pLast.index)];
+  const containerPath = path.slice(0, -1);
+  state.multi = [];
+  for (let index = lo; index <= hi; index += 1) {
+    state.multi.push([...containerPath, { key: pLast.key, index }]);
+  }
+  state.selected = path;
+}
+
+// 渲染前清理失效路径（节点被删/移动后下标漂移）。
+function normalizeSelection() {
+  state.multi = state.multi.filter((p) => findNode(p));
+  if (state.selected && !findNode(state.selected)) state.selected = null;
+  if (state.selected && !pathIn(state.multi, state.selected)) state.multi.push(state.selected);
+  if (!state.selected && state.multi.length) state.selected = state.multi[state.multi.length - 1];
+}
+
+// 结构变更前后用节点对象身份重寻选中集（比按下标修正更稳）。
+function captureSelectionNodes() {
+  return {
+    primary: state.selected ? findNode(state.selected) : null,
+    others: state.multi.map((p) => findNode(p)).filter(Boolean),
+  };
+}
+
+function restoreSelectionPaths(sel) {
+  state.multi = sel.others.map((node) => findPathOf(node)).filter(Boolean);
+  const primaryPath = sel.primary ? findPathOf(sel.primary) : null;
+  state.selected = primaryPath || state.multi[state.multi.length - 1] || null;
+  if (state.selected && !pathIn(state.multi, state.selected)) state.multi.push(state.selected);
+}
+
+// ---------------------------------------------------------------------------
+// 子树复制：内部剪贴板格式 {version: 1, nodes: [...]}，粘贴时全树 id 重映射。
+// ---------------------------------------------------------------------------
+
+function remapSubtreeIds(node) {
+  const base = String(node.id).replace(/\d+$/, "");
+  node.id = uniqueId(base);
+  for (const key of CONTAINER_LISTS[node.type] || []) {
+    for (const child of listOf(node, key)) remapSubtreeIds(child);
+  }
+}
+
+function copySelection() {
+  if (!state.multi.length) return;
+  const nodes = state.multi.map((p) => structuredClone(findNode(p)));
+  state.clipboard = { version: 1, nodes };
+  showCompileMessage(`已复制 ${nodes.length} 个节点`, true);
+}
+
+function pasteClipboard() {
+  if (!state.clipboard || !state.clipboard.nodes.length) return;
+  const pre = takeSnapshot();
+  let containerPath = [];
+  let key = "children";
+  let index = state.workflow.root.children.length;
+  if (state.selected) {
+    const last = state.selected[state.selected.length - 1];
+    containerPath = state.selected.slice(0, -1);
+    key = last.key;
+    index = last.index + 1;
+  }
+  let lastPath = null;
+  for (const source of state.clipboard.nodes) {
+    const node = structuredClone(source);
+    remapSubtreeIds(node);
+    insertNode(containerPath, key, index, node);
+    lastPath = [...containerPath, { key, index }];
+    index += 1;
+  }
+  pushUndo(pre);
+  selectSingle(lastPath);
+  markDirty();
+  render();
+}
+
+// ---------------------------------------------------------------------------
 // 节点构造
 // ---------------------------------------------------------------------------
 
@@ -197,6 +358,9 @@ function newWorkflow() {
     root: { type: "sequence", id: "root", children: [] },
   };
   state.selected = null;
+  state.multi = [];
+  state.undo = [];
+  state.redo = [];
   $("file-name").value = "";
   clearDirty();
   render();
@@ -302,16 +466,18 @@ function rootEndDrop() {
 
 function appendAction(command) {
   const drop = rootEndDrop();
+  pushUndo();
   insertNode(drop.containerPath, drop.key, drop.index, newActionNode(command));
-  state.selected = [...drop.containerPath, { key: drop.key, index: drop.index }];
+  selectSingle([...drop.containerPath, { key: drop.key, index: drop.index }]);
   markDirty();
   render();
 }
 
 function appendFlow(type) {
   const drop = rootEndDrop();
+  pushUndo();
   insertNode(drop.containerPath, drop.key, drop.index, newFlowNode(type));
-  state.selected = [...drop.containerPath, { key: drop.key, index: drop.index }];
+  selectSingle([...drop.containerPath, { key: drop.key, index: drop.index }]);
   markDirty();
   render();
 }
@@ -322,9 +488,11 @@ function moveNode(path, delta) {
   const list = findList(containerPath, last.key);
   const target = last.index + delta;
   if (target < 0 || target >= list.length) return;
+  const sel = captureSelectionNodes();
+  pushUndo();
   const [node] = list.splice(last.index, 1);
   list.splice(target, 0, node);
-  state.selected = [...containerPath, { key: last.key, index: target }];
+  restoreSelectionPaths(sel);
   markDirty();
   render();
 }
@@ -332,21 +500,87 @@ function moveNode(path, delta) {
 function removeNode(path) {
   const node = findNode(path);
   if (CONTAINER_LISTS[node.type] && !confirm("删除容器将连同其全部子树一起删除，确认？")) return;
-  const last = path[path.length - 1];
-  const containerPath = path.slice(0, -1);
+  const sel = captureSelectionNodes();
+  pushUndo();
   removeSubtree(path);
-  if (state.selected) {
-    if (pathStartsWith(state.selected, path) || pathEquals(state.selected, path)) {
-      state.selected = null;
-    } else if (
-      state.selected.length === path.length &&
-      pathEquals(state.selected.slice(0, -1), containerPath) &&
-      state.selected[state.selected.length - 1].key === last.key &&
-      state.selected[state.selected.length - 1].index > last.index
-    ) {
-      state.selected[state.selected.length - 1].index -= 1;
+  sel.primary = sel.primary === node || !sel.primary || subtreeContains(node, sel.primary) ? null : sel.primary;
+  sel.others = sel.others.filter((n) => n !== node && !subtreeContains(node, n));
+  restoreSelectionPaths(sel);
+  markDirty();
+  render();
+}
+
+function subtreeContains(container, node) {
+  for (const key of CONTAINER_LISTS[container.type] || []) {
+    for (const child of listOf(container, key)) {
+      if (child === node || subtreeContains(child, node)) return true;
     }
   }
+  return false;
+}
+
+// ---------------------------------------------------------------------------
+// 批量操作（多选）：同列表 + 连续性校验，块移动/批量删除。
+// ---------------------------------------------------------------------------
+
+function batchGroup() {
+  const paths = state.multi.length > 1 ? state.multi : state.selected ? [state.selected] : [];
+  if (!paths.length) return null;
+  const last = paths[0][paths[0].length - 1];
+  const containerPath = paths[0].slice(0, -1);
+  for (const p of paths) {
+    const pLast = p[p.length - 1];
+    if (pLast.key !== last.key) return null;
+    if (!pathEquals(p.slice(0, -1), containerPath)) return null;
+  }
+  const indices = paths.map((p) => p[p.length - 1].index).sort((a, b) => a - b);
+  const contiguous = indices.every((v, i) => i === 0 || v === indices[i - 1] + 1);
+  return { containerPath, key: last.key, indices, contiguous };
+}
+
+function batchCanMove(delta) {
+  const group = batchGroup();
+  if (!group || !group.contiguous) return false;
+  const list = findList(group.containerPath, group.key);
+  if (!list) return false;
+  const start = group.indices[0];
+  const end = group.indices[group.indices.length - 1];
+  return delta < 0 ? start > 0 : end < list.length - 1;
+}
+
+function batchMove(delta) {
+  if (!batchCanMove(delta)) return;
+  const group = batchGroup();
+  const list = findList(group.containerPath, group.key);
+  const start = group.indices[0];
+  const count = group.indices.length;
+  pushUndo();
+  const block = list.splice(start, count);
+  list.splice(start + delta, 0, ...block);
+  const containerPath = group.containerPath;
+  const key = group.key;
+  state.multi = [];
+  for (let i = 0; i < count; i += 1) {
+    state.multi.push([...containerPath, { key, index: start + delta + i }]);
+  }
+  state.selected = state.multi[state.multi.length - 1];
+  markDirty();
+  render();
+}
+
+function batchDelete() {
+  const paths = state.multi.length ? state.multi : state.selected ? [state.selected] : [];
+  if (!paths.length) return;
+  const hasContainer = paths.some((p) => CONTAINER_LISTS[findNode(p).type]);
+  if (hasContainer && !confirm("删除选中项包含容器，其全部子树将连带删除，确认？")) return;
+  pushUndo();
+  const ordered = [...paths].sort((a, b) => b.length - a.length || b[b.length - 1].index - a[a.length - 1].index);
+  for (const path of ordered) {
+    if (!findNode(path)) continue;
+    removeSubtree(path);
+  }
+  state.selected = null;
+  state.multi = [];
   markDirty();
   render();
 }
@@ -435,14 +669,20 @@ function handleCanvasDrop(e) {
   if (!dragState || !pendingDrop) return;
   e.preventDefault();
   const { containerPath, key, index } = pendingDrop;
+  const pre = takeSnapshot();
   if (dragState.type === "new") {
     const node = dragState.flow ? newFlowNode(dragState.flow) : newActionNode(dragState.command);
     insertNode(containerPath, key, index, node);
-    state.selected = [...containerPath, { key, index }];
+    selectSingle([...containerPath, { key, index }]);
+    pushUndo(pre);
   } else {
-    const node = findNode(dragState.path);
+    const sel = captureSelectionNodes();
     const moved = moveSubtree(dragState.path, containerPath, key, index);
-    state.selected = moved || findPathOf(node);
+    if (moved) {
+      pushUndo(pre);
+      restoreSelectionPaths(sel);
+      selectSingle(moved);
+    }
   }
   markDirty();
   render();
@@ -503,6 +743,7 @@ function renderNode(node, path, index) {
   li.dataset.node = node.id;
   li.dataset.path = JSON.stringify(path);
   li.classList.add(`type-${node.type}`);
+  if (pathIn(state.multi, path)) li.classList.add("multi-selected");
   if (state.selected && pathEquals(state.selected, path)) li.classList.add("selected");
 
   const row = document.createElement("div");
@@ -551,7 +792,9 @@ function renderNode(node, path, index) {
   });
   li.addEventListener("click", (e) => {
     e.stopPropagation();
-    state.selected = path;
+    if (e.ctrlKey || e.metaKey) toggleMulti(path);
+    else if (e.shiftKey) rangeSelect(path);
+    else selectSingle(path);
     render();
   });
 
@@ -591,8 +834,19 @@ function renderChildren(listEl, containerPath, key) {
 }
 
 function render() {
+  normalizeSelection();
   renderCanvas();
   renderProps();
+  renderToolbar();
+}
+
+function renderToolbar() {
+  $("btn-undo").disabled = !state.undo.length;
+  $("btn-redo").disabled = !state.redo.length;
+  $("btn-up").disabled = !batchCanMove(-1);
+  $("btn-down").disabled = !batchCanMove(1);
+  const hasSelection = state.multi.length > 0 || !!state.selected;
+  $("btn-delete").disabled = !hasSelection;
 }
 
 function renderCanvas() {
@@ -615,6 +869,13 @@ function renderCanvas() {
 function renderProps() {
   const body = $("props-body");
   body.textContent = "";
+  if (state.multi.length > 1) {
+    const hint = document.createElement("p");
+    hint.className = "hint";
+    hint.textContent = `已选中 ${state.multi.length} 个节点（Ctrl 多选 / Shift 范围）。批量操作请用顶部工具栏。`;
+    body.appendChild(hint);
+    return;
+  }
   const node = state.selected ? findNode(state.selected) : null;
   if (!node) {
     const hint = document.createElement("p");
@@ -629,10 +890,7 @@ function renderProps() {
     renderCanvas();
   }));
   if (node.type !== "action") {
-    const info = document.createElement("p");
-    info.className = "hint";
-    info.textContent = `${FLOW_LABELS[node.type] || node.type} 的属性表单将在下一切片提供`;
-    body.appendChild(info);
+    renderControlProps(node, body);
     return;
   }
   const commandWrap = document.createElement("div");
@@ -669,6 +927,77 @@ function renderProps() {
     for (const key of keys) {
       body.appendChild(schemaField(node, key, properties[key], required.has(key)));
     }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 控制节点属性表单（切片 2）：if 条件 / forEach 循环 / try 捕获 / return 值
+// ---------------------------------------------------------------------------
+
+const CONDITION_OPS = ["eq", "ne", "gt", "gte", "lt", "lte", "contains", "truthy"];
+
+function controlHint(text) {
+  const p = document.createElement("p");
+  p.className = "hint";
+  p.textContent = text;
+  return p;
+}
+
+function renderControlProps(node, body) {
+  if (node.type === "sequence") {
+    body.appendChild(controlHint("顺序容器：子节点按顺序执行。"));
+    return;
+  }
+  if (node.type === "if") {
+    if (!node.condition) node.condition = { op: "truthy", left: "" };
+    const condition = node.condition;
+    body.appendChild(selectField(
+      "条件操作符",
+      { enum: CONDITION_OPS },
+      true,
+      condition.op,
+      (v) => { condition.op = v || "truthy"; },
+    ));
+    body.appendChild(literalField("左值（left）", condition.left, (v) => {
+      condition.left = v;
+      markDirty();
+      renderCanvas();
+    }, true));
+    body.appendChild(literalField("右值（right，truthy 时留空）", condition.right, (v) => {
+      if (v === null || v === "") delete condition.right; else condition.right = v;
+      markDirty();
+      renderCanvas();
+    }));
+    return;
+  }
+  if (node.type === "forEach") {
+    body.appendChild(jsonField("items（数组或引用）", node.items, (v) => {
+      node.items = v === null ? [] : v;
+      markDirty();
+      renderCanvas();
+    }, true));
+    body.appendChild(textField("循环变量名（item_var）", node.item_var || "item", (v) => {
+      if (NAME_PATTERN.test(v)) node.item_var = v;
+      markDirty();
+      renderCanvas();
+    }, true));
+    return;
+  }
+  if (node.type === "try") {
+    body.appendChild(textField("错误变量名（error_var）", node.error_var || "error", (v) => {
+      if (NAME_PATTERN.test(v)) node.error_var = v;
+      markDirty();
+      renderCanvas();
+    }, true));
+    return;
+  }
+  if (node.type === "return") {
+    body.appendChild(jsonField("返回值（value）", node.value, (v) => {
+      node.value = v;
+      markDirty();
+      renderCanvas();
+    }));
+    body.appendChild(controlHint("return 节点会终止整个工作流并返回该值。"));
   }
 }
 
@@ -721,11 +1050,32 @@ function textField(labelText, value, onChange, required) {
   input.type = "text";
   input.value = value;
   input.placeholder = "${...}";
+  input.addEventListener("focus", () => pushUndo());
   input.addEventListener("input", () => {
     input.style.borderColor = "";
     onChange(input.value.trim());
   });
   return wrapField(labelText, required, input, REFERENCE_HINT);
+}
+
+// 条件左值/右值：${...} 引用保持字符串，其余按 JSON 字面量解析（数组/对象/数字/布尔）。
+function literalField(labelText, value, onChange, required) {
+  const input = document.createElement("input");
+  input.type = "text";
+  input.value = typeof value === "string" || value === undefined ? value ?? "" : JSON.stringify(value);
+  input.placeholder = "${steps.x.outputs.y} 或字面量";
+  input.addEventListener("focus", () => pushUndo());
+  input.addEventListener("change", () => {
+    input.style.borderColor = "";
+    const raw = input.value.trim();
+    if (raw === "") { onChange(""); return; }
+    if (raw.startsWith("${")) { onChange(raw); return; }
+    if (/^[[{0-9tfn"-]/.test(raw)) {
+      try { onChange(JSON.parse(raw)); return; } catch { onChange(raw); return; }
+    }
+    onChange(raw);
+  });
+  return wrapField(labelText, required, input, "引用 ${...} 或 JSON 字面量");
 }
 
 function numberField(labelText, value, onChange, required) {
@@ -734,6 +1084,7 @@ function numberField(labelText, value, onChange, required) {
   input.step = "any";
   input.value = value === undefined || value === null ? "" : String(value);
   input.addEventListener("change", () => {
+    pushUndo();
     input.style.borderColor = "";
     if (input.value === "") { onChange(null); return; }
     const parsed = Number(input.value);
@@ -747,7 +1098,7 @@ function checkboxField(labelText, required, value, onChange) {
   const input = document.createElement("input");
   input.type = "checkbox";
   input.checked = value;
-  input.addEventListener("change", () => onChange(input.checked));
+  input.addEventListener("change", () => { pushUndo(); onChange(input.checked); });
   return wrapField(labelText, required, input);
 }
 
@@ -764,7 +1115,10 @@ function selectField(labelText, propSchema, required, value, onChange) {
     input.appendChild(element);
   }
   input.value = value === undefined ? "" : String(value);
-  input.addEventListener("change", () => onChange(input.value === "" ? null : input.value));
+  input.addEventListener("change", () => {
+    pushUndo();
+    onChange(input.value === "" ? null : input.value);
+  });
   return wrapField(labelText, required, input);
 }
 
@@ -773,6 +1127,7 @@ function jsonField(labelText, value, onChange, required) {
   input.value = value === undefined || value === null ? "" : JSON.stringify(value, null, 2);
   input.placeholder = "{}";
   input.addEventListener("change", () => {
+    pushUndo();
     input.style.borderColor = "";
     if (input.value.trim() === "") { onChange(null); return; }
     try {
@@ -830,6 +1185,9 @@ async function openWorkflow(name) {
     }
     state.workflow = doc;
     state.selected = null;
+    state.multi = [];
+    state.undo = [];
+    state.redo = [];
     $("file-name").value = name;
     clearDirty();
     render();
@@ -886,9 +1244,35 @@ async function init() {
   $("open-select").addEventListener("change", (e) => { if (e.target.value) openWorkflow(e.target.value); });
   $("btn-save").addEventListener("click", saveWorkflow);
   $("btn-compile").addEventListener("click", compileWorkflow);
+  $("btn-undo").addEventListener("click", undo);
+  $("btn-redo").addEventListener("click", redo);
+  $("btn-up").addEventListener("click", () => batchMove(-1));
+  $("btn-down").addEventListener("click", () => batchMove(1));
+  $("btn-delete").addEventListener("click", batchDelete);
+  window.addEventListener("keydown", handleEditorKeydown);
   window.addEventListener("beforeunload", (e) => {
     if (state.dirty) { e.preventDefault(); e.returnValue = ""; }
   });
+}
+
+// 输入框聚焦时快捷键不劫持（复制粘贴/撤销留给文本编辑）。
+function isEditableTarget(target) {
+  return !!(
+    target &&
+    (target.tagName === "INPUT" || target.tagName === "TEXTAREA" ||
+      target.tagName === "SELECT" || target.isContentEditable)
+  );
+}
+
+function handleEditorKeydown(e) {
+  if (isEditableTarget(e.target)) return;
+  const key = e.key.toLowerCase();
+  const ctrl = e.ctrlKey || e.metaKey;
+  if (ctrl && key === "c") { copySelection(); e.preventDefault(); return; }
+  if (ctrl && key === "v") { pasteClipboard(); e.preventDefault(); return; }
+  if (ctrl && key === "z" && !e.shiftKey) { undo(); e.preventDefault(); return; }
+  if (ctrl && (key === "y" || (key === "z" && e.shiftKey))) { redo(); e.preventDefault(); return; }
+  if (key === "delete" || key === "backspace") { batchDelete(); e.preventDefault(); }
 }
 
 init();

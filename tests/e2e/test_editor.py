@@ -139,3 +139,134 @@ def test_editor_nested_containers(server):
     assert if_node["then"][0]["command"] == "browser.launch"
     assert if_node["then"][1]["type"] == "forEach"
     assert if_node["else"][0]["command"] == "browser.navigate"
+
+
+def test_editor_control_node_forms(server):
+    base = f"http://127.0.0.1:{server.port}"
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
+        page.goto(f"{base}/")
+        page.wait_for_selector('[data-flow="if"]')
+
+        page.click('[data-flow="if"]')
+        page.wait_for_selector('#canvas li[data-node="if"]')
+        page.select_option('#props-body select[data-field="条件操作符"]', "eq")
+        page.fill('#props-body input[data-field="左值（left）"]', "${inputs.q}")
+        page.press('#props-body input[data-field="左值（left）"]', "Tab")
+        page.fill('#props-body input[data-field="右值（right，truthy 时留空）"]', "x")
+        page.press('#props-body input[data-field="右值（right，truthy 时留空）"]', "Tab")
+
+        page.click('[data-flow="forEach"]')
+        page.wait_for_selector('#canvas li[data-node="forEach"]')
+        page.fill('#props-body input[data-field="循环变量名（item_var）"]', "row")
+        page.fill('#props-body textarea[data-field="items（数组或引用）"]', '["a", "b"]')
+        page.press('#props-body textarea[data-field="items（数组或引用）"]', "Tab")
+
+        page.click('[data-flow="return"]')
+        page.wait_for_selector('#canvas li[data-node="return"]')
+        page.fill('#props-body textarea[data-field="返回值（value）"]', '"ok"')
+        page.press('#props-body textarea[data-field="返回值（value）"]', "Tab")
+
+        page.fill("#file-name", "control-forms")
+        page.click("#btn-save")
+        page.wait_for_selector("#compile-panel .ok")
+        browser.close()
+
+    doc = _read_workflow(base, "control-forms")
+    if_node = doc["root"]["children"][0]
+    assert if_node["condition"] == {"op": "eq", "left": "${inputs.q}", "right": "x"}
+    loop_node = doc["root"]["children"][1]
+    assert loop_node["item_var"] == "row"
+    assert loop_node["items"] == ["a", "b"]
+    assert doc["root"]["children"][2]["value"] == "ok"
+
+
+def test_editor_copy_paste_undo_redo(server):
+    base = f"http://127.0.0.1:{server.port}"
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
+        page.goto(f"{base}/")
+        page.wait_for_selector('[data-command="data.limit"]')
+
+        page.click('[data-command="data.limit"]')
+        page.click('[data-command="data.writeText"]')
+        page.wait_for_selector('#canvas li[data-node="writeText"]')
+        assert _canvas_order(page) == ["limit", "writeText"]
+
+        page.click('#canvas li[data-node="limit"]')
+        page.keyboard.press("Control+C")
+        page.keyboard.press("Control+V")
+        page.wait_for_selector('#canvas li[data-node="limit2"]')
+        order = _canvas_order(page)
+        assert order == ["limit", "limit2", "writeText"]
+        assert len(set(order)) == 3
+
+        # 输入框聚焦时快捷键不劫持
+        page.click("#palette-filter")
+        page.keyboard.press("Control+V")
+        assert len(_canvas_order(page)) == 3
+
+        page.click('#canvas li[data-node="limit"]')
+        page.keyboard.press("Control+Z")
+        page.wait_for_function(
+            "() => document.querySelectorAll('#canvas li[data-node]').length === 2"
+        )
+        assert _canvas_order(page) == ["limit", "writeText"]
+        page.keyboard.press("Control+Y")
+        page.wait_for_function(
+            "() => document.querySelectorAll('#canvas li[data-node]').length === 3"
+        )
+        assert _canvas_order(page) == ["limit", "limit2", "writeText"]
+        browser.close()
+
+
+def test_editor_multi_select_batch(server):
+    base = f"http://127.0.0.1:{server.port}"
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
+        page.on("dialog", lambda dialog: dialog.accept())
+        page.goto(f"{base}/")
+        page.wait_for_selector('[data-command="browser.launch"]')
+
+        page.click('[data-command="browser.launch"]')
+        page.click('[data-command="browser.navigate"]')
+        page.click('[data-command="browser.close"]')
+        page.wait_for_selector('#canvas li[data-node="close"]')
+
+        page.click('#canvas li[data-node="launch"]')
+        page.click('#canvas li[data-node="navigate"]', modifiers=["Shift"])
+        assert page.locator("#canvas li.multi-selected").count() == 2
+
+        page.click("#btn-down")
+        page.wait_for_function(
+            "() => Array.from(document.querySelectorAll('#canvas li[data-node]'))"
+            ".map(e => e.dataset.node).join(',') === 'close,launch,navigate'"
+        )
+        assert _canvas_order(page) == ["close", "launch", "navigate"]
+
+        # 非连续多选：批量移动不可用
+        page.click('#canvas li[data-node="close"]')
+        page.click('#canvas li[data-node="navigate"]', modifiers=["Control"])
+        assert page.locator("#canvas li.multi-selected").count() == 2
+        assert page.locator("#btn-up").is_disabled()
+        assert page.locator("#btn-down").is_disabled()
+
+        page.click("#btn-delete")
+        page.wait_for_function(
+            "() => document.querySelectorAll('#canvas li[data-node]').length === 1"
+        )
+        assert _canvas_order(page) == ["launch"]
+
+        # 容器删除连带子树：确认对话框接受后整树移除
+        page.click('[data-flow="if"]')
+        page.wait_for_selector('#canvas li[data-node="if"]')
+        page.click('#canvas li[data-node="if"]')
+        page.click("#btn-delete")
+        page.wait_for_function(
+            "() => document.querySelectorAll('#canvas li[data-node]').length === 1"
+        )
+        assert _canvas_order(page) == ["launch"]
+        browser.close()
