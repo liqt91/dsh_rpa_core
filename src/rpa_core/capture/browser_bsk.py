@@ -12,6 +12,9 @@
 - 捕获手势：**Ctrl+Click**（普通点击穿透不捕获，用户可正常导航找到目标）；
   Esc 取消；bsk 合成点击用 `bsk click --modifiers ctrl`（CDP modifiers 位）
 - 会话取消/结束强制 `bsk session stop`（规则 11：释放 attempt 拥有的资源）
+- **借用模式**（`page_url`）：捕获用户**已打开**的标签页——`tab list --scope user`
+  子串匹配 → `tab borrow` 移入 Agent Window → picker 注入该页（--tab-id）→
+  结束时 `tab return` 归还原窗口原位置；不匹配则报错并列出可用页面
 """
 
 import json
@@ -138,9 +141,11 @@ class BrowserBskCaptureSession:
         self._config = {
             "browser_instance_id": browser_instance_id,
             "start_url": start_url,
+            "page_url": page_url,
         }
         self._client = BskClient(bsk_binary=bsk_binary, runner=runner)
         self._session_id: str | None = None
+        self._borrowed_tab_id: str | None = None
         self._cancelled = False
         self._closed = False
 
@@ -148,7 +153,9 @@ class BrowserBskCaptureSession:
 
     def _evaluate(self, session_id: str, expression: str) -> Any:
         try:
-            return self._client.evaluate(session_id, expression)
+            return self._client.evaluate(
+                session_id, expression, tab_id=self._borrowed_tab_id
+            )
         except BskSessionGoneError as exc:
             raise RuntimeError(f"bsk session not active: {session_id}") from exc
 
@@ -157,10 +164,30 @@ class BrowserBskCaptureSession:
             self._config["browser_instance_id"]
         )
         session_id = self._session_id
-        if self._config["start_url"]:
+        page_url = self._config.get("page_url")
+        if page_url:
+            # 借用用户已打开的标签页（url 子串匹配），而非新开 Agent Window 页面
+            self._borrowed_tab_id = self._borrow_user_tab(session_id, page_url)
+        elif self._config["start_url"]:
             self._client.navigate(session_id, self._config["start_url"])
             self._client.run("wait-for-navigation", "--session", session_id)
         return [session_id]
+
+    def _borrow_user_tab(self, session_id: str, page_url: str) -> str:
+        tabs = self._client.tab_list(session_id, scope="user")
+        candidates = [
+            tab for tab in tabs
+            if page_url in str(tab.get("url", ""))
+        ]
+        if not candidates:
+            available = [str(tab.get("url", ""))[:60] for tab in tabs]
+            raise RuntimeError(
+                f"no user tab matches {page_url!r}; open the page first. "
+                f"available: {available}"
+            )
+        tab_id = str(candidates[0].get("tab_id") or candidates[0].get("id"))
+        result = self._client.tab_borrow(session_id, tab_id)
+        return str(result.get("tab_id") or tab_id)
 
     @property
     def session_id(self) -> str | None:
@@ -213,6 +240,13 @@ class BrowserBskCaptureSession:
         sid = self._session_id
         self._session_id = None
         if sid:
+            # 先归还借用的用户标签页（回到原窗口原位置），再停会话
+            if self._borrowed_tab_id:
+                try:
+                    self._client.tab_return(sid, self._borrowed_tab_id)
+                except Exception:
+                    pass
+                self._borrowed_tab_id = None
             try:
                 self._client.session_stop(sid)
             except Exception:

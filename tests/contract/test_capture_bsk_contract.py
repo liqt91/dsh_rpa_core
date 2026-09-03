@@ -166,3 +166,85 @@ def test_bsk_capture_start_failure_raises():
     session = BrowserBskCaptureSession(transport="bsk", runner=runner)
     with pytest.raises(RuntimeError, match="no browsers online"):
         session.start()
+
+
+# -- 借用模式：捕获用户已打开的标签页（page_url 子串匹配） -------------------
+
+_USER_TABS = [
+    {"tab_id": 101, "title": "小红书 - 探索", "url": "https://www.xiaohongshu.com/explore"},
+    {"tab_id": 102, "title": "DeepSeek", "url": "https://www.deepseek.com/"},
+]
+
+
+def _borrow_runner(tab_url_keyword: str):
+    descriptor_json = json.dumps(_DESCRIPTOR)
+    calls: list[list[str]] = []
+
+    def runner(*args: str) -> dict:
+        args = list(args)
+        calls.append(list(args))
+        if args[:2] == ["session", "start"]:
+            return dict(_BSK_SESSION_START)
+        if args[:3] == ["tab", "list", "--session"]:
+            return list(_USER_TABS)
+        if args[:3] == ["tab", "borrow", "--session"]:
+            return {"tab_id": 101, "original_window_id": 50, "agent_window_id": 60}
+        if args[:3] == ["tab", "return", "--session"]:
+            return {"tab_id": 101, "returned_to_window_id": 50}
+        if args[0] == "evaluate":
+            expr = args[-1]
+            assert "--tab-id" in args, "borrowed mode must target the borrowed tab"
+            assert "101" in args
+            if "__rpaCaptureResult" in expr:
+                return {"ok": True, "value": descriptor_json}
+            return {"ok": True, "value": "installed"}
+        if args[:2] == ["session", "stop"]:
+            return {"stopped": ["abcd"]}
+        return {"ok": True}
+
+    runner.calls = calls
+    return runner
+
+
+def test_bsk_capture_borrows_user_tab_by_page_url():
+    runner = _borrow_runner("xiaohongshu")
+    session = BrowserBskCaptureSession(
+        transport="bsk",
+        page_url="xiaohongshu.com/explore",
+        runner=runner,
+    )
+    pages = session.start()
+    assert pages == ["abcd"]
+    assert session._borrowed_tab_id == "101"
+    result = session.pick(timeout_seconds=10)
+    assert result["selector"]["css"] == "#search-form > button"
+    session.close()
+    verbs = [c[1] for c in runner.calls if c[0] == "tab"]
+    assert verbs == ["list", "borrow", "return"]
+    assert ["session", "stop", "abcd"] in runner.calls
+
+
+def test_bsk_capture_borrow_no_match_reports_available():
+    runner = _borrow_runner("not-found")
+    session = BrowserBskCaptureSession(
+        transport="bsk", page_url="nonexistent.example", runner=runner,
+    )
+    with pytest.raises(RuntimeError, match="no user tab matches"):
+        session.start()
+
+
+def test_bsk_capture_start_url_still_uses_agent_window():
+    """不带 page_url 时维持 Agent Window 导航路径（不借用）。"""
+    runner = _make_runner(script=[
+        (["session", "start"], dict(_BSK_SESSION_START)),
+        (["navigate", "--session", "abcd"], {"reached": "load"}),
+        (["wait-for-navigation", "--session", "abcd"], {"reached": "load"}),
+        (["session", "stop", "abcd"], {"stopped": ["abcd"]}),
+    ])
+    session = BrowserBskCaptureSession(
+        transport="bsk", start_url="https://example.com", runner=runner,
+    )
+    session.start()
+    assert session._borrowed_tab_id is None
+    session.close()
+    assert not [c for c in runner.calls if c[0] == "tab"]

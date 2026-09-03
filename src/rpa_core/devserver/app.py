@@ -217,6 +217,8 @@ class DevServerApp:
             elif transport == "bsk":
                 if body.get("browserInstanceId"):
                     kwargs["browser_instance_id"] = str(body["browserInstanceId"])
+                if body.get("pageUrl"):
+                    kwargs["page_url"] = str(body["pageUrl"])
             else:
                 kwargs["browser_type"] = str(body.get("browserType", "edge"))
                 if body.get("userDataDir"):

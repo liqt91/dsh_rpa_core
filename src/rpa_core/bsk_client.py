@@ -59,6 +59,8 @@ class BskClient:
     def _raise_for_error(
         self, payload: dict, *, exit_code: int, stderr: str = "", raw: str = ""
     ) -> None:
+        if not isinstance(payload, dict):
+            return  # 数组载荷（如 tab list）无错误通道
         if exit_code == 0 and not payload.get("code"):
             return
         code = str(payload.get("code") or f"exit_{exit_code}")
@@ -82,10 +84,12 @@ class BskClient:
     def session_stop(self, session_id: str) -> None:
         self.run("session", "stop", session_id)
 
-    def evaluate(self, session_id: str, expression: str, *, timeout: str = "30s"):
-        payload = self.run(
-            "evaluate", "--session", session_id, "--timeout", timeout, expression
-        )
+    def evaluate(self, session_id: str, expression: str, *, timeout: str = "30s",
+                 tab_id: str | None = None):
+        args = ["evaluate", "--session", session_id, "--timeout", timeout]
+        if tab_id:
+            args += ["--tab-id", str(tab_id)]
+        payload = self.run(*args, expression)
         return payload.get("value")
 
     def navigate(self, session_id: str, url: str) -> str:
@@ -106,3 +110,17 @@ class BskClient:
     def browsers(self) -> list[dict]:
         payload = self.run("browsers")
         return payload if isinstance(payload, list) else []
+
+    def tab_list(self, session_id: str, *, scope: str = "user") -> list[dict]:
+        payload = self.run("tab", "list", "--session", session_id, "--scope", scope)
+        if isinstance(payload, list):
+            return payload
+        return payload.get("tabs", []) if isinstance(payload, dict) else []
+
+    def tab_borrow(self, session_id: str, tab_id: str) -> dict:
+        """借用用户标签页进 Agent Window（返回含 tab_id/original_window_id）。"""
+        return self.run("tab", "borrow", "--session", session_id, str(tab_id))
+
+    def tab_return(self, session_id: str, tab_id: str) -> None:
+        """归还借用标签页到原窗口原位置。"""
+        self.run("tab", "return", "--session", session_id, str(tab_id))
