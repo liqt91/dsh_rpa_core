@@ -78,14 +78,17 @@
 | 优先级 | 传输 | 场景 | 状态 |
 |---|---|---|---|
 | 主（M10a） | 持久 profile | 公共页 + 可接受登录一次的站点 | 已定 |
-| **优先（M14）** | **自研捕获扩展（token 配对反连）** | 登录态页面、高频捕获、零弹窗 | **提前实装**（见下） |
+| **优先（M14）** | **BrowserSkill(bsk)单扩展路线**:evaluate 注入 picker + selector 直通执行 | 登录态页面、高频捕获、零弹窗、登录态执行 | **S2 部分实测通过（2026-09-02)**，详见 docs/capture-browserskill.md;真实点选/小红书/iframe 验证待补 |
+| 兜底 | 自研捕获扩展（token 配对反连） | bsk evaluate 通道不够用时启用 | 设计已备，暂缓实装 |
 | 次（M10b） | chrome-inspect-ws（DevToolsActivePort WS URL） | 登录态页面、零重登录 | S1 已验证通过；**每连接弹窗确认，高频场景降级为备选** |
 | 记录备查 | Panerelay | —— | 降级（Node 依赖） |
 | 记录备查 | Playwright MCP 扩展传输 | —— | 不作为传输（机制已借鉴进 M14） |
 
+**2026-09-02 二次修订（S2 后）**:M14 由"自研捕获扩展"调整为接入 Tencent/BrowserSkill（单扩展、商店分发、免弹窗、顺带获得登录态执行能力）；依据与实测记录见 docs/capture-browserskill.md。自研扩展方案保留为兜底。
+
 **2026-09-02 修订**：chrome-inspect-ws 虽开关跨重启持久，但**每次 WebSocket 连接都弹窗确认**，高频捕获下疲劳成本不可接受；M10c（自研扩展 token 配对）提前为 M14 实装，`extension-ws` 成为登录态捕获的优先传输，chrome-inspect-ws 降为"扩展未安装时的无安装成本备选"。
 
-dev server 端点契约（M8 定义）：`POST /api/capture/browser/start {transport: "persistent" | "user-browser", ...}`；`user-browser` 子类型现有 **`chrome-inspect-ws`**（弹窗式）与 M14 实装的 **`extension-ws`**（免弹窗）。
+dev server 端点契约（M8 定义）：`POST /api/capture/browser/start {transport: "persistent" | "user-browser", ...}`；`user-browser` 子类型现有 **`chrome-inspect-ws`**（弹窗式），M14 计划新增 **`bsk`**（BrowserSkill 免弹窗，S2 已部分验证）；自研扩展 `extension-ws` 降为兜底方案。
 
 ## 4. S1 验证协议（已执行，2026-09-01）
 
