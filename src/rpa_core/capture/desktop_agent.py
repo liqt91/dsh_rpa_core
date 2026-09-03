@@ -129,6 +129,52 @@ def _root_window_handle(hwnd: int) -> int:
     return int(ctypes.windll.user32.GetAncestor(hwnd, GA_ROOT))
 
 
+def _rect_contains(rect, x: int, y: int) -> bool:
+    return (rect.left <= x < rect.right and rect.top <= y < rect.bottom
+            and (rect.right - rect.left) > 0 and (rect.bottom - rect.top) > 0)
+
+
+def _rect_area(rect) -> int:
+    return max(rect.right - rect.left, 1) * max(rect.bottom - rect.top, 1)
+
+
+def _drill_to_leaf(info, x: int, y: int, *, max_depth: int = 12,
+                   max_children: int = 200):
+    """从 ElementFromPoint 结果向下钻取：逐层找包含该点且面积最小的子元素。
+
+    UIA ElementFromPoint 常返回粗粒度容器（窗口/Pane）；小控件/小文字需要
+    沿树向下钻到最深叶子。仅沿点路径钻取（O(深度×每层子数)），大容器
+    （如浏览器 Document 数千子节点）超过 max_children 即停（那是 bsk 的领域）。
+    鸭子类型：info 需有 .children()/.rectangle/.handle（便于单测替身）。
+    """
+    current = info
+    for _ in range(max_depth):
+        try:
+            children = current.children()
+        except Exception:
+            break
+        if not children or len(children) > max_children:
+            break
+        containing = []
+        for child in children:
+            try:
+                rect = child.rectangle
+            except Exception:
+                continue
+            if _rect_contains(rect, x, y):
+                containing.append((_rect_area(rect), child))
+        if not containing:
+            break
+        containing.sort(key=lambda pair: pair[0])
+        candidate = containing[0][1]
+        if int(getattr(candidate, "handle", 0) or 0) == int(
+            getattr(current, "handle", 0) or 0
+        ):
+            break
+        current = candidate
+    return current
+
+
 def _verify(window, criteria: dict, automation_id: str | None) -> int:
 
     matches = window.descendants(**criteria)
@@ -326,7 +372,8 @@ def _hover_capture(hotkey_vk: int, timeout: float) -> dict:
                     info = _element_from_point(x, y)
                     hwnd = int(info.handle or 0)
                     if hwnd and hwnd != overlay.hwnd:
-                        rect = info.rectangle
+                        fine = _drill_to_leaf(info, x, y)
+                        rect = fine.rectangle
                         overlay.show_rect(rect.left, rect.top, rect.right, rect.bottom)
                         last_root = _root_window_handle(hwnd)
                 except Exception:
