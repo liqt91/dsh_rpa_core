@@ -156,8 +156,9 @@ def _win32_root_at(x: int, y: int) -> int:
     return _root_window_handle(deepest) or deepest
 
 
-# 浏览器内容区的 UIA 树巨大（数千节点）且属于 bsk 页内捕获的领域，跳过窗口枚举
-_SCOPE_SKIP_CLASSES = {"Chrome_RenderWidgetHostHWND", "Chrome_WidgetWin_1"}
+# 网页 DOM 内容宿主（数千节点的无障碍树，属 bsk 页内捕获领域）：
+# DFS 时跳过其子树，但浏览器 UI 骨架（TabStrip/Toolbar 等兄弟分支）照走
+_DOM_HOST_MARKERS = ("Chrome_RenderWidgetHostHWND", "RootWebArea")
 
 
 def _class_name_of(hwnd: int) -> str:
@@ -166,6 +167,88 @@ def _class_name_of(hwnd: int) -> str:
     buf = ctypes.create_unicode_buffer(256)
     ctypes.windll.user32.GetClassNameW(hwnd, buf, 256)
     return buf.value
+
+
+def _is_dom_host(info) -> bool:
+    """UIA 节点是否网页 DOM 内容宿主（跳过其子树，避免展开数千节点）。"""
+    try:
+        cls = getattr(info, "class_name", "") or ""
+        if any(marker in cls for marker in _DOM_HOST_MARKERS):
+            return True
+        aid = getattr(info, "automation_id", None) or ""
+        if "RootWebArea" in aid:
+            return True
+        name = getattr(info, "name", "") or ""
+        if "RootWebArea" in name:
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def _dfs_smallest_at(info, x: int, y: int, *, max_depth: int = 30,
+                     max_children: int = 400):
+    """含点优先 DFS：从 info 向下逐层只走包含点的分支，每层取面积最小者。
+
+    与 _drill_to_leaf 同构但作用于任意子树根（窗口作用域），并跳过
+    DOM 内容宿主子树（浏览器网页内容）。返回最深命中元素（info 层级对象）。
+    """
+    current = info
+    for _ in range(max_depth):
+        if _is_dom_host(current):
+            break
+        try:
+            children = current.children()
+        except Exception:
+            break
+        if not children or len(children) > max_children:
+            break
+        containing = []
+        for child in children:
+            if _is_dom_host(child):
+                continue
+            try:
+                rect = child.rectangle
+            except Exception:
+                continue
+            if _rect_contains(rect, x, y):
+                containing.append((_rect_area(rect), child))
+        if not containing:
+            break
+        containing.sort(key=lambda pair: pair[0])
+        candidate = containing[0][1]
+        # 防环：仅双方都有真实 handle 且相等才算同元素（虚拟元素 handle 全为 0，不比）
+        cand_hwnd = int(getattr(candidate, "handle", 0) or 0)
+        curr_hwnd = int(getattr(current, "handle", 0) or 0)
+        if cand_hwnd and curr_hwnd and cand_hwnd == curr_hwnd:
+            break
+        current = candidate
+    return current
+
+
+def _window_scope_hit(root_hwnd: int, x: int, y: int):
+    """窗口作用域命中：UIA 根下的含点优先 DFS（替代全树 descendants 枚举）。
+
+    返回 (element_info, rect)；找不到返回 (None, None)。
+    """
+    if not root_hwnd:
+        return None, None
+    from pywinauto.uia_defines import IUIA
+    from pywinauto.uia_element_info import UIAElementInfo
+
+    try:
+        root_element = IUIA().iuia.ElementFromHandle(root_hwnd)
+        root_info = UIAElementInfo(root_element)
+    except Exception:
+        return None, None
+    leaf = _dfs_smallest_at(root_info, x, y)
+    try:
+        rect = leaf.rectangle
+    except Exception:
+        return None, None
+    if not _rect_contains(rect, x, y):
+        return None, None
+    return leaf, rect
 
 
 def _rect_contains(rect, x: int, y: int) -> bool:
@@ -206,9 +289,10 @@ def _drill_to_leaf(info, x: int, y: int, *, max_depth: int = 12,
             break
         containing.sort(key=lambda pair: pair[0])
         candidate = containing[0][1]
-        if int(getattr(candidate, "handle", 0) or 0) == int(
-            getattr(current, "handle", 0) or 0
-        ):
+        # 防环：仅双方都有真实 handle 且相等才算同元素（虚拟元素 handle 全为 0，不比）
+        cand_hwnd = int(getattr(candidate, "handle", 0) or 0)
+        curr_hwnd = int(getattr(current, "handle", 0) or 0)
+        if cand_hwnd and curr_hwnd and cand_hwnd == curr_hwnd:
             break
         current = candidate
     return current
@@ -226,39 +310,14 @@ def _verify(window, criteria: dict, automation_id: str | None) -> int:
     return len(matches)
 
 
-def _smallest_containing_wrapper(root_hwnd: int, x: int, y: int):
-    """根窗口 UIA 子树内找包含该点且面积最小的元素（窗口作用域，免疫覆盖层）。"""
+def _verify_in_root(root_hwnd: int, criteria: dict, automation_id: str | None) -> int:
     from pywinauto import Desktop
 
     window = Desktop(backend="uia").window(handle=root_hwnd)
-    best_wrapper = None
-    best_area = None
-    for wrapper in window.descendants():
-        try:
-            rect = wrapper.rectangle()
-        except Exception:
-            continue
-        if rect.left <= x < rect.right and rect.top <= y < rect.bottom:
-            area = max(rect.width(), 1) * max(rect.height(), 1)
-            if best_area is None or area <= best_area:
-                best_wrapper, best_area = wrapper, area
-    return best_wrapper
+    return _verify(window, criteria, automation_id)
 
 
-def capture_in_window(root_hwnd: int, x: int, y: int) -> dict | None:
-    """窗口作用域 hit-test：在被测窗口 UIA 子树内找包含该点且面积最小的元素。
-
-    免疫屏幕覆盖层（安全软件 InputSite 等）对 ElementFromPoint 的劫持。
-    找不到包含点的后代时返回 None（调用方回退屏幕级 hit-test）。
-    """
-    best_wrapper = _smallest_containing_wrapper(root_hwnd, x, y)
-    if best_wrapper is None:
-        return None
-    return _describe_wrapper(best_wrapper, root_hwnd)
-
-
-def _describe_wrapper(wrapper, root_hwnd: int) -> dict:
-    info = wrapper.element_info
+def _describe_info(info, root_hwnd: int) -> dict:
     control_type = info.control_type
     automation_id = info.automation_id or None
     name = info.name or None
@@ -277,7 +336,7 @@ def _describe_wrapper(wrapper, root_hwnd: int) -> dict:
     verify_count = 0
     if criteria:
         try:
-            verify_count = _verify(wrapper.top_level_parent(), criteria, automation_id)
+            verify_count = _verify_in_root(root_hwnd, criteria, automation_id)
         except Exception:
             verify_count = 0
     if verify_count != 1 and "controlType" in locator and locator["controlType"] == "Pane":
@@ -303,6 +362,17 @@ def _describe_wrapper(wrapper, root_hwnd: int) -> dict:
             "className": info.class_name or None,
         },
     }
+
+
+def capture_in_window(root_hwnd: int, x: int, y: int) -> dict | None:
+    """窗口作用域 hit-test：含点优先 DFS 找最深命中（免疫覆盖层 + 不展开全树）。
+
+    找不到包含点的后代时返回 None（调用方回退屏幕级 hit-test）。
+    """
+    leaf, _rect = _window_scope_hit(root_hwnd, x, y)
+    if leaf is None:
+        return None
+    return _describe_info(leaf, root_hwnd)
 
 
 def capture_at(x: int, y: int, scope_hwnd: int | None = None) -> dict:
@@ -394,18 +464,17 @@ def capture_with_retry(x: int, y: int, scope_hwnd: int | None, attempts: int = 4
     return best if best is not None else {"timeout": True}
 
 
-def _hover_hit(x: int, y: int, exclude_hwnd: int):
-    """hover 命中：返回 (rect, root_hwnd)。
+def _hover_hit(x: int, y: int, exclude_hwnd: int, allow_scoped: bool = True):
+    """hover 命中：返回 (rect, root_hwnd, scoped_ran)。
 
-    双通道取更细者：
-    1. ElementFromPoint + 向下钻取（原生 handle 元素，如 Win32/WPF 控件）
-    2. win32 窗口链定位根窗口 → 窗口作用域最小包含枚举（XAML 虚拟元素、
-       桌面 ListItem 等无 handle 元素——Terminal 标签文字/图标、桌面图标）
-    浏览器窗口类（Chrome_RenderWidgetHostHWND / Chrome_WidgetWin_1）跳过
-    窗口枚举（树巨大且属 bsk 页内领域）。
+    快路径优先（ElementFromPoint + 向下钻取，正常控件/浏览器 UI 骨架都在这命中）；
+    仅当快路径失败（无 handle 虚拟元素）或命中面积过大（疑似粗容器）时才走
+    窗口作用域 DFS 兜底。allow_scoped=False 时跳过 DFS（hover 高频帧节流用，
+    捕获瞬间必须 True 保证精度）。scoped_ran 表示本次是否真正执行了 DFS。
     """
     rect = None
     root = 0
+    scoped_ran = False
     try:
         info = _element_from_point(x, y)
         hwnd = int(info.handle or 0)
@@ -415,16 +484,17 @@ def _hover_hit(x: int, y: int, exclude_hwnd: int):
             root = _root_window_handle(hwnd)
     except Exception:
         pass
-    if not root:
-        root = _win32_root_at(x, y)
-    if root and _class_name_of(root) not in _SCOPE_SKIP_CLASSES:
-        try:
-            wrapper = _smallest_containing_wrapper(root, x, y)
-        except Exception:
-            wrapper = None
-        if wrapper is not None:
-            scoped_rect = wrapper.rectangle()
-            if rect is None or _rect_area(scoped_rect) < _rect_area(rect):
+    # 大矩形（>约 400x300）疑似粗容器命中（面板/文档/整窗），才走 DFS 兜底
+    need_scoped = rect is None or _rect_area(rect) > 120_000
+    if need_scoped and allow_scoped:
+        scoped_ran = True
+        if not root:
+            root = _win32_root_at(x, y)
+        if root:
+            scoped_info, scoped_rect = _window_scope_hit(root, x, y)
+            if scoped_rect is not None and (
+                rect is None or _rect_area(scoped_rect) < _rect_area(rect)
+            ):
                 rect = scoped_rect
     if rect is None:
         # 全部失败时退化到窗口矩形（至少框住目标窗口）
@@ -432,7 +502,7 @@ def _hover_hit(x: int, y: int, exclude_hwnd: int):
             win_rect = wintypes.RECT()
             ctypes.windll.user32.GetWindowRect(root, ctypes.byref(win_rect))
             rect = win_rect
-    return rect, root
+    return rect, root, scoped_ran
 
 
 def _hover_capture(hotkey_vk: int, timeout: float) -> dict:
@@ -444,6 +514,7 @@ def _hover_capture(hotkey_vk: int, timeout: float) -> dict:
     deadline = time.monotonic() + timeout
     last_pos = (-1, -1)
     last_hit = 0.0
+    last_scoped = 0.0  # DFS 节流：粗命中区域 150ms 一次（浏览器 UI 骨架变化慢）
     last_root = 0
     hotkey_was = _hotkey_pressed(hotkey_vk)
     lbutton_was = _hotkey_pressed(VK_LBUTTON)
@@ -454,7 +525,13 @@ def _hover_capture(hotkey_vk: int, timeout: float) -> dict:
             if moved and time.monotonic() - last_hit > 0.06:
                 last_hit = time.monotonic()
                 last_pos = (x, y)
-                rect, root = _hover_hit(x, y, overlay.hwnd)
+                # 粗命中（大 rect）时才允许 DFS，且节流 150ms（DFS ~50ms 不能每帧跑）
+                allow_scoped = time.monotonic() - last_scoped > 0.15
+                rect, root, scoped_ran = _hover_hit(
+                    x, y, overlay.hwnd, allow_scoped=allow_scoped
+                )
+                if scoped_ran:
+                    last_scoped = time.monotonic()
                 if rect is not None:
                     overlay.show_rect(rect.left, rect.top, rect.right, rect.bottom)
                 if root:
@@ -473,9 +550,9 @@ def _hover_capture(hotkey_vk: int, timeout: float) -> dict:
             if escape_now:
                 return {"cancelled": True}
             if capture_triggered:
-                # 捕获瞬间以当前点重新命中取根窗口（与 hover 同一路径，
+                # 捕获瞬间以当前点重新命中取根窗口（allow_scoped=True 保证精度，
                 # 免疫覆盖层 / XAML 虚拟元素无 handle 的情况）
-                _rect, root = _hover_hit(x, y, overlay.hwnd)
+                _rect, root, _ = _hover_hit(x, y, overlay.hwnd, allow_scoped=True)
                 scope = root or last_root or None
                 return capture_with_retry(x, y, scope)
             time.sleep(0.03)
