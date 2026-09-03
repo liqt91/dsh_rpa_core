@@ -2,6 +2,7 @@
 
 ## 2026-09-03
 
+- hover 捕获两轮修复：(1) 悬浮框 region API 用 pywin32 不存在的 CreateRectRgn （改 gdi32 ctypes），且异常被循环静默吞掉表现为"没效果"；Ctrl+C 慢取消——queue.get 长 timeout 吞键盘中断，改短切片轮询 + CLI KeyboardInterrupt 即退；(2) 细粒度：_drill_to_leaf 向下钻最深叶子（Label/Text 级）+ UIA 虚拟元素盲区用 win32 窗口链根窗口 + 窗口作用域枚举兜底（Terminal 标签文字/图标、桌面图标），浏览器 UI 区域确认是 Chromium 设计不进 UIA（非缺陷）。full gate 159 tests。
 - 完成 M14a bsk 执行传输：`browser.launch transport:"bsk"`（v1.1.0，browserInstanceId + 能力差异声明 CSS only/仅主 frame）；运行期 BskSession（session 映射、取消逐命令检查、close 强制 session stop）；抽能力层 bsk_client.py 统一 bsk 子进程协议（devserver 捕获与运行期执行器共用，消除分叉）；executor 合同 10 项；修复 executors/browser.py 被 PowerShell 写入引入的 BOM。full gate 148 tests。
 - 完成 M14.5 CLI 通道对齐（ADR 0006 §6 落地）：`rpa-core catalog`（digest+清单，与 load_catalog 同源）、`capture browser|desktop`（一次性会话；bsk 默认传输 + Ctrl+Click 合成验收、desktop F9/point；save-as+flow 落库流程元素资产；cancel+close 强制）、`elements list|show|verify`；元素校验下沉 model/capture.py（devserver 薄封装）；cli_parity 合同 7 项；README CLI 段更新；full gate 138 tests。
 

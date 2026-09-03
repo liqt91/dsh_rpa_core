@@ -129,6 +129,45 @@ def _root_window_handle(hwnd: int) -> int:
     return int(ctypes.windll.user32.GetAncestor(hwnd, GA_ROOT))
 
 
+def _win32_deepest_child(hwnd: int, x: int, y: int, max_depth: int = 10) -> int:
+    """win32 子窗口下钻：WindowFromPoint 根下找包含点的最深子窗口。"""
+    point = wintypes.POINT(x, y)
+    for _ in range(max_depth):
+        child = int(
+            ctypes.windll.user32.ChildWindowFromPointEx(hwnd, point, 0) or 0
+        )
+        if not child or child == hwnd:
+            break
+        hwnd = child
+    return hwnd
+
+
+def _win32_root_at(x: int, y: int) -> int:
+    """点下的 win32 根窗口（UIA 虚拟元素无 handle 时的兜底定位）。
+
+    XAML（Terminal 标签页）/ 桌面 ListItem 等虚拟元素没有 win32 handle，
+    ElementFromPoint 的钻取链会断；此时用 win32 窗口链定位根窗口，
+    再在根窗口 UIA 树里做窗口作用域枚举。
+    """
+    hwnd = int(ctypes.windll.user32.WindowFromPoint(wintypes.POINT(x, y)) or 0)
+    if not hwnd:
+        return 0
+    deepest = _win32_deepest_child(hwnd, x, y)
+    return _root_window_handle(deepest) or deepest
+
+
+# 浏览器内容区的 UIA 树巨大（数千节点）且属于 bsk 页内捕获的领域，跳过窗口枚举
+_SCOPE_SKIP_CLASSES = {"Chrome_RenderWidgetHostHWND", "Chrome_WidgetWin_1"}
+
+
+def _class_name_of(hwnd: int) -> str:
+    if not hwnd:
+        return ""
+    buf = ctypes.create_unicode_buffer(256)
+    ctypes.windll.user32.GetClassNameW(hwnd, buf, 256)
+    return buf.value
+
+
 def _rect_contains(rect, x: int, y: int) -> bool:
     return (rect.left <= x < rect.right and rect.top <= y < rect.bottom
             and (rect.right - rect.left) > 0 and (rect.bottom - rect.top) > 0)
@@ -187,12 +226,8 @@ def _verify(window, criteria: dict, automation_id: str | None) -> int:
     return len(matches)
 
 
-def capture_in_window(root_hwnd: int, x: int, y: int) -> dict | None:
-    """窗口作用域 hit-test：在被测窗口 UIA 子树内找包含该点且面积最小的元素。
-
-    免疫屏幕覆盖层（安全软件 InputSite 等）对 ElementFromPoint 的劫持。
-    找不到包含点的后代时返回 None（调用方回退屏幕级 hit-test）。
-    """
+def _smallest_containing_wrapper(root_hwnd: int, x: int, y: int):
+    """根窗口 UIA 子树内找包含该点且面积最小的元素（窗口作用域，免疫覆盖层）。"""
     from pywinauto import Desktop
 
     window = Desktop(backend="uia").window(handle=root_hwnd)
@@ -207,6 +242,16 @@ def capture_in_window(root_hwnd: int, x: int, y: int) -> dict | None:
             area = max(rect.width(), 1) * max(rect.height(), 1)
             if best_area is None or area <= best_area:
                 best_wrapper, best_area = wrapper, area
+    return best_wrapper
+
+
+def capture_in_window(root_hwnd: int, x: int, y: int) -> dict | None:
+    """窗口作用域 hit-test：在被测窗口 UIA 子树内找包含该点且面积最小的元素。
+
+    免疫屏幕覆盖层（安全软件 InputSite 等）对 ElementFromPoint 的劫持。
+    找不到包含点的后代时返回 None（调用方回退屏幕级 hit-test）。
+    """
+    best_wrapper = _smallest_containing_wrapper(root_hwnd, x, y)
     if best_wrapper is None:
         return None
     return _describe_wrapper(best_wrapper, root_hwnd)
@@ -349,10 +394,51 @@ def capture_with_retry(x: int, y: int, scope_hwnd: int | None, attempts: int = 4
     return best if best is not None else {"timeout": True}
 
 
+def _hover_hit(x: int, y: int, exclude_hwnd: int):
+    """hover 命中：返回 (rect, root_hwnd)。
+
+    双通道取更细者：
+    1. ElementFromPoint + 向下钻取（原生 handle 元素，如 Win32/WPF 控件）
+    2. win32 窗口链定位根窗口 → 窗口作用域最小包含枚举（XAML 虚拟元素、
+       桌面 ListItem 等无 handle 元素——Terminal 标签文字/图标、桌面图标）
+    浏览器窗口类（Chrome_RenderWidgetHostHWND / Chrome_WidgetWin_1）跳过
+    窗口枚举（树巨大且属 bsk 页内领域）。
+    """
+    rect = None
+    root = 0
+    try:
+        info = _element_from_point(x, y)
+        hwnd = int(info.handle or 0)
+        if hwnd and hwnd != exclude_hwnd:
+            fine = _drill_to_leaf(info, x, y)
+            rect = fine.rectangle
+            root = _root_window_handle(hwnd)
+    except Exception:
+        pass
+    if not root:
+        root = _win32_root_at(x, y)
+    if root and _class_name_of(root) not in _SCOPE_SKIP_CLASSES:
+        try:
+            wrapper = _smallest_containing_wrapper(root, x, y)
+        except Exception:
+            wrapper = None
+        if wrapper is not None:
+            scoped_rect = wrapper.rectangle()
+            if rect is None or _rect_area(scoped_rect) < _rect_area(rect):
+                rect = scoped_rect
+    if rect is None:
+        # 全部失败时退化到窗口矩形（至少框住目标窗口）
+        if root:
+            win_rect = wintypes.RECT()
+            ctypes.windll.user32.GetWindowRect(root, ctypes.byref(win_rect))
+            rect = win_rect
+    return rect, root
+
+
 def _hover_capture(hotkey_vk: int, timeout: float) -> dict:
     """hover 模式：鼠标移动实时高亮命中元素；热键或 Ctrl+Click 捕获；Esc 取消。
 
-    作用域取悬停元素的根窗口（免疫屏幕覆盖层劫持），而非前台窗口。
+    作用域取悬停点 win32 根窗口（免疫屏幕覆盖层劫持），而非前台窗口。
     """
     overlay = _HoverOverlay()
     deadline = time.monotonic() + timeout
@@ -368,16 +454,11 @@ def _hover_capture(hotkey_vk: int, timeout: float) -> dict:
             if moved and time.monotonic() - last_hit > 0.06:
                 last_hit = time.monotonic()
                 last_pos = (x, y)
-                try:
-                    info = _element_from_point(x, y)
-                    hwnd = int(info.handle or 0)
-                    if hwnd and hwnd != overlay.hwnd:
-                        fine = _drill_to_leaf(info, x, y)
-                        rect = fine.rectangle
-                        overlay.show_rect(rect.left, rect.top, rect.right, rect.bottom)
-                        last_root = _root_window_handle(hwnd)
-                except Exception:
-                    pass
+                rect, root = _hover_hit(x, y, overlay.hwnd)
+                if rect is not None:
+                    overlay.show_rect(rect.left, rect.top, rect.right, rect.bottom)
+                if root:
+                    last_root = root
             overlay.pump()
 
             hotkey_now = _hotkey_pressed(hotkey_vk)
@@ -392,15 +473,10 @@ def _hover_capture(hotkey_vk: int, timeout: float) -> dict:
             if escape_now:
                 return {"cancelled": True}
             if capture_triggered:
-                # 捕获瞬间以当前点重新命中取根窗口（hover 的 last_root 可能滞后/陈旧）
-                scope = last_root or None
-                try:
-                    info = _element_from_point(x, y)
-                    hwnd = int(info.handle or 0)
-                    if hwnd and hwnd != overlay.hwnd:
-                        scope = _root_window_handle(hwnd) or scope
-                except Exception:
-                    pass
+                # 捕获瞬间以当前点重新命中取根窗口（与 hover 同一路径，
+                # 免疫覆盖层 / XAML 虚拟元素无 handle 的情况）
+                _rect, root = _hover_hit(x, y, overlay.hwnd)
+                scope = root or last_root or None
                 return capture_with_retry(x, y, scope)
             time.sleep(0.03)
         return {"timeout": True}
