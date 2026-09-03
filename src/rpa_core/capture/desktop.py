@@ -20,6 +20,7 @@ class DesktopCaptureSession:
         timeout_seconds: float = 60.0,
         point: dict[str, int] | None = None,
         window_handle: int | None = None,
+        hover: bool = False,
     ):
         args = [
             sys.executable,
@@ -34,6 +35,8 @@ class DesktopCaptureSession:
             args += ["--point", str(point.get("x", 0)), str(point.get("y", 0))]
         if window_handle:
             args += ["--window-handle", str(window_handle)]
+        if hover:
+            args += ["--hover"]
         self._proc = subprocess.Popen(
             args,
             stdout=subprocess.PIPE,

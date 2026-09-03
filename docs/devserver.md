@@ -55,7 +55,20 @@ curl http://127.0.0.1:8765/api/workflows/demo      # 读回
 
 PowerShell 全流程（`$base = "http://127.0.0.1:8765"`）：
 
-**桌面控件捕获**（把鼠标移到目标控件上，按 F9）：
+**桌面控件捕获**（hover 模式：鼠标移动实时高亮，F9 或 Ctrl+Click 捕获）：
+
+```powershell
+$base = "http://127.0.0.1:8765"
+$s = Invoke-RestMethod -Method Post -Uri "$base/api/capture/desktop/start" `
+  -ContentType "application/json" -Body '{"hover":true,"timeoutSeconds":60}'
+# → {"sessionId":"desktop-1","mode":"hover"}；移动鼠标（红色高亮框跟随），到目标控件按 F9 或 Ctrl+Click
+Invoke-RestMethod -Method Post -Uri "$base/api/capture/desktop/pick" `
+  -ContentType "application/json" `
+  -Body (@{sessionId=$s.sessionId; saveAs="myControl"; flow="myFlow"; timeoutSeconds=90} | ConvertTo-Json)
+# → 元素描述符（selector.locator 可回验命中）并存入 workflows/myFlow/elements/myControl.json
+```
+
+**桌面控件捕获**（热键模式：把鼠标移到目标控件上，按 F9，无高亮）：
 
 ```powershell
 $base = "http://127.0.0.1:8765"

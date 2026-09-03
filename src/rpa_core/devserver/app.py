@@ -176,12 +176,15 @@ class DevServerApp:
                 kwargs["point"] = body["point"]
             if body.get("windowHandle"):
                 kwargs["window_handle"] = int(body["windowHandle"])
+            if body.get("hover"):
+                kwargs["hover"] = True
             with self._capture_lock:
                 session_id = self._next_capture_id("desktop")
                 self._desktop_sessions[session_id] = factory(**kwargs)
             return {
                 "sessionId": session_id,
-                "mode": "point" if kwargs.get("point") else "hotkey",
+                "mode": "hover" if kwargs.get("hover")
+                else "point" if kwargs.get("point") else "hotkey",
             }
         if action == "pick":
             session_id = self._capture_session_id(self._desktop_sessions, body)

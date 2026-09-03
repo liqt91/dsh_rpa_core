@@ -60,8 +60,10 @@ class FakeBrowserSession:
 
 
 class FakeDesktopSession:
-    def __init__(self, hotkey="F9", timeout_seconds=60.0, point=None):
-        self.config = {"hotkey": hotkey, "timeout_seconds": timeout_seconds, "point": point}
+    def __init__(self, hotkey="F9", timeout_seconds=60.0, point=None, window_handle=None,
+                 hover=False):
+        self.config = {"hotkey": hotkey, "timeout_seconds": timeout_seconds,
+                       "point": point, "hover": hover}
         self.cancelled = False
 
     def pick(self, timeout_seconds=90):
@@ -187,6 +189,25 @@ def test_desktop_capture_flow_and_session_removal(capture_server):
     )
     assert status == 200
     assert capture_server.app._desktop_sessions == {}
+
+
+def test_desktop_capture_hover_mode_plumbing(capture_server):
+    """hover 模式透传：start 带 hover=true → mode=hover 且工厂收到 hover=True。"""
+    base = f"http://127.0.0.1:{capture_server.port}"
+    status, payload = _request(
+        "POST",
+        "/api/capture/desktop/start",
+        {"hover": True, "timeoutSeconds": 15},
+        base=base,
+    )
+    assert status == 200
+    assert payload["mode"] == "hover"
+    session_id = payload["sessionId"]
+    session = capture_server.app._desktop_sessions[session_id]
+    assert session.config["hover"] is True
+    _request(
+        "POST", "/api/capture/desktop/cancel", {"sessionId": session_id}, base=base
+    )
 
 
 def test_capture_pick_unknown_session_is_404(capture_server):

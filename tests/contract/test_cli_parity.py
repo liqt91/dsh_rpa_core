@@ -138,6 +138,17 @@ def test_cli_capture_desktop_point_and_save(monkeypatch, tmp_path, capsys):
     assert json.loads(stored.read_text(encoding="utf-8"))["kind"] == "desktop"
 
 
+def test_cli_capture_desktop_hover_passthrough(monkeypatch, tmp_path, capsys):
+    monkeypatch.setattr(cli, "DesktopCaptureSession", _FakeDesktopSession)
+    _FakeDesktopSession.instances = []
+    code, _ = _run([
+        "capture", "desktop", "--hover", "--timeout", "5",
+    ], capsys)
+    assert code == 0
+    session = _FakeDesktopSession.instances[0]
+    assert session.kwargs["hover"] is True
+
+
 def test_cli_capture_save_requires_flow(monkeypatch, tmp_path, capsys):
     monkeypatch.setattr(cli, "BrowserBskCaptureSession", _FakeBrowserSession)
     monkeypatch.setattr(cli, "BrowserCaptureSession", _FakeBrowserSession)

@@ -107,6 +107,7 @@ def _cmd_capture(args) -> int:
             timeout_seconds=args.timeout,
             point=_parse_point(args.point),
             window_handle=args.window_handle,
+            hover=args.hover,
         )
         start = lambda: None  # noqa: E731
         pick = lambda timeout: session.pick(timeout_seconds=timeout)  # noqa: E731
@@ -240,6 +241,8 @@ def main() -> int:
             desktop.add_argument("--timeout", type=float, default=90.0)
             desktop.add_argument("--point", help="测试模式：x,y 坐标直接捕获")
             desktop.add_argument("--window-handle", type=int)
+            desktop.add_argument("--hover", action="store_true",
+                                 help="hover 模式：鼠标移动实时高亮，热键或 Ctrl+Click 捕获")
             desktop.add_argument("--save-as")
             desktop.add_argument("--flow")
             desktop.add_argument("--workflows", type=Path, default=Path("workflows"))
