@@ -478,10 +478,12 @@ def _hover_hit(x: int, y: int, exclude_hwnd: int, allow_scoped: bool = True):
     try:
         info = _element_from_point(x, y)
         hwnd = int(info.handle or 0)
-        if hwnd and hwnd != exclude_hwnd:
+        if hwnd != exclude_hwnd:
+            # 虚拟元素（handle=None：桌面 ListItem / XAML 文本）同样可用——
+            # ElementFromPoint 返回的 rect 本来就有效，handle 只用于根窗口定位
             fine = _drill_to_leaf(info, x, y)
             rect = fine.rectangle
-            root = _root_window_handle(hwnd)
+            root = _root_window_handle(hwnd) if hwnd else 0
     except Exception:
         pass
     # 大矩形（>约 400x300）疑似粗容器命中（面板/文档/整窗），才走 DFS 兜底
