@@ -10,7 +10,7 @@ Clean-room 类型化 RPA 运行时核心实验：**显式 workflow 语义、隔�
 
 ```text
 Workflow AST → validation/compiler → execution plan → orchestrator
-  → browser.playwright / desktop.uia / desktop.win32 / python.worker
+  → browser.playwright（playwright 默认 / bsk 复用真实浏览器）/ desktop.uia / desktop.win32 / python.worker
   → typed results + events.jsonl + result.json
 ```
 
@@ -173,6 +173,8 @@ uv run python -m rpa_core.cli devserver
 | `baidu-news-top10` | 真实站点：百度搜索「新闻」→ 标题前 10 条 → 文本文件 |
 | `api-usage` | 进程内 API 四步 + run→读证据→pause→resume |
 | `windows-desktop` / `uia-desktop` | 记事本 / WinForms 桌面垂直切片 |
+
+`browser.launch` 传输：`playwright`（默认，独立自动化浏览器）/ `bsk`（BrowserSkill 单扩展，复用用户真实已登录浏览器；能力差异 CSS only、仅主 frame；M14）。
 
 ## 测试与质量门禁
 

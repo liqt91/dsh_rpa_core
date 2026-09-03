@@ -15,11 +15,11 @@
 """
 
 import json
-import subprocess
 import time
 from collections.abc import Callable
-from pathlib import Path
 from typing import Any
+
+from rpa_core.bsk_client import BskClient, BskSessionGoneError
 
 # picker 与现有 browser picker 共享同一套 selector 构造/描述逻辑，
 # 差异仅在：坐标栈代替 mouseover target、Ctrl+Click 手势、主世界状态轮询。
@@ -116,12 +116,6 @@ _PICKER_JS = r"""
 _POLL_JS = "JSON.stringify(window.__rpaCaptureResult)"
 _CLEANUP_JS = "window.__rpaPickerCleanup && window.__rpaPickerCleanup()"
 
-_DEFAULT_BSK = str(Path.home() / ".local" / "bin" / "bsk.exe")
-
-
-def default_bsk_binary() -> str:
-    return _DEFAULT_BSK
-
 
 class BrowserBskCaptureSession:
     """bsk 传输捕获会话；pick/cancel 从任意线程调用（同步，子进程内阻塞）。"""
@@ -145,47 +139,27 @@ class BrowserBskCaptureSession:
             "browser_instance_id": browser_instance_id,
             "start_url": start_url,
         }
-        self._bsk_binary = bsk_binary or _DEFAULT_BSK
-        self._runner = runner  # 测试注入：替代真实子进程
+        self._client = BskClient(bsk_binary=bsk_binary, runner=runner)
         self._session_id: str | None = None
         self._cancelled = False
         self._closed = False
 
-    # -- bsk 子进程（同步，evaluate 命令式） ---------------------------------
-
-    def _bsk(self, *args: str) -> dict:
-        if self._runner is not None:
-            return self._runner(*args)
-        proc = subprocess.run(
-            [self._bsk_binary, "--json", *args],
-            capture_output=True, text=True, timeout=60, encoding="utf-8",
-        )
-        out = proc.stdout.strip()
-        try:
-            return json.loads(out) if out else {"_rc": proc.returncode}
-        except json.JSONDecodeError:
-            return {"_raw": out, "_stderr": proc.stderr.strip(), "_rc": proc.returncode}
+    # -- bsk 子进程（统一走能力层 BskClient） --------------------------------
 
     def _evaluate(self, session_id: str, expression: str) -> Any:
-        result = self._bsk("evaluate", "--session", session_id, expression)
-        if result.get("code") == "not_found":
-            raise RuntimeError(f"bsk session not active: {session_id}")
-        return result.get("value")
+        try:
+            return self._client.evaluate(session_id, expression)
+        except BskSessionGoneError as exc:
+            raise RuntimeError(f"bsk session not active: {session_id}") from exc
 
     def start(self) -> list[str]:
-        args = ["session", "start"]
-        if self._config["browser_instance_id"]:
-            args += ["--browser", self._config["browser_instance_id"]]
-        result = self._bsk(*args)
-        if result.get("code"):
-            raise RuntimeError(f"bsk session start failed: {result.get('message')}")
-        session_id = result.get("session_id")
-        if not session_id:
-            raise RuntimeError(f"bsk session start did not return session_id: {result}")
-        self._session_id = session_id
+        self._session_id = self._client.session_start(
+            self._config["browser_instance_id"]
+        )
+        session_id = self._session_id
         if self._config["start_url"]:
-            self._bsk("navigate", "--session", session_id, self._config["start_url"])
-            self._bsk("wait-for-navigation", "--session", session_id)
+            self._client.navigate(session_id, self._config["start_url"])
+            self._client.run("wait-for-navigation", "--session", session_id)
         return [session_id]
 
     @property
@@ -201,10 +175,7 @@ class BrowserBskCaptureSession:
         self._evaluate(sid, _PICKER_JS)
         if click_css:
             # 自动化验收：CDP 合成 Ctrl+Click（等价真实 Ctrl+Click 手势）
-            self._bsk(
-                "click", "--session", sid,
-                "--selector", click_css, "--modifiers", "ctrl",
-            )
+            self._client.click(sid, click_css, modifiers="ctrl")
         deadline = time.monotonic() + timeout_seconds
         while time.monotonic() < deadline:
             if self._cancelled or self._closed:
@@ -243,6 +214,6 @@ class BrowserBskCaptureSession:
         self._session_id = None
         if sid:
             try:
-                self._bsk("session", "stop", sid)
+                self._client.session_stop(sid)
             except Exception:
                 pass

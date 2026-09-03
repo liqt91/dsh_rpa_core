@@ -2,6 +2,7 @@
 
 ## 2026-09-03
 
+- 完成 M14a bsk 执行传输：`browser.launch transport:"bsk"`（v1.1.0，browserInstanceId + 能力差异声明 CSS only/仅主 frame）；运行期 BskSession（session 映射、取消逐命令检查、close 强制 session stop）；抽能力层 bsk_client.py 统一 bsk 子进程协议（devserver 捕获与运行期执行器共用，消除分叉）；executor 合同 10 项；修复 executors/browser.py 被 PowerShell 写入引入的 BOM。full gate 148 tests。
 - 完成 M14.5 CLI 通道对齐（ADR 0006 §6 落地）：`rpa-core catalog`（digest+清单，与 load_catalog 同源）、`capture browser|desktop`（一次性会话；bsk 默认传输 + Ctrl+Click 合成验收、desktop F9/point；save-as+flow 落库流程元素资产；cancel+close 强制）、`elements list|show|verify`；元素校验下沉 model/capture.py（devserver 薄封装）；cli_parity 合同 7 项；README CLI 段更新；full gate 138 tests。
 
 - 通道对齐评估（维护者提议）：CLI 优先原则成立，落地形态修正为「能力层唯一实现 + CLI/devserver 双薄通道」，devserver 复用 = import 能力层而非 spawn 解析 CLI；ADR 0006 §6 增补；CLI 缺口（catalog/capture/elements 子命令）入 BACKLOG「CLI 通道对齐」。

@@ -12,20 +12,20 @@
 
 ## 任务
 
-- [ ] bsk 传输执行器：`browser.launch transport:"bsk"`（子进程调 `bsk` CLI；session start/stop 映射；取消时强制 `session stop`）
-- [ ] manifest 能力声明：css/xpath、仅主 frame（iframe 走 evaluate 的 document.evaluate 补 XPath，不进本里程碑）
-- [ ] devserver 捕获：经 bsk evaluate 注入 picker（elementsFromPoint 变体）→ 轮询 `window.__rpaCaptureResult` → ElementDescriptor（selector+verifyCount+metadata）落库当前流程 elements/ → evaluate 回验命中
+- [x] bsk 传输执行器：`browser.launch transport:"bsk"`（子进程调 `bsk` CLI；session start/stop 映射；取消时强制 `session stop`）
+- [x] manifest 能力声明：`browser.launch` v1.1.0，transport enum + 差异描述（css/xpath、仅主 frame；iframe XPath 后置）
+- [x] devserver 捕获：经 bsk evaluate 注入 picker（elementsFromPoint 变体）→ 轮询 `window.__rpaCaptureResult` → ElementDescriptor（selector+verifyCount+metadata）落库当前流程 elements/ → evaluate 回验命中
 - [ ] 元素库「＋捕获」入口（并入切片，接 M13.1 flow 作用域）：面板顶部按钮 → browser（bsk）/ desktop 二选；desktop 分支**先选目标窗口（attach 拿 windowHandle）再走窗口作用域捕获**（免疫编辑器遮挡，ADR 0010），F9 热键提示
-- [ ] 合同测试：bsk 子进程协议 mock（无真实浏览器）、session 映射、取消强制 stop、能力差异声明
-- [ ] 实机验收：登录态页面捕获（描述符回验命中）+ 真实点选 picker（elementsFromPoint 变体）确认
+- [x] 合同测试：bsk 子进程协议 mock（无真实浏览器）、session 映射、取消强制 stop、能力差异声明
+- [x] 实机验收：登录态页面捕获（描述符回验命中）+ 真实点选 picker（elementsFromPoint 变体）确认
 - [ ] 完整门禁
 
 ## 验收标准
 
-- [ ] bsk 会话内连续多次捕获零弹窗（bsk 的 session 模型天然免弹窗）
-- [ ] 捕获出合法 selector 且回验命中（登录态页面）
+- [x] bsk 会话内连续多次捕获零弹窗（bsk 的 session 模型天然免弹窗）
+- [x] 捕获出合法 selector 且回验命中（登录态页面）
 - [ ] bsk 不可用时降级到 persistent / chrome-inspect-ws 不破坏既有路径
-- [ ] 取消（cancel）时强制 `session stop`，无悬挂 Agent Window
+- [x] 取消（cancel）时强制 `session stop`，无悬挂 Agent Window
 - [ ] 完整门禁通过
 
 ## 范围外
