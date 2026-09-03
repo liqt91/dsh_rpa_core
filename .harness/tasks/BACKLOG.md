@@ -4,14 +4,12 @@
 
 ## 当前任务
 
-- [ ] M14 自研捕获扩展（`active`）
+- [ ] M14 浏览器捕获 — bsk 剩余切片（`active`）
   - 计划：`M14-extension.md`
-  - 并入切片：**元素库「＋捕获」入口**（browser 扩展为主/persistent 兜底 + desktop 热键流程提示），捕获结果存当前流程元素资产。
-  - 完成门槛：token 配对反连 dev server 零弹窗、标签页授权、登录态页面捕获回验命中。
+  - 剩余：M14a 执行传输（`browser.launch transport:"bsk"`）、manifest 能力声明、元素库「＋捕获」入口、登录态页面验收。
 
 ## 后续任务
 
-- [ ] CLI 通道对齐（ADR 0006 §6，排期待定）：`rpa-core catalog`（digest+清单）、`rpa-core capture browser|desktop`（交互式 start/pick/cancel）、`rpa-core elements`（流程元素 list/verify）——补齐"仅 devserver 有"的能力，让 M15 agent 不碰 HTTP 完成捕获全流程。
 - [ ] M15 WorkBuddy 连接器入驻（`planned`）
   - 计划：`M15-workbuddy-connector.md`
   - 决策：CLI+Skill 主路径（2026-09-02 评估五种入驻形态）；MCP 化、专家包装后置。
@@ -29,6 +27,9 @@
 
 ## 已完成
 
+- [x] M14.5 CLI 通道对齐（`done`）
+  - 计划：`M14.5-cli-parity.md`
+  - 证据：`catalog`/`capture browser|desktop`/`elements list|show|verify` 子命令与 devserver 同权；元素校验下沉能力层；cli_parity 合同 7 项；138 tests 全门禁。
 - [x] M13.1 流程目录化与元素即流程资产（`done`）
   - 计划：`M13.1-flow-dir-assets.md`
   - 证据：每流程一个目录 `<name>/workflow.json` + 元素资产 `<name>/elements/*.json`（可入版本库）；元素端点嵌套 `/api/workflows/{name}/elements[/{el}[/verify]]`；capture pick saveAs 需 flow；前端元素库按当前流程；122 tests 全门禁。

@@ -5,7 +5,12 @@ from pydantic import ValidationError
 
 from rpa_core.catalog import CommandCatalog
 from rpa_core.compiler.compiler import WorkflowCompileError, WorkflowCompiler
-from rpa_core.model.capture import ElementDescriptor
+from rpa_core.model.capture import (
+    ElementDescriptor,
+    ElementDocumentError,
+    selector_errors,
+    validate_element_document,
+)
 from rpa_core.model.workflow import Workflow
 
 from .store import (
@@ -329,29 +334,10 @@ def _validation_errors(exc: ValidationError) -> list[dict]:
 
 def _validate_element_document(body: dict) -> ElementDescriptor:
     try:
-        return ElementDescriptor.model_validate(body)
-    except ValidationError as exc:
-        detail = _validation_errors(exc)[0]
-        raise ApiError(400, "BAD_REQUEST", f"{detail['path']}: {detail['message']}") from exc
+        return validate_element_document(body)
+    except ElementDocumentError as exc:
+        raise ApiError(400, "BAD_REQUEST", str(exc)) from exc
 
 
 def _selector_errors(element: ElementDescriptor) -> list[dict]:
-    errors: list[dict] = []
-    if element.kind == "browser":
-        css = element.selector.get("css")
-        if not isinstance(css, str) or not css.strip():
-            errors.append({"path": "selector.css", "message": "browser 元素需要非空 css selector"})
-    elif element.kind == "desktop":
-        locator = element.selector.get("locator")
-        if not isinstance(locator, dict):
-            errors.append({"path": "selector.locator", "message": "desktop 元素需要 locator 对象"})
-            return errors
-        try:
-            from rpa_core.model.desktop import DesktopLocator
-
-            DesktopLocator.model_validate(locator)
-        except ValidationError as exc:
-            for error in exc.errors():
-                location = ".".join(str(part) for part in error["loc"]) or "<root>"
-                errors.append({"path": f"selector.locator.{location}", "message": error["msg"]})
-    return errors
+    return selector_errors(element)

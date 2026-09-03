@@ -115,11 +115,16 @@ uv run python .harness/scripts/check_all.py
 
 ```text
 uv run python -m rpa_core.cli validate examples/search-and-save/workflow.json
-uv run python -m rpa_core.cli run     examples/search-and-save/workflow.json [--artifacts DIR]
-uv run python -m rpa_core.cli resume  workflow.json --run-id <run_id> [--allow-indeterminate]
+uv run python -m rpa_core.cli run      examples/search-and-save/workflow.json [--artifacts DIR]
+uv run python -m rpa_core.cli resume   workflow.json --run-id <run_id> [--allow-indeterminate]
+uv run python -m rpa_core.cli catalog                                   # 命令目录 digest + 清单
+uv run python -m rpa_core.cli capture browser|desktop [选项] [--save-as 名 --flow 流程]   # 交互捕获
+uv run python -m rpa_core.cli elements list|show|verify --flow 流程 [--workflows DIR]      # 元素资产
 uv run python -m rpa_core.cli devserver [--port 8765] [--workflows DIR]
 ```
 
+- CLI 与 devserver 同为能力层薄通道（ADR 0006 §6 通道对齐）：catalog/capture/elements 两通道同权。
+- `capture` 为一次性会话：启动 → 阻塞等待用户手势（bsk：Ctrl+Click；desktop：热键 F9）→ 打印描述符 JSON → 可选 `--save-as --flow` 落库到 `workflows/<流程>/elements/`。`--click-css` 供自动化验收合成 Ctrl+Click。
 - `resume` 需 `--run-id`（见该 run 的 `result.json`），`indeterminate` 终态的人工续跑需 `--allow-indeterminate`。
 - 运行证据落 `<artifacts>/<run_id>/`：`result.json`（终态结果）、`events.jsonl`（追加事件流）、`checkpoint.json`（边界进度）。
 

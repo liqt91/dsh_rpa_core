@@ -131,6 +131,11 @@
       "id": "flow-dir-assets",
       "title": "Per-flow workflow directories with elements as flow assets",
       "passes": true
+    },
+    {
+      "id": "cli-parity",
+      "title": "CLI channel parity: catalog, capture, elements subcommands",
+      "passes": true
     }
   ]
 }

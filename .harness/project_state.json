@@ -2,7 +2,7 @@
   "project": "rpa_core",
   "phase": "editor-tree-interactions",
   "status": "active",
-  "completed_milestone": "M13.1-flow-dir-assets",
+  "completed_milestone": "M14.5-cli-parity",
   "active_milestone": "M14-extension",
   "active_plan": ".harness/tasks/M14-extension.md",
   "active_feature": "capture-extension",
