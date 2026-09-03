@@ -472,10 +472,11 @@ def capture_with_retry(x: int, y: int, scope_hwnd: int | None, attempts: int = 4
 def _hover_hit(x: int, y: int, exclude_hwnd: int, allow_scoped: bool = True):
     """hover 命中：返回 (rect, root_hwnd, scoped_ran)。
 
-    快路径优先（ElementFromPoint + 向下钻取，正常控件/浏览器 UI 骨架都在这命中）；
-    仅当快路径失败（无 handle 虚拟元素）或命中面积过大（疑似粗容器）时才走
-    窗口作用域 DFS 兜底。allow_scoped=False 时跳过 DFS（hover 高频帧节流用，
-    捕获瞬间必须 True 保证精度）。scoped_ran 表示本次是否真正执行了 DFS。
+    快路径优先（ElementFromPoint + 向下钻取，正常控件/浏览器 UI 骨架/桌面图标
+    都在这命中）。DFS 兜底仅在快路径完全失败（rect 为 None，如无 handle 虚拟
+    元素）时启用——粗容器命中（大 rect）在 hover 期间直接框粗 rect（响应优先，
+    横扫不停顿），捕获瞬间的 capture_with_retry 走全量 DFS 保证精度。
+    allow_scoped=False 时跳过 DFS（hover 高频帧节流用）。
     """
     rect = None
     root = 0
@@ -491,17 +492,14 @@ def _hover_hit(x: int, y: int, exclude_hwnd: int, allow_scoped: bool = True):
             root = _root_window_handle(hwnd) if hwnd else 0
     except Exception:
         pass
-    # 大矩形（>约 400x300）疑似粗容器命中（面板/文档/整窗），才走 DFS 兜底
-    need_scoped = rect is None or _rect_area(rect) > 120_000
-    if need_scoped and allow_scoped:
+    # 仅快路径完全失败（无 rect）才走 DFS 兜底
+    if rect is None and allow_scoped:
         scoped_ran = True
         if not root:
             root = _win32_root_at(x, y)
         if root:
             scoped_info, scoped_rect = _window_scope_hit(root, x, y)
-            if scoped_rect is not None and (
-                rect is None or _rect_area(scoped_rect) < _rect_area(rect)
-            ):
+            if scoped_rect is not None:
                 rect = scoped_rect
     if rect is None:
         # 全部失败时退化到窗口矩形（至少框住目标窗口）
