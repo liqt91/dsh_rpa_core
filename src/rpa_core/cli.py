@@ -113,7 +113,11 @@ def _cmd_capture(args) -> int:
         pick = lambda timeout: session.pick(timeout_seconds=timeout)  # noqa: E731
     try:
         start()
-        result = pick(args.timeout)
+        try:
+            result = pick(args.timeout)
+        except KeyboardInterrupt:
+            print(json.dumps({"cancelled": True, "reason": "keyboard interrupt"}))
+            return 130
         if result.get("kind") and args.save_as:
             if not args.flow:
                 print(json.dumps({"error": "BAD_REQUEST", "message": "--save-as 需要 --flow"}))

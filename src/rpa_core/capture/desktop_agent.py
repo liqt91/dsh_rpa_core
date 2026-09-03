@@ -85,13 +85,15 @@ class _HoverOverlay:
         win32con = self._win32con
         width = right - left
         height = bottom - top
-        outer = win32gui.CreateRectRgn(0, 0, width, height)
-        inner = win32gui.CreateRectRgn(
+        # region 函数走 gdi32（pywin32 不暴露 CreateRectRgn/CombineRgn）
+        gdi32 = ctypes.windll.gdi32
+        outer = gdi32.CreateRectRgn(0, 0, width, height)
+        inner = gdi32.CreateRectRgn(
             self.BORDER, self.BORDER,
             max(width - self.BORDER, self.BORDER),
             max(height - self.BORDER, self.BORDER),
         )
-        win32gui.CombineRgn(outer, outer, inner, win32con.RGN_DIFF)
+        gdi32.CombineRgn(outer, outer, inner, win32con.RGN_DIFF)
         win32gui.SetWindowRgn(self.hwnd, outer, True)
         win32gui.SetWindowPos(
             self.hwnd, win32con.HWND_TOPMOST, left, top, width, height,
@@ -343,7 +345,16 @@ def _hover_capture(hotkey_vk: int, timeout: float) -> dict:
             if escape_now:
                 return {"cancelled": True}
             if capture_triggered:
-                return capture_with_retry(x, y, last_root or None)
+                # 捕获瞬间以当前点重新命中取根窗口（hover 的 last_root 可能滞后/陈旧）
+                scope = last_root or None
+                try:
+                    info = _element_from_point(x, y)
+                    hwnd = int(info.handle or 0)
+                    if hwnd and hwnd != overlay.hwnd:
+                        scope = _root_window_handle(hwnd) or scope
+                except Exception:
+                    pass
+                return capture_with_retry(x, y, scope)
             time.sleep(0.03)
         return {"timeout": True}
     finally:

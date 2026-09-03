@@ -9,6 +9,7 @@ import queue
 import subprocess
 import sys
 import threading
+import time
 from typing import Any
 
 
@@ -55,9 +56,18 @@ class DesktopCaptureSession:
             self._queue.put(line)
 
     def pick(self, timeout_seconds: float = 90.0) -> dict[str, Any]:
-        try:
-            line = self._queue.get(timeout=timeout_seconds)
-        except queue.Empty:
+        deadline = time.monotonic() + timeout_seconds
+        while time.monotonic() < deadline:
+            try:
+                # 短切片轮询：长 timeout 的 queue.get 在 Windows 上吞 Ctrl+C
+                line = self._queue.get(timeout=min(0.5, deadline - time.monotonic()))
+                break
+            except queue.Empty:
+                if self._proc.poll() is not None:
+                    # agent 已退出但没读到行 → 崩溃信息
+                    return self._crash_info({"timeout": True})
+                continue
+        else:
             return self._crash_info({"timeout": True})
         line = line.strip()
         if not line:
