@@ -72,3 +72,12 @@ runtime 状态机（ADR 0004 恢复、ADR 0005 暂停）、三类执行器与 25
 - 调用方入门文档（`docs/api-usage.md`）与合同测试落在下一里程碑（M6）。
 - HTTP 重估条件已写明，避免"是否该上服务"反复讨论。
 - 规则 10 的排除清单除本 ADR 明确推迟的 HTTP 外维持不变。
+
+## §6 通道对齐原则（2026-09-03 增补，维护者提议）
+
+**能力层（rpa_core 包）是唯一能力实现；CLI 与 devserver 是两个薄通道。**
+
+- **CLI 优先**：能力层每项能力必须有 CLI 入口（agent/脚本通道，M15 WorkBuddy 主路径）；devserver 只做人类交互，不得独占能力。
+- **devserver 复用方式 = 直接 import 能力层**（现状即如此，架构检查强制隔离），**不是 spawn 解析 CLI 子进程**（stdout 解析脆弱、双进程开销）。唯一例外是运行操控（长任务/取消），子进程隔离是机制选择，见运行控制 backlog 条目。
+- 新能力落地顺序：库函数 → CLI 子命令 →（如需人类交互）devserver 端点。
+- 当前缺口（CLI 无入口，仅 devserver 有）：`catalog` 摘要、`capture` 交互捕获、`elements` 读写/verify——入 BACKLOG「CLI 通道对齐」条目补齐。

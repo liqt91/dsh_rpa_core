@@ -2,6 +2,8 @@
 
 ## 2026-09-03
 
+- 通道对齐评估（维护者提议）：CLI 优先原则成立，落地形态修正为「能力层唯一实现 + CLI/devserver 双薄通道」，devserver 复用 = import 能力层而非 spawn 解析 CLI；ADR 0006 §6 增补；CLI 缺口（catalog/capture/elements 子命令）入 BACKLOG「CLI 通道对齐」。
+
 - 安装 Tencent BrowserSkill（bsk 0.1.11 CLI/daemon + Edge/Chrome 商店扩展 0.2.0），doctor 全绿；Chrome 版存在且可用（不走 CDP 端口，不受 Chrome 152 默认 profile 封锁影响）。
 - M14 按 spike 结论从"自研扩展"改为 bsk 单扩展路线（任务单重写）：probe 验证 evaluate 注入 picker（elementsFromPoint 变体绕过 bsk ControlOverlay 遮罩）→ **Ctrl+Click 捕获手势**（普通点击穿透不捕获，用户可正常导航）→ 轮询读回 → 回验命中，Edge 152 全链路通过。
 - 实装 `BrowserBskCaptureSession`（session start/stop 映射、取消强制 stop、runner 注入可测）+ devserver transport 白名单加 `bsk` + cli 工厂分发；合同测试 8 项。

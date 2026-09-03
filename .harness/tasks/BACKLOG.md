@@ -11,6 +11,7 @@
 
 ## 后续任务
 
+- [ ] CLI 通道对齐（ADR 0006 §6，排期待定）：`rpa-core catalog`（digest+清单）、`rpa-core capture browser|desktop`（交互式 start/pick/cancel）、`rpa-core elements`（流程元素 list/verify）——补齐"仅 devserver 有"的能力，让 M15 agent 不碰 HTTP 完成捕获全流程。
 - [ ] M15 WorkBuddy 连接器入驻（`planned`）
   - 计划：`M15-workbuddy-connector.md`
   - 决策：CLI+Skill 主路径（2026-09-02 评估五种入驻形态）；MCP 化、专家包装后置。
