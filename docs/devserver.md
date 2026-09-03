@@ -29,7 +29,7 @@ uv run python -m rpa_core.cli devserver --port 9000 --workflows D:\tmp\workflows
 | `/api/workflows/{name}/elements/{el}` | GET / POST / DELETE | 读 / 保存（model 校验）/ 删除流程元素 |
 | `/api/workflows/{name}/elements/{el}/verify` | POST | 元素结构校验（M13：ElementDescriptor 模型 + selector/locator 语义；活体验证需捕获会话内完成） |
 | `/api/capture/desktop/{start,pick,cancel}` | POST | 桌面 UIA 捕获（M10 实装，见下） |
-| `/api/capture/browser/{start,pick,cancel}` | POST | 浏览器捕获（M10 实装，见下）；start 需 `{"transport": "persistent" \| "user-browser"}` |
+| `/api/capture/browser/{start,pick,cancel}` | POST | 浏览器捕获；start 需 `{"transport": "bsk" \| "persistent" \| "user-browser"}`（M14：bsk 为主） |
 
 错误形态统一为 `{"error": <CODE>, "message": <str>}`：`BAD_REQUEST`(400)、`FORBIDDEN`(403)、`NOT_FOUND`(404)、`METHOD_NOT_ALLOWED`(405)、`PAYLOAD_TOO_LARGE`(413)、`NOT_IMPLEMENTED`(501)。
 
@@ -100,7 +100,16 @@ Invoke-RestMethod -Method Post -Uri "$base/api/capture/browser/pick" `
 - `cancel` 结束会话：桌面会终止 agent 子进程，浏览器会清理注入并断开（不关闭你的浏览器）
 - 桌面捕获优先级：`windowHandle` > 前台窗口 > 屏幕级 hit-test（窗口作用域可免疫安全软件覆盖层，见 `docs/capture-transport.md`）
 
-## 捕获契约（M10 前占位）
+**浏览器捕获 — bsk**（BrowserSkill 单扩展，用户真实已登录浏览器，零弹窗，M14 主路线）：
 
-- `POST /api/capture/browser/start` 的 `transport` 取值与降级链见 `docs/capture-transport.md`：`persistent`（专用持久 profile，主路线）/ `user-browser`（登录态复用，子类型由 S1 结论定：chrome-inspect-ws / panerelay / mcp-extension）。
-- 桌面捕获走 UIA hit-test，捕获会话状态放独立子进程（避免 COM 状态污染服务进程），子进程协议随 M10 实装。
+```powershell
+$s = Invoke-RestMethod -Method Post -Uri "$base/api/capture/browser/start" `
+  -ContentType "application/json" `
+  -Body (@{transport="bsk"; browserInstanceId="5680266e"} | ConvertTo-Json)   # 多浏览器在线时指定
+# Agent Window 打开目标页面（Ctrl+Click 捕获元素，普通点击导航不干扰）：
+Invoke-RestMethod -Method Post -Uri "$base/api/capture/browser/pick" `
+  -ContentType "application/json" `
+  -Body (@{sessionId=$s.sessionId; timeoutSeconds=60; saveAs="loginPageEl"; flow="myFlow"} | ConvertTo-Json)
+```
+
+bsk 捕获交互：hover 高亮（elementsFromPoint 变体绕过 bsk 的 ControlOverlay 遮罩）→ **Ctrl+Click 捕获**（普通点击穿透不捕获，可正常导航找到目标）→ Esc 取消；`cancel` 强制 `bsk session stop` 回收 Agent Window。

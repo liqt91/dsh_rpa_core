@@ -33,11 +33,13 @@ DESKTOP_DESCRIPTOR = {
 
 class FakeBrowserSession:
     def __init__(self, transport, user_data_dir=None, headless=False, user_agent=None,
-                 browser_type="edge", page_url=None, start_url=None):
+                 browser_type="edge", page_url=None, start_url=None,
+                 browser_instance_id=None):
         self.config = {
             "transport": transport, "user_data_dir": user_data_dir,
             "headless": headless, "user_agent": user_agent,
             "browser_type": browser_type, "page_url": page_url, "start_url": start_url,
+            "browser_instance_id": browser_instance_id,
         }
         self.started = False
         self.closed = False
@@ -317,3 +319,38 @@ def test_element_put_rejects_invalid_document(capture_server):
         base=base,
     )
     assert status == 404
+
+
+def test_browser_bsk_transport_flow_saves_to_flow(capture_server):
+    """transport=bsk 走 devserver 契约层（FakeBrowserSession 兼容 bsk 签名）。"""
+    base = f"http://127.0.0.1:{capture_server.port}"
+    status, payload = _request(
+        "POST",
+        "/api/capture/browser/start",
+        {"transport": "bsk", "browserInstanceId": "edge1"},
+        base=base,
+    )
+    assert status == 200
+    session_id = payload["sessionId"]
+
+    status, payload = _request(
+        "POST",
+        "/api/capture/browser/pick",
+        {"sessionId": session_id, "saveAs": "bskButton", "flow": FLOW, "timeoutSeconds": 5},
+        base=base,
+    )
+    assert status == 200
+    assert payload["savedAs"] == "bskButton"
+    assert payload["flow"] == FLOW
+
+    status, element = _request("GET", _elements(element="bskButton"), base=base)
+    assert status == 200
+    assert element["kind"] == "browser"
+    assert element["selector"] == {"css": "#go"}
+
+    status, payload = _request(
+        "POST", "/api/capture/browser/cancel", {"sessionId": session_id}, base=base
+    )
+    assert status == 200
+    assert payload["cancelled"] is True
+    assert capture_server.app._browser_sessions == {}

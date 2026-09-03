@@ -3,7 +3,11 @@ import asyncio
 import json
 from pathlib import Path
 
-from rpa_core.capture import BrowserCaptureSession, DesktopCaptureSession
+from rpa_core.capture import (
+    BrowserBskCaptureSession,
+    BrowserCaptureSession,
+    DesktopCaptureSession,
+)
 from rpa_core.catalog import load_catalog
 from rpa_core.compiler import WorkflowCompiler
 from rpa_core.devserver import DevServer
@@ -40,13 +44,20 @@ def _compile(path: Path):
     return root, catalog, plan
 
 
+def _browser_capture_factory(**kwargs):
+    """devserver 捕获工厂分发：transport=bsk 走 BrowserBskCaptureSession（用户真实浏览器）。"""
+    if kwargs.get("transport") == "bsk":
+        return BrowserBskCaptureSession(**kwargs)
+    return BrowserCaptureSession(**kwargs)
+
+
 def _serve(args) -> int:
     root = Path(__file__).resolve().parents[2]
     server = DevServer(
         commands_root=root / "commands",
         workflows_root=args.workflows,
         port=args.port,
-        browser_capture_factory=BrowserCaptureSession,
+        browser_capture_factory=_browser_capture_factory,
         desktop_capture_factory=DesktopCaptureSession,
     )
     print(

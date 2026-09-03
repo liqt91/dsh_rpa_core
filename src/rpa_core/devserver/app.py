@@ -26,7 +26,7 @@ DEFAULT_CAPABILITIES = frozenset(
 )
 
 _CAPTURE_ACTIONS = frozenset({"start", "pick", "cancel"})
-_BROWSER_TRANSPORTS = frozenset({"persistent", "user-browser"})
+_BROWSER_TRANSPORTS = frozenset({"persistent", "user-browser", "bsk"})
 
 
 class ApiError(Exception):
@@ -200,7 +200,7 @@ class DevServerApp:
             raise ApiError(
                 400,
                 "BAD_REQUEST",
-                "'transport' must be one of: persistent, user-browser",
+                "'transport' must be one of: persistent, user-browser, bsk",
             )
         factory = self._require_capture(self._browser_capture_factory, "browser capture")
         if action == "start":
@@ -209,6 +209,9 @@ class DevServerApp:
                 if body.get("userDataDir"):
                     kwargs["user_data_dir"] = str(body["userDataDir"])
                 kwargs["headless"] = bool(body.get("headless", False))
+            elif transport == "bsk":
+                if body.get("browserInstanceId"):
+                    kwargs["browser_instance_id"] = str(body["browserInstanceId"])
             else:
                 kwargs["browser_type"] = str(body.get("browserType", "edge"))
                 if body.get("userDataDir"):
