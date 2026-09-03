@@ -83,6 +83,10 @@ class _HoverOverlay:
     def show_rect(self, left: int, top: int, right: int, bottom: int) -> None:
         win32gui = self._win32gui
         win32con = self._win32con
+        bounds = (left, top, right, bottom)
+        if bounds == getattr(self, "_last_bounds", None):
+            return  # rect 未变：跳过 region 重建与 SetWindowPos（每帧 GDI 开销）
+        self._last_bounds = bounds
         width = right - left
         height = bottom - top
         # region 函数走 gdi32（pywin32 不暴露 CreateRectRgn/CombineRgn）
@@ -94,7 +98,8 @@ class _HoverOverlay:
             max(height - self.BORDER, self.BORDER),
         )
         gdi32.CombineRgn(outer, outer, inner, win32con.RGN_DIFF)
-        win32gui.SetWindowRgn(self.hwnd, outer, True)
+        gdi32.DeleteObject(inner)  # inner 不再使用，否则每帧泄漏一个 GDI 句柄
+        win32gui.SetWindowRgn(self.hwnd, outer, True)  # outer 所有权移交窗口
         win32gui.SetWindowPos(
             self.hwnd, win32con.HWND_TOPMOST, left, top, width, height,
             win32con.SWP_NOACTIVATE | win32con.SWP_SHOWWINDOW,
@@ -524,7 +529,7 @@ def _hover_capture(hotkey_vk: int, timeout: float) -> dict:
         while time.monotonic() < deadline:
             x, y = _cursor_pos()
             moved = abs(x - last_pos[0]) > 3 or abs(y - last_pos[1]) > 3
-            if moved and time.monotonic() - last_hit > 0.06:
+            if moved and time.monotonic() - last_hit > 0.03:
                 last_hit = time.monotonic()
                 last_pos = (x, y)
                 # 粗命中（大 rect）时才允许 DFS，且节流 150ms（DFS ~50ms 不能每帧跑）
@@ -557,7 +562,7 @@ def _hover_capture(hotkey_vk: int, timeout: float) -> dict:
                 _rect, root, _ = _hover_hit(x, y, overlay.hwnd, allow_scoped=True)
                 scope = root or last_root or None
                 return capture_with_retry(x, y, scope)
-            time.sleep(0.03)
+            time.sleep(0.015)
         return {"timeout": True}
     finally:
         overlay.destroy()
