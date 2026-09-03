@@ -8,14 +8,14 @@
 
 - 执行传输：`browser.launch` 新增 `transport:"bsk"`，executor 子进程调 `bsk` CLI，session 映射 + 取消时强制 `session stop`；manifest 声明能力差异（css/xpath、仅主 frame）
 - 捕获：devserver 经 bsk evaluate 注入 picker（elementsFromPoint 变体）→ 轮询读回 → ElementDescriptor 落库（flow 资产）→ evaluate 回验
-- 元素库「＋捕获」入口：面板按钮 → browser（bsk 为主 / persistent 兜底）/ desktop（F9）二选 → 结果直接存入当前流程元素资产
+- 元素库「＋捕获」入口：面板按钮 → browser（bsk 为主 / persistent 兜底）/ desktop 二选 → 结果直接存入当前流程元素资产；desktop 分支先 attach 目标窗口（ADR 0010，免疫编辑器遮挡）
 
 ## 任务
 
 - [ ] bsk 传输执行器：`browser.launch transport:"bsk"`（子进程调 `bsk` CLI；session start/stop 映射；取消时强制 `session stop`）
 - [ ] manifest 能力声明：css/xpath、仅主 frame（iframe 走 evaluate 的 document.evaluate 补 XPath，不进本里程碑）
 - [ ] devserver 捕获：经 bsk evaluate 注入 picker（elementsFromPoint 变体）→ 轮询 `window.__rpaCaptureResult` → ElementDescriptor（selector+verifyCount+metadata）落库当前流程 elements/ → evaluate 回验命中
-- [ ] 元素库「＋捕获」入口（并入切片，接 M13.1 flow 作用域）：面板顶部按钮 → browser（bsk）/ desktop（F9 热键提示）二选
+- [ ] 元素库「＋捕获」入口（并入切片，接 M13.1 flow 作用域）：面板顶部按钮 → browser（bsk）/ desktop 二选；desktop 分支**先选目标窗口（attach 拿 windowHandle）再走窗口作用域捕获**（免疫编辑器遮挡，ADR 0010），F9 热键提示
 - [ ] 合同测试：bsk 子进程协议 mock（无真实浏览器）、session 映射、取消强制 stop、能力差异声明
 - [ ] 实机验收：登录态页面捕获（描述符回验命中）+ 真实点选 picker（elementsFromPoint 变体）确认
 - [ ] 完整门禁

@@ -1,5 +1,14 @@
 # 工作日志
 
+## 2026-09-03
+
+- 安装 Tencent BrowserSkill（bsk 0.1.11 CLI/daemon + Edge/Chrome 商店扩展 0.2.0），doctor 全绿；Chrome 版存在且可用（不走 CDP 端口，不受 Chrome 152 默认 profile 封锁影响）。
+- M14 按 spike 结论从"自研扩展"改为 bsk 单扩展路线（任务单重写）：probe 验证 evaluate 注入 picker（elementsFromPoint 变体绕过 bsk ControlOverlay 遮罩）→ **Ctrl+Click 捕获手势**（普通点击穿透不捕获，用户可正常导航）→ 轮询读回 → 回验命中，Edge 152 全链路通过。
+- 实装 `BrowserBskCaptureSession`（session start/stop 映射、取消强制 stop、runner 注入可测）+ devserver transport 白名单加 `bsk` + cli 工厂分发；合同测试 8 项。
+- 实机验收：Edge 必应搜索框 Ctrl+Click 捕获 `#sb_form_q`（verifyCount=1）落库 `workflows/demo/elements/bingSearchBox.json`，重新导航回验命中；cancel 干净回收 Agent Window。
+- 路线决策（ADR 0010）：编辑器保持 web 页面，捕获遮挡实证矩阵（bsk Agent Window 独立/窗口作用域 hit-test 免疫/仅裸屏幕兜底路径会遮挡）；桌面客户端薄壳入 BACKLOG 远期（重估条件三条）；M14 desktop 捕获分支补"先 attach 目标窗口"。
+- full gate 131 tests；当前 active：M14（剩余：M14a 执行传输、能力声明、元素库「＋捕获」入口、登录态验收）。
+
 ## 2026-09-02
 
 - 修复 2026-08-31 旧条目的编码乱码（上个会话编码问题，从 PROGRESS.md 语义还原）。

@@ -1,0 +1,26 @@
+{
+  "kind": "browser",
+  "selector": {
+    "css": "#sb_form_q"
+  },
+  "verifyCount": 1,
+  "name": null,
+  "metadata": {
+    "tag": "textarea",
+    "id": "sb_form_q",
+    "classes": [
+      "sb_form_q",
+      "sb_form_ta",
+      "hp_fadein_ph",
+      "hp_fadein_show"
+    ],
+    "text": "",
+    "rect": {
+      "x": 215,
+      "y": 183,
+      "width": 843,
+      "height": 22
+    }
+  },
+  "capturedAt": "2026-09-03T03:42:33.565136Z"
+}
