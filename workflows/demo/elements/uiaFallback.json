@@ -1,0 +1,20 @@
+{
+  "kind": "desktop",
+  "selector": {
+    "locator": {
+      "backend": "uia",
+      "controlType": "Pane"
+    }
+  },
+  "verifyCount": 29,
+  "name": null,
+  "metadata": {
+    "windowHandle": 13633222,
+    "windowTitle": "小红书 - 你的生活兴趣社区 - Google Chrome",
+    "controlType": "Pane",
+    "automationId": null,
+    "name": null,
+    "className": "Intermediate D3D Window"
+  },
+  "capturedAt": "2026-09-04T05:12:31.176243Z"
+}

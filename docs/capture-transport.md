@@ -68,7 +68,7 @@
 |---|---|
 | CDP attach 默认 profile | S0 实测被 Chrome 152 封锁（136+ 上游策略） |
 | profile 拷贝快照 | GB 级复制、app-bound 加密风险、快照过期（日常浏览器新登录不回流） |
-| UIA 读 Chrome 无障碍树 | 只暴露 Name/ControlType，无法还原可靠 CSS selector |
+| UIA 读 Chrome 无障碍树 | 只暴露 Name/ControlType，无法还原可靠 CSS selector；**2026-09-03 实测兜底进一步证伪**：hybrid 关闭时对没装扩展的 Chrome 网页正文 UIA 捕获命中渲染层 Pane（Intermediate D3D Window），verifyCount=29（29 个同型匹配，locator 不唯一不可用）——网页正文没有可用的 UIA 退路，网页捕获只有扩展/bsk 两条正路。UIA 的正确用途是桌面应用 + 浏览器 UI 骨架（TabStrip/Omnibox 等，已验证可达） |
 | 代理抓包 | 抓流量不抓 DOM 元素 |
 | 图像识别 | 仓库明确排除 |
 | Firefox attach | Playwright 不支持挂用户 Firefox |
