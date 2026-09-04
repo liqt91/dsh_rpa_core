@@ -273,18 +273,23 @@ class DevServerApp:
             return None
 
     def extension_token(self, body: Any) -> dict:
-        """配对 token：PUT body {"token": "..."} 写入（编辑器侧配置一次）。"""
+        """配对 token：PUT/POST body {"token": "..."} 显式写入；GET 返回当前状态与值。"""
         if isinstance(body, dict) and body.get("token"):
             self._token_path.write_text(str(body["token"]), encoding="utf-8")
-            return {"configured": True}
-        return {"configured": self._read_token() is not None}
+            return {"configured": True, "token": str(body["token"])}
+        return {"configured": self._read_token() is not None,
+                "token": self._read_token()}
 
     def _require_extension_token(self, headers) -> None:
         expected = self._read_token()
-        if expected is None:
-            raise ApiError(501, "NOT_IMPLEMENTED",
-                           "capture extension not paired (POST /api/capture/extension/token first)")
         provided = headers.get("X-Capture-Token", "")
+        if not provided:
+            raise ApiError(403, "FORBIDDEN", "missing capture extension token")
+        if expected is None:
+            # TOFU（trust on first use）：loopback 本地工具，首次接触自动采纳并持久化，
+            # 免手动配对；此后只认这个 token，轮换需删 .capture-extension-token
+            self._token_path.write_text(provided, encoding="utf-8")
+            return
         if provided != expected:
             raise ApiError(403, "FORBIDDEN", "invalid capture extension token")
 

@@ -88,6 +88,12 @@
     }
   };
 
+  // 鼠标离开网页区域/窗口失焦/滚动时清掉高亮框（否则红框残留在屏幕上）
+  const onLeave = () => { if (armed) hideBox(); };
+  document.documentElement.addEventListener("mouseleave", onLeave, true);
+  window.addEventListener("blur", onLeave);
+  window.addEventListener("scroll", onLeave, true);
+
   chrome.runtime.onMessage.addListener((msg) => {
     if (msg && msg.type === "rpa-capture-arm") {
       armed = msg.armed === true;

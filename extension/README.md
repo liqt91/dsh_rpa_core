@@ -8,12 +8,9 @@ MV3 零构建 content-script 扩展：捕获模式下在任意浏览器（Chrome
 2. Edge：`edge://extensions` → 同上
 3. 两个浏览器都装 → 跨浏览器无缝捕获
 
-## 配对（一次性）
+## 配对（自动，零操作）
 
-1. 编辑器所在机器起 devserver（`rpa-core devserver`，默认 8765）
-2. 扩展 popup（点工具栏图标）→「生成新 token」→ 复制
-3. devserver 侧写入：`POST /api/capture/extension/token` body `{"token": "<粘贴>"}`；或编辑器元素库捕获入口自动带上
-4. 配对后零弹窗；token 存 devserver `workflows/.capture-extension-token` + 扩展 `chrome.storage.local`
+扩展首次轮询 devserver 时自动生成 token 并携带——devserver **TOFU（首次接触自动采纳）**并持久化到 `workflows/.capture-extension-token`，之后只认这个 token。无需任何手动配对操作。popup 里可查看 token / 重新生成（重新生成后需删除 devserver 的 `.capture-extension-token` 文件再轮换）。
 
 ## 使用
 

@@ -30,7 +30,7 @@ uv run python -m rpa_core.cli devserver --port 9000 --workflows D:\tmp\workflows
 | `/api/workflows/{name}/elements/{el}/verify` | POST | 元素结构校验（M13：ElementDescriptor 模型 + selector/locator 语义；活体验证需捕获会话内完成） |
 | `/api/capture/desktop/{start,pick,cancel}` | POST | 桌面 UIA 捕获（M10 实装，见下） |
 | `/api/capture/browser/{start,pick,cancel}` | POST | 浏览器捕获；start 需 `{"transport": "bsk" \| "persistent" \| "user-browser" \| "extension"}`（M14：bsk 为主，extension 为无缝跨页主路线） |
-| `/api/capture/extension/token` | GET / POST | 扩展 token 配对（编辑器侧配置一次，存 `workflows/.capture-extension-token`） |
+| `/api/capture/extension/token` | GET / POST | 扩展 token（POST 显式写入；**TOFU**：未配对时首个带 token 的请求自动采纳持久化——免手动配对；存 `workflows/.capture-extension-token`） |
 | `/api/capture/extension/pending` | GET | 扩展轮询捕获激活状态（头 `X-Capture-Token`） |
 | `/api/capture/extension/result` | POST | 扩展 content script 捕获结果回传（头 `X-Capture-Token`） |
 
@@ -133,9 +133,7 @@ bsk 捕获交互：hover 高亮（elementsFromPoint 变体绕过 bsk 的 Control
 **浏览器捕获 — extension**（自研 content-script 扩展，无缝跨浏览器/跨页主路线，零逐次授权）：
 
 ```powershell
-# 配对一次：扩展 popup 生成 token → 写入 devserver
-Invoke-RestMethod -Method Post -Uri "$base/api/capture/extension/token" `
-  -ContentType "application/json" -Body (@{token="粘贴扩展 popup 里的 token"} | ConvertTo-Json)
+# 配对零操作：扩展首次轮询自动带 token，devserver TOFU 采纳（无需手动写入）
 # 捕获：捕获期间所有浏览器的所有页面 hover 高亮自动激活，Ctrl+Click 捕获：
 Invoke-RestMethod -Method Post -Uri "$base/api/capture/browser/start" `
   -ContentType "application/json" -Body '{"transport":"extension"}'

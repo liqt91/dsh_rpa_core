@@ -54,23 +54,24 @@ def _pair(base):
         "POST", "/api/capture/extension/token", {"token": "tok-1"}, base=base
     )
     assert status == 200
-    assert payload == {"configured": True}
+    assert payload == {"configured": True, "token": "tok-1"}
 
 
 def test_token_pairing_roundtrip(server):
     base = f"http://127.0.0.1:{server.port}"
     status, payload = _request("GET", "/api/capture/extension/token", base=base)
-    assert payload == {"configured": False}
+    assert payload == {"configured": False, "token": None}
     _pair(base)
     status, payload = _request("GET", "/api/capture/extension/token", base=base)
-    assert payload == {"configured": True}
+    assert payload == {"configured": True, "token": "tok-1"}
 
 
 def test_pending_requires_configured_token(server):
     base = f"http://127.0.0.1:{server.port}"
+    # 未配对且请求不带 token → 403（缺凭据）
     status, payload = _request("GET", "/api/capture/extension/pending", base=base)
-    assert status == 501
-    _pair(base)
+    assert status == 403
+    # TOFU：首次带 token 接触自动采纳并持久化（免手动配对）
     status, payload = _request(
         "GET", "/api/capture/extension/pending", base=base, token="tok-1"
     )

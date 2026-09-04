@@ -7,8 +7,12 @@ const POLL_IDLE_MS = 5000;     // 空闲时
 let pollMs = POLL_IDLE_MS;
 
 async function getToken() {
+  // 自动配对：未配对时自动生成并持久化（devserver 侧 TOFU 首次接触采纳）
   const data = await chrome.storage.local.get("rpaCaptureToken");
-  return data.rpaCaptureToken || "";
+  if (data.rpaCaptureToken) return data.rpaCaptureToken;
+  const token = crypto.randomUUID();
+  await chrome.storage.local.set({ rpaCaptureToken: token });
+  return token;
 }
 
 async function poll() {
