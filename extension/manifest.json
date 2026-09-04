@@ -1,0 +1,21 @@
+{
+  "manifest_version": 3,
+  "name": "rpa_core element capture",
+  "version": "0.1.0",
+  "description": "rpa_core 元素捕获扩展：捕获模式下在任意页面 hover 高亮、Ctrl+Click 捕获元素描述符回传编辑器。",
+  "permissions": ["storage", "alarms"],
+  "host_permissions": ["http://127.0.0.1:8765/*"],
+  "background": { "service_worker": "background.js" },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "all_frames": false,
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "rpa_core capture"
+  }
+}

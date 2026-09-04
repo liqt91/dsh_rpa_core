@@ -31,7 +31,7 @@ DEFAULT_CAPABILITIES = frozenset(
 )
 
 _CAPTURE_ACTIONS = frozenset({"start", "pick", "cancel"})
-_BROWSER_TRANSPORTS = frozenset({"persistent", "user-browser", "bsk"})
+_BROWSER_TRANSPORTS = frozenset({"persistent", "user-browser", "bsk", "extension"})
 
 
 class ApiError(Exception):
@@ -222,6 +222,8 @@ class DevServerApp:
                     kwargs["browser_instance_id"] = str(body["browserInstanceId"])
                 if body.get("pageUrl"):
                     kwargs["page_url"] = str(body["pageUrl"])
+            elif transport == "extension":
+                pass  # content-script 扩展：无启动参数，picker 已在所有页面待命
             else:
                 kwargs["browser_type"] = str(body.get("browserType", "edge"))
                 if body.get("userDataDir"):
@@ -257,6 +259,58 @@ class DevServerApp:
         session.cancel()
         session.close()
         return {"cancelled": True, "sessionId": session_id}
+
+    # -- content-script 扩展捕获（M14 无缝路线）：token 配对 + pending/result --
+
+    @property
+    def _token_path(self):
+        return self._store.root / ".capture-extension-token"
+
+    def _read_token(self) -> str | None:
+        try:
+            return self._token_path.read_text(encoding="utf-8").strip() or None
+        except OSError:
+            return None
+
+    def extension_token(self, body: Any) -> dict:
+        """配对 token：PUT body {"token": "..."} 写入（编辑器侧配置一次）。"""
+        if isinstance(body, dict) and body.get("token"):
+            self._token_path.write_text(str(body["token"]), encoding="utf-8")
+            return {"configured": True}
+        return {"configured": self._read_token() is not None}
+
+    def _require_extension_token(self, headers) -> None:
+        expected = self._read_token()
+        if expected is None:
+            raise ApiError(501, "NOT_IMPLEMENTED",
+                           "capture extension not paired (POST /api/capture/extension/token first)")
+        provided = headers.get("X-Capture-Token", "")
+        if provided != expected:
+            raise ApiError(403, "FORBIDDEN", "invalid capture extension token")
+
+    def _pending_extension_session(self) -> str | None:
+        for session_id, session in self._browser_sessions.items():
+            if getattr(session, "is_extension_capture", False) and session.pending:
+                return session_id
+        return None
+
+    def extension_pending(self, headers) -> dict:
+        """扩展 background 轮询：是否有激活的扩展捕获会话。"""
+        self._require_extension_token(headers)
+        session_id = self._pending_extension_session()
+        return {"pending": session_id is not None, "sessionId": session_id}
+
+    def extension_result(self, headers, body: Any) -> dict:
+        """扩展 content script 捕获结果回传。"""
+        self._require_extension_token(headers)
+        if not isinstance(body, dict):
+            raise ApiError(400, "BAD_REQUEST", "result body must be a JSON object")
+        session_id = str(body.get("sessionId") or self._pending_extension_session() or "")
+        session = self._browser_sessions.get(session_id)
+        if session is None or not getattr(session, "is_extension_capture", False):
+            raise ApiError(404, "NOT_FOUND", f"no pending extension session: {session_id}")
+        session.submit(body.get("descriptor", body))
+        return {"received": True, "sessionId": session_id}
 
     def _save_element(self, flow: str, descriptor: dict, save_as: str) -> dict:
         store = self._element_store(flow)

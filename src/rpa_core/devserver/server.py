@@ -133,9 +133,11 @@ class _RequestHandler(BaseHTTPRequestHandler):
                     )
             raise ApiError(404, "NOT_FOUND", f"no route for {path}")
         if path.startswith(_CAPTURE_PREFIX):
+            segments = path[len(_CAPTURE_PREFIX) :].split("/")
+            if len(segments) == 2 and segments[0] == "extension":
+                return self._route_capture_extension(segments[1], method)
             if method != "POST":
                 raise ApiError(405, "METHOD_NOT_ALLOWED", "use POST for capture endpoints")
-            segments = path[len(_CAPTURE_PREFIX) :].split("/")
             if len(segments) != 2:
                 raise ApiError(404, "NOT_FOUND", f"no route for {path}")
             kind, action = segments
@@ -146,6 +148,24 @@ class _RequestHandler(BaseHTTPRequestHandler):
                 return self.app.capture_browser(action, body)
             raise ApiError(404, "NOT_FOUND", f"no route for {path}")
         raise ApiError(404, "NOT_FOUND", f"no route for {path}")
+
+    def _route_capture_extension(self, action: str, method: str) -> dict:
+        """content-script 扩展捕获通道：token 配对（编辑器侧）+ pending/result（扩展侧）。"""
+        if action == "token":
+            if method == "GET":
+                return self.app.extension_token(None)
+            if method in ("POST", "PUT"):
+                return self.app.extension_token(self._read_json(required=True))
+            raise ApiError(405, "METHOD_NOT_ALLOWED", "use GET/POST for extension token")
+        if action == "pending":
+            if method != "GET":
+                raise ApiError(405, "METHOD_NOT_ALLOWED", "use GET for extension pending")
+            return self.app.extension_pending(self.headers)
+        if action == "result":
+            if method != "POST":
+                raise ApiError(405, "METHOD_NOT_ALLOWED", "use POST for extension result")
+            return self.app.extension_result(self.headers, self._read_json(required=True))
+        raise ApiError(404, "NOT_FOUND", f"no route for extension action {action}")
 
     def _drain_body(self, length: int) -> None:
         remaining = length

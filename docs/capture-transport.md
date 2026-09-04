@@ -79,10 +79,13 @@
 |---|---|---|---|
 | 主（M10a） | 持久 profile | 公共页 + 可接受登录一次的站点 | 已定 |
 | **优先（M14）** | **BrowserSkill(bsk)单扩展路线**:evaluate 注入 picker + selector 直通执行 | 登录态页面、高频捕获、零弹窗、登录态执行 | **S2 部分实测通过（2026-09-02)**，详见 docs/capture-browserskill.md;真实点选/小红书/iframe 验证待补 |
-| 兜底 | 自研捕获扩展（token 配对反连） | bsk evaluate 通道不够用时启用 | 设计已备，暂缓实装 |
+| **无缝捕获（M14 后段）** | **自研 content-script 扩展**（`<all_urls>` content script + token 配对 + HTTP 回传） | **跨浏览器/跨页无缝 hover 捕获**（鼠标在 Chrome/Edge/各页面间移动框选不申请权限） | 已实装（2026-09-03）；实机验收待人工 |
+| 兜底 | 自研捕获扩展（token 配对反连 WS） | bsk evaluate 通道不够用时启用 | 设计已备，暂缓实装 |
 | 次（M10b） | chrome-inspect-ws（DevToolsActivePort WS URL） | 登录态页面、零重登录 | S1 已验证通过；**每连接弹窗确认，高频场景降级为备选** |
 | 记录备查 | Panerelay | —— | 降级（Node 依赖） |
 | 记录备查 | Playwright MCP 扩展传输 | —— | 不作为传输（机制已借鉴进 M14） |
+
+**2026-09-03 三次修订（无缝捕获场景 + 重估）**：维护者场景——Chrome/Edge 同时开、各若干页面，捕获模式下鼠标在浏览器/页面间移动无缝框选、零逐次授权。重估结论：**bsk 的 Agent Window + 借用模型结构性不满足**（borrow 搬动标签页 + 每次借用内嵌确认），无缝捕获只有自研 content-script 扩展（`<all_urls>` content script 天然全页面注入）原生支持。**通道分工定稿**：自研扩展 = 设计期捕获主路线；bsk = 运行期执行（M14a）+ 免安装捕获兜底；桌面 hover = 非浏览器区域。自研扩展不走 WS（stdlib http.server 无 WS 服务端），改 HTTP POST 回传 + pending 短轮询。重估时顺带核实 Playwright MCP 官方 README 已劝 coding agent 走 CLI+SKILLS（佐证 ADR 0006 §6 CLI 优先），且其 ref 体系（@eN 会话局部）与我们确定性 selector 回放契约冲突，维持不作传输。
 
 **2026-09-02 二次修订（S2 后）**:M14 由"自研捕获扩展"调整为接入 Tencent/BrowserSkill（单扩展、商店分发、免弹窗、顺带获得登录态执行能力）；依据与实测记录见 docs/capture-browserskill.md。自研扩展方案保留为兜底。
 

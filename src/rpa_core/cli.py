@@ -7,6 +7,7 @@ from rpa_core.capture import (
     BrowserBskCaptureSession,
     BrowserCaptureSession,
     DesktopCaptureSession,
+    ExtensionCaptureSession,
 )
 from rpa_core.catalog import load_catalog
 from rpa_core.compiler import WorkflowCompiler
@@ -48,6 +49,8 @@ def _browser_capture_factory(**kwargs):
     """devserver 捕获工厂分发：transport=bsk 走 BrowserBskCaptureSession（用户真实浏览器）。"""
     if kwargs.get("transport") == "bsk":
         return BrowserBskCaptureSession(**kwargs)
+    if kwargs.get("transport") == "extension":
+        return ExtensionCaptureSession(**kwargs)
     return BrowserCaptureSession(**kwargs)
 
 
@@ -227,7 +230,8 @@ def main() -> int:
         if action == "capture":
             cap_sub = sub.add_subparsers(dest="target", required=True)
             browser = cap_sub.add_parser("browser")
-            browser.add_argument("--transport", choices=["bsk", "persistent", "user-browser"],
+            browser.add_argument("--transport", choices=["bsk", "persistent", "user-browser",
+                                                         "extension"],
                                  default="bsk")
             browser.add_argument("--browser-instance-id")
             browser.add_argument("--browser-type", default="edge")

@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><style>
+  body { font-family: sans-serif; width: 300px; padding: 12px; }
+  h3 { margin: 0 0 8px; font-size: 14px; }
+  .row { display: flex; gap: 6px; margin: 8px 0; }
+  input { flex: 1; font-family: monospace; font-size: 12px; padding: 4px; }
+  button { padding: 4px 10px; font-size: 12px; }
+  #status { font-size: 12px; margin-top: 8px; }
+  .ok { color: #1a7f37; } .bad { color: #cf222e; }
+</style></head>
+<body>
+  <h3>rpa_core 捕获扩展</h3>
+  <div class="row">
+    <input id="token" type="text" placeholder="粘贴 devserver 的配对 token">
+    <button id="save">保存</button>
+  </div>
+  <div class="row"><button id="gen">生成新 token</button></div>
+  <div id="status"></div>
+  <script src="popup.js"></script>
+</body>
+</html>
