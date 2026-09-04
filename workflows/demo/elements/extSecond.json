@@ -1,0 +1,25 @@
+{
+  "kind": "browser",
+  "selector": {
+    "css": "#nav > div.container > div.position-relative:nth-of-type(1) > div.d-flex"
+  },
+  "verifyCount": 1,
+  "name": null,
+  "metadata": {
+    "tag": "div",
+    "id": null,
+    "classes": [
+      "d-flex",
+      "align-items-center",
+      "flex-grow-1"
+    ],
+    "text": "首页\n                    \n                    树洞\n                    女装\n          ",
+    "rect": {
+      "x": 114,
+      "y": 83,
+      "width": 1296,
+      "height": 33
+    }
+  },
+  "capturedAt": "2026-09-04T03:37:11.898352Z"
+}

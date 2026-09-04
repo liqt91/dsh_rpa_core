@@ -1,0 +1,23 @@
+{
+  "kind": "browser",
+  "selector": {
+    "css": "#search-input-in-feeds"
+  },
+  "verifyCount": 1,
+  "name": null,
+  "metadata": {
+    "tag": "textarea",
+    "id": "search-input-in-feeds",
+    "classes": [
+      "textarea"
+    ],
+    "text": "",
+    "rect": {
+      "x": 449,
+      "y": 79,
+      "width": 752,
+      "height": 24
+    }
+  },
+  "capturedAt": "2026-09-04T03:35:07.164185Z"
+}
