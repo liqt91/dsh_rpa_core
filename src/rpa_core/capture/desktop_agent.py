@@ -470,17 +470,14 @@ def capture_with_retry(x: int, y: int, scope_hwnd: int | None, attempts: int = 4
 
 
 def _hover_hit(x: int, y: int, exclude_hwnd: int, allow_scoped: bool = True):
-    """hover 命中：返回 (rect, root_hwnd, scoped_ran)。
+    """hover 命中：返回 (rect, root_hwnd, element_info, scoped_ran)。
 
-    快路径优先（ElementFromPoint + 向下钻取，正常控件/浏览器 UI 骨架/桌面图标
-    都在这命中）。DFS 兜底仅在快路径完全失败（rect 为 None，如无 handle 虚拟
-    元素）时启用——粗容器命中（大 rect）在 hover 期间直接框粗 rect（响应优先，
-    横扫不停顿），捕获瞬间的 capture_with_retry 走全量 DFS 保证精度。
-    allow_scoped=False 时跳过 DFS（hover 高频帧节流用）。
+    element_info 供捕获瞬间复用（避免重复 hit-test）。其余语义见 DFS 兜底注释。
     """
     rect = None
     root = 0
     scoped_ran = False
+    leaf = None
     try:
         info = _element_from_point(x, y)
         hwnd = int(info.handle or 0)
@@ -489,6 +486,7 @@ def _hover_hit(x: int, y: int, exclude_hwnd: int, allow_scoped: bool = True):
             # ElementFromPoint 返回的 rect 本来就有效，handle 只用于根窗口定位
             fine = _drill_to_leaf(info, x, y)
             rect = fine.rectangle
+            leaf = fine
             root = _root_window_handle(hwnd) if hwnd else 0
     except Exception:
         pass
@@ -498,16 +496,17 @@ def _hover_hit(x: int, y: int, exclude_hwnd: int, allow_scoped: bool = True):
         if not root:
             root = _win32_root_at(x, y)
         if root:
-            scoped_info, scoped_rect = _window_scope_hit(root, x, y)
+            scoped_leaf, scoped_rect = _window_scope_hit(root, x, y)
             if scoped_rect is not None:
                 rect = scoped_rect
+                leaf = scoped_leaf
     if rect is None:
         # 全部失败时退化到窗口矩形（至少框住目标窗口）
         if root:
             win_rect = wintypes.RECT()
             ctypes.windll.user32.GetWindowRect(root, ctypes.byref(win_rect))
             rect = win_rect
-    return rect, root, scoped_ran
+    return rect, root, leaf, scoped_ran
 
 
 def _hover_capture(hotkey_vk: int, timeout: float) -> dict:
@@ -521,6 +520,8 @@ def _hover_capture(hotkey_vk: int, timeout: float) -> dict:
     last_hit = 0.0
     last_scoped = 0.0  # DFS 节流：粗命中区域 150ms 一次（浏览器 UI 骨架变化慢）
     last_root = 0
+    last_leaf = None  # hover 最后命中的元素（捕获瞬间复用，省一次 hit-test）
+    last_rect = None
     hotkey_was = _hotkey_pressed(hotkey_vk)
     lbutton_was = _hotkey_pressed(VK_LBUTTON)
     try:
@@ -532,15 +533,18 @@ def _hover_capture(hotkey_vk: int, timeout: float) -> dict:
                 last_pos = (x, y)
                 # 粗命中（大 rect）时才允许 DFS，且节流 150ms（DFS ~50ms 不能每帧跑）
                 allow_scoped = time.monotonic() - last_scoped > 0.15
-                rect, root, scoped_ran = _hover_hit(
+                rect, root, leaf, scoped_ran = _hover_hit(
                     x, y, overlay.hwnd, allow_scoped=allow_scoped
                 )
                 if scoped_ran:
                     last_scoped = time.monotonic()
                 if rect is not None:
                     overlay.show_rect(rect.left, rect.top, rect.right, rect.bottom)
+                    last_rect = rect
                 if root:
                     last_root = root
+                if leaf is not None:
+                    last_leaf = leaf
             overlay.pump()
 
             hotkey_now = _hotkey_pressed(hotkey_vk)
@@ -555,9 +559,14 @@ def _hover_capture(hotkey_vk: int, timeout: float) -> dict:
             if escape_now:
                 return {"cancelled": True}
             if capture_triggered:
-                # 捕获瞬间以当前点重新命中取根窗口（allow_scoped=True 保证精度，
-                # 免疫覆盖层 / XAML 虚拟元素无 handle 的情况）
-                _rect, root, _ = _hover_hit(x, y, overlay.hwnd, allow_scoped=True)
+                # 捕获瞬间：鼠标仍在 hover 最后命中的 rect 内 → 直接复用该元素
+                # （省一次 hit-test + DFS，捕获延迟从数百 ms 降到 describe 一次）
+                if last_leaf is not None and last_rect is not None and _rect_contains(
+                    last_rect, x, y
+                ):
+                    return _describe_info(last_leaf, last_root or 0)
+                # 否则（hover 没跟上/鼠标刚快速移入）走全量 DFS 保证精度
+                _rect, root, _leaf, _ = _hover_hit(x, y, overlay.hwnd, allow_scoped=True)
                 scope = root or last_root or None
                 return capture_with_retry(x, y, scope)
             time.sleep(0.015)
