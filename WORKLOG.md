@@ -2,6 +2,7 @@
 
 ## 2026-09-03
 
+- browser.launch 加 keepOpen（bsk 传输）：流程跑完不 session.stop Agent Window，留给 bsk daemon 持有（空闲超时兜底）供人工继续操作/登录/人审；显式 browser.close 仍停；实机验证 run 结束后 session 仍存活。full gate 192 tests。
 - 完成 M18 运行控制：ADR 0011 放行 devserver 代理型运行控制（子进程 run host，进程内仍无 orchestrator/run 状态）；/api/runs start/status/events/cancel + CLI run --inputs；前端 ▶运行/■取消/事件流面板轮询。full gate 190 tests。
 - 完成 M17 编辑器进阶：变量补全（${ 引用路径下拉）、全屏画布、运行状态高亮（devserver 新增只读 /api/runs/latest-events 端点读 run_artifacts events.jsonl，画布节点按 node_id 标状态色）；E2E +3；full gate 184 tests。
 - rpa-core-runtime 0.1.0 发布 PyPI（撞名 rpa-core → 改名 rpa-core-runtime）；wheel 内含 26 条命令清单；干净环境 pip install 实测可用；WorkBuddy 连接器 init 前置（可安装源）就绪。

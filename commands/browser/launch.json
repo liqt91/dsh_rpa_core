@@ -23,6 +23,10 @@
         "type": "string",
         "minLength": 1,
         "description": "bsk 传输专用：多浏览器在线时指定实例（bsk browsers 查询）"
+      },
+      "keepOpen": {
+        "type": "boolean",
+        "description": "bsk 传输专用：流程结束后不 session.stop（Agent Window 留给 bsk daemon 持有，空闲超时兜底，可继续人工操作）；默认 false = 流程结束即回收"
       }
     },
     "additionalProperties": false

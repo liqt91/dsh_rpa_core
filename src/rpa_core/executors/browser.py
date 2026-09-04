@@ -32,6 +32,7 @@ class PlaywrightExecutor(CommandExecutor):
         self._playwright: Playwright | None = None
         self._sessions: dict[str, tuple[Browser, BrowserContext, Page]] = {}
         self._bsk_sessions: dict[str, BskSession] = {}
+        self._bsk_keep_open: dict[str, bool] = {}
         self._bsk_runner = bsk_runner
 
     async def _ensure_runtime(self) -> Playwright:
@@ -264,7 +265,9 @@ class PlaywrightExecutor(CommandExecutor):
         except BskError as exc:
             return CommandResult.failure(ErrorCode.EXECUTOR_FAILED, str(exc))
         session_id = str(uuid.uuid4())
+        keep_open = bool(inputs.get("keepOpen", False))
         self._bsk_sessions[session_id] = session
+        self._bsk_keep_open[session_id] = keep_open
         return CommandResult.success(
             outputs={"sessionId": session_id},
             effects=[
@@ -418,9 +421,15 @@ class PlaywrightExecutor(CommandExecutor):
         )
 
     async def close(self) -> None:
-        for _sid, session in list(self._bsk_sessions.items()):
-            await self._run_bsk(session.stop)
+        # bsk keepOpen 会话（流程结束仍保留 Agent Window 供人工继续，daemon 空闲超时兜底）
+        # 不在此停；非 keepOpen 的一律回收（规则 11）
+        for sid in list(self._bsk_sessions):
+            if self._bsk_keep_open.get(sid):
+                self._bsk_sessions.pop(sid, None)
+                continue
+            await self._run_bsk(self._bsk_sessions[sid].stop)
         self._bsk_sessions.clear()
+        self._bsk_keep_open.clear()
         for browser, _context, _page in list(self._sessions.values()):
             await browser.close()
         self._sessions.clear()

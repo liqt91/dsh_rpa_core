@@ -256,3 +256,42 @@ async def test_executor_close_stops_all_bsk_sessions():
     assert not executor._bsk_sessions
     stop_calls = [c for c in runner.calls if c[:2] == ["session", "stop"]]
     assert len(stop_calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_executor_close_keeps_keepopen_bsk_session():
+    """keepOpen=True 的 bsk 会话在 executor.close() 时不 session.stop（Agent Window 保留）。"""
+    runner = _count_runner()
+    executor = PlaywrightExecutor(bsk_runner=runner)
+    for _ in range(2):
+        await executor.execute(
+            _invocation("browser.launch", {"transport": "bsk", "keepOpen": True}),
+            asyncio.Event(),
+        )
+    await executor.execute(
+        _invocation("browser.launch", {"transport": "bsk"}), asyncio.Event()
+    )
+    await executor.close()
+    assert not executor._bsk_sessions  # keepOpen 会话仅从登记移除，不 stop
+    stop_calls = [c for c in runner.calls if c[:2] == ["session", "stop"]]
+    assert len(stop_calls) == 1  # 只有非 keepOpen 的被停
+
+
+@pytest.mark.asyncio
+async def test_bsk_explicit_close_still_stops_keepopen_session():
+    """keepOpen 不豁免显式 browser.close 命令（流程内显式关仍停）。"""
+    runner = _count_runner()
+    executor = PlaywrightExecutor(bsk_runner=runner)
+    launch = await executor.execute(
+        _invocation("browser.launch", {"transport": "bsk", "keepOpen": True}),
+        asyncio.Event(),
+    )
+    sid = launch.outputs["sessionId"]
+    result = await executor.execute(
+        _invocation("browser.close", {"sessionId": sid}), asyncio.Event()
+    )
+    assert result.status == "success"
+    assert sid not in executor._bsk_sessions
+    stop_calls = [c for c in runner.calls if c[:2] == ["session", "stop"]]
+    assert len(stop_calls) == 1
+    await executor.close()

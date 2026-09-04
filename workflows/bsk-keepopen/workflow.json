@@ -1,0 +1,21 @@
+{
+  "schema_version": "1.0",
+  "id": "bsk-keepopen",
+  "name": "bsk keepOpen test",
+  "inputs": {},
+  "root": {
+    "type": "sequence",
+    "id": "root",
+    "children": [
+      {"type": "action", "id": "launch", "command": "browser.launch",
+       "with": {"transport": "bsk", "keepOpen": true}},
+      {"type": "action", "id": "nav", "command": "browser.navigate",
+       "with": {"sessionId": "${steps.launch.outputs.sessionId}",
+                "url": "https://example.com"}},
+      {"type": "action", "id": "read", "command": "browser.getText",
+       "with": {"sessionId": "${steps.launch.outputs.sessionId}",
+                "selector": "h1"}},
+      {"type": "return", "id": "ret", "value": "${steps.read.outputs.value}"}
+    ]
+  }
+}

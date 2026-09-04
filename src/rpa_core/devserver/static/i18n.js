@@ -98,6 +98,7 @@ window.RPA_I18N = {
     userAgent: "User-Agent",
     transport: "传输方式",
     browserInstanceId: "浏览器实例 ID",
+    keepOpen: "结束后保持打开",
     item_var: "循环变量名",
     error_var: "错误变量名",
     automationId: "自动化 ID",
