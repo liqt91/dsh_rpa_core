@@ -28,6 +28,10 @@ uv run python -m rpa_core.cli devserver --port 9000 --workflows D:\tmp\workflows
 | `/api/workflows/{name}/elements` | GET | 该流程元素资产列表（`{elements: []}`） |
 | `/api/workflows/{name}/elements/{el}` | GET / POST / DELETE | 读 / 保存（model 校验）/ 删除流程元素 |
 | `/api/workflows/{name}/elements/{el}/verify` | POST | 元素结构校验（M13：ElementDescriptor 模型 + selector/locator 语义；活体验证需捕获会话内完成） |
+| `/api/runs` | POST | 启动运行（body `{"workflow": <名>, "inputs": {...}?}`；spawn `rpa-core run` 子进程，返回 `{runId}`） |
+| `/api/runs/{runId}` | GET | 运行状态（子进程在跑？exit code？result.json） |
+| `/api/runs/{runId}/events` | GET | 运行事件流（轮询 events.jsonl） |
+| `/api/runs/{runId}/cancel` | POST | 取消运行（终止子进程，run 落 cancelled） |
 | `/api/capture/desktop/{start,pick,cancel}` | POST | 桌面 UIA 捕获（M10 实装，见下） |
 | `/api/capture/browser/{start,pick,cancel}` | POST | 浏览器捕获；start 需 `{"transport": "bsk" \| "persistent" \| "user-browser" \| "extension"}`（M14：bsk 为主，extension 为无缝跨页主路线） |
 | `/api/capture/extension/token` | GET / POST | 扩展 token（POST 显式写入；**TOFU**：未配对时首个带 token 的请求自动采纳持久化——免手动配对；存 `workflows/.capture-extension-token`） |

@@ -2,6 +2,7 @@
 
 ## 2026-09-03
 
+- 完成 M18 运行控制：ADR 0011 放行 devserver 代理型运行控制（子进程 run host，进程内仍无 orchestrator/run 状态）；/api/runs start/status/events/cancel + CLI run --inputs；前端 ▶运行/■取消/事件流面板轮询。full gate 190 tests。
 - 完成 M17 编辑器进阶：变量补全（${ 引用路径下拉）、全屏画布、运行状态高亮（devserver 新增只读 /api/runs/latest-events 端点读 run_artifacts events.jsonl，画布节点按 node_id 标状态色）；E2E +3；full gate 184 tests。
 - rpa-core-runtime 0.1.0 发布 PyPI（撞名 rpa-core → 改名 rpa-core-runtime）；wheel 内含 26 条命令清单；干净环境 pip install 实测可用；WorkBuddy 连接器 init 前置（可安装源）就绪。
 - 完成 M14 收口：bsk 执行传输 + 自研 content-script 扩展无缝捕获 + 混合捕获 auto（装扩展网页走插件/没装走 UIA/先回传者胜）+ 桌面 hover 细粒度 + 元素编辑确认对话框 + 元素库「＋捕获」入口（网页/桌面二选）。实机验收：登录态小红书、跨浏览器无缝、混合双通道。feature capture-extension 通过。active → M15 WorkBuddy 连接器。

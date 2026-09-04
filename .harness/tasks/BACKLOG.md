@@ -10,7 +10,8 @@
 
 ## 后续任务
 
-- [ ] 运行控制（backlog，不立项）：前端 run + cancel + 看 events/result（最小范围）；子进程 run host + `/api/runs/{id}` + 新 ADR 放行 devserver 代理型操控 HTTP；pause/resume/indeterminate 对话后置。
+- [ ] 运行控制进阶（pause/resume、indeterminate 人工确认对话前端化）——M18 后置项，需 orchestrator 句柄跨进程模型或新机制
+- [ ] UI、DSH、MCP、调度器和安装器集成（`planned`）——见远期任务
 
 ## 远期任务
 
@@ -21,6 +22,12 @@
 
 ## 已完成
 
+- [x] M18 运行控制（`done`）
+  - 计划：`M18-run-control.md`
+  - 证据：ADR 0011 子进程 run host；/api/runs start/status/events/cancel；前端 ▶运行/■取消/事件流面板；190 tests 全门禁。
+- [x] M17 编辑器进阶（`done`）
+  - 计划：`M17-editor-advanced.md`
+  - 证据：变量补全/全屏画布/运行状态高亮（/api/runs/latest-events）；184 tests 全门禁。
 - [x] M15 WorkBuddy 连接器入驻（`done`）
   - 计划：`M15-workbuddy-connector.md`
   - 证据：CLI auth/status/unauth 三件套 + statusMatch 契约；workbuddy-connector/ 目录（meta type:cli + cli.json runtime python + icon.svg + skills/rpa-automation/SKILL.md + references 三件套）；修真实部署缺口（commands/ 打进 wheel + 包内优先解析）；干净 venv 本地路径安装验证；181 tests 全门禁。

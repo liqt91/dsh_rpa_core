@@ -141,6 +141,11 @@
       "id": "editor-advanced",
       "title": "Editor advanced: variable completion, fullscreen canvas, run status highlight",
       "passes": true
+    },
+    {
+      "id": "run-control",
+      "title": "Editor run control: run/cancel/status via devserver subprocess host",
+      "passes": true
     }
   ]
 }

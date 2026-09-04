@@ -323,6 +323,9 @@ def main() -> int:
             continue
         sub.add_argument("workflow", type=Path)
         sub.add_argument("--artifacts", type=Path, default=Path("run_artifacts"))
+        if action == "run":
+            sub.add_argument("--inputs", type=str, default=None,
+                             help="JSON 字符串，覆盖 workflow 默认输入")
         if action == "resume":
             sub.add_argument("--run-id", required=True)
             sub.add_argument("--allow-indeterminate", action="store_true")
@@ -358,6 +361,9 @@ def main() -> int:
         )
         try:
             orchestrator = Orchestrator(catalog, registry, args.artifacts)
+            inputs = None
+            if getattr(args, "inputs", None):
+                inputs = json.loads(args.inputs)
             if args.action == "resume":
                 result = await orchestrator.resume(
                     plan,
@@ -365,7 +371,7 @@ def main() -> int:
                     allow_indeterminate=args.allow_indeterminate,
                 ).wait()
             else:
-                result = await orchestrator.run(plan)
+                result = await orchestrator.run(plan, inputs=inputs)
             print(result.model_dump_json(indent=2))
             return 0 if result.status.value == "succeeded" else 1
         except CheckpointError as exc:

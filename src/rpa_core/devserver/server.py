@@ -103,6 +103,23 @@ class _RequestHandler(BaseHTTPRequestHandler):
             if method != "GET":
                 raise ApiError(405, "METHOD_NOT_ALLOWED", "use GET")
             return self.app.latest_run_events()
+        if path == "/api/runs":
+            if method != "POST":
+                raise ApiError(405, "METHOD_NOT_ALLOWED", "use POST to start a run")
+            return self.app.run_start(self._read_json(required=True))
+        if path.startswith("/api/runs/"):
+            rest = path[len("/api/runs/"):]
+            if rest.endswith("/events"):
+                if method != "GET":
+                    raise ApiError(405, "METHOD_NOT_ALLOWED", "use GET for run events")
+                return self.app.run_events(rest[: -len("/events")])
+            if rest.endswith("/cancel"):
+                if method != "POST":
+                    raise ApiError(405, "METHOD_NOT_ALLOWED", "use POST to cancel a run")
+                return self.app.run_cancel(rest[: -len("/cancel")])
+            if method != "GET":
+                raise ApiError(405, "METHOD_NOT_ALLOWED", "use GET for run status")
+            return self.app.run_status(rest)
         if path.startswith(_WORKFLOW_SEGMENT_PREFIX):
             segments = path[len(_WORKFLOW_SEGMENT_PREFIX):].split("/")
             if not segments[0] or any(segment == "" for segment in segments):

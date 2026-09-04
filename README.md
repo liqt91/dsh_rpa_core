@@ -163,6 +163,8 @@ uv run python -m rpa_core.cli devserver
 
 元素库（M13 + 流程目录）：编辑器元素库面板显示**当前流程**（文件名框）的元素资产 `workflows/<流程名>/elements/` → 浏览/插入到选中节点字段 → 结构校验（verify）→ 删除；端点嵌套于流程：`/api/workflows/<流程名>/elements[/<元素>[/verify]]`。
 
+运行控制（M18，ADR 0011）：编辑器「▶ 运行」spawn 子进程跑 `rpa-core run`（devserver 进程内无 orchestrator/run 状态，隔离不破）→ 轮询 `/api/runs/{runId}` 状态 + 事件流面板 → 「■ 取消」终止子进程；pause/resume/indeterminate 对话后置。
+
 端点与编辑器用法详见 `docs/devserver.md`。
 
 ## 示例

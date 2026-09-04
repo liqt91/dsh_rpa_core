@@ -193,6 +193,48 @@ def test_run_status_highlight(server):
         browser.close()
 
 
+def test_editor_run_control(server):
+    """编辑器运行控制：运行 data 流程 → 状态转完成。"""
+    base = f"http://127.0.0.1:{server.port}"
+    data_workflow = {
+        "schema_version": "1.0",
+        "id": "rc-e2e",
+        "name": "rc e2e",
+        "inputs": {"workspace": "."},
+        "root": {
+            "type": "sequence",
+            "id": "root",
+            "children": [
+                {"type": "action", "id": "fmt", "command": "data.format",
+                 "with": {"template": "hello {name}", "values": {"name": "e2e"}}},
+                {"type": "return", "id": "ret", "value": "${steps.fmt.outputs.text}"},
+            ],
+        },
+    }
+    _request_json(base, "PUT", "/api/workflows/rc-e2e", data_workflow)
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
+        page.goto(f"{base}/")
+        page.wait_for_selector('[data-command="data.format"]')
+
+        page.fill("#file-name", "rc-e2e")
+        page.select_option("#open-select", "rc-e2e")
+        page.wait_for_selector('#canvas li[data-node="fmt"]')
+
+        page.click("#btn-run")
+        page.wait_for_selector("#run-panel:not(.hidden)")
+        # 等运行完成（状态文本不再含"运行中"）
+        page.wait_for_function(
+            "() => !document.querySelector('#run-status-text').textContent.includes('运行中')",
+            timeout=30000,
+        )
+        status_text = page.locator("#run-status-text").inner_text()
+        assert "succeeded" in status_text or "完成" in status_text
+        browser.close()
+
+
 def test_capture_entry_menu_toggles(server):
     """元素库「＋捕获」入口：按钮开合菜单，含网页/桌面两个选项。"""
     base = f"http://127.0.0.1:{server.port}"

@@ -14,6 +14,7 @@ from rpa_core.model.capture import (
 )
 from rpa_core.model.workflow import Workflow
 
+from .runs import RunManager
 from .store import (
     WorkflowNameError,
     WorkflowNotFoundError,
@@ -61,8 +62,10 @@ class DevServerApp:
         self._desktop_sessions: dict[str, Any] = {}
         self._capture_lock = threading.RLock()
         self._capture_seq = 0
+        self._runs = RunManager(store.root)
 
     def close(self) -> None:
+        self._runs.close()
         with self._capture_lock:
             sessions = list(self._browser_sessions.values()) + list(
                 self._desktop_sessions.values()
@@ -138,6 +141,40 @@ class DevServerApp:
             if line:
                 events.append(json.loads(line))
         return {"runId": run_dir.name, "events": events}
+
+    # -- 运行控制（ADR 0011：子进程 run host，devserver 只做代理） -----------
+
+    def run_start(self, body: Any) -> dict:
+        if not isinstance(body, dict):
+            raise ApiError(400, "BAD_REQUEST", "request body must be a JSON object")
+        workflow = body.get("workflow")
+        if not isinstance(workflow, str) or not workflow:
+            raise ApiError(400, "BAD_REQUEST", "missing 'workflow'")
+        inputs = body.get("inputs")
+        if inputs is not None and not isinstance(inputs, dict):
+            raise ApiError(400, "BAD_REQUEST", "'inputs' must be an object")
+        try:
+            return self._runs.start(workflow, inputs)
+        except FileNotFoundError as exc:
+            raise ApiError(404, "NOT_FOUND", str(exc)) from exc
+
+    def run_status(self, run_id: str) -> dict:
+        try:
+            return self._runs.status(run_id)
+        except KeyError:
+            raise ApiError(404, "NOT_FOUND", f"run not found: {run_id}") from None
+
+    def run_events(self, run_id: str) -> dict:
+        try:
+            return self._runs.events(run_id)
+        except KeyError:
+            raise ApiError(404, "NOT_FOUND", f"run not found: {run_id}") from None
+
+    def run_cancel(self, run_id: str) -> dict:
+        try:
+            return self._runs.cancel(run_id)
+        except KeyError:
+            raise ApiError(404, "NOT_FOUND", f"run not found: {run_id}") from None
 
     def compile(self, body: Any) -> dict:
         if not isinstance(body, dict):

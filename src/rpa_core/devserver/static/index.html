@@ -15,7 +15,9 @@
   <select id="open-select"><option value="">打开…</option></select>
   <button id="btn-save">保存</button>
   <button id="btn-compile">编译</button>
+  <button id="btn-run" title="运行当前流程（子进程）">▶ 运行</button>
   <button id="btn-run-status" title="按最近一次运行高亮画布节点">运行状态</button>
+  <button id="btn-run-cancel" class="hidden" title="取消运行">■ 取消</button>
   <span class="toolbar-sep"></span>
   <button id="btn-undo" title="撤销（Ctrl+Z）" disabled>↶ 撤销</button>
   <button id="btn-redo" title="重做（Ctrl+Y）" disabled>↷ 重做</button>
@@ -71,6 +73,13 @@
 </div>
 <footer>
   <div id="compile-panel"><span class="hint">点击「编译」校验当前工作流（保存草稿不要求编译通过）</span></div>
+  <div id="run-panel" class="hidden">
+    <div id="run-head">
+      <span id="run-status-text"></span>
+      <span id="run-events-toggle">事件流 ▾</span>
+    </div>
+    <div id="run-events" class="hidden"></div>
+  </div>
   <details id="glossary">
     <summary>术语表</summary>
     <dl id="glossary-list"></dl>

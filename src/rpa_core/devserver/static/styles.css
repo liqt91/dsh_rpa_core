@@ -133,6 +133,14 @@ footer { border-top: 1px solid var(--border); padding: 8px 12px; max-height: 180
 #canvas li[data-node].run-failed { border-left: 4px solid var(--bad); }
 #canvas li[data-node].run-running { border-left: 4px solid var(--accent); }
 
+/* 运行控制面板 */
+#run-panel { border-top: 1px solid var(--border); padding: 8px 0; margin-top: 6px; }
+#run-head { display: flex; justify-content: space-between; align-items: center; font-size: 12px; }
+#run-status-text { color: var(--muted); }
+#run-events-toggle { cursor: pointer; color: var(--accent); }
+#run-events { margin-top: 6px; max-height: 140px; overflow-y: auto; font-family: Consolas, monospace; font-size: 11px; }
+.run-event-line { padding: 1px 0; color: var(--faint); }
+
 /* 元素库捕获入口 */
 .capture-entry { position: relative; display: flex; gap: 4px; align-items: center; }
 #btn-element-capture { padding: 1px 8px; }

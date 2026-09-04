@@ -1809,6 +1809,87 @@ function clearRunStatus() {
   }
 }
 
+// ---------------------------------------------------------------------------
+// 运行控制（ADR 0011：子进程 run host）
+// ---------------------------------------------------------------------------
+
+let activeRunId = null;
+let runPollTimer = null;
+
+async function runWorkflow() {
+  const flow = currentFlow();
+  if (!flow) {
+    showCompileMessage("先命名或保存流程再运行", false);
+    return;
+  }
+  if (state.dirty && !confirm("流程有未保存修改，先保存再运行？（取消则运行磁盘上的版本）")) return;
+  if (state.dirty) await saveWorkflow();
+  try {
+    const result = await api("POST", "/api/runs", { workflow: flow });
+    activeRunId = result.runId;
+    $("run-panel").classList.remove("hidden");
+    $("btn-run-cancel").classList.remove("hidden");
+    $("run-status-text").textContent = `运行中… ${flow} (${activeRunId})`;
+    pollRunStatus();
+  } catch (err) {
+    showCompileMessage(`运行启动失败：${err.message || err}`, false);
+  }
+}
+
+async function pollRunStatus() {
+  if (!activeRunId) return;
+  try {
+    const s = await api("GET", `/api/runs/${activeRunId}`);
+    if (s.running) {
+      $("run-status-text").textContent = `运行中… (${activeRunId})`;
+      runPollTimer = setTimeout(pollRunStatus, 800);
+    } else {
+      const result = s.result;
+      const status = result ? result.status : `exit ${s.exitCode}`;
+      $("run-status-text").textContent = `完成：${status} (${activeRunId})`;
+      $("btn-run-cancel").classList.add("hidden");
+      activeRunId = null;
+      loadRunEventsOnce();
+    }
+  } catch (err) {
+    showCompileMessage(String(err.message || err), false);
+    activeRunId = null;
+  }
+}
+
+async function cancelRun() {
+  if (!activeRunId) return;
+  try {
+    await api("POST", `/api/runs/${activeRunId}/cancel`);
+    showCompileMessage("已取消运行", true);
+  } catch (err) {
+    showCompileMessage(String(err.message || err), false);
+  }
+  if (runPollTimer) clearTimeout(runPollTimer);
+  activeRunId = null;
+  $("btn-run-cancel").classList.add("hidden");
+  $("run-status-text").textContent = "已取消";
+}
+
+async function loadRunEventsOnce() {
+  const panel = $("run-events");
+  try {
+    // 当前 run 已结束，读最近运行事件（runId 与 activeRunId 解耦）
+    const data = await api("GET", "/api/runs/latest-events");
+    panel.textContent = "";
+    for (const ev of data.events.slice(-30)) {
+      const line = document.createElement("div");
+      line.className = "run-event-line";
+      line.textContent = `${ev.type}${ev.node_id ? " · " + ev.node_id : ""}`;
+      panel.appendChild(line);
+    }
+  } catch { /* 无运行记录 */ }
+}
+
+function toggleRunEvents() {
+  $("run-events").classList.toggle("hidden");
+}
+
 async function init() {
   const data = await api("GET", "/api/catalog");
   state.catalog = data.commands;
@@ -1854,6 +1935,13 @@ async function init() {
   $("btn-run-status").addEventListener("click", () => {
     loadRunStatus().catch((err) => showCompileMessage(String(err.message || err), false));
   });
+  $("btn-run").addEventListener("click", () => {
+    runWorkflow().catch((err) => showCompileMessage(String(err.message || err), false));
+  });
+  $("btn-run-cancel").addEventListener("click", () => {
+    cancelRun().catch((err) => showCompileMessage(String(err.message || err), false));
+  });
+  $("run-events-toggle").addEventListener("click", toggleRunEvents);
   window.addEventListener("keydown", handleEditorKeydown);
   window.addEventListener("beforeunload", (e) => {
     if (state.dirty) { e.preventDefault(); e.returnValue = ""; }
