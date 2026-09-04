@@ -22,6 +22,7 @@ class DesktopCaptureSession:
         point: dict[str, int] | None = None,
         window_handle: int | None = None,
         hover: bool = False,
+        hybrid: bool = False,
     ):
         args = [
             sys.executable,
@@ -38,6 +39,8 @@ class DesktopCaptureSession:
             args += ["--window-handle", str(window_handle)]
         if hover:
             args += ["--hover"]
+        if hybrid:
+            args += ["--hybrid"]
         self._proc = subprocess.Popen(
             args,
             stdout=subprocess.PIPE,

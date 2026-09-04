@@ -108,6 +108,12 @@ class _HoverOverlay:
     def pump(self) -> None:
         self._win32gui.PumpWaitingMessages()
 
+    def hide(self) -> None:
+        """隐藏高亮框（hybrid 模式鼠标进入浏览器内容区时让位给扩展页内高亮）。"""
+        if self.hwnd:
+            self._win32gui.ShowWindow(self.hwnd, self._win32con.SW_HIDE)
+            self._last_bounds = None
+
     def destroy(self) -> None:
         if self.hwnd:
             self._win32gui.DestroyWindow(self.hwnd)
@@ -509,10 +515,21 @@ def _hover_hit(x: int, y: int, exclude_hwnd: int, allow_scoped: bool = True):
     return rect, root, leaf, scoped_ran
 
 
-def _hover_capture(hotkey_vk: int, timeout: float) -> dict:
+# hybrid 模式：这些窗口类是浏览器**网页内容区**（让位给 content-script 扩展的页内捕获）
+_BROWSER_CONTENT_CLASSES = {"Chrome_RenderWidgetHostHWND"}
+
+
+def _window_class_at(x: int, y: int) -> str:
+    hwnd = int(ctypes.windll.user32.WindowFromPoint(wintypes.POINT(x, y)) or 0)
+    return _class_name_of(hwnd)
+
+
+def _hover_capture(hotkey_vk: int, timeout: float, hybrid: bool = False) -> dict:
     """hover 模式：鼠标移动实时高亮命中元素；热键或 Ctrl+Click 捕获；Esc 取消。
 
     作用域取悬停点 win32 根窗口（免疫屏幕覆盖层劫持），而非前台窗口。
+    hybrid=True（混合捕获）：鼠标进入浏览器网页内容区时抑制高亮且忽略捕获手势——
+    让位给浏览器扩展的页内捕获（没装扩展时该区域 UIA 捕获本来就不可用，行为不变）。
     """
     overlay = _HoverOverlay()
     deadline = time.monotonic() + timeout
@@ -527,8 +544,13 @@ def _hover_capture(hotkey_vk: int, timeout: float) -> dict:
     try:
         while time.monotonic() < deadline:
             x, y = _cursor_pos()
+            in_browser_content = hybrid and _window_class_at(x, y) in _BROWSER_CONTENT_CLASSES
             moved = abs(x - last_pos[0]) > 3 or abs(y - last_pos[1]) > 3
-            if moved and time.monotonic() - last_hit > 0.03:
+            if in_browser_content:
+                overlay.hide()
+                last_leaf = None
+                last_rect = None
+            elif moved and time.monotonic() - last_hit > 0.03:
                 last_hit = time.monotonic()
                 last_pos = (x, y)
                 # 粗命中（大 rect）时才允许 DFS，且节流 150ms（DFS ~50ms 不能每帧跑）
@@ -559,6 +581,9 @@ def _hover_capture(hotkey_vk: int, timeout: float) -> dict:
             if escape_now:
                 return {"cancelled": True}
             if capture_triggered:
+                if in_browser_content:
+                    # 浏览器内容区：让位给扩展的页内捕获（它有 Ctrl+Click 手势）
+                    continue
                 # 捕获瞬间：鼠标仍在 hover 最后命中的 rect 内 → 直接复用该元素
                 # （省一次 hit-test + DFS，捕获延迟从数百 ms 降到 describe 一次）
                 if last_leaf is not None and last_rect is not None and _rect_contains(
@@ -586,6 +611,8 @@ def main() -> int:
     parser.add_argument("--window-handle", type=int, default=None, dest="window_handle")
     parser.add_argument("--hover", action="store_true",
                         help="hover 模式：鼠标移动实时高亮，热键或 Ctrl+Click 捕获")
+    parser.add_argument("--hybrid", action="store_true",
+                        help="混合捕获：浏览器网页内容区让位给扩展页内捕获（仅配合 --hover）")
     args = parser.parse_args()
 
     if sys.platform != "win32":
@@ -599,7 +626,7 @@ def main() -> int:
         keys = {"F9": 0x78, "F8": 0x77, "F10": 0x79}
         hotkey = keys.get(args.hotkey.upper(), VK_F9)
         if args.hover:
-            result = _hover_capture(hotkey, args.timeout)
+            result = _hover_capture(hotkey, args.timeout, hybrid=args.hybrid)
         elif args.point is not None:
             scope = args.window_handle
             if not scope:

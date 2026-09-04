@@ -178,12 +178,17 @@ class DevServerApp:
                 kwargs["window_handle"] = int(body["windowHandle"])
             if body.get("hover"):
                 kwargs["hover"] = True
+                # 混合捕获：已配对扩展时自动双通道（网页走扩展、桌面走 UIA），
+                # 可用 body hybrid:false 显式关闭
+                if body.get("hybrid", True) and self._read_token() is not None:
+                    kwargs["hybrid"] = True
             with self._capture_lock:
                 session_id = self._next_capture_id("desktop")
                 self._desktop_sessions[session_id] = factory(**kwargs)
             return {
                 "sessionId": session_id,
-                "mode": "hover" if kwargs.get("hover")
+                "mode": "hybrid" if kwargs.get("hybrid")
+                else "hover" if kwargs.get("hover")
                 else "point" if kwargs.get("point") else "hotkey",
             }
         if action == "pick":
@@ -191,7 +196,7 @@ class DevServerApp:
             session = self._desktop_sessions[session_id]
             timeout = float(body.get("timeoutSeconds", 90))
             result = session.pick(timeout_seconds=timeout)
-            if result.get("kind") == "desktop" and body.get("saveAs"):
+            if result.get("kind") in ("desktop", "browser") and body.get("saveAs"):
                 flow = self._flow_from_body(body, require=True)
                 result.update(self._save_element(flow, result, str(body["saveAs"])))
             return result
@@ -294,9 +299,10 @@ class DevServerApp:
             raise ApiError(403, "FORBIDDEN", "invalid capture extension token")
 
     def _pending_extension_session(self) -> str | None:
-        for session_id, session in self._browser_sessions.items():
-            if getattr(session, "is_extension_capture", False) and session.pending:
-                return session_id
+        for registry in (self._browser_sessions, self._desktop_sessions):
+            for session_id, session in registry.items():
+                if getattr(session, "is_extension_capture", False) and session.pending:
+                    return session_id
         return None
 
     def extension_pending(self, headers) -> dict:
@@ -311,7 +317,9 @@ class DevServerApp:
         if not isinstance(body, dict):
             raise ApiError(400, "BAD_REQUEST", "result body must be a JSON object")
         session_id = str(body.get("sessionId") or self._pending_extension_session() or "")
-        session = self._browser_sessions.get(session_id)
+        session = self._browser_sessions.get(session_id) or self._desktop_sessions.get(
+            session_id
+        )
         if session is None or not getattr(session, "is_extension_capture", False):
             raise ApiError(404, "NOT_FOUND", f"no pending extension session: {session_id}")
         session.submit(body.get("descriptor", body))

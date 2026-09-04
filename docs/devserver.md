@@ -63,8 +63,11 @@ PowerShell 全流程（`$base = "http://127.0.0.1:8765"`）：
 ```powershell
 $base = "http://127.0.0.1:8765"
 $s = Invoke-RestMethod -Method Post -Uri "$base/api/capture/desktop/start" `
-  -ContentType "application/json" -Body '{"hover":true,"timeoutSeconds":60}'
-# → {"sessionId":"desktop-1","mode":"hover"}；移动鼠标（红色高亮框跟随），到目标控件按 F9 或 Ctrl+Click
+  -ContentType "application/json"   -Body '{"hover":true,"timeoutSeconds":60}'
+# → {"sessionId":"desktop-1","mode":"hover"}（已配对扩展时自动升级 hybrid：mode 回 "hybrid"）；
+# 移动鼠标（红色高亮框跟随），到目标控件按 F9 或 Ctrl+Click
+# 混合捕获（hybrid）：鼠标进浏览器网页内容区时桌面高亮让位给扩展页内 picker，
+# Ctrl+Click 走扩展捕获；浏览器 UI 骨架与桌面应用仍走 UIA。先回传者胜，另一侧自动回收。
 Invoke-RestMethod -Method Post -Uri "$base/api/capture/desktop/pick" `
   -ContentType "application/json" `
   -Body (@{sessionId=$s.sessionId; saveAs="myControl"; flow="myFlow"; timeoutSeconds=90} | ConvertTo-Json)

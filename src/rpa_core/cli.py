@@ -8,6 +8,7 @@ from rpa_core.capture import (
     BrowserCaptureSession,
     DesktopCaptureSession,
     ExtensionCaptureSession,
+    HybridCaptureSession,
 )
 from rpa_core.catalog import load_catalog
 from rpa_core.compiler import WorkflowCompiler
@@ -52,6 +53,13 @@ def _browser_capture_factory(**kwargs):
     if kwargs.get("transport") == "extension":
         return ExtensionCaptureSession(**kwargs)
     return BrowserCaptureSession(**kwargs)
+
+
+def _desktop_capture_factory(**kwargs):
+    """桌面捕获工厂：hybrid=True → 混合会话（桌面 hover + 扩展双通道）。"""
+    if kwargs.pop("hybrid", False):
+        return HybridCaptureSession(desktop_factory=DesktopCaptureSession, **kwargs)
+    return DesktopCaptureSession(**kwargs)
 
 
 def _cmd_catalog() -> int:
@@ -200,7 +208,7 @@ def _serve(args) -> int:
         workflows_root=args.workflows,
         port=args.port,
         browser_capture_factory=_browser_capture_factory,
-        desktop_capture_factory=DesktopCaptureSession,
+        desktop_capture_factory=_desktop_capture_factory,
     )
     print(
         json.dumps(
