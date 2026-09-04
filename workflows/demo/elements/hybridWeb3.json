@@ -1,0 +1,22 @@
+{
+  "kind": "desktop",
+  "selector": {
+    "locator": {
+      "backend": "uia",
+      "controlType": "Hyperlink",
+      "automationId": "nav-21221",
+      "name": "大吐槽"
+    }
+  },
+  "verifyCount": 0,
+  "name": null,
+  "metadata": {
+    "windowHandle": 66554,
+    "windowTitle": "管理员: Windows PowerShell",
+    "controlType": "Hyperlink",
+    "automationId": "nav-21221",
+    "name": "大吐槽",
+    "className": "nav-link p-1 "
+  },
+  "capturedAt": "2026-09-04T04:46:48.777945Z"
+}

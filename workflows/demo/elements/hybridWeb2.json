@@ -1,0 +1,21 @@
+{
+  "kind": "desktop",
+  "selector": {
+    "locator": {
+      "backend": "uia",
+      "controlType": "Group",
+      "automationId": "header"
+    }
+  },
+  "verifyCount": 0,
+  "name": null,
+  "metadata": {
+    "windowHandle": 66554,
+    "windowTitle": "管理员: Windows PowerShell",
+    "controlType": "Group",
+    "automationId": "header",
+    "name": null,
+    "className": "text-white text-center position-relative"
+  },
+  "capturedAt": "2026-09-04T04:45:41.587114Z"
+}

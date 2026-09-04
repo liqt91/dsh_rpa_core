@@ -1,0 +1,20 @@
+{
+  "kind": "desktop",
+  "selector": {
+    "locator": {
+      "backend": "uia",
+      "controlType": "Hyperlink"
+    }
+  },
+  "verifyCount": 0,
+  "name": null,
+  "metadata": {
+    "windowHandle": 131322,
+    "windowTitle": "Program Manager",
+    "controlType": "Hyperlink",
+    "automationId": null,
+    "name": null,
+    "className": null
+  },
+  "capturedAt": "2026-09-04T04:43:05.034797Z"
+}

@@ -1,0 +1,22 @@
+{
+  "kind": "desktop",
+  "selector": {
+    "locator": {
+      "backend": "uia",
+      "controlType": "Edit",
+      "automationId": "search-input-ai",
+      "name": "保定打人者已被刑拘"
+    }
+  },
+  "verifyCount": 0,
+  "name": null,
+  "metadata": {
+    "windowHandle": 66554,
+    "windowTitle": "管理员: Windows PowerShell",
+    "controlType": "Edit",
+    "automationId": "search-input-ai",
+    "name": "保定打人者已被刑拘",
+    "className": "textarea"
+  },
+  "capturedAt": "2026-09-04T04:44:33.852153Z"
+}

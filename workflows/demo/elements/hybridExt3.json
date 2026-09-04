@@ -1,0 +1,23 @@
+{
+  "kind": "browser",
+  "selector": {
+    "css": "#search-input-ai"
+  },
+  "verifyCount": 1,
+  "name": null,
+  "metadata": {
+    "tag": "textarea",
+    "id": "search-input-ai",
+    "classes": [
+      "textarea"
+    ],
+    "text": "",
+    "rect": {
+      "x": 420,
+      "y": 53,
+      "width": 878,
+      "height": 41
+    }
+  },
+  "capturedAt": "2026-09-04T05:06:15.118540Z"
+}

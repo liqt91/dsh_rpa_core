@@ -488,12 +488,13 @@ def _hover_hit(x: int, y: int, exclude_hwnd: int, allow_scoped: bool = True):
         info = _element_from_point(x, y)
         hwnd = int(info.handle or 0)
         if hwnd != exclude_hwnd:
-            # 虚拟元素（handle=None：桌面 ListItem / XAML 文本）同样可用——
-            # ElementFromPoint 返回的 rect 本来就有效，handle 只用于根窗口定位
+            # 虚拟元素（handle=None：桌面 ListItem / XAML 文本 / 浏览器无障碍树）
+            # 同样可用——ElementFromPoint 返回的 rect 本来就有效
             fine = _drill_to_leaf(info, x, y)
             rect = fine.rectangle
-            leaf = fine
-            root = _root_window_handle(hwnd) if hwnd else 0
+            # root 定位：有 handle 用 UIA 祖先链；无 handle（虚拟元素）必须走
+            # win32 窗口链，否则 hover 缓存的 last_root 会陈旧（指向别的窗口）
+            root = _root_window_handle(hwnd) if hwnd else _win32_root_at(x, y)
     except Exception:
         pass
     # 仅快路径完全失败（无 rect）才走 DFS 兜底
