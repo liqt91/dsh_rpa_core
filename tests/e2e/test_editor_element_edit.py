@@ -121,3 +121,27 @@ def test_element_dialog_rename_deletes_old(server):
     listing = _request_json(base, "GET", "/api/workflows/edit-e2e/elements")
     assert "newName" in listing["elements"]
     assert "oldName" not in listing["elements"]
+
+
+def test_capture_entry_menu_toggles(server):
+    """元素库「＋捕获」入口：按钮开合菜单，含网页/桌面两个选项。"""
+    base = f"http://127.0.0.1:{server.port}"
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
+        page.goto(f"{base}/")
+        page.wait_for_selector('[data-command="browser.click"]')
+
+        page.click("#btn-element-capture")
+        page.wait_for_selector("#capture-menu:not(.hidden)")
+        options = page.locator("#capture-menu button").all_text_contents()
+        assert len(options) == 2
+        assert "网页" in options[0]
+        assert "桌面" in options[1]
+
+        # 点外部关闭
+        page.click("#elements-head h2")
+        page.wait_for_function(
+            "() => document.querySelector('#capture-menu').classList.contains('hidden')"
+        )
+        browser.close()

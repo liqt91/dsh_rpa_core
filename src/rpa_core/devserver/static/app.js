@@ -1610,46 +1610,96 @@ async function editElement(name) {
 async function captureIntoField(node, key) {
   const flow = requireFlow();
   if (!flow) return;
-  showCompileMessage("正在启动捕获浏览器…", true);
+  const descriptor = await captureBrowserElement(flow);
+  if (descriptor && descriptor.selector && descriptor.selector.css) {
+    setWith(node, key, descriptor.selector.css);
+    markDirty();
+    render();
+    showCompileMessage(
+      `已捕获 selector（命中 ${descriptor.verifyCount}）` +
+        (descriptor._savedName ? ` 并存入「${descriptor._savedName}」` : "（未入库）"),
+      true,
+    );
+  }
+}
+
+// 通用捕获：返回描述符（或 null）。kind: "browser"（extension 无缝）| "desktop"（hover+hybrid）
+async function captureElement(kind) {
+  const flow = requireFlow();
+  if (!flow) return null;
+  if (kind === "browser") return captureBrowserElement(flow);
+  return captureDesktopElement(flow);
+}
+
+async function captureBrowserElement(flow) {
+  showCompileMessage("正在启动捕获（扩展无缝模式）…", true);
   let sessionId;
   try {
     const start = await api("POST", "/api/capture/browser/start", {
-      transport: "persistent",
-      headless: false,
+      transport: "extension",
     });
     sessionId = start.sessionId;
   } catch (err) {
     showCompileMessage(`捕获启动失败：${err.message || err}`, false);
-    return;
+    return null;
   }
-  showCompileMessage("捕获中：请在打开的浏览器里点击目标元素（Esc 取消）", true);
+  showCompileMessage("捕获中：鼠标移到网页元素上 Ctrl+Click 捕获（Esc 取消）", true);
   try {
     const result = await api("POST", "/api/capture/browser/pick", {
       sessionId,
       timeoutSeconds: 90,
     });
-    // pick 结束后立即回收捕获会话（避免悬挂 Agent Window / 持久浏览器进程）
     try { await api("POST", "/api/capture/browser/cancel", { sessionId }); } catch { /* 忽略 */ }
-    if (result.kind === "browser" && result.selector && result.selector.css) {
-      setWith(node, key, result.selector.css);
-      const savedName = await openElementDialog({
-        mode: "confirm", flow, descriptor: result,
-      });
-      markDirty();
-      render();
-      showCompileMessage(
-        `已捕获 selector（命中 ${result.verifyCount}）` +
-          (savedName ? ` 并存入「${savedName}」` : "（未入库）"),
-        true,
-      );
-    } else if (result.cancelled) {
-      showCompileMessage("已取消捕获", false);
-    } else if (result.timeout) {
-      showCompileMessage("捕获超时", false);
-    }
+    return await _confirmAndSave(flow, result);
   } catch (err) {
     showCompileMessage(`捕获失败：${err.message || err}`, false);
+    return null;
   }
+}
+
+async function captureDesktopElement(flow) {
+  showCompileMessage("正在启动桌面捕获（hover）…", true);
+  let sessionId;
+  try {
+    const start = await api("POST", "/api/capture/desktop/start", {
+      hover: true,
+      timeoutSeconds: 90,
+    });
+    sessionId = start.sessionId;
+  } catch (err) {
+    showCompileMessage(`捕获启动失败：${err.message || err}`, false);
+    return null;
+  }
+  showCompileMessage("捕获中：鼠标移到目标控件按 F9 或 Ctrl+Click（Esc 取消）", true);
+  try {
+    const result = await api("POST", "/api/capture/desktop/pick", {
+      sessionId,
+      timeoutSeconds: 90,
+    });
+    try { await api("POST", "/api/capture/desktop/cancel", { sessionId }); } catch { /* 忽略 */ }
+    return await _confirmAndSave(flow, result);
+  } catch (err) {
+    showCompileMessage(`捕获失败：${err.message || err}`, false);
+    return null;
+  }
+}
+
+// 捕获后统一确认入库：编辑对话框 → 保存
+async function _confirmAndSave(flow, result) {
+  if (!(result && result.kind && result.selector)) {
+    if (result.cancelled) showCompileMessage("已取消捕获", false);
+    else if (result.timeout) showCompileMessage("捕获超时", false);
+    return null;
+  }
+  const savedName = await openElementDialog({
+    mode: "confirm", flow, descriptor: result,
+  });
+  result._savedName = savedName || null;
+  return result;
+}
+
+function toggleCaptureMenu() {
+  $("capture-menu").classList.toggle("hidden");
 }
 
 async function init() {
@@ -1679,6 +1729,20 @@ async function init() {
   $("btn-delete").addEventListener("click", batchDelete);
   $("btn-elements-refresh").addEventListener("click", loadElements);
   $("file-name").addEventListener("input", loadElements);
+  $("btn-element-capture").addEventListener("click", toggleCaptureMenu);
+  document.addEventListener("click", (e) => {
+    const menu = $("capture-menu");
+    if (menu && !menu.classList.contains("hidden")
+        && !e.target.closest(".capture-entry")) {
+      menu.classList.add("hidden");
+    }
+  });
+  for (const btn of document.querySelectorAll("#capture-menu button")) {
+    btn.addEventListener("click", () => {
+      $("capture-menu").classList.add("hidden");
+      captureElement(btn.dataset.kind);
+    });
+  }
   window.addEventListener("keydown", handleEditorKeydown);
   window.addEventListener("beforeunload", (e) => {
     if (state.dirty) { e.preventDefault(); e.returnValue = ""; }

@@ -109,6 +109,19 @@ footer { border-top: 1px solid var(--border); padding: 8px 12px; max-height: 180
 #elements-list li.elements-empty { color: var(--muted); font-size: 12px; border-style: dashed; padding: 8px; text-align: center; }
 .capture-btn { margin-top: 6px; font-size: 12px; }
 
+/* 元素库捕获入口 */
+.capture-entry { position: relative; display: flex; gap: 4px; align-items: center; }
+#btn-element-capture { padding: 1px 8px; }
+#capture-menu {
+  position: absolute; top: 100%; right: 0; z-index: 50; margin-top: 4px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 6px;
+  box-shadow: 0 8px 24px rgba(0,0,0,.14); padding: 4px; display: flex; flex-direction: column; gap: 2px;
+  min-width: 150px;
+}
+#capture-menu.hidden { display: none; }
+#capture-menu button { text-align: left; border: none; background: none; padding: 5px 10px; font-size: 12px; border-radius: 4px; cursor: pointer; color: var(--body); }
+#capture-menu button:hover { background: var(--bg); }
+
 /* 元素编辑确认对话框 */
 #element-dialog-mask {
   position: fixed; inset: 0; background: rgba(0,0,0,.35);
