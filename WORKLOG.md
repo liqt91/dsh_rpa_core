@@ -1,5 +1,11 @@
 # 工作日志
 
+## 2026-09-04
+
+- keepOpen 实机验证：bsk run 结束后 session 仍存活、Agent Window 保留（对照：非 keepOpen 正常回收）。
+- 自研执行层评估（M19 立项前）：核实 BrowserSkill 为 MIT 开源（可 fork/复用，但工程为 Rust daemon + WXT/TS 扩展，与本仓库零构建 vanilla + Python/stdlib 取向冲突——取其模式与协议而非搬工程）；确认「MV3 扩展 + chrome.debugger 可信 CDP」为三家（bsk / Playwright MCP 扩展 / Panerelay）收敛共识。
+- 维护者决策：走彻底自研路线（扩展兼任执行，单插件），仅支持独立窗口执行、bsk 退出运行时路径；执行通道须用 WebSocket（MV3 SW 无活动连接 30s 被回收，常驻 WS 兼作保活+低延迟命令通道）。
+- M19 计划定稿：单插件（捕获+执行）+ 常驻 broker daemon（`rpa-core broker`，默认 ws://127.0.0.1:52801，lock 自启/防双实例，同 bsk daemon 模式）+ 引入 websockets 依赖；扩展 chrome.debugger 驱动独立窗口；Python 侧 ExtensionExecSession 抄 browser_bsk 命令表。待批准后落 `.harness/tasks/M19-self-exec.md`。
 ## 2026-09-03
 
 - browser.launch 加 keepOpen（bsk 传输）：流程跑完不 session.stop Agent Window，留给 bsk daemon 持有（空闲超时兜底）供人工继续操作/登录/人审；显式 browser.close 仍停；实机验证 run 结束后 session 仍存活。full gate 192 tests。
