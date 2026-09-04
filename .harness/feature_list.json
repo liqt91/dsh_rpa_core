@@ -125,7 +125,7 @@
     {
       "id": "capture-extension",
       "title": "BrowserSkill (bsk) capture transport and element library capture entry",
-      "passes": false
+      "passes": true
     },
     {
       "id": "flow-dir-assets",

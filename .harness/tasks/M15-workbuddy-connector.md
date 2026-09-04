@@ -1,6 +1,6 @@
 # M15 WorkBuddy 连接器入驻（CLI + Skill）
 
-状态：`planned`
+状态：`active`
 
 ## 背景与决策
 

@@ -4,17 +4,14 @@
 
 ## 当前任务
 
-- [ ] M14 浏览器捕获 — bsk 剩余切片（`active`）
-  - 计划：`M14-extension.md`
-  - 剩余：M14a 执行传输（`browser.launch transport:"bsk"`）、manifest 能力声明、元素库「＋捕获」入口、登录态页面验收。
+- [ ] M15 WorkBuddy 连接器入驻（`active`）
+  - 计划：`M15-workbuddy-connector.md`
+  - 决策：CLI+Skill 主路径（2026-09-02 评估五种入驻形态）；MCP 化、专家包装后置。
 
 ## 后续任务
 
-- [ ] M15 WorkBuddy 连接器入驻（`planned`）
-  - 计划：`M15-workbuddy-connector.md`
-  - 决策：CLI+Skill 主路径（2026-09-02 评估五种入驻形态）；MCP 化、专家包装后置。
 - [ ] M16 混合捕获 auto 模式（`planned`）
-  - Chrome 窗口检测 → 扩展路由（M14 落地后）→ DPI 坐标换算；降级路径待 M14 后立。
+  - **已由 M14 混合捕获（HybridCaptureSession）覆盖核心**——Chrome 窗口检测 + 扩展路由 + 先回传者胜已实装验收。剩余：DPI 坐标换算边界。可降级或关闭。
 - [ ] M11 后续：变量补全、全屏编辑器、运行状态高亮（进阶项，按需另立）
 - [ ] 运行控制（backlog，不立项）：前端 run + cancel + 看 events/result（最小范围）；子进程 run host + `/api/runs/{id}` + 新 ADR 放行 devserver 代理型操控 HTTP；pause/resume/indeterminate 对话后置。
 
@@ -27,6 +24,9 @@
 
 ## 已完成
 
+- [x] M14 浏览器捕获（bsk 执行 + 自研扩展捕获 + 混合捕获 + 桌面 hover）（`done`）
+  - 计划：`M14-extension.md`
+  - 证据：bsk 执行传输（M14a）+ content-script 扩展无缝捕获 + HybridCaptureSession + 桌面 hover 细粒度钻取 + 元素编辑确认 + 「＋捕获」入口；实机验收（登录态小红书、跨浏览器无缝、混合双通道）；175 tests 全门禁。
 - [x] M14.5 CLI 通道对齐（`done`）
   - 计划：`M14.5-cli-parity.md`
   - 证据：`catalog`/`capture browser|desktop`/`elements list|show|verify` 子命令与 devserver 同权；元素校验下沉能力层；cli_parity 合同 7 项；138 tests 全门禁。
