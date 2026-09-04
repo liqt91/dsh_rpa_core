@@ -4,15 +4,12 @@
 
 ## 当前任务
 
-- [ ] M15 WorkBuddy 连接器入驻（`active`）
-  - 计划：`M15-workbuddy-connector.md`
-  - 决策：CLI+Skill 主路径（2026-09-02 评估五种入驻形态）；MCP 化、专家包装后置。
+- [ ] M17 编辑器进阶（`active`）
+  - 计划：`M17-editor-advanced.md`
+  - 目标：变量补全、全屏编辑器、运行状态高亮。
 
 ## 后续任务
 
-- [ ] M16 混合捕获 auto 模式（`planned`）
-  - **已由 M14 混合捕获（HybridCaptureSession）覆盖核心**——Chrome 窗口检测 + 扩展路由 + 先回传者胜已实装验收。剩余：DPI 坐标换算边界。可降级或关闭。
-- [ ] M11 后续：变量补全、全屏编辑器、运行状态高亮（进阶项，按需另立）
 - [ ] 运行控制（backlog，不立项）：前端 run + cancel + 看 events/result（最小范围）；子进程 run host + `/api/runs/{id}` + 新 ADR 放行 devserver 代理型操控 HTTP；pause/resume/indeterminate 对话后置。
 
 ## 远期任务
@@ -24,6 +21,11 @@
 
 ## 已完成
 
+- [x] M15 WorkBuddy 连接器入驻（`done`）
+  - 计划：`M15-workbuddy-connector.md`
+  - 证据：CLI auth/status/unauth 三件套 + statusMatch 契约；workbuddy-connector/ 目录（meta type:cli + cli.json runtime python + icon.svg + skills/rpa-automation/SKILL.md + references 三件套）；修真实部署缺口（commands/ 打进 wheel + 包内优先解析）；干净 venv 本地路径安装验证；181 tests 全门禁。
+- [x] M16 混合捕获 auto 模式（`done`，由 M14 HybridCaptureSession 覆盖核心后关闭）
+  - 证据：M14 混合捕获实机验收（插件腿网页 Ctrl+Click + UIA 腿桌面 F9 + 让位）；剩余 DPI 坐标换算边界降级为已知边界。
 - [x] M14 浏览器捕获（bsk 执行 + 自研扩展捕获 + 混合捕获 + 桌面 hover）（`done`）
   - 计划：`M14-extension.md`
   - 证据：bsk 执行传输（M14a）+ content-script 扩展无缝捕获 + HybridCaptureSession + 桌面 hover 细粒度钻取 + 元素编辑确认 + 「＋捕获」入口；实机验收（登录态小红书、跨浏览器无缝、混合双通道）；175 tests 全门禁。

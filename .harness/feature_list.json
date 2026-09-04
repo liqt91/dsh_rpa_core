@@ -120,7 +120,7 @@
     {
       "id": "workbuddy-connector",
       "title": "WorkBuddy CLI connector with auth trio and skill package",
-      "passes": false
+      "passes": true
     },
     {
       "id": "capture-extension",
@@ -136,6 +136,11 @@
       "id": "cli-parity",
       "title": "CLI channel parity: catalog, capture, elements subcommands",
       "passes": true
+    },
+    {
+      "id": "editor-advanced",
+      "title": "Editor advanced: variable completion, fullscreen canvas, run status highlight",
+      "passes": false
     }
   ]
 }

@@ -1,0 +1,27 @@
+{
+  "runtime": {
+    "type": "python",
+    "version": "3.12"
+  },
+  "init": {
+    "darwin": "python -m pip install rpa-core",
+    "linux": "python -m pip install rpa-core",
+    "win32": "python -m pip install \"D:/Users/Administrator/Documents/代码/rpa_core\""
+  },
+  "auth": {
+    "darwin": "rpa-core auth",
+    "linux": "rpa-core auth",
+    "win32": "rpa-core.cmd auth"
+  },
+  "unAuth": {
+    "darwin": "rpa-core unauth",
+    "linux": "rpa-core unauth",
+    "win32": "rpa-core.cmd unauth"
+  },
+  "status": {
+    "darwin": "rpa-core status",
+    "linux": "rpa-core status",
+    "win32": "rpa-core.cmd status"
+  },
+  "statusMatch": "\"status\": \"ready\""
+}

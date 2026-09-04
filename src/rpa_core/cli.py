@@ -1,6 +1,8 @@
 import argparse
 import asyncio
 import json
+import sys
+from importlib import metadata as importlib_metadata
 from pathlib import Path
 
 from rpa_core.capture import (
@@ -29,9 +31,17 @@ def _load_workflow(path: Path) -> Workflow:
     return Workflow.model_validate_json(path.read_text(encoding="utf-8"))
 
 
+def _commands_root() -> Path:
+    """命令目录解析：pip 安装后读包内打包的 commands/，开发态读仓库根。"""
+    packaged = Path(__file__).resolve().parent / "commands"
+    if packaged.is_dir():
+        return packaged
+    return Path(__file__).resolve().parents[2] / "commands"
+
+
 def _compile(path: Path):
     root = Path(__file__).resolve().parents[2]
-    catalog = load_catalog(root / "commands")
+    catalog = load_catalog(_commands_root())
     workflow = _load_workflow(path)
     plan = WorkflowCompiler(catalog).compile(
         workflow,
@@ -64,8 +74,7 @@ def _desktop_capture_factory(**kwargs):
 
 def _cmd_catalog() -> int:
     """能力层 catalog 摘要（ADR 0006 §6 通道对齐：CLI 与 devserver 同权）。"""
-    root = Path(__file__).resolve().parents[2]
-    catalog = load_catalog(root / "commands")
+    catalog = load_catalog(_commands_root())
     commands = [
         {
             "id": manifest.id,
@@ -79,6 +88,39 @@ def _cmd_catalog() -> int:
         json.dumps({"digest": catalog.digest, "commands": commands},
                    ensure_ascii=False, indent=2)
     )
+    return 0
+
+
+def _version() -> str:
+    try:
+        return importlib_metadata.version("rpa-core")
+    except importlib_metadata.PackageNotFoundError:
+        return "0.1.0"
+
+
+def _cmd_auth() -> int:
+    """WorkBuddy 连接器 auth：本连接器无认证（本地工具），固定返回就绪。"""
+    print(json.dumps({
+        "status": "ready",
+        "auth": "none",
+        "note": "本连接器无需登录（本地运行）",
+    }, ensure_ascii=False))
+    return 0
+
+
+def _cmd_status() -> int:
+    """WorkBuddy 连接器 status：无副作用状态检查（幂等，读持久化状态）。"""
+    print(json.dumps({
+        "status": "ready",
+        "version": _version(),
+        "auth": "none",
+    }, ensure_ascii=False))
+    return 0
+
+
+def _cmd_unauth() -> int:
+    """WorkBuddy 连接器 unAuth：无凭证可清理，正常返回。"""
+    print(json.dumps({"status": "ok", "note": "无登录态需要清理"}, ensure_ascii=False))
     return 0
 
 
@@ -202,9 +244,8 @@ def _cmd_elements(args) -> int:
 
 
 def _serve(args) -> int:
-    root = Path(__file__).resolve().parents[2]
     server = DevServer(
-        commands_root=root / "commands",
+        commands_root=_commands_root(),
         workflows_root=args.workflows,
         port=args.port,
         browser_capture_factory=_browser_capture_factory,
@@ -225,15 +266,23 @@ def _serve(args) -> int:
 
 
 def main() -> int:
+    # 子进程/管道场景 stdout 可能是 cp936——统一 UTF-8，保证 JSON 输出可解码
+    # （desktop_agent 同款处理；WorkBuddy statusMatch 契约依赖可解析输出）
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+        sys.stderr.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
     parser = argparse.ArgumentParser(prog="rpa-core")
     subparsers = parser.add_subparsers(dest="action", required=True)
-    for action in ("validate", "run", "resume", "devserver", "catalog", "capture", "elements"):
+    for action in ("validate", "run", "resume", "devserver", "catalog", "capture",
+                   "elements", "auth", "status", "unauth"):
         sub = subparsers.add_parser(action)
         if action == "devserver":
             sub.add_argument("--port", type=int, default=8765)
             sub.add_argument("--workflows", type=Path, default=Path("workflows"))
             continue
-        if action == "catalog":
+        if action in ("catalog", "auth", "status", "unauth"):
             continue
         if action == "capture":
             cap_sub = sub.add_subparsers(dest="target", required=True)
@@ -286,6 +335,12 @@ def main() -> int:
         return _cmd_capture(args)
     if args.action == "elements":
         return _cmd_elements(args)
+    if args.action == "auth":
+        return _cmd_auth()
+    if args.action == "status":
+        return _cmd_status()
+    if args.action == "unauth":
+        return _cmd_unauth()
     _root, catalog, plan = _compile(args.workflow)
     if args.action == "validate":
         print(json.dumps({"valid": True, "catalogDigest": catalog.digest}, indent=2))

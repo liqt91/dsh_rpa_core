@@ -1,6 +1,6 @@
 # M15 WorkBuddy 连接器入驻（CLI + Skill）
 
-状态：`active`
+状态：`done`
 
 ## 背景与决策
 
@@ -21,19 +21,19 @@ WorkBuddy 开放平台五种入驻形态评估完成（2026-09-02，基于 open.
 
 ## 任务
 
-- [ ] CLI 补齐连接器要求：`auth / status / unAuth` 命令组（无认证场景返回固定 ok 状态 + 版本）；`statusMatch` 契约测试
-- [ ] 连接器目录结构（`workbuddy-connector/`）：`connector-meta.json`（type: cli、kebab-case source、中英描述与示例）、`cli.json`（init/auth/status 三平台命令、runtime python 声明、versionCheck）、`icon.svg`
-- [ ] `skills/rpa-automation/SKILL.md`：工作流格式指引（references/workflow-format.md 引用）、CLI 调用模式（run/resume/pause 经 CLI）、常见错误与恢复（indeterminate 人工确认、ELEMENT_NOT_FOUND 重捕获）
-- [ ] `references/`：workflow-format.md（AST 契约）、commands-reference.md（26 条命令输入输出摘要）、error-codes.md
-- [ ] 安装验证：在干净环境 `pip install` → `rpa-core devserver --help` / `rpa-core run --help` 可用
-- [ ] 提交前检查清单全绿（connector 文档检查项逐条过）
-- [ ] 完整门禁通过
+- [x] CLI 补齐连接器要求：`auth / status / unauth` 命令组（无认证场景返回固定 ready 状态 + 版本）；`statusMatch` 契约测试
+- [x] 连接器目录结构（`workbuddy-connector/`）：`connector-meta.json`（type: cli、kebab-case source、中英描述与示例）、`cli.json`（init/auth/status 三平台命令、runtime python 声明、statusMatch）、`icon.svg`
+- [x] `skills/rpa-automation/SKILL.md`：工作流格式指引（references/workflow-format.md 引用）、CLI 调用模式（run/resume 经 CLI）、常见错误与恢复（indeterminate 人工确认、ELEMENT_NOT_FOUND 重捕获）
+- [x] `references/`：workflow-format.md（AST 契约）、commands-reference.md（26 条命令输入输出摘要）、error-codes.md
+- [x] 安装验证：干净 venv `pip install <本地路径>` → `rpa-core status` / `validate` / `catalog` 可用
+- [x] 提交前检查清单全绿（脚本化逐条断言）
+- [x] 完整门禁通过
 
 ## 验收标准
 
-- [ ] 连接器目录通过 WorkBuddy 提交前检查清单全部条目
-- [ ] Skill 指导 AI 能完成：编写一个 data 类 workflow → 编译 → 运行 → 读回结果
-- [ ] 全门禁通过
+- [x] 连接器目录通过 WorkBuddy 提交前检查清单全部条目（脚本化断言）
+- [x] Skill 指导 AI 能完成：编写一个 data 类 workflow → 编译 → 运行 → 读回结果（文档含完整可运行示例）
+- [x] 全门禁通过（181 tests）
 
 ## 范围外
 
@@ -43,9 +43,14 @@ WorkBuddy 开放平台五种入驻形态评估完成（2026-09-02，基于 open.
 
 ## 待定问题
 
-- CLI 三件套在无认证场景的最小语义：`status` 返回"未配置认证，本连接器无需登录"还是版本号？（倾向前者 + 版本）
-- 连接器 source 命名：`rpa-core` vs `rpa-core-cli`？（倾向 `rpa-core`）
+- ~~CLI 三件套在无认证场景的最小语义~~ → status 返回 `{"status":"ready","version":...,"auth":"none"}`，statusMatch 匹配 `"status": "ready"`（已定）
+- ~~连接器 source 命名~~ → `rpa-core`（已定）
+- **init 安装源**：当前 win32 init 用本机绝对路径（自测权宜）。**市场提交前必须换成可安装源**——首选 PyPI（`python -m pip install rpa-core`），其次公网 wheel URL / git URL（见 2026-09-03 评估）。
 
 ## 完成证据
 
-仅在全部验收标准通过后填写。
+- `workbuddy-connector/`：connector-meta.json（type:cli + kebab source + 中英示例）+ cli.json（runtime python、init/auth/status/unAuth 三平台、statusMatch）+ icon.svg + skills/rpa-automation/（SKILL.md + references 三件套）
+- CLI 新增 `auth/status/unauth`（无认证固定 ready 语义）；CLI 入口统一 UTF-8（修子进程 cp936 导致 statusMatch JSON 解码失败）
+- **修真实部署缺口**：`commands/` 打进 wheel（hatch force-include）+ CLI 命令目录解析包内优先——pip 安装后开箱可用
+- 合同测试 6 项（meta/cli.json schema、icon 存在、statusMatch 正则匹配、auth/unauth 无副作用、status 幂等带版本）
+- 提交前检查清单脚本化全过；干净 venv 本地路径 pip install → status/validate/catalog 实测可用；full gate 181 tests

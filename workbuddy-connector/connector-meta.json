@@ -1,0 +1,22 @@
+{
+  "name": "RPA Core",
+  "name_zh": "RPA Core 自动化",
+  "name_en": "RPA Core",
+  "description": "Type-safe desktop & browser RPA automation: build workflows, capture elements, run them deterministically.",
+  "description_zh": "类型安全的桌面与浏览器 RPA 自动化：编写工作流、捕获元素、确定性运行。",
+  "description_en": "Type-safe desktop & browser RPA automation: build workflows, capture elements, run them deterministically.",
+  "source": "rpa-core",
+  "type": "cli",
+  "version": "0.1.0",
+  "minWorkbuddyVersion": "5.0.0",
+  "examples_zh": [
+    "帮我打开必应搜索 RPA 并保存前 10 条标题",
+    "写一个每天早上抓取新闻头条的桌面流程",
+    "把我小红书收藏页的第一个卡片内容抓下来"
+  ],
+  "examples_en": [
+    "Open Bing, search for RPA and save the top 10 titles",
+    "Build a desktop workflow that grabs headlines every morning",
+    "Capture the first card on my Xiaohongshu favorites page"
+  ]
+}
