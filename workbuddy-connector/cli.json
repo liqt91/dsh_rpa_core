@@ -4,9 +4,9 @@
     "version": "3.12"
   },
   "init": {
-    "darwin": "python -m pip install rpa-core",
-    "linux": "python -m pip install rpa-core",
-    "win32": "python -m pip install \"D:/Users/Administrator/Documents/代码/rpa_core\""
+    "darwin": "python -m pip install rpa-core-runtime",
+    "linux": "python -m pip install rpa-core-runtime",
+    "win32": "python -m pip install rpa-core-runtime"
   },
   "auth": {
     "darwin": "rpa-core auth",

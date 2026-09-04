@@ -93,7 +93,7 @@ def _cmd_catalog() -> int:
 
 def _version() -> str:
     try:
-        return importlib_metadata.version("rpa-core")
+        return importlib_metadata.version("rpa-core-runtime")
     except importlib_metadata.PackageNotFoundError:
         return "0.1.0"
 

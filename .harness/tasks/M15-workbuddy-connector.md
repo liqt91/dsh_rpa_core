@@ -45,7 +45,7 @@ WorkBuddy 开放平台五种入驻形态评估完成（2026-09-02，基于 open.
 
 - ~~CLI 三件套在无认证场景的最小语义~~ → status 返回 `{"status":"ready","version":...,"auth":"none"}`，statusMatch 匹配 `"status": "ready"`（已定）
 - ~~连接器 source 命名~~ → `rpa-core`（已定）
-- **init 安装源**：当前 win32 init 用本机绝对路径（自测权宜）。**市场提交前必须换成可安装源**——首选 PyPI（`python -m pip install rpa-core`），其次公网 wheel URL / git URL（见 2026-09-03 评估）。
+- ~~**init 安装源**~~ → 已定案 **PyPI**：包名 `rpa-core-runtime`（`rpa-core` 撞名被拒，2026-09-03 发布 0.1.0 并实测干净环境安装可用）。市场提交时无需再改。
 
 ## 完成证据
 

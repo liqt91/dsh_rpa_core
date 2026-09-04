@@ -1,5 +1,5 @@
 [project]
-name = "rpa-core"
+name = "rpa-core-runtime"
 version = "0.1.0"
 description = "Clean-room typed RPA runtime core"
 readme = "README.md"

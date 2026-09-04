@@ -2,6 +2,7 @@
 
 ## 2026-09-03
 
+- rpa-core-runtime 0.1.0 发布 PyPI（撞名 rpa-core → 改名 rpa-core-runtime）；wheel 内含 26 条命令清单；干净环境 pip install 实测可用；WorkBuddy 连接器 init 前置（可安装源）就绪。
 - 完成 M14 收口：bsk 执行传输 + 自研 content-script 扩展无缝捕获 + 混合捕获 auto（装扩展网页走插件/没装走 UIA/先回传者胜）+ 桌面 hover 细粒度 + 元素编辑确认对话框 + 元素库「＋捕获」入口（网页/桌面二选）。实机验收：登录态小红书、跨浏览器无缝、混合双通道。feature capture-extension 通过。active → M15 WorkBuddy 连接器。
 - 混合捕获实机验收：插件腿（网页 Ctrl+Click）+ UIA 腿（桌面 F9）+ 让位（正文区让位）双通道通过；修 stale-root bug（无 handle 虚拟元素根窗口用 win32 链解析）。并实测证伪「UIA 兜底网页内容」：命中渲染层 Pane、verifyCount=29 不可用，记入 capture-transport.md §2.6（网页正文无 UIA 退路）。
 - hover 捕获性能与横扫漏框：(3) 帧节奏与 GDI 泄漏——show_rect 每帧泄漏 inner region 句柄（补 DeleteObject）、rect 未变跳过重建/SetWindowPos、hit 节流 60→30ms 帧间隔 30→15ms；(4) 横扫漏框根因——图标间隙命中大背景 Pane 每帧触发 Progman 全树 DFS（300ms 卡顿帧=整图标滑过），改为 DFS 仅快路径完全失败时兜底，粗容器 hover 直接框粗 rect（响应优先）、捕获瞬间仍全量 DFS 保精度；更正前日结论：浏览器 UI 骨架（TabStrip/Omnibox/工具栏）本就暴露在 UIA 树（此前被 drill 的 handle 防环误杀+skip 列表一刀切拦住）。full gate 159 tests。

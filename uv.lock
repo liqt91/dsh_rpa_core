@@ -365,7 +365,7 @@ wheels = [
 ]
 
 [[package]]
-name = "rpa-core"
+name = "rpa-core-runtime"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
