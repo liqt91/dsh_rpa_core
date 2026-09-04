@@ -15,7 +15,11 @@
 - [x] bsk 传输执行器：`browser.launch transport:"bsk"`（子进程调 `bsk` CLI；session start/stop 映射；取消时强制 `session stop`）
 - [x] manifest 能力声明：`browser.launch` v1.1.0，transport enum + 差异描述（css/xpath、仅主 frame；iframe XPath 后置）
 - [x] devserver 捕获：经 bsk evaluate 注入 picker（elementsFromPoint 变体）→ 轮询 `window.__rpaCaptureResult` → ElementDescriptor（selector+verifyCount+metadata）落库当前流程 elements/ → evaluate 回验命中
-- [ ] 元素库「＋捕获」入口（并入切片，接 M13.1 flow 作用域）：面板顶部按钮 → browser（bsk）/ desktop 二选；desktop 分支**先选目标窗口（attach 拿 windowHandle）再走窗口作用域捕获**（免疫编辑器遮挡，ADR 0010），F9 热键提示
+- [x] bsk 借用模式（`pageUrl` 子串匹配用户已打开标签页 → picker 注入该页 → 结束归还）——2026-09-03 实装
+- [x] 桌面 hover 捕获（`--hover`：悬浮框跟随鼠标、F9/Ctrl+Click 捕获、钻取最深叶子、win32 窗口链兜底虚拟元素、性能节流）——2026-09-03 实装
+- [x] 元素编辑确认切片：捕获 → 编辑对话框（改名/改 selector/看 metadata/同名覆盖保护）→ 确认入库；元素库面板点元素名可编辑；bsk 捕获会话 pick 后未 cancel 的资源泄漏顺带修复
+- [ ] 自研 content-script 捕获扩展（无缝场景：跨浏览器跨页 hover 框选、零逐次授权；HTTP POST 回传，复用已验证 picker JS；与桌面 hover 交接）
+- [ ] 元素库「＋捕获」入口：面板顶部按钮 → browser / desktop 二选（desktop 分支先 attach 目标窗口，ADR 0010）
 - [x] 合同测试：bsk 子进程协议 mock（无真实浏览器）、session 映射、取消强制 stop、能力差异声明
 - [x] 实机验收：登录态页面捕获（描述符回验命中）+ 真实点选 picker（elementsFromPoint 变体）确认
 - [ ] 完整门禁

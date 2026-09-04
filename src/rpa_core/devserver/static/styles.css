@@ -108,3 +108,25 @@ footer { border-top: 1px solid var(--border); padding: 8px 12px; max-height: 180
 #elements-list .element-item button { padding: 0 7px; font-size: 12px; }
 #elements-list li.elements-empty { color: var(--muted); font-size: 12px; border-style: dashed; padding: 8px; text-align: center; }
 .capture-btn { margin-top: 6px; font-size: 12px; }
+
+/* 元素编辑确认对话框 */
+#element-dialog-mask {
+  position: fixed; inset: 0; background: rgba(0,0,0,.35);
+  display: flex; align-items: center; justify-content: center; z-index: 100;
+}
+#element-dialog-mask.hidden { display: none; }
+#element-dialog {
+  background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+  box-shadow: 0 12px 40px rgba(0,0,0,.2); padding: 14px 16px; width: 420px;
+  max-height: 80vh; overflow-y: auto;
+}
+#element-dialog h3 { margin: 0 0 10px; font-size: 14px; }
+#element-dialog .dlg-field { margin-bottom: 8px; }
+#element-dialog .dlg-field label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 2px; }
+#element-dialog .dlg-field input { width: 100%; }
+#element-dialog .dlg-field input[readonly] { color: var(--muted); background: var(--bg); }
+#element-dialog .dlg-meta { font-size: 11px; color: var(--faint); font-family: Consolas, monospace; margin: 8px 0; white-space: pre-wrap; }
+#element-dialog .dlg-verify { font-size: 12px; margin: 6px 0; }
+#element-dialog .dlg-verify.ok { color: var(--ok); }
+#element-dialog .dlg-verify.bad { color: var(--bad); }
+#element-dialog .dlg-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 12px; }

@@ -48,6 +48,19 @@
     <ul id="elements-list"></ul>
   </aside>
 </main>
+<div id="element-dialog-mask" class="hidden">
+  <div id="element-dialog">
+    <h3 id="element-dialog-title">元素确认</h3>
+    <div class="dlg-field"><label>元素名（元素库标识）</label><input type="text" id="element-dialog-name"></div>
+    <div class="dlg-field"><label>Selector（可编辑）</label><input type="text" id="element-dialog-selector"></div>
+    <div class="dlg-meta" id="element-dialog-meta"></div>
+    <div class="dlg-verify" id="element-dialog-verify"></div>
+    <div class="dlg-actions">
+      <button id="element-dialog-cancel">放弃</button>
+      <button id="element-dialog-save">保存入库</button>
+    </div>
+  </div>
+</div>
 <footer>
   <div id="compile-panel"><span class="hint">点击「编译」校验当前工作流（保存草稿不要求编译通过）</span></div>
   <details id="glossary">

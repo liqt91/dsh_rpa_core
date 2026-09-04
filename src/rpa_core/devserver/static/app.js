@@ -1405,6 +1405,9 @@ function renderElements(names, hasFlow) {
     const title = document.createElement("span");
     title.className = "element-name";
     title.textContent = name;
+    title.style.cursor = "pointer";
+    title.title = "点击编辑元素";
+    title.addEventListener("click", () => editElement(name));
     li.appendChild(title);
     const insert = document.createElement("button");
     insert.textContent = "插入";
@@ -1498,6 +1501,112 @@ async function deleteElement(name) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// 元素编辑确认对话框（捕获后确认入库 / 元素库面板点元素名编辑）
+// ---------------------------------------------------------------------------
+
+function openElementDialog({ mode, flow, descriptor, existingName }) {
+  // mode: "confirm"（捕获后确认） | "edit"（元素库编辑）
+  return new Promise((resolve) => {
+    const mask = $("element-dialog-mask");
+    const nameInput = $("element-dialog-name");
+    const selectorInput = $("element-dialog-selector");
+    const metaEl = $("element-dialog-meta");
+    const verifyEl = $("element-dialog-verify");
+    const titleEl = $("element-dialog-title");
+
+    titleEl.textContent = mode === "edit" ? "编辑元素" : "捕获确认";
+    const defaultName = existingName
+      || `${descriptor.metadata?.tag || "element"}_${Date.now() % 100000}`;
+    nameInput.value = defaultName;
+    selectorInput.value = descriptor.selector?.css
+      || JSON.stringify(descriptor.selector?.locator || descriptor.selector || "");
+    const meta = descriptor.metadata || {};
+    metaEl.textContent = [
+      meta.tag && `tag: ${meta.tag}`,
+      meta.id && `id: ${meta.id}`,
+      meta.classes?.length && `classes: ${meta.classes.join(" ")}`,
+      meta.text && `text: ${meta.text}`,
+      meta.rect && `rect: ${meta.rect.width}×${meta.rect.height} @ (${meta.rect.x},${meta.rect.y})`,
+      descriptor.kind === "desktop" && meta.controlType && `controlType: ${meta.controlType}`,
+      descriptor.kind === "desktop" && meta.automationId && `automationId: ${meta.automationId}`,
+      descriptor.kind === "desktop" && meta.windowTitle && `window: ${meta.windowTitle}`,
+    ].filter(Boolean).join("\n") || "(无 metadata)";
+    const vc = descriptor.verifyCount;
+    verifyEl.textContent = vc != null ? `捕获时命中 ${vc} 个` : "";
+    verifyEl.className = "dlg-verify " + (vc === 1 ? "ok" : "bad");
+
+    const close = (result) => {
+      mask.classList.add("hidden");
+      resolve(result);
+    };
+
+    $("element-dialog-cancel").onclick = () => close(null);
+    mask.onclick = (e) => { if (e.target === mask) close(null); };
+    $("element-dialog-save").onclick = async () => {
+      const name = nameInput.value.trim();
+      const selector = selectorInput.value.trim();
+      if (!name || !selector) {
+        showCompileMessage("元素名和 selector 不能为空", false);
+        return;
+      }
+      // 同名覆盖保护
+      if (mode === "confirm") {
+        try {
+          const existing = await api("GET", `${elementsBasePath(flow)}/${encodeURIComponent(name)}`);
+          if (existing && !confirm(`元素「${name}」已存在，覆盖？`)) return;
+        } catch { /* 不存在，正常 */ }
+      }
+      const isBrowser = descriptor.kind === "browser";
+      let selectorDoc;
+      if (isBrowser) {
+        selectorDoc = { css: selector };
+      } else {
+        try {
+          selectorDoc = { locator: JSON.parse(selector) };
+        } catch {
+          showCompileMessage("desktop locator 不是合法 JSON", false);
+          return;
+        }
+      }
+      const doc = {
+        kind: descriptor.kind,
+        selector: selectorDoc,
+        verifyCount: descriptor.verifyCount ?? 0,
+        metadata: descriptor.metadata || {},
+      };
+      try {
+        await api("POST", `${elementsBasePath(flow)}/${encodeURIComponent(name)}`, doc);
+        loadElements();
+        showCompileMessage(`元素「${name}」已入库`, true);
+        close(name);
+      } catch (err) {
+        showCompileMessage(`保存失败：${err.message || err}`, false);
+      }
+    };
+    mask.classList.remove("hidden");
+    nameInput.focus();
+  });
+}
+
+async function editElement(name) {
+  const flow = requireFlow();
+  if (!flow) return;
+  try {
+    const descriptor = await api("GET", `${elementsBasePath(flow)}/${encodeURIComponent(name)}`);
+    const saved = await openElementDialog({
+      mode: "edit", flow, descriptor, existingName: name,
+    });
+    if (saved && saved !== name) {
+      // 改名：删旧存新
+      await api("DELETE", `${elementsBasePath(flow)}/${encodeURIComponent(name)}`);
+      loadElements();
+    }
+  } catch (err) {
+    showCompileMessage(String(err.message || err), false);
+  }
+}
+
 async function captureIntoField(node, key) {
   const flow = requireFlow();
   if (!flow) return;
@@ -1519,27 +1628,18 @@ async function captureIntoField(node, key) {
       sessionId,
       timeoutSeconds: 90,
     });
+    // pick 结束后立即回收捕获会话（避免悬挂 Agent Window / 持久浏览器进程）
+    try { await api("POST", "/api/capture/browser/cancel", { sessionId }); } catch { /* 忽略 */ }
     if (result.kind === "browser" && result.selector && result.selector.css) {
       setWith(node, key, result.selector.css);
-      const saveAs = prompt("元素已捕获，可选输入名字保存到当前流程元素库（留空跳过）：");
-      if (saveAs) {
-        await api(
-          "POST",
-          `${elementsBasePath(flow)}/${encodeURIComponent(saveAs)}`,
-          {
-            kind: "browser",
-            selector: result.selector,
-            verifyCount: result.verifyCount,
-            metadata: result.metadata,
-          },
-        );
-        loadElements();
-      }
+      const savedName = await openElementDialog({
+        mode: "confirm", flow, descriptor: result,
+      });
       markDirty();
       render();
       showCompileMessage(
         `已捕获 selector（命中 ${result.verifyCount}）` +
-          (saveAs ? ` 并存入「${saveAs}」` : ""),
+          (savedName ? ` 并存入「${savedName}」` : "（未入库）"),
         true,
       );
     } else if (result.cancelled) {
