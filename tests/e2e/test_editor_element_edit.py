@@ -123,6 +123,76 @@ def test_element_dialog_rename_deletes_old(server):
     assert "oldName" not in listing["elements"]
 
 
+def test_variable_completion_dropdown(server):
+    """属性表单输入 ${ 弹出可引用路径下拉，选中补全。"""
+    base = f"http://127.0.0.1:{server.port}"
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
+        page.goto(f"{base}/")
+        page.wait_for_selector('[data-command="browser.launch"]')
+
+        # 加 launch + navigate，选中 navigate，url 字段输 ${ 触发补全
+        page.click('[data-command="browser.launch"]')
+        page.wait_for_selector('#canvas li[data-node="launch"]')
+        page.click('[data-command="browser.navigate"]')
+        page.wait_for_selector('#canvas li[data-node="navigate"]')
+
+        url_field = page.locator('#props-body input[data-field="url"]')
+        url_field.click()
+        url_field.type("${")
+        page.wait_for_selector(".ref-completion .ref-item")
+        items = page.locator(".ref-completion .ref-item").all_text_contents()
+        assert any("steps.launch.outputs.sessionId" in i for i in items), items
+        # 选中 sessionId 项补全
+        page.locator(".ref-completion .ref-item",
+                     has_text="steps.launch.outputs.sessionId").first.click()
+        assert "steps.launch.outputs.sessionId" in url_field.input_value()
+        browser.close()
+
+
+def test_fullscreen_toggle(server):
+    """画布全屏切换：加 fullscreen class，再点退出。"""
+    base = f"http://127.0.0.1:{server.port}"
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
+        page.goto(f"{base}/")
+        page.wait_for_selector('[data-command="browser.launch"]')
+        page.click("#btn-fullscreen")
+        page.wait_for_selector("#canvas-wrap.fullscreen")
+        page.click("#btn-fullscreen")
+        page.wait_for_function(
+            "() => !document.querySelector('#canvas-wrap').classList.contains('fullscreen')"
+        )
+        browser.close()
+
+
+def test_run_status_highlight(server):
+    """运行状态高亮：画布节点按最近运行 events 标 run-succeeded。"""
+    base = f"http://127.0.0.1:{server.port}"
+    # 种一个运行证据（events.jsonl 含 node_id）
+    artifacts = server.app._store.root.parent / "run_artifacts" / "run-x"
+    artifacts.mkdir(parents=True)
+    (artifacts / "events.jsonl").write_text(
+        '{"seq":1,"run_id":"run-x","type":"runStarted","node_id":null,"payload":{}}\n'
+        '{"seq":2,"run_id":"run-x","type":"stepStarted","node_id":"launch","payload":{}}\n'
+        '{"seq":3,"run_id":"run-x","type":"stepCompleted","node_id":"launch","payload":{}}\n',
+        encoding="utf-8",
+    )
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
+        page.goto(f"{base}/")
+        page.wait_for_selector('[data-command="browser.launch"]')
+        page.click('[data-command="browser.launch"]')
+        page.wait_for_selector('#canvas li[data-node="launch"]')
+
+        page.click("#btn-run-status")
+        page.wait_for_selector('#canvas li[data-node="launch"].run-succeeded')
+        browser.close()
+
+
 def test_capture_entry_menu_toggles(server):
     """元素库「＋捕获」入口：按钮开合菜单，含网页/桌面两个选项。"""
     base = f"http://127.0.0.1:{server.port}"

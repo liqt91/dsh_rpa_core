@@ -99,6 +99,10 @@ class _RequestHandler(BaseHTTPRequestHandler):
             if method != "GET":
                 raise ApiError(405, "METHOD_NOT_ALLOWED", "use GET for /api/workflows")
             return self.app.list_workflows()
+        if path == "/api/runs/latest-events":
+            if method != "GET":
+                raise ApiError(405, "METHOD_NOT_ALLOWED", "use GET")
+            return self.app.latest_run_events()
         if path.startswith(_WORKFLOW_SEGMENT_PREFIX):
             segments = path[len(_WORKFLOW_SEGMENT_PREFIX):].split("/")
             if not segments[0] or any(segment == "" for segment in segments):

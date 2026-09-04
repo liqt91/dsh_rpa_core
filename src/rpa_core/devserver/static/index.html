@@ -15,6 +15,7 @@
   <select id="open-select"><option value="">打开…</option></select>
   <button id="btn-save">保存</button>
   <button id="btn-compile">编译</button>
+  <button id="btn-run-status" title="按最近一次运行高亮画布节点">运行状态</button>
   <span class="toolbar-sep"></span>
   <button id="btn-undo" title="撤销（Ctrl+Z）" disabled>↶ 撤销</button>
   <button id="btn-redo" title="重做（Ctrl+Y）" disabled>↷ 重做</button>
@@ -26,7 +27,7 @@
     <ul id="palette-list"></ul>
   </aside>
   <section id="canvas-wrap">
-    <h2>画布 · sequence root</h2>
+    <h2>画布 · sequence root <button id="btn-fullscreen" title="全屏专注画布" style="padding:0 8px;font-size:12px;">⛶ 全屏</button></h2>
     <ol id="canvas"></ol>
     <p class="hint">点击左侧命令/控制流追加节点，或拖拽到画布任意位置插入；拖拽节点 grip（⠿）移动子树。引用语法 ${inputs.x}、${steps.节点.outputs.键}、${loop.item}</p>
     <div id="multi-bar" class="hidden">

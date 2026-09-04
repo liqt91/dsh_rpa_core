@@ -314,8 +314,7 @@ function newFlowNode(type) {
   if (type === "sequence") return { type: "sequence", id, children: [] };
   if (type === "if") return { type: "if", id, condition: { op: "truthy", left: "" }, then: [], else: [] };
   if (type === "forEach") return { type: "forEach", id, items: [], item_var: "item", children: [] };
-  if (type === "try") return { type: "try", id, children: [], catch: [], error_var: "error" };
-  return { type: "return", id, value: null };
+  if (type === "try") return { type: "try", id, children: [], catch: [], error_var: "error" };  return { type: "return", id, value: null };
 }
 
 // ---------------------------------------------------------------------------
@@ -336,6 +335,74 @@ async function api(method, path, body) {
 }
 
 const manifestOf = (command) => state.catalog.find((c) => c.id === command);
+
+// ---------------------------------------------------------------------------
+// 变量补全：属性表单输入 ${ 时提示可引用路径（inputs / 各节点 outputs / loop / error）
+// ---------------------------------------------------------------------------
+
+function computeReferencePaths() {
+  const paths = [];
+  if (!state.workflow) return paths;
+  for (const key of Object.keys(state.workflow.inputs || {})) {
+    paths.push(`\${inputs.${key}}`);
+  }
+  const walk = (node) => {
+    if (!node) return;
+    if (node.type === "action") {
+      const manifest = manifestOf(node.command);
+      const outputs = (manifest && manifest.output_schema
+        && manifest.output_schema.properties) || {};
+      for (const key of Object.keys(outputs)) {
+        paths.push(`\${steps.${node.id}.outputs.${key}}`);
+      }
+    }
+    for (const key of CONTAINER_LISTS[node.type] || []) {
+      for (const child of listOf(node, key) || []) walk(child);
+    }
+    if (node.type === "forEach") paths.push(`\${loop.${node.item_var || "item"}}`);
+    if (node.type === "try") paths.push(`\${${node.error_var || "error"}.code}`);
+  };
+  walk(state.workflow.root);
+  return paths;
+}
+
+// 给输入框挂 ${ 触发的引用补全下拉
+function attachRefCompletion(input) {
+  let dropdown = null;
+  const closeDropdown = () => { if (dropdown) { dropdown.remove(); dropdown = null; } };
+  input.addEventListener("input", () => {
+    const cursor = input.selectionStart || 0;
+    const before = input.value.slice(0, cursor);
+    const match = before.match(/\$\{([\w.]*)$/);
+    if (!match) { closeDropdown(); return; }
+    const partial = match[1];
+    const candidates = computeReferencePaths().filter((p) =>
+      p.toLowerCase().includes(partial.toLowerCase()));
+    if (!candidates.length) { closeDropdown(); return; }
+    if (!dropdown) {
+      dropdown = document.createElement("div");
+      dropdown.className = "ref-completion";
+      input.parentElement.style.position = "relative";
+      input.parentElement.appendChild(dropdown);
+    }
+    dropdown.textContent = "";
+    for (const path of candidates.slice(0, 8)) {
+      const item = document.createElement("div");
+      item.className = "ref-item";
+      item.textContent = path;
+      item.addEventListener("mousedown", (e) => {
+        e.preventDefault();
+        const after = input.value.slice(cursor);
+        input.value = before.slice(0, before.length - match[0].length) + path + after;
+        input.dispatchEvent(new Event("input"));
+        closeDropdown();
+      });
+      dropdown.appendChild(item);
+    }
+  });
+  input.addEventListener("blur", () => setTimeout(closeDropdown, 150));
+  input.addEventListener("keydown", (e) => { if (e.key === "Escape") closeDropdown(); });
+}
 
 function markDirty() {
   state.dirty = true;
@@ -1143,6 +1210,7 @@ function textField(labelText, value, onChange, required, rawKey) {
   input.type = "text";
   input.value = value;
   input.placeholder = "${...}";
+  attachRefCompletion(input);
   input.addEventListener("focus", () => pushUndo());
   input.addEventListener("input", () => {
     input.style.borderColor = "";
@@ -1157,6 +1225,7 @@ function literalField(labelText, value, onChange, required, rawKey) {
   input.type = "text";
   input.value = typeof value === "string" || value === undefined ? value ?? "" : JSON.stringify(value);
   input.placeholder = "${steps.x.outputs.y} 或字面量";
+  attachRefCompletion(input);
   input.addEventListener("focus", () => pushUndo());
   input.addEventListener("change", () => {
     input.style.borderColor = "";
@@ -1702,6 +1771,44 @@ function toggleCaptureMenu() {
   $("capture-menu").classList.toggle("hidden");
 }
 
+function toggleFullscreen() {
+  const wrap = $("canvas-wrap");
+  const on = wrap.classList.toggle("fullscreen");
+  $("btn-fullscreen").textContent = on ? "⛶ 退出全屏" : "⛶ 全屏";
+}
+
+// 运行状态高亮：读最近一次运行的 events，按 node_id 给画布节点标状态色
+async function loadRunStatus() {
+  const data = await api("GET", "/api/runs/latest-events");
+  clearRunStatus();
+  if (!data.runId) {
+    showCompileMessage("没有运行记录（run_artifacts 为空）", false);
+    return;
+  }
+  const status = {};
+  for (const ev of data.events) {
+    if (!ev.node_id) continue;
+    if (ev.type === "stepStarted" || ev.type === "stepAttemptStarted") {
+      status[ev.node_id] = status[ev.node_id] || "running";
+    } else if (ev.type === "stepCompleted") {
+      status[ev.node_id] = "succeeded";
+    } else if (ev.type === "stepFailed") {
+      status[ev.node_id] = "failed";
+    }
+  }
+  for (const el of document.querySelectorAll("#canvas li[data-node]")) {
+    const s = status[el.dataset.node];
+    if (s) el.classList.add(`run-${s}`);
+  }
+  showCompileMessage(`已高亮运行 ${data.runId.slice(0, 8)}（${Object.keys(status).length} 节点）`, true);
+}
+
+function clearRunStatus() {
+  for (const el of document.querySelectorAll("#canvas li[data-node]")) {
+    el.classList.remove("run-succeeded", "run-failed", "run-running");
+  }
+}
+
 async function init() {
   const data = await api("GET", "/api/catalog");
   state.catalog = data.commands;
@@ -1743,6 +1850,10 @@ async function init() {
       captureElement(btn.dataset.kind);
     });
   }
+  $("btn-fullscreen").addEventListener("click", toggleFullscreen);
+  $("btn-run-status").addEventListener("click", () => {
+    loadRunStatus().catch((err) => showCompileMessage(String(err.message || err), false));
+  });
   window.addEventListener("keydown", handleEditorKeydown);
   window.addEventListener("beforeunload", (e) => {
     if (state.dirty) { e.preventDefault(); e.returnValue = ""; }

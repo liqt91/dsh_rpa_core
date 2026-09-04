@@ -1,3 +1,4 @@
+import json
 import threading
 from typing import Any
 
@@ -117,6 +118,26 @@ class DevServerApp:
                 }
             )
         return {"digest": self._catalog.digest, "commands": commands}
+
+    def latest_run_events(self) -> dict:
+        """读 run_artifacts 下最近一次运行的 events.jsonl（只读，设计期用）。"""
+        artifacts = self._store.root.parent / "run_artifacts"
+        if not artifacts.is_dir():
+            return {"runId": None, "events": []}
+        runs = sorted(
+            (d for d in artifacts.iterdir() if (d / "events.jsonl").is_file()),
+            key=lambda d: (d / "events.jsonl").stat().st_mtime,
+            reverse=True,
+        )
+        if not runs:
+            return {"runId": None, "events": []}
+        run_dir = runs[0]
+        events = []
+        for line in (run_dir / "events.jsonl").read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if line:
+                events.append(json.loads(line))
+        return {"runId": run_dir.name, "events": events}
 
     def compile(self, body: Any) -> dict:
         if not isinstance(body, dict):

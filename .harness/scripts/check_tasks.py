@@ -16,17 +16,23 @@ def main() -> int:
     feature_by_id = {feature["id"]: feature for feature in features["features"]}
 
     task_index = ROOT / state["task_index"]
-    active_plan = ROOT / state["active_plan"]
     if not task_index.is_file():
         errors.append(f"missing task index: {task_index}")
-    if not active_plan.is_file():
-        errors.append(f"missing active plan: {active_plan}")
 
-    active_feature = feature_by_id.get(state["active_feature"])
-    if active_feature is None:
-        errors.append(f"unknown active feature: {state['active_feature']}")
-    elif active_feature["passes"]:
-        errors.append(f"active feature already passes: {state['active_feature']}")
+    # 任务间隔期允许无 active（active_plan/active_feature 为 None）
+    active_plan = state.get("active_plan")
+    if active_plan is not None:
+        active_plan = ROOT / active_plan
+        if not active_plan.is_file():
+            errors.append(f"missing active plan: {active_plan}")
+
+    active_feature_id = state.get("active_feature")
+    if active_feature_id is not None:
+        active_feature = feature_by_id.get(active_feature_id)
+        if active_feature is None:
+            errors.append(f"unknown active feature: {active_feature_id}")
+        elif active_feature["passes"]:
+            errors.append(f"active feature already passes: {active_feature_id}")
 
     active_documents = []
     for path in sorted((HARNESS / "tasks").glob("M*.md")):
@@ -40,7 +46,8 @@ def main() -> int:
         if status == "active":
             active_documents.append(path.resolve())
 
-    if active_documents != [active_plan.resolve()]:
+    expected_active = [active_plan.resolve()] if active_plan is not None else []
+    if active_documents != expected_active:
         errors.append(
             f"active task mismatch: expected exactly {active_plan}, found {active_documents}"
         )

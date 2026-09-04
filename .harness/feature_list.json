@@ -140,7 +140,7 @@
     {
       "id": "editor-advanced",
       "title": "Editor advanced: variable completion, fullscreen canvas, run status highlight",
-      "passes": false
+      "passes": true
     }
   ]
 }
