@@ -20,8 +20,11 @@ from rpa_core.executors import (
     ExecutorRegistry,
     PlaywrightExecutor,
     PythonWorkerExecutor,
-    Win32DesktopExecutor,
 )
+
+# Win32DesktopExecutor仅在Windows上可用
+if sys.platform == "win32":
+    from rpa_core.executors import Win32DesktopExecutor
 from rpa_core.model.workflow import Workflow
 from rpa_core.runtime import Orchestrator
 from rpa_core.runtime.checkpoint import CheckpointError
@@ -466,14 +469,15 @@ def main() -> int:
 
     async def run() -> int:
         browser = PlaywrightExecutor()
-        registry = ExecutorRegistry(
-            {
-                "browser.playwright": browser,
-                "desktop.uia": DesktopExecutor(),
-                "desktop.win32": Win32DesktopExecutor(),
-                "python.worker": PythonWorkerExecutor(),
-            }
-        )
+        executors = {
+            "browser.playwright": browser,
+            "desktop.uia": DesktopExecutor(),
+            "python.worker": PythonWorkerExecutor(),
+        }
+        # Win32DesktopExecutor仅在Windows上可用
+        if sys.platform == "win32":
+            executors["desktop.win32"] = Win32DesktopExecutor()
+        registry = ExecutorRegistry(executors)
         try:
             orchestrator = Orchestrator(catalog, registry, args.artifacts)
             inputs = None
