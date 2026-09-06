@@ -1,6 +1,10 @@
 ---
 name: rpa-automation
 description: 用 rpa-core CLI 编写并运行确定性 RPA 工作流（桌面与浏览器自动化）。当用户要求"自动打开某网站/应用、抓数据、填表单、重复操作桌面软件"时使用。
+description_zh: 通过 rpa-core CLI 编写、校验并运行桌面与浏览器 RPA 自动化流程。
+description_en: Author, validate, and run deterministic desktop and browser RPA workflows with the rpa-core CLI.
+version: 1.0.0
+author: rpa-core
 ---
 
 # RPA Core 自动化（rpa-core CLI）

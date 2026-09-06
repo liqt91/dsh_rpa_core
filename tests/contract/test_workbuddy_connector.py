@@ -39,6 +39,25 @@ def test_cli_json_required_fields():
     assert CLI_JSON.get("statusMatch")
 
 
+def test_cli_json_win32_entries_do_not_reference_cmd_shims():
+    """pip/distlib 在 Windows 只生成 .exe 入口脚本，不生成 .cmd（干净 venv 实测）。"""
+    for section in ("init", "auth", "unAuth", "status"):
+        win32_cmd = CLI_JSON[section]["win32"]
+        assert ".cmd" not in win32_cmd, (
+            f"{section}.win32 references nonexistent .cmd shim: {win32_cmd}"
+        )
+
+
+def test_skill_md_frontmatter_required_fields():
+    text = (CONNECTOR / "skills" / "rpa-automation" / "SKILL.md").read_text(encoding="utf-8")
+    match = re.match(r"^---\r?\n(.*?)\r?\n---\r?\n", text, re.DOTALL)
+    assert match, "SKILL.md missing YAML frontmatter"
+    for field in ("name", "description", "description_zh", "description_en", "version", "author"):
+        assert re.search(rf"^{field}: .+$", match.group(1), re.MULTILINE), (
+            f"SKILL.md frontmatter missing required field: {field}"
+        )
+
+
 def test_icon_exists():
     assert (CONNECTOR / "icon.svg").is_file()
 
