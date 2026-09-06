@@ -8,6 +8,9 @@ MV3 零构建 content-script 扩展：捕获模式下在任意浏览器（Chrome
 2. Edge：`edge://extensions` → 同上
 3. 两个浏览器都装 → 跨浏览器无缝捕获
 
+> Windows 自动静默安装见 `docs/extension-install.md`：`rpa-core install-extension`
+> （外部扩展注册表路线；注意：新版 Edge 会把"未知来源"扩展禁用，零点击启用需扩展上架商店，见文档 §6.4）。
+
 ## 配对（自动，零操作）
 
 扩展首次轮询 devserver 时自动生成 token 并携带——devserver **TOFU（首次接触自动采纳）**并持久化到 `workflows/.capture-extension-token`，之后只认这个 token。无需任何手动配对操作。popup 里可查看 token / 重新生成（重新生成后需删除 devserver 的 `.capture-extension-token` 文件再轮换）。

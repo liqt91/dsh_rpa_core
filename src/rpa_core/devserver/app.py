@@ -1,11 +1,17 @@
 import json
 import threading
+from pathlib import Path
 from typing import Any
 
 from pydantic import ValidationError
 
 from rpa_core.catalog import CommandCatalog
 from rpa_core.compiler.compiler import WorkflowCompileError, WorkflowCompiler
+from rpa_core.extension_installer import (
+    default_build_dir,
+    load_packed_extension,
+    update_manifest_xml,
+)
 from rpa_core.model.capture import (
     ElementDescriptor,
     ElementDocumentError,
@@ -52,12 +58,14 @@ class DevServerApp:
         capabilities: set[str] | None = None,
         browser_capture_factory=None,
         desktop_capture_factory=None,
+        extension_build_dir: Path | None = None,
     ):
         self._catalog = catalog
         self._store = store
         self._capabilities = frozenset(capabilities) if capabilities else DEFAULT_CAPABILITIES
         self._browser_capture_factory = browser_capture_factory
         self._desktop_capture_factory = desktop_capture_factory
+        self._extension_build_dir = extension_build_dir or default_build_dir()
         self._browser_sessions: dict[str, Any] = {}
         self._desktop_sessions: dict[str, Any] = {}
         self._capture_lock = threading.RLock()
@@ -382,6 +390,22 @@ class DevServerApp:
             raise ApiError(404, "NOT_FOUND", f"no pending extension session: {session_id}")
         session.submit(body.get("descriptor", body))
         return {"received": True, "sessionId": session_id}
+
+    # -- 扩展静默安装托管（update manifest XML + CRX，见 docs/extension-install.md）--
+
+    def _packed_extension(self):
+        packed = load_packed_extension(self._extension_build_dir)
+        if packed is None:
+            raise ApiError(
+                503, "EXTENSION_NOT_PACKED", "扩展尚未打包：先运行 rpa-core install-extension"
+            )
+        return packed
+
+    def extension_crx_bytes(self) -> bytes:
+        return self._packed_extension().crx_path.read_bytes()
+
+    def extension_manifest_xml(self, base_url: str) -> str:
+        return update_manifest_xml(self._packed_extension(), f"{base_url}/api/extension/crx")
 
     def _save_element(self, flow: str, descriptor: dict, save_as: str) -> dict:
         store = self._element_store(flow)

@@ -146,6 +146,11 @@
       "id": "run-control",
       "title": "Editor run control: run/cancel/status via devserver subprocess host",
       "passes": true
+    },
+    {
+      "id": "extension-installer",
+      "title": "Silent browser extension install: CRX packing, devserver hosting, policy registry with UAC fallback",
+      "passes": true
     }
   ]
 }

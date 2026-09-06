@@ -31,6 +31,8 @@ packages = ["src/rpa_core"]
 [tool.hatch.build.targets.wheel.force-include]
 # 命令目录是运行时必需资源：打包进 wheel（pip install 后开箱可用），开发态仍读仓库根
 "commands" = "rpa_core/commands"
+# 扩展源码是 install-extension 打包 CRX 的输入，同样必须进 wheel
+"extension" = "rpa_core/extension"
 
 [tool.pytest.ini_options]
 addopts = "-q"

@@ -40,6 +40,11 @@ class _RequestHandler(BaseHTTPRequestHandler):
     def editor_html(self) -> bytes:
         return self.server.editor_html  # type: ignore[attr-defined]
 
+    @property
+    def base_url(self) -> str:
+        host, port = self.server.server_address[:2]
+        return f"http://{host}:{port}"
+
     def do_GET(self) -> None:
         self._handle("GET")
 
@@ -73,6 +78,17 @@ class _RequestHandler(BaseHTTPRequestHandler):
             if method != "GET":
                 raise ApiError(405, "METHOD_NOT_ALLOWED", "use GET for static assets")
             return self._route_static(path)
+        if path == "/api/extension/crx":
+            if method != "GET":
+                raise ApiError(405, "METHOD_NOT_ALLOWED", "use GET for the extension crx")
+            return 200, self.app.extension_crx_bytes(), "application/x-chrome-extension"
+        if path == "/api/extension/update-manifest":
+            if method != "GET":
+                raise ApiError(
+                    405, "METHOD_NOT_ALLOWED", "use GET for the extension update manifest"
+                )
+            xml = self.app.extension_manifest_xml(self.base_url)
+            return 200, xml.encode("utf-8"), "application/xml"
         payload = self._route_api(method, path)
         return 200, _encode(payload), _JSON_TYPE
 
@@ -249,6 +265,7 @@ class DevServer:
         capabilities: set[str] | None = None,
         browser_capture_factory=None,
         desktop_capture_factory=None,
+        extension_build_dir: Path | None = None,
     ):
         if catalog is None:
             catalog = load_catalog(commands_root)
@@ -259,6 +276,7 @@ class DevServer:
             capabilities,
             browser_capture_factory=browser_capture_factory,
             desktop_capture_factory=desktop_capture_factory,
+            extension_build_dir=extension_build_dir,
         )
         editor_path = Path(__file__).resolve().parent / "static" / "index.html"
         self.editor_html = editor_path.read_bytes()
@@ -274,6 +292,10 @@ class DevServer:
     @property
     def host(self) -> str:
         return self._httpd.server_address[0]
+
+    @property
+    def base_url(self) -> str:
+        return f"http://{self.host}:{self.port}"
 
     def start(self) -> None:
         if self._thread is not None:

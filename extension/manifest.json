@@ -1,8 +1,9 @@
 {
   "manifest_version": 3,
   "name": "rpa_core element capture",
-  "version": "0.1.0",
+  "version": "0.1.2",
   "description": "rpa_core 元素捕获扩展：捕获模式下在任意页面 hover 高亮、Ctrl+Click 捕获元素描述符回传编辑器。",
+  "update_url": "https://edge.microsoft.com/extensionwebstorebase/v1/crx",
   "permissions": ["storage", "alarms"],
   "host_permissions": ["http://127.0.0.1:8765/*"],
   "background": { "service_worker": "background.js" },

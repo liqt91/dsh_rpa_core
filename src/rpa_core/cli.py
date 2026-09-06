@@ -196,6 +196,107 @@ def _parse_point(raw: str | None) -> dict | None:
     return {"x": int(x), "y": int(y)}
 
 
+def _cmd_install_extension(args) -> int:
+    """扩展静默安装（方案与竞品调证见 docs/extension-install.md）。
+
+    默认走 HKCU 外部扩展注册表（external_registry_loader 通道）：免管理员、
+    免商店上架、不受未加域 forcelist 门控。--policy 走 ExtensionInstallForcelist
+    （受管环境强制安装；HKCU 被拒时弹一次 UAC 提权写 HKLM 自动降级）。
+    """
+    from rpa_core.extension_installer import (
+        DEFAULT_DEVSERVER_ORIGIN,
+        UPDATE_MANIFEST_PATH,
+        ExtensionInstallError,
+        default_build_dir,
+        detect_browsers,
+        extension_root,
+        install_elevated,
+        install_external_registry_entry,
+        install_policy_entry,
+        load_packed_extension,
+        pack_extension,
+        remove_external_registry_entries,
+        remove_policy_entries,
+    )
+
+    build_dir = args.build_dir or default_build_dir()
+    update_url = args.update_url or f"{DEFAULT_DEVSERVER_ORIGIN}{UPDATE_MANIFEST_PATH}"
+    try:
+        if args.elevated:
+            return _install_extension_elevated(args, update_url)
+        if args.remove:
+            packed = load_packed_extension(build_dir)
+            removed: dict[str, int] = {"chrome": 0, "edge": 0}
+            if packed is not None:
+                for browser, count in remove_external_registry_entries(
+                    packed.extension_id
+                ).items():
+                    removed[browser] += count
+            for browser, count in remove_policy_entries(
+                extension_id=packed.extension_id if packed else None,
+                update_url=update_url,
+            ).items():
+                removed[browser] += count
+            print(json.dumps({"removed": removed}, ensure_ascii=False, indent=2))
+            return 0
+        packed = pack_extension(extension_root(), build_dir)
+        if args.policy:
+            hive = "HKCU"
+            try:
+                installed = install_policy_entry(packed.extension_id, update_url)
+            except ExtensionInstallError as exc:
+                if exc.code != "REGISTRY_DENIED":
+                    raise
+                installed = install_elevated(packed.extension_id, update_url)
+                hive = "HKLM"
+            payload = {
+                "extensionId": packed.extension_id,
+                "version": packed.version,
+                "updateUrl": update_url,
+                "crx": str(packed.crx_path),
+                "mechanism": "policy",
+                "policyHive": hive,
+                "browsers": installed,
+                "detected": detect_browsers(),
+                "note": "重启 Chrome/Edge 后静默安装（不可手动卸载）；未加域机器仅接受商店来源；"
+                        "需 devserver 在默认端口运行以托管 CRX",
+            }
+        else:
+            installed = install_external_registry_entry(
+                packed.extension_id, packed.crx_path, packed.version
+            )
+            payload = {
+                "extensionId": packed.extension_id,
+                "version": packed.version,
+                "crx": str(packed.crx_path),
+                "mechanism": "external-registry",
+                "browsers": installed,
+                "detected": detect_browsers(),
+                "note": "已写入外部扩展注册表；新版 Edge 会将其按未知来源禁用（启用开关灰色），"
+                        "零点击启用需扩展上架商店（docs/extension-install.md §6.4）",
+            }
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+        return 0
+    except ExtensionInstallError as exc:
+        print(json.dumps({"error": exc.code, "message": str(exc)}, ensure_ascii=False))
+        return 1
+
+
+def _install_extension_elevated(args, update_url: str) -> int:
+    """提权子进程：写 HKLM 策略并把结果 JSON 落到 --result-file（父进程回读）。"""
+    from rpa_core.extension_installer import install_policy_entry
+
+    result_path = Path(args.result_file)
+    try:
+        results = install_policy_entry(args.extension_id, update_url, elevated=True)
+        result = {"status": "ok", "browsers": results}
+    except Exception as exc:  # 提权子进程的任何失败都必须回传给父进程
+        code = getattr(exc, "code", "ELEVATION_FAILED")
+        result = {"status": "error", "code": code, "message": str(exc)}
+    result_path.write_text(json.dumps(result, ensure_ascii=False), encoding="utf-8")
+    return 0 if result["status"] == "ok" else 1
+
+
 def _cmd_elements(args) -> int:
     from rpa_core.devserver.store import (
         WorkflowDirStore,
@@ -276,13 +377,25 @@ def main() -> int:
     parser = argparse.ArgumentParser(prog="rpa-core")
     subparsers = parser.add_subparsers(dest="action", required=True)
     for action in ("validate", "run", "resume", "devserver", "catalog", "capture",
-                   "elements", "auth", "status", "unauth"):
+                   "elements", "auth", "status", "unauth", "install-extension"):
         sub = subparsers.add_parser(action)
         if action == "devserver":
             sub.add_argument("--port", type=int, default=8765)
             sub.add_argument("--workflows", type=Path, default=Path("workflows"))
             continue
         if action in ("catalog", "auth", "status", "unauth"):
+            continue
+        if action == "install-extension":
+            sub.add_argument("--remove", action="store_true",
+                             help="移除外部扩展注册表与强制安装策略条目")
+            sub.add_argument("--policy", action="store_true",
+                             help="走 ExtensionInstallForcelist 策略路线（受管环境强制安装）")
+            sub.add_argument("--update-url",
+                             help="覆盖 update manifest URL（默认本地 devserver 8765）")
+            sub.add_argument("--build-dir", type=Path, help="覆盖 CRX/pem 产物目录")
+            sub.add_argument("--elevated", action="store_true", help=argparse.SUPPRESS)
+            sub.add_argument("--extension-id", help=argparse.SUPPRESS)
+            sub.add_argument("--result-file", help=argparse.SUPPRESS)
             continue
         if action == "capture":
             cap_sub = sub.add_subparsers(dest="target", required=True)
@@ -344,6 +457,8 @@ def main() -> int:
         return _cmd_status()
     if args.action == "unauth":
         return _cmd_unauth()
+    if args.action == "install-extension":
+        return _cmd_install_extension(args)
     _root, catalog, plan = _compile(args.workflow)
     if args.action == "validate":
         print(json.dumps({"valid": True, "catalogDigest": catalog.digest}, indent=2))
