@@ -600,3 +600,36 @@ def test_editor_run_params_dialog_when_inputs_declared(server):
         page.wait_for_timeout(300)
         assert page.locator("#run-panel").is_hidden()
         browser.close()
+
+
+def test_editor_selector_field_picks_element_from_library(server):
+    """切片 D：属性面板 selector 字段可从元素库下拉选择（浏览器元素），自动填 css + kind 徽标。"""
+    base = f"http://127.0.0.1:{server.port}"
+    _request_json(
+        base, "POST", "/api/workflows/pick-flow/elements/searchBox",
+        {"kind": "browser", "selector": {"css": "#kw"},
+         "verifyCount": 1, "metadata": {"tag": "input"}},
+    )
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
+        page.goto(f"{base}/")
+        page.wait_for_selector('[data-command="browser.click"]')
+        page.fill("#file-name", "pick-flow")
+        page.wait_for_selector("#bottom-panels #elements-list li.element-item")
+
+        page.click('[data-command="browser.click"]')
+        page.wait_for_selector('#canvas li[data-node="click"]')
+        page.click('#canvas li[data-node="click"]')
+        page.wait_for_selector('#props-body input[data-field="selector"]')
+
+        # 下拉出现且含元素库条目
+        page.select_option("#props-body .element-pick", "searchBox")
+        # change handler 异步 GET 元素后填值 → 轮询等待生效
+        page.wait_for_function(
+            "() => document.querySelector('#props-body input[data-field=\"selector\"]')"
+            ".value === '#kw'"
+        )
+        badge = page.locator("#props-body .element-pick-badge")
+        assert "searchBox" in badge.inner_text()
+        browser.close()

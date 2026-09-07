@@ -35,10 +35,18 @@
   - 顶层 inputs 声明时 ▶ 运行先弹对话框（按原始类型 string/number/bool 渲染输入），取消不启动
   - 无 inputs 声明直接运行；运行中（activeRunId）离开页 beforeunload 拦截
   - E2E：`test_editor_run_params_dialog_when_inputs_declared`（弹窗+取消不启动）；既有 run_control E2E 适配（确认参数后运行）
-- [ ] **决策点**（A/B/F/G 已完成，现触发）：评估 app.js 行数/回归 → 决定切片 C/D/E 走 vanilla 还是立 ADR 迁 React
-- [ ] **切片 C：元素截图灯箱 + 上传 + 缩略图**（依赖决策点）
-- [ ] **切片 D：属性表单主元素选择器下拉 + kind 徽标 + 锚点提示**（依赖决策点）
-- [ ] **切片 E：多 tab 属性表单（参数/元素/高级）**（依赖决策点）
+- [x] **决策点**（A/B/F/G 完成，已评估）：**结论——切片 C/D/E 继续 vanilla，不立 ADR 迁 React**
+  - 实测：app.js M19 起点 1886 → 现 2049 行（A+B+F+G 净 +163 行），远未到 ~2500 拐点；每片 30-56 行收敛于既有全量重绘模式，零范式回归
+  - 迁移固定成本高（重写 2049 行 + 产物入库 devserver/static + 破零外链 ADR + E2E 重验），不因 C/D/E 属 React 友好而减少
+  - 保留后置触发条件（任一即重估立 ADR）：app.js>2500 行且连续 2 切片状态同步回归 / 需虚拟滚动或自由 DAG 画布 / 需 devserver 外独立复用
+- [x] **切片 D：属性表单 selector 字段「从元素库选」下拉 + kind 徽标**（重排优先，纯前端）
+  - browser.* 命令 `selector` 字段：下拉列当前流程元素，选中浏览器元素自动填 css + 显示 kind 徽标；与「捕获」按钮并列
+  - 桌面字段语义未纳入（click 用 elementId / 捕获落库用 locator，不一致，避免臆测）
+  - E2E：`test_editor_selector_field_picks_element_from_library`
+- [ ] **切片 E：多 tab 属性表单（参数/元素/高级）**
+- [ ] **切片 C：元素截图灯箱 + 上传 + 缩略图（后置，待捕获截图源就绪）**
+  - 现状缺口：捕获产物无图（全仓库无截图），stdlib 无截图/压缩；上传需新后端端点且撞 1MiB body 限
+  - 触发：bsk/桌面捕获链路具备自动截屏能力后再评估
 - [ ] 每切片：E2E/合同 + 完整门禁；PROGRESS 追加一行
 
 ## 验收（汇总）

@@ -1169,6 +1169,53 @@ function schemaField(node, key, propSchema, required) {
     field = textField(label, value === undefined ? "" : String(value), (v) => setWith(node, key, v), required, key);
   }
   if (key === "selector") {
+    // 切片 D：从元素库选主元素（浏览器元素 → 填 css），带 kind 徽标；与「捕获」并列
+    const pickWrap = document.createElement("div");
+    pickWrap.className = "element-pick-row";
+    const pick = document.createElement("select");
+    pick.className = "element-pick";
+    pick.innerHTML = '<option value="">从元素库选…</option>';
+    for (const name of state.elementsSeen || []) {
+      const opt = document.createElement("option");
+      opt.value = name;
+      opt.textContent = name;
+      pick.appendChild(opt);
+    }
+    pick.title = "选择流程元素库中的浏览器元素，填充其 css selector";
+    const badge = document.createElement("span");
+    badge.className = "element-pick-badge hidden";
+    pickWrap.appendChild(pick);
+    pickWrap.appendChild(badge);
+    pick.addEventListener("change", async () => {
+      const name = pick.value;
+      if (!name) { badge.classList.add("hidden"); return; }
+      const flow = requireFlow();
+      if (!flow) return;
+      try {
+        const element = await api("GET", `${elementsBasePath(flow)}/${encodeURIComponent(name)}`);
+        if (element.kind !== "browser" || !element.selector || !element.selector.css) {
+          showCompileMessage(`元素「${name}」不是浏览器 css 元素，无法填入 selector`, false);
+          pick.value = "";
+          return;
+        }
+        setWith(node, key, element.selector.css);
+        const inputEl = field.querySelector('input[data-field]');
+        if (inputEl) inputEl.value = element.selector.css;
+        badge.textContent = `${elementKindLabel(element.kind)} · ${name}`;
+        badge.className = "element-pick-badge ok";
+        markDirty();
+        showCompileMessage(`已填入元素「${name}」的 selector`, true);
+      } catch (err) {
+        showCompileMessage(String(err.message || err), false);
+        pick.value = "";
+      }
+    });
+    // 兜底：字段已有非空值时反向标徽章（值来自元素库的常见 css）
+    if (typeof value === "string" && value.trim()) {
+      badge.textContent = `css · ${value}`;
+      badge.className = "element-pick-badge";
+    }
+    field.appendChild(pickWrap);
     const captureBtn = document.createElement("button");
     captureBtn.type = "button";
     captureBtn.className = "capture-btn";
