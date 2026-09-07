@@ -112,13 +112,6 @@ class _RequestHandler(BaseHTTPRequestHandler):
                 )
             payload = self.app.extension_open_dir_view()
             return 200, _encode(payload), _JSON_TYPE
-        if path == "/api/extension/open-page":
-            if method != "POST":
-                raise ApiError(
-                    405, "METHOD_NOT_ALLOWED", "use POST to open a browser extensions page"
-                )
-            payload = self.app.extension_open_page_view(self._read_json(required=False))
-            return 200, _encode(payload), _JSON_TYPE
         if path == "/api/extension/open-browser":
             if method != "POST":
                 raise ApiError(

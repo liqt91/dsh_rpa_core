@@ -458,12 +458,14 @@ def test_editor_extension_dialog_shows_guide_for_both_browsers(server_no_extensi
         assert rows.count() >= 2
         text = page.locator("#extension-browsers").inner_text()
         assert "Chrome" in text and "Edge" in text
-        # 引导：目录路径输入框 + 复制/打开目录 + 打开浏览器(第2步) + 打开扩展页(第3步)
+        # 引导：目录路径输入框 + 复制/打开目录 + 打开浏览器(第2步) + 状态行(第3步无按钮)
         assert page.locator("#extension-dir-path").input_value()
         assert page.locator("#btn-ext-copy-path").is_visible()
         assert page.locator("#btn-ext-open-dir").is_visible()
         assert page.locator("#extension-open-browsers .ext-open-browser").count() == 2
-        assert rows.first.locator(".ext-open-page").is_visible()
+        # 第 3 步扩展页只能手动输入（无按钮），只渲染状态徽标
+        assert page.locator("#extension-browsers .ext-open-page").count() == 0
+        assert rows.first.locator(".ext-badge").count() >= 1
         # 点击遮罩不关闭（仅「关闭」按钮关闭）
         page.mouse.click(5, 5)
         page.wait_for_timeout(200)

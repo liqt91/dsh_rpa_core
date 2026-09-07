@@ -657,22 +657,6 @@ def open_browser(browser: str) -> bool:
     return False
 
 
-def open_browser_extensions_page(browser: str) -> bool:
-    """打开浏览器的扩展管理页（chrome://extensions / edge://extensions）。"""
-    page = "chrome://extensions" if browser == "chrome" else "edge://extensions"
-    for candidate in _browser_binary_candidates(browser):
-        if candidate.is_file():
-            try:
-                subprocess.Popen(
-                    [str(candidate), page],
-                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                )
-                return True
-            except OSError:
-                return False
-    return False
-
-
 def extension_status(
     extension_id: str,
     build_dir: Path | None = None,

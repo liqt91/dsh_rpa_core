@@ -1892,67 +1892,61 @@ function toggleRunEvents() {
 
 // ---------------------------------------------------------------------------
 // 浏览器捕获插件安装引导：开发者模式 Load unpacked（持久可用）。
-// 引导四步：①复制/打开源码目录 ②打开浏览器 ③打开扩展管理页 ④加载已解压目录。
-// 检测状态（GET /api/extension/status，按 location==4 && path==源码目录 匹配）。
+// 引导四步：①复制/打开源码目录 ②打开浏览器 ③手动打开扩展管理页 ④加载已解压目录。
+// 状态（GET /api/extension/status，按 location==4 && path==源码目录 匹配）只读展示。
 // ---------------------------------------------------------------------------
 
 const EXTENSION_NAMES = { chrome: "Chrome", edge: "Edge" };
-const EXTENSION_ENABLE = { chrome: "chrome://extensions", edge: "edge://extensions" };
 
 async function loadExtensionStatus() {
   const data = await api("GET", "/api/extension/status");
   $("extension-dir-path").value = data.extensionDir || "";
-  renderExtensionRows("extension-open-browsers", "open-browser", data, (browser) =>
-    `<button class="ext-open-browser" data-browser="${browser}">打开 ${EXTENSION_NAMES[browser]}</button>`
-  );
-  renderExtensionRows("extension-browsers", "open-page", data, (browser) => {
-    const badge = statusBadge(data.browsers?.[browser] || {});
-    return `${badge}<button class="ext-open-page" data-browser="${browser}">打开 ${EXTENSION_NAMES[browser]} 扩展页</button>`;
-  });
-  bindExtensionOpenButtons("extension-open-browsers", "open-browser");
-  bindExtensionOpenButtons("extension-browsers", "open-page");
+  renderBrowserButtons("extension-open-browsers", data);
+  renderStatusRows("extension-browsers", data);
 }
 
-function renderExtensionRows(containerId, kind, data, rowHtml) {
+// 第 2 步：每浏览器一个「打开浏览器」按钮
+function renderBrowserButtons(containerId, data) {
   const box = $(containerId);
   box.textContent = "";
   for (const browser of ["chrome", "edge"]) {
     const row = document.createElement("div");
     row.className = "ext-row";
-    row.dataset.kind = kind;
-    row.innerHTML = `<span class="ext-name">${EXTENSION_NAMES[browser]}</span>${rowHtml(browser)}`;
-    box.appendChild(row);
-  }
-}
-
-function bindExtensionOpenButtons(containerId, kind) {
-  const container = $(containerId);
-  const selector = kind === "open-browser" ? ".ext-open-browser" : ".ext-open-page";
-  for (const btn of container.querySelectorAll(selector)) {
+    const btn = document.createElement("button");
+    btn.className = "ext-open-browser";
+    btn.dataset.browser = browser;
+    btn.textContent = `打开 ${EXTENSION_NAMES[browser]}`;
     btn.addEventListener("click", async (e) => {
       const el = e.currentTarget;
-      const browser = el.dataset.browser;
       el.disabled = true;
-      const endpoint = kind === "open-browser" ? "/api/extension/open-browser" : "/api/extension/open-page";
       try {
-        await api("POST", endpoint, { browser });
-        if (kind === "open-browser") {
-          showExtensionResult(`已打开 ${EXTENSION_NAMES[browser]}。下一步：打开扩展管理页。`, true);
-        } else {
-          const url = EXTENSION_ENABLE[browser];
-          let copied = "";
-          try { await navigator.clipboard.writeText(url); copied = " 已复制地址到剪贴板"; }
-          catch (_) { copied = ""; }
-          showExtensionResult(
-            `已打开 ${EXTENSION_NAMES[browser]}。扩展管理页无法从外部直接打开，` +
-            `请在地址栏粘贴/输入：${url}${copied}`, true);
-        }
+        await api("POST", "/api/extension/open-browser", { browser });
+        showExtensionResult(`已打开 ${EXTENSION_NAMES[browser]}。下一步：按第 3 步输入扩展页地址。`, true);
       } catch (err) {
         showExtensionResult(`操作失败：${err.message || err}`, false);
       } finally {
         el.disabled = false;
       }
     });
+    row.innerHTML = `<span class="ext-name">${EXTENSION_NAMES[browser]}</span>`;
+    row.appendChild(btn);
+    box.appendChild(row);
+  }
+}
+
+// 第 3 步：扩展页不能从外部打开，只展示加载状态（打开方式见 HTML 文字）
+function renderStatusRows(containerId, data) {
+  const box = $(containerId);
+  box.textContent = "";
+  for (const browser of ["chrome", "edge"]) {
+    const info = data.browsers?.[browser] || {};
+    const row = document.createElement("div");
+    row.className = "ext-row";
+    row.innerHTML = `
+      <span class="ext-name">${EXTENSION_NAMES[browser]}</span>
+      ${statusBadge(info)}
+    `;
+    box.appendChild(row);
   }
 }
 

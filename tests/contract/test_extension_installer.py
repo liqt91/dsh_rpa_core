@@ -256,7 +256,7 @@ def test_cli_install_defaults_to_guide_not_registry(_fake_registry, monkeypatch,
     empty = tmp_path / "empty"
     empty.mkdir()
     monkeypatch.setattr(ext, "open_path_in_explorer", lambda path: True)
-    monkeypatch.setattr(ext, "open_browser_extensions_page", lambda browser: True)
+    monkeypatch.setattr(ext, "open_browser", lambda browser: True)
     code, out = _cli("install-extension", "--build-dir", str(empty), monkeypatch=monkeypatch)
     assert code == 0
     payload = json.loads(out)
@@ -317,7 +317,7 @@ def test_cli_remove_extension_clears_both_mechanisms(_fake_registry, monkeypatch
     (build_dir / "extension.crx").write_bytes(b"Cr24-fake")
     monkeypatch.setattr(ext, "find_browser_binary", lambda: None)
     monkeypatch.setattr(ext, "open_path_in_explorer", lambda path: True)
-    monkeypatch.setattr(ext, "open_browser_extensions_page", lambda browser: True)
+    monkeypatch.setattr(ext, "open_browser", lambda browser: True)
     code, _ = _cli("install-extension", "--registry", "--build-dir", str(build_dir),
                    monkeypatch=monkeypatch)
     assert code == 0
@@ -338,7 +338,7 @@ def test_cli_install_guide_works_without_browser(_fake_registry, monkeypatch, tm
     empty.mkdir()
     monkeypatch.setattr(ext, "find_browser_binary", lambda: None)
     monkeypatch.setattr(ext, "open_path_in_explorer", lambda path: False)
-    monkeypatch.setattr(ext, "open_browser_extensions_page", lambda browser: False)
+    monkeypatch.setattr(ext, "open_browser", lambda browser: False)
     code, out = _cli("install-extension", "--build-dir", str(empty), monkeypatch=monkeypatch)
     assert code == 0
     assert json.loads(out)["mode"] == "load-unpacked"

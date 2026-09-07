@@ -224,7 +224,7 @@ def _cmd_install_extension(args) -> int:
         install_external_guided,
         install_policy_entry,
         load_packed_extension,
-        open_browser_extensions_page,
+        open_browser,
         open_path_in_explorer,
         pack_extension,
         remove_external_registry_entries,
@@ -285,13 +285,20 @@ def _cmd_install_extension(args) -> int:
         if args.guide or not (args.policy or args.registry):
             # 默认 / --guide：Load unpacked 引导（打开目录 + 给出路径与步骤）
             opened = open_path_in_explorer(source_dir)
+            opened_browsers = []
+            for browser in browsers:
+                if open_browser(browser):
+                    opened_browsers.append(browser)
             guide = {
                 "mode": "load-unpacked",
                 "extensionDir": str(source_dir),
                 "openedExplorer": opened,
+                "openedBrowsers": opened_browsers,
                 "steps": [
                     "复制上方 extensionDir 路径",
-                    "打开浏览器扩展页：chrome://extensions / edge://extensions",
+                    "打开浏览器（本命令已尝试启动）",
+                    "在地址栏输入扩展页并回车：chrome://extensions / edge://extensions"
+                    "（扩展页无法从外部直接打开，需手动输入）",
                     "开启「开发者模式」",
                     "点击「加载已解压的扩展程序」，粘贴/选择 extensionDir 目录",
                     "完成后重开本对话框确认状态为「已启用」",
@@ -300,10 +307,6 @@ def _cmd_install_extension(args) -> int:
                         "旧注册表路线在商店上架前不可靠（启用后约 30s 被判损坏），"
                         "保留 --registry 供上架后使用。",
             }
-            if opened:
-                for browser in browsers:
-                    if open_browser_extensions_page(browser):
-                        break
             print(json.dumps(guide, ensure_ascii=False, indent=2))
             return 0
         packed = pack_extension(extension_root(), build_dir)
