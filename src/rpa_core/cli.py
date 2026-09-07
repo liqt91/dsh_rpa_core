@@ -200,11 +200,11 @@ def _parse_point(raw: str | None) -> dict | None:
 
 
 def _cmd_install_extension(args) -> int:
-    """扩展静默安装（方案与竞品调证见 docs/extension-install.md）。
+    """扩展安装引导：默认外部注册表双浏览器安装；--status 只检测不写。
 
-    默认走 HKCU 外部扩展注册表（external_registry_loader 通道）：免管理员、
-    免商店上架、不受未加域 forcelist 门控。--policy 走 ExtensionInstallForcelist
-    （受管环境强制安装；HKCU 被拒时弹一次 UAC 提权写 HKLM 自动降级）。
+    Chrome/Edge 152 实测：安装后需在扩展页点一次启用（manifest update_url 指向 CWS），
+    见 docs/extension-install.md §6.5。--policy 走 forcelist（受管环境强制安装；
+    HKCU 被拒时单次 UAC 提权写 HKLM 自动降级）。
     """
     from rpa_core.extension_installer import (
         DEFAULT_DEVSERVER_ORIGIN,
@@ -213,6 +213,7 @@ def _cmd_install_extension(args) -> int:
         default_build_dir,
         detect_browsers,
         extension_root,
+        extension_status,
         install_elevated,
         install_external_registry_entry,
         install_policy_entry,
@@ -224,6 +225,9 @@ def _cmd_install_extension(args) -> int:
 
     build_dir = args.build_dir or default_build_dir()
     update_url = args.update_url or f"{DEFAULT_DEVSERVER_ORIGIN}{UPDATE_MANIFEST_PATH}"
+    browsers = ("chrome",) if args.browser == "chrome" else (
+        ("edge",) if args.browser == "edge" else ("chrome", "edge")
+    )
     try:
         if args.elevated:
             return _install_extension_elevated(args, update_url)
@@ -241,6 +245,32 @@ def _cmd_install_extension(args) -> int:
             ).items():
                 removed[browser] += count
             print(json.dumps({"removed": removed}, ensure_ascii=False, indent=2))
+            return 0
+        if args.status:
+            packed = load_packed_extension(build_dir)
+            if packed is None:
+                print(
+                    json.dumps(
+                        {
+                            "status": "not-packed",
+                            "note": "扩展尚未打包；先运行 rpa-core install-extension 打包并安装",
+                        },
+                        ensure_ascii=False,
+                        indent=2,
+                    )
+                )
+                return 0
+            status = extension_status(packed.extension_id, build_dir)
+            status["_browsers"] = browsers
+            status["_enable_hint"] = {
+                "chrome": "chrome://extensions",
+                "edge": "edge://extensions",
+            }
+            status["_note"] = (
+                "已装插件需在扩展页启用：安装后打开扩展页点一次启用"
+                "（Chrome/Edge 152 实测）"
+            )
+            print(json.dumps(status, ensure_ascii=False, indent=2))
             return 0
         packed = pack_extension(extension_root(), build_dir)
         if args.policy:
@@ -266,7 +296,7 @@ def _cmd_install_extension(args) -> int:
             }
         else:
             installed = install_external_registry_entry(
-                packed.extension_id, packed.crx_path, packed.version
+                packed.extension_id, packed.crx_path, packed.version, browsers=browsers
             )
             payload = {
                 "extensionId": packed.extension_id,
@@ -275,8 +305,13 @@ def _cmd_install_extension(args) -> int:
                 "mechanism": "external-registry",
                 "browsers": installed,
                 "detected": detect_browsers(),
-                "note": "已写入外部扩展注册表；新版 Edge 会将其按未知来源禁用（启用开关灰色），"
-                        "零点击启用需扩展上架商店（docs/extension-install.md §6.4）",
+                "enableHint": {
+                    "chrome": "chrome://extensions",
+                    "edge": "edge://extensions",
+                },
+                "note": "已写入外部扩展注册表；Chrome/Edge 152 实测需用户在扩展页点一次启用"
+                        "（非零点击，manifest update_url 指向 CWS），零点击启用需商店上架"
+                        " + forcelist（docs/extension-install.md §6.5）",
             }
         print(json.dumps(payload, ensure_ascii=False, indent=2))
         return 0
@@ -391,6 +426,10 @@ def main() -> int:
         if action == "install-extension":
             sub.add_argument("--remove", action="store_true",
                              help="移除外部扩展注册表与强制安装策略条目")
+            sub.add_argument("--status", action="store_true",
+                             help="只检测安装/启用状态，不写入")
+            sub.add_argument("--browser", choices=("chrome", "edge"),
+                             help="仅安装到指定浏览器（默认 Chrome+Edge）")
             sub.add_argument("--policy", action="store_true",
                              help="走 ExtensionInstallForcelist 策略路线（受管环境强制安装）")
             sub.add_argument("--update-url",

@@ -89,6 +89,15 @@ class _RequestHandler(BaseHTTPRequestHandler):
                 )
             xml = self.app.extension_manifest_xml(self.base_url)
             return 200, xml.encode("utf-8"), "application/xml"
+        if path == "/api/extension/status":
+            if method != "GET":
+                raise ApiError(405, "METHOD_NOT_ALLOWED", "use GET for extension status")
+            return 200, _encode(self.app.extension_status_view()), _JSON_TYPE
+        if path == "/api/extension/install":
+            if method != "POST":
+                raise ApiError(405, "METHOD_NOT_ALLOWED", "use POST to install the extension")
+            payload = self.app.extension_install_view(self._read_json(required=False))
+            return 200, _encode(payload), _JSON_TYPE
         payload = self._route_api(method, path)
         return 200, _encode(payload), _JSON_TYPE
 

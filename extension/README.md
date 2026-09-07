@@ -9,7 +9,8 @@ MV3 零构建 content-script 扩展：捕获模式下在任意浏览器（Chrome
 3. 两个浏览器都装 → 跨浏览器无缝捕获
 
 > Windows 自动静默安装见 `docs/extension-install.md`：`rpa-core install-extension`
-> （外部扩展注册表路线；注意：新版 Edge 会把"未知来源"扩展禁用，零点击启用需扩展上架商店，见文档 §6.4）。
+> （外部扩展注册表路线；Chrome/Edge 152 实测安装后需在扩展页点一次启用，零点击需商店上架，
+> 见文档 §6.5）。
 
 ## 配对（自动，零操作）
 

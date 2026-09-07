@@ -175,3 +175,30 @@ footer { border-top: 1px solid var(--border); padding: 8px 12px; max-height: 180
 #element-dialog .dlg-verify.ok { color: var(--ok); }
 #element-dialog .dlg-verify.bad { color: var(--bad); }
 #element-dialog .dlg-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 12px; }
+
+/* 浏览器捕获插件安装对话框 */
+#extension-dialog-mask {
+  position: fixed; inset: 0; background: rgba(0,0,0,.35);
+  display: flex; align-items: center; justify-content: center; z-index: 100;
+}
+#extension-dialog-mask.hidden { display: none; }
+#extension-dialog {
+  background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+  box-shadow: 0 12px 40px rgba(0,0,0,.2); padding: 14px 16px; width: 460px;
+  max-height: 80vh; overflow-y: auto;
+}
+#extension-dialog h3 { margin: 0 0 6px; font-size: 14px; }
+#extension-dialog .hint { font-size: 12px; color: var(--muted); margin: 4px 0 10px; }
+.ext-row { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--border); }
+.ext-row:last-child { border-bottom: none; }
+.ext-name { font-weight: 600; width: 56px; }
+.ext-badge { font-size: 11px; font-weight: 700; border-radius: 4px; padding: 2px 8px; color: #fff; }
+.ext-badge.ok { background: #1a7f37; }
+.ext-badge.warn { background: #bf8700; }
+.ext-badge.bad { background: #cf222e; }
+.ext-install { margin-left: auto; }
+.ext-note { font-size: 12px; color: var(--muted); justify-content: center; }
+#extension-result { font-size: 12px; margin-top: 8px; white-space: pre-wrap; }
+#extension-result.ok { color: var(--ok); }
+#extension-result.bad { color: var(--bad); }
+#extension-result.hidden { display: none; }

@@ -426,3 +426,38 @@ def test_editor_element_library_delete(server):
         browser.close()
     listing = _request_json(base, "GET", "/api/workflows/del-flow/elements")
     assert listing == {"elements": []}
+
+
+@pytest.fixture()
+def server_no_extension(tmp_path):
+    # 空 extension build 目录：/api/extension/status 返回 packed:null（不触碰真机注册表）
+    dev = DevServer(
+        commands_root=ROOT / "commands",
+        workflows_root=tmp_path / "workflows",
+        port=0,
+        extension_build_dir=tmp_path / "empty-ext-build",
+    )
+    dev.start()
+    try:
+        yield dev
+    finally:
+        dev.stop()
+
+
+def test_editor_extension_dialog_shows_both_browsers(server_no_extension):
+    base = f"http://127.0.0.1:{server_no_extension.port}"
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
+        page.goto(f"{base}/")
+        page.wait_for_selector("#btn-extension")
+        page.click("#btn-extension")
+        page.wait_for_selector("#extension-dialog-mask:not(.hidden)")
+        rows = page.locator("#extension-browsers .ext-row")
+        assert rows.count() >= 2
+        text = page.locator("#extension-browsers").inner_text()
+        assert "Chrome" in text and "Edge" in text
+        assert rows.first.locator(".ext-install").is_visible()
+        page.click("#extension-dialog-close")
+        assert page.locator("#extension-dialog-mask").is_hidden()
+        browser.close()

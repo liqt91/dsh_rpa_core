@@ -19,6 +19,8 @@
   <button id="btn-run-status" title="按最近一次运行高亮画布节点">运行状态</button>
   <button id="btn-run-cancel" class="hidden" title="取消运行">■ 取消</button>
   <span class="toolbar-sep"></span>
+  <button id="btn-extension" title="浏览器捕获插件安装与状态">⇲ 插件</button>
+  <span class="toolbar-sep"></span>
   <button id="btn-undo" title="撤销（Ctrl+Z）" disabled>↶ 撤销</button>
   <button id="btn-redo" title="重做（Ctrl+Y）" disabled>↷ 重做</button>
   <span id="valid-badge" class="hidden"></span>
@@ -68,6 +70,18 @@
     <div class="dlg-actions">
       <button id="element-dialog-cancel">放弃</button>
       <button id="element-dialog-save">保存入库</button>
+    </div>
+  </div>
+</div>
+<div id="extension-dialog-mask" class="hidden">
+  <div id="extension-dialog">
+    <h3>浏览器捕获插件</h3>
+    <p class="hint">元素捕获需浏览器安装 rpa_core 插件（外部注册表路线，免管理员）。
+      安装后请在对应浏览器的扩展页点一次「启用」（Chrome/Edge 152 实测，非零点击）。</p>
+    <div id="extension-browsers"></div>
+    <div id="extension-result" class="hidden"></div>
+    <div class="dlg-actions">
+      <button id="extension-dialog-close">关闭</button>
     </div>
   </div>
 </div>

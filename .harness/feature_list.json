@@ -151,6 +151,11 @@
       "id": "extension-installer",
       "title": "Silent browser extension install: CRX packing, devserver hosting, policy registry with UAC fallback",
       "passes": true
+    },
+    {
+      "id": "extension-guide-install",
+      "title": "Guided extension install entry: per-browser status detection and install from CLI and editor",
+      "passes": true
     }
   ]
 }

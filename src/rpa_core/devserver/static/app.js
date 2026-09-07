@@ -1890,6 +1890,81 @@ function toggleRunEvents() {
   $("run-events").classList.toggle("hidden");
 }
 
+// ---------------------------------------------------------------------------
+// 浏览器捕获插件安装入口：状态检测（GET /api/extension/status）+
+// 单选安装（POST /api/extension/install）+ 装后去扩展页启用引导
+// ---------------------------------------------------------------------------
+
+const EXTENSION_NAMES = { chrome: "Chrome", edge: "Edge" };
+const EXTENSION_ENABLE = { chrome: "chrome://extensions", edge: "edge://extensions" };
+
+async function loadExtensionStatus() {
+  const data = await api("GET", "/api/extension/status");
+  const box = $("extension-browsers");
+  box.textContent = "";
+  for (const browser of ["chrome", "edge"]) {
+    const info = data.browsers?.[browser] || {};
+    const row = document.createElement("div");
+    row.className = "ext-row";
+    const badge = statusBadge(info);
+    row.innerHTML = `
+      <span class="ext-name">${EXTENSION_NAMES[browser]}</span>
+      ${badge}
+      <button class="ext-install" data-browser="${browser}" title="写入外部扩展注册表">安装</button>
+    `;
+    row.querySelector(".ext-install").addEventListener("click", async (e) => {
+      const btn = e.currentTarget;
+      btn.disabled = true;
+      btn.textContent = "安装中…";
+      try {
+        const result = await api("POST", "/api/extension/install", { browser });
+        showExtensionResult(
+          `已写入 ${EXTENSION_NAMES[browser]} 外部扩展注册表。
+           请打开扩展页并点一次「启用」：${EXTENSION_ENABLE[browser]}`
+        );
+        await loadExtensionStatus();
+      } catch (err) {
+        showExtensionResult(`安装失败：${err.message || err}`, false);
+        btn.disabled = false;
+        btn.textContent = "安装";
+      }
+    });
+    box.appendChild(row);
+  }
+  if (!data.packed) {
+    const row = document.createElement("div");
+    row.className = "ext-row ext-note";
+    row.textContent = "扩展尚未打包；点任一浏览器「安装」会自动打包（需本机 Chrome/Edge）。";
+    box.appendChild(row);
+  }
+}
+
+function statusBadge(info) {
+  if (info.enabled) return '<span class="ext-badge ok">已启用</span>';
+  if (info.installed) return '<span class="ext-badge warn">已装未启用</span>';
+  if (info.registryEntry) return '<span class="ext-badge warn">已登记（待重启）</span>';
+  return `<span class="ext-badge bad">未安装</span>`;
+}
+
+function showExtensionResult(text, ok = true) {
+  const el = $("extension-result");
+  el.textContent = text;
+  el.className = ok ? "ok" : "bad";
+  el.classList.remove("hidden");
+}
+
+function toggleExtensionDialog() {
+  const mask = $("extension-dialog-mask");
+  const opening = mask.classList.contains("hidden");
+  mask.classList.toggle("hidden");
+  if (opening) {
+    $("extension-result").classList.add("hidden");
+    loadExtensionStatus().catch((err) =>
+      showExtensionResult(String(err.message || err), false)
+    );
+  }
+}
+
 async function init() {
   const data = await api("GET", "/api/catalog");
   state.catalog = data.commands;
@@ -1932,6 +2007,11 @@ async function init() {
     });
   }
   $("btn-fullscreen").addEventListener("click", toggleFullscreen);
+  $("btn-extension").addEventListener("click", toggleExtensionDialog);
+  $("extension-dialog-close").addEventListener("click", toggleExtensionDialog);
+  $("extension-dialog-mask").addEventListener("click", (e) => {
+    if (e.target === $("extension-dialog-mask")) toggleExtensionDialog();
+  });
   $("btn-run-status").addEventListener("click", () => {
     loadRunStatus().catch((err) => showCompileMessage(String(err.message || err), false));
   });

@@ -328,6 +328,30 @@ def _winreg_module():
     return winreg
 
 
+def _read_external_registry_entry_status(browser: str, extension_id: str) -> dict | None:
+    """只读外部扩展注册表条目（path/version）；非 win32 或无条目返回 None。"""
+    external_root = BROWSER_EXTERNAL_ROOTS.get(browser)
+    if external_root is None or sys.platform != "win32":
+        return None
+    try:
+        winreg = _winreg_module()
+    except ImportError:
+        return None
+    try:
+        key = winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER, f"{external_root}\\{extension_id}", 0, winreg.KEY_READ
+        )
+    except OSError:
+        return None
+    try:
+        values = dict(_enum_values(winreg, key))
+    finally:
+        key.Close()
+    if not values:
+        return None
+    return {"path": values.get("path"), "version": values.get("version")}
+
+
 def install_policy_entry(
     extension_id: str, update_url: str, *, elevated: bool = False
 ) -> dict[str, str]:
@@ -414,9 +438,13 @@ def remove_external_registry_entry(
 
 
 def install_external_registry_entry(
-    extension_id: str, crx_path: Path, version: str
+    extension_id: str,
+    crx_path: Path,
+    version: str,
+    browsers: tuple[str, ...] = ("chrome", "edge"),
 ) -> dict[str, str]:
-    """对 Chrome/Edge 各写一条 HKCU 外部扩展注册表；浏览器下次启动即静默安装本地 CRX。"""
+    """对指定浏览器（默认 Chrome+Edge）各写一条 HKCU 外部扩展注册表；
+    浏览器下次启动即静默安装本地 CRX。返回 {browser: added/updated/already}。"""
     if sys.platform != "win32":
         raise ExtensionInstallError(
             "PLATFORM_UNSUPPORTED", "静默安装当前仅支持 Windows（macOS/Linux 需 root/MDM，暂缓）"
@@ -425,6 +453,8 @@ def install_external_registry_entry(
     results = {}
     try:
         for browser, external_root in BROWSER_EXTERNAL_ROOTS.items():
+            if browser not in browsers:
+                continue
             results[browser] = write_external_registry_entry(
                 winreg, external_root, extension_id, crx_path, version
             )
@@ -452,6 +482,106 @@ def remove_external_registry_entries(extension_id: str) -> dict[str, int]:
                 pass
         removed[browser] = count
     return removed
+
+
+# -- 状态检测（extension-status：注册表 + 浏览器 profile 只读探针）-------------
+
+# profile 的 Secure Preferences 里，扩展记录通常在 extensions.settings.<id>；
+# enabled 判定：该记录无 disable_reasons 且（有 ack_external 或 state==1）——
+# 对应实测「启用后」终态（Chrome/Edge 152，docs §6.5）。
+
+
+def browser_user_data_dirs(browser: str) -> list[Path]:
+    """返回某浏览器 User Data 目录候选（本地用户目录；不存在的目录剔除）。"""
+    if sys.platform == "win32":
+        local = os.environ.get("LOCALAPPDATA")
+        if not local:
+            return []
+        relative = {
+            "chrome": Path("Google") / "Chrome" / "User Data",
+            "edge": Path("Microsoft") / "Edge" / "User Data",
+        }.get(browser)
+        if relative is None:
+            return []
+        return [Path(local) / relative]
+    home = Path.home()
+    relative = {
+        "chrome": Path(".config/google-chrome"),
+        "edge": Path(".config/microsoft-edge"),
+    }.get(browser)
+    return [home / relative] if relative else []
+
+
+def read_profile_extension_state(
+    user_data_dir: Path, extension_id: str
+) -> list[dict]:
+    """只读扫描浏览器 profile 的 Secure Preferences，返回该扩展在各 profile 的状态。
+
+    每项：{"profile": 目录名, "installed": bool, "enabled": bool, "disable_reasons": [...]}。
+    文件缺失/不可解析的 profile 跳过（不抛错）。
+    """
+    states: list[dict] = []
+    if not user_data_dir.is_dir():
+        return states
+    for child in sorted(user_data_dir.iterdir()):
+        if not child.is_dir():
+            continue
+        prefs = child / "Secure Preferences"
+        if not prefs.is_file():
+            continue
+        try:
+            data = json.loads(prefs.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        settings = ((data.get("extensions") or {}).get("settings") or {}).get(
+            extension_id
+        )
+        if settings is None:
+            continue
+        disable = settings.get("disable_reasons") or []
+        enabled = not disable and bool(
+            settings.get("ack_external") or settings.get("state") == 1
+        )
+        states.append(
+            {
+                "profile": child.name,
+                "installed": True,
+                "enabled": enabled,
+                "disable_reasons": disable,
+            }
+        )
+    return states
+
+
+def extension_status(extension_id: str, build_dir: Path | None = None) -> dict:
+    """报告每浏览器安装状态：binary/registry 条目/profile 已装与已启用。
+
+    纯只读；build_dir 缺省时仍返回（registry/profile 照常探测），packed 为 None。
+    """
+    packed = load_packed_extension(build_dir) if build_dir is not None else None
+    packed_info = None
+    if packed is not None:
+        packed_info = {
+            "extensionId": packed.extension_id,
+            "version": packed.version,
+            "crxPath": str(packed.crx_path),
+        }
+    browsers: dict[str, dict] = {}
+    for browser in ("chrome", "edge"):
+        registry = _read_external_registry_entry_status(browser, extension_id)
+        profiles: list[dict] = []
+        for user_data in browser_user_data_dirs(browser):
+            profiles.extend(read_profile_extension_state(user_data, extension_id))
+        browsers[browser] = {
+            "binary": any(
+                path.is_file() for path in _browser_binary_candidates(browser)
+            ),
+            "registryEntry": registry,
+            "profiles": profiles,
+            "installed": any(item["installed"] for item in profiles),
+            "enabled": any(item["enabled"] for item in profiles),
+        }
+    return {"packed": packed_info, "browsers": browsers}
 
 
 # -- 提权降级（HKCU\Software\Policies 被加固的机器：单次 UAC，提权写 HKLM）------

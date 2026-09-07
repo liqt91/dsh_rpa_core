@@ -444,3 +444,197 @@ def test_endpoints_503_when_not_packed(unpacked_server):
     status, body, _ = _raw(base, "/api/extension/update-manifest")
     assert status == 503
     assert json.loads(body.decode("utf-8"))["error"] == "EXTENSION_NOT_PACKED"
+
+
+# -- 安装状态检测（注册表 + 浏览器 profile Secure Preferences 只读探针）----------
+
+
+def _write_secure_prefs(user_data: Path, profile: str, extension_id: str, record: dict):
+    prefs = user_data / profile / "Secure Preferences"
+    prefs.parent.mkdir(parents=True, exist_ok=True)
+    document = {"extensions": {"settings": {extension_id: record}}}
+    prefs.write_text(json.dumps(document), encoding="utf-8")
+
+
+def test_read_profile_extension_state_detects_installed_and_enabled(tmp_path):
+    ext_id = EXPECTED_ID
+    _write_secure_prefs(
+        tmp_path, "Default", ext_id,
+        {"location": 3, "ack_external": True, "state": 1},
+    )
+    _write_secure_prefs(
+        tmp_path, "Profile 1", ext_id,
+        {"location": 3, "disable_reasons": [8192]},
+    )
+    states = ext.read_profile_extension_state(tmp_path, ext_id)
+    assert [item["profile"] for item in states] == ["Default", "Profile 1"]
+    enabled = [item for item in states if item["enabled"]]
+    assert len(enabled) == 1 and enabled[0]["profile"] == "Default"
+    assert states[0]["disable_reasons"] == []
+    assert states[1]["installed"] and not states[1]["enabled"]
+
+
+def test_read_profile_extension_state_ignores_missing_and_broken(tmp_path):
+    _write_secure_prefs(tmp_path, "Default", EXPECTED_ID, {"location": 4})
+    broken = tmp_path / "Broken"
+    broken.mkdir()
+    (broken / "Secure Preferences").write_text("{not-json", encoding="utf-8")
+    (tmp_path / "NoPrefs").mkdir()
+    assert len(ext.read_profile_extension_state(tmp_path, EXPECTED_ID)) == 1
+
+
+def test_extension_status_reports_per_browser(monkeypatch, tmp_path):
+    fake = FakeWinreg()
+    monkeypatch.setattr(ext, "_winreg_module", lambda: fake)
+    monkeypatch.setattr(sys, "platform", "win32")
+    # Chrome：已启用（profile 有 ack_external 无 disable）
+    chrome_ud = tmp_path / "chrome-ud"
+    _write_secure_prefs(
+        chrome_ud, "Default", EXPECTED_ID,
+        {"location": 3, "ack_external": True, "state": 1},
+    )
+    # Edge：仅注册表条目（未加载进 profile）
+    install_external_registry_entry(EXPECTED_ID, Path("C:/x/a.crx"), "1.0")
+    monkeypatch.setattr(
+        ext, "browser_user_data_dirs",
+        lambda browser: [chrome_ud if browser == "chrome" else tmp_path / "edge-ud"],
+    )
+    monkeypatch.setattr(
+        ext, "_browser_binary_candidates", lambda browser: [tmp_path / "no-browser"]
+    )
+    status = ext.extension_status(EXPECTED_ID)
+    browsers = status["browsers"]
+    assert browsers["chrome"]["installed"] and browsers["chrome"]["enabled"]
+    assert browsers["chrome"]["binary"] is False
+    assert browsers["edge"]["registryEntry"] == {
+        "path": str(Path("C:/x/a.crx")), "version": "1.0",
+    }
+    assert browsers["edge"]["installed"] is False
+    assert status["packed"] is None
+
+
+def test_install_external_registry_entry_single_browser(monkeypatch):
+    fake = FakeWinreg()
+    monkeypatch.setattr(ext, "_winreg_module", lambda: fake)
+    monkeypatch.setattr(sys, "platform", "win32")
+    results = install_external_registry_entry("abc", Path("C:/x/a.crx"), "1.0",
+                                              browsers=("edge",))
+    assert results == {"edge": "added"}
+    assert any("Chrome" in path for path in fake.stores) is False
+    edge_root = BROWSER_EXTERNAL_ROOTS["edge"]
+    assert fake.stores[f"{edge_root}\\abc"] == {
+        "path": (str(Path("C:/x/a.crx")), 1), "version": ("1.0", 1),
+    }
+
+
+# -- CLI：--browser 单选 与 --status 只读 ---------------------------------------
+
+
+def test_cli_install_extension_single_browser_edge(_fake_registry, monkeypatch, tmp_path):
+    build_dir = tmp_path / "build"
+    build_dir.mkdir()
+    (build_dir / "extension.pem").write_text(_PKCS8, encoding="utf-8")
+    (build_dir / "extension.crx").write_bytes(b"Cr24-fake")
+    monkeypatch.setattr(ext, "find_browser_binary", lambda: None)
+    code, out = _cli("install-extension", "--browser", "edge", "--build-dir",
+                     str(build_dir), monkeypatch=monkeypatch)
+    assert code == 0
+    payload = json.loads(out)
+    assert payload["browsers"] == {"edge": "added"}
+    assert any("Chrome" in path for path in _fake_registry.stores) is False
+
+
+def test_cli_install_extension_status_is_read_only(_fake_registry, monkeypatch, tmp_path):
+    build_dir = tmp_path / "build"
+    build_dir.mkdir()
+    (build_dir / "extension.pem").write_text(_PKCS8, encoding="utf-8")
+    (build_dir / "extension.crx").write_bytes(b"Cr24-fake")
+    monkeypatch.setattr(ext, "find_browser_binary", lambda: None)
+    monkeypatch.setattr(ext, "extension_status",
+                        lambda ext_id, build_dir=None: {"packed": None, "browsers": {}})
+    code, out = _cli("install-extension", "--status", "--build-dir", str(build_dir),
+                     monkeypatch=monkeypatch)
+    assert code == 0
+    payload = json.loads(out)
+    assert "browsers" in payload and "_enable_hint" in payload
+    assert not _fake_registry.stores  # --status 不写任何注册表
+
+
+def test_cli_install_extension_status_when_not_packed(_fake_registry, monkeypatch, tmp_path):
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    monkeypatch.setattr(ext, "extension_status",
+                        lambda ext_id, build_dir=None: {"browsers": {}})
+    code, out = _cli("install-extension", "--status", "--build-dir", str(empty),
+                     monkeypatch=monkeypatch)
+    assert code == 0
+    assert json.loads(out)["status"] == "not-packed"
+
+
+# -- devserver 端点：status（只读）+ install（单选） -----------------------------
+
+
+def _raw_post(base: str, path: str, payload: dict):
+    body = json.dumps(payload).encode("utf-8")
+    request = urllib.request.Request(
+        f"{base}{path}", data=body, method="POST",
+        headers={"Content-Type": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(request) as response:
+            return response.status, response.read()
+    except urllib.error.HTTPError as exc:
+        return exc.code, exc.read()
+
+
+def test_extension_status_endpoint_reports_browsers(packed_server, monkeypatch):
+    base = f"http://127.0.0.1:{packed_server.port}"
+    fake_status = {
+        "packed": {"extensionId": EXPECTED_ID, "version": "0.1.2"},
+        "browsers": {
+            "chrome": {"binary": False, "registryEntry": None, "profiles": [],
+                       "installed": False, "enabled": False},
+            "edge": {"binary": False, "registryEntry": None, "profiles": [],
+                     "installed": False, "enabled": False},
+        },
+        "enableHint": {"chrome": "chrome://extensions", "edge": "edge://extensions"},
+    }
+    import rpa_core.devserver.app as app_module
+    monkeypatch.setattr(app_module, "extension_status", lambda *a, **k: fake_status)
+    status, body, content_type = _raw(base, "/api/extension/status")
+    assert status == 200
+    assert content_type.startswith("application/json")
+    payload = json.loads(body.decode("utf-8"))
+    assert set(payload["browsers"]) == {"chrome", "edge"}
+    assert payload["enableHint"]["edge"] == "edge://extensions"
+
+
+def test_extension_install_endpoint_single_browser(packed_server, monkeypatch):
+    base = f"http://127.0.0.1:{packed_server.port}"
+    import rpa_core.devserver.app as app_module
+    monkeypatch.setattr(
+        app_module, "install_external_registry_entry",
+        lambda ext_id, crx, ver, browsers=("chrome", "edge"):
+            {b: "added" for b in browsers},
+    )
+    monkeypatch.setattr(app_module, "extension_status",
+                        lambda *a, **k: {"browsers": {"edge": {"enabled": False}}})
+    status, body = _raw_post(base, "/api/extension/install", {"browser": "edge"})
+    assert status == 200
+    payload = json.loads(body.decode("utf-8"))
+    assert payload["browsers"] == {"edge": "added"}
+    assert payload["enableHint"]["chrome"] == "chrome://extensions"
+    assert payload["extensionId"] == EXPECTED_ID
+
+
+def test_extension_install_endpoint_rejects_unknown_browser(packed_server):
+    base = f"http://127.0.0.1:{packed_server.port}"
+    status, body = _raw_post(base, "/api/extension/install", {"browser": "firefox"})
+    assert status == 400
+    assert json.loads(body.decode("utf-8"))["error"] == "BAD_REQUEST"
+
+
+def test_extension_status_and_install_method_guards(packed_server):
+    base = f"http://127.0.0.1:{packed_server.port}"
+    assert _raw(base, "/api/extension/status", method="POST")[0] == 405
+    assert _raw(base, "/api/extension/install")[0] == 405

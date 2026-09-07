@@ -8,8 +8,13 @@ from pydantic import ValidationError
 from rpa_core.catalog import CommandCatalog
 from rpa_core.compiler.compiler import WorkflowCompileError, WorkflowCompiler
 from rpa_core.extension_installer import (
+    ExtensionInstallError,
     default_build_dir,
+    extension_root,
+    extension_status,
+    install_external_registry_entry,
     load_packed_extension,
+    pack_extension,
     update_manifest_xml,
 )
 from rpa_core.model.capture import (
@@ -406,6 +411,53 @@ class DevServerApp:
 
     def extension_manifest_xml(self, base_url: str) -> str:
         return update_manifest_xml(self._packed_extension(), f"{base_url}/api/extension/crx")
+
+    def extension_status_view(self) -> dict:
+        """只读状态：双浏览器 binary/registry/profile 已装与已启用（无 body）。"""
+        packed = load_packed_extension(self._extension_build_dir)
+        if packed is None:
+            return {
+                "packed": None,
+                "note": "扩展尚未打包；先在编辑器安装或运行 rpa-core install-extension",
+                "browsers": extension_status("", self._extension_build_dir)["browsers"],
+            }
+        status = extension_status(packed.extension_id, self._extension_build_dir)
+        status["enableHint"] = {"chrome": "chrome://extensions", "edge": "edge://extensions"}
+        return status
+
+    def extension_install_view(self, body: Any) -> dict:
+        """免管理员外部注册表安装（浏览器可选 chrome/edge/both）。写 HKCU，需本机 Windows。"""
+        if not isinstance(body, dict):
+            raise ApiError(400, "BAD_REQUEST", "request body must be a JSON object")
+        browser = str(body.get("browser") or "both")
+        if browser not in ("chrome", "edge", "both"):
+            raise ApiError(400, "BAD_REQUEST", "browser must be one of: chrome, edge, both")
+        if browser == "both":
+            targets = ("chrome", "edge")
+        else:
+            targets = (browser,)
+        # 未打包则先打包（devserver 进程内复用能力层；CRX 托管已依赖同一 build 目录）
+        packed = load_packed_extension(self._extension_build_dir)
+        if packed is None:
+            try:
+                packed = pack_extension(extension_root(), self._extension_build_dir)
+            except ExtensionInstallError as exc:
+                raise ApiError(503, exc.code, str(exc)) from exc
+        try:
+            installed = install_external_registry_entry(
+                packed.extension_id, packed.crx_path, packed.version, browsers=targets
+            )
+        except ExtensionInstallError as exc:
+            raise ApiError(502, exc.code, str(exc)) from exc
+        status = extension_status(packed.extension_id, self._extension_build_dir)
+        return {
+            "extensionId": packed.extension_id,
+            "version": packed.version,
+            "browsers": installed,
+            "enableHint": {"chrome": "chrome://extensions", "edge": "edge://extensions"},
+            "note": "已写入外部扩展注册表；请在浏览器扩展页点一次启用（重启浏览器后生效）",
+            "status": status,
+        }
 
     def _save_element(self, flow: str, descriptor: dict, save_as: str) -> dict:
         store = self._element_store(flow)
