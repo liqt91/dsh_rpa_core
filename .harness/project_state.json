@@ -4,9 +4,9 @@
   "status": "active",
   "completed_milestone": "M18-run-control",
   "active_milestone": null,
-  "active_plan": null,
-  "active_feature": null,
-  "next_milestone": null,
+  "active_plan": ".harness/tasks/M19-editor-interactions.md",
+  "active_feature": "editor-interactions",
+  "next_milestone": "M19-editor-interactions",
   "later_milestones": [],
   "task_index": ".harness/tasks/BACKLOG.md",
   "scope": {

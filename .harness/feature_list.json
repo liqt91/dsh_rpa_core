@@ -156,6 +156,11 @@
       "id": "extension-guide-install",
       "title": "Guided extension install entry: per-browser status detection and install from CLI and editor",
       "passes": true
+    },
+    {
+      "id": "editor-interactions",
+      "title": "Editor interaction polish: resizable panels, bottom element library tabs, capture/run UX",
+      "passes": false
     }
   ]
 }

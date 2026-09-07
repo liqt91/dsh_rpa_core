@@ -473,3 +473,32 @@ def test_editor_extension_dialog_shows_guide_for_both_browsers(server_no_extensi
         page.click("#extension-dialog-close")
         assert page.locator("#extension-dialog-mask").is_hidden()
         browser.close()
+
+
+def test_editor_resizable_panels_persist(server):
+    base = f"http://127.0.0.1:{server.port}"
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
+        page.goto(f"{base}/")
+        page.wait_for_selector('[data-command="browser.launch"]')
+
+        def palette_width():
+            return page.evaluate("document.getElementById('palette').offsetWidth")
+
+        before = palette_width()
+        handle = page.locator('.resize-v[data-resize="palette"]')
+        box = handle.bounding_box()
+        page.mouse.move(box["x"] + box["width"] / 2, box["y"] + 50)
+        page.mouse.down()
+        page.mouse.move(box["x"] + box["width"] / 2 + 90, box["y"] + 50, steps=6)
+        page.mouse.up()
+        after = palette_width()
+        assert after > before, f"palette should widen: {before} -> {after}"
+
+        # 刷新后宽度保持（localStorage 记忆）
+        page.reload()
+        page.wait_for_selector('[data-command="browser.launch"]')
+        restored = palette_width()
+        assert abs(restored - after) <= 2, f"width should persist: {after} -> {restored}"
+        browser.close()

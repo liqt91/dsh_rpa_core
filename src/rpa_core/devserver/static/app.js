@@ -1987,6 +1987,57 @@ function toggleExtensionDialog(open) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// 面板可拖拽分栏（切片 A）：palette/props 宽度可拖，localStorage 记忆。
+// 零构建 vanilla：mousedown 起拖 + mousemove 调宽，min/max 夹取，松手保存。
+// ---------------------------------------------------------------------------
+
+const PANEL_WIDTHS_KEY = "rpa_editor_panel_widths";
+const PANEL_WIDTH_MIN = 180;
+const PANEL_WIDTH_MAX = 600;
+
+function restorePanelWidths() {
+  let saved = {};
+  try { saved = JSON.parse(localStorage.getItem(PANEL_WIDTHS_KEY) || "{}"); } catch (_) { saved = {}; }
+  if (saved.palette) $("palette").style.width = `${saved.palette}px`;
+  if (saved.props) $("props").style.width = `${saved.props}px`;
+}
+
+function initPanelResize() {
+  restorePanelWidths();
+  const activeHandles = document.querySelectorAll(".resize-v");
+  activeHandles.forEach((handle) => {
+    handle.addEventListener("mousedown", (e) => {
+      e.preventDefault();
+      const target = handle.dataset.resize === "palette" ? $("palette") : $("props");
+      const startX = e.clientX;
+      const startWidth = target.offsetWidth;
+      document.body.classList.add("resizing-panel");
+      handle.classList.add("active");
+
+      const onMove = (ev) => {
+        const delta = handle.dataset.resize === "palette"
+          ? ev.clientX - startX           // palette 拖右缘向右增宽
+          : startX - ev.clientX;          // props 拖左缘向右增宽
+        const w = Math.min(PANEL_WIDTH_MAX, Math.max(PANEL_WIDTH_MIN, startWidth + delta));
+        target.style.width = `${w}px`;
+      };
+      const onUp = () => {
+        const widths = {};
+        try { widths.palette = Math.round($("palette").offsetWidth); } catch (_) { }
+        try { widths.props = Math.round($("props").offsetWidth); } catch (_) { }
+        try { localStorage.setItem(PANEL_WIDTHS_KEY, JSON.stringify(widths)); } catch (_) { }
+        document.body.classList.remove("resizing-panel");
+        handle.classList.remove("active");
+        window.removeEventListener("mousemove", onMove);
+        window.removeEventListener("mouseup", onUp);
+      };
+      window.addEventListener("mousemove", onMove);
+      window.addEventListener("mouseup", onUp);
+    });
+  });
+}
+
 async function init() {
   const data = await api("GET", "/api/catalog");
   state.catalog = data.commands;
@@ -2055,6 +2106,7 @@ async function init() {
   window.addEventListener("beforeunload", (e) => {
     if (state.dirty) { e.preventDefault(); e.returnValue = ""; }
   });
+  initPanelResize();
   loadElements();
 }
 

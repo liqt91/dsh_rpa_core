@@ -9,6 +9,15 @@ button:hover { background: var(--bg); }
 .hidden { display: none; }
 main { flex: 1; display: flex; min-height: 0; }
 
+/* 面板分隔条（切片 A：可拖拽调宽 + localStorage 记忆） */
+.resize-v {
+  width: 5px; cursor: col-resize; background: transparent;
+  transition: background 0.15s; flex-shrink: 0;
+}
+.resize-v:hover, .resize-v.active { background: var(--accent); }
+body.resizing-panel { cursor: col-resize; user-select: none; }
+body.resizing-panel * { cursor: col-resize !important; }
+
 /* 命令面板 */
 #palette { width: 260px; border-right: 1px solid var(--border); display: flex; flex-direction: column; min-height: 0; }
 #palette input { margin: 8px; }
