@@ -23,8 +23,10 @@
   - 左(#palette)/右(#props)宽度可拖；拖后记忆、重开恢复
   - 尺寸下限/上限；body 拖拽态 class 防选中
   - E2E：拖 handle 后宽度变化 + 刷新后保持（`test_editor_resizable_panels_persist`）
-- [ ] **切片 B：元素库底部 Tab 化 + 分组折叠 + 记忆**
-  - 元素库从右侧(props 下方)变为底部可拖高区/多 tab（元素库 / 数据表格占位）；分组折叠记忆
+- [x] **切片 B：元素库移入底部 dock（可拖高 + 记忆）**
+  - 元素库从右侧 props 移到底部 `#bottom-panels`（resize-h 可拖高、localStorage 记忆、高度下限/上限）
+  - 元素列表改横向网格（auto-fill minmax 280px）；运行面板维持 footer 不动
+  - E2E：dock 内有元素 + props 不再含元素库 + 高度拖动/刷新保持
 - [ ] **切片 F：捕获后自动轮询刷新（仅元素库激活且页面可见时）**
   - 替代手动 ↻；文档可见性 + tab 激活门控
 - [ ] **切片 G：运行参数对话框 + 运行中 beforeunload 警告**

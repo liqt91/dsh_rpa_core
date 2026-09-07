@@ -502,3 +502,44 @@ def test_editor_resizable_panels_persist(server):
         restored = palette_width()
         assert abs(restored - after) <= 2, f"width should persist: {after} -> {restored}"
         browser.close()
+
+
+def test_editor_bottom_element_dock_resizable(server):
+    """元素库在底部 dock（#bottom-panels），高度可拖且记忆。"""
+    base = f"http://127.0.0.1:{server.port}"
+    _request_json(
+        base, "POST", "/api/workflows/bottom-dock-flow/elements/searchBox",
+        {"kind": "browser", "selector": {"css": "#kw"},
+         "verifyCount": 1, "metadata": {"tag": "input"}},
+    )
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
+        page.goto(f"{base}/")
+        page.wait_for_selector('[data-command="browser.launch"]')
+        page.fill("#file-name", "bottom-dock-flow")
+        page.wait_for_selector("#bottom-panels #elements-list li.element-item")
+        assert "searchBox" in page.locator("#bottom-panels").inner_text()
+        # props 面板不再含元素库
+        assert page.locator("#props #elements-list").count() == 0
+
+        def bottom_height():
+            return page.evaluate("document.getElementById('bottom-panels').offsetHeight")
+
+        before = bottom_height()
+        handle = page.locator("#bottom-resize")
+        box = handle.bounding_box()
+        page.mouse.move(box["x"] + 200, box["y"] + box["height"] / 2)
+        page.mouse.down()
+        page.mouse.move(box["x"] + 200, box["y"] + box["height"] / 2 + 60, steps=6)
+        page.mouse.up()
+        after = bottom_height()
+        assert after > before, f"dock should grow: {before} -> {after}"
+
+        page.reload()
+        page.wait_for_selector('[data-command="browser.launch"]')
+        page.fill("#file-name", "bottom-dock-flow")
+        page.wait_for_selector("#bottom-panels #elements-list li.element-item")
+        restored = bottom_height()
+        assert abs(restored - after) <= 2, f"dock height should persist: {after} -> {restored}"
+        browser.close()

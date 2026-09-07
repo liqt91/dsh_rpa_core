@@ -47,21 +47,23 @@
   <aside id="props">
     <h2>属性</h2>
     <div id="props-body"></div>
-    <div class="props-sep"></div>
-    <div id="elements-head">
-      <h2>元素库</h2>
-      <div class="capture-entry">
-        <button id="btn-element-capture" title="捕获新元素">＋捕获</button>
-        <button id="btn-elements-refresh" title="刷新元素库">↻</button>
-        <div id="capture-menu" class="hidden">
-          <button data-kind="browser">网页（无缝扩展）</button>
-          <button data-kind="desktop">桌面（hover）</button>
-        </div>
-      </div>
-    </div>
-    <ul id="elements-list"></ul>
   </aside>
 </main>
+<div class="resize-h" id="bottom-resize" title="拖动调整底部面板高度"></div>
+<section id="bottom-panels">
+  <div id="elements-head">
+    <h2>元素库</h2>
+    <div class="capture-entry">
+      <button id="btn-element-capture" title="捕获新元素">＋捕获</button>
+      <button id="btn-elements-refresh" title="刷新元素库">↻</button>
+      <div id="capture-menu" class="hidden">
+        <button data-kind="browser">网页（无缝扩展）</button>
+        <button data-kind="desktop">桌面（hover）</button>
+      </div>
+    </div>
+  </div>
+  <ul id="elements-list"></ul>
+</section>
 <div id="element-dialog-mask" class="hidden">
   <div id="element-dialog">
     <h3 id="element-dialog-title">元素确认</h3>

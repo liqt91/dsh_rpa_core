@@ -1988,25 +1988,38 @@ function toggleExtensionDialog(open) {
 }
 
 // ---------------------------------------------------------------------------
-// 面板可拖拽分栏（切片 A）：palette/props 宽度可拖，localStorage 记忆。
-// 零构建 vanilla：mousedown 起拖 + mousemove 调宽，min/max 夹取，松手保存。
+// 面板可拖拽分栏（切片 A/B）：palette/props 宽度 + 底部元素库高度可拖，记忆。
+// 零构建 vanilla：mousedown 起拖 + mousemove 调整，min/max 夹取，松手保存。
 // ---------------------------------------------------------------------------
 
-const PANEL_WIDTHS_KEY = "rpa_editor_panel_widths";
+const PANEL_RESIZE_KEY = "rpa_editor_panel_resize";
 const PANEL_WIDTH_MIN = 180;
 const PANEL_WIDTH_MAX = 600;
+const BOTTOM_HEIGHT_MIN = 120;
+const BOTTOM_HEIGHT_MAX = 520;
 
-function restorePanelWidths() {
+function restorePanelResize() {
   let saved = {};
-  try { saved = JSON.parse(localStorage.getItem(PANEL_WIDTHS_KEY) || "{}"); } catch (_) { saved = {}; }
+  try { saved = JSON.parse(localStorage.getItem(PANEL_RESIZE_KEY) || "{}"); } catch (_) { saved = {}; }
   if (saved.palette) $("palette").style.width = `${saved.palette}px`;
   if (saved.props) $("props").style.width = `${saved.props}px`;
+  const bottom = $("bottom-panels");
+  if (saved.bottom && bottom) {
+    bottom.style.height = `${Math.min(BOTTOM_HEIGHT_MAX, Math.max(BOTTOM_HEIGHT_MIN, saved.bottom))}px`;
+  }
+}
+
+function savePanelResize() {
+  const saved = {};
+  try { saved.palette = Math.round($("palette").offsetWidth); } catch (_) { }
+  try { saved.props = Math.round($("props").offsetWidth); } catch (_) { }
+  try { saved.bottom = Math.round($("bottom-panels").offsetHeight); } catch (_) { }
+  try { localStorage.setItem(PANEL_RESIZE_KEY, JSON.stringify(saved)); } catch (_) { }
 }
 
 function initPanelResize() {
-  restorePanelWidths();
-  const activeHandles = document.querySelectorAll(".resize-v");
-  activeHandles.forEach((handle) => {
+  restorePanelResize();
+  document.querySelectorAll(".resize-v").forEach((handle) => {
     handle.addEventListener("mousedown", (e) => {
       e.preventDefault();
       const target = handle.dataset.resize === "palette" ? $("palette") : $("props");
@@ -2014,7 +2027,6 @@ function initPanelResize() {
       const startWidth = target.offsetWidth;
       document.body.classList.add("resizing-panel");
       handle.classList.add("active");
-
       const onMove = (ev) => {
         const delta = handle.dataset.resize === "palette"
           ? ev.clientX - startX           // palette 拖右缘向右增宽
@@ -2023,10 +2035,7 @@ function initPanelResize() {
         target.style.width = `${w}px`;
       };
       const onUp = () => {
-        const widths = {};
-        try { widths.palette = Math.round($("palette").offsetWidth); } catch (_) { }
-        try { widths.props = Math.round($("props").offsetWidth); } catch (_) { }
-        try { localStorage.setItem(PANEL_WIDTHS_KEY, JSON.stringify(widths)); } catch (_) { }
+        savePanelResize();
         document.body.classList.remove("resizing-panel");
         handle.classList.remove("active");
         window.removeEventListener("mousemove", onMove);
@@ -2036,6 +2045,31 @@ function initPanelResize() {
       window.addEventListener("mouseup", onUp);
     });
   });
+
+  const bottomHandle = $("bottom-resize");
+  const bottom = $("bottom-panels");
+  if (bottomHandle && bottom) {
+    bottomHandle.addEventListener("mousedown", (e) => {
+      e.preventDefault();
+      const startY = e.clientY;
+      const startHeight = bottom.offsetHeight;
+      document.body.classList.add("resizing-bottom");
+      bottomHandle.classList.add("active");
+      const onMove = (ev) => {
+        const h = startHeight + (ev.clientY - startY);   // 向下拖增高
+        bottom.style.height = `${Math.min(BOTTOM_HEIGHT_MAX, Math.max(BOTTOM_HEIGHT_MIN, h))}px`;
+      };
+      const onUp = () => {
+        savePanelResize();
+        document.body.classList.remove("resizing-bottom");
+        bottomHandle.classList.remove("active");
+        window.removeEventListener("mousemove", onMove);
+        window.removeEventListener("mouseup", onUp);
+      };
+      window.addEventListener("mousemove", onMove);
+      window.addEventListener("mouseup", onUp);
+    });
+  }
 }
 
 async function init() {

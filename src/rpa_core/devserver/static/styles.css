@@ -102,20 +102,35 @@ footer { border-top: 1px solid var(--border); padding: 8px 12px; max-height: 180
 .bad { color: var(--bad); }
 .error-line { font-family: Consolas, monospace; font-size: 12px; }
 
-/* 元素库面板 */
-.props-sep { border-top: 1px solid var(--border); margin: 14px 0 10px; }
-#elements-head { display: flex; align-items: center; justify-content: space-between; }
-#elements-head h2 { margin: 0; }
-#elements-head button { padding: 1px 8px; }
-#elements-list { list-style: none; margin: 8px 0 0; padding: 0; }
+/* 底部元素库面板（切片 B：从右侧移入底部可拖高 dock，横向网格） */
+body.resizing-bottom { cursor: row-resize; user-select: none; }
+body.resizing-bottom * { cursor: row-resize !important; }
+.resize-h {
+  height: 5px; cursor: row-resize; background: transparent;
+  transition: background 0.15s; flex-shrink: 0;
+}
+.resize-h:hover, .resize-h.active { background: var(--accent); }
+#bottom-panels {
+  border-top: 1px solid var(--border); background: var(--bg);
+  display: flex; flex-direction: column; height: 220px; min-height: 120px; flex-shrink: 0;
+}
+#bottom-panels #elements-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 6px 12px; border-bottom: 1px solid var(--border);
+}
+#bottom-panels #elements-head h2 { margin: 0; }
+#elements-list {
+  list-style: none; margin: 0; padding: 8px 12px; overflow-y: auto; flex: 1; min-height: 0;
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 6px; align-content: start;
+}
 #elements-list li.element-item {
   border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px;
-  margin-bottom: 6px; display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap; background: #fff;
 }
 #elements-list .element-name { font-weight: 500; }
 #elements-list .element-sub { flex-basis: 100%; font-family: Consolas, monospace; font-size: 11px; color: var(--faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #elements-list .element-item button { padding: 0 7px; font-size: 12px; }
-#elements-list li.elements-empty { color: var(--muted); font-size: 12px; border-style: dashed; padding: 8px; text-align: center; }
+#elements-list li.elements-empty { color: var(--muted); font-size: 12px; border-style: dashed; padding: 8px; text-align: center; background: #fff; }
 .capture-btn { margin-top: 6px; font-size: 12px; }
 
 /* 变量补全下拉 */
