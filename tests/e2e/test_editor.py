@@ -531,7 +531,8 @@ def test_editor_bottom_element_dock_resizable(server):
         box = handle.bounding_box()
         page.mouse.move(box["x"] + 200, box["y"] + box["height"] / 2)
         page.mouse.down()
-        page.mouse.move(box["x"] + 200, box["y"] + box["height"] / 2 + 60, steps=6)
+        # dock 在页面底部：向上拖（y 减小）增高
+        page.mouse.move(box["x"] + 200, box["y"] + box["height"] / 2 - 60, steps=6)
         page.mouse.up()
         after = bottom_height()
         assert after > before, f"dock should grow: {before} -> {after}"

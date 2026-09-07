@@ -2056,7 +2056,8 @@ function initPanelResize() {
       document.body.classList.add("resizing-bottom");
       bottomHandle.classList.add("active");
       const onMove = (ev) => {
-        const h = startHeight + (ev.clientY - startY);   // 向下拖增高
+        // dock 位于页面底部，分隔条在其上沿：向上拖（clientY 减小）增高，向下拖变矮
+        const h = startHeight - (ev.clientY - startY);
         bottom.style.height = `${Math.min(BOTTOM_HEIGHT_MAX, Math.max(BOTTOM_HEIGHT_MIN, h))}px`;
       };
       const onUp = () => {
