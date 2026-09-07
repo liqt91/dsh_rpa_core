@@ -444,7 +444,7 @@ def server_no_extension(tmp_path):
         dev.stop()
 
 
-def test_editor_extension_dialog_shows_both_browsers(server_no_extension):
+def test_editor_extension_dialog_shows_guide_for_both_browsers(server_no_extension):
     base = f"http://127.0.0.1:{server_no_extension.port}"
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
@@ -458,7 +458,11 @@ def test_editor_extension_dialog_shows_both_browsers(server_no_extension):
         assert rows.count() >= 2
         text = page.locator("#extension-browsers").inner_text()
         assert "Chrome" in text and "Edge" in text
-        assert rows.first.locator(".ext-install").is_visible()
+        # 引导：目录路径输入框 + 复制/打开目录 + 打开扩展页按钮
+        assert page.locator("#extension-dir-path").input_value()
+        assert page.locator("#btn-ext-copy-path").is_visible()
+        assert page.locator("#btn-ext-open-dir").is_visible()
+        assert rows.first.locator(".ext-open-page").is_visible()
         page.click("#extension-dialog-close")
         assert page.locator("#extension-dialog-mask").is_hidden()
         browser.close()

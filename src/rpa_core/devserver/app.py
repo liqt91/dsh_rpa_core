@@ -15,6 +15,8 @@ from rpa_core.extension_installer import (
     extension_status,
     install_external_guided,
     load_packed_extension,
+    open_browser_extensions_page,
+    open_path_in_explorer,
     pack_extension,
     update_manifest_xml,
 )
@@ -414,17 +416,42 @@ class DevServerApp:
         return update_manifest_xml(self._packed_extension(), f"{base_url}/api/extension/crx")
 
     def extension_status_view(self) -> dict:
-        """只读状态：双浏览器 binary/registry/profile 已装与已启用（无 body）。"""
-        packed = load_packed_extension(self._extension_build_dir)
-        if packed is None:
-            return {
-                "packed": None,
-                "note": "扩展尚未打包；先在编辑器安装或运行 rpa-core install-extension",
-                "browsers": extension_status("", self._extension_build_dir)["browsers"],
-            }
-        status = extension_status(packed.extension_id, self._extension_build_dir)
-        status["enableHint"] = {"chrome": "chrome://extensions", "edge": "edge://extensions"}
+        """只读状态：双浏览器 registry/开发者模式(Load unpacked) 已装与已启用。
+
+        同时返回 extensionDir（开发者模式引导需要加载的源码目录）。
+        """
+        source_dir = extension_root()
+        status = extension_status(
+            "",
+            self._extension_build_dir,
+            extension_dir=source_dir,
+        )
+        status["extensionDir"] = str(source_dir)
+        status["enableHint"] = {
+            "chrome": "chrome://extensions", "edge": "edge://extensions",
+        }
+        status["installMode"] = "load-unpacked"
         return status
+
+    def extension_open_dir_view(self) -> dict:
+        """在系统文件管理器打开扩展源码目录（Load unpacked 引导：方便定位/复制路径）。"""
+        source = extension_root()
+        if not source.is_dir():
+            raise ApiError(404, "NOT_FOUND", f"extension source dir missing: {source}")
+        opened = open_path_in_explorer(source)
+        return {"opened": opened, "extensionDir": str(source)}
+
+    def extension_open_page_view(self, body: Any) -> dict:
+        """打开指定浏览器的扩展管理页（开发者模式引导第一步）。"""
+        if not isinstance(body, dict):
+            raise ApiError(400, "BAD_REQUEST", "request body must be a JSON object")
+        browser = str(body.get("browser") or "")
+        if browser not in ("chrome", "edge"):
+            raise ApiError(400, "BAD_REQUEST", "browser must be one of: chrome, edge")
+        opened = open_browser_extensions_page(browser)
+        if not opened:
+            raise ApiError(404, "NOT_FOUND", f"{browser} executable not found")
+        return {"opened": True, "browser": browser}
 
     def extension_install_view(self, body: Any) -> dict:
         """免管理员外部注册表安装（浏览器可选 chrome/edge/both）。写 HKCU，需本机 Windows。"""

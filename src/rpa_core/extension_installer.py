@@ -572,10 +572,102 @@ def read_profile_extension_state(
     return states
 
 
-def extension_status(extension_id: str, build_dir: Path | None = None) -> dict:
-    """报告每浏览器安装状态：binary/registry 条目/profile 已装与已启用。
+def read_unpacked_extension_state(
+    user_data_dir: Path, extension_dir: Path
+) -> list[dict]:
+    """检测「开发者模式 Load unpacked」加载状态：按扩展源码目录路径匹配。
 
-    纯只读；build_dir 缺省时仍返回（registry/profile 照常探测），packed 为 None。
+    开发者模式加载的扩展 ID 由目录路径派生（非 pem 密钥），无法用 extension_id
+    匹配；且 Chrome/Edge 在 Secure Preferences 中不保存 unpacked 扩展的 manifest
+    （manifest 为 None），故改为匹配记录里的 ``path`` == 本扩展源码目录
+    （location==4 unpacked）。返回每 profile：
+    {"profile", "installed", "enabled", "location"}。
+    """
+    target = str(extension_dir.resolve())
+    states: list[dict] = []
+    if not extension_dir.is_dir() or not user_data_dir.is_dir():
+        return states
+    for child in sorted(user_data_dir.iterdir()):
+        if not child.is_dir():
+            continue
+        if not (child / "Secure Preferences").is_file():
+            continue
+        secure = _profile_prefs_json(child, "Secure Preferences")
+        settings = (secure.get("extensions") or {}).get("settings") or {}
+        matched = [
+            record for record in settings.values()
+            if record.get("location") == 4
+            and str(record.get("path") or "").lower() == target.lower()
+        ]
+        if not matched:
+            continue
+        record = matched[0]
+        disable = record.get("disable_reasons") or []
+        states.append({
+            "profile": child.name,
+            "installed": True,
+            "enabled": not disable,
+            "location": record.get("location"),
+        })
+    return states
+
+
+def open_path_in_explorer(path: Path) -> bool:
+    """在系统文件管理器中打开指定目录（定位/选中）。跨平台 best-effort。"""
+    import webbrowser
+
+    if sys.platform == "win32":
+        # explorer /select 打开父目录并选中目标
+        try:
+            subprocess.Popen(
+                ["explorer", "/select,", str(path)],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+            return True
+        except OSError:
+            return False
+    # macOS/Linux：open/xdg-open 直接打开目录（无选中能力）
+    opener = "open" if sys.platform == "darwin" else "xdg-open"
+    try:
+        subprocess.Popen(
+            [opener, str(path)],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        return True
+    except OSError:
+        try:
+            webbrowser.open(path.as_uri())
+            return True
+        except Exception:
+            return False
+
+
+def open_browser_extensions_page(browser: str) -> bool:
+    """打开浏览器的扩展管理页（chrome://extensions / edge://extensions）。"""
+    page = "chrome://extensions" if browser == "chrome" else "edge://extensions"
+    for candidate in _browser_binary_candidates(browser):
+        if candidate.is_file():
+            try:
+                subprocess.Popen(
+                    [str(candidate), page],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                )
+                return True
+            except OSError:
+                return False
+    return False
+
+
+def extension_status(
+    extension_id: str,
+    build_dir: Path | None = None,
+    extension_dir: Path | None = None,
+) -> dict:
+    """报告每浏览器安装状态：binary/registry 条目/profile 已装与已启用 +
+    开发者模式(Load unpacked)加载状态。
+
+    纯只读；build_dir/extension_dir 缺省时对应探测项为空（packed 为 None）。
+    extension_dir 给定后按 manifest.name 匹配开发者模式加载（location 4）。
     """
     packed = load_packed_extension(build_dir) if build_dir is not None else None
     packed_info = None
@@ -591,14 +683,23 @@ def extension_status(extension_id: str, build_dir: Path | None = None) -> dict:
         profiles: list[dict] = []
         for user_data in browser_user_data_dirs(browser):
             profiles.extend(read_profile_extension_state(user_data, extension_id))
+        unpacked_profiles: list[dict] = []
+        for user_data in browser_user_data_dirs(browser):
+            if extension_dir is not None:
+                unpacked_profiles.extend(
+                    read_unpacked_extension_state(user_data, extension_dir)
+                )
         browsers[browser] = {
             "binary": any(
                 path.is_file() for path in _browser_binary_candidates(browser)
             ),
             "registryEntry": registry,
             "profiles": profiles,
-            "installed": any(item["installed"] for item in profiles),
-            "enabled": any(item["enabled"] for item in profiles),
+            "unpackedProfiles": unpacked_profiles,
+            "installed": any(item["installed"] for item in profiles)
+                or any(item["installed"] for item in unpacked_profiles),
+            "enabled": any(item["enabled"] for item in profiles)
+                or any(item["enabled"] for item in unpacked_profiles),
             "uninstallBlocked": any(
                 item.get("uninstall_blocked") for item in profiles
             ),

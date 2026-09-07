@@ -200,12 +200,16 @@ def _parse_point(raw: str | None) -> dict | None:
 
 
 def _cmd_install_extension(args) -> int:
-    """扩展安装引导：默认外部注册表双浏览器安装；--status 只检测不写。
+    """扩展安装引导。
 
-    Chrome/Edge 152 实测：安装后需在扩展页点一次启用（manifest update_url 指向 CWS），
-    见 docs/extension-install.md §6.5。--policy 走 forcelist（受管环境强制安装；
-    HKCU 被拒时单次 UAC 提权写 HKLM 自动降级）。若浏览器曾卸载过本扩展，
-    external_registry_loader 会永久跳过——用 --unblock 清除该记忆（docs §7）。
+    默认（无旗标）= **开发者模式 Load unpacked 引导**：本地扩展源码目录即可加载，
+    无需打包/商店上架，持久可用（影刀同款；Chrome/Edge 152 实测外部注册表本地 CRX
+    未上架会在启用后约 30s 被商店校验判损坏，故不作为默认路线，见
+    docs/extension-install.md §6.5 修订）。输出源码目录路径与分步指引。
+
+    --status 只检测不写；--unblock 清除浏览器卸载记忆；--registry 走旧的外部注册表
+    路线（仅商店上架后可靠）；--policy 走 forcelist（受管环境强制安装；HKCU 被拒时
+    单次 UAC 提权写 HKLM 自动降级）。
     """
     from rpa_core.extension_installer import (
         DEFAULT_DEVSERVER_ORIGIN,
@@ -220,6 +224,8 @@ def _cmd_install_extension(args) -> int:
         install_external_guided,
         install_policy_entry,
         load_packed_extension,
+        open_browser_extensions_page,
+        open_path_in_explorer,
         pack_extension,
         remove_external_registry_entries,
         remove_policy_entries,
@@ -230,6 +236,7 @@ def _cmd_install_extension(args) -> int:
     browsers = ("chrome",) if args.browser == "chrome" else (
         ("edge",) if args.browser == "edge" else ("chrome", "edge")
     )
+    source_dir = extension_root()
     try:
         if args.elevated:
             return _install_extension_elevated(args, update_url)
@@ -249,28 +256,14 @@ def _cmd_install_extension(args) -> int:
             print(json.dumps({"removed": removed}, ensure_ascii=False, indent=2))
             return 0
         if args.status:
-            packed = load_packed_extension(build_dir)
-            if packed is None:
-                print(
-                    json.dumps(
-                        {
-                            "status": "not-packed",
-                            "note": "扩展尚未打包；先运行 rpa-core install-extension 打包并安装",
-                        },
-                        ensure_ascii=False,
-                        indent=2,
-                    )
-                )
-                return 0
-            status = extension_status(packed.extension_id, build_dir)
+            status = extension_status("", build_dir, extension_dir=source_dir)
             status["_browsers"] = browsers
+            status["_extension_dir"] = str(source_dir)
             status["_enable_hint"] = {
-                "chrome": "chrome://extensions",
-                "edge": "edge://extensions",
+                "chrome": "chrome://extensions", "edge": "edge://extensions",
             }
             status["_note"] = (
-                "已装插件需在扩展页启用：安装后打开扩展页点一次启用"
-                "（Chrome/Edge 152 实测）"
+                "安装方式：开发者模式 → Load unpacked 选择源码目录（本地目录，持久可用）"
             )
             print(json.dumps(status, ensure_ascii=False, indent=2))
             return 0
@@ -288,6 +281,30 @@ def _cmd_install_extension(args) -> int:
                 "note": "已从浏览器 external_uninstalls 移除本扩展 ID；"
                         "需关闭浏览器后执行（运行中会被覆写），再冷启动浏览器生效",
             }, ensure_ascii=False, indent=2))
+            return 0
+        if args.guide or not (args.policy or args.registry):
+            # 默认 / --guide：Load unpacked 引导（打开目录 + 给出路径与步骤）
+            opened = open_path_in_explorer(source_dir)
+            guide = {
+                "mode": "load-unpacked",
+                "extensionDir": str(source_dir),
+                "openedExplorer": opened,
+                "steps": [
+                    "复制上方 extensionDir 路径",
+                    "打开浏览器扩展页：chrome://extensions / edge://extensions",
+                    "开启「开发者模式」",
+                    "点击「加载已解压的扩展程序」，粘贴/选择 extensionDir 目录",
+                    "完成后重开本对话框确认状态为「已启用」",
+                ],
+                "note": "开发者模式加载本地源码目录，持久可用（无需打包/商店上架）。"
+                        "旧注册表路线在商店上架前不可靠（启用后约 30s 被判损坏），"
+                        "保留 --registry 供上架后使用。",
+            }
+            if opened:
+                for browser in browsers:
+                    if open_browser_extensions_page(browser):
+                        break
+            print(json.dumps(guide, ensure_ascii=False, indent=2))
             return 0
         packed = pack_extension(extension_root(), build_dir)
         if args.policy:
@@ -328,9 +345,9 @@ def _cmd_install_extension(args) -> int:
                     "chrome": "chrome://extensions",
                     "edge": "edge://extensions",
                 },
-                "note": guided["note"] + " Chrome/Edge 152 实测需用户在扩展页点一次启用"
-                        "（非零点击，manifest update_url 指向 CWS），零点击启用需商店上架"
-                        " + forcelist（docs/extension-install.md §6.5）",
+                "note": guided["note"] + " 外部注册表路线仅商店上架后可靠；"
+                        "未上架本地 CRX 启用后约 30s 会被商店校验判损坏"
+                        "（docs/extension-install.md §6.5 修订）",
             }
         print(json.dumps(payload, ensure_ascii=False, indent=2))
         return 0
@@ -447,11 +464,15 @@ def main() -> int:
                              help="移除外部扩展注册表与强制安装策略条目")
             sub.add_argument("--status", action="store_true",
                              help="只检测安装/启用状态，不写入")
+            sub.add_argument("--guide", action="store_true",
+                             help="开发者模式 Load unpacked 引导（默认行为，可省略）")
+            sub.add_argument("--registry", action="store_true",
+                             help="走外部注册表路线（仅商店上架后可靠；默认改为引导）")
             sub.add_argument("--unblock", action="store_true",
                              help="从浏览器 external_uninstalls 移除本扩展 ID"
                                   "（装不上/被跳过时用；需先关浏览器再冷启动）")
             sub.add_argument("--browser", choices=("chrome", "edge"),
-                             help="仅安装到指定浏览器（默认 Chrome+Edge）")
+                             help="仅处理指定浏览器（默认 Chrome+Edge）")
             sub.add_argument("--policy", action="store_true",
                              help="走 ExtensionInstallForcelist 策略路线（受管环境强制安装）")
             sub.add_argument("--update-url",

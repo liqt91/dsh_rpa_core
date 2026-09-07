@@ -1891,8 +1891,8 @@ function toggleRunEvents() {
 }
 
 // ---------------------------------------------------------------------------
-// 浏览器捕获插件安装入口：状态检测（GET /api/extension/status）+
-// 单选安装（POST /api/extension/install）+ 装后去扩展页启用引导
+// 浏览器捕获插件安装引导：开发者模式 Load unpacked（影刀同款，持久可用）。
+// 检测状态（GET /api/extension/status）+ 打开源码目录 / 扩展管理页 + 复制路径。
 // ---------------------------------------------------------------------------
 
 const EXTENSION_NAMES = { chrome: "Chrome", edge: "Edge" };
@@ -1900,6 +1900,7 @@ const EXTENSION_ENABLE = { chrome: "chrome://extensions", edge: "edge://extensio
 
 async function loadExtensionStatus() {
   const data = await api("GET", "/api/extension/status");
+  $("extension-dir-path").value = data.extensionDir || "";
   const box = $("extension-browsers");
   box.textContent = "";
   for (const browser of ["chrome", "edge"]) {
@@ -1907,68 +1908,47 @@ async function loadExtensionStatus() {
     const row = document.createElement("div");
     row.className = "ext-row";
     const badge = statusBadge(info);
+    const pageBtn = document.createElement("button");
+    pageBtn.className = "ext-open-page";
+    pageBtn.dataset.browser = browser;
+    pageBtn.textContent = `打开 ${EXTENSION_NAMES[browser]} 扩展页`;
+    pageBtn.addEventListener("click", async (e) => {
+      const btn = e.currentTarget;
+      btn.disabled = true;
+      const url = EXTENSION_ENABLE[browser];
+      try {
+        await api("POST", "/api/extension/open-page", { browser });
+        // 浏览器安全限制：chrome:///edge:// 页面无法从外部命令可靠导航，
+        // 自动复制地址并提示粘贴（与影刀引导一致）。
+        let copied = "";
+        try {
+          await navigator.clipboard.writeText(url);
+          copied = " 已复制地址到剪贴板";
+        } catch (_) { copied = ""; }
+        showExtensionResult(
+          `已打开 ${EXTENSION_NAMES[browser]}。若未进入扩展页，请在地址栏粘贴/输入：${url}${copied}`,
+          true
+        );
+      } catch (err) {
+        showExtensionResult(`打开失败：${err.message || err}`, false);
+      } finally {
+        btn.disabled = false;
+      }
+    });
     row.innerHTML = `
       <span class="ext-name">${EXTENSION_NAMES[browser]}</span>
       ${badge}
-      <button class="ext-install" data-browser="${browser}" title="写入外部扩展注册表">安装</button>
-      <button class="ext-unblock hidden" data-browser="${browser}" title="清除浏览器卸载记忆">解除屏蔽</button>
     `;
-    if (info.uninstallBlocked) {
-      row.querySelector(".ext-unblock").classList.remove("hidden");
-    }
-    row.querySelector(".ext-install").addEventListener("click", async (e) => {
-      const btn = e.currentTarget;
-      btn.disabled = true;
-      btn.textContent = "安装中…";
-      try {
-        const result = await api("POST", "/api/extension/install", { browser });
-        const blocked = (result.unblocked && result.unblocked[browser] || []).length
-          ? "（已自动解除卸载屏蔽）" : "";
-        const running = (result.runningBrowsers || []).includes(browser)
-          ? " 检测到浏览器正在运行，请先关闭，再打开扩展页点一次「启用」。"
-          : "";
-        showExtensionResult(
-          `已写入 ${EXTENSION_NAMES[browser]} 外部扩展注册表${blocked}。${running}`
-        );
-        await loadExtensionStatus();
-      } catch (err) {
-        showExtensionResult(`安装失败：${err.message || err}`, false);
-        btn.disabled = false;
-        btn.textContent = "安装";
-      }
-    });
-    row.querySelector(".ext-unblock").addEventListener("click", async (e) => {
-      const btn = e.currentTarget;
-      btn.disabled = true;
-      try {
-        await api("POST", "/api/extension/unblock", { browser });
-        showExtensionResult(
-          `已解除 ${EXTENSION_NAMES[browser]} 的卸载屏蔽。
-           请先关闭浏览器，再重新打开使其生效，然后点「安装」。`,
-          true
-        );
-        await loadExtensionStatus();
-      } catch (err) {
-        showExtensionResult(`解除失败：${err.message || err}`, false);
-        btn.disabled = false;
-      }
-    });
-    box.appendChild(row);
-  }
-  if (!data.packed) {
-    const row = document.createElement("div");
-    row.className = "ext-row ext-note";
-    row.textContent = "扩展尚未打包；点任一浏览器「安装」会自动打包（需本机 Chrome/Edge）。";
+    row.appendChild(pageBtn);
     box.appendChild(row);
   }
 }
 
 function statusBadge(info) {
-  if (info.uninstallBlocked) return '<span class="ext-badge warn">已卸载屏蔽</span>';
   if (info.enabled) return '<span class="ext-badge ok">已启用</span>';
-  if (info.installed) return '<span class="ext-badge warn">已装未启用</span>';
-  if (info.registryEntry) return '<span class="ext-badge warn">已登记（待重启）</span>';
-  return `<span class="ext-badge bad">未安装</span>`;
+  if (info.installed) return '<span class="ext-badge warn">已加载未启用</span>';
+  if (info.uninstallBlocked) return '<span class="ext-badge warn">有卸载记录</span>';
+  return `<span class="ext-badge bad">未加载</span>`;
 }
 
 function showExtensionResult(text, ok = true) {
@@ -1976,6 +1956,17 @@ function showExtensionResult(text, ok = true) {
   el.textContent = text;
   el.className = ok ? "ok" : "bad";
   el.classList.remove("hidden");
+}
+
+async function copyExtensionDir() {
+  const path = $("extension-dir-path").value;
+  if (!path) { showExtensionResult("目录路径为空", false); return; }
+  try {
+    await navigator.clipboard.writeText(path);
+    showExtensionResult(`已复制：${path}`, true);
+  } catch (err) {
+    showExtensionResult(`复制失败：${err.message || err}`, false);
+  }
 }
 
 function toggleExtensionDialog() {
@@ -2033,6 +2024,15 @@ async function init() {
   }
   $("btn-fullscreen").addEventListener("click", toggleFullscreen);
   $("btn-extension").addEventListener("click", toggleExtensionDialog);
+  $("btn-ext-copy-path").addEventListener("click", copyExtensionDir);
+  $("btn-ext-open-dir").addEventListener("click", async () => {
+    try {
+      const r = await api("POST", "/api/extension/open-dir");
+      showExtensionResult(`已在文件管理器中打开：${r.extensionDir}`, true);
+    } catch (err) {
+      showExtensionResult(`打开失败：${err.message || err}`, false);
+    }
+  });
   $("extension-dialog-close").addEventListener("click", toggleExtensionDialog);
   $("extension-dialog-mask").addEventListener("click", (e) => {
     if (e.target === $("extension-dialog-mask")) toggleExtensionDialog();

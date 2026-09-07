@@ -251,7 +251,22 @@ def _cli(*argv: str, monkeypatch) -> tuple[int, str]:
     return code, buffer.getvalue()
 
 
-def test_cli_install_extension_defaults_to_external_registry(_fake_registry, monkeypatch, tmp_path):
+def test_cli_install_defaults_to_guide_not_registry(_fake_registry, monkeypatch, tmp_path):
+    """无旗标默认 = 开发者模式 Load unpacked 引导，不写注册表、不打包。"""
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    monkeypatch.setattr(ext, "open_path_in_explorer", lambda path: True)
+    monkeypatch.setattr(ext, "open_browser_extensions_page", lambda browser: True)
+    code, out = _cli("install-extension", "--build-dir", str(empty), monkeypatch=monkeypatch)
+    assert code == 0
+    payload = json.loads(out)
+    assert payload["mode"] == "load-unpacked"
+    assert payload["extensionDir"]
+    assert len(payload["steps"]) >= 4
+    assert not _fake_registry.stores  # 引导不写注册表
+
+
+def test_cli_registry_flag_writes_external_registry(_fake_registry, monkeypatch, tmp_path):
     build_dir = tmp_path / "build"
     build_dir.mkdir()
     (build_dir / "extension.pem").write_text(_PKCS8, encoding="utf-8")
@@ -261,7 +276,8 @@ def test_cli_install_extension_defaults_to_external_registry(_fake_registry, mon
     monkeypatch.setattr(ext, "clear_uninstall_block",
                         lambda ext_id, browsers=("chrome", "edge"):
                         {"chrome": [], "edge": []})
-    code, out = _cli("install-extension", "--build-dir", str(build_dir), monkeypatch=monkeypatch)
+    code, out = _cli("install-extension", "--registry", "--build-dir", str(build_dir),
+                     monkeypatch=monkeypatch)
     assert code == 0
     payload = json.loads(out)
     assert payload["extensionId"] == EXPECTED_ID
@@ -300,7 +316,10 @@ def test_cli_remove_extension_clears_both_mechanisms(_fake_registry, monkeypatch
     (build_dir / "extension.pem").write_text(_PKCS8, encoding="utf-8")
     (build_dir / "extension.crx").write_bytes(b"Cr24-fake")
     monkeypatch.setattr(ext, "find_browser_binary", lambda: None)
-    code, _ = _cli("install-extension", "--build-dir", str(build_dir), monkeypatch=monkeypatch)
+    monkeypatch.setattr(ext, "open_path_in_explorer", lambda path: True)
+    monkeypatch.setattr(ext, "open_browser_extensions_page", lambda browser: True)
+    code, _ = _cli("install-extension", "--registry", "--build-dir", str(build_dir),
+                   monkeypatch=monkeypatch)
     assert code == 0
     code, _ = _cli(
         "install-extension", "--policy", "--build-dir", str(build_dir), monkeypatch=monkeypatch
@@ -313,10 +332,22 @@ def test_cli_remove_extension_clears_both_mechanisms(_fake_registry, monkeypatch
     assert all(not store for store in _fake_registry.stores.values())
 
 
-def test_cli_install_error_output(_fake_registry, monkeypatch, tmp_path):
+def test_cli_install_guide_works_without_browser(_fake_registry, monkeypatch, tmp_path):
+    """默认引导不需要本机浏览器/打包（Load unpacked 用手动加载）。"""
+    empty = tmp_path / "empty"
+    empty.mkdir()
     monkeypatch.setattr(ext, "find_browser_binary", lambda: None)
-    code, out = _cli("install-extension", "--build-dir", str(tmp_path / "empty"),
-                     monkeypatch=monkeypatch)
+    monkeypatch.setattr(ext, "open_path_in_explorer", lambda path: False)
+    monkeypatch.setattr(ext, "open_browser_extensions_page", lambda browser: False)
+    code, out = _cli("install-extension", "--build-dir", str(empty), monkeypatch=monkeypatch)
+    assert code == 0
+    assert json.loads(out)["mode"] == "load-unpacked"
+
+
+def test_cli_registry_flag_errors_without_browser(_fake_registry, monkeypatch, tmp_path):
+    monkeypatch.setattr(ext, "find_browser_binary", lambda: None)
+    code, out = _cli("install-extension", "--registry", "--build-dir",
+                     str(tmp_path / "empty"), monkeypatch=monkeypatch)
     assert code == 1
     assert json.loads(out) == {
         "error": "NO_BROWSER",
@@ -517,6 +548,49 @@ def test_extension_status_reports_per_browser(monkeypatch, tmp_path):
     assert status["packed"] is None
 
 
+def _write_unpacked_secure_prefs(user_data: Path, profile: str, extension_dir: Path,
+                                 *, disable_reasons=None):
+    """写入一条 location=4（开发者模式 Load unpacked）扩展记录。"""
+    prefs = user_data / profile / "Secure Preferences"
+    prefs.parent.mkdir(parents=True, exist_ok=True)
+    document = {
+        "extensions": {
+            "settings": {
+                "unpackedid": {
+                    "location": 4,
+                    "path": str(extension_dir),
+                    "disable_reasons": disable_reasons or [],
+                    "state": 1,
+                }
+            }
+        }
+    }
+    prefs.write_text(json.dumps(document), encoding="utf-8")
+
+
+def test_read_unpacked_extension_state_matches_by_path(tmp_path):
+    ext_dir = tmp_path / "ext"
+    ext_dir.mkdir()
+    _write_unpacked_secure_prefs(tmp_path, "Default", ext_dir)
+    states = ext.read_unpacked_extension_state(tmp_path, ext_dir)
+    assert len(states) == 1
+    assert states[0]["installed"] and states[0]["enabled"]
+    assert states[0]["location"] == 4
+
+
+def test_read_unpacked_extension_state_ignores_other_dir_and_location(tmp_path):
+    ext_dir = tmp_path / "ext"
+    ext_dir.mkdir()
+    other = tmp_path / "other"
+    other.mkdir()
+    _write_unpacked_secure_prefs(tmp_path, "Default", ext_dir, disable_reasons=[1024])
+    # 不同目录、且带 disable → 不命中（路径不同）
+    assert ext.read_unpacked_extension_state(tmp_path, other) == []
+    # 同目录但被禁用 → installed 但未启用
+    states = ext.read_unpacked_extension_state(tmp_path, ext_dir)
+    assert states[0]["installed"] and not states[0]["enabled"]
+
+
 def test_install_external_registry_entry_single_browser(monkeypatch):
     fake = FakeWinreg()
     monkeypatch.setattr(ext, "_winreg_module", lambda: fake)
@@ -643,7 +717,7 @@ def test_install_external_guided_respects_single_browser(monkeypatch):
     assert any("Chrome" in path for path in fake.stores) is False
 
 
-def test_cli_install_extension_single_browser_edge(_fake_registry, monkeypatch, tmp_path):
+def test_cli_registry_single_browser_edge(_fake_registry, monkeypatch, tmp_path):
     build_dir = tmp_path / "build"
     build_dir.mkdir()
     (build_dir / "extension.pem").write_text(_PKCS8, encoding="utf-8")
@@ -653,8 +727,8 @@ def test_cli_install_extension_single_browser_edge(_fake_registry, monkeypatch, 
     monkeypatch.setattr(ext, "clear_uninstall_block",
                         lambda ext_id, browsers=("chrome", "edge"):
                         {"chrome": [], "edge": []})
-    code, out = _cli("install-extension", "--browser", "edge", "--build-dir",
-                     str(build_dir), monkeypatch=monkeypatch)
+    code, out = _cli("install-extension", "--registry", "--browser", "edge",
+                     "--build-dir", str(build_dir), monkeypatch=monkeypatch)
     assert code == 0
     payload = json.loads(out)
     assert payload["browsers"] == {"edge": "added"}
@@ -668,7 +742,8 @@ def test_cli_install_extension_status_is_read_only(_fake_registry, monkeypatch, 
     (build_dir / "extension.crx").write_bytes(b"Cr24-fake")
     monkeypatch.setattr(ext, "find_browser_binary", lambda: None)
     monkeypatch.setattr(ext, "extension_status",
-                        lambda ext_id, build_dir=None: {"packed": None, "browsers": {}})
+                        lambda ext_id, build_dir=None, extension_dir=None:
+                        {"packed": None, "browsers": {}})
     code, out = _cli("install-extension", "--status", "--build-dir", str(build_dir),
                      monkeypatch=monkeypatch)
     assert code == 0
@@ -677,15 +752,18 @@ def test_cli_install_extension_status_is_read_only(_fake_registry, monkeypatch, 
     assert not _fake_registry.stores  # --status 不写任何注册表
 
 
-def test_cli_install_extension_status_when_not_packed(_fake_registry, monkeypatch, tmp_path):
+def test_cli_install_extension_status_works_without_packing(_fake_registry, monkeypatch, tmp_path):
+    """--status 不要求打包（Load unpacked 检测按源码目录名，与 CRX 无关）。"""
     empty = tmp_path / "empty"
     empty.mkdir()
     monkeypatch.setattr(ext, "extension_status",
-                        lambda ext_id, build_dir=None: {"browsers": {}})
+                        lambda ext_id, build_dir=None, extension_dir=None:
+                        {"browsers": {}})
     code, out = _cli("install-extension", "--status", "--build-dir", str(empty),
                      monkeypatch=monkeypatch)
     assert code == 0
-    assert json.loads(out)["status"] == "not-packed"
+    payload = json.loads(out)
+    assert "browsers" in payload and "_extension_dir" in payload
 
 
 def test_cli_install_extension_unblock(_fake_registry, monkeypatch, tmp_path):
