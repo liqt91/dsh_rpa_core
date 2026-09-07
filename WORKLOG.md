@@ -1,5 +1,26 @@
 # 工作日志
 
+## 2026-09-07
+
+- 浏览器扩展安装全链路实证与方向修正（详见 docs/extension-install.md §6.5.1，PROGRESS 四条）：
+  - Chrome/Edge 152 双浏览器对照 + 影刀插件真机重装对比：外部注册表来源放行与否由 manifest update_url 归属决定；§6.5「指 CWS 即可用、无需上架」被真机推翻——未上架本地 CRX 启用后约 30s 被异步商店校验判损坏（disable [1024]）；影刀持久只因 ID 真上架。
+  - 根因二连：装不上多为 `extensions.external_uninstalls` 卸载记忆（loader 永久跳过，清除+冷启动即装）；安装入口默认改开发者模式 Load unpacked 引导（源码目录、持久可用，影刀 Chrome 同款）。
+  - 扩展安装入口落地（CLI `install-extension` + 编辑器「⇲ 插件」对话框）：per-browser 状态检测（注册表/profile/开发者模式按 `location==4 && path` 匹配）、复制/打开源码目录、安装自动清除卸载屏蔽、--registry 保留上架后路线；ADR 0012（devserver 能力层复用而非子进程代理）。
+  - 实测边界：chrome:// 与 edge:// 扩展页无法从外部命令导航（安全设计）→ 对话框第 3 步改纯文字指引；模态框仅「关闭」按钮关闭。
+- 完成 M19 编辑器交互补强（对照隔壁 rpa_script 仿影刀编辑器，仅借鉴不搬码）：
+  - A 面板可拖分栏 + localStorage 记忆；B 元素库移入底部可拖高 dock（横向网格，方向修正上拖增高）；F 捕获自动刷新（2s 轮询 + visibilitychange 门控 + 元素名集合差集，仅变化重渲染）；G 运行参数对话框（顶层 inputs 按声明类型渲染）+ 运行中 beforeunload 拦截；D selector 字段「从元素库选」下拉 + kind 徽标。
+  - 技术栈决策：切片 C/D/E 前立决策点——实测 app.js 1886→~2050 行线性增长、零范式回归、字段密度 1-6，**继续 vanilla 不迁 React**（迁移固定成本高：重写 + 产物入库 + 破零外链 ADR）。
+  - 切 C（元素截图灯箱）后置：捕获链路现无截图产物、stdlib 无截图/压缩 → 移 BACKLOG 远期 blocked；切 E（多 tab 属性表单）留接口：字段多（>~8）再按「常规/参数/…」划分。
+  - 收口：M19 任务单 done、feature editor-interactions passes、project_state completed_milestone=M19；full gate 250 tests。
+
+## 2026-09-06
+
+- 完成 extension-installer：扩展静默安装双通道（外部扩展注册表 HKCU + ExtensionInstallForcelist 策略，UAC 提权 HKLM 降级），逆向影刀 6.2.23 实锤 external_registry_loader 通道；Edge --pack-extension + pem 持久化、纯 stdlib DER 推扩展 ID；devserver 托管 update-manifest XML + CRX；CLI `install-extension`（默认外部注册表 / --policy / --remove）；合同 24 项（fake winreg）+ 真机实测。详见 PROGRESS 2026-09-06 行、docs/extension-install.md。
+
+## 2026-09-05
+
+- 完成 WorkBuddy 连接器合规审查：对照 open.workbuddy.cn/docs/connector 修 cli.json win32 入口（rpa-core.cmd→rpa-core.exe，干净 venv 实证 pip 只生成 .exe）+ SKILL.md frontmatter 必填字段；合同 +2 防回归。详见 PROGRESS 2026-09-05 行。
+
 ## 2026-09-04
 
 - keepOpen 实机验证：bsk run 结束后 session 仍存活、Agent Window 保留（对照：非 keepOpen 正常回收）。
