@@ -160,7 +160,7 @@
     {
       "id": "editor-interactions",
       "title": "Editor interaction polish: resizable panels, bottom element library tabs, capture/run UX",
-      "passes": false
+      "passes": true
     }
   ]
 }
