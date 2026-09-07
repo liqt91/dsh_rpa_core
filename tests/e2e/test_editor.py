@@ -544,3 +544,26 @@ def test_editor_bottom_element_dock_resizable(server):
         restored = bottom_height()
         assert abs(restored - after) <= 2, f"dock height should persist: {after} -> {restored}"
         browser.close()
+
+
+def test_editor_element_auto_refresh_on_poll(server):
+    """切片 F：捕获在后台落库时，dock 经轮询自动出现新元素（无需手动 ↻）。"""
+    base = f"http://127.0.0.1:{server.port}"
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
+        page.goto(f"{base}/")
+        page.wait_for_selector('[data-command="browser.launch"]')
+        page.fill("#file-name", "auto-refresh-flow")
+        page.wait_for_selector("#bottom-panels #elements-list li.elements-empty")
+
+        # 模拟后台捕获落库：页面开着，外部（同源 API）新增一个元素
+        _request_json(
+            base, "POST", "/api/workflows/auto-refresh-flow/elements/polledEl",
+            {"kind": "browser", "selector": {"css": "#poll"},
+             "verifyCount": 1, "metadata": {"tag": "input"}},
+        )
+        # 不等手动刷新，轮询（2s）应自动带出
+        page.wait_for_selector("#bottom-panels #elements-list li.element-item", timeout=8000)
+        assert "polledEl" in page.locator("#bottom-panels").inner_text()
+        browser.close()

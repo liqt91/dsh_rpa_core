@@ -10,6 +10,7 @@ const state = {
   redo: [],
   clipboard: null,
   dirty: false,
+  elementsSeen: null, // 最近一次渲染的元素名集合（捕获自动刷新差集用）
 };
 let dragState = null; // {type:"new", command} | {type:"new", flow} | {type:"move", path}
 let pendingDrop = null; // {containerPath, key, index}
@@ -1437,6 +1438,7 @@ function elementsBasePath(flow) {
 async function loadElements() {
   const flow = currentFlow();
   if (!flow) {
+    state.elementsSeen = null;
     renderElements([], false);
     return;
   }
@@ -1444,11 +1446,45 @@ async function loadElements() {
   try {
     data = await api("GET", elementsBasePath(flow));
   } catch (err) {
+    state.elementsSeen = null;
     renderElements([], false);
     return;
   }
-  renderElements(data.elements || [], true);
+  const names = data.elements || [];
+  state.elementsSeen = new Set(names);
+  renderElements(names, true);
 }
+
+// ---------------------------------------------------------------------------
+// 捕获自动刷新（切片 F）：页面可见且有命名流程时，2s 轮询元素列表，
+// 与已渲染集合做差集，仅在有新增时才重渲染（捕获常在后台 tab 落库）。
+// ---------------------------------------------------------------------------
+
+async function pollElements() {
+  const flow = currentFlow();
+  if (!flow || document.visibilityState !== "visible") return;
+  const seen = state.elementsSeen;
+  if (!seen) { loadElements(); return; }
+  let data;
+  try {
+    data = await api("GET", elementsBasePath(flow));
+  } catch (_) {
+    return;
+  }
+  const names = data.elements || [];
+  if (names.length !== seen.size || names.some((name) => !seen.has(name))) {
+    state.elementsSeen = new Set(names);
+    renderElements(names, true);
+  }
+}
+
+function startElementPolling() {
+  setInterval(pollElements, 2000);
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") loadElements();
+  });
+}
+
 
 function renderElements(names, hasFlow) {
   const list = $("elements-list");
@@ -2142,6 +2178,7 @@ async function init() {
     if (state.dirty) { e.preventDefault(); e.returnValue = ""; }
   });
   initPanelResize();
+  startElementPolling();
   loadElements();
 }
 

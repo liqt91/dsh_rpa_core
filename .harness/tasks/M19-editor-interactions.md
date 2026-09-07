@@ -27,8 +27,11 @@
   - 元素库从右侧 props 移到底部 `#bottom-panels`（resize-h 可拖高、localStorage 记忆、高度下限/上限）
   - 元素列表改横向网格（auto-fill minmax 280px）；运行面板维持 footer 不动
   - E2E：dock 内有元素 + props 不再含元素库 + 高度拖动/刷新保持
-- [ ] **切片 F：捕获后自动轮询刷新（仅元素库激活且页面可见时）**
-  - 替代手动 ↻；文档可见性 + tab 激活门控
+- [x] **切片 F：捕获后自动轮询刷新（仅元素库激活且页面可见时）**
+  - 2s 轮询元素列表，与 `state.elementsSeen` 差集比较，仅变化时重渲染（后台捕获落库自动带出）
+  - 门控：`document.visibilityState==="visible"` 且已命名 flow；visibilitychange→可见即刷
+  - E2E：`test_editor_element_auto_refresh_on_poll`（外部新增元素，无手动 ↻ 自动出现）
+- [ ] **切片 G：运行参数对话框 + 运行中 beforeunload 警告**
 - [ ] **切片 G：运行参数对话框 + 运行中 beforeunload 警告**
   - run 支持 --inputs 参数对话框；运行中离开页提示
 - [ ] **决策点**（完成 B 后）：评估 app.js 行数/回归 → 决定切片 C/D/E 走 vanilla 还是立 ADR 迁 React
