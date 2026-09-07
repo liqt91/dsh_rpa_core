@@ -453,6 +453,7 @@ def test_editor_extension_dialog_shows_both_browsers(server_no_extension):
         page.wait_for_selector("#btn-extension")
         page.click("#btn-extension")
         page.wait_for_selector("#extension-dialog-mask:not(.hidden)")
+        page.wait_for_selector("#extension-browsers .ext-row")
         rows = page.locator("#extension-browsers .ext-row")
         assert rows.count() >= 2
         text = page.locator("#extension-browsers").inner_text()

@@ -512,12 +512,29 @@ def browser_user_data_dirs(browser: str) -> list[Path]:
     return [home / relative] if relative else []
 
 
+def _profile_prefs_json(profile_dir: Path, filename: str) -> dict:
+    """读 profile 下的 JSON 偏好文件；缺失/损坏返回空 dict。"""
+    path = profile_dir / filename
+    if not path.is_file():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
 def read_profile_extension_state(
     user_data_dir: Path, extension_id: str
 ) -> list[dict]:
-    """只读扫描浏览器 profile 的 Secure Preferences，返回该扩展在各 profile 的状态。
+    """只读扫描浏览器 profile，返回该扩展在各 profile 的状态。
 
-    每项：{"profile": 目录名, "installed": bool, "enabled": bool, "disable_reasons": [...]}。
+    每项：{"profile": 目录名, "installed": bool, "enabled": bool,
+    "disable_reasons": [...], "uninstall_blocked": bool}。
+    installed/enabled/disable_reasons 来自 Secure Preferences 的 extensions.settings；
+    uninstall_blocked 来自 Preferences 的 extensions.external_uninstalls
+    （Chromium：外部扩展曾被用户卸载后，external_registry_loader 会永久跳过重装，
+    即使注册表条目仍在——见 docs/extension-install.md 排查）。
     文件缺失/不可解析的 profile 跳过（不抛错）。
     """
     states: list[dict] = []
@@ -526,28 +543,30 @@ def read_profile_extension_state(
     for child in sorted(user_data_dir.iterdir()):
         if not child.is_dir():
             continue
-        prefs = child / "Secure Preferences"
-        if not prefs.is_file():
-            continue
-        try:
-            data = json.loads(prefs.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            continue
-        settings = ((data.get("extensions") or {}).get("settings") or {}).get(
+        secure_path = child / "Secure Preferences"
+        if not secure_path.is_file():
+            continue  # 非真实 profile（无 Secure Preferences 的目录不探测）
+        secure = _profile_prefs_json(child, "Secure Preferences")
+        settings = ((secure.get("extensions") or {}).get("settings") or {}).get(
             extension_id
         )
-        if settings is None:
-            continue
-        disable = settings.get("disable_reasons") or []
-        enabled = not disable and bool(
-            settings.get("ack_external") or settings.get("state") == 1
-        )
+        regular = _profile_prefs_json(child, "Preferences")
+        uninstalled = (regular.get("extensions") or {}).get(
+            "external_uninstalls"
+        ) or []
+        blocked = extension_id in uninstalled
+        if settings is None and not blocked:
+            continue  # 该 profile 无此扩展记录，也不在卸载跳过名单——跳过
+        disable = (settings or {}).get("disable_reasons") or []
         states.append(
             {
                 "profile": child.name,
-                "installed": True,
-                "enabled": enabled,
+                "installed": settings is not None,
+                "enabled": settings is not None and not disable and bool(
+                    settings.get("ack_external") or settings.get("state") == 1
+                ),
                 "disable_reasons": disable,
+                "uninstall_blocked": blocked,
             }
         )
     return states
@@ -580,8 +599,108 @@ def extension_status(extension_id: str, build_dir: Path | None = None) -> dict:
             "profiles": profiles,
             "installed": any(item["installed"] for item in profiles),
             "enabled": any(item["enabled"] for item in profiles),
+            "uninstallBlocked": any(
+                item.get("uninstall_blocked") for item in profiles
+            ),
         }
     return {"packed": packed_info, "browsers": browsers}
+
+
+def clear_uninstall_block(
+    extension_id: str, browsers: tuple[str, ...] = ("chrome", "edge")
+) -> dict[str, list[str]]:
+    """从指定浏览器各 profile 的 Preferences.extensions.external_uninstalls 移除本扩展 ID。
+
+    仅在浏览器**已关闭**时调用有效（浏览器运行中会覆写该文件）。返回
+    {browser: [被清除的 profile 目录名]}。
+    """
+    cleared: dict[str, list[str]] = {"chrome": [], "edge": []}
+    for browser, dirs in (("chrome", browser_user_data_dirs("chrome")),
+                          ("edge", browser_user_data_dirs("edge"))):
+        if browser not in browsers:
+            continue
+        for user_data in dirs:
+            if not user_data.is_dir():
+                continue
+            for child in sorted(user_data.iterdir()):
+                if not child.is_dir():
+                    continue
+                prefs_path = child / "Preferences"
+                if not prefs_path.is_file():
+                    continue
+                prefs = _profile_prefs_json(child, "Preferences")
+                ext_prefs = prefs.get("extensions")
+                if not isinstance(ext_prefs, dict):
+                    continue
+                uninstalled = ext_prefs.get("external_uninstalls")
+                if not isinstance(uninstalled, list) or extension_id not in uninstalled:
+                    continue
+                uninstalled = [item for item in uninstalled if item != extension_id]
+                if uninstalled:
+                    ext_prefs["external_uninstalls"] = uninstalled
+                else:
+                    ext_prefs.pop("external_uninstalls", None)
+                prefs_path.write_text(
+                    json.dumps(prefs, ensure_ascii=False), encoding="utf-8"
+                )
+                cleared[browser].append(child.name)
+    return cleared
+
+
+_BROWSER_PROCESSES = {"chrome": "chrome.exe", "edge": "msedge.exe"}
+
+
+def browser_running(browser: str) -> bool:
+    """目标浏览器当前是否有进程在运行（win32；其他平台一律 False）。
+
+    仅用于判断"卸载屏蔽清除是否可靠/loader 是否要等重启"——运行中的浏览器
+    会在退出时用内存副本覆写 Preferences，导致清除被冲掉。
+    """
+    if sys.platform != "win32":
+        return False
+    exe = _BROWSER_PROCESSES.get(browser)
+    if exe is None:
+        return False
+    try:
+        completed = subprocess.run(
+            ["tasklist", "/FI", f"IMAGENAME eq {exe}"],
+            capture_output=True, text=True, timeout=10, encoding="utf-8",
+            errors="replace",
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return exe.lower() in completed.stdout.lower()
+
+
+def install_external_guided(
+    extension_id: str,
+    crx_path: Path,
+    version: str,
+    browsers: tuple[str, ...] = ("chrome", "edge"),
+) -> dict:
+    """对外部注册表安装做引导：对**当前未运行**的浏览器先清卸载屏蔽再写注册表。
+
+    运行中的浏览器无法可靠清除（退出会覆写），返回 runningBrowsers 提示需关闭重开。
+    返回 {"installed", "unblocked", "runningBrowsers", "note"}。
+    """
+    unblockable = tuple(
+        browser for browser in browsers if not browser_running(browser)
+    )
+    unblocked = clear_uninstall_block(extension_id, browsers=unblockable) \
+        if unblockable else {"chrome": [], "edge": []}
+    installed = install_external_registry_entry(
+        extension_id, crx_path, version, browsers=browsers
+    )
+    running = [browser for browser in browsers if browser_running(browser)]
+    note = "已写入外部扩展注册表。"
+    if running:
+        note += " 检测到浏览器正在运行：请先关闭，再重新打开扩展页并点一次启用。"
+    return {
+        "installed": installed,
+        "unblocked": unblocked,
+        "runningBrowsers": running,
+        "note": note,
+    }
 
 
 # -- 提权降级（HKCU\Software\Policies 被加固的机器：单次 UAC，提权写 HKLM）------

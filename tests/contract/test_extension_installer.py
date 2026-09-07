@@ -257,6 +257,10 @@ def test_cli_install_extension_defaults_to_external_registry(_fake_registry, mon
     (build_dir / "extension.pem").write_text(_PKCS8, encoding="utf-8")
     (build_dir / "extension.crx").write_bytes(b"Cr24-fake")
     monkeypatch.setattr(ext, "find_browser_binary", lambda: None)
+    monkeypatch.setattr(ext, "browser_running", lambda browser: False)
+    monkeypatch.setattr(ext, "clear_uninstall_block",
+                        lambda ext_id, browsers=("chrome", "edge"):
+                        {"chrome": [], "edge": []})
     code, out = _cli("install-extension", "--build-dir", str(build_dir), monkeypatch=monkeypatch)
     assert code == 0
     payload = json.loads(out)
@@ -527,7 +531,116 @@ def test_install_external_registry_entry_single_browser(monkeypatch):
     }
 
 
-# -- CLI：--browser 单选 与 --status 只读 ---------------------------------------
+# -- 卸载屏蔽（external_uninstalls：loader 永久跳过的检测与清除）----------------
+
+
+def _write_preferences(user_data: Path, profile: str, extension_id: str,
+                       *, include_in_uninstalls: bool):
+    prefs = user_data / profile / "Preferences"
+    prefs.parent.mkdir(parents=True, exist_ok=True)
+    document = {"extensions": {"external_uninstalls": (
+        [extension_id] if include_in_uninstalls else []
+    )}}
+    prefs.write_text(json.dumps(document), encoding="utf-8")
+
+
+def test_read_profile_extension_state_reports_uninstall_block(tmp_path):
+    _write_secure_prefs(tmp_path, "Default", EXPECTED_ID, {"location": 3})
+    _write_preferences(tmp_path, "Default", EXPECTED_ID, include_in_uninstalls=True)
+    states = ext.read_profile_extension_state(tmp_path, EXPECTED_ID)
+    assert len(states) == 1
+    assert states[0]["uninstall_blocked"] is True
+    assert states[0]["installed"] is True
+
+
+def test_read_profile_extension_state_reports_block_when_never_installed(tmp_path):
+    # Secure Preferences 存在（真实 profile）但 settings 无此扩展；
+    # external_uninstalls 有记录 → 报告 blocked，解释 loader 为何跳过
+    profile = tmp_path / "Default"
+    profile.mkdir(parents=True)
+    (profile / "Secure Preferences").write_text("{}", encoding="utf-8")
+    _write_preferences(tmp_path, "Default", EXPECTED_ID, include_in_uninstalls=True)
+    states = ext.read_profile_extension_state(tmp_path, EXPECTED_ID)
+    assert len(states) == 1
+    assert states[0]["uninstall_blocked"] is True
+    assert states[0]["installed"] is False
+
+
+def test_clear_uninstall_block_removes_only_our_id(tmp_path, monkeypatch):
+    monkeypatch.setattr(ext, "browser_user_data_dirs", lambda browser: [tmp_path])
+    for profile in ("Default", "Profile 1"):
+        _write_secure_prefs(tmp_path, profile, EXPECTED_ID, {"location": 3})
+        _write_preferences(tmp_path, profile, EXPECTED_ID,
+                           include_in_uninstalls=True)
+    # Default 额外带无关扩展的 uninstalls 记录，不应被清除
+    other = tmp_path / "Default" / "Preferences"
+    data = json.loads(other.read_text(encoding="utf-8"))
+    data["extensions"]["external_uninstalls"].append("someotherid")
+    other.write_text(json.dumps(data), encoding="utf-8")
+
+    cleared = ext.clear_uninstall_block(EXPECTED_ID)
+    total = len(cleared["chrome"]) + len(cleared["edge"])
+    assert total >= 1  # 双浏览器同指向 tmp，先跑的一侧即清掉全部
+    for profile in ("Default", "Profile 1"):
+        prefs = tmp_path / profile / "Preferences"
+        data = json.loads(prefs.read_text(encoding="utf-8"))
+        uninstalled = data["extensions"].get("external_uninstalls", [])
+        assert EXPECTED_ID not in uninstalled
+    default_prefs = json.loads(
+        (tmp_path / "Default" / "Preferences").read_text(encoding="utf-8")
+    )
+    assert "someotherid" in default_prefs["extensions"]["external_uninstalls"]
+    profile1_prefs = json.loads(
+        (tmp_path / "Profile 1" / "Preferences").read_text(encoding="utf-8")
+    )
+    assert "external_uninstalls" not in profile1_prefs["extensions"]
+
+
+def test_clear_uninstall_block_removes_empty_key(tmp_path, monkeypatch):
+    monkeypatch.setattr(ext, "browser_user_data_dirs", lambda browser: [tmp_path])
+    profile = tmp_path / "Default"
+    profile.mkdir(parents=True)
+    (profile / "Secure Preferences").write_text("{}", encoding="utf-8")
+    _write_preferences(tmp_path, "Default", EXPECTED_ID, include_in_uninstalls=True)
+    ext.clear_uninstall_block(EXPECTED_ID)
+    prefs = tmp_path / "Default" / "Preferences"
+    data = json.loads(prefs.read_text(encoding="utf-8"))
+    assert "external_uninstalls" not in data["extensions"]
+
+
+def test_install_external_guided_unblocks_closed_browsers(monkeypatch):
+    fake = FakeWinreg()
+    monkeypatch.setattr(ext, "_winreg_module", lambda: fake)
+    monkeypatch.setattr(sys, "platform", "win32")
+    # Edge 运行中（跳过清除但照写注册表）；Chrome 关闭（自动清除）
+    monkeypatch.setattr(ext, "browser_running",
+                        lambda browser: browser == "edge")
+    monkeypatch.setattr(
+        ext, "clear_uninstall_block",
+        lambda ext_id, browsers=("chrome", "edge"):
+            {"chrome": ["Default"], "edge": []} if "chrome" in browsers
+            else {"chrome": [], "edge": []},
+    )
+    result = ext.install_external_guided("abc", Path("C:/x/a.crx"), "1.0",
+                                         browsers=("chrome", "edge"))
+    assert result["installed"] == {"chrome": "added", "edge": "added"}
+    assert result["unblocked"]["chrome"] == ["Default"]
+    assert result["runningBrowsers"] == ["edge"]
+    assert "正在运行" in result["note"]
+
+
+def test_install_external_guided_respects_single_browser(monkeypatch):
+    fake = FakeWinreg()
+    monkeypatch.setattr(ext, "_winreg_module", lambda: fake)
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(ext, "browser_running", lambda browser: False)
+    monkeypatch.setattr(ext, "clear_uninstall_block",
+                        lambda ext_id, browsers=("chrome", "edge"):
+                        {"chrome": [], "edge": []})
+    result = ext.install_external_guided("abc", Path("C:/x/a.crx"), "1.0",
+                                         browsers=("edge",))
+    assert result["installed"] == {"edge": "added"}
+    assert any("Chrome" in path for path in fake.stores) is False
 
 
 def test_cli_install_extension_single_browser_edge(_fake_registry, monkeypatch, tmp_path):
@@ -536,6 +649,10 @@ def test_cli_install_extension_single_browser_edge(_fake_registry, monkeypatch, 
     (build_dir / "extension.pem").write_text(_PKCS8, encoding="utf-8")
     (build_dir / "extension.crx").write_bytes(b"Cr24-fake")
     monkeypatch.setattr(ext, "find_browser_binary", lambda: None)
+    monkeypatch.setattr(ext, "browser_running", lambda browser: False)
+    monkeypatch.setattr(ext, "clear_uninstall_block",
+                        lambda ext_id, browsers=("chrome", "edge"):
+                        {"chrome": [], "edge": []})
     code, out = _cli("install-extension", "--browser", "edge", "--build-dir",
                      str(build_dir), monkeypatch=monkeypatch)
     assert code == 0
@@ -571,6 +688,22 @@ def test_cli_install_extension_status_when_not_packed(_fake_registry, monkeypatc
     assert json.loads(out)["status"] == "not-packed"
 
 
+def test_cli_install_extension_unblock(_fake_registry, monkeypatch, tmp_path):
+    build_dir = tmp_path / "build"
+    build_dir.mkdir()
+    (build_dir / "extension.pem").write_text(_PKCS8, encoding="utf-8")
+    (build_dir / "extension.crx").write_bytes(b"Cr24-fake")
+    monkeypatch.setattr(ext, "find_browser_binary", lambda: None)
+    monkeypatch.setattr(ext, "clear_uninstall_block",
+                        lambda ext_id: {"chrome": ["Default"], "edge": []})
+    code, out = _cli("install-extension", "--unblock", "--build-dir", str(build_dir),
+                     monkeypatch=monkeypatch)
+    assert code == 0
+    payload = json.loads(out)
+    assert payload["unblocked"] == {"chrome": ["Default"], "edge": []}
+    assert not _fake_registry.stores  # --unblock 不写注册表
+
+
 # -- devserver 端点：status（只读）+ install（单选） -----------------------------
 
 
@@ -593,9 +726,11 @@ def test_extension_status_endpoint_reports_browsers(packed_server, monkeypatch):
         "packed": {"extensionId": EXPECTED_ID, "version": "0.1.2"},
         "browsers": {
             "chrome": {"binary": False, "registryEntry": None, "profiles": [],
-                       "installed": False, "enabled": False},
+                       "installed": False, "enabled": False,
+                       "uninstallBlocked": False},
             "edge": {"binary": False, "registryEntry": None, "profiles": [],
-                     "installed": False, "enabled": False},
+                     "installed": False, "enabled": False,
+                     "uninstallBlocked": False},
         },
         "enableHint": {"chrome": "chrome://extensions", "edge": "edge://extensions"},
     }
@@ -607,15 +742,20 @@ def test_extension_status_endpoint_reports_browsers(packed_server, monkeypatch):
     payload = json.loads(body.decode("utf-8"))
     assert set(payload["browsers"]) == {"chrome", "edge"}
     assert payload["enableHint"]["edge"] == "edge://extensions"
+    assert "uninstallBlocked" in payload["browsers"]["chrome"]
 
 
 def test_extension_install_endpoint_single_browser(packed_server, monkeypatch):
     base = f"http://127.0.0.1:{packed_server.port}"
     import rpa_core.devserver.app as app_module
     monkeypatch.setattr(
-        app_module, "install_external_registry_entry",
-        lambda ext_id, crx, ver, browsers=("chrome", "edge"):
-            {b: "added" for b in browsers},
+        app_module, "install_external_guided",
+        lambda ext_id, crx, ver, browsers=("chrome", "edge"): {
+            "installed": {b: "added" for b in browsers},
+            "unblocked": {"chrome": [], "edge": []},
+            "runningBrowsers": [],
+            "note": "已写入外部扩展注册表。",
+        },
     )
     monkeypatch.setattr(app_module, "extension_status",
                         lambda *a, **k: {"browsers": {"edge": {"enabled": False}}})
@@ -625,11 +765,31 @@ def test_extension_install_endpoint_single_browser(packed_server, monkeypatch):
     assert payload["browsers"] == {"edge": "added"}
     assert payload["enableHint"]["chrome"] == "chrome://extensions"
     assert payload["extensionId"] == EXPECTED_ID
+    assert payload["runningBrowsers"] == []
 
 
 def test_extension_install_endpoint_rejects_unknown_browser(packed_server):
     base = f"http://127.0.0.1:{packed_server.port}"
     status, body = _raw_post(base, "/api/extension/install", {"browser": "firefox"})
+    assert status == 400
+    assert json.loads(body.decode("utf-8"))["error"] == "BAD_REQUEST"
+
+
+def test_extension_unblock_endpoint(packed_server, monkeypatch):
+    base = f"http://127.0.0.1:{packed_server.port}"
+    import rpa_core.devserver.app as app_module
+    monkeypatch.setattr(app_module, "clear_uninstall_block",
+                        lambda ext_id: {"chrome": [], "edge": ["Default"]})
+    status, body = _raw_post(base, "/api/extension/unblock", {"browser": "edge"})
+    assert status == 200
+    payload = json.loads(body.decode("utf-8"))
+    assert payload["cleared"] == {"edge": ["Default"]}
+    assert payload["extensionId"] == EXPECTED_ID
+
+
+def test_extension_unblock_endpoint_rejects_unknown_browser(packed_server):
+    base = f"http://127.0.0.1:{packed_server.port}"
+    status, body = _raw_post(base, "/api/extension/unblock", {"browser": "firefox"})
     assert status == 400
     assert json.loads(body.decode("utf-8"))["error"] == "BAD_REQUEST"
 

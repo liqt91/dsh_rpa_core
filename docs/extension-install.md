@@ -220,6 +220,8 @@ Chrome 152.0.7977.76、Edge 152.0.4191.62。全部用全新临时 profile 干净
 - 从 forcelist 移除条目（或整个策略消失）会让浏览器**自动卸载**该扩展（官方行为）；所以管控工具清键不仅阻断安装，还可能连带卸载已装扩展。
 - devserver 不在默认端口运行时，策略路线的扩展拉取会失败（重试无害）；`--update-url` 覆盖。外部注册表路线不依赖 devserver。
 - 版本更新：改 `extension/manifest.json` version → 重跑安装命令 → 注册表 version 变化触发浏览器重装（注册表路线）或 devserver/商店提供新 CRX（策略/商店路线）。
+- **装不上先查 `external_uninstalls`（2026-09-07 真机排查根因，安装已自动处理）**：若浏览器曾记录该扩展被"用户卸载"，`<User Data>\<profile>\Preferences` 的 `extensions.external_uninstalls` 会含其 ID，此后 **external_registry_loader 永久跳过重装**——注册表条目/CRX/端点全对也装不上。修复：关闭浏览器 → 从该 `Preferences` 的 `external_uninstalls` 移除本扩展 ID → 冷启动浏览器（loader 延迟约 40-60s 才写入 profile）。**`install-extension`/编辑器「安装」现已对未运行的浏览器自动清除该记录**（`browser_running` 检测；运行中无法可靠清除，会提示关闭后重开）。手动补救仍可用 `--unblock` / 编辑器「解除屏蔽」按钮。
+- **Chrome 与 Edge 的注册表项相互独立**（`Software\Google\Chrome\Extensions\<id>` vs `Software\Microsoft\Edge\Extensions\<id>`），各 loader 只读自己的；共用的只是 CRX 文件路径与扩展 ID（同 pem 推导，有意为之）。`external_uninstalls` 亦随各浏览器 User Data 独立。风险仅在双商店上架需各自 key/update_url（同 ID/CRX 不可两全，§6.5）。
 - 防劫持/管控类软件（清浏览器策略键）环境下策略路线不可用，属环境限制而非缺陷；外部注册表路线写的是 `Software\<vendor>\Extensions`（非 Policies 树），通常不在其清除范围。
 
 ## 8. 竞品安装方式拆解（影刀 / K-RPA Lite / 阿里云 RPA，2026-09 调证）

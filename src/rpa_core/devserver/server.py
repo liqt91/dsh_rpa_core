@@ -98,6 +98,13 @@ class _RequestHandler(BaseHTTPRequestHandler):
                 raise ApiError(405, "METHOD_NOT_ALLOWED", "use POST to install the extension")
             payload = self.app.extension_install_view(self._read_json(required=False))
             return 200, _encode(payload), _JSON_TYPE
+        if path == "/api/extension/unblock":
+            if method != "POST":
+                raise ApiError(
+                    405, "METHOD_NOT_ALLOWED", "use POST to clear the extension uninstall block"
+                )
+            payload = self.app.extension_unblock_view(self._read_json(required=False))
+            return 200, _encode(payload), _JSON_TYPE
         payload = self._route_api(method, path)
         return 200, _encode(payload), _JSON_TYPE
 

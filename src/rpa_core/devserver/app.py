@@ -9,10 +9,11 @@ from rpa_core.catalog import CommandCatalog
 from rpa_core.compiler.compiler import WorkflowCompileError, WorkflowCompiler
 from rpa_core.extension_installer import (
     ExtensionInstallError,
+    clear_uninstall_block,
     default_build_dir,
     extension_root,
     extension_status,
-    install_external_registry_entry,
+    install_external_guided,
     load_packed_extension,
     pack_extension,
     update_manifest_xml,
@@ -444,7 +445,7 @@ class DevServerApp:
             except ExtensionInstallError as exc:
                 raise ApiError(503, exc.code, str(exc)) from exc
         try:
-            installed = install_external_registry_entry(
+            guided = install_external_guided(
                 packed.extension_id, packed.crx_path, packed.version, browsers=targets
             )
         except ExtensionInstallError as exc:
@@ -453,10 +454,36 @@ class DevServerApp:
         return {
             "extensionId": packed.extension_id,
             "version": packed.version,
-            "browsers": installed,
+            "browsers": guided["installed"],
+            "unblocked": guided["unblocked"],
+            "runningBrowsers": guided["runningBrowsers"],
             "enableHint": {"chrome": "chrome://extensions", "edge": "edge://extensions"},
-            "note": "已写入外部扩展注册表；请在浏览器扩展页点一次启用（重启浏览器后生效）",
+            "note": guided["note"],
             "status": status,
+        }
+
+    def extension_unblock_view(self, body: Any) -> dict:
+        """清除浏览器 external_uninstalls 卸载记忆（装不上/loader 跳过时用）。
+
+        写浏览器 profile 的 Preferences；须在浏览器关闭时执行才不会被覆写。
+        """
+        if not isinstance(body, dict):
+            raise ApiError(400, "BAD_REQUEST", "request body must be a JSON object")
+        browser = str(body.get("browser") or "both")
+        if browser not in ("chrome", "edge", "both"):
+            raise ApiError(400, "BAD_REQUEST", "browser must be one of: chrome, edge, both")
+        packed = load_packed_extension(self._extension_build_dir)
+        if packed is None:
+            raise ApiError(503, "EXTENSION_NOT_PACKED", "扩展尚未打包；先运行安装")
+        if browser == "both":
+            cleared = clear_uninstall_block(packed.extension_id)
+        else:
+            result = clear_uninstall_block(packed.extension_id)
+            cleared = {browser: result.get(browser, [])}
+        return {
+            "extensionId": packed.extension_id,
+            "cleared": cleared,
+            "note": "请先关闭浏览器再执行（运行中会被覆写），随后冷启动浏览器使 loader 重新扫描",
         }
 
     def _save_element(self, flow: str, descriptor: dict, save_as: str) -> dict:

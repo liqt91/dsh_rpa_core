@@ -1911,22 +1911,46 @@ async function loadExtensionStatus() {
       <span class="ext-name">${EXTENSION_NAMES[browser]}</span>
       ${badge}
       <button class="ext-install" data-browser="${browser}" title="写入外部扩展注册表">安装</button>
+      <button class="ext-unblock hidden" data-browser="${browser}" title="清除浏览器卸载记忆">解除屏蔽</button>
     `;
+    if (info.uninstallBlocked) {
+      row.querySelector(".ext-unblock").classList.remove("hidden");
+    }
     row.querySelector(".ext-install").addEventListener("click", async (e) => {
       const btn = e.currentTarget;
       btn.disabled = true;
       btn.textContent = "安装中…";
       try {
         const result = await api("POST", "/api/extension/install", { browser });
+        const blocked = (result.unblocked && result.unblocked[browser] || []).length
+          ? "（已自动解除卸载屏蔽）" : "";
+        const running = (result.runningBrowsers || []).includes(browser)
+          ? " 检测到浏览器正在运行，请先关闭，再打开扩展页点一次「启用」。"
+          : "";
         showExtensionResult(
-          `已写入 ${EXTENSION_NAMES[browser]} 外部扩展注册表。
-           请打开扩展页并点一次「启用」：${EXTENSION_ENABLE[browser]}`
+          `已写入 ${EXTENSION_NAMES[browser]} 外部扩展注册表${blocked}。${running}`
         );
         await loadExtensionStatus();
       } catch (err) {
         showExtensionResult(`安装失败：${err.message || err}`, false);
         btn.disabled = false;
         btn.textContent = "安装";
+      }
+    });
+    row.querySelector(".ext-unblock").addEventListener("click", async (e) => {
+      const btn = e.currentTarget;
+      btn.disabled = true;
+      try {
+        await api("POST", "/api/extension/unblock", { browser });
+        showExtensionResult(
+          `已解除 ${EXTENSION_NAMES[browser]} 的卸载屏蔽。
+           请先关闭浏览器，再重新打开使其生效，然后点「安装」。`,
+          true
+        );
+        await loadExtensionStatus();
+      } catch (err) {
+        showExtensionResult(`解除失败：${err.message || err}`, false);
+        btn.disabled = false;
       }
     });
     box.appendChild(row);
@@ -1940,6 +1964,7 @@ async function loadExtensionStatus() {
 }
 
 function statusBadge(info) {
+  if (info.uninstallBlocked) return '<span class="ext-badge warn">已卸载屏蔽</span>';
   if (info.enabled) return '<span class="ext-badge ok">已启用</span>';
   if (info.installed) return '<span class="ext-badge warn">已装未启用</span>';
   if (info.registryEntry) return '<span class="ext-badge warn">已登记（待重启）</span>';

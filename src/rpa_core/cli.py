@@ -204,18 +204,20 @@ def _cmd_install_extension(args) -> int:
 
     Chrome/Edge 152 实测：安装后需在扩展页点一次启用（manifest update_url 指向 CWS），
     见 docs/extension-install.md §6.5。--policy 走 forcelist（受管环境强制安装；
-    HKCU 被拒时单次 UAC 提权写 HKLM 自动降级）。
+    HKCU 被拒时单次 UAC 提权写 HKLM 自动降级）。若浏览器曾卸载过本扩展，
+    external_registry_loader 会永久跳过——用 --unblock 清除该记忆（docs §7）。
     """
     from rpa_core.extension_installer import (
         DEFAULT_DEVSERVER_ORIGIN,
         UPDATE_MANIFEST_PATH,
         ExtensionInstallError,
+        clear_uninstall_block,
         default_build_dir,
         detect_browsers,
         extension_root,
         extension_status,
         install_elevated,
-        install_external_registry_entry,
+        install_external_guided,
         install_policy_entry,
         load_packed_extension,
         pack_extension,
@@ -272,6 +274,21 @@ def _cmd_install_extension(args) -> int:
             )
             print(json.dumps(status, ensure_ascii=False, indent=2))
             return 0
+        if args.unblock:
+            packed = load_packed_extension(build_dir)
+            if packed is None:
+                print(json.dumps(
+                    {"status": "not-packed",
+                     "note": "扩展尚未打包；先运行 rpa-core install-extension 打包并安装"},
+                    ensure_ascii=False, indent=2))
+                return 0
+            cleared = clear_uninstall_block(packed.extension_id)
+            print(json.dumps({
+                "unblocked": cleared,
+                "note": "已从浏览器 external_uninstalls 移除本扩展 ID；"
+                        "需关闭浏览器后执行（运行中会被覆写），再冷启动浏览器生效",
+            }, ensure_ascii=False, indent=2))
+            return 0
         packed = pack_extension(extension_root(), build_dir)
         if args.policy:
             hive = "HKCU"
@@ -295,7 +312,7 @@ def _cmd_install_extension(args) -> int:
                         "需 devserver 在默认端口运行以托管 CRX",
             }
         else:
-            installed = install_external_registry_entry(
+            guided = install_external_guided(
                 packed.extension_id, packed.crx_path, packed.version, browsers=browsers
             )
             payload = {
@@ -303,13 +320,15 @@ def _cmd_install_extension(args) -> int:
                 "version": packed.version,
                 "crx": str(packed.crx_path),
                 "mechanism": "external-registry",
-                "browsers": installed,
+                "browsers": guided["installed"],
+                "unblocked": guided["unblocked"],
+                "runningBrowsers": guided["runningBrowsers"],
                 "detected": detect_browsers(),
                 "enableHint": {
                     "chrome": "chrome://extensions",
                     "edge": "edge://extensions",
                 },
-                "note": "已写入外部扩展注册表；Chrome/Edge 152 实测需用户在扩展页点一次启用"
+                "note": guided["note"] + " Chrome/Edge 152 实测需用户在扩展页点一次启用"
                         "（非零点击，manifest update_url 指向 CWS），零点击启用需商店上架"
                         " + forcelist（docs/extension-install.md §6.5）",
             }
@@ -428,6 +447,9 @@ def main() -> int:
                              help="移除外部扩展注册表与强制安装策略条目")
             sub.add_argument("--status", action="store_true",
                              help="只检测安装/启用状态，不写入")
+            sub.add_argument("--unblock", action="store_true",
+                             help="从浏览器 external_uninstalls 移除本扩展 ID"
+                                  "（装不上/被跳过时用；需先关浏览器再冷启动）")
             sub.add_argument("--browser", choices=("chrome", "edge"),
                              help="仅安装到指定浏览器（默认 Chrome+Edge）")
             sub.add_argument("--policy", action="store_true",
