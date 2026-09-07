@@ -202,6 +202,7 @@ footer { border-top: 1px solid var(--border); padding: 8px 12px; max-height: 180
 .ext-badge.warn { background: #bf8700; }
 .ext-badge.bad { background: #cf222e; }
 .ext-open-page { margin-left: auto; font-size: 12px; }
+.ext-open-browser { margin-left: auto; font-size: 12px; }
 .ext-note { font-size: 12px; color: var(--muted); justify-content: center; }
 #extension-result { font-size: 12px; margin-top: 8px; white-space: pre-wrap; }
 #extension-result.ok { color: var(--ok); }

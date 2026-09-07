@@ -119,6 +119,13 @@ class _RequestHandler(BaseHTTPRequestHandler):
                 )
             payload = self.app.extension_open_page_view(self._read_json(required=False))
             return 200, _encode(payload), _JSON_TYPE
+        if path == "/api/extension/open-browser":
+            if method != "POST":
+                raise ApiError(
+                    405, "METHOD_NOT_ALLOWED", "use POST to launch the browser"
+                )
+            payload = self.app.extension_open_browser_view(self._read_json(required=False))
+            return 200, _encode(payload), _JSON_TYPE
         payload = self._route_api(method, path)
         return 200, _encode(payload), _JSON_TYPE
 

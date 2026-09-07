@@ -876,3 +876,22 @@ def test_extension_status_and_install_method_guards(packed_server):
     base = f"http://127.0.0.1:{packed_server.port}"
     assert _raw(base, "/api/extension/status", method="POST")[0] == 405
     assert _raw(base, "/api/extension/install")[0] == 405
+
+
+def test_extension_open_browser_endpoint(packed_server, monkeypatch):
+    base = f"http://127.0.0.1:{packed_server.port}"
+    import rpa_core.devserver.app as app_module
+    monkeypatch.setattr(app_module, "open_browser", lambda browser: True)
+    status, body = _raw_post(base, "/api/extension/open-browser", {"browser": "edge"})
+    assert status == 200
+    payload = json.loads(body.decode("utf-8"))
+    assert payload == {"opened": True, "browser": "edge"}
+
+
+def test_extension_open_browser_endpoint_404_when_missing(packed_server, monkeypatch):
+    base = f"http://127.0.0.1:{packed_server.port}"
+    import rpa_core.devserver.app as app_module
+    monkeypatch.setattr(app_module, "open_browser", lambda browser: False)
+    status, body = _raw_post(base, "/api/extension/open-browser", {"browser": "chrome"})
+    assert status == 404
+    assert json.loads(body.decode("utf-8"))["error"] == "NOT_FOUND"

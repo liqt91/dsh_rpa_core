@@ -15,6 +15,7 @@ from rpa_core.extension_installer import (
     extension_status,
     install_external_guided,
     load_packed_extension,
+    open_browser,
     open_browser_extensions_page,
     open_path_in_explorer,
     pack_extension,
@@ -442,13 +443,25 @@ class DevServerApp:
         return {"opened": opened, "extensionDir": str(source)}
 
     def extension_open_page_view(self, body: Any) -> dict:
-        """打开指定浏览器的扩展管理页（开发者模式引导第一步）。"""
+        """打开指定浏览器的扩展管理页（引导第 3 步）。"""
         if not isinstance(body, dict):
             raise ApiError(400, "BAD_REQUEST", "request body must be a JSON object")
         browser = str(body.get("browser") or "")
         if browser not in ("chrome", "edge"):
             raise ApiError(400, "BAD_REQUEST", "browser must be one of: chrome, edge")
         opened = open_browser_extensions_page(browser)
+        if not opened:
+            raise ApiError(404, "NOT_FOUND", f"{browser} executable not found")
+        return {"opened": True, "browser": browser}
+
+    def extension_open_browser_view(self, body: Any) -> dict:
+        """启动指定浏览器（引导第 2 步：先把浏览器打开/聚焦）。"""
+        if not isinstance(body, dict):
+            raise ApiError(400, "BAD_REQUEST", "request body must be a JSON object")
+        browser = str(body.get("browser") or "")
+        if browser not in ("chrome", "edge"):
+            raise ApiError(400, "BAD_REQUEST", "browser must be one of: chrome, edge")
+        opened = open_browser(browser)
         if not opened:
             raise ApiError(404, "NOT_FOUND", f"{browser} executable not found")
         return {"opened": True, "browser": browser}

@@ -76,21 +76,24 @@
 <div id="extension-dialog-mask" class="hidden">
   <div id="extension-dialog">
     <h3>安装浏览器捕获插件</h3>
-    <p class="hint">捕获网页元素需要浏览器加载 rpa_core 插件。采用「开发者模式 → 加载已解压的扩展程序」方式
-      （影刀同款，本地源码目录即可，无需商店上架、持久可用）。</p>
+    <p class="hint">捕获网页元素需要浏览器以「开发者模式 → 加载已解压的扩展程序」加载 rpa_core 插件
+      （本地源码目录即可，持久可用）。</p>
 
-    <div class="ext-guide-step"><b>第 1 步</b>：复制插件源码目录路径</div>
+    <div class="ext-guide-step"><b>第 1 步</b>：定位插件源码目录</div>
     <div class="ext-path-row">
       <input id="extension-dir-path" readonly>
       <button id="btn-ext-copy-path" title="复制目录路径到剪贴板">复制路径</button>
       <button id="btn-ext-open-dir" title="在文件管理器中打开该目录">打开目录</button>
     </div>
 
-    <div class="ext-guide-step"><b>第 2 步</b>：打开浏览器扩展管理页并开启「开发者模式」</div>
+    <div class="ext-guide-step"><b>第 2 步</b>：打开浏览器（Chrome / Edge）</div>
+    <div id="extension-open-browsers"></div>
+
+    <div class="ext-guide-step"><b>第 3 步</b>：打开该浏览器的扩展管理页</div>
     <div id="extension-browsers"></div>
 
-    <div class="ext-guide-step"><b>第 3 步</b>：点击「加载已解压的扩展程序」，选择第 1 步的目录</div>
-    <p class="hint">Chrome/Edge 各自加载一次；加载完成后本页下方状态应显示「已启用」。</p>
+    <div class="ext-guide-step"><b>第 4 步</b>：开启「开发者模式」→ 点「加载已解压的扩展程序」，选第 1 步的目录</div>
+    <p class="hint">加载完成后本页状态应显示「已启用」；扩展管理页需在地址栏粘贴 chrome://extensions（浏览器不允许外部直接打开）。</p>
 
     <div id="extension-result" class="hidden"></div>
     <div class="dlg-actions">

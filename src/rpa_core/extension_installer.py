@@ -642,6 +642,21 @@ def open_path_in_explorer(path: Path) -> bool:
             return False
 
 
+def open_browser(browser: str) -> bool:
+    """启动浏览器（不带 URL，新窗口/既有实例聚焦）。"""
+    for candidate in _browser_binary_candidates(browser):
+        if candidate.is_file():
+            try:
+                subprocess.Popen(
+                    [str(candidate)],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                )
+                return True
+            except OSError:
+                return False
+    return False
+
+
 def open_browser_extensions_page(browser: str) -> bool:
     """打开浏览器的扩展管理页（chrome://extensions / edge://extensions）。"""
     page = "chrome://extensions" if browser == "chrome" else "edge://extensions"
