@@ -567,3 +567,36 @@ def test_editor_element_auto_refresh_on_poll(server):
         page.wait_for_selector("#bottom-panels #elements-list li.element-item", timeout=8000)
         assert "polledEl" in page.locator("#bottom-panels").inner_text()
         browser.close()
+
+
+def test_editor_run_params_dialog_when_inputs_declared(server):
+    """切片 G：流程声明顶层 inputs 时，▶ 运行先弹参数对话框；取消则不启动。"""
+    base = f"http://127.0.0.1:{server.port}"
+    # 带顶层 inputs 的最小流程（写入后经编辑器打开）
+    _request_json(
+        base, "PUT", "/api/workflows/param-flow",
+        {"schema_version": "1.0", "id": "param-flow", "name": "param flow",
+         "inputs": {"name": "world", "count": 2},
+         "root": {"type": "sequence", "id": "root", "children": []}},
+    )
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
+        page.goto(f"{base}/")
+        page.wait_for_selector('[data-command="browser.launch"]')
+        # 打开 param-flow（open-select 触发 openWorkflow，填充 state.workflow.inputs）
+        page.select_option("#open-select", "param-flow")
+        page.wait_for_function(
+            "() => document.getElementById('file-name').value === 'param-flow'"
+        )
+
+        page.click("#btn-run")
+        page.wait_for_selector("#run-params-mask:not(.hidden)")
+        # 两个声明键出现在对话框中
+        fields_text = page.locator("#run-params-fields").inner_text()
+        assert "name" in fields_text and "count" in fields_text
+        # 取消 → 不启动运行（run-panel 保持隐藏）
+        page.click("#run-params-cancel")
+        page.wait_for_timeout(300)
+        assert page.locator("#run-panel").is_hidden()
+        browser.close()

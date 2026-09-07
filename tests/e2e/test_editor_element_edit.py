@@ -224,6 +224,9 @@ def test_editor_run_control(server):
         page.wait_for_selector('#canvas li[data-node="fmt"]')
 
         page.click("#btn-run")
+        # 流程声明了 inputs → 运行参数对话框出现，预填 workspace="."，直接点「运行」
+        page.wait_for_selector("#run-params-mask:not(.hidden)")
+        page.click("#run-params-run")
         page.wait_for_selector("#run-panel:not(.hidden)")
         # 等运行完成（状态文本不再含"运行中"）
         page.wait_for_function(

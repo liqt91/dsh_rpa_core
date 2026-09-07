@@ -1852,6 +1852,61 @@ function clearRunStatus() {
 let activeRunId = null;
 let runPollTimer = null;
 
+// ---------------------------------------------------------------------------
+// 运行参数对话框（切片 G）：流程声明了顶层 inputs 时，先让用户填/覆盖再运行。
+// ---------------------------------------------------------------------------
+
+function collectRunInputs() {
+  const workflow = state.workflow || {};
+  const declared = workflow.inputs || {};
+  const keys = Object.keys(declared);
+  return new Promise((resolve) => {
+    if (!keys.length) { resolve({}); return; }
+    const mask = $("run-params-mask");
+    const fields = $("run-params-fields");
+    fields.textContent = "";
+    for (const key of keys) {
+      const raw = declared[key];
+      const isBool = typeof raw === "boolean";
+      const wrap = document.createElement("div");
+      wrap.className = "run-param-field";
+      const label = document.createElement("label");
+      label.textContent = key;
+      label.htmlFor = `run-param-${key}`;
+      const input = document.createElement("input");
+      input.id = `run-param-${key}`;
+      input.value = raw == null ? "" : String(raw);
+      if (isBool) { input.type = "checkbox"; input.checked = !!raw; }
+      wrap.appendChild(label);
+      wrap.appendChild(input);
+      fields.appendChild(wrap);
+    }
+    const read = () => {
+      const values = {};
+      for (const key of keys) {
+        const input = $(`run-param-${key}`);
+        const raw = declared[key];
+        const isBool = typeof raw === "boolean";
+        if (isBool) values[key] = input.checked;
+        else if (typeof raw === "number") {
+          const n = Number(input.value);
+          values[key] = Number.isNaN(n) ? raw : n;
+        } else if (raw == null) {
+          values[key] = input.value === "" ? null : input.value;
+        } else {
+          values[key] = input.value;
+        }
+      }
+      return values;
+    };
+    $("run-params-cancel").onclick = () => { mask.classList.add("hidden"); resolve(null); };
+    $("run-params-run").onclick = () => { mask.classList.add("hidden"); resolve(read()); };
+    mask.classList.remove("hidden");
+    const first = fields.querySelector("input");
+    if (first) first.focus();
+  });
+}
+
 async function runWorkflow() {
   const flow = currentFlow();
   if (!flow) {
@@ -1860,8 +1915,12 @@ async function runWorkflow() {
   }
   if (state.dirty && !confirm("流程有未保存修改，先保存再运行？（取消则运行磁盘上的版本）")) return;
   if (state.dirty) await saveWorkflow();
+  const inputs = await collectRunInputs();
+  if (inputs === null) return; // 用户在参数对话框点了取消
   try {
-    const result = await api("POST", "/api/runs", { workflow: flow });
+    const body = { workflow: flow };
+    if (Object.keys(inputs).length) body.inputs = inputs;
+    const result = await api("POST", "/api/runs", body);
     activeRunId = result.runId;
     $("run-panel").classList.remove("hidden");
     $("btn-run-cancel").classList.remove("hidden");
@@ -2175,7 +2234,7 @@ async function init() {
   $("run-events-toggle").addEventListener("click", toggleRunEvents);
   window.addEventListener("keydown", handleEditorKeydown);
   window.addEventListener("beforeunload", (e) => {
-    if (state.dirty) { e.preventDefault(); e.returnValue = ""; }
+    if (state.dirty || activeRunId) { e.preventDefault(); e.returnValue = ""; }
   });
   initPanelResize();
   startElementPolling();

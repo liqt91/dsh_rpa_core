@@ -31,10 +31,11 @@
   - 2s 轮询元素列表，与 `state.elementsSeen` 差集比较，仅变化时重渲染（后台捕获落库自动带出）
   - 门控：`document.visibilityState==="visible"` 且已命名 flow；visibilitychange→可见即刷
   - E2E：`test_editor_element_auto_refresh_on_poll`（外部新增元素，无手动 ↻ 自动出现）
-- [ ] **切片 G：运行参数对话框 + 运行中 beforeunload 警告**
-- [ ] **切片 G：运行参数对话框 + 运行中 beforeunload 警告**
-  - run 支持 --inputs 参数对话框；运行中离开页提示
-- [ ] **决策点**（完成 B 后）：评估 app.js 行数/回归 → 决定切片 C/D/E 走 vanilla 还是立 ADR 迁 React
+- [x] **切片 G：运行参数对话框 + 运行中 beforeunload 警告**
+  - 顶层 inputs 声明时 ▶ 运行先弹对话框（按原始类型 string/number/bool 渲染输入），取消不启动
+  - 无 inputs 声明直接运行；运行中（activeRunId）离开页 beforeunload 拦截
+  - E2E：`test_editor_run_params_dialog_when_inputs_declared`（弹窗+取消不启动）；既有 run_control E2E 适配（确认参数后运行）
+- [ ] **决策点**（A/B/F/G 已完成，现触发）：评估 app.js 行数/回归 → 决定切片 C/D/E 走 vanilla 还是立 ADR 迁 React
 - [ ] **切片 C：元素截图灯箱 + 上传 + 缩略图**（依赖决策点）
 - [ ] **切片 D：属性表单主元素选择器下拉 + kind 徽标 + 锚点提示**（依赖决策点）
 - [ ] **切片 E：多 tab 属性表单（参数/元素/高级）**（依赖决策点）

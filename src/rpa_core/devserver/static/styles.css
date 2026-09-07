@@ -236,3 +236,19 @@ body.resizing-bottom * { cursor: row-resize !important; }
 #extension-result.ok { color: var(--ok); }
 #extension-result.bad { color: var(--bad); }
 #extension-result.hidden { display: none; }
+
+/* 运行参数对话框（切片 G） */
+#run-params-mask {
+  position: fixed; inset: 0; background: rgba(0,0,0,.35);
+  display: flex; align-items: center; justify-content: center; z-index: 100;
+}
+#run-params-mask.hidden { display: none; }
+#run-params-dialog {
+  background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+  box-shadow: 0 12px 40px rgba(0,0,0,.2); padding: 14px 16px; width: 420px;
+  max-height: 80vh; overflow-y: auto;
+}
+#run-params-dialog h3 { margin: 0 0 6px; font-size: 14px; }
+#run-params-dialog .run-param-field { margin-bottom: 10px; }
+#run-params-dialog label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 2px; }
+#run-params-dialog input { width: 100%; }
