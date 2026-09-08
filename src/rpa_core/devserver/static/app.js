@@ -1228,6 +1228,31 @@ function setWith(node, key, value) {
   renderCanvas();
 }
 
+// 采集画布中所有「创建会话」的 lifecycle 节点（output 含 sessionId），供 session 引用下拉用。
+function collectSessionNodes() {
+  const out = [];
+  const visit = (container) => {
+    const lists = [];
+    if (Array.isArray(container.children)) lists.push(container.children);
+    if (Array.isArray(container.then)) lists.push(container.then);
+    if (Array.isArray(container.else)) lists.push(container.else);
+    if (Array.isArray(container.catch)) lists.push(container.catch);
+    for (const list of lists) {
+      for (const n of list) {
+        if (n.type === "action") {
+          const m = manifestOf(n.command);
+          const outProps = m && m.output_schema ? (m.output_schema.properties || {}) : {};
+          if (outProps.sessionId) out.push({ id: n.id, command: n.command, zh: commandName(n.command) });
+        } else {
+          visit(n);
+        }
+      }
+    }
+  };
+  if (state.workflow && state.workflow.root) visit(state.workflow.root);
+  return out;
+}
+
 function schemaField(node, key, propSchema, required) {
   const value = node["with"] ? node["with"][key] : undefined;
   const label = fieldLabel(key);
@@ -1242,6 +1267,44 @@ function schemaField(node, key, propSchema, required) {
     field = jsonField(label, value, (v) => setWith(node, key, v), required, key);
   } else {
     field = textField(label, value === undefined ? "" : String(value), (v) => setWith(node, key, v), required, key);
+  }
+  if (key === "sessionId") {
+    // 会话引用字段：绑定创建会话的节点输出即可，无需手填。
+    const pickWrap = document.createElement("div");
+    pickWrap.className = "session-pick-row";
+    const sel = document.createElement("select");
+    sel.className = "session-pick";
+    sel.innerHTML = '<option value="">— 引用创建会话的节点 —</option>';
+    for (const s of collectSessionNodes()) {
+      const opt = document.createElement("option");
+      opt.value = s.id;
+      opt.textContent = `${s.zh}（${s.id}）`;
+      sel.appendChild(opt);
+    }
+    sel.title = "该命令的运行值绑定到「创建会话」节点的输出 sessionId，无需手填";
+    const hint = document.createElement("span");
+    hint.className = "field-hint";
+    hint.textContent = "引用会话输出，无需手填";
+    pickWrap.appendChild(sel);
+    pickWrap.appendChild(hint);
+    sel.addEventListener("change", () => {
+      if (!sel.value) return;
+      const ref = `\${steps.${sel.value}.outputs.sessionId}`;
+      setWith(node, key, ref);
+      const inputEl = field.querySelector('input[data-field]');
+      if (inputEl) {
+        inputEl.value = ref;
+        inputEl.title = `引用 ${sel.value} 的会话输出`;
+      }
+      markDirty();
+      showCompileMessage(`已绑定会话：${ref}`, true);
+    });
+    const inputEl = field.querySelector('input[data-field]');
+    if (inputEl && typeof value === "string" && value.startsWith("${steps.")) {
+      hint.textContent = "已绑定会话引用";
+      hint.className = "field-hint ok";
+    }
+    field.appendChild(pickWrap);
   }
   if (key === "selector") {
     // 切片 D：从元素库选主元素（浏览器元素 → 填 css），带 kind 徽标；与「捕获」并列

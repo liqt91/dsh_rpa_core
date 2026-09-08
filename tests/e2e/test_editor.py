@@ -707,3 +707,38 @@ def test_editor_palette_tree_collapse(server):
         )
         assert click_item.is_visible()
         browser.close()
+
+
+def test_editor_session_id_binds_to_launch_node(server):
+    """sessionId 字段无需手填：属性面板下拉绑定 launch 节点输出引用。"""
+    base = f"http://127.0.0.1:{server.port}"
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
+        page.goto(f"{base}/")
+        page.wait_for_selector('[data-command="browser.launch"], [data-command="browser.click"]')
+        # 展开类别（搜索强制展开）
+        page.fill("#palette-filter", "browser")
+        page.wait_for_selector('[data-command="browser.launch"]:visible, [data-command="browser.click"]:visible')
+        page.fill("#palette-filter", "")
+
+        page.click('[data-command="browser.launch"]')
+        page.wait_for_selector('#canvas li[data-node="launch"]')
+        page.click('[data-command="browser.click"]')
+        page.wait_for_selector('#canvas li[data-node="click"]')
+
+        # 点 click 节点，属性面板 sessionId 字段应出现「引用创建会话的节点」下拉
+        page.click('#canvas li[data-node="click"]')
+        page.wait_for_selector("#props-body .session-pick")
+        # 下拉里有 launch 节点
+        options = page.eval_on_selector_all("#props-body .session-pick option", "els => els.map(e=>e.value)")
+        assert "launch" in options
+        # 选择 → sessionId 输入框填 `${steps.launch.outputs.sessionId}`
+        page.select_option("#props-body .session-pick", "launch")
+        page.wait_for_function(
+            "() => document.querySelector('#props-body input[data-field=\"sessionId\"]')"
+            ".value === '${steps.launch.outputs.sessionId}'"
+        )
+        hint = page.locator("#props-body .field-hint")
+        assert "引用" in hint.inner_text()
+        browser.close()

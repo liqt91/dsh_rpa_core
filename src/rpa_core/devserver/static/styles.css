@@ -123,6 +123,10 @@ button:disabled { opacity: .45; cursor: default; }
 .element-pick-badge { font-size: 11px; color: var(--muted); font-family: Consolas, monospace; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .element-pick-badge.ok { color: var(--ok); }
 .element-pick-badge.hidden { display: none; }
+.session-pick-row { display: flex; align-items: center; gap: 6px; margin: 2px 0 4px; }
+.session-pick { flex: 1; min-width: 0; }
+.field-hint { font-size: 11px; color: var(--muted); white-space: nowrap; }
+.field-hint.ok { color: var(--ok); }
 footer { border-top: 1px solid var(--border); padding: 8px 12px; max-height: 180px; overflow-y: auto; background: var(--bg); }
 #glossary { margin-top: 6px; font-size: 12px; }
 #glossary summary { cursor: pointer; color: var(--muted); }
