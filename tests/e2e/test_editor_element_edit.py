@@ -151,23 +151,6 @@ def test_variable_completion_dropdown(server):
         browser.close()
 
 
-def test_fullscreen_toggle(server):
-    """画布全屏切换：加 fullscreen class，再点退出。"""
-    base = f"http://127.0.0.1:{server.port}"
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        page = browser.new_page()
-        page.goto(f"{base}/")
-        page.wait_for_selector('[data-command="browser.launch"]')
-        page.click("#btn-fullscreen")
-        page.wait_for_selector("#canvas-wrap.fullscreen")
-        page.click("#btn-fullscreen")
-        page.wait_for_function(
-            "() => !document.querySelector('#canvas-wrap').classList.contains('fullscreen')"
-        )
-        browser.close()
-
-
 def test_run_status_highlight(server):
     """运行状态高亮：画布节点按最近运行 events 标 run-succeeded。"""
     base = f"http://127.0.0.1:{server.port}"

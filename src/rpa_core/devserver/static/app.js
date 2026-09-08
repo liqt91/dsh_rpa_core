@@ -714,8 +714,6 @@ function clearDropMarkers() {
   for (const el of document.querySelectorAll("#canvas li.drop-empty")) {
     el.classList.remove("drop-into");
   }
-  const wrap = $("canvas-wrap");
-  if (wrap) wrap.classList.remove("drop-root-hint");
 }
 
 function handleDragEnd() {
@@ -775,7 +773,6 @@ function handleCanvasDragOver(e) {
   const drop = rootEndDrop();
   if (dropAllowed(drop.containerPath)) {
     pendingDrop = drop;
-    $("canvas-wrap").classList.add("drop-root-hint");
     e.dataTransfer.dropEffect = dragState.type === "new" ? "copy" : "move";
   } else {
     e.dataTransfer.dropEffect = "none";
@@ -1857,12 +1854,6 @@ function toggleCaptureMenu() {
   $("capture-menu").classList.toggle("hidden");
 }
 
-function toggleFullscreen() {
-  const wrap = $("canvas-wrap");
-  const on = wrap.classList.toggle("fullscreen");
-  $("btn-fullscreen").textContent = on ? "⛶ 退出全屏" : "⛶ 全屏";
-}
-
 // 运行状态高亮：读最近一次运行的 events，按 node_id 给画布节点标状态色
 async function loadRunStatus() {
   const data = await api("GET", "/api/runs/latest-events");
@@ -2261,7 +2252,6 @@ async function init() {
       captureElement(btn.dataset.kind);
     });
   }
-  $("btn-fullscreen").addEventListener("click", toggleFullscreen);
   $("btn-extension").addEventListener("click", () => toggleExtensionDialog(true));
   $("btn-ext-copy-path").addEventListener("click", copyExtensionDir);
   $("btn-ext-open-dir").addEventListener("click", async () => {

@@ -49,18 +49,13 @@ h2 { font-size: 13px; color: var(--muted); margin: 0 0 8px; font-weight: 600; }
   list-style: none; margin: 0; padding: 0; width: 100%;
   flex: 1; display: flex; flex-direction: column; align-items: stretch;
 }
-/* 根级空画布占位：撑满整块画布区（虚线大框 = 整块可拖），非根级空容器保持小框 */
+/* 根级空画布：撑满整块、无边框，仅居中提示文字 */
 #canvas > li.drop-empty {
   flex: 1; min-height: 220px; display: flex; align-items: center; justify-content: center;
-  border: 2px dashed var(--border); border-radius: 10px; font-size: 13px;
-  background: transparent;
+  font-size: 13px; color: var(--muted); background: transparent; cursor: default;
 }
 #canvas > li.drop-empty.drop-into {
-  border-color: var(--accent); color: var(--accent); background: rgba(9,105,218,.06);
-}
-/* 拖拽悬停画布空白区时：提示落点 = 追加到根末尾 */
-#canvas-wrap.drop-root-hint #canvas {
-  outline: 2px dashed var(--accent); outline-offset: -2px; border-radius: 8px;
+  color: var(--accent); background: rgba(9,105,218,.06);
 }
 #canvas ol.children {
   list-style: none; margin: 6px 0 2px; padding: 6px 0 6px 16px;
@@ -182,12 +177,6 @@ body.resizing-bottom * { cursor: row-resize !important; }
   color: var(--accent); cursor: pointer;
 }
 .ref-completion .ref-item:hover { background: var(--bg); }
-
-/* 全屏画布 */
-#canvas-wrap.fullscreen {
-  position: fixed; inset: 0; z-index: 200; background: var(--canvas);
-  padding: 12px 20px; overflow-y: auto;
-}
 
 /* 运行状态高亮 */
 #canvas li[data-node].run-succeeded { border-left: 4px solid var(--ok); }
