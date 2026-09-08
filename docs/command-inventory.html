@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>rpa_core 指令清单对比</title>
+<style>
+:root{--border:#d0d7de;--muted:#656d76;--accent:#0969da;--ok:#1a7f37;--bad:#cf222e;--bg:#f6f8fa;--canvas:#e9edf1;}
+*{box-sizing:border-box} body{margin:0;font:14px/1.6 -apple-system,"Segoe UI","Microsoft YaHei",sans-serif;color:#1f2328;background:var(--bg);padding:24px 32px;}
+h1{font-size:22px;margin:0 0 6px} h2{font-size:18px;margin:28px 0 10px;border-bottom:1px solid var(--border);padding-bottom:6px}
+p{color:var(--muted);max-width:900px} code{background:#fff;border:1px solid var(--border);border-radius:4px;padding:0 5px;font-family:Consolas,monospace;font-size:12px}
+table{border-collapse:collapse;width:100%;background:#fff;border:1px solid var(--border);border-radius:8px;overflow:hidden}
+th,td{border-bottom:1px solid var(--border);padding:7px 10px;text-align:left;vertical-align:top;font-size:13px}
+th{background:#f0f3f6;font-weight:600} tr:last-child td{border-bottom:none}
+.btn{padding:5px 12px;border:1px solid var(--border);border-radius:6px;background:#fff;cursor:pointer}
+.btn:hover{border-color:var(--accent);color:var(--accent)}
+#float-tools{position:sticky;top:0;background:var(--bg);padding:8px 0;z-index:5;display:flex;gap:8px;align-items:center}
+#q{flex:0 1 300px;padding:5px 10px;border:1px solid var(--border);border-radius:6px;font:inherit}
+.legend-box{background:#fff;border:1px solid var(--border);border-radius:8px;padding:12px 16px;margin-bottom:16px}
+.legend-box table{border:none;width:auto} .legend-box td{border-bottom:1px dashed var(--border)}
+.grp{margin:12px 0}
+.grp-head{display:flex;align-items:center;gap:6px;background:#f0f3f6;border:1px solid var(--border);border-radius:6px;padding:7px 12px;cursor:pointer;font-weight:600}
+.grp-head .caret{transition:transform .15s;display:inline-block;color:var(--muted)}
+.grp-head.open .caret{transform:rotate(90deg)}
+.grp-count{margin-left:auto;font-weight:400;color:var(--muted)}
+.grp-body{padding:8px 4px 8px 14px}
+.hidden{display:none}
+.wrap-field{display:inline-block}
+@media(max-width:720px){body{padding:12px} table{font-size:12px} th,td{padding:6px 6px}}
+</style>
+</head><body>
+<h1>rpa_core 指令清单对比</h1>
+<p>生成日期：2026-09-07。对比参考隔壁仿影刀项目指令库（<code>commands-new.json</code>）。</p>
+
+<div id="float-tools">
+  <input id="q" placeholder="筛选指令（id / 中文名 / kind / effect）…">
+  <button class="btn" id="btn-toggle">全部展开 / 收起</button>
+</div>
+
+<div class="legend-box">
+  <b>术语说明</b>
+  <table>
+    <tr><th colspan="2">kind（命令类别）</th></tr>
+    <tr><td><code>action</code></td><td><b>动作</b>：对外部世界执行一次操作（点击、输入、写入等），通常改变系统状态</td></tr><tr><td><code>query</code></td><td><b>查询</b>：只读获取数据，不改变任何东西</td></tr><tr><td><code>transform</code></td><td><b>变换</b>：纯数据加工（截取、格式化、拼接等），不触碰外部系统</td></tr><tr><td><code>lifecycle</code></td><td><b>生命周期</b>：创建或关闭一个会话资源（浏览器、桌面窗口附着）</td></tr>
+  </table>
+  <table style="margin-top:10px">
+    <tr><th colspan="2">effect（副作用等级，决定是否可重试/回放）</th></tr>
+    <tr><td><code>pure</code></td><td><b>无副作用</b>：纯计算，无外部副作用，可安全重试/回放</td></tr><tr><td><code>read</code></td><td><b>只读</b>：读取外部状态，不改变它</td></tr><tr><td><code>idempotent-write</code></td><td><b>幂等写入</b>：重复执行结果一致，可安全重试</td></tr><tr><td><code>unsafe-write</code></td><td><b>不可重试写入</b>：重复执行可能多写，禁止自动重试</td></tr><tr><td><code>session</code></td><td><b>会话</b>：创建/关闭会话资源（生命周期类）</td></tr>
+  </table>
+  <p style="margin-top:10px"><b>输入参数</b>：每条命令执行所需的字段，格式 <code>字段:类型*</code>（<code>*</code> = 必填）。类型取值：<code>string</code> 文本、<code>number/integer</code> 数字、<code>boolean</code> 布尔、<code>object</code> 对象、<code>array&lt;T&gt;</code> 数组。<b>输出</b>：命令执行后返回的字段。</p>
+</div>
+
+<h2>一、我们的指令（26 条，输入/输出参数来自 manifest schema）</h2>
+<table id="ours"><thead><tr>
+<th>指令</th><th>中文名</th><th>kind</th><th>effect</th><th>输入参数（* 必填）</th><th>输出</th>
+</tr></thead><tbody><tr><td><code>browser.click</code></td><td>点击元素</td><td title='对外部世界执行一次操作（点击、输入、写入等），通常改变系统状态'>action</td><td title='重复执行可能多写，禁止自动重试'>unsafe-write</td><td>sessionId: string*, selector: string*, timeoutMs: integer</td><td>matchedCount, sessionId</td></tr>
+<tr><td><code>browser.close</code></td><td>关闭浏览器</td><td title='创建或关闭一个会话资源（浏览器、桌面窗口附着）'>lifecycle</td><td title='创建/关闭会话资源（生命周期类）'>session</td><td>sessionId: string*</td><td>-</td></tr>
+<tr><td><code>browser.getText</code></td><td>读取元素文本</td><td title='只读获取数据，不改变任何东西'>query</td><td title='读取外部状态，不改变它'>read</td><td>sessionId: string*, selector: string*, timeoutMs: integer</td><td>value</td></tr>
+<tr><td><code>browser.input</code></td><td>输入文本</td><td title='对外部世界执行一次操作（点击、输入、写入等），通常改变系统状态'>action</td><td title='重复执行可能多写，禁止自动重试'>unsafe-write</td><td>sessionId: string*, selector: string*, text: string*, timeoutMs: integer</td><td>matchedCount, sessionId</td></tr>
+<tr><td><code>browser.launch</code></td><td>启动浏览器</td><td title='创建或关闭一个会话资源（浏览器、桌面窗口附着）'>lifecycle</td><td title='创建/关闭会话资源（生命周期类）'>session</td><td>headless: boolean, userAgent: string, userDataDir: string, transport: string, browserInstanceId: string, keepOpen: boolean</td><td>sessionId</td></tr>
+<tr><td><code>browser.navigate</code></td><td>打开网页</td><td title='对外部世界执行一次操作（点击、输入、写入等），通常改变系统状态'>action</td><td title='重复执行可能多写，禁止自动重试'>unsafe-write</td><td>sessionId: string*, url: string*, timeoutMs: integer</td><td>url, sessionId</td></tr>
+<tr><td><code>browser.queryAll</code></td><td>抓取列表文本</td><td title='只读获取数据，不改变任何东西'>query</td><td title='读取外部状态，不改变它'>read</td><td>sessionId: string*, selector: string*</td><td>items, count</td></tr>
+<tr><td><code>browser.waitFor</code></td><td>等待元素出现</td><td title='只读获取数据，不改变任何东西'>query</td><td title='读取外部状态，不改变它'>read</td><td>sessionId: string*, selector: string*, timeoutMs: integer</td><td>matchedCount</td></tr>
+<tr><td><code>data.format</code></td><td>格式化文本</td><td title='纯数据加工（截取、格式化、拼接等），不触碰外部系统'>transform</td><td title='纯计算，无外部副作用，可安全重试/回放'>pure</td><td>template: string*, values: object*</td><td>text</td></tr>
+<tr><td><code>data.limit</code></td><td>截取前 N 条</td><td title='纯数据加工（截取、格式化、拼接等），不触碰外部系统'>transform</td><td title='纯计算，无外部副作用，可安全重试/回放'>pure</td><td>items: array&lt;?&gt;*, count: integer*</td><td>items, count</td></tr>
+<tr><td><code>data.writeJson</code></td><td>写入 JSON 文件</td><td title='对外部世界执行一次操作（点击、输入、写入等），通常改变系统状态'>action</td><td title='重复执行结果一致，可安全重试'>idempotent-write</td><td>workspace: string*, path: string*, data: any*</td><td>path</td></tr>
+<tr><td><code>data.writeText</code></td><td>写入文本文件</td><td title='对外部世界执行一次操作（点击、输入、写入等），通常改变系统状态'>action</td><td title='重复执行结果一致，可安全重试'>idempotent-write</td><td>workspace: string*, path: string*, text: string, lines: array&lt;string&gt;</td><td>path</td></tr>
+<tr><td><code>desktop.attachWindow</code></td><td>附着窗口（UIA）</td><td title='创建或关闭一个会话资源（浏览器、桌面窗口附着）'>lifecycle</td><td title='创建/关闭会话资源（生命周期类）'>session</td><td>title: string*, processId: integer, timeoutMs: integer</td><td>sessionId, processId, workWindowId</td></tr>
+<tr><td><code>desktop.click</code></td><td>点击控件（UIA）</td><td title='对外部世界执行一次操作（点击、输入、写入等），通常改变系统状态'>action</td><td title='重复执行可能多写，禁止自动重试'>unsafe-write</td><td>sessionId: string*, elementId: string*, timeoutMs: integer</td><td>-</td></tr>
+<tr><td><code>desktop.closeSession</code></td><td>关闭会话（UIA）</td><td title='创建或关闭一个会话资源（浏览器、桌面窗口附着）'>lifecycle</td><td title='创建/关闭会话资源（生命周期类）'>session</td><td>sessionId: string*</td><td>-</td></tr>
+<tr><td><code>desktop.findElement</code></td><td>查找控件（UIA）</td><td title='只读获取数据，不改变任何东西'>query</td><td title='读取外部状态，不改变它'>read</td><td>sessionId: string*, locator: object*, timeoutMs: integer</td><td>elementId, matchedCount</td></tr>
+<tr><td><code>desktop.getText</code></td><td>读取控件文本（UIA）</td><td title='只读获取数据，不改变任何东西'>query</td><td title='读取外部状态，不改变它'>read</td><td>sessionId: string*, elementId: string*, timeoutMs: integer</td><td>value</td></tr>
+<tr><td><code>desktop.input</code></td><td>控件输入（UIA）</td><td title='对外部世界执行一次操作（点击、输入、写入等），通常改变系统状态'>action</td><td title='重复执行可能多写，禁止自动重试'>unsafe-write</td><td>sessionId: string*, elementId: string*, text: string*, timeoutMs: integer</td><td>-</td></tr>
+<tr><td><code>desktop.win32.attachWindow</code></td><td>附着窗口（Win32）</td><td title='创建或关闭一个会话资源（浏览器、桌面窗口附着）'>lifecycle</td><td title='创建/关闭会话资源（生命周期类）'>session</td><td>title: string, className: string, handle: integer, processId: integer, timeoutMs: integer</td><td>sessionId, processId, workWindowId</td></tr>
+<tr><td><code>desktop.win32.click</code></td><td>点击控件（Win32）</td><td title='对外部世界执行一次操作（点击、输入、写入等），通常改变系统状态'>action</td><td title='重复执行可能多写，禁止自动重试'>unsafe-write</td><td>sessionId: string*, elementId: string*, timeoutMs: integer</td><td>-</td></tr>
+<tr><td><code>desktop.win32.closeSession</code></td><td>关闭会话（Win32）</td><td title='创建或关闭一个会话资源（浏览器、桌面窗口附着）'>lifecycle</td><td title='创建/关闭会话资源（生命周期类）'>session</td><td>sessionId: string*</td><td>-</td></tr>
+<tr><td><code>desktop.win32.findElement</code></td><td>查找控件（Win32）</td><td title='只读获取数据，不改变任何东西'>query</td><td title='读取外部状态，不改变它'>read</td><td>sessionId: string*, locator: object*, timeoutMs: integer</td><td>elementId, matchedCount</td></tr>
+<tr><td><code>desktop.win32.getText</code></td><td>读取控件文本（Win32）</td><td title='只读获取数据，不改变任何东西'>query</td><td title='读取外部状态，不改变它'>read</td><td>sessionId: string*, elementId: string*, timeoutMs: integer</td><td>value</td></tr>
+<tr><td><code>desktop.win32.hotkey</code></td><td>组合按键（Win32）</td><td title='对外部世界执行一次操作（点击、输入、写入等），通常改变系统状态'>action</td><td title='重复执行可能多写，禁止自动重试'>unsafe-write</td><td>sessionId: string*, keys: string*, timeoutMs: integer</td><td>-</td></tr>
+<tr><td><code>desktop.win32.input</code></td><td>控件输入（Win32）</td><td title='对外部世界执行一次操作（点击、输入、写入等），通常改变系统状态'>action</td><td title='重复执行可能多写，禁止自动重试'>unsafe-write</td><td>sessionId: string*, elementId: string*, text: string*, timeoutMs: integer</td><td>-</td></tr>
+<tr><td><code>desktop.win32.menuSelect</code></td><td>菜单选择（Win32）</td><td title='对外部世界执行一次操作（点击、输入、写入等），通常改变系统状态'>action</td><td title='重复执行可能多写，禁止自动重试'>unsafe-write</td><td>sessionId: string*, menuPath: array&lt;string&gt;*, timeoutMs: integer</td><td>-</td></tr></tbody></table>
+
+<h2>二、隔壁指令（按类别，共 62 条）</h2>
+<p>类别：浏览器操作、浏览器元素操作、变量及日志、循环、条件判断、异常处理、桌面操作、vision</p>
+<div class='sib-cat'><button class='sib-cat-head'>浏览器操作<span class='count'>6</span></button><div class='sib-cat-body'><table><thead><tr><th>中文名</th><th>cmd</th><th>参数</th></tr></thead><tbody><tr><td>打开浏览器</td><td><code>launchBrowser</code></td><td>浏览器:select, 启动后打开网址:string, 窗口前置:boolean, 窗口状态:select, 保存窗口对象到:string, 执行失败时:select, 重试次数:number, 超时(秒):number, 步骤说明:text</td></tr><tr><td>页面跳转</td><td><code>navigate</code></td><td>浏览器窗口:string, 目标网址:string, 等待页面加载完成:boolean, 执行失败时:select, 重试次数:number, 超时(秒):number, 步骤说明:text</td></tr><tr><td>新建标签页</td><td><code>newTab</code></td><td>浏览器窗口:string, 打开网址:string, 激活新标签页:boolean, 执行失败时:select, 重试次数:number, 超时(秒):number, 步骤说明:text</td></tr><tr><td>切换标签页</td><td><code>switchTab</code></td><td>浏览器窗口:string, URL 匹配:string, 执行失败时:select, 重试次数:number, 超时(秒):number, 步骤说明:text</td></tr><tr><td>关闭标签页</td><td><code>closeTab</code></td><td>浏览器窗口:string, 标签页序号(可选):number, URL 匹配:string, 执行失败时:select, 重试次数:number, 超时(秒):number, 步骤说明:text</td></tr><tr><td>关闭浏览器</td><td><code>closeBrowser</code></td><td>窗口变量:string, 执行失败时:select, 重试次数:number, 超时(秒):number, 步骤说明:text</td></tr></tbody></table></div></div><div class='sib-cat'><button class='sib-cat-head'>浏览器元素操作<span class='count'>9</span></button><div class='sib-cat-body'><table><thead><tr><th>中文名</th><th>cmd</th><th>参数</th></tr></thead><tbody><tr><td>等待元素出现</td><td><code>waitForElement</code></td><td>目标元素:element, 超时时间（秒）:number, 可见性:select, 执行失败时:select, 重试次数:number, 步骤说明:text</td></tr><tr><td>点击元素</td><td><code>clickElement</code></td><td>元素:element*, 匹配范围:select, 锚点元素:string, 元素可见性:select, 真实鼠标点击:boolean, 点击方式:select, 执行失败时:select, 重试次数:number, 超时(秒):number, 步骤说明:text</td></tr><tr><td>输入文本</td><td><code>inputElement</code></td><td>元素:element*, 输入内容:string*, 模拟键盘输入:boolean, 输入后按回车:boolean, 匹配范围:select, 锚点元素:string, 元素可见性:select, 执行失败时:select, 重试次数:number, 超时(秒):number, 步骤说明:text</td></tr><tr><td>获取文本</td><td><code>getText</code></td><td>目标元素:element, 匹配范围:select, 保存到变量:string, 执行失败时:select, 重试次数:number, 超时(秒):number, 步骤说明:text</td></tr><tr><td>获取超链接</td><td><code>getElementLink</code></td><td>目标元素:element*, 匹配范围:select, 保存到变量:string, 执行失败时:select, 重试次数:number, 超时(秒):number, 步骤说明:text</td></tr><tr><td>鼠标悬停</td><td><code>hover</code></td><td>目标元素:element, 匹配范围:select, 执行失败时:select, 重试次数:number, 超时(秒):number, 步骤说明:text</td></tr><tr><td>滚动到元素</td><td><code>scrollIntoView</code></td><td>目标元素:element, 匹配范围:select, 执行失败时:select, 重试次数:number, 超时(秒):number, 步骤说明:text</td></tr><tr><td>按键</td><td><code>pressKey</code></td><td>按键:select*, 修饰键:string, 操作系统真实按键:boolean, 执行失败时:select, 重试次数:number, 超时(秒):number, 步骤说明:text</td></tr><tr><td>截图</td><td><code>takeScreenshot</code></td><td>目标元素(可选):element, 保存到变量(base64):string, 执行失败时:select, 重试次数:number, 超时(秒):number, 步骤说明:text</td></tr></tbody></table></div></div><div class='sib-cat'><button class='sib-cat-head'>变量及日志<span class='count'>2</span></button><div class='sib-cat-body'><table><thead><tr><th>中文名</th><th>cmd</th><th>参数</th></tr></thead><tbody><tr><td>设置变量</td><td><code>setVar</code></td><td>变量名:string*, 值:string, 值类型:select, 执行失败时:select, 重试次数:number, 超时(秒):number, 步骤说明:text</td></tr><tr><td>输出日志</td><td><code>log</code></td><td>日志内容:text, 日志级别:select, 执行失败时:select, 重试次数:number, 超时(秒):number, 步骤说明:text</td></tr></tbody></table></div></div><div class='sib-cat'><button class='sib-cat-head'>循环<span class='count'>7</span></button><div class='sib-cat-body'><table><thead><tr><th>中文名</th><th>cmd</th><th>参数</th></tr></thead><tbody><tr><td>遍历元素列表</td><td><code>forEachElement</code></td><td>目标元素列表:element-list*, 当前项变量:string, 索引变量:string, 匹配范围:select</td></tr><tr><td>遍历列表</td><td><code>forList</code></td><td>列表变量:string*, 当前项变量:string, 索引变量:string</td></tr><tr><td>循环次数</td><td><code>forRange</code></td><td>起始值:number, 结束值:number*, 步长:number, 当前值变量:string</td></tr><tr><td>条件循环</td><td><code>whileCondition</code></td><td>条件类型:select*, 元素:element, URL 包含:string, 变量名:string, 预期值:string, 表达式:string, 最大迭代次数:number</td></tr><tr><td>跳出循环</td><td><code>break</code></td><td>-</td></tr><tr><td>继续下次循环</td><td><code>continue</code></td><td>-</td></tr><tr><td>结束循环</td><td><code>endLoop</code></td><td>-</td></tr></tbody></table></div></div><div class='sib-cat'><button class='sib-cat-head'>条件判断<span class='count'>10</span></button><div class='sib-cat-body'><table><thead><tr><th>中文名</th><th>cmd</th><th>参数</th></tr></thead><tbody><tr><td>如果元素可见</td><td><code>ifElementVisible</code></td><td>元素:element*, 判断条件:select, 匹配范围:select</td></tr><tr><td>判断元素存在</td><td><code>ifElementExists</code></td><td>元素:element*, 判断条件:select, 匹配范围:select</td></tr><tr><td>如果变量相等</td><td><code>ifVarEquals</code></td><td>变量名:str-var*, 比较值:string*</td></tr><tr><td>如果文本相等</td><td><code>ifTextEquals</code></td><td>文本A:string*, 文本B:string*</td></tr><tr><td>如果列表包含</td><td><code>ifListContains</code></td><td>列表变量:str-var*, 查找值:string*</td></tr><tr><td>如果字典包含键</td><td><code>ifDictContains</code></td><td>字典变量:str-var*, 键名:string*</td></tr><tr><td>如果文本包含</td><td><code>ifTextContains</code></td><td>源文本:string*, 包含文本:string*</td></tr><tr><td>判断URL包含</td><td><code>ifUrlContains</code></td><td>URL 包含:string*</td></tr><tr><td>如果变量包含</td><td><code>ifVarContains</code></td><td>变量名:str-var*, 包含文本:string*</td></tr><tr><td>结束条件</td><td><code>endIf</code></td><td>-</td></tr></tbody></table></div></div><div class='sib-cat'><button class='sib-cat-head'>异常处理<span class='count'>3</span></button><div class='sib-cat-body'><table><thead><tr><th>中文名</th><th>cmd</th><th>参数</th></tr></thead><tbody><tr><td>尝试执行</td><td><code>try</code></td><td>-</td></tr><tr><td>捕获异常</td><td><code>catch</code></td><td>错误信息保存到:str-var</td></tr><tr><td>结束异常处理</td><td><code>endTry</code></td><td>-</td></tr></tbody></table></div></div><div class='sib-cat'><button class='sib-cat-head'>桌面操作<span class='count'>23</span></button><div class='sib-cat-body'><table><thead><tr><th>中文名</th><th>cmd</th><th>参数</th></tr></thead><tbody><tr><td>打开软件</td><td><code>openAppWin32</code></td><td>选择软件 (Win32):select, 自定义程序路径 (Win32):string, 启动参数 (Win32):string, 窗口句柄存入变量 (Win32):str-var, 执行失败时:select, 重试次数:number, 超时(秒):number, 步骤说明:text</td></tr><tr><td>等待窗口出现</td><td><code>waitWindowWin32</code></td><td>窗口标题:string*, 窗口类名（可选）:string, 超时(秒):number, 结果存入变量(HWND):str-var, 执行失败时:select, 重试次数:number, 步骤说明:text</td></tr><tr><td>查找窗口</td><td><code>findWindowAuto</code></td><td>窗口标题:string*, 搜索模式:select, 实现方式:select, 查找后激活窗口:boolean, 结果存入变量:str-var, 执行失败时:select, 重试次数:number, 超时(秒):number, 步骤说明:text</td></tr><tr><td>查找窗口 (Win32)</td><td><code>findWindowWin32</code></td><td>搜索模式:select, 窗口标题/类名 (Win32):string*, 查找后激活窗口 (Win32):boolean, 结果存入变量(HWND) (Win32):str-var, 执行失败时:select, 重试次数:number, 超时(秒):number, 步骤说明:text</td></tr><tr><td>查找窗口 (UIA)</td><td><code>findWindowUia</code></td><td>窗口标题:string*, 搜索模式:select, 结果存入变量(UIA):str-var, 执行失败时:select, 重试次数:number, 超时(秒):number, 步骤说明:text</td></tr><tr><td>查找父控件</td><td><code>findParentWin32</code></td><td>子窗口 (HWND变量) (Win32):str-var*, 结果存入变量 (Win32):str-var, 执行失败时:select, 重试次数:number, 超时(秒):number, 步骤说明:text</td></tr><tr><td>查找兄弟控件</td><td><code>findSiblingWin32</code></td><td>参考控件 (HWND变量) (Win32):str-var*, 查找方向 (Win32):select, 目标类名 (Win32):select, 跳过几个 (Win32):number, 结果存入变量 (Win32):str-var, 执行失败时:select, 重试次数:number, 超时(秒):number, 步骤说明:text</td></tr><tr><td>查找子控件</td><td><code>findChildWin32</code></td><td>父窗口 (HWND变量) (Win32):str-var*, 控件类名 (Win32):select, 标题筛选 (Win32):string, 匹配第几个 (Win32):number, 结果存入变量 (Win32):str-var, 执行失败时:select, 重试次数:number, 超时(秒):number, 步骤说明:text</td></tr><tr><td>从元素库取控件</td><td><code>pickElementAuto</code></td><td>桌面元素:string*, 层级序号:number, 结果存入变量:str-var, 执行失败时:select, 重试次数:number, 超时(秒):number, 步骤说明:text</td></tr><tr><td>从元素库取控件 (Win32)</td><td><code>pickFromPathWin32</code></td><td>桌面元素 (Win32):string*, 层级序号 (Win32):number, 结果存入变量(HWND) (Win32):str-var, 执行失败时:select, 重试次数:number, 超时(秒):number, 步骤说明:text</td></tr><tr><td>从元素库取控件 (UIA)</td><td><code>pickElementUia</code></td><td>桌面元素:string*, 层级序号:number, 结果存入变量(UIA):str-var, 执行失败时:select, 重试次数:number, 超时(秒):number, 步骤说明:text</td></tr><tr><td>点击控件</td><td><code>clickControlAuto</code></td><td>目标控件:str-var*, 执行失败时:select, 重试次数:number, 超时(秒):number, 步骤说明:text</td></tr><tr><td>点击控件 (Win32)</td><td><code>clickControlWin32</code></td><td>目标控件句柄 (HWND变量) (Win32):str-var*, 执行失败时:select, 重试次数:number, 超时(秒):number, 步骤说明:text</td></tr><tr><td>点击控件 (UIA)</td><td><code>clickElementUia</code></td><td>目标控件 (UIA变量):str-var*, 执行失败时:select, 重试次数:number, 超时(秒):number, 步骤说明:text</td></tr><tr><td>输入文字</td><td><code>inputControlAuto</code></td><td>目标控件:str-var*, 输入内容:string*, 执行失败时:select, 重试次数:number, 超时(秒):number, 步骤说明:text</td></tr><tr><td>输入文字 (Win32)</td><td><code>inputControlWin32</code></td><td>目标控件句柄 (HWND变量) (Win32):str-var*, 输入内容 (Win32):string*, 执行失败时:select, 重试次数:number, 超时(秒):number, 步骤说明:text</td></tr><tr><td>输入文字 (UIA)</td><td><code>inputElementUia</code></td><td>目标控件 (UIA变量):str-var*, 输入内容:string*, 执行失败时:select, 重试次数:number, 超时(秒):number, 步骤说明:text</td></tr><tr><td>发送按键</td><td><code>sendKeyWin32</code></td><td>按键 (Win32):select*, 自定义按键 (Win32):string, 修饰键 (Win32):string, 重复次数 (Win32):number, 执行失败时:select, 重试次数:number, 超时(秒):number, 步骤说明:text</td></tr><tr><td>鼠标点击</td><td><code>mouseClickWin32</code></td><td>X 坐标:number*, Y 坐标:number*, 相对窗口 (HWND变量，可选):str-var, 点击类型:select, 结果存入变量(坐标):str-var, 执行失败时:select, 重试次数:number, 超时(秒):number, 步骤说明:text</td></tr><tr><td>点击菜单</td><td><code>clickMenuWin32</code></td><td>父窗口 (HWND变量) (Win32):str-var*, 菜单路径 (Win32):string*, 执行失败时:select, 重试次数:number, 超时(秒):number, 步骤说明:text</td></tr><tr><td>等待</td><td><code>waitWin32</code></td><td>等待模式 (Win32):select, 等待时间(秒) (Win32):number, 最少(秒) (Win32):number, 最多(秒) (Win32):number, 执行失败时:select, 重试次数:number, 超时(秒):number, 步骤说明:text</td></tr><tr><td>窗口截图</td><td><code>screenshotWindowWin32</code></td><td>窗口 (HWND变量):str-var*, 保存路径:string*, 结果存入变量(路径):str-var, 执行失败时:select, 重试次数:number, 超时(秒):number, 步骤说明:text</td></tr><tr><td>关闭窗口</td><td><code>closeWindowWin32</code></td><td>窗口 (HWND变量) (Win32):str-var*, 执行失败时:select, 重试次数:number, 超时(秒):number, 步骤说明:text</td></tr></tbody></table></div></div><div class='sib-cat'><button class='sib-cat-head'>vision<span class='count'>2</span></button><div class='sib-cat-body'><table><thead><tr><th>中文名</th><th>cmd</th><th>参数</th></tr></thead><tbody><tr><td>图像查找</td><td><code>findImage</code></td><td>参考图元素:element*, 匹配范围:select, 相似度阈值:number, 超时(秒):number, 执行失败时:select, 重试次数:number, 步骤说明:text</td></tr><tr><td>图像点击</td><td><code>clickImage</code></td><td>参考图元素:element*, 匹配范围:select, 相似度阈值:number, 超时(秒):number, 执行失败时:select, 重试次数:number, 步骤说明:text</td></tr></tbody></table></div></div>
+
+<h2>三、对比与推荐新增（适合 rpa_core 零依赖取向）</h2>
+<h3>概览</h3>
+<ul><li>我们 <b>26</b> 条（browser/data/desktop 三线）。</li>
+<li>隔壁 <b>62</b> 条，覆盖 8 个类别。</li>
+<li>我们明显少的：条件判断、循环、异常处理（仅 if/forEach/try 三个控制流容器），以及浏览器标签页管理/截图/页面信息、桌面截图/系统信息/等待 等。</li></ul>
+<h3>推荐新增</h3>
+<table><thead><tr><th>建议</th><th>类别</th><th>理由</th><th>复杂度</th></tr></thead><tbody><tr><td><code>data.setVar / data.log / data.getCurrentDateTime</code></td><td>变量与数据/输出日志</td><td>流程传参、中间结果、过程可视化，RPA 地基（隔壁已有 setVar/log）</td><td>低</td></tr>
+<tr><td><code>控制流 while / break / continue</code></td><td>条件循环</td><td>循环提前退出、条件循环，补全表达力（隔壁已有 whileCondition/break/continue）</td><td>中</td></tr>
+<tr><td><code>browser.takeScreenshot</code></td><td>页面</td><td>RPA 验收/留证刚需，Playwright 原生支持</td><td>中</td></tr>
+<tr><td><code>browser.newTab / switchTab / closeTab</code></td><td>页面</td><td>多标签页真实场景（隔壁已有 navigate/newTab/switchTab）</td><td>中</td></tr>
+<tr><td><code>browser.hover</code></td><td>元素操作</td><td>菜单/hover 场景，Playwright hover 原生</td><td>低</td></tr>
+<tr><td><code>browser.getPageInfo</code></td><td>页面</td><td>调试与断言（URL/标题/元信息）</td><td>低</td></tr>
+<tr><td><code>desktop.takeScreenshot</code></td><td>桌面</td><td>桌面验收留证；需零依赖截图实现（深挖 stdlib/GDI 成本高）</td><td>高</td></tr>
+<tr><td><code>desktop.getMousePos / sendKey / 系统信息</code></td><td>桌面</td><td>常见桌面操控，Win32 通道可做</td><td>中</td></tr></tbody></table>
+<h3>建议优先级</h3><ol><li>先补控制流与变量：data.setVar / data.log / while / break / continue——流程表达力地基，零依赖、成本低。</li>
+<li>再补浏览器实用：takeScreenshot / newTab|switchTab|closeTab / hover / getPageInfo。</li>
+<li>桌面与业务：按真实用例逐条立项（注意第三方库边界）。</li></ol>
+
+<script>
+(function(){
+  var q = document.getElementById('q');
+  var kindTitle = {"action": "对外部世界执行一次操作（点击、输入、写入等），通常改变系统状态", "query": "只读获取数据，不改变任何东西", "transform": "纯数据加工（截取、格式化、拼接等），不触碰外部系统", "lifecycle": "创建或关闭一个会话资源（浏览器、桌面窗口附着）"};
+  var effectTitle = {"pure": "纯计算，无外部副作用，可安全重试/回放", "read": "读取外部状态，不改变它", "idempotent-write": "重复执行结果一致，可安全重试", "unsafe-write": "重复执行可能多写，禁止自动重试", "session": "创建/关闭会话资源（生命周期类）"};
+
+  // 展开/收起类别（语义组 + 隔壁类别）
+  document.querySelectorAll('.grp-head, .sib-cat-head').forEach(function(h){
+    h.addEventListener('click', function(){ h.classList.toggle('open');
+      var b = h.nextElementSibling; if (b) b.classList.toggle('hidden'); });
+  });
+
+  // 全部展开/收起
+  var allOpen = true;
+  document.getElementById('btn-toggle').addEventListener('click', function(){
+    allOpen = !allOpen;
+    document.querySelectorAll('.grp-head, .sib-cat-head').forEach(function(h){
+      h.classList.toggle('open', allOpen);
+      var b = h.nextElementSibling; if (b) b.classList.toggle('hidden', !allOpen);
+    });
+    document.getElementById('btn-toggle').textContent = allOpen ? '全部收起' : '全部展开';
+  });
+
+  // 筛选：过滤“我们的指令”表行；角色上，命中则展开
+  function apply() {
+    var k = (q.value||'').trim().toLowerCase();
+    document.querySelectorAll('#ours tbody tr').forEach(function(tr){
+      var txt = tr.textContent.toLowerCase();
+      tr.style.display = (!k || txt.indexOf(k) >= 0) ? '' : 'none';
+    });
+  }
+  q.addEventListener('input', apply);
+  apply();
+})();
+</script>
+</body></html>
