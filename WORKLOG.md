@@ -9,7 +9,9 @@
   - compiler 静态收集 output_name，前向（declared later）与未知/error_var 越界引用均编译期拦截，与 `${steps.*}` 前向语义一致；保留 catch error_var 词法作用域。
   - editor：节点属性加「输出变量名」；sessionId 下拉对已命名节点显示变量名并引用 `${name}.sessionId`。
   - 新增 resolver 单测 5、compiler 编译测试 3、runtime 集成 1、editor e2e 1。
-  - full gate 257 passed；5 桌面 UIA 真实交互 e2e 因本会话无可交互桌面 pre-existing 失败（HEAD 基线复现同失败，与本次无关）。
+  - full gate 257 passed；5 桌面 UIA 真实交互 e2e 在本会话报 "window did not appear"（HEAD 基线复现同失败，与本次无关）。
+- 桌面 UIA e2e 失败根因定位（决定性实验收口）：非沙箱下 python 内 Popen 启动 GUI demo 到 `demo started` 后进程即被 **SIGTERM**（连窗口枚举都未执行）；改为**外部 detached 启动 demo（PowerShell Start-Process）→ 独立 python 进程用 pywinauto 连接**，可稳定枚举主窗口及其控件（queryInput/submitButton/dialogButton/resultText）并做 set_edit_text/click 交互。结论：**本 WorkBuddy 会话内由 python/bash 直接启动 GUI winexe 会触发进程被 SIGTERM**，而非 UIA 探测能力问题（demo 窗口本身可被正常枚举）。该 5 个桌面 e2e 需在能访问桌面的会话（如 opencode cmd agent）补验。
+- var-system 本地提交 `c13bad3`（14 文件，+423/-10，未 push）。
 
 ## 2026-09-07
 
