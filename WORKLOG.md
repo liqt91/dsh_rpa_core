@@ -1,5 +1,16 @@
 # 工作日志
 
+## 2026-09-08
+
+- 完成指令优化规划 Phase 1-4（见 PROGRESS 同日多条）：参数补齐 P1-S1~S6（sessionId resourceType 标签、browser.click/input/close 等六参数、editor 按 resourceType 过滤下拉）+ 新指令 18 条×双后端（hover、窗口操作、executeScript/screenshot/select、upload/download/handleDialog/getWindowList 等），累计 55 manifests。
+- 完成 Phase 5 用户变量体系 var-system（`passes: true`）：
+  - Model `ActionNode.output_name`（pattern `^[A-Za-z_]\w*$`）；runtime `scopes.variables[output_name] = result.outputs`；resolver 支持变量**子路径** `${var_name}`（整 dict）/ `${var_name.field}`（取字段）。
+  - 子路径增强决策（维护者确认）：`output_name` 存整个 outputs dict，若只支持单段 `${web_page1}` 会让下游 sessionId 收到 dict 而失败 → 须 `${web_page1.sessionId}`。
+  - compiler 静态收集 output_name，前向（declared later）与未知/error_var 越界引用均编译期拦截，与 `${steps.*}` 前向语义一致；保留 catch error_var 词法作用域。
+  - editor：节点属性加「输出变量名」；sessionId 下拉对已命名节点显示变量名并引用 `${name}.sessionId`。
+  - 新增 resolver 单测 5、compiler 编译测试 3、runtime 集成 1、editor e2e 1。
+  - full gate 257 passed；5 桌面 UIA 真实交互 e2e 因本会话无可交互桌面 pre-existing 失败（HEAD 基线复现同失败，与本次无关）。
+
 ## 2026-09-07
 
 - 浏览器扩展安装全链路实证与方向修正（详见 docs/extension-install.md §6.5.1，PROGRESS 四条）：

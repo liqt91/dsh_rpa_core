@@ -13,6 +13,11 @@ class ActionNode(NodeBase):
     type: Literal["action"] = "action"
     command: str
     with_: dict[str, Any] = Field(default_factory=dict, alias="with")
+    output_name: str | None = Field(
+        default=None,
+        pattern=r"^[A-Za-z_]\w*$",
+        description="用户可读的输出变量名，如 web_page1",
+    )
     timeout_seconds: float | None = Field(default=None, gt=0, le=3600)
     retry_count: int = Field(default=0, ge=0, le=10)
     retry_backoff_seconds: float = Field(default=0.1, ge=0, le=60)

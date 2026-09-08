@@ -102,6 +102,7 @@ window.RPA_I18N = {
   fields: {
     sessionId: "会话 ID",
     resourceType: "资源类型",
+    output_name: "输出变量名",
     url: "网址",
     selector: "选择器",
     text: "文本",

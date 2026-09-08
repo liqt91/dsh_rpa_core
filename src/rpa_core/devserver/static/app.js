@@ -1163,6 +1163,33 @@ function renderProps() {
       body.appendChild(schemaField(node, key, properties[key], required.has(key)));
     }
   }
+  // 输出变量名（可选）
+  const onWrap = document.createElement("div");
+  onWrap.className = "field";
+  const onLabel = document.createElement("label");
+  onLabel.textContent = "输出变量名";
+  const onInput = document.createElement("input");
+  onInput.type = "text";
+  onInput.dataset.field = "输出变量名";
+  onInput.value = node.output_name || "";
+  onInput.placeholder = "可选，如 web_page1";
+  onInput.title = "为该节点输出命名，后续节点可通过 ${变量名} 引用";
+  onInput.addEventListener("input", () => {
+    const v = onInput.value.trim();
+    node.output_name = v || undefined;
+    markDirty();
+  });
+  onInput.addEventListener("blur", () => {
+    const v = onInput.value.trim();
+    if (v && !/^[A-Za-z_]\w*$/.test(v)) {
+      onInput.style.borderColor = "var(--err)";
+    } else {
+      onInput.style.borderColor = "";
+    }
+  });
+  onWrap.appendChild(onLabel);
+  onWrap.appendChild(onInput);
+  body.appendChild(onWrap);
 }
 
 // ---------------------------------------------------------------------------
@@ -1265,7 +1292,7 @@ function collectSessionNodes(filterResourceType) {
               const rt = outProps.resourceType;
               if (!rt || rt.const !== filterResourceType) continue;
             }
-            out.push({ id: n.id, command: n.command, zh: commandName(n.command) });
+            out.push({ id: n.id, command: n.command, zh: commandName(n.command), outputName: n.output_name || null });
           }
         } else {
           visit(n);
@@ -1314,7 +1341,12 @@ function schemaField(node, key, propSchema, required) {
     for (const s of sessionNodes) {
       const opt = document.createElement("option");
       opt.value = s.id;
-      opt.textContent = `${s.zh}（${s.id}）`;
+      if (s.outputName) {
+        // 已命名输出变量：label 显示变量名，选中时引用其子字段 ${name}.sessionId
+        opt.textContent = "${" + s.outputName + "}（" + s.zh + "）";
+      } else {
+        opt.textContent = `${s.zh}（${s.id}）`;
+      }
       sel.appendChild(opt);
     }
     sel.title = "该命令的运行值绑定到「创建会话」节点的输出 sessionId，无需手填";
@@ -1325,18 +1357,21 @@ function schemaField(node, key, propSchema, required) {
     pickWrap.appendChild(hint);
     sel.addEventListener("change", () => {
       if (!sel.value) return;
-      const ref = `\${steps.${sel.value}.outputs.sessionId}`;
+      const picked = sessionNodes.find((s) => s.id === sel.value);
+      const ref = picked && picked.outputName
+        ? `\${${picked.outputName}.sessionId}`
+        : `\${steps.${sel.value}.outputs.sessionId}`;
       setWith(node, key, ref);
       const inputEl = field.querySelector('input[data-field]');
       if (inputEl) {
         inputEl.value = ref;
-        inputEl.title = `引用 ${sel.value} 的会话输出`;
+        inputEl.title = `引用会话输出：${ref}`;
       }
       markDirty();
       showCompileMessage(`已绑定会话：${ref}`, true);
     });
     const inputEl = field.querySelector('input[data-field]');
-    if (inputEl && typeof value === "string" && value.startsWith("${steps.")) {
+    if (inputEl && typeof value === "string" && value.startsWith("${")) {
       hint.textContent = "已绑定会话引用";
       hint.className = "field-hint ok";
     }

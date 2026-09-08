@@ -185,7 +185,7 @@
     {
       "id": "var-system",
       "title": "User variable system: ActionNode.output_name + scopes.variables + ${var_name} reference",
-      "passes": false
+      "passes": true
     }
   ]
 }

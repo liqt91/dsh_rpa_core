@@ -72,3 +72,91 @@ def test_compile_rejects_unknown_command_and_forward_step():
             ),
             {"browser.read", "process.start", "browser.control"},
         )
+
+
+def test_compile_accepts_output_name_reference_after_declaration():
+    """launch 配 output_name 后，后续节点可引用 ${web_page1} 与其子字段。"""
+    plan = WorkflowCompiler(catalog()).compile(
+        workflow(
+            {
+                "type": "sequence",
+                "id": "root",
+                "children": [
+                    {
+                        "type": "action",
+                        "id": "launch",
+                        "command": "browser.launch",
+                        "output_name": "web_page1",
+                        "with": {"headless": True},
+                    },
+                    {
+                        "type": "action",
+                        "id": "nav",
+                        "command": "browser.navigate",
+                        "with": {"sessionId": "${web_page1.sessionId}", "url": "https://x"},
+                    },
+                ],
+            }
+        ),
+        {"browser.control", "browser.read", "process.start"},
+    )
+    assert plan.workflow.root.children[0].output_name == "web_page1"
+
+
+def test_compile_rejects_forward_variable_reference():
+    """引用在 output_name 声明节点之前出现 → 报 forward variable reference。"""
+    compiler = WorkflowCompiler(catalog())
+    with pytest.raises(WorkflowCompileError, match="Forward variable reference"):
+        compiler.compile(
+            workflow(
+                {
+                    "type": "sequence",
+                    "id": "root",
+                    "children": [
+                        {
+                            "type": "action",
+                            "id": "nav",
+                            "command": "browser.navigate",
+                            "with": {"sessionId": "${web_page1.sessionId}", "url": "https://x"},
+                        },
+                        {
+                            "type": "action",
+                            "id": "launch",
+                            "command": "browser.launch",
+                            "output_name": "web_page1",
+                            "with": {"headless": True},
+                        },
+                    ],
+                }
+            ),
+            {"browser.control", "browser.read", "process.start"},
+        )
+
+
+def test_compile_rejects_undeclared_variable_reference():
+    """从未声明的裸变量名引用 → 报作用域外根（Unsupported reference root）。"""
+    compiler = WorkflowCompiler(catalog())
+    with pytest.raises(WorkflowCompileError, match="Unsupported reference root: nope"):
+        compiler.compile(
+            workflow(
+                {
+                    "type": "sequence",
+                    "id": "root",
+                    "children": [
+                        {
+                            "type": "action",
+                            "id": "launch",
+                            "command": "browser.launch",
+                            "with": {"headless": True},
+                        },
+                        {
+                            "type": "action",
+                            "id": "nav",
+                            "command": "browser.navigate",
+                            "with": {"sessionId": "${nope}", "url": "https://x"},
+                        },
+                    ],
+                }
+            ),
+            {"browser.control", "browser.read", "process.start"},
+        )
