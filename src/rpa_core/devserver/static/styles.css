@@ -1,4 +1,4 @@
-:root { --border: #d0d7de; --muted: #656d76; --accent: #0969da; --ok: #1a7f37; --bad: #cf222e; --bg: #f6f8fa; }
+:root { --border: #d0d7de; --muted: #656d76; --accent: #0969da; --ok: #1a7f37; --bad: #cf222e; --bg: #f6f8fa; --canvas: #e9edf1; }
 * { box-sizing: border-box; }
 body { margin: 0; font: 14px/1.5 -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif; color: #1f2328; height: 100vh; display: flex; flex-direction: column; }
 header { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--border); background: var(--bg); flex-wrap: wrap; }
@@ -38,17 +38,28 @@ body.resizing-panel * { cursor: col-resize !important; }
 .icon-block.kind-flow { background: #fff1e6; color: #bc4c00; }
 
 /* 画布与树形结构 */
-#canvas-wrap { flex: 1; overflow-y: auto; padding: 12px; min-width: 0; }
+#canvas-wrap {
+  flex: 1; overflow-y: auto; padding: 12px 16px; min-width: 0;
+  background: var(--canvas);  /* 画布工作区浅底，白节点卡浮其上，铺满整块 */
+}
 h2 { font-size: 13px; color: var(--muted); margin: 0 0 8px; font-weight: 600; }
-#canvas { list-style: none; margin: 0; padding: 0; max-width: 720px; }
-#canvas ol.children { list-style: none; margin: 6px 0 2px; padding: 6px 0 6px 16px; border-left: 4px solid var(--border); border-radius: 0 6px 6px 0; }
-#canvas ol.children.depth-0 { border-left-color: #0969da; background: #f3f8ff; }
-#canvas ol.children.depth-1 { border-left-color: #1a7f37; background: #f2fbf4; }
-#canvas ol.children.depth-2 { border-left-color: #bf8700; background: #fff8e6; }
-#canvas ol.children.depth-3 { border-left-color: #8250df; background: #f8f5ff; }
-#canvas ol.children.depth-4 { border-left-color: #cf222e; background: #fff3f3; }
-#canvas ol.children.depth-5 { border-left-color: #0a7ea4; background: #f0f9fc; }
-#canvas li { border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; margin-bottom: 6px; cursor: pointer; background: #fff; }
+#canvas { list-style: none; margin: 0; padding: 0; width: 100%; }
+#canvas ol.children {
+  list-style: none; margin: 6px 0 2px; padding: 6px 0 6px 16px;
+  border-left: 4px solid var(--border); border-radius: 0 6px 6px 0;
+}
+#canvas ol.children.depth-0 { border-left-color: #0969da; background: rgba(9,105,218,.04); }
+#canvas ol.children.depth-1 { border-left-color: #1a7f37; background: rgba(26,127,55,.04); }
+#canvas ol.children.depth-2 { border-left-color: #bf8700; background: rgba(191,135,0,.05); }
+#canvas ol.children.depth-3 { border-left-color: #8250df; background: rgba(130,80,223,.04); }
+#canvas ol.children.depth-4 { border-left-color: #cf222e; background: rgba(207,34,46,.04); }
+#canvas ol.children.depth-5 { border-left-color: #0a7ea4; background: rgba(10,126,164,.05); }
+#canvas li {
+  border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px;
+  margin-bottom: 6px; cursor: pointer; background: #fff;
+  box-shadow: 0 1px 2px rgba(31,35,40,.04);
+}
+#canvas li:hover { box-shadow: 0 2px 6px rgba(31,35,40,.08); }
 #canvas li.selected { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
 #canvas li.multi-selected { border-color: var(--accent); background: #eef4ff; }
 button:disabled { opacity: .45; cursor: default; }
@@ -153,7 +164,7 @@ body.resizing-bottom * { cursor: row-resize !important; }
 
 /* 全屏画布 */
 #canvas-wrap.fullscreen {
-  position: fixed; inset: 0; z-index: 200; background: var(--bg);
+  position: fixed; inset: 0; z-index: 200; background: var(--canvas);
   padding: 12px 20px; overflow-y: auto;
 }
 
