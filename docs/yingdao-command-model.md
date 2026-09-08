@@ -175,7 +175,7 @@ rpa_core 实测访问影刀「打开网页」文档（`711591442174164992`）确
 
 → rpa_core 的 input 指令需支持此模式枚举。
 
-> 指令正文及参数截图位于 `docs/yingdao-cmds/`（gitignored，本地素材）。
+> 指令正文及参数截图位于 `docs/yingdao-cmds/`。
 
 ## 二·六、影刀桌面自动化指令全集（本机实机抓取，含参数截图）
 
@@ -242,7 +242,7 @@ rpa_core 实测访问影刀「打开网页」文档（`711591442174164992`）确
 | 浏览器类型参数 | 有（7 值枚举） | 无（操作系统级，不涉及浏览器） |
 | 对话框处理 | 网页 alert/confirm/prompt | 系统级文件对话框（上传/下载） |
 
-> 指令正文及参数截图位于 `docs/yingdao-cmds-desktop/`（gitignored，本地素材）。
+> 指令正文及参数截图位于 `docs/yingdao-cmds-desktop/`。
 
 ## 三、待补充的输入
 

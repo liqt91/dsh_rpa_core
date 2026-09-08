@@ -1,0 +1,166 @@
+[
+  {
+    "title": "影刀概述",
+    "leaf": true
+  },
+  {
+    "title": "快速入门",
+    "leaf": false
+  },
+  {
+    "title": "功能文档",
+    "leaf": false
+  },
+  {
+    "title": "指令文档",
+    "leaf": false
+  },
+  {
+    "title": "魔法指令",
+    "leaf": true
+  },
+  {
+    "title": "条件判断",
+    "leaf": false
+  },
+  {
+    "title": "循环",
+    "leaf": false
+  },
+  {
+    "title": "等待",
+    "leaf": false
+  },
+  {
+    "title": "相似元素操作",
+    "leaf": false
+  },
+  {
+    "title": "网页自动化",
+    "leaf": false
+  },
+  {
+    "title": "打开网页",
+    "leaf": true
+  },
+  {
+    "title": "选择浏览器用户",
+    "leaf": true
+  },
+  {
+    "title": "获取已打开的网页对象",
+    "leaf": true
+  },
+  {
+    "title": "点击元素(web)",
+    "leaf": true
+  },
+  {
+    "title": "鼠标悬停在元素上(web)",
+    "leaf": true
+  },
+  {
+    "title": "填写输入框(web)",
+    "leaf": true
+  },
+  {
+    "title": "关闭网页",
+    "leaf": true
+  },
+  {
+    "title": "网页操作",
+    "leaf": false
+  },
+  {
+    "title": "元素操作",
+    "leaf": false
+  },
+  {
+    "title": "数据提取",
+    "leaf": false
+  },
+  {
+    "title": "对话框处理",
+    "leaf": false
+  },
+  {
+    "title": "桌面软件自动化",
+    "leaf": false
+  },
+  {
+    "title": "鼠标键盘",
+    "leaf": false
+  },
+  {
+    "title": "数据表格",
+    "leaf": false
+  },
+  {
+    "title": "Excel/WPS表格",
+    "leaf": false
+  },
+  {
+    "title": "对话框",
+    "leaf": false
+  },
+  {
+    "title": "数据处理",
+    "leaf": false
+  },
+  {
+    "title": "操作系统",
+    "leaf": false
+  },
+  {
+    "title": "流程/应用",
+    "leaf": false
+  },
+  {
+    "title": "人工智能AI",
+    "leaf": false
+  },
+  {
+    "title": "网络",
+    "leaf": false
+  },
+  {
+    "title": "工作队列",
+    "leaf": false
+  },
+  {
+    "title": "其他",
+    "leaf": false
+  },
+  {
+    "title": "手机操作自动化",
+    "leaf": false
+  },
+  {
+    "title": "自定义指令",
+    "leaf": false
+  },
+  {
+    "title": "接口文档",
+    "leaf": false
+  },
+  {
+    "title": "常见问题",
+    "leaf": false
+  },
+  {
+    "title": "开放API",
+    "leaf": false
+  },
+  {
+    "title": "管理文档",
+    "leaf": false
+  },
+  {
+    "title": "专题文档",
+    "leaf": false
+  },
+  {
+    "title": "解决方案",
+    "leaf": false
+  }
+]
