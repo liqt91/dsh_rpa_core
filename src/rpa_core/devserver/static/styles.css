@@ -24,8 +24,13 @@ body.resizing-panel * { cursor: col-resize !important; }
 #palette-list { list-style: none; margin: 0; padding: 0 8px 8px; overflow-y: auto; overflow-x: hidden; flex: 1; }
 #palette-list li.palette-item { padding: 6px 8px; border: 1px solid var(--border); border-radius: 8px; margin-bottom: 6px; cursor: pointer; display: flex; align-items: center; gap: 8px; min-width: 0; }
 #palette-list li.palette-item:hover { border-color: var(--accent); }
-#palette-list li.palette-group { cursor: default; border: none; padding: 8px 2px 2px; margin-bottom: 2px; font-size: 12px; font-weight: 600; color: var(--muted); display: flex; align-items: center; gap: 6px; }
-#palette-list li.palette-group:hover { border-color: transparent; }
+#palette-list li.palette-group { cursor: pointer; border: none; padding: 8px 2px 2px; margin-bottom: 2px; font-size: 12px; font-weight: 600; color: var(--muted); display: flex; align-items: center; gap: 6px; user-select: none; }
+#palette-list li.palette-group:hover { color: var(--accent); }
+.palette-caret { display: inline-flex; transition: transform 0.15s; color: var(--faint); flex-shrink: 0; }
+.palette-caret.open { transform: rotate(90deg); }
+.palette-children { display: flex; flex-direction: column; gap: 0; }
+.palette-children.hidden { display: none; }
+.palette-children .palette-item { margin-left: 6px; }
 .kind { font-size: 11px; color: var(--muted); border: 1px solid var(--border); border-radius: 10px; padding: 0 6px; white-space: nowrap; flex-shrink: 0; }
 .item-texts { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .item-title { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

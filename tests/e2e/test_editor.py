@@ -658,3 +658,52 @@ def test_editor_selector_field_picks_element_from_library(server):
         badge = page.locator("#props-body .element-pick-badge")
         assert "searchBox" in badge.inner_text()
         browser.close()
+
+
+def test_editor_palette_tree_collapse(server):
+    """指令面板是可展开树：点分组收起/展开，搜索时强制展开。"""
+    base = f"http://127.0.0.1:{server.port}"
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
+        page.goto(f"{base}/")
+        page.wait_for_selector('[data-command="browser.click"]')
+
+        # 元素操作组默认展开，含 browser.click
+        click_item = page.locator('[data-command="browser.click"]')
+        assert click_item.is_visible()
+
+        # 收起「元素操作」组 → 条目隐藏
+        header = page.locator('li.palette-group[data-group="元素操作"]')
+        header.click()
+        page.wait_for_function(
+            "() => {"
+            "const g=document.querySelector('[data-group=\"元素操作\"]');"
+            "const n=g&&g.nextElementSibling;"
+            "return n && n.classList.contains('hidden');"
+            "}"
+        )
+        assert not click_item.is_visible()
+
+        # 再点展开 → 条目恢复
+        header.click()
+        page.wait_for_function(
+            "() => {"
+            "const g=document.querySelector('[data-group=\"元素操作\"]');"
+            "const n=g&&g.nextElementSibling;"
+            "return n && !n.classList.contains('hidden');"
+            "}"
+        )
+        assert click_item.is_visible()
+
+        # 搜索时强制展开：先收起，再输入关键词 → 命中项可见
+        page.fill("#palette-filter", "click")
+        page.wait_for_function(
+            "() => {"
+            "const g=document.querySelector('[data-group=\"元素操作\"]');"
+            "const n=g&&g.nextElementSibling;"
+            "return n && !n.classList.contains('hidden');"
+            "}"
+        )
+        assert click_item.is_visible()
+        browser.close()

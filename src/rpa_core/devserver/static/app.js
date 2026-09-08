@@ -11,6 +11,7 @@ const state = {
   clipboard: null,
   dirty: false,
   elementsSeen: null, // 最近一次渲染的元素名集合（捕获自动刷新差集用）
+  collapsedGroups: new Set(), // 指令面板已收起的分组名（默认全展开，点击收起）
 };
 let dragState = null; // {type:"new", command} | {type:"new", flow} | {type:"move", path}
 let pendingDrop = null; // {containerPath, key, index}
@@ -500,17 +501,44 @@ function iconSvg(name) {
   return span;
 }
 
-function paletteGroup(name, items, list, icon, color) {
+function paletteGroup(name, items, list, icon, color, forceExpand) {
   if (!items.length) return;
+  const key = name;
+  const collapsed = !forceExpand && state.collapsedGroups.has(key);
   const header = document.createElement("li");
   header.className = "palette-group";
+  header.dataset.group = key;
   if (color && CATEGORY_COLORS[color]) header.style.color = CATEGORY_COLORS[color];
+
+  const caret = iconSvg("caret");
+  caret.className = "palette-caret";
+  header.appendChild(caret);
+
   if (icon) header.appendChild(iconSvg(icon));
   const text = document.createElement("span");
   text.textContent = name;
   header.appendChild(text);
+
+  const children = document.createElement("div");
+  children.className = "palette-children";
+  if (collapsed) children.classList.add("hidden");
+  for (const item of items) children.appendChild(item);
+
+  header.addEventListener("click", () => {
+    if (state.collapsedGroups.has(key)) {
+      state.collapsedGroups.delete(key);
+      children.classList.remove("hidden");
+      caret.classList.add("open");
+    } else {
+      state.collapsedGroups.add(key);
+      children.classList.add("hidden");
+      caret.classList.remove("open");
+    }
+  });
+  if (!collapsed) caret.classList.add("open");
+
   list.appendChild(header);
-  for (const item of items) list.appendChild(item);
+  list.appendChild(children);
 }
 
 function flowPaletteItem(flow, filter) {
@@ -588,8 +616,9 @@ function renderPalette() {
   const filter = $("palette-filter").value.trim().toLowerCase();
   const list = $("palette-list");
   list.textContent = "";
+  const forceExpand = !!filter; // 搜索时强制所有分组展开（参考隔壁）
   const flowItems = FLOW_ITEMS.map((f) => flowPaletteItem(f, filter)).filter(Boolean);
-  paletteGroup("控制流", flowItems, list, "branch");
+  paletteGroup("控制流", flowItems, list, "branch", null, forceExpand);
 
   // 语义类别分组（参考隔壁）：控制流之后按"想做什么"分组；未匹配的兜底按 id 前缀。
   const assigned = new Set();
@@ -602,7 +631,7 @@ function renderPalette() {
       if (item) items.push(item);
       assigned.add(manifest.id);
     }
-    paletteGroup(group.label, items, list, group.icon, group.color);
+    paletteGroup(group.label, items, list, group.icon, group.color, forceExpand);
   }
   // 兜底：未归入语义类别的命令按 id 前缀分组
   const groups = new Map();
@@ -613,7 +642,7 @@ function renderPalette() {
     const item = commandPaletteItem(manifest, filter);
     if (item) groups.get(prefix).push(item);
   }
-  for (const [prefix, items] of groups) paletteGroup(prefix, items, list, GROUP_ICONS[prefix]);
+  for (const [prefix, items] of groups) paletteGroup(prefix, items, list, GROUP_ICONS[prefix], null, forceExpand);
 }
 
 // ---------------------------------------------------------------------------

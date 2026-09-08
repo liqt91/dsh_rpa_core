@@ -14,6 +14,7 @@
     shield: "M8 1l6 2v5c0 4-2.5 6.5-6 8-3.5-1.5-6-4-6-8V3z",
     back: "M13 3H5a3 3 0 0 0-3 3v1m11 4 3-3-3-3M3 13h8",
     play: "M4 2l9 6-9 6z",
+    caret: "M5 2l6 6-6 6",
   };
   window.RPA_ICONS = {
     get(name) {
