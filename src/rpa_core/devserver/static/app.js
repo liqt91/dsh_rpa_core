@@ -464,6 +464,35 @@ const GROUP_ICONS = { browser: "browser", data: "data", desktop: "desktop", desk
 const KIND_ICON = { action: "play", query: "browser", transform: "transform", lifecycle: "window" };
 const FLOW_ICON = { sequence: "play", if: "branch", forEach: "loop", try: "shield", return: "back" };
 
+// 语义类别（参考隔壁仿影刀指令展示）：按"想做什么"分组，替代机械的 id 前缀分组。
+// 条目仍按 kind 分色；类别 header 用类别图标 + 分类色。未匹配命令兜底按 id 前缀分组。
+const CATEGORY_COLORS = { blue: "#0969da", green: "#1a7f37", purple: "#8250df", cyan: "#0a7ea4", orange: "#bc4c00" };
+const SEMANTIC_GROUPS = [
+  {
+    label: "页面导航", icon: "browser", color: "blue",
+    member: (id) => ["browser.navigate", "browser.launch", "browser.close"].includes(id),
+  },
+  {
+    label: "元素操作", icon: "play", color: "blue",
+    member: (id) => ["browser.click", "browser.input", "browser.getText",
+                    "browser.queryAll", "browser.waitFor"].includes(id),
+  },
+  {
+    label: "数据处理", icon: "data", color: "green",
+    member: (id) => ["data.writeJson", "data.writeText", "data.format", "data.limit"].includes(id),
+  },
+  {
+    label: "桌面会话", icon: "window", color: "purple",
+    member: (id) => ["desktop.attachWindow", "desktop.closeSession",
+                    "desktop.win32.attachWindow", "desktop.win32.closeSession"].includes(id),
+  },
+  {
+    label: "桌面控件", icon: "desktop", color: "cyan",
+    member: (id) => id.startsWith("desktop.")
+                && !id.endsWith("attachWindow") && !id.endsWith("closeSession"),
+  },
+];
+
 function iconSvg(name) {
   const span = document.createElement("span");
   span.className = "icon";
@@ -471,10 +500,11 @@ function iconSvg(name) {
   return span;
 }
 
-function paletteGroup(name, items, list, icon) {
+function paletteGroup(name, items, list, icon, color) {
   if (!items.length) return;
   const header = document.createElement("li");
   header.className = "palette-group";
+  if (color && CATEGORY_COLORS[color]) header.style.color = CATEGORY_COLORS[color];
   if (icon) header.appendChild(iconSvg(icon));
   const text = document.createElement("span");
   text.textContent = name;
@@ -560,8 +590,24 @@ function renderPalette() {
   list.textContent = "";
   const flowItems = FLOW_ITEMS.map((f) => flowPaletteItem(f, filter)).filter(Boolean);
   paletteGroup("控制流", flowItems, list, "branch");
+
+  // 语义类别分组（参考隔壁）：控制流之后按"想做什么"分组；未匹配的兜底按 id 前缀。
+  const assigned = new Set();
+  for (const group of SEMANTIC_GROUPS) {
+    const items = [];
+    for (const manifest of state.catalog) {
+      if (assigned.has(manifest.id)) continue;
+      if (!group.member(manifest.id)) continue;
+      const item = commandPaletteItem(manifest, filter);
+      if (item) items.push(item);
+      assigned.add(manifest.id);
+    }
+    paletteGroup(group.label, items, list, group.icon, group.color);
+  }
+  // 兜底：未归入语义类别的命令按 id 前缀分组
   const groups = new Map();
   for (const manifest of state.catalog) {
+    if (assigned.has(manifest.id)) continue;
     const prefix = manifest.id.split(".")[0];
     if (!groups.has(prefix)) groups.set(prefix, []);
     const item = commandPaletteItem(manifest, filter);
