@@ -8,7 +8,7 @@
   "resources": ["desktop.session", "desktop.element"],
   "stability": "stable",
   "effect": {"kind": "unsafe-write", "replay": "unsafe", "idempotency": "none"},
-  "input_schema": {"type": "object", "required": ["sessionId", "elementId", "text"], "properties": {"sessionId": {"type": "string", "minLength": 1}, "elementId": {"type": "string", "minLength": 1}, "text": {"type": "string"}, "timeoutMs": {"type": "integer", "minimum": 1}}, "additionalProperties": false},
+  "input_schema": {"type": "object", "required": ["sessionId", "elementId", "text"], "properties": {"sessionId": {"type": "string", "minLength": 1}, "elementId": {"type": "string", "minLength": 1}, "text": {"type": "string"}, "timeoutMs": {"type": "integer", "minimum": 1}, "mode": {"type": "string", "enum": ["simulateHuman", "clipboard", "automation"], "description": "输入方式：simulateHuman=模拟人工，clipboard=剪贴板粘贴，automation=自动化接口", "default": "simulateHuman"}, "append": {"type": "boolean", "description": "追加输入", "default": false}, "keyIntervalMs": {"type": "integer", "minimum": 0, "description": "按键间隔（毫秒）", "default": 50}, "clickBeforeInput": {"type": "boolean", "description": "输入前先点击元素获取焦点", "default": false}, "postDelayMs": {"type": "integer", "minimum": 0, "description": "执行后延迟（毫秒）", "default": 0}}, "additionalProperties": false},
   "output_schema": {"type": "object", "additionalProperties": false},
   "errors": ["ELEMENT_NOT_FOUND", "SESSION_NOT_FOUND", "SESSION_LOST", "TIMEOUT", "CANCELLED", "EXECUTOR_FAILED"],
   "implementation": {"handler": "desktop.uia:input"},

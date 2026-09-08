@@ -8,7 +8,7 @@
   "resources": ["browser.session"],
   "stability": "stable",
   "effect": {"kind": "unsafe-write", "replay": "unsafe", "idempotency": "none"},
-  "input_schema": {"type": "object", "required": ["sessionId", "selector", "text"], "properties": {"sessionId": {"type": "string"}, "selector": {"type": "string", "minLength": 1}, "text": {"type": "string"}, "timeoutMs": {"type": "integer", "minimum": 1}}, "additionalProperties": false},
+  "input_schema": {"type": "object", "required": ["sessionId", "selector", "text"], "properties": {"sessionId": {"type": "string"}, "selector": {"type": "string", "minLength": 1}, "text": {"type": "string"}, "timeoutMs": {"type": "integer", "minimum": 1}, "mode": {"type": "string", "enum": ["fill", "type", "clipboard"], "description": "输入方式：fill=直接填写（快速稳定），type=逐字模拟人工输入，clipboard=剪贴板粘贴", "default": "fill"}, "append": {"type": "boolean", "description": "追加输入（不清空现有内容）", "default": false}, "pressEnter": {"type": "boolean", "description": "输入后按 Enter 键", "default": false}, "keyIntervalMs": {"type": "integer", "minimum": 0, "description": "逐字输入时的按键间隔（毫秒），仅 mode=type 时生效", "default": 50}, "clickBeforeInput": {"type": "boolean", "description": "输入前先点击元素获取焦点", "default": false}, "postDelayMs": {"type": "integer", "minimum": 0, "description": "执行后延迟（毫秒）", "default": 0}}, "additionalProperties": false},
   "output_schema": {"type": "object", "required": ["matchedCount", "sessionId"], "properties": {"matchedCount": {"type": "integer", "minimum": 1}, "sessionId": {"type": "string"}}, "additionalProperties": false},
   "errors": ["ELEMENT_NOT_FOUND", "SESSION_NOT_FOUND", "TIMEOUT", "CANCELLED", "EXECUTOR_FAILED"],
   "implementation": {"handler": "browser.playwright:input"},

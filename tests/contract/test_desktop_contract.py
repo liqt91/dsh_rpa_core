@@ -16,6 +16,17 @@ SHARED_DESKTOP_COMMANDS = (
     "input",
     "getText",
     "closeSession",
+    "activateWindow",
+    "setWindowState",
+    "setWindowVisible",
+    "moveWindow",
+    "resizeWindow",
+    "getWindowTitle",
+    "getSelectedText",
+    "screenshot",
+    "select",
+    "drag",
+    "getWindowList",
 )
 
 
@@ -158,7 +169,7 @@ def test_desktop_backend_manifests_share_lifecycle_contract():
         assert win32["id"] == f"desktop.win32.{name}"
         for field in ("version", "kind", "risk", "stability", "effect", "capabilities"):
             assert uia[field] == win32[field], f"{name}: {field} differs between backends"
-        attach_outputs = ("sessionId", "processId", "workWindowId")
+            attach_outputs = ("sessionId", "resourceType", "processId", "workWindowId")
         if name == "attachWindow":
             assert set(uia["output_schema"]["required"]) == set(attach_outputs)
             assert set(win32["output_schema"]["required"]) == set(attach_outputs)

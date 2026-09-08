@@ -1,0 +1,17 @@
+{
+  "id": "browser.executeScript",
+  "version": "1.0.0",
+  "executor": "browser.playwright",
+  "kind": "action",
+  "risk": "browser-control",
+  "capabilities": ["browser.control"],
+  "resources": ["browser.session"],
+  "stability": "stable",
+  "effect": {"kind": "unsafe-write", "replay": "unsafe", "idempotency": "none"},
+  "input_schema": {"type": "object", "required": ["sessionId", "script"], "properties": {"sessionId": {"type": "string"}, "script": {"type": "string", "minLength": 1, "description": "要执行的 JavaScript 代码"}, "args": {"type": "array", "items": {"type": "string"}, "description": "传递给脚本的参数数组", "default": []}, "timeoutMs": {"type": "integer", "minimum": 1}}, "additionalProperties": false},
+  "output_schema": {"type": "object", "required": ["result", "sessionId"], "properties": {"result": {"description": "脚本返回值"}, "sessionId": {"type": "string"}}, "additionalProperties": false},
+  "errors": ["SESSION_NOT_FOUND", "TIMEOUT", "CANCELLED", "EXECUTOR_FAILED"],
+  "implementation": {"handler": "browser.playwright:executeScript"},
+  "default_timeout_seconds": 30,
+  "retryable": false
+}

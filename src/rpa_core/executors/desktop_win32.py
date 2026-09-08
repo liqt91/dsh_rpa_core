@@ -41,7 +41,11 @@ class Win32DesktopExecutor(CommandExecutor):
             )
         if cancellation.is_set():
             return CommandResult(status="cancelled")
-        if invocation.command_id != "desktop.win32.attachWindow":
+        _no_session_commands = (
+            "desktop.win32.attachWindow",
+            "desktop.win32.getWindowList",
+        )
+        if invocation.command_id not in _no_session_commands:
             session_id = str(invocation.inputs.get("sessionId") or "")
             if not session_id or session_id not in self._sessions:
                 return CommandResult.failure(
@@ -72,25 +76,25 @@ class Win32DesktopExecutor(CommandExecutor):
             class_name = inputs.get("className")
             handle = inputs.get("handle")
             process_id = inputs.get("processId")
+            match_mode = inputs.get("matchMode", "exact")
             timeout_ms = int(inputs.get("timeoutMs") or 0)
             deadline = time.monotonic() + timeout_ms / 1000.0
             while True:
                 if handle is not None:
                     windows = Desktop(backend="win32").windows(handle=int(handle))
                 else:
-                    windows = (
-                        Desktop(backend="win32").windows(title=title)
-                        if title
-                        else Desktop(backend="win32").windows()
-                    )
+                    all_wins = Desktop(backend="win32").windows()
+                    if title:
+                        all_wins = self._filter_windows(all_wins, title, match_mode)
                     if class_name:
-                        windows = [
-                            window for window in windows if window.class_name() == class_name
+                        all_wins = [
+                            w for w in all_wins if w.class_name() == class_name
                         ]
                     if process_id is not None:
-                        windows = [
-                            window for window in windows if window.process_id() == process_id
+                        all_wins = [
+                            w for w in all_wins if w.process_id() == process_id
                         ]
+                    windows = all_wins
                 if len(windows) == 1:
                     break
                 if len(windows) > 1:
@@ -114,6 +118,7 @@ class Win32DesktopExecutor(CommandExecutor):
             return CommandResult.success(
                 outputs={
                     "sessionId": session_id,
+                    "resourceType": "windowHandle",
                     "processId": pid,
                     "workWindowId": str(native_handle),
                 },
@@ -134,6 +139,17 @@ class Win32DesktopExecutor(CommandExecutor):
                 ErrorCode.SESSION_NOT_FOUND, "Desktop session not found"
             )
         if command == "desktop.win32.closeSession":
+            force_kill = inputs.get("forceKill", False)
+            if force_kill:
+                try:
+                    import ctypes
+                    ctypes.windll.kernel32.TerminateProcess(
+                        ctypes.windll.kernel32.OpenProcess(
+                            0x0400, False, session.process_id
+                        ), 1
+                    )
+                except Exception:
+                    pass
             self._sessions.pop(session_id, None)
             return CommandResult.success(
                 effects=[
@@ -145,6 +161,174 @@ class Win32DesktopExecutor(CommandExecutor):
                     )
                     ]
                 )
+
+        if command == "desktop.win32.getWindowList":
+            import ctypes
+            import re
+            title_pattern = inputs.get("titlePattern")
+            match_mode = inputs.get("matchMode", "contains")
+            user32 = ctypes.windll.user32
+            result_windows = []
+
+            def _on_window(hwnd: Any, _lparam: Any) -> bool:
+                if not user32.IsWindowVisible(hwnd):
+                    return True
+                buf = ctypes.create_unicode_buffer(512)
+                user32.GetWindowTextW(hwnd, buf, 512)
+                win_title = buf.value
+                if not win_title:
+                    return True
+                if title_pattern:
+                    if match_mode == "exact" and win_title != title_pattern:
+                        return True
+                    elif match_mode == "contains" and title_pattern not in win_title:
+                        return True
+                    elif match_mode == "regex" and not re.search(title_pattern, win_title):
+                        return True
+                cls_buf = ctypes.create_unicode_buffer(256)
+                user32.GetClassNameW(hwnd, cls_buf, 256)
+                pid = ctypes.c_ulong()
+                user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+                result_windows.append({
+                    "title": win_title,
+                    "className": cls_buf.value,
+                    "processId": pid.value,
+                })
+                return True
+
+            callback = ctypes.WINFUNCTYPE(
+                ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p
+            )(_on_window)
+            user32.EnumWindows(callback, None)
+            return CommandResult.success(
+                outputs={"windows": result_windows},
+                effects=[
+                    EffectRecord.committed(
+                        invocation,
+                        kind=EffectKind.READ,
+                        resource="desktop.win32.windows",
+                        details={"operation": "getWindowList", "count": len(result_windows)},
+                    )
+                ],
+            )
+
+        if command == "desktop.win32.activateWindow":
+            import ctypes
+            user32 = ctypes.windll.user32
+            hwnd = int(session.window_handle)
+            user32.SetForegroundWindow(hwnd)
+            return CommandResult.success(
+                effects=[
+                    EffectRecord.committed(
+                        invocation,
+                        kind=EffectKind.UNSAFE_WRITE,
+                        resource=f"desktop.win32.session:{session_id}:window:{session.window_handle}",
+                        details={"operation": "activateWindow"},
+                    )
+                ]
+            )
+
+        if command == "desktop.win32.setWindowState":
+            import ctypes
+            user32 = ctypes.windll.user32
+            hwnd = int(session.window_handle)
+            state = inputs.get("state", "normal")
+            SW = {"maximized": 3, "minimized": 6, "normal": 1}
+            user32.ShowWindow(hwnd, SW.get(state, 1))
+            return CommandResult.success(
+                effects=[
+                    EffectRecord.committed(
+                        invocation,
+                        kind=EffectKind.UNSAFE_WRITE,
+                        resource=f"desktop.win32.session:{session_id}:window:{session.window_handle}",
+                        details={"operation": "setWindowState", "state": state},
+                    )
+                ]
+            )
+
+        if command == "desktop.win32.setWindowVisible":
+            import ctypes
+            user32 = ctypes.windll.user32
+            hwnd = int(session.window_handle)
+            visible = inputs.get("visible", True)
+            user32.ShowWindow(hwnd, 5 if visible else 0)
+            return CommandResult.success(
+                effects=[
+                    EffectRecord.committed(
+                        invocation,
+                        kind=EffectKind.UNSAFE_WRITE,
+                        resource=f"desktop.win32.session:{session_id}:window:{session.window_handle}",
+                        details={"operation": "setWindowVisible", "visible": visible},
+                    )
+                ]
+            )
+
+        if command == "desktop.win32.moveWindow":
+            import ctypes
+            user32 = ctypes.windll.user32
+            hwnd = int(session.window_handle)
+            rect = ctypes.wintypes.RECT()
+            user32.GetWindowRect(hwnd, ctypes.byref(rect))
+            w = rect.right - rect.left
+            h = rect.bottom - rect.top
+            user32.MoveWindow(hwnd, int(inputs["x"]), int(inputs["y"]), w, h, True)
+            return CommandResult.success(
+                effects=[
+                    EffectRecord.committed(
+                        invocation,
+                        kind=EffectKind.UNSAFE_WRITE,
+                        resource=f"desktop.win32.session:{session_id}:window:{session.window_handle}",
+                        details={"operation": "moveWindow"},
+                    )
+                ]
+            )
+
+        if command == "desktop.win32.resizeWindow":
+            import ctypes
+            user32 = ctypes.windll.user32
+            hwnd = int(session.window_handle)
+            rect = ctypes.wintypes.RECT()
+            user32.GetWindowRect(hwnd, ctypes.byref(rect))
+            user32.MoveWindow(
+                hwnd, rect.left, rect.top,
+                int(inputs["width"]), int(inputs["height"]), True
+            )
+            return CommandResult.success(
+                effects=[
+                    EffectRecord.committed(
+                        invocation,
+                        kind=EffectKind.UNSAFE_WRITE,
+                        resource=f"desktop.win32.session:{session_id}:window:{session.window_handle}",
+                        details={"operation": "resizeWindow"},
+                    )
+                ]
+            )
+
+        if command == "desktop.win32.getWindowTitle":
+            import ctypes
+            user32 = ctypes.windll.user32
+            hwnd = int(session.window_handle)
+            buf = ctypes.create_unicode_buffer(512)
+            user32.GetWindowTextW(hwnd, buf, 512)
+            title = buf.value
+            cls_buf = ctypes.create_unicode_buffer(256)
+            user32.GetClassNameW(hwnd, cls_buf, 256)
+            class_name = cls_buf.value
+            return CommandResult.success(
+                outputs={
+                    "title": title,
+                    "className": class_name,
+                    "processId": session.process_id,
+                },
+                effects=[
+                    EffectRecord.committed(
+                        invocation,
+                        kind=EffectKind.READ,
+                        resource=f"desktop.win32.session:{session_id}:window:{session.window_handle}",
+                        details={"operation": "getWindowTitle"},
+                    )
+                ],
+            )
 
         if command == "desktop.win32.menuSelect":
             path = inputs.get("menuPath") or []
@@ -237,7 +421,59 @@ class Win32DesktopExecutor(CommandExecutor):
 
         resource = f"desktop.win32.session:{session_id}:element:{element_id}"
         if command == "desktop.win32.input":
-            element.set_edit_text(str(inputs["text"]))
+            mode = inputs.get("mode", "simulateHuman")
+            text_val = str(inputs["text"])
+            append = inputs.get("append", False)
+            key_interval = inputs.get("keyIntervalMs", 50)
+            click_first = inputs.get("clickBeforeInput", False)
+            post_delay = inputs.get("postDelayMs", 0)
+
+            if click_first:
+                if hasattr(element, "click_input"):
+                    element.click_input()
+                elif hasattr(element, "invoke"):
+                    element.invoke()
+                time.sleep(0.05)
+
+            if mode == "clipboard":
+                if hasattr(element, "set_focus"):
+                    element.set_focus()
+                import win32clipboard
+                import win32con
+                win32clipboard.OpenClipboard()
+                try:
+                    win32clipboard.EmptyClipboard()
+                    win32clipboard.SetClipboardText(
+                        text_val, win32con.CF_UNICODETEXT
+                    )
+                finally:
+                    win32clipboard.CloseClipboard()
+                import pywinauto
+                pywinauto.keyboard.send_keys("^v")
+            elif mode == "simulateHuman":
+                if hasattr(element, "set_focus"):
+                    element.set_focus()
+                if append and hasattr(element, "get_value"):
+                    current = element.get_value()
+                    text_val = current + text_val
+                if hasattr(element, "type_keys"):
+                    element.type_keys(
+                        text_val, with_spaces=True,
+                        pause=key_interval / 1000.0,
+                    )
+                else:
+                    element.set_edit_text(text_val)
+            else:
+                if hasattr(element, "set_edit_text"):
+                    if append:
+                        current = element.get_edit_text() or ""
+                        element.set_edit_text(current + text_val)
+                    else:
+                        element.set_edit_text(text_val)
+
+            if post_delay > 0:
+                time.sleep(post_delay / 1000)
+
             return CommandResult.success(
                 effects=[
                     EffectRecord.committed(
@@ -249,10 +485,38 @@ class Win32DesktopExecutor(CommandExecutor):
                 ]
             )
         if command == "desktop.win32.click":
-            if hasattr(element, "invoke"):
+            click_type = inputs.get("clickType", "single")
+            button = inputs.get("button", "left")
+            modifiers = inputs.get("modifiers", [])
+            post_delay = inputs.get("postDelayMs", 0)
+
+            if hasattr(element, "click_input"):
+                click_kwargs: dict = {"button": button}
+                if click_type == "double":
+                    click_kwargs["click_count"] = 2
+                if modifiers:
+                    import pywinauto
+                    _MOD_MAP = {
+                        "Alt": "menu", "Ctrl": "control",
+                        "Shift": "shift", "Win": "win",
+                    }
+                    for mod in modifiers:
+                        pywinauto.keyboard.key_down(_MOD_MAP.get(mod, mod))
+                    try:
+                        element.click_input(**click_kwargs)
+                    finally:
+                        for mod in reversed(modifiers):
+                            pywinauto.keyboard.key_up(_MOD_MAP.get(mod, mod))
+                else:
+                    element.click_input(**click_kwargs)
+            elif hasattr(element, "invoke"):
                 element.invoke()
             else:
                 element.click_input()
+
+            if post_delay > 0:
+                time.sleep(post_delay / 1000)
+
             return CommandResult.success(
                 effects=[
                     EffectRecord.committed(
@@ -278,9 +542,127 @@ class Win32DesktopExecutor(CommandExecutor):
                     )
                 ],
             )
+        if command == "desktop.win32.getSelectedText":
+            try:
+                sel = element.iface_value.GetSelection()
+                if sel:
+                    text = sel[0].iface_value.GetCurrentValue() or ""
+                else:
+                    text = ""
+            except Exception:
+                text = ""
+            return CommandResult.success(
+                outputs={"text": text},
+                effects=[
+                    EffectRecord.committed(
+                        invocation,
+                        kind=EffectKind.READ,
+                        resource=resource,
+                        details={"operation": "getSelectedText"},
+                    )
+                ],
+            )
+        if command == "desktop.win32.screenshot":
+            save_path = str(inputs["savePath"])
+            try:
+                bmp = element.iface_value.GetCurrentPropertyValue(30013)
+                if bmp:
+                    import io
+
+                    from PIL import Image
+                    img = Image.open(io.BytesIO(bytes(bmp)))
+                    img.save(save_path)
+                else:
+                    raise RuntimeError("No image data")
+            except Exception:
+                window = self._window_by_handle(session.window_handle)
+                if window:
+                    window.capture_as_image().save(save_path)
+            return CommandResult.success(
+                outputs={"filePath": save_path},
+                effects=[
+                    EffectRecord.committed(
+                        invocation,
+                        kind=EffectKind.IDEMPOTENT_WRITE,
+                        resource=resource,
+                        details={"operation": "screenshot", "filePath": save_path},
+                    )
+                ],
+            )
+        if command == "desktop.win32.select":
+            value = str(inputs["value"])
+            select_by = inputs.get("selectBy", "value")
+            try:
+                sel = element.iface_selection
+                if select_by == "index":
+                    sel.Select(int(value))
+                elif select_by == "label":
+                    items = sel.GetCurrentSelection()
+                    for item in items:
+                        if item.GetCurrentPropertyValue(30005) == value:
+                            item.Select()
+                            break
+                else:
+                    items = sel.GetCurrentSelection()
+                    for item in items:
+                        if item.GetCurrentPropertyValue(30006) == value:
+                            item.Select()
+                            break
+            except Exception:
+                pass
+            return CommandResult.success(
+                effects=[
+                    EffectRecord.committed(
+                        invocation,
+                        kind=EffectKind.UNSAFE_WRITE,
+                        resource=resource,
+                        details={"operation": "selectOption"},
+                    )
+                ]
+            )
+        if command == "desktop.win32.drag":
+            target_x = int(inputs["targetX"])
+            target_y = int(inputs["targetY"])
+            try:
+                rect = element.rectangle()
+                start_x = rect.left + (rect.right - rect.left) // 2
+                start_y = rect.top + (rect.bottom - rect.top) // 2
+            except Exception:
+                start_x, start_y = 0, 0
+            import ctypes
+            user32 = ctypes.windll.user32
+            user32.SetCursorPos(start_x, start_y)
+            user32.mouse_event(0x0002, 0, 0, 0, 0)
+            steps = 10
+            for i in range(1, steps + 1):
+                cx = start_x + (target_x - start_x) * i // steps
+                cy = start_y + (target_y - start_y) * i // steps
+                user32.SetCursorPos(cx, cy)
+                time.sleep(0.01)
+            user32.mouse_event(0x0004, 0, 0, 0, 0)
+            return CommandResult.success(
+                effects=[
+                    EffectRecord.committed(
+                        invocation,
+                        kind=EffectKind.UNSAFE_WRITE,
+                        resource=resource,
+                        details={"operation": "drag"},
+                    )
+                ]
+            )
         return CommandResult.failure(
             ErrorCode.COMMAND_NOT_FOUND, f"Unsupported command: {command}"
         )
+
+    @staticmethod
+    def _filter_windows(windows: list[Any], title: str, match_mode: str) -> list[Any]:
+        import re
+        if match_mode == "contains":
+            return [w for w in windows if title in (w.window_text() or "")]
+        if match_mode == "regex":
+            pattern = re.compile(title)
+            return [w for w in windows if pattern.search(w.window_text() or "")]
+        return [w for w in windows if (w.window_text() or "") == title]
 
     @staticmethod
     def _find(window: Any, locator: DesktopLocator) -> list[Any]:

@@ -94,7 +94,7 @@ class PlaywrightExecutor(CommandExecutor):
                 session_id = str(uuid.uuid4())
                 self._sessions[session_id] = (browser, context, page)
                 return CommandResult.success(
-                    outputs={"sessionId": session_id},
+                    outputs={"sessionId": session_id, "resourceType": "webPage"},
                     effects=[
                         EffectRecord.committed(
                             invocation,
@@ -139,7 +139,42 @@ class PlaywrightExecutor(CommandExecutor):
                         "Target element did not match",
                         details={"selector": inputs["selector"], "matchedCount": 0},
                     )
-                await locator.first.click(timeout=timeout_ms)
+                import random as _random
+                click_type = inputs.get("clickType", "single")
+                button = inputs.get("button", "left")
+                modifiers_raw = inputs.get("modifiers", [])
+                simulate = inputs.get("simulateHuman", True)
+                click_pos = inputs.get("clickPosition", "center")
+                post_delay = inputs.get("postDelayMs", 0)
+
+                pw_modifiers = []
+                for m in modifiers_raw:
+                    if m == "Win":
+                        pw_modifiers.append("Meta")
+                    else:
+                        pw_modifiers.append(m)
+
+                click_kwargs: dict[str, Any] = {
+                    "button": button,
+                    "click_count": 2 if click_type == "double" else 1,
+                    "timeout": timeout_ms,
+                }
+                if pw_modifiers:
+                    click_kwargs["modifiers"] = pw_modifiers
+
+                if click_pos == "random":
+                    box = await locator.first.bounding_box()
+                    if box:
+                        rx = box["x"] + _random.uniform(0, box["width"])
+                        ry = box["y"] + _random.uniform(0, box["height"])
+                        click_kwargs["position"] = {"x": rx - box["x"], "y": ry - box["y"]}
+
+                if not simulate:
+                    click_kwargs["force"] = True
+
+                await locator.first.click(**click_kwargs)
+                if post_delay > 0:
+                    await asyncio.sleep(post_delay / 1000)
                 return CommandResult.success(
                     outputs={"matchedCount": count, "sessionId": session_id},
                     effects=[
@@ -160,7 +195,43 @@ class PlaywrightExecutor(CommandExecutor):
                         "Target element did not match",
                         details={"selector": inputs["selector"], "matchedCount": 0},
                     )
-                await locator.first.fill(str(inputs["text"]), timeout=timeout_ms)
+                mode = inputs.get("mode", "fill")
+                text_val = str(inputs["text"])
+                append = inputs.get("append", False)
+                press_enter = inputs.get("pressEnter", False)
+                key_interval = inputs.get("keyIntervalMs", 50)
+                click_first = inputs.get("clickBeforeInput", False)
+                post_delay = inputs.get("postDelayMs", 0)
+
+                if click_first:
+                    await locator.first.click(timeout=timeout_ms)
+
+                if mode == "type":
+                    if append:
+                        await locator.first.press("End")
+                    await locator.first.type(text_val, delay=key_interval, timeout=timeout_ms)
+                elif mode == "clipboard":
+                    await page.evaluate(
+                        "(t) => navigator.clipboard.writeText(t)", text_val
+                    )
+                    if append:
+                        await locator.first.press("End")
+                    await locator.first.press("Control+v")
+                else:
+                    if append:
+                        current = await locator.first.input_value()
+                        await locator.first.fill(
+                            current + text_val, timeout=timeout_ms
+                        )
+                    else:
+                        await locator.first.fill(text_val, timeout=timeout_ms)
+
+                if press_enter:
+                    await locator.first.press("Enter")
+
+                if post_delay > 0:
+                    await asyncio.sleep(post_delay / 1000)
+
                 return CommandResult.success(
                     outputs={"matchedCount": count, "sessionId": session_id},
                     effects=[
@@ -169,6 +240,27 @@ class PlaywrightExecutor(CommandExecutor):
                             kind=EffectKind.UNSAFE_WRITE,
                             resource=f"browser.session:{session_id}:selector:{inputs['selector']}",
                             details={"operation": "input", "matchedCount": count},
+                        )
+                    ],
+                )
+            if command == "browser.hover":
+                locator = page.locator(str(inputs["selector"]))
+                count = await locator.count()
+                if count == 0:
+                    return CommandResult.failure(
+                        ErrorCode.ELEMENT_NOT_FOUND,
+                        "Target element did not match",
+                        details={"selector": inputs["selector"], "matchedCount": 0},
+                    )
+                await locator.first.hover(timeout=timeout_ms)
+                return CommandResult.success(
+                    outputs={"matchedCount": count, "sessionId": session_id},
+                    effects=[
+                        EffectRecord.committed(
+                            invocation,
+                            kind=EffectKind.UNSAFE_WRITE,
+                            resource=f"browser.session:{session_id}:selector:{inputs['selector']}",
+                            details={"operation": "hover", "matchedCount": count},
                         )
                     ],
                 )
@@ -224,7 +316,24 @@ class PlaywrightExecutor(CommandExecutor):
                     ],
                 )
             if command == "browser.close":
-                if browser is not None:
+                force_kill = inputs.get("forceKill", False)
+                if force_kill and browser is not None:
+                    try:
+                        proc = browser._impl_obj._browser_process
+                        if proc and proc.pid:
+                            import os
+                            import signal
+                            try:
+                                os.kill(proc.pid, signal.SIGTERM)
+                            except OSError:
+                                pass
+                    except Exception:
+                        pass
+                    try:
+                        await browser.close()
+                    except Exception:
+                        pass
+                elif browser is not None:
                     await browser.close()
                 else:
                     await context.close()
@@ -238,6 +347,135 @@ class PlaywrightExecutor(CommandExecutor):
                             details={"operation": "close"},
                         )
                     ]
+                )
+            if command == "browser.executeScript":
+                script = str(inputs["script"])
+                args = inputs.get("args", [])
+                result = await page.evaluate(script, args)
+                return CommandResult.success(
+                    outputs={"result": result, "sessionId": session_id},
+                    effects=[
+                        EffectRecord.committed(
+                            invocation,
+                            kind=EffectKind.UNSAFE_WRITE,
+                            resource=f"browser.session:{session_id}:script",
+                            details={"operation": "executeScript"},
+                        )
+                    ],
+                )
+            if command == "browser.screenshot":
+                save_path = str(inputs["savePath"])
+                selector = inputs.get("selector")
+                full_page = inputs.get("fullPage", False)
+                if selector:
+                    locator = page.locator(selector)
+                    await locator.first.wait_for(state="visible", timeout=timeout_ms)
+                    await locator.first.screenshot(path=save_path)
+                else:
+                    await page.screenshot(path=save_path, full_page=full_page)
+                return CommandResult.success(
+                    outputs={"filePath": save_path},
+                    effects=[
+                        EffectRecord.committed(
+                            invocation,
+                            kind=EffectKind.IDEMPOTENT_WRITE,
+                            resource=f"browser.session:{session_id}:screenshot",
+                            details={"operation": "screenshot", "filePath": save_path},
+                        )
+                    ],
+                )
+            if command == "browser.select":
+                selector = str(inputs["selector"])
+                value = str(inputs["value"])
+                select_by = inputs.get("selectBy", "value")
+                locator = page.locator(selector)
+                count = await locator.count()
+                if count == 0:
+                    return CommandResult.failure(
+                        ErrorCode.ELEMENT_NOT_FOUND,
+                        "Target element did not match",
+                        details={"selector": selector, "matchedCount": 0},
+                    )
+                if select_by == "index":
+                    await locator.first.select_option(index=int(value), timeout=timeout_ms)
+                elif select_by == "label":
+                    await locator.first.select_option(label=value, timeout=timeout_ms)
+                else:
+                    await locator.first.select_option(value=value, timeout=timeout_ms)
+                return CommandResult.success(
+                    outputs={"matchedCount": count, "sessionId": session_id},
+                    effects=[
+                        EffectRecord.committed(
+                            invocation,
+                            kind=EffectKind.UNSAFE_WRITE,
+                            resource=f"browser.session:{session_id}:selector:{selector}",
+                            details={"operation": "selectOption", "matchedCount": count},
+                        )
+                    ],
+                )
+            if command == "browser.upload":
+                selector = str(inputs["selector"])
+                files = [str(f) for f in inputs["files"]]
+                locator = page.locator(selector)
+                count = await locator.count()
+                if count == 0:
+                    return CommandResult.failure(
+                        ErrorCode.ELEMENT_NOT_FOUND,
+                        "Target element did not match",
+                        details={"selector": selector, "matchedCount": 0},
+                    )
+                await locator.first.set_input_files(files, timeout=timeout_ms)
+                return CommandResult.success(
+                    outputs={"matchedCount": count, "sessionId": session_id},
+                    effects=[
+                        EffectRecord.committed(
+                            invocation,
+                            kind=EffectKind.UNSAFE_WRITE,
+                            resource=f"browser.session:{session_id}:selector:{selector}",
+                            details={"operation": "upload", "matchedCount": count},
+                        )
+                    ],
+                )
+            if command == "browser.download":
+                save_dir = str(inputs["saveDir"])
+                timeout_ms_dl = int(inputs.get("timeoutMs", 60_000))
+                async with page.expect_download(timeout=timeout_ms_dl) as download_info:
+                    pass
+                download = await download_info.value
+                import os
+                os.makedirs(save_dir, exist_ok=True)
+                target = os.path.join(save_dir, download.suggested_filename)
+                await download.save_as(target)
+                return CommandResult.success(
+                    outputs={"filePath": target},
+                    effects=[
+                        EffectRecord.committed(
+                            invocation,
+                            kind=EffectKind.UNSAFE_WRITE,
+                            resource=f"browser.session:{session_id}:download",
+                            details={"operation": "download", "filePath": target},
+                        )
+                    ],
+                )
+            if command == "browser.handleDialog":
+                action = inputs.get("action", "accept")
+                prompt_text = inputs.get("promptText")
+                dialog_event = getattr(self, "_pending_dialog", None)
+                if dialog_event and hasattr(dialog_event, "value"):
+                    dlg = dialog_event.value
+                    if action == "accept":
+                        await dlg.accept(prompt_text)
+                    else:
+                        await dlg.dismiss()
+                return CommandResult.success(
+                    effects=[
+                        EffectRecord.committed(
+                            invocation,
+                            kind=EffectKind.UNSAFE_WRITE,
+                            resource=f"browser.session:{session_id}:dialog",
+                            details={"operation": "handleDialog", "action": action},
+                        )
+                    ],
                 )
             return CommandResult.failure(
                 ErrorCode.COMMAND_NOT_FOUND, f"Unsupported command: {command}"
@@ -269,7 +507,7 @@ class PlaywrightExecutor(CommandExecutor):
         self._bsk_sessions[session_id] = session
         self._bsk_keep_open[session_id] = keep_open
         return CommandResult.success(
-            outputs={"sessionId": session_id},
+            outputs={"sessionId": session_id, "resourceType": "webPage"},
             effects=[
                 EffectRecord.committed(
                     invocation,
@@ -331,6 +569,18 @@ class PlaywrightExecutor(CommandExecutor):
                     {"operation": "input", "matchedCount": count},
                     outputs={"matchedCount": count, "sessionId": session_id},
                 )
+            if command == "browser.hover":
+                count = await self._run_bsk(session.count, selector)
+                if count == 0:
+                    return self._bsk_not_found(inputs)
+                await self._run_bsk(session.hover, selector)
+                effect_kind = EffectKind.UNSAFE_WRITE
+                resource += f":selector:{selector}"
+                return self._bsk_success(
+                    invocation, effect_kind, resource,
+                    {"operation": "hover", "matchedCount": count},
+                    outputs={"matchedCount": count, "sessionId": session_id},
+                )
             if command == "browser.waitFor":
                 found = await self._run_bsk(
                     session.wait_for, selector, timeout_s, cancellation.is_set
@@ -378,6 +628,76 @@ class PlaywrightExecutor(CommandExecutor):
                 return self._bsk_success(
                     invocation, EffectKind.SESSION, resource,
                     {"operation": "close", "transport": "bsk"},
+                )
+            if command == "browser.executeScript":
+                script = str(inputs["script"])
+                result = await self._run_bsk(session.evaluate, script)
+                return self._bsk_success(
+                    invocation, EffectKind.UNSAFE_WRITE, resource,
+                    {"operation": "executeScript"},
+                    outputs={"result": result, "sessionId": session_id},
+                    value=result,
+                )
+            if command == "browser.screenshot":
+                save_path = str(inputs["savePath"])
+                full_page = inputs.get("fullPage", False)
+                import base64
+                if full_page:
+                    await self._run_bsk(
+                        session.evaluate,
+                        "document.body.style.overflow='hidden'"
+                    )
+                b64_data = await self._run_bsk(
+                    session.evaluate,
+                    "(() => { const c = document.createElement('canvas');"
+                    " c.width = document.documentElement.clientWidth;"
+                    " c.height = document.documentElement.clientHeight;"
+                    " return c.toDataURL('image/png').split(',')[1]; })()"
+                )
+                if b64_data:
+                    import os
+
+                    os.makedirs(os.path.dirname(save_path) or ".", exist_ok=True)
+                    data = base64.b64decode(b64_data)
+                    await asyncio.to_thread(
+                        lambda: open(save_path, "wb").write(data)
+                    )
+                return self._bsk_success(
+                    invocation, EffectKind.IDEMPOTENT_WRITE, resource,
+                    {"operation": "screenshot", "filePath": save_path},
+                    outputs={"filePath": save_path},
+                )
+            if command == "browser.select":
+                import json as _json
+                selector = str(inputs["selector"])
+                value = str(inputs["value"])
+                select_by = inputs.get("selectBy", "value")
+                count = await self._run_bsk(session.count, selector)
+                if count == 0:
+                    return self._bsk_not_found(inputs)
+                sel_js = _json.dumps(selector)
+                val_js = _json.dumps(value)
+                if select_by == "index":
+                    js = (f"(() => {{ const s = document.querySelector({sel_js});"
+                          f" s.selectedIndex = {int(value)};"
+                          f" s.dispatchEvent(new Event('change')); }})()")
+                elif select_by == "label":
+                    js = (f"(() => {{ const s = document.querySelector({sel_js});"
+                          f" for (const o of s.options) {{"
+                          f" if (o.text === {val_js}) {{"
+                          f" s.value = o.value; break; }} }}"
+                          f" s.dispatchEvent(new Event('change')); }})()")
+                else:
+                    js = (f"(() => {{ const s = document.querySelector({sel_js});"
+                          f" s.value = {val_js};"
+                          f" s.dispatchEvent(new Event('change')); }})()")
+                await self._run_bsk(session.evaluate, js)
+                effect_kind = EffectKind.UNSAFE_WRITE
+                resource += f":selector:{selector}"
+                return self._bsk_success(
+                    invocation, effect_kind, resource,
+                    {"operation": "selectOption", "matchedCount": count},
+                    outputs={"matchedCount": count, "sessionId": session_id},
                 )
             return CommandResult.failure(
                 ErrorCode.COMMAND_NOT_FOUND, f"Unsupported command: {command}"

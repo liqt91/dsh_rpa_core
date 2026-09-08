@@ -1,0 +1,17 @@
+{
+  "id": "desktop.win32.activateWindow",
+  "version": "1.0.0",
+  "executor": "desktop.win32",
+  "kind": "action",
+  "risk": "desktop-control",
+  "capabilities": ["desktop.control"],
+  "resources": ["desktop.session", "desktop.window"],
+  "stability": "stable",
+  "effect": {"kind": "unsafe-write", "replay": "unsafe", "idempotency": "none"},
+  "input_schema": {"type": "object", "required": ["sessionId"], "properties": {"sessionId": {"type": "string", "minLength": 1}}, "additionalProperties": false},
+  "output_schema": {"type": "object", "additionalProperties": false},
+  "errors": ["SESSION_NOT_FOUND", "SESSION_LOST", "EXECUTOR_FAILED"],
+  "implementation": {"handler": "desktop.win32:activate_window"},
+  "default_timeout_seconds": 15,
+  "retryable": false
+}

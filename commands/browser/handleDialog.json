@@ -1,0 +1,17 @@
+{
+  "id": "browser.handleDialog",
+  "version": "1.0.0",
+  "executor": "browser.playwright",
+  "kind": "action",
+  "risk": "browser-control",
+  "capabilities": ["browser.control"],
+  "resources": ["browser.session"],
+  "stability": "stable",
+  "effect": {"kind": "unsafe-write", "replay": "unsafe", "idempotency": "none"},
+  "input_schema": {"type": "object", "required": ["sessionId"], "properties": {"sessionId": {"type": "string"}, "action": {"type": "string", "enum": ["accept", "dismiss"], "description": "对话框操作", "default": "accept"}, "promptText": {"type": "string", "description": "prompt 对话框的输入文本"}}, "additionalProperties": false},
+  "output_schema": {"type": "object", "additionalProperties": false},
+  "errors": ["SESSION_NOT_FOUND", "CANCELLED", "EXECUTOR_FAILED"],
+  "implementation": {"handler": "browser.playwright:handleDialog"},
+  "default_timeout_seconds": 10,
+  "retryable": false
+}

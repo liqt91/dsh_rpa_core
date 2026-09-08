@@ -476,7 +476,8 @@ const SEMANTIC_GROUPS = [
   {
     label: "元素操作", icon: "play", color: "blue",
     member: (id) => ["browser.click", "browser.input", "browser.getText",
-                    "browser.queryAll", "browser.waitFor"].includes(id),
+                    "browser.queryAll", "browser.waitFor", "browser.hover",
+                    "browser.executeScript", "browser.screenshot", "browser.select"].includes(id),
   },
   {
     label: "数据处理", icon: "data", color: "green",
@@ -488,9 +489,24 @@ const SEMANTIC_GROUPS = [
                     "desktop.win32.attachWindow", "desktop.win32.closeSession"].includes(id),
   },
   {
+    label: "桌面窗口", icon: "window", color: "orange",
+    member: (id) => ["desktop.activateWindow", "desktop.setWindowState",
+                    "desktop.setWindowVisible", "desktop.moveWindow",
+                    "desktop.resizeWindow", "desktop.getWindowTitle",
+                    "desktop.win32.activateWindow", "desktop.win32.setWindowState",
+                    "desktop.win32.setWindowVisible", "desktop.win32.moveWindow",
+                    "desktop.win32.resizeWindow", "desktop.win32.getWindowTitle"].includes(id),
+  },
+  {
     label: "桌面控件", icon: "desktop", color: "cyan",
     member: (id) => id.startsWith("desktop.")
-                && !id.endsWith("attachWindow") && !id.endsWith("closeSession"),
+                && !id.endsWith("attachWindow") && !id.endsWith("closeSession")
+                && !["desktop.activateWindow", "desktop.setWindowState",
+                     "desktop.setWindowVisible", "desktop.moveWindow",
+                     "desktop.resizeWindow", "desktop.getWindowTitle",
+                     "desktop.win32.activateWindow", "desktop.win32.setWindowState",
+                     "desktop.win32.setWindowVisible", "desktop.win32.moveWindow",
+                     "desktop.win32.resizeWindow", "desktop.win32.getWindowTitle"].includes(id),
   },
 ];
 
@@ -1229,7 +1245,8 @@ function setWith(node, key, value) {
 }
 
 // 采集画布中所有「创建会话」的 lifecycle 节点（output 含 sessionId），供 session 引用下拉用。
-function collectSessionNodes() {
+// filterResourceType: 可选，传入时只返回 output_schema 含该 resourceType 的节点。
+function collectSessionNodes(filterResourceType) {
   const out = [];
   const visit = (container) => {
     const lists = [];
@@ -1242,7 +1259,14 @@ function collectSessionNodes() {
         if (n.type === "action") {
           const m = manifestOf(n.command);
           const outProps = m && m.output_schema ? (m.output_schema.properties || {}) : {};
-          if (outProps.sessionId) out.push({ id: n.id, command: n.command, zh: commandName(n.command) });
+          if (outProps.sessionId) {
+            // 按 resourceType 过滤：只显示匹配类型的生产者
+            if (filterResourceType) {
+              const rt = outProps.resourceType;
+              if (!rt || rt.const !== filterResourceType) continue;
+            }
+            out.push({ id: n.id, command: n.command, zh: commandName(n.command) });
+          }
         } else {
           visit(n);
         }
@@ -1270,12 +1294,24 @@ function schemaField(node, key, propSchema, required) {
   }
   if (key === "sessionId") {
     // 会话引用字段：绑定创建会话的节点输出即可，无需手填。
+    // 按当前命令的 resources 确定资源类型过滤：browser.session→webPage, desktop.session→windowHandle
+    const curManifest = manifestOf(node.command);
+    const curResources = curManifest && curManifest.resources ? curManifest.resources : [];
+    let filterRT = null;
+    if (curResources.includes("browser.session")) filterRT = "webPage";
+    else if (curResources.includes("desktop.session")) filterRT = "windowHandle";
+
     const pickWrap = document.createElement("div");
     pickWrap.className = "session-pick-row";
     const sel = document.createElement("select");
     sel.className = "session-pick";
-    sel.innerHTML = '<option value="">— 引用创建会话的节点 —</option>';
-    for (const s of collectSessionNodes()) {
+    const sessionNodes = collectSessionNodes(filterRT);
+    if (sessionNodes.length === 0) {
+      sel.innerHTML = '<option value="">— 无匹配的会话节点 —</option>';
+    } else {
+      sel.innerHTML = '<option value="">— 引用创建会话的节点 —</option>';
+    }
+    for (const s of sessionNodes) {
       const opt = document.createElement("option");
       opt.value = s.id;
       opt.textContent = `${s.zh}（${s.id}）`;

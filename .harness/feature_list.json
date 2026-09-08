@@ -161,6 +161,31 @@
       "id": "editor-interactions",
       "title": "Editor interaction polish: resizable panels, bottom element library tabs, capture/run UX",
       "passes": true
+    },
+    {
+      "id": "command-params-phase1",
+      "title": "Command param enrichment: sessionId resourceType tagging + existing command parameter additions from Yingdao analysis",
+      "passes": false
+    },
+    {
+      "id": "command-new-batch1",
+      "title": "New commands batch 1: browser.hover, desktop.activateWindow/setWindowState/setWindowVisible/moveWindow/resizeWindow/getWindowTitle/getSelectedText",
+      "passes": true
+    },
+    {
+      "id": "command-new-batch2",
+      "title": "New commands batch 2: browser.executeScript/screenshot/select, desktop.screenshot/select/drag",
+      "passes": true
+    },
+    {
+      "id": "command-new-batch3",
+      "title": "New commands batch 3: browser.upload/download/handleDialog, desktop.getWindowList",
+      "passes": true
+    },
+    {
+      "id": "var-system",
+      "title": "User variable system: ActionNode.output_name + scopes.variables + ${var_name} reference",
+      "passes": false
     }
   ]
 }

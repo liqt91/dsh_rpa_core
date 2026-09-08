@@ -56,6 +56,13 @@ class BskSession:
     def click(self, selector: str) -> None:
         self._client.click(self._require(), selector)
 
+    def hover(self, selector: str) -> None:
+        import json
+        self.evaluate(
+            f"(() => {{ const el = document.querySelector({json.dumps(selector)});"
+            " if (el) el.dispatchEvent(new MouseEvent('mouseover', {bubbles:true})); }})()"
+        )
+
     def fill(self, selector: str, text: str) -> None:
         self._client.fill(self._require(), selector, text)
 

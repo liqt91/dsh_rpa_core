@@ -31,7 +31,7 @@
     },
     "additionalProperties": false
   },
-  "output_schema": {"type": "object", "required": ["sessionId"], "properties": {"sessionId": {"type": "string"}}, "additionalProperties": false},
+  "output_schema": {"type": "object", "required": ["sessionId", "resourceType"], "properties": {"sessionId": {"type": "string"}, "resourceType": {"type": "string", "const": "webPage", "description": "资源类型标签：webPage=浏览器网页对象，windowHandle=桌面窗口句柄"}}, "additionalProperties": false},
   "errors": ["EXECUTOR_FAILED", "TIMEOUT", "CANCELLED"],
   "implementation": {"handler": "browser.playwright:launch"},
   "default_timeout_seconds": 30,
