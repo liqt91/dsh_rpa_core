@@ -475,6 +475,31 @@ def test_editor_extension_dialog_shows_guide_for_both_browsers(server_no_extensi
         browser.close()
 
 
+def test_editor_empty_canvas_full_area_drop(server):
+    """空画布时整块区域都是可拖放画布：拖到虚线框外的空白区也能追加到根。"""
+    base = f"http://127.0.0.1:{server.port}"
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
+        page.goto(f"{base}/")
+        page.wait_for_selector('[data-command="browser.launch"]')
+        # 空画布占位撑满整块
+        empty = page.locator("#canvas > li.drop-empty")
+        wrap_h = page.evaluate("document.getElementById('canvas-wrap').clientHeight")
+        empty_h = empty.evaluate("el => el.getBoundingClientRect().height")
+        assert empty_h >= wrap_h * 0.6, (
+            f"empty placeholder should fill canvas: {empty_h} vs wrap {wrap_h}"
+        )
+
+        # 拖指令到画布区底部空白（虚线框外）→ 仍追加成功
+        source = page.locator('[data-command="browser.launch"]')
+        wrap = page.locator("#canvas-wrap")
+        wb = wrap.bounding_box()
+        source.drag_to(wrap, target_position={"x": wb["width"] / 2, "y": wb["height"] - 20})
+        page.wait_for_selector('#canvas li[data-node="launch"]')
+        browser.close()
+
+
 def test_editor_resizable_panels_persist(server):
     base = f"http://127.0.0.1:{server.port}"
     with sync_playwright() as p:

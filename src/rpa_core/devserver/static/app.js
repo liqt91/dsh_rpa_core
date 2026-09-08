@@ -714,6 +714,8 @@ function clearDropMarkers() {
   for (const el of document.querySelectorAll("#canvas li.drop-empty")) {
     el.classList.remove("drop-into");
   }
+  const wrap = $("canvas-wrap");
+  if (wrap) wrap.classList.remove("drop-root-hint");
 }
 
 function handleDragEnd() {
@@ -773,6 +775,7 @@ function handleCanvasDragOver(e) {
   const drop = rootEndDrop();
   if (dropAllowed(drop.containerPath)) {
     pendingDrop = drop;
+    $("canvas-wrap").classList.add("drop-root-hint");
     e.dataTransfer.dropEffect = dragState.type === "new" ? "copy" : "move";
   } else {
     e.dataTransfer.dropEffect = "none";
@@ -2223,11 +2226,13 @@ async function init() {
   await refreshOpenList();
   newWorkflow();
   $("palette-filter").addEventListener("input", renderPalette);
-  const canvas = $("canvas");
-  canvas.addEventListener("dragover", handleCanvasDragOver);
-  canvas.addEventListener("drop", handleCanvasDrop);
-  canvas.addEventListener("dragleave", (e) => {
-    if (e.target === canvas) clearDropMarkers();
+  // 画布 = 整块 canvas-wrap（含节点外的空白区）：拖放监听绑在 wrap 上，
+  // 空画布/空白区落点走 rootEndDrop 兜底（追加到根末尾）。
+  const canvasArea = $("canvas-wrap");
+  canvasArea.addEventListener("dragover", handleCanvasDragOver);
+  canvasArea.addEventListener("drop", handleCanvasDrop);
+  canvasArea.addEventListener("dragleave", (e) => {
+    if (e.target === canvasArea) clearDropMarkers();
   });
   requestAnimationFrame(autoScrollTick);
   $("btn-new").addEventListener("click", () => { newWorkflow(); showCompileMessage("已新建草稿", true); });
