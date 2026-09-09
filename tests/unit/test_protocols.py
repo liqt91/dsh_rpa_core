@@ -22,7 +22,7 @@ def workflow(root):
 def test_catalog_is_loaded_and_digest_is_stable():
     first = catalog()
     second = catalog()
-    assert len(first) == 55
+    assert len(first) == 54
     assert first.digest == second.digest
     with pytest.raises(TypeError):
         first._commands["x"] = None
@@ -33,9 +33,9 @@ def test_compile_accepts_explicit_references_and_capabilities():
         workflow(
             {
                 "type": "action",
-                "id": "launch",
-                "command": "browser.launch",
-                "with": {"headless": True},
+                "id": "open",
+                "command": "browser.navigate",
+                "with": {"url": "https://x", "headless": True},
             }
         ),
         {"browser.control", "process.start"},
@@ -66,7 +66,12 @@ def test_compile_rejects_unknown_command_and_forward_step():
                                 "selector": "h1",
                             },
                         },
-                        {"type": "action", "id": "future", "command": "browser.launch", "with": {}},
+                        {
+                            "type": "action",
+                            "id": "future",
+                            "command": "browser.navigate",
+                            "with": {"url": "https://x"},
+                        },
                     ],
                 }
             ),
@@ -75,7 +80,7 @@ def test_compile_rejects_unknown_command_and_forward_step():
 
 
 def test_compile_accepts_output_name_reference_after_declaration():
-    """launch 配 output_name 后，后续节点可引用 ${web_page1} 与其子字段。"""
+    """打开网页配 output_aliases 后，后续节点可引用 ${web}（sessionId 整值）与其子字段。"""
     plan = WorkflowCompiler(catalog()).compile(
         workflow(
             {
@@ -84,27 +89,27 @@ def test_compile_accepts_output_name_reference_after_declaration():
                 "children": [
                     {
                         "type": "action",
-                        "id": "launch",
-                        "command": "browser.launch",
-                        "output_name": "web_page1",
-                        "with": {"headless": True},
+                        "id": "open",
+                        "command": "browser.navigate",
+                        "output_aliases": {"sessionId": "web"},
+                        "with": {"url": "https://x", "headless": True},
                     },
                     {
                         "type": "action",
-                        "id": "nav",
-                        "command": "browser.navigate",
-                        "with": {"sessionId": "${web_page1.sessionId}", "url": "https://x"},
+                        "id": "read",
+                        "command": "browser.getText",
+                        "with": {"sessionId": "${web}", "selector": "h1"},
                     },
                 ],
             }
         ),
         {"browser.control", "browser.read", "process.start"},
     )
-    assert plan.workflow.root.children[0].output_name == "web_page1"
+    assert plan.workflow.root.children[0].output_aliases == {"sessionId": "web"}
 
 
 def test_compile_rejects_forward_variable_reference():
-    """引用在 output_name 声明节点之前出现 → 报 forward variable reference。"""
+    """引用在 output_aliases 声明节点之前出现 → 报 forward variable reference。"""
     compiler = WorkflowCompiler(catalog())
     with pytest.raises(WorkflowCompileError, match="Forward variable reference"):
         compiler.compile(
@@ -115,16 +120,16 @@ def test_compile_rejects_forward_variable_reference():
                     "children": [
                         {
                             "type": "action",
-                            "id": "nav",
-                            "command": "browser.navigate",
-                            "with": {"sessionId": "${web_page1.sessionId}", "url": "https://x"},
+                            "id": "read",
+                            "command": "browser.getText",
+                            "with": {"sessionId": "${web}", "selector": "h1"},
                         },
                         {
                             "type": "action",
-                            "id": "launch",
-                            "command": "browser.launch",
-                            "output_name": "web_page1",
-                            "with": {"headless": True},
+                            "id": "open",
+                            "command": "browser.navigate",
+                            "output_aliases": {"sessionId": "web"},
+                            "with": {"url": "https://x"},
                         },
                     ],
                 }
@@ -145,15 +150,15 @@ def test_compile_rejects_undeclared_variable_reference():
                     "children": [
                         {
                             "type": "action",
-                            "id": "launch",
-                            "command": "browser.launch",
-                            "with": {"headless": True},
+                            "id": "open",
+                            "command": "browser.navigate",
+                            "with": {"url": "https://x", "headless": True},
                         },
                         {
                             "type": "action",
-                            "id": "nav",
-                            "command": "browser.navigate",
-                            "with": {"sessionId": "${nope}", "url": "https://x"},
+                            "id": "read",
+                            "command": "browser.getText",
+                            "with": {"sessionId": "${nope}", "selector": "h1"},
                         },
                     ],
                 }

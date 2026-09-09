@@ -1,16 +1,65 @@
 {
   "id": "browser.navigate",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "executor": "browser.playwright",
   "kind": "action",
   "risk": "browser-control",
-  "capabilities": ["browser.control"],
+  "capabilities": ["browser.control", "process.start"],
   "resources": ["browser.session"],
   "stability": "stable",
-  "effect": {"kind": "unsafe-write", "replay": "unsafe", "idempotency": "none"},
-  "input_schema": {"type": "object", "required": ["sessionId", "url"], "properties": {"sessionId": {"type": "string"}, "url": {"type": "string"}, "timeoutMs": {"type": "integer", "minimum": 1}}, "additionalProperties": false},
-  "output_schema": {"type": "object", "required": ["url", "sessionId"], "properties": {"url": {"type": "string"}, "sessionId": {"type": "string"}}, "additionalProperties": false},
-  "errors": ["SESSION_NOT_FOUND", "TIMEOUT", "CANCELLED", "EXECUTOR_FAILED"],
+  "effect": {"kind": "session", "replay": "unsafe", "idempotency": "none"},
+  "input_schema": {
+    "type": "object",
+    "required": ["url"],
+    "properties": {
+      "url": {"type": "string", "x-fx": true},
+      "timeoutMs": {"type": "integer", "minimum": 1},
+      "channel": {
+        "type": "string",
+        "enum": ["chromium", "chrome", "msedge"],
+        "description": "浏览器类型（对标影刀浏览器类型）：chromium=内置浏览器（默认）；chrome/msedge=复用本机安装的 Chrome/Edge"
+      },
+      "args": {
+        "type": "array",
+        "items": {"type": "string"},
+        "description": "命令行参数（可为空）：必须是目标浏览器支持的命令行，如 --incognito、--start-maximized、--user-data-dir=..."
+      },
+      "headless": {"type": "boolean"},
+      "userAgent": {"type": "string", "minLength": 1},
+      "userDataDir": {"type": "string", "minLength": 1},
+      "transport": {
+        "type": "string",
+        "enum": ["playwright", "bsk"],
+        "description": "playwright=独立自动化浏览器（默认，headless/userAgent/userDataDir 生效）；bsk=BrowserSkill 单扩展，复用用户真实已登录浏览器（Agent Window），能力差异：CSS selector only、仅主 frame（iframe 不支持）；headless/userAgent/userDataDir 在 bsk 下被忽略"
+      },
+      "browserInstanceId": {
+        "type": "string",
+        "minLength": 1,
+        "description": "bsk 传输专用：多浏览器在线时指定实例（bsk browsers 查询）"
+      },
+      "keepOpen": {
+        "type": "boolean",
+        "description": "bsk 传输专用：流程结束后不 session.stop（Agent Window 留给 bsk daemon 持有，空闲超时兜底，可继续人工操作）；默认 false = 流程结束即回收"
+      }
+    },
+    "additionalProperties": false,
+    "x-depends": {
+      "channel": {"transport": "playwright"},
+      "args": {"transport": "playwright"},
+      "headless": {"transport": "playwright"},
+      "userAgent": {"transport": "playwright"},
+      "userDataDir": {"transport": "playwright"},
+      "browserInstanceId": {"transport": "bsk"},
+      "keepOpen": {"transport": "bsk"}
+    }
+  },
+  "output_schema": {"type": "object", "required": ["sessionId", "url", "resourceType"], "properties": {"sessionId": {"type": "string"}, "url": {"type": "string"}, "resourceType": {"type": "string", "const": "webPage", "description": "资源类型标签：webPage=浏览器网页对象，windowHandle=桌面窗口句柄"}}, "additionalProperties": false},
+  "x-outputs": {
+    "sessionId": {"label": "保存网页对象到", "primary": true},
+    "url": {"label": "最终网址", "hidden": true},
+    "resourceType": {"label": "资源类型", "hidden": true}
+  },
+  "errors": ["TIMEOUT", "CANCELLED", "EXECUTOR_FAILED"],
   "implementation": {"handler": "browser.playwright:navigate"},
   "default_timeout_seconds": 30,
   "retryable": false

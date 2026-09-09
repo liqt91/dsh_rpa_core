@@ -67,9 +67,10 @@ class PlaywrightExecutor(CommandExecutor):
         command = invocation.command_id
         inputs = invocation.inputs
         try:
-            if command == "browser.launch":
+            if command == "browser.navigate":
+                # 打开网页 = 启动浏览器 + 导航（不单独维护浏览器实例指令）
                 if inputs.get("transport") == "bsk":
-                    return await self._launch_bsk(invocation, inputs, started)
+                    return await self._open_bsk(invocation, inputs, started)
                 runtime = await self._ensure_runtime()
                 user_agent = inputs.get("userAgent")
                 user_data_dir = inputs.get("userDataDir")
@@ -77,6 +78,12 @@ class PlaywrightExecutor(CommandExecutor):
                     "headless": bool(inputs.get("headless", True)),
                     "ignore_default_args": ["--enable-automation"],
                 }
+                channel = inputs.get("channel")
+                if channel and channel != "chromium":
+                    launch_kwargs["channel"] = str(channel)
+                extra_args = inputs.get("args")
+                if extra_args:
+                    launch_kwargs["args"] = [str(a) for a in extra_args]
                 if user_agent:
                     launch_kwargs["user_agent"] = str(user_agent)
                 if user_data_dir:
@@ -93,14 +100,34 @@ class PlaywrightExecutor(CommandExecutor):
                     page = await context.new_page()
                 session_id = str(uuid.uuid4())
                 self._sessions[session_id] = (browser, context, page)
+                timeout_ms = int(inputs.get("timeoutMs", 30_000))
+                try:
+                    await page.goto(
+                        str(inputs["url"]), wait_until="domcontentloaded", timeout=timeout_ms
+                    )
+                except Exception:
+                    # 导航失败必须释放本次新建的浏览器（规则 11：attempt 资源先释放再退出）
+                    self._sessions.pop(session_id, None)
+                    try:
+                        if browser is not None:
+                            await browser.close()
+                        else:
+                            await context.close()
+                    except Exception:
+                        pass
+                    raise
                 return CommandResult.success(
-                    outputs={"sessionId": session_id, "resourceType": "webPage"},
+                    outputs={
+                        "sessionId": session_id,
+                        "url": page.url,
+                        "resourceType": "webPage",
+                    },
                     effects=[
                         EffectRecord.committed(
                             invocation,
                             kind=EffectKind.SESSION,
                             resource=f"browser.session:{session_id}",
-                            details={"operation": "launch"},
+                            details={"operation": "navigate", "url": page.url},
                         )
                     ],
                     diagnostics={"durationMs": int((time.monotonic() - started) * 1000)},
@@ -112,24 +139,9 @@ class PlaywrightExecutor(CommandExecutor):
                     command, invocation, inputs, session_ref, started, cancellation
                 )
 
-            session_id, browser, _context, page = self._session(inputs)
+            session_id, browser, context, page = self._session(inputs)
             timeout_ms = int(inputs.get("timeoutMs", 30_000))
 
-            if command == "browser.navigate":
-                await page.goto(
-                    str(inputs["url"]), wait_until="domcontentloaded", timeout=timeout_ms
-                )
-                return CommandResult.success(
-                    outputs={"url": page.url, "sessionId": session_id},
-                    effects=[
-                        EffectRecord.committed(
-                            invocation,
-                            kind=EffectKind.UNSAFE_WRITE,
-                            resource=f"browser.session:{session_id}:url",
-                            details={"operation": "navigate", "url": page.url},
-                        )
-                    ],
-                )
             if command == "browser.click":
                 locator = page.locator(str(inputs["selector"]))
                 count = await locator.count()
@@ -489,9 +501,10 @@ class PlaywrightExecutor(CommandExecutor):
 
     # -- bsk 传输（M14a：用户真实浏览器，能力差异 CSS only / 仅主 frame） -----
 
-    async def _launch_bsk(
+    async def _open_bsk(
         self, invocation: CommandInvocation, inputs: dict[str, Any], started: float
     ) -> CommandResult:
+        """打开网页（bsk 传输）= session start + navigate 一步完成。"""
         session = BskSession(
             browser_instance_id=(
                 str(inputs["browserInstanceId"]) if inputs.get("browserInstanceId") else None
@@ -506,14 +519,29 @@ class PlaywrightExecutor(CommandExecutor):
         keep_open = bool(inputs.get("keepOpen", False))
         self._bsk_sessions[session_id] = session
         self._bsk_keep_open[session_id] = keep_open
+        try:
+            final_url = await self._run_bsk(session.navigate, str(inputs["url"]))
+        except BskError as exc:
+            # 导航失败：回收刚建的 bsk 会话（规则 11）
+            self._bsk_sessions.pop(session_id, None)
+            self._bsk_keep_open.pop(session_id, None)
+            try:
+                await self._run_bsk(session.stop)
+            except BskError:
+                pass
+            return CommandResult.failure(ErrorCode.EXECUTOR_FAILED, str(exc))
         return CommandResult.success(
-            outputs={"sessionId": session_id, "resourceType": "webPage"},
+            outputs={
+                "sessionId": session_id,
+                "url": final_url,
+                "resourceType": "webPage",
+            },
             effects=[
                 EffectRecord.committed(
                     invocation,
                     kind=EffectKind.SESSION,
                     resource=f"browser.session:{session_id}",
-                    details={"operation": "launch", "transport": "bsk"},
+                    details={"operation": "navigate", "transport": "bsk", "url": final_url},
                 )
             ],
             diagnostics={"durationMs": int((time.monotonic() - started) * 1000)},
@@ -536,15 +564,6 @@ class PlaywrightExecutor(CommandExecutor):
         resource = f"browser.session:{session_id}"
 
         try:
-            if command == "browser.navigate":
-                final_url = await self._run_bsk(session.navigate, str(inputs["url"]))
-                effect_kind = EffectKind.UNSAFE_WRITE
-                resource += ":url"
-                return self._bsk_success(
-                    invocation, effect_kind, resource,
-                    {"operation": "navigate", "url": final_url},
-                    outputs={"url": final_url, "sessionId": session_id},
-                )
             if command == "browser.click":
                 count = await self._run_bsk(session.count, selector)
                 if count == 0:

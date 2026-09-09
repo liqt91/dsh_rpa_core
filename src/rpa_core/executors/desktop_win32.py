@@ -57,10 +57,16 @@ class Win32DesktopExecutor(CommandExecutor):
                     self._thread_pool = ThreadPoolExecutor(
                         max_workers=1, thread_name_prefix="rpa-desktop-win32"
                     )
+                op_timeout_ms = invocation.inputs.get("operationTimeoutMs")
+                operation_timeout = (
+                    float(op_timeout_ms) / 1000.0
+                    if op_timeout_ms
+                    else self.operation_timeout_seconds
+                )
                 operation = asyncio.get_running_loop().run_in_executor(
                     self._thread_pool, self._execute_sync, invocation
                 )
-                return await asyncio.wait_for(operation, timeout=self.operation_timeout_seconds)
+                return await asyncio.wait_for(operation, timeout=operation_timeout)
         except asyncio.CancelledError:
             raise
         except TimeoutError:

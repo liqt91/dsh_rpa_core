@@ -130,24 +130,24 @@ def test_variable_completion_dropdown(server):
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()
         page.goto(f"{base}/")
-        page.wait_for_selector('[data-command="browser.launch"]')
+        page.wait_for_selector('[data-command="browser.navigate"]')
 
-        # 加 launch + navigate，选中 navigate，url 字段输 ${ 触发补全
-        page.click('[data-command="browser.launch"]')
-        page.wait_for_selector('#canvas li[data-node="launch"]')
+        # 加 navigate + click，选中 click，selector 字段输 ${ 触发补全
         page.click('[data-command="browser.navigate"]')
         page.wait_for_selector('#canvas li[data-node="navigate"]')
+        page.click('[data-command="browser.click"]')
+        page.wait_for_selector('#canvas li[data-node="click"]')
 
-        url_field = page.locator('#props-body input[data-field="url"]')
-        url_field.click()
-        url_field.type("${")
+        selector_field = page.locator('#props-body input[data-field="selector"]')
+        selector_field.click()
+        selector_field.type("${")
         page.wait_for_selector(".ref-completion .ref-item")
         items = page.locator(".ref-completion .ref-item").all_text_contents()
-        assert any("steps.launch.outputs.sessionId" in i for i in items), items
+        assert any("steps.navigate.outputs.sessionId" in i for i in items), items
         # 选中 sessionId 项补全
         page.locator(".ref-completion .ref-item",
-                     has_text="steps.launch.outputs.sessionId").first.click()
-        assert "steps.launch.outputs.sessionId" in url_field.input_value()
+                     has_text="steps.navigate.outputs.sessionId").first.click()
+        assert "steps.navigate.outputs.sessionId" in selector_field.input_value()
         browser.close()
 
 
@@ -159,20 +159,20 @@ def test_run_status_highlight(server):
     artifacts.mkdir(parents=True)
     (artifacts / "events.jsonl").write_text(
         '{"seq":1,"run_id":"run-x","type":"runStarted","node_id":null,"payload":{}}\n'
-        '{"seq":2,"run_id":"run-x","type":"stepStarted","node_id":"launch","payload":{}}\n'
-        '{"seq":3,"run_id":"run-x","type":"stepCompleted","node_id":"launch","payload":{}}\n',
+        '{"seq":2,"run_id":"run-x","type":"stepStarted","node_id":"navigate","payload":{}}\n'
+        '{"seq":3,"run_id":"run-x","type":"stepCompleted","node_id":"navigate","payload":{}}\n',
         encoding="utf-8",
     )
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()
         page.goto(f"{base}/")
-        page.wait_for_selector('[data-command="browser.launch"]')
-        page.click('[data-command="browser.launch"]')
-        page.wait_for_selector('#canvas li[data-node="launch"]')
+        page.wait_for_selector('[data-command="browser.navigate"]')
+        page.click('[data-command="browser.navigate"]')
+        page.wait_for_selector('#canvas li[data-node="navigate"]')
 
         page.click("#btn-run-status")
-        page.wait_for_selector('#canvas li[data-node="launch"].run-succeeded')
+        page.wait_for_selector('#canvas li[data-node="navigate"].run-succeeded')
         browser.close()
 
 

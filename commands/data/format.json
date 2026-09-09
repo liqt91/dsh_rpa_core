@@ -23,6 +23,9 @@
     "properties": {"text": {"type": "string"}},
     "additionalProperties": false
   },
+  "x-outputs": {
+    "text": {"label": "格式化文本", "primary": true}
+  },
   "errors": ["INVALID_INPUT", "TIMEOUT", "CANCELLED"],
   "implementation": {"handler": "python.worker:format"},
   "default_timeout_seconds": 15,

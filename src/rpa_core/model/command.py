@@ -102,6 +102,14 @@ class CommandManifest(BaseModel):
     implementation: Implementation
     default_timeout_seconds: float = Field(default=30.0, gt=0, le=3600)
     retryable: bool = False
+    x_outputs: dict[str, dict[str, Any]] | None = Field(
+        default=None,
+        alias="x-outputs",
+        description="输出字段元数据，用于 UI 显示别名输入框",
+    )
+    x_fx: list[str] | None = Field(default=None, alias="x-fx")
+    x_python: list[str] | None = Field(default=None, alias="x-python")
+    x_depends: dict[str, dict[str, Any]] | None = Field(default=None, alias="x-depends")
 
     @model_validator(mode="after")
     def validate_retry_policy(self) -> "CommandManifest":

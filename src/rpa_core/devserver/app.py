@@ -125,17 +125,25 @@ class DevServerApp:
         commands = []
         for command_id in sorted(self._catalog):
             manifest = self._catalog[command_id]
-            commands.append(
-                {
-                    "id": manifest.id,
-                    "version": manifest.version,
-                    "kind": manifest.kind.value,
-                    "effect": manifest.effect.model_dump(mode="json"),
-                    "input_schema": manifest.input_schema,
-                    "output_schema": manifest.output_schema,
-                    "errors": [error.value for error in manifest.errors],
-                }
-            )
+            entry = {
+                "id": manifest.id,
+                "version": manifest.version,
+                "kind": manifest.kind.value,
+                "executor": manifest.executor,
+                "risk": manifest.risk.value,
+                "capabilities": manifest.capabilities,
+                "resources": manifest.resources,
+                "stability": manifest.stability.value,
+                "effect": manifest.effect.model_dump(mode="json"),
+                "input_schema": manifest.input_schema,
+                "output_schema": manifest.output_schema,
+                "errors": [error.value for error in manifest.errors],
+                "retryable": manifest.retryable,
+                "default_timeout_seconds": manifest.default_timeout_seconds,
+            }
+            if manifest.x_outputs:
+                entry["x-outputs"] = manifest.x_outputs
+            commands.append(entry)
         return {"digest": self._catalog.digest, "commands": commands}
 
     def latest_run_events(self) -> dict:

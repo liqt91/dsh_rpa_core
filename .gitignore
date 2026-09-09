@@ -16,3 +16,7 @@ _tmp_*/
 
 # 本地 agent 技能目录
 /.agents/
+
+# Node.js
+node_modules/
+frontend/dist/

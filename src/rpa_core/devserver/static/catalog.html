@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>指令清单 · rpa_core</title>
+<style>
+:root { --fg:#1f2328; --muted:#656d76; --faint:#8c959f; --line:#d0d7de; --bg:#f6f8fa;
+  --blue:#0969da; --green:#1a7f37; --purple:#8250df; --orange:#bc4c00; --bad:#cf222e; }
+* { box-sizing: border-box; }
+body { margin: 0; font: 14px/1.6 -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif; color: var(--fg); background: var(--bg); }
+header.top { position: sticky; top: 0; z-index: 5; background: #fff; border-bottom: 1px solid var(--line); padding: 10px 20px; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+header.top h1 { font-size: 16px; margin: 0; }
+header.top .meta { color: var(--muted); font-size: 12px; }
+header.top input { flex: 1; min-width: 220px; padding: 6px 10px; border: 1px solid var(--line); border-radius: 6px; font-size: 13px; }
+header.top button { padding: 5px 10px; border: 1px solid var(--line); background: #fff; border-radius: 6px; cursor: pointer; font-size: 12px; }
+header.top button:hover { background: var(--bg); }
+.wrap { max-width: 1080px; margin: 16px auto 60px; padding: 0 16px; }
+.legend { background: #fff; border: 1px solid var(--line); border-radius: 8px; padding: 10px 14px; font-size: 12px; color: var(--muted); margin-bottom: 16px; }
+.legend b { color: var(--fg); }
+.legend code { background: var(--bg); padding: 1px 5px; border-radius: 4px; }
+h2.group { font-size: 14px; margin: 22px 0 8px; color: var(--muted); display: flex; align-items: center; gap: 8px; }
+h2.group .count { font-weight: 400; color: var(--faint); }
+.cmd { background: #fff; border: 1px solid var(--line); border-radius: 8px; margin-bottom: 8px; overflow: hidden; }
+.cmd > summary { cursor: pointer; padding: 10px 14px; display: flex; align-items: center; gap: 10px; list-style: none; flex-wrap: wrap; }
+.cmd > summary::-webkit-details-marker { display: none; }
+.cmd > summary:hover { background: var(--bg); }
+.cmd .zh { font-weight: 600; }
+.cmd .id { font-family: Consolas, monospace; font-size: 12px; color: var(--muted); }
+.cmd .caret { color: var(--faint); font-size: 11px; transition: transform .15s; }
+.cmd[open] .caret { transform: rotate(90deg); }
+.badge { font-size: 11px; padding: 1px 7px; border-radius: 10px; border: 1px solid var(--line); color: var(--muted); white-space: nowrap; }
+.badge.kind-action { color: var(--blue); border-color: var(--blue); }
+.badge.kind-query { color: var(--green); border-color: var(--green); }
+.badge.kind-transform { color: var(--purple); border-color: var(--purple); }
+.badge.kind-lifecycle { color: var(--orange); border-color: var(--orange); }
+.badge.effect { border-style: dashed; }
+.badge.hidden-mark { color: var(--faint); }
+.cmd .detail { border-top: 1px solid var(--line); padding: 12px 14px; }
+.kv { display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 12px; color: var(--muted); margin-bottom: 10px; }
+.kv b { color: var(--fg); font-weight: 600; }
+.kv code { font-family: Consolas, monospace; }
+h3.ptitle { font-size: 12px; margin: 12px 0 6px; padding: 3px 8px; border-radius: 4px; display: inline-block; }
+h3.ptitle.in { background: rgba(9,105,218,.08); border-left: 3px solid var(--blue); }
+h3.ptitle.out { background: rgba(26,127,55,.08); border-left: 3px solid var(--green); }
+table { border-collapse: collapse; width: 100%; font-size: 12.5px; }
+th, td { text-align: left; padding: 5px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { color: var(--muted); font-weight: 600; font-size: 12px; }
+td.mono, code { font-family: Consolas, monospace; }
+.req { color: var(--bad); font-weight: 700; }
+.desc { color: var(--muted); white-space: pre-wrap; }
+.primary-mark { color: var(--green); font-weight: 700; }
+.hidden-row { color: var(--faint); }
+.hidden-row td { color: var(--faint); }
+.none { color: var(--faint); font-size: 12px; padding: 4px 0; }
+.errs { font-size: 12px; color: var(--muted); }
+.errs code { background: var(--bg); padding: 1px 5px; border-radius: 4px; margin-right: 4px; }
+.dep { color: var(--purple); font-size: 11px; }
+</style>
+</head>
+<body>
+<header class="top">
+  <h1>指令清单</h1>
+  <span class="meta" id="meta">加载中…</span>
+  <input id="q" placeholder="搜索：中文名 / id / 参数字段…">
+  <button id="expand-all">全部展开</button>
+  <button id="collapse-all">全部收起</button>
+  <button onclick="location.href='/'">← 返回编辑器</button>
+</header>
+<div class="wrap">
+  <div class="legend">
+    <b>图例</b>：
+    <code>kind</code> 命令类别（动作/查询/变换/生命周期）；
+    <code>effect</code> 副作用等级（无副作用/只读/幂等写入/不可重试写入/会话）；
+    参数表 <span class="req">*</span> = 必填；<span class="dep">仅当…</span> = 字段联动（x-depends）；
+    输出区 <span class="primary-mark">★</span> = 主输出；灰色行 = hidden 内部输出（不给别名框，运行值仍可 ${} 引用）。
+    类型写法：<code>string / number / integer / boolean / array&lt;T&gt; / object / any</code>。
+  </div>
+  <div id="list"></div>
+</div>
+<script src="/static/i18n.js"></script>
+<script>
+"use strict";
+const I18N = window.RPA_I18N || {};
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const cmdName = (id) => (I18N.commands && I18N.commands[id]) || id;
+const kindName = (k) => (I18N.kinds && I18N.kinds[k]) || k;
+const effectName = (e) => (I18N.effects && I18N.effects[e]) || e;
+const fieldName = (cmd, key) =>
+  (I18N.commandFields && I18N.commandFields[cmd] && I18N.commandFields[cmd][key])
+  || (I18N.fields && I18N.fields[key]) || key;
+
+const GROUPS = [
+  { match: (id) => id.startsWith("browser."), label: "浏览器" },
+  { match: (id) => id.startsWith("desktop.win32."), label: "桌面（Win32）" },
+  { match: (id) => id.startsWith("desktop."), label: "桌面（UIA）" },
+  { match: (id) => id.startsWith("data."), label: "数据处理" },
+];
+
+function typeOf(s) {
+  if (!s) return "any";
+  if (s.enum) return s.enum.join(" | ");
+  if (s.const !== undefined) return `const ${s.const}`;
+  if (s.type === "array") return `array<${typeOf(s.items || {})}>`;
+  return s.type || "any";
+}
+
+function inputRows(cmd, schema) {
+  const props = (schema && schema.properties) || {};
+  const required = new Set((schema && schema.required) || []);
+  const deps = (schema && schema["x-depends"]) || {};
+  const keys = Object.keys(props);
+  if (!keys.length) return '<div class="none">无输入参数</div>';
+  const rows = keys.map((k) => {
+    const p = props[k];
+    const dep = deps[k]
+      ? `<div class="dep">仅当 ${esc(Object.keys(deps[k])[0])} = ${esc(Object.values(deps[k])[0])}</div>` : "";
+    const def = p.default !== undefined ? `<div class="desc">默认 ${esc(JSON.stringify(p.default))}</div>` : "";
+    return `<tr>
+      <td class="mono">${esc(k)}${required.has(k) ? ' <span class="req">*</span>' : ""}</td>
+      <td>${esc(fieldName(cmd, k))}</td>
+      <td class="mono">${esc(typeOf(p))}</td>
+      <td class="desc">${esc(p.description || "")}${def}${dep}</td>
+    </tr>`;
+  }).join("");
+  return `<table><tr><th>字段</th><th>名称</th><th>类型</th><th>说明</th></tr>${rows}</table>`;
+}
+
+function outputRows(cmd, schema, xOutputs) {
+  const props = (schema && schema.properties) || {};
+  const keys = Object.keys(props);
+  if (!keys.length) return '<div class="none">无输出</div>';
+  const meta = xOutputs || {};
+  const rows = keys.map((k) => {
+    const m = meta[k] || {};
+    const label = m.label || fieldName(cmd, k);
+    const marks = [
+      m.primary ? '<span class="primary-mark">★主输出</span>' : "",
+      m.hidden ? '<span class="badge hidden-mark">hidden 内部</span>' : "",
+    ].filter(Boolean).join(" ");
+    return `<tr class="${m.hidden ? "hidden-row" : ""}">
+      <td class="mono">${esc(k)}</td>
+      <td>${esc(label)} ${marks}</td>
+      <td class="mono">${esc(typeOf(props[k]))}</td>
+      <td class="desc">${esc((props[k] && props[k].description) || "")}</td>
+    </tr>`;
+  }).join("");
+  return `<table><tr><th>字段</th><th>别名框标签</th><th>类型</th><th>说明</th></tr>${rows}</table>`;
+}
+
+function cmdCard(c) {
+  const e = c.effect || {};
+  const badges = [
+    `<span class="badge kind-${esc(c.kind)}">${esc(kindName(c.kind))}</span>`,
+    `<span class="badge effect">${esc(effectName(e.kind))} · replay:${esc(e.replay)}</span>`,
+    c.retryable ? '<span class="badge">可重试</span>' : "",
+    c.stability !== "stable" ? `<span class="badge">${esc(c.stability)}</span>` : "",
+  ].filter(Boolean).join("");
+  return `<details class="cmd" data-search="${esc((c.id + " " + cmdName(c.id)).toLowerCase())}">
+    <summary>
+      <span class="caret">▶</span>
+      <span class="zh">${esc(cmdName(c.id))}</span>
+      <span class="id">${esc(c.id)} <span class="desc">v${esc(c.version)}</span></span>
+      ${badges}
+    </summary>
+    <div class="detail">
+      <div class="kv">
+        <span>executor <code>${esc(c.executor)}</code></span>
+        <span>risk <b>${esc(c.risk)}</b></span>
+        <span>默认超时 <b>${esc(c.default_timeout_seconds)}s</b></span>
+        ${(c.capabilities || []).length ? `<span>能力 <code>${c.capabilities.map(esc).join(", ")}</code></span>` : ""}
+        ${(c.resources || []).length ? `<span>资源 <code>${c.resources.map(esc).join(", ")}</code></span>` : ""}
+      </div>
+      <h3 class="ptitle in">输入参数</h3>
+      ${inputRows(c.id, c.input_schema)}
+      <h3 class="ptitle out">输出参数</h3>
+      ${outputRows(c.id, c.output_schema, c["x-outputs"])}
+      <h3 class="ptitle">错误码</h3>
+      <div class="errs">${(c.errors || []).map((x) => `<code>${esc(x)}</code>`).join("") || "无"}</div>
+    </div>
+  </details>`;
+}
+
+async function main() {
+  const res = await fetch("/api/catalog");
+  const data = await res.json();
+  const commands = data.commands || [];
+  $("meta").textContent = `共 ${commands.length} 条 · digest ${String(data.digest || "").slice(0, 12)}… · 实时来自 /api/catalog`;
+  const list = $("list");
+  const used = new Set();
+  let html = "";
+  for (const g of GROUPS) {
+    const members = commands.filter((c) => g.match(c.id) && !used.has(c.id));
+    members.forEach((c) => used.add(c.id));
+    if (!members.length) continue;
+    html += `<h2 class="group">${esc(g.label)} <span class="count">${members.length} 条</span></h2>`;
+    html += members.map(cmdCard).join("");
+  }
+  const rest = commands.filter((c) => !used.has(c.id));
+  if (rest.length) {
+    html += `<h2 class="group">其他 <span class="count">${rest.length} 条</span></h2>`;
+    html += rest.map(cmdCard).join("");
+  }
+  list.innerHTML = html;
+
+  $("q").addEventListener("input", () => {
+    const q = $("q").value.trim().toLowerCase();
+    document.querySelectorAll(".cmd").forEach((el) => {
+      const hay = q && el.textContent.toLowerCase();
+      el.style.display = !q || el.dataset.search.includes(q) || hay.includes(q) ? "" : "none";
+      if (q && el.style.display !== "none") el.open = true;
+    });
+    document.querySelectorAll("h2.group").forEach((h) => {
+      let el = h.nextElementSibling, any = false;
+      while (el && el.classList && el.classList.contains("cmd")) {
+        if (el.style.display !== "none") any = true;
+        el = el.nextElementSibling;
+      }
+      h.style.display = any ? "" : "none";
+    });
+  });
+  $("expand-all").addEventListener("click", () =>
+    document.querySelectorAll(".cmd").forEach((el) => { el.open = true; }));
+  $("collapse-all").addEventListener("click", () =>
+    document.querySelectorAll(".cmd").forEach((el) => { el.open = false; }));
+}
+
+main().catch((err) => { $("meta").textContent = "加载失败: " + err; });
+</script>
+</body>
+</html>

@@ -10,6 +10,9 @@
   "effect": {"kind": "read", "replay": "safe", "idempotency": "none"},
   "input_schema": {"type": "object", "properties": {"titlePattern": {"type": "string", "description": "窗口标题匹配模式（可选，为空返回所有可见窗口）"}, "matchMode": {"type": "string", "enum": ["exact", "contains", "regex"], "description": "匹配方式", "default": "contains"}}, "additionalProperties": false},
   "output_schema": {"type": "object", "required": ["windows"], "properties": {"windows": {"type": "array", "items": {"type": "object", "properties": {"title": {"type": "string"}, "className": {"type": "string"}, "processId": {"type": "integer"}, "sessionId": {"type": "string"}}, "required": ["title", "className", "processId"]}}}, "additionalProperties": false},
+  "x-outputs": {
+    "windows": {"label": "窗口列表", "primary": true}
+  },
   "errors": ["PLATFORM_UNSUPPORTED", "EXECUTOR_FAILED"],
   "implementation": {"handler": "desktop.uia:get_window_list"},
   "default_timeout_seconds": 15,

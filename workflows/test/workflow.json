@@ -1,0 +1,44 @@
+{
+  "schema_version": "1.0",
+  "id": "draft",
+  "name": "未命名工作流",
+  "inputs": {},
+  "root": {
+    "type": "sequence",
+    "id": "root",
+    "children": [
+      {
+        "type": "action",
+        "id": "openPage",
+        "command": "browser.navigate",
+        "with": {
+          "url": ""
+        },
+        "output_aliases": {
+          "sessionId": "web_page1"
+        },
+        "_exprModes": {}
+      },
+      {
+        "type": "action",
+        "id": "input",
+        "command": "browser.input",
+        "with": {
+          "sessionId": "${web_page1}",
+          "mode": "fill",
+          "append": false,
+          "pressEnter": false,
+          "keyIntervalMs": 50,
+          "clickBeforeInput": false,
+          "postDelayMs": 0,
+          "selector": "",
+          "text": ""
+        },
+        "_exprModes": {
+          "text": "python",
+          "selector": "fx"
+        }
+      }
+    ]
+  }
+}

@@ -5,14 +5,13 @@
 // tests/contract/test_editor_i18n.py 用门禁锁同步：改目录不改本表 = full gate 红。
 window.RPA_I18N = {
   commands: {
-    "browser.launch": "启动浏览器",
     "browser.navigate": "打开网页",
     "browser.click": "点击元素",
     "browser.input": "输入文本",
     "browser.waitFor": "等待元素出现",
     "browser.getText": "读取元素文本",
     "browser.queryAll": "抓取列表文本",
-    "browser.close": "关闭浏览器",
+    "browser.close": "关闭网页",
     "browser.hover": "鼠标悬停",
     "data.writeJson": "写入 JSON 文件",
     "data.writeText": "写入文本文件",
@@ -160,7 +159,9 @@ window.RPA_I18N = {
     menuPath: "菜单路径",
     foundIndex: "第 N 个匹配",
     headless: "无头模式",
+    channel: "浏览器类型",
     userAgent: "User-Agent",
+    userDataDir: "用户数据目录",
     transport: "传输方式",
     browserInstanceId: "浏览器实例 ID",
     keepOpen: "结束后保持打开",
@@ -169,6 +170,10 @@ window.RPA_I18N = {
     automationId: "自动化 ID",
     controlType: "控件类型",
     name: "名称",
+  },
+  // 按命令覆盖的字段标签：同名参数在不同命令下含义不同（如 args）
+  commandFields: {
+    "browser.navigate": { args: "命令行参数" },
   },
   glossary: {
     action: "动作：对外部世界执行一次操作（点击、写入等）",

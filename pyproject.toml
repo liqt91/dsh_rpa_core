@@ -42,6 +42,8 @@ testpaths = ["tests"]
 [tool.ruff]
 target-version = "py312"
 line-length = 100
+# scripts/ 是一次性调研抓取脚本（非产品代码），不入 lint 门禁
+exclude = ["scripts/"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "ASYNC"]

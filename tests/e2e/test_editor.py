@@ -50,26 +50,26 @@ def test_editor_vertical_slice(server):
         page = browser.new_page()
         page.goto(f"{base}/")
 
-        page.wait_for_selector('[data-command="browser.launch"]')
+        page.wait_for_selector('[data-command="browser.waitFor"]')
         assert page.locator("#palette-list li").count() >= 20
 
-        page.click('[data-command="browser.launch"]')
-        page.wait_for_selector('#canvas li[data-node="launch"]')
+        page.click('[data-command="browser.waitFor"]')
+        page.wait_for_selector('#canvas li[data-node="waitFor"]')
         page.click('[data-command="browser.navigate"]')
         page.wait_for_selector('#canvas li[data-node="navigate"]')
 
         page.locator('[data-command="browser.close"]').drag_to(
-            page.locator('#canvas li[data-node="launch"]'),
+            page.locator('#canvas li[data-node="waitFor"]'),
             target_position={"x": 30, "y": 3},
         )
         page.wait_for_selector('#canvas li[data-node="close"]')
-        assert _canvas_order(page) == ["close", "launch", "navigate"]
+        assert _canvas_order(page) == ["close", "waitFor", "navigate"]
 
         page.locator('#canvas li[data-node="navigate"]').drag_to(
-            page.locator('#canvas li[data-node="launch"]'),
+            page.locator('#canvas li[data-node="waitFor"]'),
             target_position={"x": 30, "y": 3},
         )
-        assert _canvas_order(page) == ["close", "navigate", "launch"]
+        assert _canvas_order(page) == ["close", "navigate", "waitFor"]
 
         page.click('#canvas li[data-node="navigate"]')
         url_field = page.locator('#props-body input[data-field="url"]')
@@ -91,16 +91,16 @@ def test_editor_vertical_slice(server):
         page.wait_for_selector("#compile-panel .ok")
 
         page.reload()
-        page.wait_for_selector('[data-command="browser.launch"]')
+        page.wait_for_selector('[data-command="browser.waitFor"]')
         page.select_option("#open-select", "editor-e2e")
         page.wait_for_selector('#canvas li[data-node="navigate"]')
         assert page.locator("#canvas li[data-node]").count() == 3
-        assert _canvas_order(page) == ["close", "navigate", "launch"]
+        assert _canvas_order(page) == ["close", "navigate", "waitFor"]
         browser.close()
 
     doc = _read_workflow(base, "editor-e2e")
     commands = [child["command"] for child in doc["root"]["children"]]
-    assert commands == ["browser.close", "browser.navigate", "browser.launch"]
+    assert commands == ["browser.close", "browser.navigate", "browser.waitFor"]
     assert doc["root"]["children"][1]["with"]["url"] == "http://127.0.0.1:9/"
 
 
@@ -110,25 +110,25 @@ def test_editor_nested_containers(server):
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()
         page.goto(f"{base}/")
-        page.wait_for_selector('[data-command="browser.launch"]')
+        page.wait_for_selector('[data-command="browser.waitFor"]')
 
         # 拖入 if 容器（空画布落点）
         page.locator('[data-flow="if"]').drag_to(page.locator("#canvas li.hint"))
         page.wait_for_selector('#canvas li[data-node="if"]')
 
-        # then 空分支落点拖入 launch，else 空分支落点拖入 navigate
-        page.locator('[data-command="browser.launch"]').drag_to(
+        # then 空分支落点拖入 waitFor，else 空分支落点拖入 navigate
+        page.locator('[data-command="browser.waitFor"]').drag_to(
             page.locator('li[data-node="if"] li.drop-empty').first
         )
-        page.wait_for_selector('li[data-node="if"] li[data-node="launch"]')
+        page.wait_for_selector('li[data-node="if"] li[data-node="waitFor"]')
         page.locator('[data-command="browser.navigate"]').drag_to(
             page.locator('li[data-node="if"] li.drop-empty').first
         )
         page.wait_for_selector('li[data-node="if"] li[data-node="navigate"]')
 
-        # 嵌套 forEach 拖入 then 分支 launch 之后
+        # 嵌套 forEach 拖入 then 分支 waitFor 之后
         page.locator('[data-flow="forEach"]').drag_to(
-            page.locator('li[data-node="if"] li[data-node="launch"]'),
+            page.locator('li[data-node="if"] li[data-node="waitFor"]'),
             target_position={"x": 60, "y": 30},
         )
         page.wait_for_selector('li[data-node="if"] li[data-node="forEach"]')
@@ -138,9 +138,9 @@ def test_editor_nested_containers(server):
         page.wait_for_selector("#compile-panel .ok")
 
         page.reload()
-        page.wait_for_selector('[data-command="browser.launch"]')
+        page.wait_for_selector('[data-command="browser.waitFor"]')
         page.select_option("#open-select", "nested-e2e")
-        page.wait_for_selector('li[data-node="if"] li[data-node="launch"]')
+        page.wait_for_selector('li[data-node="if"] li[data-node="waitFor"]')
         page.wait_for_selector('li[data-node="if"] li[data-node="navigate"]')
         page.wait_for_selector('li[data-node="if"] li[data-node="forEach"]')
         browser.close()
@@ -148,7 +148,7 @@ def test_editor_nested_containers(server):
     doc = _read_workflow(base, "nested-e2e")
     if_node = doc["root"]["children"][0]
     assert if_node["type"] == "if"
-    assert if_node["then"][0]["command"] == "browser.launch"
+    assert if_node["then"][0]["command"] == "browser.waitFor"
     assert if_node["then"][1]["type"] == "forEach"
     assert if_node["else"][0]["command"] == "browser.navigate"
 
@@ -241,23 +241,23 @@ def test_editor_multi_select_batch(server):
         page = browser.new_page()
         page.on("dialog", lambda dialog: dialog.accept())
         page.goto(f"{base}/")
-        page.wait_for_selector('[data-command="browser.launch"]')
+        page.wait_for_selector('[data-command="browser.waitFor"]')
 
-        page.click('[data-command="browser.launch"]')
+        page.click('[data-command="browser.waitFor"]')
         page.click('[data-command="browser.navigate"]')
         page.click('[data-command="browser.close"]')
         page.wait_for_selector('#canvas li[data-node="close"]')
 
-        page.click('#canvas li[data-node="launch"]')
+        page.click('#canvas li[data-node="waitFor"]')
         page.click('#canvas li[data-node="navigate"]', modifiers=["Shift"])
         assert page.locator("#canvas li.multi-selected").count() == 2
 
         page.click("#btn-down")
         page.wait_for_function(
             "() => Array.from(document.querySelectorAll('#canvas li[data-node]'))"
-            ".map(e => e.dataset.node).join(',') === 'close,launch,navigate'"
+            ".map(e => e.dataset.node).join(',') === 'close,waitFor,navigate'"
         )
-        assert _canvas_order(page) == ["close", "launch", "navigate"]
+        assert _canvas_order(page) == ["close", "waitFor", "navigate"]
 
         # 非连续多选：批量移动不可用
         page.click('#canvas li[data-node="close"]')
@@ -270,7 +270,7 @@ def test_editor_multi_select_batch(server):
         page.wait_for_function(
             "() => document.querySelectorAll('#canvas li[data-node]').length === 1"
         )
-        assert _canvas_order(page) == ["launch"]
+        assert _canvas_order(page) == ["waitFor"]
 
         # 容器删除连带子树：确认对话框接受后整树移除
         page.click('[data-flow="if"]')
@@ -280,7 +280,7 @@ def test_editor_multi_select_batch(server):
         page.wait_for_function(
             "() => document.querySelectorAll('#canvas li[data-node]').length === 1"
         )
-        assert _canvas_order(page) == ["launch"]
+        assert _canvas_order(page) == ["waitFor"]
         browser.close()
 
 
@@ -290,12 +290,12 @@ def test_editor_chinese_display_and_no_horizontal_scroll(server):
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()
         page.goto(f"{base}/")
-        page.wait_for_selector('[data-command="browser.launch"]')
+        page.wait_for_selector('[data-command="browser.waitFor"]')
 
         # 命令面板：中文名 + 英文副标；无横向滚动条
         palette_text = page.locator("#palette-list").inner_text()
-        assert "启动浏览器" in palette_text
-        assert "browser.launch" in palette_text
+        assert "打开网页" in palette_text
+        assert "browser.navigate" in palette_text
         overflow = page.evaluate(
             "() => { const el = document.getElementById('palette-list');"
             " return el.scrollWidth - el.clientWidth; }"
@@ -303,12 +303,12 @@ def test_editor_chinese_display_and_no_horizontal_scroll(server):
         assert overflow <= 1
 
         # 画布节点：中文标题 + 英文副标
-        page.click('[data-command="browser.launch"]')
-        page.wait_for_selector('#canvas li[data-node="launch"] .item-title')
-        title = page.locator('#canvas li[data-node="launch"] .item-title')
-        assert title.inner_text() == "启动浏览器"
-        sub = page.locator('#canvas li[data-node="launch"] .item-sub')
-        assert "browser.launch" in sub.inner_text()
+        page.click('[data-command="browser.navigate"]')
+        page.wait_for_selector('#canvas li[data-node="navigate"] .item-title')
+        title = page.locator('#canvas li[data-node="navigate"] .item-title')
+        assert title.inner_text() == "打开网页"
+        sub = page.locator('#canvas li[data-node="navigate"] .item-sub')
+        assert "browser.navigate" in sub.inner_text()
 
         # 控制流分支标签中文化
         page.click('[data-flow="if"]')
@@ -318,7 +318,7 @@ def test_editor_chinese_display_and_no_horizontal_scroll(server):
 
         # 属性面板字段中文化（命令参数的英文键降为副标）
         page.click('[data-command="browser.navigate"]')
-        page.wait_for_selector('#canvas li[data-node="navigate"]')
+        page.wait_for_selector('#canvas li[data-node="navigate2"]')
         labels = page.locator("#props-body .field label").all_inner_texts()
         assert any(label.startswith("网址") for label in labels)
         assert any("url" in label for label in labels)
@@ -345,25 +345,25 @@ def test_editor_multi_action_bar(server):
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()
         page.goto(f"{base}/")
-        page.wait_for_selector('[data-command="browser.launch"]')
+        page.wait_for_selector('[data-command="browser.waitFor"]')
 
         # 无选中时悬浮条隐藏
         assert page.locator("#multi-bar").is_hidden()
 
-        page.click('[data-command="browser.launch"]')
+        page.click('[data-command="browser.waitFor"]')
         page.click('[data-command="browser.navigate"]')
         page.wait_for_selector('#canvas li[data-node="navigate"]')
 
         # 单选时出现，含批量按钮
-        page.click('#canvas li[data-node="launch"]')
+        page.click('#canvas li[data-node="waitFor"]')
         assert page.locator("#multi-bar").is_visible()
         assert page.locator("#multi-count").inner_text() == "1 个已选"
 
         # 悬浮条复制按钮复制选中子树，随后粘贴产生 id 重映射的副本
         page.click("#btn-copy")
         page.keyboard.press("Control+V")
-        page.wait_for_selector('#canvas li[data-node="launch2"]')
-        assert _canvas_order(page) == ["launch", "launch2", "navigate"]
+        page.wait_for_selector('#canvas li[data-node="waitFor2"]')
+        assert _canvas_order(page) == ["waitFor", "waitFor2", "navigate"]
         browser.close()
 
 
@@ -482,7 +482,7 @@ def test_editor_empty_canvas_full_area_drop(server):
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()
         page.goto(f"{base}/")
-        page.wait_for_selector('[data-command="browser.launch"]')
+        page.wait_for_selector('[data-command="browser.waitFor"]')
         # 空画布占位撑满整块
         empty = page.locator("#canvas > li.drop-empty")
         wrap_h = page.evaluate("document.getElementById('canvas-wrap').clientHeight")
@@ -492,11 +492,11 @@ def test_editor_empty_canvas_full_area_drop(server):
         )
 
         # 拖指令到画布区底部空白（虚线框外）→ 仍追加成功
-        source = page.locator('[data-command="browser.launch"]')
+        source = page.locator('[data-command="browser.waitFor"]')
         wrap = page.locator("#canvas-wrap")
         wb = wrap.bounding_box()
         source.drag_to(wrap, target_position={"x": wb["width"] / 2, "y": wb["height"] - 20})
-        page.wait_for_selector('#canvas li[data-node="launch"]')
+        page.wait_for_selector('#canvas li[data-node="waitFor"]')
         browser.close()
 
 
@@ -506,7 +506,7 @@ def test_editor_resizable_panels_persist(server):
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()
         page.goto(f"{base}/")
-        page.wait_for_selector('[data-command="browser.launch"]')
+        page.wait_for_selector('[data-command="browser.waitFor"]')
 
         def palette_width():
             return page.evaluate("document.getElementById('palette').offsetWidth")
@@ -523,7 +523,7 @@ def test_editor_resizable_panels_persist(server):
 
         # 刷新后宽度保持（localStorage 记忆）
         page.reload()
-        page.wait_for_selector('[data-command="browser.launch"]')
+        page.wait_for_selector('[data-command="browser.waitFor"]')
         restored = palette_width()
         assert abs(restored - after) <= 2, f"width should persist: {after} -> {restored}"
         browser.close()
@@ -541,7 +541,7 @@ def test_editor_bottom_element_dock_resizable(server):
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()
         page.goto(f"{base}/")
-        page.wait_for_selector('[data-command="browser.launch"]')
+        page.wait_for_selector('[data-command="browser.waitFor"]')
         page.fill("#file-name", "bottom-dock-flow")
         page.wait_for_selector("#bottom-panels #elements-list li.element-item")
         assert "searchBox" in page.locator("#bottom-panels").inner_text()
@@ -563,7 +563,7 @@ def test_editor_bottom_element_dock_resizable(server):
         assert after > before, f"dock should grow: {before} -> {after}"
 
         page.reload()
-        page.wait_for_selector('[data-command="browser.launch"]')
+        page.wait_for_selector('[data-command="browser.waitFor"]')
         page.fill("#file-name", "bottom-dock-flow")
         page.wait_for_selector("#bottom-panels #elements-list li.element-item")
         restored = bottom_height()
@@ -578,7 +578,7 @@ def test_editor_element_auto_refresh_on_poll(server):
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()
         page.goto(f"{base}/")
-        page.wait_for_selector('[data-command="browser.launch"]')
+        page.wait_for_selector('[data-command="browser.waitFor"]')
         page.fill("#file-name", "auto-refresh-flow")
         page.wait_for_selector("#bottom-panels #elements-list li.elements-empty")
 
@@ -608,7 +608,7 @@ def test_editor_run_params_dialog_when_inputs_declared(server):
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()
         page.goto(f"{base}/")
-        page.wait_for_selector('[data-command="browser.launch"]')
+        page.wait_for_selector('[data-command="browser.waitFor"]')
         # 打开 param-flow（open-select 触发 openWorkflow，填充 state.workflow.inputs）
         page.select_option("#open-select", "param-flow")
         page.wait_for_function(
@@ -709,82 +709,91 @@ def test_editor_palette_tree_collapse(server):
         browser.close()
 
 
-def test_editor_session_id_binds_to_launch_node(server):
-    """sessionId 字段无需手填：属性面板下拉绑定 launch 节点输出引用。"""
+def test_editor_session_id_binds_to_navigate_node(server):
+    """sessionId 字段无需手填：属性面板下拉绑定「打开网页」节点的网页对象输出。"""
     base = f"http://127.0.0.1:{server.port}"
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()
         page.goto(f"{base}/")
         page.wait_for_selector(
-            '[data-command="browser.launch"], [data-command="browser.click"]'
+            '[data-command="browser.navigate"], [data-command="browser.click"]'
         )
         # 展开类别（搜索强制展开）
         page.fill("#palette-filter", "browser")
         page.wait_for_selector(
-            '[data-command="browser.launch"]:visible, [data-command="browser.click"]:visible'
+            '[data-command="browser.navigate"]:visible, [data-command="browser.click"]:visible'
         )
         page.fill("#palette-filter", "")
 
-        page.click('[data-command="browser.launch"]')
-        page.wait_for_selector('#canvas li[data-node="launch"]')
+        page.click('[data-command="browser.navigate"]')
+        page.wait_for_selector('#canvas li[data-node="navigate"]')
         page.click('[data-command="browser.click"]')
         page.wait_for_selector('#canvas li[data-node="click"]')
 
         # 点 click 节点，属性面板 sessionId 字段应出现「引用创建会话的节点」下拉
         page.click('#canvas li[data-node="click"]')
         page.wait_for_selector("#props-body .session-pick")
-        # 下拉里有 launch 节点
+        # 下拉里有 navigate 节点
         options = page.eval_on_selector_all(
             "#props-body .session-pick option",
             "els => els.map(e=>e.value)",
         )
-        assert "launch" in options
-        # 选择 → sessionId 输入框填 `${steps.launch.outputs.sessionId}`
-        page.select_option("#props-body .session-pick", "launch")
+        assert "navigate" in options
+        # 选择 → sessionId 输入框填 `${steps.navigate.outputs.sessionId}`
+        page.select_option("#props-body .session-pick", "navigate")
         page.wait_for_function(
             "() => document.querySelector('#props-body input[data-field=\"sessionId\"]')"
-            ".value === '${steps.launch.outputs.sessionId}'"
+            ".value === '${steps.navigate.outputs.sessionId}'"
         )
         hint = page.locator("#props-body .field-hint")
         assert "引用" in hint.inner_text()
         browser.close()
 
 
-def test_editor_output_name_binds_session_variable(server):
-    """output_name 命名 launch 后，click 的 sessionId 下拉显示变量名并引用 ${name}.sessionId。"""
+def test_editor_output_alias_binds_session_variable(server):
+    """打开网页的「保存网页对象到」别名命名后，click 的 sessionId 下拉显示变量名并引用 ${别名}。"""
     base = f"http://127.0.0.1:{server.port}"
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()
         page.goto(f"{base}/")
         page.wait_for_selector(
-            '[data-command="browser.launch"], [data-command="browser.click"]'
+            '[data-command="browser.navigate"], [data-command="browser.click"]'
         )
         page.fill("#palette-filter", "browser")
         page.wait_for_selector(
-            '[data-command="browser.launch"]:visible, [data-command="browser.click"]:visible'
+            '[data-command="browser.navigate"]:visible, [data-command="browser.click"]:visible'
         )
         page.fill("#palette-filter", "")
 
-        page.click('[data-command="browser.launch"]')
-        page.wait_for_selector('#canvas li[data-node="launch"]')
-        # 点 launch，填输出变量名
-        page.click('#canvas li[data-node="launch"]')
-        page.wait_for_selector('#props-body input[data-field="输出变量名"]')
-        page.fill('#props-body input[data-field="输出变量名"]', "web_page1")
+        page.click('[data-command="browser.navigate"]')
+        page.wait_for_selector('#canvas li[data-node="navigate"]')
+        # 点 navigate，属性面板分「输入参数 / 输出参数」两区，输出区含「保存网页对象到」
+        page.click('#canvas li[data-node="navigate"]')
+        page.wait_for_selector('#props-body input[data-field="保存网页对象到"]')
+        sections = page.locator("#props-body .props-section").all_inner_texts()
+        assert any(s.startswith("输入参数") for s in sections), sections
+        assert any(s.startswith("输出参数") for s in sections), sections
+        # hidden 输出（最终网址/资源类型）不渲染别名框
+        assert page.locator('#props-body input[data-field="最终网址"]').count() == 0
+        assert page.locator('#props-body input[data-field="资源类型"]').count() == 0
+        # 输入区字段 label 在分区之后（网址在输入参数区）
+        labels = page.locator("#props-body .field label").all_inner_texts()
+        assert any(label.startswith("网址") for label in labels)
+        page.fill('#props-body input[data-field="保存网页对象到"]', "web_page1")
         page.wait_for_function(
-            "() => document.querySelector('#canvas li[data-node=\"launch\"]')"
+            "() => document.querySelector('#canvas li[data-node=\"navigate\"]')"
         )
 
         page.click('[data-command="browser.click"]')
         page.wait_for_selector('#canvas li[data-node="click"]')
         page.click('#canvas li[data-node="click"]')
         page.wait_for_selector("#props-body .session-pick")
-        # 下拉含变量命名的 launch，选中后 sessionId 引用子字段 ${web_page1.sessionId}
-        page.select_option("#props-body .session-pick", "launch")
+        # 下拉含别名命名的 navigate，选中后 sessionId 引用 ${web_page1}（别名即网页对象整值）
+        page.select_option("#props-body .session-pick", "navigate")
         page.wait_for_function(
             "() => document.querySelector('#props-body input[data-field=\"sessionId\"]')"
-            ".value === '${web_page1.sessionId}'"
+            ".value === '${web_page1}'"
         )
         browser.close()

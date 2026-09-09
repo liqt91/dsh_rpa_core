@@ -82,6 +82,35 @@ def _warmup_uia() -> None:
         pythoncom.CoUninitialize()
 
 
+def _force_foreground(title: str) -> None:
+    """强制把目标窗口置前台（AttachThreadInput 绕过前台锁）。
+
+    全量门禁内 UIA 用例排在一堆真实 Chromium e2e 之后，前台焦点常被残留窗口
+    占用；UIA SetFocus 只设置应用内键盘焦点，type_keys 的 SendInput 会落到前台
+    窗口 → 输入丢失（门禁内抖、单跑即过的根因）。运行前显式抢回前台。
+    """
+    import ctypes
+
+    user32 = ctypes.windll.user32
+    hwnd = user32.FindWindowW(None, title)
+    if not hwnd:
+        return
+    foreground = user32.GetForegroundWindow()
+    current_tid = ctypes.windll.kernel32.GetCurrentThreadId()
+    foreground_tid = user32.GetWindowThreadProcessId(foreground, None)
+    target_tid = user32.GetWindowThreadProcessId(hwnd, None)
+    user32.AttachThreadInput(current_tid, foreground_tid, True)
+    user32.AttachThreadInput(current_tid, target_tid, True)
+    try:
+        user32.ShowWindow(hwnd, 9)  # SW_RESTORE
+        user32.SetForegroundWindow(hwnd)
+        user32.SetActiveWindow(hwnd)
+        user32.SetFocus(hwnd)
+    finally:
+        user32.AttachThreadInput(current_tid, target_tid, False)
+        user32.AttachThreadInput(current_tid, foreground_tid, False)
+
+
 def _kill_demo_apps() -> None:
     subprocess.run(
         ["taskkill", "/F", "/IM", "RpaCoreDesktopDemo.exe"],
@@ -101,6 +130,8 @@ def _run_uia_workflow(tmp_path: Path, attempts: int = 1):
             await asyncio.to_thread(_wait_for_window, APP_TITLE)
             # 窗口已出现；先 warm-up UIA，避免 15s 命令超时被 ~60s 首启初始化掐断
             await asyncio.to_thread(_warmup_uia)
+            # 抢回前台焦点（全量套件内前置浏览器用例会占用前台，SendInput 需要）
+            await asyncio.to_thread(_force_foreground, APP_TITLE)
             catalog = load_catalog(ROOT / "commands")
             plan = WorkflowCompiler(catalog).compile(workflow, {"desktop.control"})
             registry = ExecutorRegistry({"desktop.uia": DesktopExecutor()})

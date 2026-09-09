@@ -3,6 +3,8 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 from rpa_core.executors import DesktopExecutor, Win32DesktopExecutor
 from rpa_core.model.command import CommandInvocation
 from rpa_core.model.desktop import DesktopLocator
@@ -183,3 +185,55 @@ def test_uia_and_win32_command_sets_diverge_only_in_win32_extras():
     win32 = {path.stem for path in (ROOT / "commands" / "desktop_win32").glob("*.json")}
     assert uia == set(SHARED_DESKTOP_COMMANDS)
     assert win32 - uia == {"hotkey", "menuSelect"}
+
+
+def test_uia_attach_does_not_trigger_full_desktop_enumeration():
+    """attachWindow exact 路径必须走 FindWindowW → UIAWrapper(handle) 构造，
+    禁止调用 Desktop(backend='uia').windows() 全桌面枚举（慢 UIA provider 可达 ~60s）。"""
+    if sys.platform != "win32":
+        pytest.skip("Windows-only")
+    from unittest.mock import MagicMock, patch
+
+    from rpa_core.executors.desktop import DesktopExecutor
+
+    executor = DesktopExecutor()
+    desktop_mock = MagicMock()
+    desktop_mock.windows.return_value = []
+
+    with patch("rpa_core.executors.desktop.ctypes") as ctypes_mock:
+        user32 = MagicMock()
+        ctypes_mock.windll.user32 = user32
+        user32.FindWindowW.return_value = 0  # 窗口不存在
+        ctypes_mock.c_ulong = MagicMock()
+        ctypes_mock.byref = MagicMock()
+
+        mocked_modules = {
+            "pywinauto": MagicMock(),
+            "pywinauto.controls": MagicMock(),
+            "pywinauto.controls.uiawrapper": MagicMock(),
+            "pywinauto.uia_element_info": MagicMock(),
+        }
+        with patch.dict("sys.modules", mocked_modules):
+            result = asyncio.run(executor.execute(
+                invocation("desktop.attachWindow", {"title": "test", "timeoutMs": 100}),
+                asyncio.Event(),
+            ))
+
+    assert result.error.code == "ELEMENT_NOT_FOUND"
+    user32.FindWindowW.assert_called()
+
+
+def test_uia_window_by_handle_does_not_enumerate_all_windows():
+    """_window_by_handle 必须用 UIAWrapper(UIAElementInfo(handle)) 直接构造，
+    禁止调用 Desktop(backend='uia').windows() 全桌面枚举。"""
+    if sys.platform != "win32":
+        pytest.skip("Windows-only")
+    from unittest.mock import MagicMock, patch
+
+    mock_wrapper = MagicMock()
+    mock_element_info = MagicMock()
+    with patch("pywinauto.controls.uiawrapper.UIAWrapper", return_value=mock_wrapper):
+        with patch("pywinauto.uia_element_info.UIAElementInfo", return_value=mock_element_info):
+            result = DesktopExecutor._window_by_handle(12345)
+
+    assert result is mock_wrapper

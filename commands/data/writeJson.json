@@ -10,6 +10,9 @@
   "effect": {"kind": "idempotent-write", "replay": "idempotent", "idempotency": "derived"},
   "input_schema": {"type": "object", "required": ["workspace", "path", "data"], "properties": {"workspace": {"type": "string", "minLength": 1}, "path": {"type": "string", "minLength": 1}, "data": {}}, "additionalProperties": false},
   "output_schema": {"type": "object", "required": ["path"], "properties": {"path": {"type": "string"}}, "additionalProperties": false},
+  "x-outputs": {
+    "path": {"label": "文件路径", "primary": true}
+  },
   "errors": ["CAPABILITY_DENIED", "SCRIPT_FAILED", "TIMEOUT", "CANCELLED"],
   "implementation": {"handler": "python.worker:write_json"},
   "default_timeout_seconds": 15,

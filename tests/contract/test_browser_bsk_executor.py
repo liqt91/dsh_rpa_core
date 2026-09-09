@@ -63,30 +63,50 @@ def _count_runner(count: int = 1):
 
 
 @pytest.mark.asyncio
-async def test_launch_bsk_returns_session_and_registers():
+async def test_navigate_bsk_returns_session_and_registers():
     executor = PlaywrightExecutor(bsk_runner=_count_runner())
     result = await executor.execute(
-        _invocation("browser.launch", {"transport": "bsk", "browserInstanceId": "edge1"}),
+        _invocation("browser.navigate", {"transport": "bsk", "browserInstanceId": "edge1", "url": "https://x.com"}),
         asyncio.Event(),
     )
     assert result.status == "success"
     session_id = result.outputs["sessionId"]
     assert session_id
     assert session_id in executor._bsk_sessions
+    assert result.outputs["url"] == "https://x.com"
+    assert result.outputs["resourceType"] == "webPage"
     assert result.effects[0].details["transport"] == "bsk"
     await executor.close()
 
 
 @pytest.mark.asyncio
-async def test_launch_default_stays_playwright():
+async def test_navigate_default_stays_playwright():
     """transport 缺省 → 不创建 bsk session（走 playwright 路径，headless 缺省）。"""
     executor = PlaywrightExecutor(bsk_runner=_count_runner())
     result = await executor.execute(
-        _invocation("browser.launch", {"headless": True}),
+        _invocation("browser.navigate", {"url": "about:blank", "headless": True}),
         asyncio.Event(),
     )
     assert result.status == "success"
     assert not executor._bsk_sessions
+    assert result.outputs["sessionId"] in executor._sessions
+    assert result.outputs["resourceType"] == "webPage"
+    await executor.close()
+
+
+@pytest.mark.asyncio
+async def test_navigate_playwright_accepts_channel_and_args():
+    """对标影刀「打开网页」：浏览器类型(channel) + 命令行参数(args) 透传 playwright。"""
+    executor = PlaywrightExecutor()
+    result = await executor.execute(
+        _invocation(
+            "browser.navigate",
+            {"url": "about:blank", "headless": True,
+             "channel": "chromium", "args": ["--window-size=800,600"]},
+        ),
+        asyncio.Event(),
+    )
+    assert result.status == "success"
     assert result.outputs["sessionId"] in executor._sessions
     await executor.close()
 
@@ -94,17 +114,12 @@ async def test_launch_default_stays_playwright():
 @pytest.mark.asyncio
 async def test_bsk_click_and_input_and_readback():
     executor = PlaywrightExecutor(bsk_runner=_count_runner())
-    launch = await executor.execute(
-        _invocation("browser.launch", {"transport": "bsk"}), asyncio.Event()
-    )
-    sid = launch.outputs["sessionId"]
-
-    nav = await executor.execute(
-        _invocation("browser.navigate", {"sessionId": sid, "url": "https://x.com"}),
+    open_page = await executor.execute(
+        _invocation("browser.navigate", {"transport": "bsk", "url": "https://x.com"}),
         asyncio.Event(),
     )
-    assert nav.status == "success"
-    assert nav.outputs["url"] == "https://x.com"
+    sid = open_page.outputs["sessionId"]
+    assert open_page.outputs["url"] == "https://x.com"
 
     click = await executor.execute(
         _invocation("browser.click", {"sessionId": sid, "selector": "#go"}),
@@ -144,10 +159,11 @@ async def test_bsk_click_and_input_and_readback():
 @pytest.mark.asyncio
 async def test_bsk_click_zero_match_is_element_not_found():
     executor = PlaywrightExecutor(bsk_runner=_count_runner(count=0))
-    launch = await executor.execute(
-        _invocation("browser.launch", {"transport": "bsk"}), asyncio.Event()
+    open_page = await executor.execute(
+        _invocation("browser.navigate", {"transport": "bsk", "url": "https://x.com"}),
+        asyncio.Event(),
     )
-    sid = launch.outputs["sessionId"]
+    sid = open_page.outputs["sessionId"]
     result = await executor.execute(
         _invocation("browser.click", {"sessionId": sid, "selector": "#missing"}),
         asyncio.Event(),
@@ -161,10 +177,11 @@ async def test_bsk_click_zero_match_is_element_not_found():
 @pytest.mark.asyncio
 async def test_bsk_wait_for_timeout_retryable():
     executor = PlaywrightExecutor(bsk_runner=_count_runner(count=0))
-    launch = await executor.execute(
-        _invocation("browser.launch", {"transport": "bsk"}), asyncio.Event()
+    open_page = await executor.execute(
+        _invocation("browser.navigate", {"transport": "bsk", "url": "https://x.com"}),
+        asyncio.Event(),
     )
-    sid = launch.outputs["sessionId"]
+    sid = open_page.outputs["sessionId"]
     result = await executor.execute(
         _invocation("browser.waitFor", {"sessionId": sid, "selector": "#never", "timeoutMs": 700}),
         asyncio.Event(),
@@ -178,10 +195,11 @@ async def test_bsk_wait_for_timeout_retryable():
 @pytest.mark.asyncio
 async def test_bsk_wait_for_cancelled():
     executor = PlaywrightExecutor(bsk_runner=_count_runner(count=0))
-    launch = await executor.execute(
-        _invocation("browser.launch", {"transport": "bsk"}), asyncio.Event()
+    open_page = await executor.execute(
+        _invocation("browser.navigate", {"transport": "bsk", "url": "https://x.com"}),
+        asyncio.Event(),
     )
-    sid = launch.outputs["sessionId"]
+    sid = open_page.outputs["sessionId"]
     cancellation = asyncio.Event()
     cancellation.set()
     result = await executor.execute(
@@ -214,10 +232,11 @@ async def test_bsk_session_gone_mid_command_maps_session_not_found():
         return {"ok": True}
 
     executor = PlaywrightExecutor(bsk_runner=runner)
-    launch = await executor.execute(
-        _invocation("browser.launch", {"transport": "bsk"}), asyncio.Event()
+    open_page = await executor.execute(
+        _invocation("browser.navigate", {"transport": "bsk", "url": "https://x.com"}),
+        asyncio.Event(),
     )
-    sid = launch.outputs["sessionId"]
+    sid = open_page.outputs["sessionId"]
     result = await executor.execute(
         _invocation("browser.click", {"sessionId": sid, "selector": "#go"}),
         asyncio.Event(),
@@ -229,13 +248,14 @@ async def test_bsk_session_gone_mid_command_maps_session_not_found():
 
 
 @pytest.mark.asyncio
-async def test_bsk_launch_failure_maps_executor_failed():
+async def test_bsk_open_failure_maps_executor_failed():
     def runner(*args: str) -> dict:
         return {"code": "not_found", "message": "no browsers online"}
 
     executor = PlaywrightExecutor(bsk_runner=runner)
     result = await executor.execute(
-        _invocation("browser.launch", {"transport": "bsk"}), asyncio.Event()
+        _invocation("browser.navigate", {"transport": "bsk", "url": "https://x.com"}),
+        asyncio.Event(),
     )
     assert result.status == "error"
     assert result.error.code == ErrorCode.EXECUTOR_FAILED
@@ -249,7 +269,8 @@ async def test_executor_close_stops_all_bsk_sessions():
     executor = PlaywrightExecutor(bsk_runner=runner)
     for _ in range(2):
         await executor.execute(
-            _invocation("browser.launch", {"transport": "bsk"}), asyncio.Event()
+            _invocation("browser.navigate", {"transport": "bsk", "url": "https://x.com"}),
+        asyncio.Event(),
         )
     assert len(executor._bsk_sessions) == 2
     await executor.close()
@@ -265,11 +286,12 @@ async def test_executor_close_keeps_keepopen_bsk_session():
     executor = PlaywrightExecutor(bsk_runner=runner)
     for _ in range(2):
         await executor.execute(
-            _invocation("browser.launch", {"transport": "bsk", "keepOpen": True}),
+            _invocation("browser.navigate", {"transport": "bsk", "keepOpen": True, "url": "https://x.com"}),
             asyncio.Event(),
         )
     await executor.execute(
-        _invocation("browser.launch", {"transport": "bsk"}), asyncio.Event()
+        _invocation("browser.navigate", {"transport": "bsk", "url": "https://x.com"}),
+        asyncio.Event(),
     )
     await executor.close()
     assert not executor._bsk_sessions  # keepOpen 会话仅从登记移除，不 stop
@@ -282,11 +304,11 @@ async def test_bsk_explicit_close_still_stops_keepopen_session():
     """keepOpen 不豁免显式 browser.close 命令（流程内显式关仍停）。"""
     runner = _count_runner()
     executor = PlaywrightExecutor(bsk_runner=runner)
-    launch = await executor.execute(
-        _invocation("browser.launch", {"transport": "bsk", "keepOpen": True}),
+    open_page = await executor.execute(
+        _invocation("browser.navigate", {"transport": "bsk", "keepOpen": True, "url": "https://x.com"}),
         asyncio.Event(),
     )
-    sid = launch.outputs["sessionId"]
+    sid = open_page.outputs["sessionId"]
     result = await executor.execute(
         _invocation("browser.close", {"sessionId": sid}), asyncio.Event()
     )

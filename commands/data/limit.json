@@ -26,6 +26,10 @@
     },
     "additionalProperties": false
   },
+  "x-outputs": {
+    "items": {"label": "数据列表", "primary": true},
+    "count": {"label": "数量"}
+  },
   "errors": ["INVALID_INPUT", "TIMEOUT", "CANCELLED"],
   "implementation": {"handler": "python.worker:limit"},
   "default_timeout_seconds": 15,

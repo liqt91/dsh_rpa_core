@@ -59,7 +59,7 @@ rpa_core/
 │  ├─ model/                  # workflow / command / runtime / capture / desktop 类型
 │  ├─ capture/                # 桌面 UIA hit-test、浏览器 picker 注入
 │  └─ devserver/              # 设计期 HTTP 服务 + 静态编辑器（见 docs/devserver.md）
-├─ commands/                  # 命令 manifest（JSON，id 如 browser.launch / desktop.win32.click）
+├─ commands/                  # 命令 manifest（JSON，id 如 browser.navigate / desktop.win32.click）
 ├─ workflows/                 # 每流程一个目录 <流程名>/workflow.json（可入版本库），
 │                             #   捕获元素作为流程资产存 <流程名>/elements/*.json
 ├─ examples/                  # 可运行示例（见下）
@@ -80,9 +80,9 @@ rpa_core/
   "root": {
     "type": "sequence",
     "children": [
-      { "type": "action", "id": "launch", "command": "browser.launch", "with": { "headless": true } },
+      { "type": "action", "id": "openPage", "command": "browser.navigate", "with": { "url": "http://127.0.0.1:8765/", "headless": true } },
       { "type": "action", "id": "input", "command": "browser.input",
-        "with": { "sessionId": "${steps.launch.outputs.sessionId}",
+        "with": { "sessionId": "${steps.openPage.outputs.sessionId}",
                   "selector": "#query", "text": "${inputs.keyword}" } },
       { "type": "action", "id": "save", "command": "data.writeJson",
         "with": { "workspace": "${inputs.workspace}", "path": "${inputs.outputPath}",
@@ -176,7 +176,7 @@ uv run python -m rpa_core.cli devserver
 | `api-usage` | 进程内 API 四步 + run→读证据→pause→resume |
 | `windows-desktop` / `uia-desktop` | 记事本 / WinForms 桌面垂直切片 |
 
-`browser.launch` 传输：`playwright`（默认，独立自动化浏览器）/ `bsk`（BrowserSkill 单扩展，复用用户真实已登录浏览器；能力差异 CSS only、仅主 frame；M14）。
+`browser.navigate`（打开网页）一步完成启动浏览器 + 导航，输出网页对象 `sessionId` 供后续命令引用；`browser.close`（关闭网页）回收。传输：`playwright`（默认，独立自动化浏览器）/ `bsk`（BrowserSkill 单扩展，复用用户真实已登录浏览器；能力差异 CSS only、仅主 frame；M14）。
 
 ## 测试与质量门禁
 

@@ -10,6 +10,9 @@
   "effect": {"kind": "idempotent-write", "replay": "idempotent", "idempotency": "derived"},
   "input_schema": {"type": "object", "required": ["sessionId", "savePath"], "properties": {"sessionId": {"type": "string"}, "savePath": {"type": "string", "minLength": 1, "description": "截图保存路径"}, "selector": {"type": "string", "description": "截取指定元素（可选，为空则截取整个页面）"}, "fullPage": {"type": "boolean", "description": "是否截取完整页面（含滚动区域）", "default": false}}, "additionalProperties": false},
   "output_schema": {"type": "object", "required": ["filePath"], "properties": {"filePath": {"type": "string"}}, "additionalProperties": false},
+  "x-outputs": {
+    "filePath": {"label": "截图路径", "primary": true}
+  },
   "errors": ["ELEMENT_NOT_FOUND", "SESSION_NOT_FOUND", "TIMEOUT", "CANCELLED", "EXECUTOR_FAILED"],
   "implementation": {"handler": "browser.playwright:screenshot"},
   "default_timeout_seconds": 30,

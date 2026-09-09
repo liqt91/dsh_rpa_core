@@ -60,10 +60,16 @@ class DesktopExecutor(CommandExecutor):
                     self._thread_pool = ThreadPoolExecutor(
                         max_workers=1, thread_name_prefix="rpa-desktop"
                     )
+                op_timeout_ms = invocation.inputs.get("operationTimeoutMs")
+                operation_timeout = (
+                    float(op_timeout_ms) / 1000.0
+                    if op_timeout_ms
+                    else self.operation_timeout_seconds
+                )
                 operation = asyncio.get_running_loop().run_in_executor(
                     self._thread_pool, self._execute_sync, invocation
                 )
-                return await asyncio.wait_for(operation, timeout=self.operation_timeout_seconds)
+                return await asyncio.wait_for(operation, timeout=operation_timeout)
         except asyncio.CancelledError:
             raise
         except TimeoutError:
@@ -74,7 +80,6 @@ class DesktopExecutor(CommandExecutor):
     def _execute_sync(self, invocation: CommandInvocation) -> CommandResult:
         import pythoncom
         from comtypes import COMError
-        from pywinauto import Desktop
 
         pythoncom.CoInitialize()
         try:
@@ -87,25 +92,9 @@ class DesktopExecutor(CommandExecutor):
                 timeout_ms = int(inputs.get("timeoutMs") or 0)
                 deadline = time.monotonic() + timeout_ms / 1000.0
                 while True:
-                    try:
-                        if match_mode == "exact":
-                            windows = Desktop(backend="uia").windows(title=title)
-                        else:
-                            all_wins = Desktop(backend="uia").windows()
-                            windows = self._filter_windows(
-                                all_wins, title, match_mode
-                            )
-                        if process_id is not None:
-                            windows = [
-                                window for window in windows
-                                if window.process_id() == process_id
-                            ]
-                    except COMError:
-                        windows = []
-                    if not windows:
-                        windows = self._windows_by_title_fallback(
-                            title, process_id, match_mode
-                        )
+                    windows = self._find_windows_by_title(
+                        title, process_id, match_mode
+                    )
                     if len(windows) == 1:
                         break
                     if len(windows) > 1:
@@ -642,6 +631,72 @@ class DesktopExecutor(CommandExecutor):
         finally:
             pythoncom.CoUninitialize()
 
+    def _find_windows_by_title(
+        self, title: str, process_id: int | None, match_mode: str
+    ) -> list[Any]:
+        """通过 title 查找窗口，优先走 Win32 路径避免全桌面 UIA 枚举。
+
+        exact 模式：FindWindowW（毫秒级）→ UIAWrapper 单窗口构造。
+        contains/regex 模式：EnumWindows 枚举句柄 → 逐个 UIAWrapper。
+        两种路径都不触发 Desktop(backend="uia").windows() 全桌面遍历，
+        避免慢 UIA provider（游戏等）导致首次初始化 ~60s 阻塞。
+        """
+        from pywinauto.controls.uiawrapper import UIAWrapper
+        from pywinauto.uia_element_info import UIAElementInfo
+
+        user32 = ctypes.windll.user32
+
+        if match_mode == "exact":
+            hwnd = user32.FindWindowW(None, title)
+            if not hwnd:
+                return []
+            if process_id is not None:
+                owner_pid = ctypes.c_ulong()
+                user32.GetWindowThreadProcessId(hwnd, ctypes.byref(owner_pid))
+                if owner_pid.value != process_id:
+                    return []
+            try:
+                return [UIAWrapper(UIAElementInfo(hwnd))]
+            except Exception:
+                return []
+
+        # contains / regex — EnumWindows 枚举句柄，逐个包装
+        handles: list[int] = []
+
+        def _on_window(hwnd: Any, _lparam: Any) -> bool:
+            buf = ctypes.create_unicode_buffer(512)
+            user32.GetWindowTextW(hwnd, buf, 512)
+            win_title = buf.value
+            if not user32.IsWindowVisible(hwnd):
+                return True
+            matched = False
+            if match_mode == "contains":
+                matched = title in win_title
+            elif match_mode == "regex":
+                import re
+                matched = bool(re.search(title, win_title))
+            if not matched:
+                return True
+            if process_id is not None:
+                owner_pid = ctypes.c_ulong()
+                user32.GetWindowThreadProcessId(hwnd, ctypes.byref(owner_pid))
+                if owner_pid.value != process_id:
+                    return True
+            handles.append(int(hwnd) if isinstance(hwnd, int) else int(str(hwnd), 0))
+            return True
+
+        callback = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)(
+            _on_window
+        )
+        user32.EnumWindows(callback, None)
+        windows: list[Any] = []
+        for h in handles:
+            try:
+                windows.append(UIAWrapper(UIAElementInfo(h)))
+            except Exception:
+                continue
+        return windows
+
     @staticmethod
     def _find(window: Any, locator: DesktopLocator) -> list[Any]:
         criteria = {}
@@ -660,77 +715,16 @@ class DesktopExecutor(CommandExecutor):
         return matches
 
     @staticmethod
-    def _filter_windows(windows: list[Any], title: str, match_mode: str) -> list[Any]:
-        import re
-        if match_mode == "contains":
-            return [
-                w for w in windows
-                if title in (getattr(w, "window_text", lambda: "")() or "")
-            ]
-        if match_mode == "regex":
-            pattern = re.compile(title)
-            return [
-                w for w in windows
-                if pattern.search(getattr(w, "window_text", lambda: "")() or "")
-            ]
-        return [
-            w for w in windows
-            if (getattr(w, "window_text", lambda: "")() or "") == title
-        ]
-
-    @staticmethod
-    def _windows_by_title_fallback(
-        title: str, process_id: int | None, match_mode: str = "exact"
-    ) -> list[Any]:
-        import re
-
+    def _window_by_handle(handle: int) -> Any | None:
+        """直接从 HWND 构造 UIAWrapper，避免 Desktop(backend="uia").windows()
+        触发全桌面枚举（慢 UIA provider 可达 ~60s）。"""
         from pywinauto.controls.uiawrapper import UIAWrapper
         from pywinauto.uia_element_info import UIAElementInfo
 
-        user32 = ctypes.windll.user32
-        handles: list[int] = []
-
-        def _on_window(hwnd: Any, _lparam: Any) -> bool:
-            buffer = ctypes.create_unicode_buffer(512)
-            user32.GetWindowTextW(hwnd, buffer, 512)
-            win_title = buffer.value
-            if not user32.IsWindowVisible(hwnd):
-                return True
-            matched = False
-            if match_mode == "exact":
-                matched = win_title == title
-            elif match_mode == "contains":
-                matched = title in win_title
-            elif match_mode == "regex":
-                matched = bool(re.search(title, win_title))
-            if not matched:
-                return True
-            owner_pid = ctypes.c_ulong()
-            user32.GetWindowThreadProcessId(hwnd, ctypes.byref(owner_pid))
-            if process_id is None or owner_pid.value == process_id:
-                handles.append(int(hwnd) if isinstance(hwnd, int) else int(str(hwnd), 0))
-            return True
-
-        callback = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)(
-            _on_window
-        )
-        user32.EnumWindows(callback, None)
-        windows: list[Any] = []
-        for handle in handles:
-            try:
-                windows.append(UIAWrapper(UIAElementInfo(handle)))
-            except Exception:
-                continue
-        return windows
-
-    @staticmethod
-    def _window_by_handle(handle: int) -> Any | None:
-        from pywinauto import Desktop
-
-        windows = Desktop(backend="uia").windows(handle=handle)
-        if len(windows) != 1:
+        try:
+            return UIAWrapper(UIAElementInfo(handle))
+        except Exception:
             return None
-        return windows[0]
 
     async def close(self) -> None:
         async with self._lock:

@@ -31,7 +31,7 @@ rpa-core 工作流是 JSON AST。根节点是 `sequence`，子节点按序执行
 
 ## 会话（session）
 
-`browser.launch` / `desktop.attachWindow` 等生命周期命令返回 `sessionId`，后续命令经 `"sessionId": "${steps.launch.outputs.sessionId}"` 复用同一会话，结束用 `close`。
+`browser.navigate`（打开网页）/ `desktop.attachWindow` 等命令创建会话并返回 `sessionId`（网页对象 / 窗口句柄），后续命令经 `"sessionId": "${steps.openPage.outputs.sessionId}"` 复用同一会话，结束用 `browser.close` / `desktop.closeSession`。
 
 ## 校验
 

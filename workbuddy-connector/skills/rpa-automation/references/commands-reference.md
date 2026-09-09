@@ -6,8 +6,7 @@
 
 | 命令 | 输入 | 输出 |
 |---|---|---|
-| `browser.launch` | headless, userAgent, userDataDir, transport, browserInstanceId | sessionId |
-| `browser.navigate` | sessionId*, url*, timeoutMs | url, sessionId |
+| `browser.navigate` | url*, timeoutMs, headless, userAgent, userDataDir, transport, browserInstanceId, keepOpen | sessionId, url, resourceType |
 | `browser.click` | sessionId*, selector*, timeoutMs | matchedCount, sessionId |
 | `browser.input` | sessionId*, selector*, text*, timeoutMs | matchedCount, sessionId |
 | `browser.waitFor` | sessionId*, selector*, timeoutMs | matchedCount |

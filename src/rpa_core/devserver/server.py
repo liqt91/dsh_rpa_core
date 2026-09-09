@@ -18,14 +18,34 @@ _WORKFLOW_SEGMENT_PREFIX = "/api/workflows/"
 _CAPTURE_PREFIX = "/api/capture/"
 _STATIC_PREFIX = "/static/"
 
-# ADR 0008 §4：硬编码静态资源 allowlist，不开放任意路径、不做目录列举。
-_STATIC_FILES = {
-    "app.js": "text/javascript; charset=utf-8",
-    "styles.css": "text/css; charset=utf-8",
-    "i18n.js": "text/javascript; charset=utf-8",
-    "icons.js": "text/javascript; charset=utf-8",
-}
+# ADR 0008 §4：静态资源允许列表（启动时动态扫描 static/ 目录）。
 _STATIC_ROOT = Path(__file__).resolve().parent / "static"
+
+# MIME 类型映射
+_MIME_MAP = {
+    ".js": "text/javascript; charset=utf-8",
+    ".css": "text/css; charset=utf-8",
+    ".html": "text/html; charset=utf-8",
+    ".json": "application/json; charset=utf-8",
+    ".svg": "image/svg+xml",
+    ".png": "image/png",
+    ".ico": "image/x-icon",
+    ".woff": "font/woff",
+    ".woff2": "font/woff2",
+}
+
+
+def _scan_static_files(root: Path) -> dict[str, str]:
+    """扫描 static/ 目录，返回 {相对路径: MIME类型} 映射。"""
+    result = {}
+    if not root.is_dir():
+        return result
+    for f in root.rglob("*"):
+        if f.is_file():
+            ct = _MIME_MAP.get(f.suffix, "application/octet-stream")
+            rel = f.relative_to(root).as_posix()
+            result[rel] = ct
+    return result
 
 
 class _RequestHandler(BaseHTTPRequestHandler):
@@ -44,6 +64,10 @@ class _RequestHandler(BaseHTTPRequestHandler):
     def base_url(self) -> str:
         host, port = self.server.server_address[:2]
         return f"http://{host}:{port}"
+
+    @property
+    def _static_files(self) -> dict[str, str]:
+        return self.server._static_files  # type: ignore[attr-defined]
 
     def do_GET(self) -> None:
         self._handle("GET")
@@ -78,6 +102,13 @@ class _RequestHandler(BaseHTTPRequestHandler):
             if method != "GET":
                 raise ApiError(405, "METHOD_NOT_ALLOWED", "use GET for static assets")
             return self._route_static(path)
+        if path.startswith("/api/"):
+            # API 路由（不改动）
+            pass
+        else:
+            # SPA fallback：非 API、非 static 的 GET 请求，仅对无扩展名路径返回 index.html
+            if method == "GET" and "." not in path.rsplit("/", 1)[-1]:
+                return 200, self.editor_html, "text/html; charset=utf-8"
         if path == "/api/extension/crx":
             if method != "GET":
                 raise ApiError(405, "METHOD_NOT_ALLOWED", "use GET for the extension crx")
@@ -124,11 +155,12 @@ class _RequestHandler(BaseHTTPRequestHandler):
 
     def _route_static(self, path: str) -> tuple[int, bytes, str]:
         name = path[len(_STATIC_PREFIX) :]
-        content_type = _STATIC_FILES.get(name)
+        content_type = self._static_files.get(name)
         if content_type is None:
             raise ApiError(404, "NOT_FOUND", f"no route for {path}")
         file_path = _STATIC_ROOT / name
-        if file_path.resolve().parent != _STATIC_ROOT:
+        # 安全检查：确保路径在 static/ 内（支持子目录）
+        if not file_path.resolve().is_relative_to(_STATIC_ROOT.resolve()):
             raise ApiError(403, "FORBIDDEN", f"no route for {path}")
         return 200, file_path.read_bytes(), content_type
 
@@ -310,9 +342,12 @@ class DevServer:
         )
         editor_path = Path(__file__).resolve().parent / "static" / "index.html"
         self.editor_html = editor_path.read_bytes()
+        # 扫描 static/ 目录，支持 Vue 构建产物（子目录 + 哈希文件名）
+        self._static_files = _scan_static_files(_STATIC_ROOT)
         self._httpd = ThreadingHTTPServer(("127.0.0.1", port), _RequestHandler)
         self._httpd.app = self.app  # type: ignore[attr-defined]
         self._httpd.editor_html = self.editor_html  # type: ignore[attr-defined]
+        self._httpd._static_files = self._static_files  # type: ignore[attr-defined]
         self._thread: threading.Thread | None = None
 
     @property

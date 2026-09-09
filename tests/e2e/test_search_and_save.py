@@ -72,8 +72,7 @@ def test_search_and_save_vertical_slice(tmp_path):
     assert records[-1]["type"] == "runFinished"
 
     expected_kinds = {
-        "launch": "session",
-        "navigate": "unsafe-write",
+        "navigate": "session",
         "input": "unsafe-write",
         "click": "unsafe-write",
         "wait": "read",

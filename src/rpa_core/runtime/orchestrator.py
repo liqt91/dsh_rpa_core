@@ -714,9 +714,10 @@ class Orchestrator:
             "effects": effect_records,
             "diagnostics": result.diagnostics,
         }
-        output_name = getattr(node, "output_name", None)
-        if output_name:
-            scopes.setdefault("variables", {})[output_name] = result.outputs
+        output_aliases = getattr(node, "output_aliases", None) or {}
+        for field, alias in output_aliases.items():
+            if field in result.outputs:
+                scopes.setdefault("variables", {})[alias] = result.outputs[field]
         step_key = _node_path_key(path)
         await asyncio.to_thread(
             CheckpointStore(events.run_dir / "checkpoint.json").write,

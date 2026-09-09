@@ -13,21 +13,13 @@
     "children": [
       {
         "type": "action",
-        "id": "launch",
-        "command": "browser.launch",
-        "with": {
-          "headless": false,
-          "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
-        }
-      },
-      {
-        "type": "action",
         "id": "openHome",
         "command": "browser.navigate",
         "with": {
-          "sessionId": "${steps.launch.outputs.sessionId}",
           "url": "https://www.baidu.com/s?wd=%E6%96%B0%E9%97%BB",
-          "timeoutMs": 20000
+          "timeoutMs": 20000,
+          "headless": false,
+          "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
         }
       },
       {
@@ -35,7 +27,7 @@
         "id": "waitForResults",
         "command": "browser.waitFor",
         "with": {
-          "sessionId": "${steps.launch.outputs.sessionId}",
+          "sessionId": "${steps.openHome.outputs.sessionId}",
           "selector": "${inputs.resultSelector}",
           "timeoutMs": 15000
         }
@@ -45,7 +37,7 @@
         "id": "grabTitles",
         "command": "browser.queryAll",
         "with": {
-          "sessionId": "${steps.launch.outputs.sessionId}",
+          "sessionId": "${steps.openHome.outputs.sessionId}",
           "selector": "${inputs.resultSelector}"
         }
       },
@@ -73,7 +65,7 @@
         "id": "close",
         "command": "browser.close",
         "with": {
-          "sessionId": "${steps.launch.outputs.sessionId}"
+          "sessionId": "${steps.openHome.outputs.sessionId}"
         }
       }
     ]

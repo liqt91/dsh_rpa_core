@@ -471,7 +471,7 @@ const CATEGORY_COLORS = { blue: "#0969da", green: "#1a7f37", purple: "#8250df", 
 const SEMANTIC_GROUPS = [
   {
     label: "页面导航", icon: "browser", color: "blue",
-    member: (id) => ["browser.navigate", "browser.launch", "browser.close"].includes(id),
+    member: (id) => ["browser.navigate", "browser.close"].includes(id),
   },
   {
     label: "元素操作", icon: "play", color: "blue",
@@ -1119,26 +1119,10 @@ function renderProps() {
     body.appendChild(hint);
     return;
   }
-  body.appendChild(textField("节点 ID", node.id, (v) => {
-    node.id = v;
-    markDirty();
-    renderCanvas();
-  }));
   if (node.type !== "action") {
     renderControlProps(node, body);
     return;
   }
-  const commandWrap = document.createElement("div");
-  commandWrap.className = "field";
-  const commandLabel = document.createElement("label");
-  commandLabel.textContent = "命令";
-  const commandInput = document.createElement("input");
-  commandInput.type = "text";
-  commandInput.value = node.command;
-  commandInput.readOnly = true;
-  commandWrap.appendChild(commandLabel);
-  commandWrap.appendChild(commandInput);
-  body.appendChild(commandWrap);
   body.appendChild(numberField("超时（秒，可选）", node.timeout_seconds, (v) => {
     if (v === null) delete node.timeout_seconds; else node.timeout_seconds = v;
     markDirty();
@@ -1151,6 +1135,14 @@ function renderProps() {
   const schema = manifest ? manifest.input_schema : {};
   const properties = schema.properties || {};
   const keys = Object.keys(properties);
+  // 分区标题：输入参数（喂给命令的值）与输出参数（命令产出的值，存变量）分开展示
+  const sectionHeader = (text, cls) => {
+    const h = document.createElement("div");
+    h.className = `props-section ${cls || ""}`.trim();
+    h.textContent = text;
+    return h;
+  };
+  body.appendChild(sectionHeader("输入参数", "props-section-in"));
   if (!keys.length) {
     body.appendChild(jsonField("参数（with，JSON）", node["with"], (v) => {
       if (v === null) node["with"] = {}; else node["with"] = v;
@@ -1163,33 +1155,68 @@ function renderProps() {
       body.appendChild(schemaField(node, key, properties[key], required.has(key)));
     }
   }
-  // 输出变量名（可选）
-  const onWrap = document.createElement("div");
-  onWrap.className = "field";
-  const onLabel = document.createElement("label");
-  onLabel.textContent = "输出变量名";
-  const onInput = document.createElement("input");
-  onInput.type = "text";
-  onInput.dataset.field = "输出变量名";
-  onInput.value = node.output_name || "";
-  onInput.placeholder = "可选，如 web_page1";
-  onInput.title = "为该节点输出命名，后续节点可通过 ${变量名} 引用";
-  onInput.addEventListener("input", () => {
-    const v = onInput.value.trim();
-    node.output_name = v || undefined;
-    markDirty();
-  });
-  onInput.addEventListener("blur", () => {
-    const v = onInput.value.trim();
-    if (v && !/^[A-Za-z_]\w*$/.test(v)) {
-      onInput.style.borderColor = "var(--err)";
-    } else {
-      onInput.style.borderColor = "";
+  // 字段联动：x-depends 声明哪些字段依赖其他字段的特定值
+  applyDependencies(body, node, schema);
+  // 输出别名：按 manifest x-outputs 逐输出字段命名（label 来自 manifest，如「保存网页对象到」），
+  // 后续节点通过 ${别名} 引用该输出整值、${别名}.字段 引用子字段。
+  const xOutputs = manifest && manifest["x-outputs"] ? manifest["x-outputs"] : null;
+  // hidden 输出（如 resourceType/最终网址）不给别名框：运行值仍可 ${...} 手动引用，但不打扰用户
+  const visibleOutputs = xOutputs
+    ? Object.entries(xOutputs).filter(([, meta]) => !(meta && meta.hidden))
+    : [];
+  if (visibleOutputs.length) {
+    body.appendChild(sectionHeader("输出参数（保存到变量，供后续指令引用）", "props-section-out"));
+    for (const [outField, meta] of visibleOutputs) {
+      const labelText = (meta && meta.label) || outField;
+      const wrap = document.createElement("div");
+      wrap.className = "field";
+      const lbl = document.createElement("label");
+      lbl.textContent = labelText;
+      const inp = document.createElement("input");
+      inp.type = "text";
+      inp.dataset.field = labelText;
+      inp.value = (node.output_aliases || {})[outField] || "";
+      inp.placeholder = "可选，如 web_page1";
+      inp.title = `为输出 ${outField} 命名，后续节点可通过 \${别名} 引用`;
+      inp.addEventListener("input", () => {
+        const v = inp.value.trim();
+        const aliases = { ...(node.output_aliases || {}) };
+        if (v) aliases[outField] = v; else delete aliases[outField];
+        node.output_aliases = Object.keys(aliases).length ? aliases : undefined;
+        markDirty();
+      });
+      inp.addEventListener("blur", () => {
+        const v = inp.value.trim();
+        inp.style.borderColor = v && !/^[A-Za-z_]\w*$/.test(v) ? "var(--err)" : "";
+      });
+      wrap.appendChild(lbl);
+      wrap.appendChild(inp);
+      body.appendChild(wrap);
     }
-  });
-  onWrap.appendChild(onLabel);
-  onWrap.appendChild(onInput);
-  body.appendChild(onWrap);
+  }
+  // 字段联动：监听所有 input 变化，重新评估依赖关系
+  body.addEventListener("input", () => applyDependencies(body, node, schema));
+  body.addEventListener("change", () => applyDependencies(body, node, schema));
+}
+
+// 字段联动：根据 x-depends 声明，禁用/启用依赖字段
+// x-depends 格式: { "headless": {"transport": "playwright"}, ... }
+// 含义: headless 仅当 transport === "playwright" 时启用
+function applyDependencies(body, node, schema) {
+  const deps = schema["x-depends"];
+  if (!deps) return;
+  for (const [field, condition] of Object.entries(deps)) {
+    const ctrlKey = Object.keys(condition)[0];
+    const requiredValue = condition[ctrlKey];
+    const ctrlValue = node["with"] ? node["with"][ctrlKey] : undefined;
+    const shouldDisable = ctrlValue !== requiredValue;
+    // 找到该字段的 wrapper（data-field 属性匹配）
+    const wrap = body.querySelector(`[data-field="${field}"]`);
+    if (!wrap) continue;
+    const fieldWrap = wrap.closest(".field");
+    if (!fieldWrap) continue;
+    fieldWrap.style.display = shouldDisable ? "none" : "";
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1292,7 +1319,7 @@ function collectSessionNodes(filterResourceType) {
               const rt = outProps.resourceType;
               if (!rt || rt.const !== filterResourceType) continue;
             }
-            out.push({ id: n.id, command: n.command, zh: commandName(n.command), outputName: n.output_name || null });
+            out.push({ id: n.id, command: n.command, zh: commandName(n.command), outputName: (n.output_aliases || {}).sessionId || null });
           }
         } else {
           visit(n);
@@ -1306,7 +1333,7 @@ function collectSessionNodes(filterResourceType) {
 
 function schemaField(node, key, propSchema, required) {
   const value = node["with"] ? node["with"][key] : undefined;
-  const label = fieldLabel(key);
+  const label = fieldLabel(key, node.command);
   let field;
   if (propSchema.enum) {
     field = selectField(label, propSchema, required, value, (v) => setWith(node, key, v), key);
@@ -1317,7 +1344,14 @@ function schemaField(node, key, propSchema, required) {
   } else if (propSchema.type === "array" || propSchema.type === "object") {
     field = jsonField(label, value, (v) => setWith(node, key, v), required, key);
   } else {
-    field = textField(label, value === undefined ? "" : String(value), (v) => setWith(node, key, v), required, key);
+    const fxOpts = {};
+    if (propSchema["x-fx"]) fxOpts.supportFx = true;
+    if (propSchema["x-python"]) fxOpts.supportPython = true;
+    if (fxOpts.supportFx || fxOpts.supportPython) {
+      fxOpts.node = node;
+      fxOpts.fieldKey = key;
+    }
+    field = textField(label, value === undefined ? "" : String(value), (v) => setWith(node, key, v), required, key, fxOpts.supportFx || fxOpts.supportPython ? fxOpts : undefined);
   }
   if (key === "sessionId") {
     // 会话引用字段：绑定创建会话的节点输出即可，无需手填。
@@ -1342,7 +1376,7 @@ function schemaField(node, key, propSchema, required) {
       const opt = document.createElement("option");
       opt.value = s.id;
       if (s.outputName) {
-        // 已命名输出变量：label 显示变量名，选中时引用其子字段 ${name}.sessionId
+        // 已为 sessionId 输出起别名：label 显示变量名，选中时引用 ${别名}（别名即 sessionId 整值）
         opt.textContent = "${" + s.outputName + "}（" + s.zh + "）";
       } else {
         opt.textContent = `${s.zh}（${s.id}）`;
@@ -1359,7 +1393,7 @@ function schemaField(node, key, propSchema, required) {
       if (!sel.value) return;
       const picked = sessionNodes.find((s) => s.id === sel.value);
       const ref = picked && picked.outputName
-        ? `\${${picked.outputName}.sessionId}`
+        ? `\${${picked.outputName}}`
         : `\${steps.${sel.value}.outputs.sessionId}`;
       setWith(node, key, ref);
       const inputEl = field.querySelector('input[data-field]');
@@ -1436,7 +1470,9 @@ function schemaField(node, key, propSchema, required) {
   return field;
 }
 
-const fieldLabel = (key) => (I18N && I18N.fields[key]) || key;
+const fieldLabel = (key, command) =>
+  (command && I18N && I18N.commandFields && I18N.commandFields[command] && I18N.commandFields[command][key])
+  || (I18N && I18N.fields[key]) || key;
 
 function wrapField(labelText, required, input, hint, rawKey) {
   const wrap = document.createElement("div");
@@ -1462,7 +1498,7 @@ function wrapField(labelText, required, input, hint, rawKey) {
   return wrap;
 }
 
-function textField(labelText, value, onChange, required, rawKey) {
+function textField(labelText, value, onChange, required, rawKey, opts) {
   const input = document.createElement("input");
   input.type = "text";
   input.value = value;
@@ -1473,7 +1509,148 @@ function textField(labelText, value, onChange, required, rawKey) {
     input.style.borderColor = "";
     onChange(input.value.trim());
   });
-  return wrapField(labelText, required, input, REFERENCE_HINT, rawKey);
+  const wrap = wrapField(labelText, required, input, REFERENCE_HINT, rawKey);
+  // fx / Python 开关
+  if (opts && (opts.supportFx || opts.supportPython)) {
+    const node = opts.node;
+    const fieldKey = opts.fieldKey;
+    const modes = node._exprModes || (node._exprModes = {});
+    // 创建输入行容器
+    const row = document.createElement("div");
+    row.className = "expr-input-row";
+    // 移除原始 input，插入到 row 中
+    input.remove();
+    if (opts.supportPython) {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "expr-btn py-btn" + (modes[fieldKey] === "python" ? " active" : "");
+      btn.textContent = "Py";
+      btn.title = "Python 表达式模式：输入 Python 表达式";
+      btn.addEventListener("click", () => {
+        pushUndo();
+        const prev = node._exprModes[fieldKey];
+        if (prev === "python") {
+          delete node._exprModes[fieldKey];
+          btn.classList.remove("active");
+          input.classList.remove("py-mode");
+          input.placeholder = "${...}";
+        } else {
+          // 如果 fx 模式激活，先清理
+          if (prev === "fx") {
+            restoreTextField(wrap, input);
+            const fxBtn = row.querySelector(".fx-btn");
+            if (fxBtn) fxBtn.classList.remove("active");
+          }
+          node._exprModes[fieldKey] = "python";
+          btn.classList.add("active");
+          input.classList.add("py-mode");
+          input.placeholder = "输入 Python 表达式";
+        }
+        markDirty();
+      });
+      row.appendChild(btn);
+    }
+    row.appendChild(input);
+    if (opts.supportFx) {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "expr-btn fx-btn" + (modes[fieldKey] === "fx" ? " active" : "");
+      btn.textContent = "fx";
+      btn.title = "变量引用模式：从下拉框选择流程变量";
+      btn.addEventListener("click", () => {
+        pushUndo();
+        const prev = node._exprModes[fieldKey];
+        if (prev === "fx") {
+          delete node._exprModes[fieldKey];
+          btn.classList.remove("active");
+          restoreTextField(wrap, input);
+        } else {
+          // 如果 Python 模式激活，先清理
+          if (prev === "python") {
+            input.classList.remove("py-mode");
+            input.placeholder = "${...}";
+            const pyBtn = row.querySelector(".py-btn");
+            if (pyBtn) pyBtn.classList.remove("active");
+          }
+          node._exprModes[fieldKey] = "fx";
+          btn.classList.add("active");
+          replaceWithVarSelect(wrap, input, node, fieldKey, onChange);
+        }
+        markDirty();
+      });
+      row.appendChild(btn);
+    }
+    // 将 row 插入到 wrap 中（替换原来的 input 位置）
+    wrap.appendChild(row);
+    // 恢复已保存的表达式模式
+    const savedMode = modes[fieldKey];
+    if (savedMode === "fx" && opts.supportFx) {
+      // 延迟执行，确保 DOM 已完全构建
+      setTimeout(() => replaceWithVarSelect(wrap, input, node, fieldKey, onChange), 0);
+    } else if (savedMode === "python" && opts.supportPython) {
+      input.classList.add("py-mode");
+      input.placeholder = "输入 Python 表达式";
+    }
+  }
+  return wrap;
+}
+
+// fx 模式：替换文本框为变量下拉选择器
+function replaceWithVarSelect(wrap, origInput, node, fieldKey, onChange) {
+  // 先清理已有的 select（防止重复创建）
+  if (wrap._fxSelect) {
+    wrap._fxSelect.remove();
+    delete wrap._fxSelect;
+  }
+  const sel = document.createElement("select");
+  sel.className = "fx-var-select";
+  sel.dataset.field = origInput.dataset.field;
+  const paths = computeReferencePaths();
+  sel.innerHTML = '<option value="">— 选择变量 —</option>';
+  for (const p of paths) {
+    const opt = document.createElement("option");
+    opt.value = p;
+    opt.textContent = p;
+    sel.appendChild(opt);
+  }
+  // 设置当前值（如果是 ${...} 引用则选中）
+  const curVal = node["with"] ? node["with"][fieldKey] : undefined;
+  if (typeof curVal === "string" && curVal.startsWith("${")) {
+    sel.value = curVal;
+  }
+  sel.addEventListener("change", () => {
+    if (sel.value) {
+      setWith(node, fieldKey, sel.value);
+    } else {
+      setWith(node, fieldKey, null);
+    }
+    markDirty();
+  });
+  // 隐藏原 input，插入 select
+  origInput.style.display = "none";
+  origInput.parentNode.insertBefore(sel, origInput.nextSibling);
+  // 存储引用以便恢复
+  wrap._fxSelect = sel;
+}
+
+// 恢复文本输入（从 fx 模式退回）
+function restoreTextField(wrap, origInput) {
+  if (wrap._fxSelect) {
+    wrap._fxSelect.remove();
+    delete wrap._fxSelect;
+  }
+  origInput.style.display = "";
+  // 确保 input 回到 row 中正确位置（如果被移除了）
+  const row = wrap.querySelector(".expr-input-row");
+  if (row && !row.contains(origInput)) {
+    // 找到 fx-btn 的位置，在它前面插入 input
+    const fxBtn = row.querySelector(".fx-btn");
+    if (fxBtn) {
+      row.insertBefore(origInput, fxBtn);
+    } else {
+      row.appendChild(origInput);
+    }
+  }
 }
 
 // 条件左值/右值：${...} 引用保持字符串，其余按 JSON 字面量解析（数组/对象/数字/布尔）。

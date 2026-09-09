@@ -165,7 +165,7 @@
     {
       "id": "command-params-phase1",
       "title": "Command param enrichment: sessionId resourceType tagging + existing command parameter additions from Yingdao analysis",
-      "passes": false
+      "passes": true
     },
     {
       "id": "command-new-batch1",

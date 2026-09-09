@@ -1,5 +1,23 @@
 # 工作日志
 
+## 2026-09-09
+
+- 提交前说明：本次提交含两部分——(a) 此前未提交的 output-aliases 变量别名重构 + UIA 生产侧提速 + devserver SPA fallback/动态静态扫描（详见 PROGRESS 同日 output-aliases / uia-e2e-flakiness-production / spa-fallback-fix 条目）；(b) 本会话的打开网页合并与配套（下述）。工作区另有 Vue 前端迁移中间态（frontend/ 源码、static/assets/ 构建产物、favicon/icons.svg）未启用、未提交。
+- **打开/关闭浏览器指令并入打开/关闭网页**（维护者决策，不单独维护浏览器实例）：
+  - `browser.launch` 删除（catalog 55→54）；`browser.navigate` v2.0.0 吸收全部启动参数（headless/userAgent/userDataDir/transport/browserInstanceId/keepOpen + x-depends 联动）并自建会话；输出「保存网页对象到」（sessionId，x-outputs primary）+ url + resourceType；`browser.close` 中文名改「关闭网页」
+  - executor：navigate 双后端（playwright/bsk）一步 open+goto，导航失败回收本次新建浏览器（规则 11）；顺带修复 `browser.close` 持久上下文分支 `context` 未定义 NameError（存量 bug）
+  - 对标影刀「打开网页」补齐：`channel`（浏览器类型 chromium/chrome/msedge）+ `args`（命令行参数），x-depends 限 playwright 传输并透传
+  - x-outputs 新增 `hidden` 标记：最终网址/资源类型不渲染别名框（运行值仍可 ${} 手动引用），输出区对齐影刀仅暴露「保存网页对象到」
+  - 编辑器（旧版 app.js）：属性面板分「输入参数 / 输出参数」两区（.props-section-in/out 分色）；「输出变量名」升级为按 x-outputs 逐字段别名输入；sessionId 下拉改引 ${别名}；i18n 新增 commandFields 按命令覆盖（args 在 navigate/executeScript 含义不再打架）
+  - devserver `/api/catalog` 下发 x-outputs 与扩展字段（executor/risk/capabilities/resources/stability/retryable/default_timeout_seconds）
+  - 迁移：examples ×3、workflows ×2、README、WorkBuddy skill 文档、全部相关测试
+- **指令清单查看页**：零构建 `static/catalog.html`，实时拉 /api/catalog 渲染 54 条 manifest（分组/搜索/展开收起/kind+effect 徽标/输入输出参数表/x-depends 标注/hidden 灰行/错误码/digest），编辑器工具条加「☰ 指令清单」入口；Playwright 实测无 JS 错误
+- 门禁修复（阻塞项收口）：
+  - UIA 桌面 e2e 门禁内必抖根治：根因=前置 Chromium 用例占用前台窗口，SendInput 落错窗口；测试侧 `_force_foreground`（AttachThreadInput 绕过前台锁）运行前抢前台，本轮门禁内通过
+  - ruff 排除 `scripts/`（一次性影刀抓取脚本，存量 24 处 lint）；补 `test_desktop_contract.py` 缺 `import pytest` 等存量 lint
+  - devserver 事故：SO_REUSEADDR 导致 8765 双进程共存，旧进程内存缓存 Vue 版 index.html 致"重启后仍 Vue"；杀 stale 进程恢复，登记端口占用检测候选改进
+- full gate passed（54 manifests，37 features）。
+
 ## 2026-09-08
 
 - 完成指令优化规划 Phase 1-4（见 PROGRESS 同日多条）：参数补齐 P1-S1~S6（sessionId resourceType 标签、browser.click/input/close 等六参数、editor 按 resourceType 过滤下拉）+ 新指令 18 条×双后端（hover、窗口操作、executeScript/screenshot/select、upload/download/handleDialog/getWindowList 等），累计 55 manifests。

@@ -61,16 +61,15 @@ workflow.json 是 JSON AST。结构见 [references/workflow-format.md](reference
 ## 浏览器流程骨架
 
 ```json
-{ "type": "action", "id": "launch", "command": "browser.launch", "with": { "headless": true } }
-{ "type": "action", "id": "nav", "command": "browser.navigate",
-  "with": { "sessionId": "${steps.launch.outputs.sessionId}", "url": "https://example.com" } }
+{ "type": "action", "id": "openPage", "command": "browser.navigate",
+  "with": { "url": "https://example.com", "headless": true } }
 { "type": "action", "id": "read", "command": "browser.getText",
-  "with": { "sessionId": "${steps.launch.outputs.sessionId}", "selector": "h1" } }
+  "with": { "sessionId": "${steps.openPage.outputs.sessionId}", "selector": "h1" } }
 { "type": "action", "id": "close", "command": "browser.close",
-  "with": { "sessionId": "${steps.launch.outputs.sessionId}" } }
+  "with": { "sessionId": "${steps.openPage.outputs.sessionId}" } }
 ```
 
-**session 规则**：`browser.launch` 返回 `sessionId`，后续每个 browser.* 命令都必须带它；结束时 `browser.close`。登录态页面用 `transport: "bsk"`（复用用户真实浏览器）。
+**session 规则**：`browser.navigate`（打开网页）启动浏览器并返回网页对象 `sessionId`，后续每个 browser.* 命令都必须带它；结束时 `browser.close`（关闭网页）。登录态页面用 `transport: "bsk"`（复用用户真实浏览器）。
 
 ## 错误恢复
 

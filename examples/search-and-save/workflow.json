@@ -12,14 +12,13 @@
     "type": "sequence",
     "id": "root",
     "children": [
-      {"type": "action", "id": "launch", "command": "browser.launch", "with": {"headless": true}},
-      {"type": "action", "id": "navigate", "command": "browser.navigate", "with": {"sessionId": "${steps.launch.outputs.sessionId}", "url": "${inputs.url}"}},
-      {"type": "action", "id": "input", "command": "browser.input", "with": {"sessionId": "${steps.launch.outputs.sessionId}", "selector": "#query", "text": "${inputs.keyword}"}},
-      {"type": "action", "id": "click", "command": "browser.click", "with": {"sessionId": "${steps.launch.outputs.sessionId}", "selector": "button[type=submit]"}},
-      {"type": "action", "id": "wait", "command": "browser.waitFor", "with": {"sessionId": "${steps.launch.outputs.sessionId}", "selector": ".result"}},
-      {"type": "action", "id": "collect", "command": "browser.queryAll", "with": {"sessionId": "${steps.launch.outputs.sessionId}", "selector": ".result"}},
+      {"type": "action", "id": "navigate", "command": "browser.navigate", "with": {"url": "${inputs.url}", "headless": true}},
+      {"type": "action", "id": "input", "command": "browser.input", "with": {"sessionId": "${steps.navigate.outputs.sessionId}", "selector": "#query", "text": "${inputs.keyword}"}},
+      {"type": "action", "id": "click", "command": "browser.click", "with": {"sessionId": "${steps.navigate.outputs.sessionId}", "selector": "button[type=submit]"}},
+      {"type": "action", "id": "wait", "command": "browser.waitFor", "with": {"sessionId": "${steps.navigate.outputs.sessionId}", "selector": ".result"}},
+      {"type": "action", "id": "collect", "command": "browser.queryAll", "with": {"sessionId": "${steps.navigate.outputs.sessionId}", "selector": ".result"}},
       {"type": "action", "id": "save", "command": "data.writeJson", "with": {"workspace": "${inputs.workspace}", "path": "${inputs.outputPath}", "data": "${steps.collect.outputs.items}"}},
-      {"type": "action", "id": "close", "command": "browser.close", "with": {"sessionId": "${steps.launch.outputs.sessionId}"}},
+      {"type": "action", "id": "close", "command": "browser.close", "with": {"sessionId": "${steps.navigate.outputs.sessionId}"}},
       {"type": "return", "id": "return", "value": "${steps.collect.outputs.items}"}
     ]
   }

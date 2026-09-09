@@ -63,8 +63,7 @@ def unsafe_manifest():
 
 def test_all_stable_commands_declare_valid_effect_policy():
     expected = {
-        "browser.launch": "session",
-        "browser.navigate": "unsafe-write",
+        "browser.navigate": "session",
         "browser.click": "unsafe-write",
         "browser.input": "unsafe-write",
         "browser.waitFor": "read",

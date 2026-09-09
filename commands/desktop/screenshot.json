@@ -10,6 +10,9 @@
   "effect": {"kind": "idempotent-write", "replay": "idempotent", "idempotency": "derived"},
   "input_schema": {"type": "object", "required": ["sessionId", "elementId", "savePath"], "properties": {"sessionId": {"type": "string", "minLength": 1}, "elementId": {"type": "string", "minLength": 1}, "savePath": {"type": "string", "minLength": 1, "description": "截图保存路径"}}, "additionalProperties": false},
   "output_schema": {"type": "object", "required": ["filePath"], "properties": {"filePath": {"type": "string"}}, "additionalProperties": false},
+  "x-outputs": {
+    "filePath": {"label": "截图路径", "primary": true}
+  },
   "errors": ["ELEMENT_NOT_FOUND", "SESSION_NOT_FOUND", "SESSION_LOST", "EXECUTOR_FAILED"],
   "implementation": {"handler": "desktop.uia:screenshot"},
   "default_timeout_seconds": 15,

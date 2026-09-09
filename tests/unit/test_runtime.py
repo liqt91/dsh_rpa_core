@@ -98,7 +98,7 @@ def _manifest(command_id, output_schema):
 
 
 def test_orchestrator_resolves_output_name_subfield_reference(tmp_path):
-    """output_name 节点输出存入 variables；后续节点经 ${var.field} 子路径解析到具体字段。"""
+    """output_aliases 节点输出存入 variables；后续节点经 ${var} 引用别名。"""
     commands = tmp_path / "commands"
     commands.mkdir()
     launch_out = {
@@ -133,14 +133,14 @@ def test_orchestrator_resolves_output_name_subfield_reference(tmp_path):
                     "type": "action",
                     "id": "producer",
                     "command": "data.produce",
-                    "output_name": "web_page1",
+                    "output_aliases": {"sessionId": "web"},
                     "with": {"sessionId": "sess-abc"},
                 },
                 {
                     "type": "action",
                     "id": "consumer",
                     "command": "data.consume",
-                    "with": {"ref": "${web_page1.sessionId}"},
+                    "with": {"ref": "${web}"},
                 },
             ],
         },
@@ -163,5 +163,5 @@ def test_orchestrator_resolves_output_name_subfield_reference(tmp_path):
         e for e in events if e.get("type") == "stepCompleted" and e.get("node_id") == "consumer"
     ]
     assert consumer_events, "consumer stepCompleted event missing"
-    # EchoExecutor 返回 consumer 收到的 ref（=${web_page1.sessionId} 解析值）
+    # EchoExecutor 返回 consumer 收到的 ref（=${web} 别名解析值）
     assert consumer_events[-1]["payload"]["outputs"]["value"] == "sess-abc"
