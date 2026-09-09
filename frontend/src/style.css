@@ -1,0 +1,115 @@
+:root {
+  /* 白色主题 */
+  --bg-primary: #ffffff;
+  --bg-secondary: #f8f9fa;
+  --bg-surface: #ffffff;
+  --bg-card: #f3f4f6;
+  --bg-hover: #f3f4f6;
+  --bg-active: #e5e7eb;
+
+  --border: #e5e7eb;
+  --border-light: #d1d5db;
+
+  --text-primary: #111827;
+  --text-secondary: #4b5563;
+  --text-muted: #9ca3af;
+
+  --accent: #3b82f6;
+  --accent-hover: #2563eb;
+  --ok: #10b981;
+  --bad: #ef4444;
+  --warn: #f59e0b;
+
+  --canvas: #f9fafb;
+
+  /* 分类色 */
+  --cat-browser: #3b82f6;
+  --cat-desktop: #8b5cf6;
+  --cat-data: #10b981;
+  --cat-flow: #f59e0b;
+  --cat-ai: #ec4899;
+  --cat-file: #06b6d4;
+
+  /* 间距 */
+  --header-height: 48px;
+  --panel-radius: 8px;
+  --card-radius: 8px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font: 13px/1.5 -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+  color: var(--text-primary);
+  background: var(--bg-primary);
+  height: 100vh;
+}
+
+#app {
+  height: 100vh;
+}
+
+button, select, input, textarea {
+  font: inherit;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  transition: all 0.15s;
+}
+
+button {
+  cursor: pointer;
+}
+
+button:hover {
+  background: var(--bg-hover);
+  border-color: var(--border-light);
+}
+
+button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+input:focus, select:focus, textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.15);
+}
+
+.hidden {
+  display: none;
+}
+
+.resizing-panel {
+  cursor: col-resize;
+  user-select: none;
+}
+
+.resizing-panel * {
+  cursor: col-resize !important;
+}
+
+/* 滚动条样式 */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #d1d5db;
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #9ca3af;
+}
