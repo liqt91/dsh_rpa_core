@@ -41,6 +41,32 @@ def _iter_references(value: Any):
             yield from _iter_references(item)
 
 
+def _collect_output_names(node: WorkflowNode) -> set[str]:
+    """遍历整棵 workflow 树，收集所有声明的 output_name（供前向引用判定）。"""
+    found: set[str] = set()
+
+    def visit(n: WorkflowNode) -> None:
+        if isinstance(n, ActionNode):
+            if n.output_name:
+                found.add(n.output_name)
+        elif isinstance(n, SequenceNode):
+            for child in n.children:
+                visit(child)
+        elif isinstance(n, IfNode):
+            for child in n.then + n.otherwise:
+                visit(child)
+        elif isinstance(n, ForEachNode):
+            for child in n.children:
+                visit(child)
+        elif isinstance(n, TryNode):
+            for child in n.children + n.catch:
+                visit(child)
+        # ReturnNode 无子节点
+
+    visit(node)
+    return found
+
+
 class WorkflowCompiler:
     def __init__(self, catalog: CommandCatalog):
         self.catalog = catalog
@@ -48,6 +74,8 @@ class WorkflowCompiler:
     def compile(self, workflow: Workflow, granted_capabilities: set[str]) -> ExecutionPlan:
         node_ids: set[str] = set()
         step_ids: set[str] = set()
+        output_names: set[str] = set()  # 前序已声明的 output_name（全局顺序收集）
+        all_output_names = _collect_output_names(workflow.root)
         required: set[str] = set()
 
         def validate_refs(value: Any, loop_vars: set[str], error_vars: set[str]) -> None:
@@ -64,7 +92,19 @@ class WorkflowCompiler:
                 elif root == "loop":
                     if not parts or parts[0] not in loop_vars:
                         raise WorkflowCompileError(f"Unknown loop reference: {reference}")
-                elif root not in error_vars:
+                elif root in output_names:
+                    # ${var_name} 或 ${var_name.field} — 前序已声明的 output_name 变量
+                    pass
+                elif root in all_output_names:
+                    # 变量在流程更靠后节点才声明 → 前向引用
+                    raise WorkflowCompileError(
+                        f"Forward variable reference (declared later): {reference}"
+                    )
+                elif root in error_vars:
+                    # 词法可见的 catch error_var：${err} 或 ${err.field}
+                    pass
+                else:
+                    # 作用域外的裸变量名 / error_var 越界 / 未声明变量 / 未知根
                     raise WorkflowCompileError(f"Unsupported reference root: {reference}")
 
         def walk(
@@ -89,6 +129,8 @@ class WorkflowCompiler:
                 Draft202012Validator(manifest.input_schema).check_schema(manifest.input_schema)
                 required.update(manifest.capabilities)
                 step_ids.add(node.id)
+                if node.output_name:
+                    output_names.add(node.output_name)
                 return
 
             if isinstance(node, SequenceNode):

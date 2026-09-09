@@ -1,5 +1,25 @@
 # 工作日志
 
+## 2026-09-08
+
+- 完成指令优化规划 Phase 1-4（见 PROGRESS 同日多条）：参数补齐 P1-S1~S6（sessionId resourceType 标签、browser.click/input/close 等六参数、editor 按 resourceType 过滤下拉）+ 新指令 18 条×双后端（hover、窗口操作、executeScript/screenshot/select、upload/download/handleDialog/getWindowList 等），累计 55 manifests。
+- 完成 Phase 5 用户变量体系 var-system（`passes: true`）：
+  - Model `ActionNode.output_name`（pattern `^[A-Za-z_]\w*$`）；runtime `scopes.variables[output_name] = result.outputs`；resolver 支持变量**子路径** `${var_name}`（整 dict）/ `${var_name.field}`（取字段）。
+  - 子路径增强决策（维护者确认）：`output_name` 存整个 outputs dict，若只支持单段 `${web_page1}` 会让下游 sessionId 收到 dict 而失败 → 须 `${web_page1.sessionId}`。
+  - compiler 静态收集 output_name，前向（declared later）与未知/error_var 越界引用均编译期拦截，与 `${steps.*}` 前向语义一致；保留 catch error_var 词法作用域。
+  - editor：节点属性加「输出变量名」；sessionId 下拉对已命名节点显示变量名并引用 `${name}.sessionId`。
+  - 新增 resolver 单测 5、compiler 编译测试 3、runtime 集成 1、editor e2e 1。
+  - full gate 257 passed；5 桌面 UIA 真实交互 e2e 在本会话报 "window did not appear"（HEAD 基线复现同失败，与本次无关）。
+- 桌面 UIA e2e 失败根因定位（决定性实验收口）：非沙箱下 python 内 Popen 启动 GUI demo 到 `demo started` 后进程即被 **SIGTERM**（连窗口枚举都未执行）；改为**外部 detached 启动 demo（PowerShell Start-Process）→ 独立 python 进程用 pywinauto 连接**，可稳定枚举主窗口及其控件（queryInput/submitButton/dialogButton/resultText）并做 set_edit_text/click 交互。结论：**本 WorkBuddy 会话内由 python/bash 直接启动 GUI winexe 会触发进程被 SIGTERM**，而非 UIA 探测能力问题（demo 窗口本身可被正常枚举）。该 5 个桌面 e2e 需在能访问桌面的会话（如 opencode cmd agent）补验。
+- **桌面 UIA e2e 真根因（用户能访问桌面会话实测，纠正上述"仅 SIGTERM 环境限制"结论）**：
+  - 用户在自己可访问桌面的 shell 跑**同样失败**（window did not appear）→ 非单纯环境限制。
+  - `_diag_latency.py` 量化：进程内**首次** `Desktop(backend="uia").windows(...)` ~**60s**，之后 ~125ms；而 `DesktopExecutor` 每命令外层 `asyncio.wait_for` 超时 **15s**（desktop.py:66）→ 首启落在命令内必被掐断 → TIMEOUT（`test_uia_attach_unknown_window...` 报 TIMEOUT 而非 ELEMENT_NOT_FOUND 即因此）。
+  - **60s 诱因 = 桌面开游戏（炉石传说等）**：全桌面 UIA 枚举会触碰所有顶层窗口 provider，游戏窗口 provider 慢/挂起拖住首启。用户关炉石后执行变快，实证确认。
+  - **修复（tests/e2e/test_uia_desktop.py）**：`_wait_for_window` 改用 Win32 `FindWindowW`（0ms，不触发全桌面 UIA 枚举）+ 新增 `_warmup_uia()`（executor 前用无 wait_for 调用提前消耗 UIA 首启）。
+  - **验证通过**：关掉炉石后 `test_uia_desktop_vertical_slice` PASS。
+  - **生产隐患（待根治）**：executor attachWindow 依赖全桌面 UIA 枚举 + 15s 超时，真实用户桌面开游戏时首个 attach 会超时；根治方向 = FindWindowW 拿 hwnd → `Desktop(backend='uia').window(handle=hwnd)` handle 级 attach。
+- var-system 本地提交 `c13bad3`（14 文件，+423/-10，未 push）。
+
 ## 2026-09-07
 
 - 浏览器扩展安装全链路实证与方向修正（详见 docs/extension-install.md §6.5.1，PROGRESS 四条）：

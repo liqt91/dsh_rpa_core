@@ -11,6 +11,21 @@ class ReferenceError(ValueError):
 
 
 def _lookup(path: str, scopes: dict[str, Any]) -> Any:
+    variables = scopes.get("variables", {})
+    # 1) 整路径命中变量名（${var_name} → 变量值整体）
+    if path in variables:
+        return variables[path]
+    # 2) 变量名 + 子路径（${var_name.field.sub} → 从变量值 dict 走子路径）
+    if variables:
+        head, dot, tail = path.partition(".")
+        if dot and head in variables:
+            value: Any = variables[head]
+            for part in tail.split("."):
+                if isinstance(value, dict) and part in value:
+                    value = value[part]
+                else:
+                    raise ReferenceError(f"Unknown reference: {path}")
+            return value
     parts = path.split(".")
     if parts[0] not in scopes:
         raise ReferenceError(f"Unknown reference: {path}")

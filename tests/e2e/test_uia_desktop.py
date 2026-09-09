@@ -49,19 +49,37 @@ def _compile_demo_app(tmp_path: Path) -> Path:
 
 
 def _wait_for_window(title: str, timeout: float = 15.0) -> None:
+    """轮询等待窗口出现。用 Win32 FindWindowW（毫秒级）探测，避免
+    pywinauto UIA Desktop 首次初始化的长阻塞（实测可达 60s）拖垮轮询超时。
+    窗口 title 唯一已知，FindWindow 精确定位即可；真正的 UIA 交互交给 executor。"""
+    import ctypes
+
+    find_window = ctypes.windll.user32.FindWindowW
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if find_window(None, title):
+            return
+        time.sleep(0.2)
+    raise TimeoutError(f"window did not appear: {title}")
+
+
+def _warmup_uia() -> None:
+    """触发一次 pywinauto UIA 初始化并完成一次全桌面枚举。
+
+    DesktopExecutor 每个命令外层有 15s 的 asyncio.wait_for 超时，而 pywinauto
+    UIA backend 在进程内首次初始化实测可达 ~60s（慢 provider / 首次 provider 连接）。
+    若首启发生在 executor 的命令里会被 15s 掐断 → TIMEOUT。此处提前把首启消耗掉，
+    后续同进程内的 UIA 调用走进程级缓存（实测 ~125ms）。
+    """
     import pythoncom
     from pywinauto import Desktop
 
     pythoncom.CoInitialize()
-    deadline = time.monotonic() + timeout
     try:
-        while time.monotonic() < deadline:
-            if Desktop(backend="uia").windows(title=title):
-                return
-            time.sleep(0.2)
+        # 首启初始化就藏在这里；允许长时间完成，不设 wait_for
+        Desktop(backend="uia").windows()
     finally:
         pythoncom.CoUninitialize()
-    raise TimeoutError(f"window did not appear: {title}")
 
 
 def _kill_demo_apps() -> None:
@@ -81,6 +99,8 @@ def _run_uia_workflow(tmp_path: Path, attempts: int = 1):
         proc = await asyncio.to_thread(subprocess.Popen, [str(exe)])
         try:
             await asyncio.to_thread(_wait_for_window, APP_TITLE)
+            # 窗口已出现；先 warm-up UIA，避免 15s 命令超时被 ~60s 首启初始化掐断
+            await asyncio.to_thread(_warmup_uia)
             catalog = load_catalog(ROOT / "commands")
             plan = WorkflowCompiler(catalog).compile(workflow, {"desktop.control"})
             registry = ExecutorRegistry({"desktop.uia": DesktopExecutor()})

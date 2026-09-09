@@ -629,3 +629,25 @@ uv run python .harness/scripts/check_all.py
 3. 运行时正确解析 `${web_page1}` → `scopes["variables"]["web_page1"]`
 4. 无 `output_name` 的节点走原有 `${steps.xxx.outputs.yyy}` 逻辑
 5. 所有测试通过
+
+### 落地记录（2026-09-08，Phase 5 done）
+
+> 与维护者确认方向后实现，对原方案 V1-S3/V1-S5 有一处技术性增强，其余照方案落地。
+
+**关键增强：变量子路径引用 `${var_name.field}`**
+
+- 背景：`output_name` 存的是**整个 outputs dict**（如 browser.launch → `{sessionId, resourceType}`）。若照 V1-S3 字面只支持单段 `${web_page1}`，解析结果是整个 dict，下游 `sessionId`（string）字段会收到 dict 而失败。
+- 决策：resolver 支持变量前缀 + 子路径 —— `${web_page1}` 返回整个 dict；`${web_page1.sessionId}` 返回 `outputs["sessionId"]`。编辑器 sessionId 下拉对已命名节点填 `${name}.sessionId`。
+- 残留：`${var_name}` 整体引用仍可用（需 object 型字段时）。
+
+**编译期前向/未知变量校验（强于 V1 的"运行时校验"）**
+
+- compiler 预扫描 `_collect_output_names`（全流程 output_name 集合），与现有 `${steps.*}` 前向引用语义一致：
+  - `root` ∈ 前序 output_names → 放行（单段或子路径）
+  - `root` ∈ 全流程但靠后声明 → `Forward variable reference`
+  - `root` 不在任何处且为单段裸名 / 多段未知根 / error_var 越界 → `Unsupported reference root`
+- 保持 error_var 词法作用域（只在 catch 子树内可引用），回归测试 `test_try_error_variable_is_lexically_scoped` 通过。
+
+**V1-S1~S7 落地清单**：S1 model（output_name 字段）✅ / S2 runtime（scopes.variables 存储）✅ / S3 resolver（整值+子路径）✅ / S4 editor（属性面板「输出变量名」，data-field 定位）✅ / S5 editor（sessionId 下拉变量名显示，change 分支生成引用）✅ / S6 现有 workflow 保持 None 兼容、无需迁移 ✅ / S7 测试 + gate ✅。
+
+**新增测试**：resolver 单测 5（整值/子路径/缺失字段/未定义/变量优先）；protocols 编译 3（后向放行/前向拒绝/未声明拒绝）；runtime 集成 1（producer output_name → consumer `${var.field}` 解析贯穿）；e2e 1（editor 命名 launch → click 下拉引用 `${web_page1.sessionId}`）。

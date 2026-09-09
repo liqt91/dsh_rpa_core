@@ -716,10 +716,14 @@ def test_editor_session_id_binds_to_launch_node(server):
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()
         page.goto(f"{base}/")
-        page.wait_for_selector('[data-command="browser.launch"], [data-command="browser.click"]')
+        page.wait_for_selector(
+            '[data-command="browser.launch"], [data-command="browser.click"]'
+        )
         # 展开类别（搜索强制展开）
         page.fill("#palette-filter", "browser")
-        page.wait_for_selector('[data-command="browser.launch"]:visible, [data-command="browser.click"]:visible')
+        page.wait_for_selector(
+            '[data-command="browser.launch"]:visible, [data-command="browser.click"]:visible'
+        )
         page.fill("#palette-filter", "")
 
         page.click('[data-command="browser.launch"]')
@@ -731,7 +735,10 @@ def test_editor_session_id_binds_to_launch_node(server):
         page.click('#canvas li[data-node="click"]')
         page.wait_for_selector("#props-body .session-pick")
         # 下拉里有 launch 节点
-        options = page.eval_on_selector_all("#props-body .session-pick option", "els => els.map(e=>e.value)")
+        options = page.eval_on_selector_all(
+            "#props-body .session-pick option",
+            "els => els.map(e=>e.value)",
+        )
         assert "launch" in options
         # 选择 → sessionId 输入框填 `${steps.launch.outputs.sessionId}`
         page.select_option("#props-body .session-pick", "launch")
@@ -741,4 +748,43 @@ def test_editor_session_id_binds_to_launch_node(server):
         )
         hint = page.locator("#props-body .field-hint")
         assert "引用" in hint.inner_text()
+        browser.close()
+
+
+def test_editor_output_name_binds_session_variable(server):
+    """output_name 命名 launch 后，click 的 sessionId 下拉显示变量名并引用 ${name}.sessionId。"""
+    base = f"http://127.0.0.1:{server.port}"
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
+        page.goto(f"{base}/")
+        page.wait_for_selector(
+            '[data-command="browser.launch"], [data-command="browser.click"]'
+        )
+        page.fill("#palette-filter", "browser")
+        page.wait_for_selector(
+            '[data-command="browser.launch"]:visible, [data-command="browser.click"]:visible'
+        )
+        page.fill("#palette-filter", "")
+
+        page.click('[data-command="browser.launch"]')
+        page.wait_for_selector('#canvas li[data-node="launch"]')
+        # 点 launch，填输出变量名
+        page.click('#canvas li[data-node="launch"]')
+        page.wait_for_selector('#props-body input[data-field="输出变量名"]')
+        page.fill('#props-body input[data-field="输出变量名"]', "web_page1")
+        page.wait_for_function(
+            "() => document.querySelector('#canvas li[data-node=\"launch\"]')"
+        )
+
+        page.click('[data-command="browser.click"]')
+        page.wait_for_selector('#canvas li[data-node="click"]')
+        page.click('#canvas li[data-node="click"]')
+        page.wait_for_selector("#props-body .session-pick")
+        # 下拉含变量命名的 launch，选中后 sessionId 引用子字段 ${web_page1.sessionId}
+        page.select_option("#props-body .session-pick", "launch")
+        page.wait_for_function(
+            "() => document.querySelector('#props-body input[data-field=\"sessionId\"]')"
+            ".value === '${web_page1.sessionId}'"
+        )
         browser.close()
