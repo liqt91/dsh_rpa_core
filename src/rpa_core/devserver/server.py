@@ -306,6 +306,9 @@ class _RequestHandler(BaseHTTPRequestHandler):
         self.send_response(status)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
+        # 本地开发服务器：静态资源（app.js/styles.css）改完即生效。
+        # 不发此头时浏览器会启发式缓存旧 JS/CSS，前端改动"看起来没生效"。
+        self.send_header("Cache-Control", "no-cache")
         if status >= 400:
             self.close_connection = True
         self.end_headers()

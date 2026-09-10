@@ -1899,8 +1899,12 @@ function replaceWithVarSelect(wrap, origInput, node, fieldKey, onChange) {
     if (top + ph > window.innerHeight - 8) top = Math.max(8, r.top - ph - 2);
     varPopup.style.left = `${Math.round(left)}px`;
     varPopup.style.top = `${Math.round(top)}px`;
-    // 面板滚动/窗口变化时关闭（fixed 定位不跟随锚点）
-    window.addEventListener("scroll", closeVarPopup, { capture: true, signal: ac.signal });
+    // 面板滚动/窗口变化时关闭（fixed 定位不跟随锚点）；
+    // 浮层自身内部滚动（列表超过 max-height）不算，不能误关。
+    window.addEventListener("scroll", (e) => {
+      if (varPopup && e.target instanceof Node && varPopup.contains(e.target)) return;
+      closeVarPopup();
+    }, { capture: true, signal: ac.signal });
     window.addEventListener("resize", closeVarPopup, { signal: ac.signal });
     fxPopupCleanup = closeVarPopup;
   };
