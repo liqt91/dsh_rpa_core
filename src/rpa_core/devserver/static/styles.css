@@ -1,4 +1,4 @@
-:root { --border: #d0d7de; --muted: #656d76; --accent: #0969da; --ok: #1a7f37; --bad: #cf222e; --bg: #f6f8fa; --canvas: #e9edf1; }
+:root { --border: #d0d7de; --muted: #656d76; --accent: #0969da; --ok: #1a7f37; --bad: #cf222e; --bg: #f6f8fa; --canvas: #e9edf1; --surface: #ffffff; }
 * { box-sizing: border-box; }
 body { margin: 0; font: 14px/1.5 -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif; color: #1f2328; height: 100vh; display: flex; flex-direction: column; }
 header { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--border); background: var(--bg); flex-wrap: wrap; }
