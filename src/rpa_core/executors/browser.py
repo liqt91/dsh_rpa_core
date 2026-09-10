@@ -128,9 +128,10 @@ class PlaywrightExecutor(CommandExecutor):
                 session_id = str(uuid.uuid4())
                 self._sessions[session_id] = (browser, context, page)
                 timeout_ms = int(inputs.get("timeoutMs", 30_000))
+                wait_until = str(inputs.get("waitUntil") or "domcontentloaded")
                 try:
                     await page.goto(
-                        str(inputs["url"]), wait_until="domcontentloaded", timeout=timeout_ms
+                        str(inputs["url"]), wait_until=wait_until, timeout=timeout_ms
                     )
                 except Exception:
                     # 导航失败必须释放本次新建的浏览器（规则 11：attempt 资源先释放再退出）

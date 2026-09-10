@@ -1,6 +1,6 @@
 {
   "id": "browser.navigate",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "executor": "browser.playwright",
   "kind": "action",
   "risk": "browser-control",
@@ -19,11 +19,17 @@
         "default": "goto"
       },
       "url": {"type": "string", "x-fx": true},
+      "waitUntil": {
+        "type": "string",
+        "enum": ["load", "domcontentloaded", "commit", "networkidle"],
+        "description": "等待网页加载完成的事件策略（对标影刀「等待网页加载完成」参数）：domcontentloaded=DOM就绪即返回（默认）；load=等待全部资源加载；networkidle=网络空闲；commit=收到响应即返回",
+        "default": "domcontentloaded"
+      },
       "timeoutMs": {"type": "integer", "minimum": 1},
       "channel": {
         "type": "string",
-        "enum": ["chromium", "chrome", "msedge"],
-        "description": "浏览器类型（对标影刀浏览器类型）：chromium=内置浏览器（默认）；chrome/msedge=复用本机安装的 Chrome/Edge"
+        "enum": ["chromium", "chrome", "msedge", "firefox", "webkit"],
+        "description": "浏览器类型（对标影刀浏览器类型）：chromium=内置浏览器（默认）；chrome/msedge/firefox/webkit=复用本机安装的对应内核浏览器；影刀的 ie/360se/QQ 等国产壳内核浏览器不在支持范围（复用用户真实已登录浏览器请用 transport=bsk）"
       },
       "args": {
         "type": "array",
@@ -50,6 +56,7 @@
     },
     "additionalProperties": false,
     "x-depends": {
+      "waitUntil": {"transport": "playwright"},
       "channel": {"transport": "playwright"},
       "args": {"transport": "playwright"},
       "headless": {"transport": "playwright"},
