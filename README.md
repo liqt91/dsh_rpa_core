@@ -203,7 +203,15 @@ uv run python -m rpa_core.cli devserver
 uv run pytest                            # unit + contract + e2e（含真实 Chromium / Windows 桌面）
 uv run ruff check .
 uv run python .harness/scripts/check_architecture.py   # 架构不变量（38 py / 26 manifest）
-uv run python .harness/scripts/check_all.py            # 完整门禁：测试 + 架构 + 任务一致性
+uv run python .harness/scripts/check_all.py            # 完整门禁：测试 + 架构 + 任务一致性 + 前端一致性脚本
+```
+
+前端一致性脚本（编辑器纯函数与后端语义共用同一份源码；已并入 `check_all.py`，单独跑亦可）：
+
+```powershell
+node scripts/check_param_groups.mjs     # 参数分组/字段联动判定
+node scripts/check_channel_preview.mjs  # 通道解析预览与宿主浏览器匹配
+node scripts/check_retry_policy.mjs     # 重试能力判定 vs manifest.retryable（并交叉校验全量 manifest）
 ```
 
 E2E 依赖 `playwright install chromium`；桌面 E2E 在 Windows + pywinauto 上运行。
@@ -215,6 +223,7 @@ E2E 依赖 `playwright install chromium`；桌面 E2E 在 Windows + pywinauto �
 | `docs/api-usage.md` | 进程内 API 使用契约 v1（四步模式 / 状态机 / 证据） |
 | `docs/devserver.md` | dev server 手册：启动、端点速查、编辑器、元素捕获全流程 |
 | `docs/editor-design.md` | 编辑器视觉设计（中文层、i18n、术语表） |
+| `docs/manifest-param-config.md` | manifest 参数配置能力审计：现有配置全景 + 缺口清单 + 建议关键字草案 |
 | `docs/capture-transport.md` | 浏览器捕获传输方案与降级链 |
 | `docs/desktop_backends.md` | 桌面后端矩阵（UIA / win32） |
 | `docs/m2_1_legacy_element_inventory.md` | 旧元素静态盘点（clean-room 边界） |

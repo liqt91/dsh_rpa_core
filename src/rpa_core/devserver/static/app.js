@@ -1264,7 +1264,9 @@ function renderProps() {
     if (v === null) delete node.timeout_seconds; else node.timeout_seconds = v;
     markDirty();
   }));
-  body.appendChild(retryCountField(node, manifest));
+  // 重试次数：仅 manifest 声明可重试的指令才出现（不支持时返回 null）
+  const retryField = retryCountField(node, manifest);
+  if (retryField) body.appendChild(retryField);
   const schema = manifest ? manifest.input_schema : {};
   const properties = schema.properties || {};
   const keys = Object.keys(properties);
@@ -2242,43 +2244,52 @@ function literalField(labelText, value, onChange, required, rawKey) {
   return wrapField(labelText, required, input, "引用 ${...} 或 JSON 字面量", rawKey);
 }
 
-// 重试次数：对「重放不安全」指令（如 browser.navigate 会重复开网页）直接禁用——
-// 编译器与运行时都会拒绝（Unsafe replay command cannot be retried），
-// 与其等运行时报错，不如在面板上说清楚；已有非法值给一键清除。
+// 重试能力判定：manifest 是唯一事实源（与运行时编排器门禁一致——
+// orchestrator 的可重试条件 = error.retryable AND manifest.retryable）。
+// 因此「不能重试」= manifest.retryable !== true，分两种原因：
+//   - unsafe-replay：重放不安全（重复开网页/重复提交），编译器直接拒绝运行
+//   - not-declared：指令未声明可重试，运行时静默忽略 retry_count
+// 纯函数（无 DOM）：scripts/check_retry_policy.mjs 从同一份源码抽取校验。
+function retryPolicy(manifest) {
+  if (!manifest) return { allowed: false, reason: "unknown" };
+  if (manifest.retryable === true) return { allowed: true, reason: "declared" };
+  const replay = manifest.effect ? manifest.effect.replay : undefined;
+  if (replay === "unsafe") return { allowed: false, reason: "unsafe-replay" };
+  return { allowed: false, reason: "not-declared" };
+}
+
+// 重试次数：只有 manifest 声明 retryable=true 的指令才渲染输入框。
+// 不能重试的指令根本不出现这个变量——参数面板不该摆一个「填了也不生效」的开关
+// （旧版是置灰 + 警告，仍然占位、仍然让人想填）。手改 workflow.json 遗留的非法值
+// 给一条说明 + 一键清除，不留静默陷阱。
 function retryCountField(node, manifest) {
-  const field = numberField("重试次数", node.retry_count ?? 0, (v) => {
-    if (v === null || v === 0) delete node.retry_count; else node.retry_count = v;
-    markDirty();
-  });
-  const unsafe = !!(manifest && manifest.effect && manifest.effect.replay === "unsafe");
-  if (!unsafe) return field;
-  const input = field.querySelector("input");
-  if (input) {
-    input.disabled = true;
-    input.title = "该指令重放不安全（重复执行会产生重复副作用，如重复打开网页/重复提交），不支持重试";
-  }
-  const hint = document.createElement("span");
-  hint.className = "field-hint wrap";
-  hint.textContent = "该指令重放不安全，不支持重试";
-  field.appendChild(hint);
-  if (node.retry_count) {
-    field.classList.add("field-invalid");
-    const note = document.createElement("span");
-    note.className = "field-hint bad wrap";
-    note.textContent = `⚠ 当前值 ${node.retry_count} 会导致编译失败，流程无法运行`;
-    const fix = document.createElement("button");
-    fix.type = "button";
-    fix.className = "retry-clear-btn";
-    fix.textContent = "清除重试次数";
-    fix.addEventListener("click", () => {
-      pushUndo();
-      delete node.retry_count;
+  const policy = retryPolicy(manifest);
+  if (policy.allowed) {
+    return numberField("重试次数", node.retry_count ?? 0, (v) => {
+      if (v === null || v === 0) delete node.retry_count; else node.retry_count = v;
       markDirty();
-      renderProps();
-      showCompileMessage(`已清除「重试次数」：${node.command} 重放不安全，不能重试`, true);
     });
-    field.append(note, fix);
   }
+  if (!node.retry_count) return null;
+  const field = document.createElement("div");
+  field.className = "field field-invalid";
+  const note = document.createElement("span");
+  note.className = "field-hint bad wrap";
+  note.textContent = policy.reason === "unsafe-replay"
+    ? `⚠ 该指令重放不安全（重复执行会产生重复副作用，如重复打开网页/重复提交），不能重试；当前值 ${node.retry_count} 会导致编译失败`
+    : `⚠ 该指令未声明支持重试，当前值 ${node.retry_count} 不会生效`;
+  const fix = document.createElement("button");
+  fix.type = "button";
+  fix.className = "retry-clear-btn";
+  fix.textContent = "清除重试次数";
+  fix.addEventListener("click", () => {
+    pushUndo();
+    delete node.retry_count;
+    markDirty();
+    renderProps();
+    showCompileMessage(`已清除「重试次数」：${node.command} 不支持重试`, true);
+  });
+  field.append(note, fix);
   return field;
 }
 
