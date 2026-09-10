@@ -1765,7 +1765,12 @@ function replaceWithVarSelect(wrap, origInput, node, fieldKey, onChange) {
     wrap._fxEditor.remove();
     delete wrap._fxEditor;
   }
-  origInput.style.display = "none";
+  // 离开文本输入框（避免占位/挤占按钮位置）；保留引用，restoreTextField 时插回。
+  // 这里不能仅 display:none：隐藏的 input 仍占据 flex 槽位，
+  // 会让 row 变成 [Py, hidden-input, fx, editor, picker]——fx 视觉上
+  // 跳到 input 前面，并且浏览器对 hidden 元素的尺寸计算也容易触发 select 拉高。
+  wrap._fxHiddenInput = origInput;
+  origInput.remove();
 
   const editor = document.createElement("div");
   editor.className = "fx-tag-editor";
@@ -1885,8 +1890,16 @@ function replaceWithVarSelect(wrap, origInput, node, fieldKey, onChange) {
   toView(node["with"] ? node["with"][fieldKey] : undefined);
   const row = wrap.querySelector(".expr-input-row");
   const holder = row || wrap;
-  holder.appendChild(editor);
-  holder.appendChild(picker);
+  // 找到 fx-btn，把 editor 插到 fx-btn 之前，让 row 最终顺序为
+  // [Py, editor, picker, fx]，fx 按钮保持在最右端。
+  const fxBtn = holder.querySelector(".fx-btn");
+  if (fxBtn) {
+    holder.insertBefore(editor, fxBtn);
+    holder.insertBefore(picker, fxBtn);
+  } else {
+    holder.appendChild(editor);
+    holder.appendChild(picker);
+  }
   wrap._fxEditor = editor;
 }
 
@@ -1910,18 +1923,21 @@ function restoreTextField(wrap, origInput) {
     wrap._fxEditor.remove();
     delete wrap._fxEditor;
   }
-  origInput.style.display = "";
-  // 确保 input 回到 row 中正确位置（如果被移除了）
-  const row = wrap.querySelector(".expr-input-row");
-  if (row && !row.contains(origInput)) {
-    // 找到 fx-btn 的位置，在它前面插入 input
-    const fxBtn = row.querySelector(".fx-btn");
-    if (fxBtn) {
-      row.insertBefore(origInput, fxBtn);
-    } else {
-      row.appendChild(origInput);
+  // 解除 detach：把 input 重新插入到 row 中的 fx-btn 之前。
+  // 这样 row 顺序回到 [Py, input, fx]，按钮位置稳定。
+  if (wrap._fxHiddenInput === origInput) {
+    delete wrap._fxHiddenInput;
+    const row = wrap.querySelector(".expr-input-row");
+    if (row && !row.contains(origInput)) {
+      const fxBtn = row.querySelector(".fx-btn");
+      if (fxBtn) {
+        row.insertBefore(origInput, fxBtn);
+      } else {
+        row.appendChild(origInput);
+      }
     }
   }
+  origInput.style.display = "";
 }
 
 // 条件左值/右值：${...} 引用保持字符串，其余按 JSON 字面量解析（数组/对象/数字/布尔）。

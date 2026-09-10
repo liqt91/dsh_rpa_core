@@ -121,12 +121,15 @@ button:disabled { opacity: .45; cursor: default; }
 .field input[type=text], .field input[type=number], .field select, .field textarea { width: 100%; }
 .field textarea { font-family: Consolas, monospace; min-height: 64px; }
 .expr-input-row { display: flex; align-items: stretch; gap: 0; }
+/* 行内所有控件统一高度 30px，避免 native <select> 拉高整行。 */
+.expr-input-row > * { height: 30px; }
 .expr-input-row input[type=text], .expr-input-row select {
   flex: 1; min-width: 0; border-radius: 0; border-left: none; border-right: none;
+  height: 30px;
 }
 .expr-input-row input[type=text]:first-child, .expr-input-row select:first-child { border-left: 1px solid var(--border); }
 .expr-btn {
-  width: 28px; min-width: 28px; display: flex; align-items: center; justify-content: center;
+  width: 28px; min-width: 28px; height: 30px; display: flex; align-items: center; justify-content: center;
   font-size: 11px; font-weight: 600; cursor: pointer; border: 1px solid var(--border);
   background: var(--bg); color: var(--muted); transition: all 0.15s;
 }
@@ -136,13 +139,16 @@ button:disabled { opacity: .45; cursor: default; }
 .expr-btn.active { background: var(--accent); color: #fff; border-color: var(--accent); z-index: 1; }
 .expr-btn.active + input[type=text], .expr-btn.active + select { border-color: var(--accent); }
 .py-mode { background: #1e1e2e !important; color: #cdd6f4 !important; border-color: #45475a !important; }
-.fx-var-select { width: auto !important; min-width: 92px; flex: 0 0 auto !important; border-radius: 0 6px 6px 0 !important; font-size: 12px; }
+.fx-var-select { width: auto !important; min-width: 92px; flex: 0 0 auto !important; border-radius: 0 6px 6px 0 !important; font-size: 12px; height: 30px; padding: 0 6px; }
 /* fx 标签化编辑器：文本 + [变量] chip 混排 */
 .fx-tag-editor {
-  flex: 1; min-width: 0; min-height: 30px; padding: 5px 8px;
+  flex: 1; min-width: 0; box-sizing: border-box;
+  height: 30px; min-height: 30px; max-height: 30px;
+  padding: 4px 8px;
   border: 1px solid var(--accent); border-right: none; border-radius: 0 0 0 0;
   background: var(--bg); font-size: 13px; line-height: 20px;
-  white-space: pre-wrap; word-break: break-word; outline: none;
+  white-space: nowrap; overflow-x: auto; overflow-y: hidden;
+  outline: none;
 }
 .fx-var-chip {
   display: inline-block; margin: 0 2px; padding: 0 6px;
