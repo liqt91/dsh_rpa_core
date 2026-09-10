@@ -1843,39 +1843,49 @@ function replaceWithVarSelect(wrap, origInput, node, fieldKey, onChange) {
     commit();
   };
 
-  // 变量插入下拉：用户变量分组置顶
-  const picker = document.createElement("select");
-  picker.className = "fx-var-select";
-  const userVars = collectUserVariables();
-  const userNames = new Set(userVars.map((v) => v.name));
-  picker.innerHTML = '<option value="">＋ 插入变量</option>';
-  if (userVars.length) {
-    const group = document.createElement("optgroup");
-    group.label = "用户变量";
-    for (const v of userVars) {
-      const opt = document.createElement("option");
-      opt.value = v.name;
-      opt.textContent = `${v.name}（${v.source}）`;
-      group.appendChild(opt);
-    }
-    picker.appendChild(group);
-  }
-  const builtinGroup = document.createElement("optgroup");
-  builtinGroup.label = "内置作用域";
-  for (const p of computeReferencePaths()) {
-    const bare = p.replace(/^\$\{|\}$/g, "");
-    if (!bare.includes(".") && userNames.has(bare)) continue;
-    const opt = document.createElement("option");
-    opt.value = bare;
-    opt.textContent = bare;
-    builtinGroup.appendChild(opt);
-  }
-  picker.appendChild(builtinGroup);
-  picker.addEventListener("change", () => {
-    if (!picker.value) return;
-    insertVar(picker.value);
-    picker.value = "";
-  });
+  // 变量插入浮层：点击编辑器弹出（不再内联占位），用户变量分组置顶。
+  // 用 mousedown + preventDefault 保证编辑器不失去焦点、光标位置不丢。
+  let varPopup = null;
+  const closeVarPopup = () => { if (varPopup) { varPopup.remove(); varPopup = null; } };
+
+  const openVarPopup = () => {
+    if (varPopup) return;
+    const userVars = collectUserVariables();
+    const userNames = new Set(userVars.map((v) => v.name));
+    varPopup = document.createElement("div");
+    varPopup.className = "ref-completion fx-var-popup";
+    const row = wrap.querySelector(".expr-input-row");
+    const holder = row || wrap;
+    holder.style.position = "relative";
+    holder.appendChild(varPopup);
+    const addGroup = (label, items) => {
+      if (!items.length) return;
+      const head = document.createElement("div");
+      head.className = "fx-var-popup-group";
+      head.textContent = label;
+      varPopup.appendChild(head);
+      for (const it of items) {
+        const item = document.createElement("div");
+        item.className = "ref-item";
+        item.textContent = it.label;
+        item.addEventListener("mousedown", (e) => {
+          e.preventDefault();
+          insertVar(it.name);
+          closeVarPopup();
+        });
+        varPopup.appendChild(item);
+      }
+    };
+    addGroup("用户变量", userVars.map((v) => ({ name: v.name, label: `${v.name}（${v.source}）` })));
+    addGroup("内置作用域", computeReferencePaths()
+      .map((p) => p.replace(/^\$\{|\}$/g, ""))
+      .filter((bare) => bare.includes(".") || !userNames.has(bare))
+      .map((bare) => ({ name: bare, label: bare })));
+  };
+
+  editor.addEventListener("click", () => openVarPopup());
+  editor.addEventListener("blur", () => setTimeout(closeVarPopup, 150));
+  editor.addEventListener("keydown", (e) => { if (e.key === "Escape") closeVarPopup(); });
 
   // 点击 chip 可删除
   editor.addEventListener("click", (e) => {
@@ -1891,16 +1901,15 @@ function replaceWithVarSelect(wrap, origInput, node, fieldKey, onChange) {
   const row = wrap.querySelector(".expr-input-row");
   const holder = row || wrap;
   // 找到 fx-btn，把 editor 插到 fx-btn 之前，让 row 最终顺序为
-  // [Py, editor, picker, fx]，fx 按钮保持在最右端。
+  // [Py, editor, fx]，fx 按钮保持在最右端。
   const fxBtn = holder.querySelector(".fx-btn");
   if (fxBtn) {
     holder.insertBefore(editor, fxBtn);
-    holder.insertBefore(picker, fxBtn);
   } else {
     holder.appendChild(editor);
-    holder.appendChild(picker);
   }
   wrap._fxEditor = editor;
+  wrap._closeFxPopup = closeVarPopup;
 }
 
 // 变量标签（chip）：点击选中、Alt+点击删除
@@ -1917,11 +1926,11 @@ function makeVarChip(name) {
 // 恢复文本输入（从 fx 模式退回）
 function restoreTextField(wrap, origInput) {
   if (wrap._fxEditor) {
-    // 编辑器及其插入下拉一起移除
-    const picker = wrap.querySelector(".fx-var-select");
-    if (picker) picker.remove();
+    // 浮层变量下拉一起关闭
+    if (typeof wrap._closeFxPopup === "function") wrap._closeFxPopup();
     wrap._fxEditor.remove();
     delete wrap._fxEditor;
+    delete wrap._closeFxPopup;
   }
   // 解除 detach：把 input 重新插入到 row 中的 fx-btn 之前。
   // 这样 row 顺序回到 [Py, input, fx]，按钮位置稳定。
