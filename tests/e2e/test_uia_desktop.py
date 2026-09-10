@@ -63,21 +63,31 @@ def _wait_for_window(title: str, timeout: float = 15.0) -> None:
     raise TimeoutError(f"window did not appear: {title}")
 
 
-def _warmup_uia() -> None:
-    """触发一次 pywinauto UIA 初始化并完成一次全桌面枚举。
+def _warmup_uia(title: str) -> None:
+    """触发一次 pywinauto UIA 初始化，只对目标窗口单窗口构造 UIAWrapper。
 
     DesktopExecutor 每个命令外层有 15s 的 asyncio.wait_for 超时，而 pywinauto
     UIA backend 在进程内首次初始化实测可达 ~60s（慢 provider / 首次 provider 连接）。
     若首启发生在 executor 的命令里会被 15s 掐断 → TIMEOUT。此处提前把首启消耗掉，
     后续同进程内的 UIA 调用走进程级缓存（实测 ~125ms）。
-    """
-    import pythoncom
-    from pywinauto import Desktop
 
+    与 executor 的 attach 路径一致，通过 Win32 FindWindowW 定位 HWND 后从单窗口构造
+    UIAWrapper，避免 Desktop(backend="uia").windows() 全桌面枚举（慢 provider 会
+    触发 RPC_E_SERVERCALL_RETRYLATER 噪音）。
+    """
+    import ctypes
+
+    import pythoncom
+    from pywinauto.controls.uiawrapper import UIAWrapper
+    from pywinauto.uia_element_info import UIAElementInfo
+
+    hwnd = ctypes.windll.user32.FindWindowW(None, title)
+    if not hwnd:
+        raise RuntimeError(f"window did not appear: {title}")
     pythoncom.CoInitialize()
     try:
         # 首启初始化就藏在这里；允许长时间完成，不设 wait_for
-        Desktop(backend="uia").windows()
+        UIAWrapper(UIAElementInfo(hwnd))
     finally:
         pythoncom.CoUninitialize()
 
@@ -129,7 +139,7 @@ def _run_uia_workflow(tmp_path: Path, attempts: int = 1):
         try:
             await asyncio.to_thread(_wait_for_window, APP_TITLE)
             # 窗口已出现；先 warm-up UIA，避免 15s 命令超时被 ~60s 首启初始化掐断
-            await asyncio.to_thread(_warmup_uia)
+            await asyncio.to_thread(_warmup_uia, APP_TITLE)
             # 抢回前台焦点（全量套件内前置浏览器用例会占用前台，SendInput 需要）
             await asyncio.to_thread(_force_foreground, APP_TITLE)
             catalog = load_catalog(ROOT / "commands")

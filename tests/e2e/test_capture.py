@@ -108,7 +108,8 @@ def test_browser_persistent_capture_end_to_end(server):
 def test_desktop_capture_end_to_end_verifies_hit(server, tmp_path):
     import subprocess as sp
 
-    from pywinauto import Desktop
+    from pywinauto.controls.uiawrapper import UIAWrapper
+    from pywinauto.uia_element_info import UIAElementInfo
 
     exe = tmp_path / "RpaCoreDesktopDemo.exe"
     csc = "C:/Windows/Microsoft.NET/Framework64/v4.0.30319/csc.exe"
@@ -128,20 +129,22 @@ def test_desktop_capture_end_to_end_verifies_hit(server, tmp_path):
     proc = sp.Popen([str(exe)])
     base = f"http://127.0.0.1:{server.port}"
     try:
+        # Win32 FindWindowW 毫秒级探测等待窗口，避免全桌面 UIA 枚举
+        # （与 executor 的 attach 路径一致：只定位单窗口，不触发慢 provider 全树遍历）。
+        user32 = ctypes.windll.user32
+        find_window = user32.FindWindowW
+        title = "RPA Core Desktop Demo"
         deadline = time.time() + 15
-        window = None
-        while time.time() < deadline and window is None:
-            matches = Desktop(backend="uia").windows(
-                title="RPA Core Desktop Demo", process=proc.pid
-            )
-            window = matches[0] if matches else None
-            if window is None:
+        hwnd = 0
+        while time.time() < deadline and not hwnd:
+            hwnd = find_window(None, title)
+            if not hwnd:
                 time.sleep(0.3)
-        assert window is not None, "test app window did not appear"
+        assert hwnd, "test app window did not appear"
+        window = UIAWrapper(UIAElementInfo(hwnd))
 
         # 多显示器/RDP 下窗口可能落在屏幕外或被遮挡：钉到主屏固定位置并置前
-        hwnd = int(window.handle)
-        ctypes.windll.user32.MoveWindow(hwnd, 120, 120, 460, 280, True)
+        user32.MoveWindow(hwnd, 120, 120, 460, 280, True)
         window.set_focus()
         time.sleep(0.5)
 
