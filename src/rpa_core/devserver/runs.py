@@ -10,10 +10,13 @@ run_id 后映射到 `run_artifacts/<uuid>/` 读证据。
 """
 
 import json
+import os
 import subprocess
 import sys
 import threading
 from pathlib import Path
+
+from rpa_core.extension_exec import DEFAULT_HUB_URL, HUB_URL_ENV
 
 
 class RunManager:
@@ -25,6 +28,9 @@ class RunManager:
         self._procs: dict[str, dict] = {}
         self._lock = threading.Lock()
         self._seq = 0
+        # 自研扩展执行通道宿主地址（DevServer.start 后写入真实端口）；
+        # 子进程据此回连命令队列，扩展收到命令后在用户真实浏览器里执行。
+        self.hub_url = DEFAULT_HUB_URL
 
     def start(self, workflow_name: str, inputs: dict | None = None) -> dict:
         workflow_path = self._workflows_root / workflow_name / "workflow.json"
@@ -36,8 +42,11 @@ class RunManager:
         ]
         if inputs:
             args += ["--inputs", json.dumps(inputs, ensure_ascii=False)]
+        env = os.environ.copy()
+        env[HUB_URL_ENV] = self.hub_url
         proc = subprocess.Popen(
             args,
+            env=env,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             text=True, encoding="utf-8", errors="replace",
             cwd=str(self._workflows_root.parent),

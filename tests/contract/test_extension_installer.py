@@ -287,7 +287,7 @@ def test_cli_registry_flag_writes_external_registry(_fake_registry, monkeypatch,
     for root in BROWSER_EXTERNAL_ROOTS.values():
         entry = _fake_registry.stores[f"{root}\\{EXPECTED_ID}"]
         assert entry["path"][0].endswith("extension.crx")
-        assert entry["version"] == ("0.1.2", 1)
+        assert entry["version"] == ("0.2.0", 1)
     assert all(FORCELIST_KEY not in path for path in _fake_registry.stores)
 
 
@@ -454,7 +454,7 @@ def test_update_manifest_served_with_crx_codebase(packed_server):
     text = body.decode("utf-8")
     assert f'appid="{EXPECTED_ID}"' in text
     assert f'codebase="{base}/api/extension/crx"' in text
-    assert 'version="0.1.2"' in text
+    assert 'version="0.2.0"' in text
 
 
 def test_crx_served_with_chrome_extension_content_type(packed_server):

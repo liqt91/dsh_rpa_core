@@ -15,6 +15,7 @@ from playwright.async_api import (
 )
 
 from rpa_core.bsk_client import BskError, BskSessionGoneError
+from rpa_core.extension_exec import ExtensionChannelError
 from rpa_core.model.command import (
     CommandInvocation,
     CommandResult,
@@ -25,6 +26,7 @@ from rpa_core.model.errors import ErrorCode
 
 from .base import CommandExecutor
 from .browser_bsk import BskSession
+from .browser_ext import ExtensionExecSession
 
 # 滚动 JS：window 全页滚动 / 元素内部滚动（position: top|bottom|point|page）
 _SCROLL_WINDOW_JS = """([position, behavior, x, y]) => {
@@ -45,14 +47,27 @@ _SCROLL_ELEMENT_JS = """(el, [position, behavior, x, y]) => {
     return el.scrollTop;
 }"""
 
+# 扩展通道：命令 → page.call 原语（DOM 操作走扩展注入函数，规避页面 CSP 对 eval 的限制）
+_EXT_PAGE_METHODS = {
+    "browser.click": "click",
+    "browser.hover": "hover",
+    "browser.input": "input",
+    "browser.scroll": "scroll",
+    "browser.select": "select",
+    "browser.check": "check",
+}
+
 
 class PlaywrightExecutor(CommandExecutor):
-    def __init__(self, bsk_runner=None):
+    def __init__(self, bsk_runner=None, ext_session=None):
         self._playwright: Playwright | None = None
         self._sessions: dict[str, tuple[Browser, BrowserContext, Page]] = {}
         self._bsk_sessions: dict[str, BskSession] = {}
         self._bsk_keep_open: dict[str, bool] = {}
         self._bsk_runner = bsk_runner
+        # 自研扩展通道（一等公民）：会话 = 用户浏览器里的一个标签页句柄
+        self._ext = ext_session or ExtensionExecSession()
+        self._ext_sessions: dict[str, str] = {}  # sessionId -> tabId
 
     async def _ensure_runtime(self) -> Playwright:
         if self._playwright is None:
@@ -86,6 +101,12 @@ class PlaywrightExecutor(CommandExecutor):
         command = invocation.command_id
         inputs = invocation.inputs
         try:
+            # 一等公民通道：sessionId 属于扩展会话 → 全程走自研扩展
+            ext_session_id = str(inputs.get("sessionId") or "")
+            if ext_session_id and ext_session_id in self._ext_sessions:
+                return await self._execute_extension(
+                    command, invocation, inputs, ext_session_id, started, cancellation
+                )
             if command == "browser.navigate":
                 nav_action = str(inputs.get("action") or "goto")
                 if nav_action != "goto":
@@ -98,6 +119,8 @@ class PlaywrightExecutor(CommandExecutor):
                 # 打开网页 = 启动浏览器 + 导航（不单独维护浏览器实例指令）
                 if inputs.get("transport") == "bsk":
                     return await self._open_bsk(invocation, inputs, started)
+                if await self._use_extension(inputs):
+                    return await self._open_extension(invocation, inputs, started)
                 runtime = await self._ensure_runtime()
                 user_agent = inputs.get("userAgent")
                 user_data_dir = inputs.get("userDataDir")
@@ -899,6 +922,346 @@ class PlaywrightExecutor(CommandExecutor):
             return str(await locator.get_attribute("href", timeout=timeout_ms) or "")
         return await locator.inner_text(timeout=timeout_ms)
 
+    # -- 自研扩展通道（M15 一等公民） -----------------------------------------
+
+    async def _use_extension(self, inputs: dict[str, Any]) -> bool:
+        """通道解析：显式 transport 优先；缺省时扩展在线则优先走扩展。
+
+        一等公民策略：装了扩展且在线 → 默认走扩展（用户真实登录态浏览器）；
+        扩展离线（未安装/休眠/devserver 未运行）→ 静默回退 playwright，流程不阻塞。
+        需要强制旧通道时显式 `transport=playwright`。
+        """
+        transport = inputs.get("transport")
+        if transport:
+            return str(transport) == "extension"
+        try:
+            return bool(await asyncio.to_thread(self._ext.online))
+        except Exception:
+            return False
+
+    async def _open_extension(
+        self, invocation: CommandInvocation, inputs: dict[str, Any], started: float
+    ) -> CommandResult:
+        """打开网页（扩展传输）= 在用户真实浏览器里新建标签页（无启动浏览器概念）。"""
+        url = str(inputs["url"])
+        timeout_s = int(inputs.get("timeoutMs", 30_000)) / 1000.0
+        try:
+            opened = await asyncio.to_thread(
+                self._ext.tabs_create, url, timeout_seconds=timeout_s
+            )
+        except ExtensionChannelError as exc:
+            return self._ext_channel_failure(exc)
+        session_id = str(uuid.uuid4())
+        tab_id = str(opened.get("tabId") or "")
+        self._ext_sessions[session_id] = tab_id
+        final_url = str(opened.get("url") or url)
+        return CommandResult.success(
+            outputs={
+                "sessionId": session_id,
+                "url": final_url,
+                "resourceType": "webPage",
+            },
+            effects=[
+                EffectRecord.committed(
+                    invocation,
+                    kind=EffectKind.SESSION,
+                    resource=f"browser.session:{session_id}",
+                    details={
+                        "operation": "navigate",
+                        "transport": "extension",
+                        "tabId": tab_id,
+                        "url": final_url,
+                    },
+                )
+            ],
+            diagnostics={"durationMs": int((time.monotonic() - started) * 1000)},
+        )
+
+    async def _execute_extension(
+        self,
+        command: str,
+        invocation: CommandInvocation,
+        inputs: dict[str, Any],
+        session_id: str,
+        started: float,
+        cancellation: asyncio.Event,
+    ) -> CommandResult:
+        """扩展会话内的命令执行（Phase 1 命令集）。"""
+        tab_id = self._ext_sessions.get(session_id, "")
+        selector = str(inputs.get("selector") or "")
+        timeout_s = int(inputs.get("timeoutMs", 30_000)) / 1000.0
+        resource = f"browser.session:{session_id}"
+        try:
+            if command == "browser.close":
+                # 扩展会话的「关闭」= 解绑：用户浏览器里的标签页留给用户，不代关
+                self._ext_sessions.pop(session_id, None)
+                return self._ext_success(
+                    invocation, EffectKind.SESSION, resource, {"operation": "detach"},
+                    outputs={"sessionId": session_id},
+                )
+            if command == "browser.navigate":
+                action = str(inputs.get("action") or "goto")
+                if action == "goto":
+                    result = await asyncio.to_thread(
+                        self._ext.tabs_navigate, tab_id, str(inputs["url"]),
+                        timeout_seconds=timeout_s,
+                    )
+                else:
+                    result = await asyncio.to_thread(
+                        self._ext.tabs_history, tab_id, action, timeout_seconds=timeout_s
+                    )
+                final_url = str(result.get("url") or "")
+                return self._ext_success(
+                    invocation, EffectKind.SESSION, resource,
+                    {"operation": action, "transport": "extension", "url": final_url},
+                    outputs={
+                        "sessionId": session_id, "url": final_url, "resourceType": "webPage"
+                    },
+                )
+            if command == "browser.listPages":
+                tabs = await asyncio.to_thread(self._ext.tabs_list, timeout_seconds=timeout_s)
+                pages = [
+                    {
+                        "index": index,
+                        "url": str(tab.get("url") or ""),
+                        "title": str(tab.get("title") or ""),
+                    }
+                    for index, tab in enumerate(tabs)
+                ]
+                return self._ext_success(
+                    invocation, EffectKind.READ, resource,
+                    {"operation": "listPages", "count": len(pages)},
+                    outputs={"pages": pages, "count": len(pages)},
+                )
+            if command == "browser.attach":
+                matched = await asyncio.to_thread(self._match_ext_tab, inputs, timeout_s)
+                if matched is None:
+                    return self._ext_not_found(inputs)
+                new_session = str(uuid.uuid4())
+                new_tab = str(matched.get("id") or "")
+                self._ext_sessions[new_session] = new_tab
+                matched_url = str(matched.get("url") or "")
+                return self._ext_success(
+                    invocation, EffectKind.SESSION, f"browser.session:{new_session}",
+                    {"operation": "attach", "tabId": new_tab, "url": matched_url},
+                    outputs={
+                        "sessionId": new_session,
+                        "url": matched_url,
+                        "resourceType": "webPage",
+                    },
+                )
+            if command == "browser.executeScript":
+                payload = await asyncio.to_thread(
+                    self._ext.page_eval, tab_id, str(inputs["script"]),
+                    args=list(inputs.get("args") or []), timeout_seconds=timeout_s,
+                )
+                result_value = payload.get("result")
+                return self._ext_success(
+                    invocation, EffectKind.UNSAFE_WRITE, resource + ":script",
+                    {"operation": "executeScript"},
+                    outputs={"result": result_value, "sessionId": session_id},
+                    value=result_value,
+                )
+            if command == "browser.getText":
+                info_type = str(inputs.get("infoType") or "text")
+                payload = await asyncio.to_thread(
+                    self._ext.page_call, tab_id, selector, "getText",
+                    args={"infoType": info_type}, timeout_seconds=timeout_s,
+                )
+                count = int(payload.get("matchedCount") or 0)
+                if count == 0:
+                    return self._ext_not_found(inputs)
+                value = payload.get("result")
+                return self._ext_success(
+                    invocation, EffectKind.READ, resource + f":selector:{selector}",
+                    {"operation": "getText", "infoType": info_type, "matchedCount": count},
+                    outputs={
+                        "value": "" if value is None else str(value),
+                        "sessionId": session_id,
+                    },
+                    value=value,
+                )
+            if command == "browser.waitFor":
+                return await self._ext_wait_for(
+                    invocation, inputs, session_id, tab_id, selector, timeout_s, cancellation
+                )
+            if command in _EXT_PAGE_METHODS:
+                return await self._ext_page_command(
+                    command, invocation, inputs, session_id, tab_id, selector, timeout_s
+                )
+            return CommandResult.failure(
+                ErrorCode.COMMAND_NOT_FOUND,
+                f"Unsupported command on extension channel: {command}",
+            )
+        except ExtensionChannelError as exc:
+            return self._ext_channel_failure(exc)
+
+    async def _ext_page_command(
+        self,
+        command: str,
+        invocation: CommandInvocation,
+        inputs: dict[str, Any],
+        session_id: str,
+        tab_id: str,
+        selector: str,
+        timeout_s: float,
+    ) -> CommandResult:
+        method = _EXT_PAGE_METHODS[command]
+        resource = f"browser.session:{session_id}:selector:{selector}"
+        payload = await asyncio.to_thread(
+            self._ext.page_call, tab_id, selector, method,
+            args=self._ext_method_args(command, inputs), timeout_seconds=timeout_s,
+        )
+        count = int(payload.get("matchedCount") or 0)
+        if command != "browser.scroll" and count == 0:
+            return self._ext_not_found(inputs)
+        if command == "browser.scroll":
+            scroll_y = payload.get("result")
+            return self._ext_success(
+                invocation, EffectKind.UNSAFE_WRITE, resource,
+                {"operation": "scroll", "scrollY": scroll_y},
+                outputs={"scrollY": float(scroll_y or 0)},
+            )
+        if command == "browser.check":
+            return self._ext_success(
+                invocation, EffectKind.UNSAFE_WRITE, resource,
+                {"operation": "check", "matchedCount": count},
+                outputs={"checked": bool(payload.get("result")), "matchedCount": count},
+            )
+        effect = EffectKind.READ if command == "browser.hover" else EffectKind.UNSAFE_WRITE
+        return self._ext_success(
+            invocation, effect, resource,
+            {"operation": command.rsplit(".", 1)[-1], "matchedCount": count},
+            outputs={"matchedCount": count, "sessionId": session_id},
+        )
+
+    async def _ext_wait_for(
+        self,
+        invocation: CommandInvocation,
+        inputs: dict[str, Any],
+        session_id: str,
+        tab_id: str,
+        selector: str,
+        timeout_s: float,
+        cancellation: asyncio.Event,
+    ) -> CommandResult:
+        """元素状态等待：扩展侧按「命中数 ± 可见性」轮询（visible/hidden/attached/detached）。"""
+        state = str(inputs.get("state") or "visible")
+        want_visible = state in ("visible", "hidden")
+        want_present = state in ("visible", "attached")
+        deadline = time.monotonic() + timeout_s
+        last_count = 0
+        while True:
+            payload = await asyncio.to_thread(
+                self._ext.page_call, tab_id, selector, "count",
+                args={"visible": want_visible}, timeout_seconds=min(10.0, timeout_s),
+            )
+            last_count = int(payload.get("matchedCount") or 0)
+            hit = last_count > 0 if want_present else last_count == 0
+            if hit:
+                return self._ext_success(
+                    invocation, EffectKind.READ,
+                    f"browser.session:{session_id}:selector:{selector}",
+                    {"operation": "waitFor", "state": state, "matchedCount": last_count},
+                    outputs={"matchedCount": last_count},
+                )
+            if cancellation.is_set():
+                return CommandResult(status="cancelled")
+            if time.monotonic() >= deadline:
+                return CommandResult.failure(
+                    ErrorCode.TIMEOUT,
+                    f"waitFor({state}) timed out on extension channel",
+                    details={"selector": selector, "state": state},
+                )
+            await asyncio.sleep(0.3)
+
+    def _ext_method_args(self, command: str, inputs: dict[str, Any]) -> dict[str, Any]:
+        """命令参数 → 扩展 page.call 参数（未支持的字段在扩展侧忽略）。"""
+        if command == "browser.click":
+            return {
+                "button": inputs.get("button") or "left",
+                "clickType": inputs.get("clickType") or "single",
+                "modifiers": inputs.get("modifiers") or [],
+            }
+        if command == "browser.input":
+            return {
+                "text": "" if inputs.get("text") is None else str(inputs["text"]),
+                "mode": inputs.get("mode") or "type",
+                "append": bool(inputs.get("append", False)),
+                "pressEnter": bool(inputs.get("pressEnter", False)),
+            }
+        if command == "browser.scroll":
+            return {
+                "position": inputs.get("position") or "bottom",
+                "x": inputs.get("x"),
+                "y": inputs.get("y"),
+                "smooth": bool(inputs.get("smooth", False)),
+            }
+        if command == "browser.select":
+            return {
+                "value": "" if inputs.get("value") is None else str(inputs["value"]),
+                "selectBy": inputs.get("selectBy") or "value",
+            }
+        if command == "browser.check":
+            return {"operation": inputs.get("operation") or "check"}
+        return {}
+
+    def _match_ext_tab(self, inputs: dict[str, Any], timeout_s: float) -> dict[str, Any] | None:
+        """attach：在用户浏览器全部标签页里按 url/title 子串或正则匹配。"""
+        import re
+
+        pattern = str(inputs.get("pattern") or "")
+        match_by = str(inputs.get("matchBy") or "url")
+        use_regex = bool(inputs.get("useRegex", False))
+        tabs = self._ext.tabs_list(timeout_seconds=timeout_s)
+        for tab in tabs:
+            field = str(tab.get("title") if match_by == "title" else tab.get("url") or "")
+            if use_regex:
+                try:
+                    hit = re.search(pattern, field) is not None
+                except re.error:
+                    hit = False
+            else:
+                hit = pattern in field
+            if hit:
+                return tab
+        return None
+
+    def _ext_success(
+        self,
+        invocation: CommandInvocation,
+        kind: EffectKind,
+        resource: str,
+        details: dict[str, Any],
+        *,
+        outputs: dict[str, Any] | None = None,
+        value: Any = None,
+    ) -> CommandResult:
+        return CommandResult.success(
+            value=value,
+            outputs=outputs or {},
+            effects=[
+                EffectRecord.committed(
+                    invocation, kind=kind, resource=resource, details=details
+                )
+            ],
+        )
+
+    def _ext_not_found(self, inputs: dict[str, Any]) -> CommandResult:
+        return CommandResult.failure(
+            ErrorCode.ELEMENT_NOT_FOUND,
+            "Target element did not match",
+            details={"selector": inputs.get("selector"), "matchedCount": 0},
+        )
+
+    def _ext_channel_failure(self, exc: ExtensionChannelError) -> CommandResult:
+        code = ErrorCode.TIMEOUT if exc.code == "TIMEOUT" else ErrorCode.EXECUTOR_FAILED
+        return CommandResult.failure(
+            code,
+            f"extension channel: {exc}",
+            details={"channel": "extension", "code": exc.code},
+        )
+
     # -- bsk 传输（M14a：用户真实浏览器，能力差异 CSS only / 仅主 frame） -----
 
     async def _open_bsk(
@@ -1166,6 +1529,8 @@ class PlaywrightExecutor(CommandExecutor):
         )
 
     async def close(self) -> None:
+        # 扩展会话（M15）：只解绑，不动用户浏览器里的标签页（默认整浏览器权限≠代管生命周期）
+        self._ext_sessions.clear()
         # bsk keepOpen 会话（流程结束仍保留 Agent Window 供人工继续，daemon 空闲超时兜底）
         # 不在此停；非 keepOpen 的一律回收（规则 11）
         for sid in list(self._bsk_sessions):

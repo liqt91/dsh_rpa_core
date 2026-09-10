@@ -1,11 +1,23 @@
 {
   "manifest_version": 3,
   "name": "rpa_core element capture",
-  "version": "0.1.2",
-  "description": "rpa_core 元素捕获扩展：捕获模式下在任意页面 hover 高亮、Ctrl+Click 捕获元素描述符回传编辑器。",
+  "version": "0.2.0",
+  "description": "rpa_core 扩展：元素捕获 + 浏览器执行通道（默认权限：整个浏览器）。",
   "update_url": "https://clients2.google.com/service/update2/crx",
-  "permissions": ["storage", "alarms"],
-  "host_permissions": ["http://127.0.0.1:8765/*"],
+  "permissions": [
+    "storage",
+    "alarms",
+    "scripting",
+    "tabs",
+    "cookies",
+    "downloads",
+    "webNavigation"
+  ],
+  "host_permissions": [
+    "http://127.0.0.1:8765/*",
+    "http://localhost:8765/*",
+    "<all_urls>"
+  ],
   "background": { "service_worker": "background.js" },
   "content_scripts": [
     {

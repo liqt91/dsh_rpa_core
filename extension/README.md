@@ -1,6 +1,9 @@
-# rpa_core 捕获扩展
+# rpa_core 扩展（捕获 + 执行通道）
 
-MV3 零构建 content-script 扩展：捕获模式下在任意浏览器（Chrome/Edge）任意页面 hover 高亮、Ctrl+Click 捕获元素描述符回传 rpa_core devserver。无缝跨浏览器/跨页（无标签页借用、无逐次授权）。
+MV3 零构建扩展（Chrome/Edge），两条通道：
+
+1. **捕获通道**：捕获模式下在任意页面 hover 高亮、Ctrl+Click 捕获元素描述符回传 rpa_core devserver。无缝跨浏览器/跨页（无标签页借用、无逐次授权）。
+2. **执行通道（M15，一等公民）**：长轮询 devserver 命令队列，在**用户真实已登录浏览器**里执行浏览器自动化（tabs / scripting / cookies / webNavigation）。rpa_core 的 `browser.*` 命令在扩展在线时默认走本通道，`playwright` / `bsk` 为二等回退。
 
 ## 安装（开发者模式）
 
@@ -24,6 +27,27 @@ MV3 零构建 content-script 扩展：捕获模式下在任意浏览器（Chrome
 
 ## 协议（自测用）
 
+捕获通道：
+
 - `GET /api/capture/extension/pending`（头 `X-Capture-Token`）→ `{pending, sessionId}`
 - `POST /api/capture/extension/result`（头 `X-Capture-Token`）body `{sessionId, descriptor}`
 - 短轮询：捕获激活 1.2s / 空闲 5s
+
+执行通道（`X-Capture-Token` 同一 token）：
+
+- `GET /api/ext/command/next?wait=20` → `{command: {id, op, args} | null}`（长轮询；空转即心跳）
+- `POST /api/ext/command/result` body `{id, ok, value}` 或 `{id, ok:false, error:{code,message}}`
+- `POST /api/ext/command/submit` body `{op, args, timeoutSeconds}` → 宿主侧（`rpa-core run` 子进程）提交命令并等结果
+- `GET /api/ext/status` → `{online, lastPollSecondsAgo, queued, inflight, permissions}`
+- `GET|POST /api/ext/permissions` → 权限查询/收窄
+
+## 执行权限（默认：整个浏览器）
+
+- 默认 `{"mode": "browser"}`：全部窗口、全部标签页、全部 Cookie —— 与「扩展是一等公民」的定位一致，命令不做范围限制。
+- 预留收窄模式（接口已立，两端同名同语义）：
+  - `{"mode": "tabs", "tabIds": ["123"]}`：仅允许操作指定标签页
+  - `{"mode": "origins", "allow": ["https://example.com"]}`：仅允许指定站点
+- 校验点两处：宿主 `ExtensionExecHub.allows()`（下发前拦截，返回 `PERMISSION_DENIED`）+ 扩展 `assertAllowed()`（执行前拦截）。
+- popup 可选切换模式；`tabIds` / `allow` 列表由宿主或人工写入 `chrome.storage.local.rpaExecPermission`。
+
+> 注意：扩展不代管用户标签页生命周期——`browser.close` 对扩展会话只做解绑，不关闭用户的标签页。

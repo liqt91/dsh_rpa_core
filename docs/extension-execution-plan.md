@@ -1,8 +1,19 @@
 # 自研扩展执行通道计划（M15 提案）
 
-状态：`待评审`
+状态：`Phase 1 已落地`（2026-09-10）
 日期：2026-09-10
 前置：`yingdao-command-model.md` §〇（维护者决策 2026-09-08：自研扩展一等公民，playwright/bsk 二等）、`yingdao-web-cmds-benchmark.md`（44 条对标，✅22/🟡8/❌14）
+
+> **落地记录 2026-09-10（Phase 1）**：协议 v2 + 通道骨架完成。
+> - 宿主侧 `rpa_core/extension_exec.py`：`ExtensionExecHub`（命令队列 + 长轮询 + 结果回收 + 权限钩子）与 `ExtensionExecClient`（执行器侧 HTTP 客户端）。
+> - 路由：`GET /api/ext/command/next?wait=N`（长轮询 + 心跳）、`POST /api/ext/command/result`、`POST /api/ext/command/submit`、`GET /api/ext/status`、`GET|POST /api/ext/permissions`；token 复用捕获通道的 TOFU 配对。
+> - `rpa-core run` 子进程经 `RPA_EXT_HUB_URL` 回连宿主（RunManager 注入真实端口）。
+> - 执行器 `extension` 通道：navigate(goto/back/forward/reload)、listPages、attach、executeScript、getText、click、hover、input、scroll、check、select、waitFor、close（解绑）。会话模型 = 用户浏览器里的 tabId 句柄；`browser.close` 只解绑不代关标签页。
+> - 一等公民路由：`transport` 缺省时**扩展在线即优先走扩展**，离线静默回退 playwright（显式 `transport=playwright` 可强制）。
+> - 权限：默认 `{"mode":"browser"}` 整个浏览器；`tabs` / `origins` 收窄为预留接口，宿主 `allows()` 与扩展 `assertAllowed()` 两处校验点同语义。
+> - 扩展：manifest 升 0.2.0（+scripting/tabs/cookies/downloads/webNavigation + `<all_urls>`），background 增执行长轮询循环与 tabs/scripting/cookies 执行面，popup 增权限模式查看/切换。
+> - 测试：`tests/contract/test_extension_exec_channel.py` 8 项（假扩展经真实 HTTP 扮演 background，覆盖协议/超时/权限/在线心跳/通道路由/边界）。
+> - 待办：Phase 2 官方通道验收（screenshot/upload/download/drag/select 完整语义）、Phase 3 扩展独有能力（网络监听/对话框/批量抓取/元素句柄）、Phase 4 默认路由固化 + 编辑器侧通道状态展示。
 
 ## 〇、结论：先做自研插件的「执行通道」，对标剩余项作为它的验收用例
 

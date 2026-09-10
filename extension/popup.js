@@ -20,4 +20,25 @@ document.getElementById("gen").addEventListener("click", async () => {
   status("已重新生成（devserver 侧需删除 workflows/.capture-extension-token 后轮换生效）", true);
 });
 
+// 执行权限（默认整个浏览器；tabs/origins 为预留收窄模式，需配合写入范围字段）
+const permSelect = document.getElementById("perm");
+const permStatus = document.getElementById("perm-status");
+
+async function loadPermission() {
+  const data = await chrome.storage.local.get("rpaExecPermission");
+  const perm = data.rpaExecPermission || { mode: "browser" };
+  permSelect.value = perm.mode || "browser";
+  permStatus.textContent = perm.mode === "browser" || !perm.mode
+    ? "范围：全部窗口 / 全部标签页 / 全部 Cookie"
+    : `范围：${JSON.stringify(perm)}（收窄模式，由宿主配置下发）`;
+}
+
+permSelect.addEventListener("change", async () => {
+  const mode = permSelect.value;
+  // 收窄模式的 tabIds/allow 列表由宿主（devserver /api/ext/permissions）或人工写入
+  await chrome.storage.local.set({ rpaExecPermission: { mode } });
+  loadPermission();
+});
+
 load();
+loadPermission();

@@ -19,6 +19,16 @@
     <button id="gen">重新生成</button>
   </div>
   <div id="status"></div>
+  <h3 style="margin-top:12px;">执行权限</h3>
+  <div style="font-size:12px;color:#57606a;">默认：整个浏览器（全部窗口/标签页/Cookie）</div>
+  <div class="row">
+    <select id="perm" style="flex:1;font-size:12px;padding:4px;">
+      <option value="browser">整个浏览器（默认）</option>
+      <option value="tabs">仅指定标签页（预留）</option>
+      <option value="origins">仅指定站点（预留）</option>
+    </select>
+  </div>
+  <div id="perm-status" style="font-size:12px;color:#57606a;"></div>
   <script src="popup.js"></script>
 </body>
 </html>
