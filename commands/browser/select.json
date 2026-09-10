@@ -8,7 +8,7 @@
   "resources": ["browser.session"],
   "stability": "stable",
   "effect": {"kind": "unsafe-write", "replay": "unsafe", "idempotency": "none"},
-  "input_schema": {"type": "object", "required": ["sessionId", "selector", "value"], "properties": {"sessionId": {"type": "string"}, "selector": {"type": "string", "minLength": 1}, "value": {"type": "string", "minLength": 1, "description": "选择项的值/标签/索引"}, "selectBy": {"type": "string", "enum": ["value", "label", "index"], "description": "选择方式", "default": "value"}, "timeoutMs": {"type": "integer", "minimum": 1}}, "additionalProperties": false},
+  "input_schema": {"type": "object", "required": ["selector", "value"], "properties": {"sessionId": {"type": "string"}, "selector": {"type": "string", "minLength": 1}, "value": {"type": "string", "minLength": 1, "description": "选择项的值/标签/索引"}, "selectBy": {"type": "string", "enum": ["value", "label", "index"], "description": "选择方式", "default": "value"}, "timeoutMs": {"type": "integer", "minimum": 1}}, "additionalProperties": false},
   "output_schema": {"type": "object", "required": ["matchedCount", "sessionId"], "properties": {"matchedCount": {"type": "integer", "minimum": 1}, "sessionId": {"type": "string"}}, "additionalProperties": false},
   "x-outputs": {
     "matchedCount": {"label": "匹配数量"},

@@ -8,7 +8,7 @@
   "resources": ["desktop.session", "desktop.window"],
   "stability": "stable",
   "effect": {"kind": "unsafe-write", "replay": "unsafe", "idempotency": "none"},
-  "input_schema": {"type": "object", "required": ["sessionId", "x", "y"], "properties": {"sessionId": {"type": "string", "minLength": 1}, "x": {"type": "integer", "description": "目标 X 坐标"}, "y": {"type": "integer", "description": "目标 Y 坐标"}}, "additionalProperties": false},
+  "input_schema": {"type": "object", "required": ["x", "y"], "properties": {"sessionId": {"type": "string", "minLength": 1}, "x": {"type": "integer", "description": "目标 X 坐标"}, "y": {"type": "integer", "description": "目标 Y 坐标"}}, "additionalProperties": false},
   "output_schema": {"type": "object", "additionalProperties": false},
   "errors": ["SESSION_NOT_FOUND", "SESSION_LOST", "EXECUTOR_FAILED"],
   "implementation": {"handler": "desktop.win32:move_window"},

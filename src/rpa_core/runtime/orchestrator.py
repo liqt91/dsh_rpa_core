@@ -37,7 +37,10 @@ from .checkpoint import (
 )
 from .events import EventWriter, RunPersistenceError
 from .resolver import ReferenceError as ResolverReferenceError
-from .resolver import evaluate, resolve
+from .resolver import evaluate, resolve, resolve_with_modes
+
+# python 模式表达式求值在 worker 子进程执行，给一个独立于命令超时的上限
+PYTHON_EVAL_TIMEOUT_SECONDS = 30.0
 
 
 class WorkflowReturn(Exception):
@@ -517,6 +520,60 @@ class Orchestrator:
                 raise RpaError(ErrorCode.INVALID_REFERENCE, str(exc)) from exc
             raise WorkflowReturn(value)
 
+    async def _evaluate_python_fields(
+        self,
+        fields: dict[str, str],
+        scopes: dict[str, Any],
+        run_id: str,
+        node_id: str,
+        cancellation: asyncio.Event,
+        input_schema: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """python 模式字段求值：在 worker 子进程执行，本次赋值的变量写回流程变量。
+
+        变量写回由 orchestrator 执行（executor 只回传数据），handler 不直接改动作用域。
+        """
+        executor = self.executors.get("python.worker")
+        if executor is None:
+            raise RpaError(
+                ErrorCode.EXECUTOR_FAILED,
+                "python.worker executor is not registered",
+                details={"nodeId": node_id},
+            )
+        variables = scopes.setdefault("variables", {})
+        invocation = CommandInvocation(
+            command_id="python.evalExpression",
+            command_version="1.0.0",
+            run_id=run_id,
+            step_id=node_id,
+            attempt=1,
+            inputs={
+                "expressions": fields,
+                "variables": {key: value for key, value in variables.items()},
+            },
+            deadline_monotonic=time.monotonic() + PYTHON_EVAL_TIMEOUT_SECONDS,
+        )
+        result = await executor.execute(invocation, cancellation)
+        if result.status != "success":
+            raise RpaError(
+                ErrorCode.SCRIPT_FAILED,
+                result.error.message if result.error else "Python evaluation failed",
+                details={"nodeId": node_id, "commandId": "python.evalExpression"},
+            )
+        assigned = result.outputs.get("assignedVariables") or {}
+        variables.update(assigned)
+        values = result.outputs.get("values") or {}
+        # string 字段：求值结果收敛为文本（对齐 fx 模式行为），其余字段保留 Python 原类型
+        properties = (input_schema or {}).get("properties", {})
+        for key, value in values.items():
+            schema = properties.get(key)
+            if isinstance(schema, dict) and schema.get("type") == "string":
+                if value is None:
+                    values[key] = ""
+                elif not isinstance(value, str):
+                    values[key] = str(value)
+        return values
+
     async def _execute_action(
         self,
         node: ActionNode,
@@ -539,10 +596,25 @@ class Orchestrator:
                 f"Unsafe replay command cannot be retried: {manifest.id}",
                 details=context,
             )
+        modes = node.expr_modes or {}
+        # python 模式字段走子进程求值（隔离执行），其余按 fx / 普通模式解析
+        python_fields = {
+            key: value
+            for key, value in node.with_.items()
+            if modes.get(key) == "python" and isinstance(value, str) and value.strip()
+        }
+        plain_inputs = {
+            key: value for key, value in node.with_.items() if key not in python_fields
+        }
         try:
-            command_inputs = resolve(node.with_, scopes)
+            command_inputs = resolve_with_modes(plain_inputs, modes, scopes)
         except ResolverReferenceError as exc:
             raise RpaError(ErrorCode.INVALID_REFERENCE, str(exc), details=context) from exc
+        if python_fields:
+            evaluated = await self._evaluate_python_fields(
+                python_fields, scopes, run_id, node.id, cancellation, manifest.input_schema
+            )
+            command_inputs.update(evaluated)
 
         errors = sorted(
             Draft202012Validator(manifest.input_schema).iter_errors(command_inputs),

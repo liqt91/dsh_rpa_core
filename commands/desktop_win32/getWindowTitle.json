@@ -8,7 +8,7 @@
   "resources": ["desktop.session", "desktop.window"],
   "stability": "stable",
   "effect": {"kind": "read", "replay": "safe", "idempotency": "none"},
-  "input_schema": {"type": "object", "required": ["sessionId"], "properties": {"sessionId": {"type": "string", "minLength": 1}}, "additionalProperties": false},
+  "input_schema": {"type": "object", "required": [], "properties": {"sessionId": {"type": "string", "minLength": 1}}, "additionalProperties": false},
   "output_schema": {"type": "object", "required": ["title", "className", "processId"], "properties": {"title": {"type": "string"}, "className": {"type": "string"}, "processId": {"type": "integer"}}, "additionalProperties": false},
   "errors": ["SESSION_NOT_FOUND", "SESSION_LOST", "EXECUTOR_FAILED"],
   "implementation": {"handler": "desktop.win32:get_window_title"},

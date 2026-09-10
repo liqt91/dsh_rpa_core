@@ -8,7 +8,7 @@
   "resources": ["browser.session"],
   "stability": "stable",
   "effect": {"kind": "unsafe-write", "replay": "unsafe", "idempotency": "none"},
-  "input_schema": {"type": "object", "required": ["sessionId", "saveDir"], "properties": {"sessionId": {"type": "string"}, "saveDir": {"type": "string", "minLength": 1, "description": "下载保存目录"}, "timeoutMs": {"type": "integer", "minimum": 1}}, "additionalProperties": false},
+  "input_schema": {"type": "object", "required": ["saveDir"], "properties": {"sessionId": {"type": "string"}, "saveDir": {"type": "string", "minLength": 1, "description": "下载保存目录"}, "timeoutMs": {"type": "integer", "minimum": 1}}, "additionalProperties": false},
   "output_schema": {"type": "object", "required": ["filePath"], "properties": {"filePath": {"type": "string", "description": "下载文件的完整路径"}}, "additionalProperties": false},
   "x-outputs": {
     "filePath": {"label": "文件路径", "primary": true}

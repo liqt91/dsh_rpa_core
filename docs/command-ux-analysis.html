@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-page-node-id="dJDvfYbvFt0nGYmnYGXp4d">
+<head data-page-node-id="BtOhSTyzApFu9oHmPmh1qX">
+<meta charset="UTF-8" data-page-node-id="Gg0nwE4Xgla9JIo9fs6Jka">
+<meta name="viewport" content="width=device-width, initial-scale=1" data-page-node-id="1CqvNuF5QXoJDyDhfqmLfY">
+<title>指令体系 UX 分析 · rpa_core</title>
+<style>
+:root{--bg:#f7f8fa;--card:#fff;--bd:#e3e6ea;--tx:#1f2328;--tx2:#5b6470;--tx3:#8b949e;
+--blue:#185fa5;--blue-bg:#e6f1fb;--red:#a32d2d;--red-bg:#fcebeb;
+--amber:#854f0b;--amber-bg:#faeeda;--green:#0f6e56;--green-bg:#e1f5ee;--gray-bg:#f1efe8}
+*{box-sizing:border-box}
+body{margin:0;padding:32px 20px 64px;background:var(--bg);color:var(--tx);
+font-family:-apple-system,"Segoe UI","Microsoft YaHei",sans-serif;font-size:14px;line-height:1.7}
+.wrap{max-width:940px;margin:0 auto}
+h1{font-size:22px;font-weight:500;margin:0 0 6px}
+.sub{color:var(--tx2);font-size:13px;margin:0 0 28px}
+h2{font-size:16px;font-weight:500;margin:36px 0 14px;padding-bottom:8px;border-bottom:1px solid var(--bd)}
+h3{font-size:14px;font-weight:500;margin:22px 0 8px}
+.card{background:var(--card);border:1px solid var(--bd);border-radius:10px;padding:18px 20px;margin-bottom:14px}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;margin-bottom:8px}
+.stat{background:var(--card);border:1px solid var(--bd);border-radius:10px;padding:14px 16px}
+.stat .n{font-size:24px;font-weight:500;color:var(--blue)}
+.stat .l{font-size:12px;color:var(--tx2);margin-top:2px}
+table{width:100%;border-collapse:collapse;font-size:13px;margin:10px 0}
+th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--bd);vertical-align:top}
+th{color:var(--tx2);font-weight:500;background:var(--gray-bg)}
+code{font-family:ui-monospace,Consolas,monospace;font-size:12.5px;background:var(--gray-bg);
+padding:1px 5px;border-radius:4px}
+pre{background:#1f2328;color:#e6edf3;padding:12px 14px;border-radius:8px;overflow-x:auto;
+font-family:ui-monospace,Consolas,monospace;font-size:12.5px;line-height:1.6;margin:10px 0}
+pre .c{color:#8b949e}
+.tag{display:inline-block;font-size:11px;padding:1px 7px;border-radius:10px;font-weight:500;vertical-align:middle}
+.p0{background:var(--red-bg);color:var(--red)}
+.p1{background:var(--amber-bg);color:var(--amber)}
+.p2{background:var(--blue-bg);color:var(--blue)}
+.ok{background:var(--green-bg);color:var(--green)}
+.good li,.bad li{margin-bottom:7px}
+ul{margin:8px 0;padding-left:20px}
+.evi{background:var(--gray-bg);border-left:3px solid var(--tx3);padding:8px 12px;
+margin:10px 0;font-size:12.5px;color:var(--tx2);border-radius:0 6px 6px 0}
+.evi b{color:var(--tx)}
+.foot{margin-top:36px;padding-top:14px;border-top:1px solid var(--bd);color:var(--tx3);font-size:12px}
+</style>
+</head>
+<body data-page-node-id="R5f32WQXs8koQxeWq4JhQ7">
+<div class="wrap" data-page-node-id="wEkseQPwXiOuX91R6DPo89">
+
+<h1 data-page-node-id="tmzgBzNiWvTipLGb0qmIPf">指令体系说明与用户体验分析</h1>
+<p class="sub" data-page-node-id="hR6r7KDSRWsgrPjGMiDJX8">rpa_core · 54 条命令 · 数据截至 2026-09-09 · 基于 manifest 实测与运行时验证</p>
+
+<h2 data-page-node-id="jSdie9apxBHzL5zFkDCwyp">一、体系现状</h2>
+
+<div class="stats" data-page-node-id="k3ui6AVakE3tEIfACXEFXC">
+<div class="stat" data-page-node-id="HY9HCvQnlXyxRG5yPyfWF4"><div class="n" data-page-node-id="HKs8fbSNldyHeA22lYpaxf">54</div><div class="l" data-page-node-id="G83zAFw4tq2n7LfwDeBzAy">命令总数</div></div>
+<div class="stat" data-page-node-id="21mRfuVNatkQaoZp24CAk4"><div class="n" data-page-node-id="2i5EisaHhJ1zmTsemLkrMi">3</div><div class="l" data-page-node-id="TZEZZQt6yCGMuoTP53AqB2">参数数中位数</div></div>
+<div class="stat" data-page-node-id="u5BJTUO3SYb8ZohuzEPEov"><div class="n" data-page-node-id="krFCshA5kqoybVBT5KRQ3f">2</div><div class="l" data-page-node-id="1cyWJuqvRgZbuOum25iPFV">必填数中位数</div></div>
+<div class="stat" data-page-node-id="fgbM0astzt6coHggZECovM"><div class="n" data-page-node-id="G51RSGCqu0njZbdUZYMa8z">45/54</div><div class="l" data-page-node-id="IwFliL3oyKZDOXdY5TYWeQ">需填 sessionId</div></div>
+<div class="stat" data-page-node-id="iSR228K0O6iPmbZgsxB9RF"><div class="n" data-page-node-id="FRYN3rrH4VRCuRX8Ccvf5A">5</div><div class="l" data-page-node-id="7baC13U6rg1ij12bevPjX3">控制流节点类型</div></div>
+</div>
+
+<h3 data-page-node-id="GjVE8bu8agSIv6ditkG8HH">命令分布</h3>
+<table data-page-node-id="DKHW8hdfMEHDRFWwAMMV7W">
+<tr data-page-node-id="U513n7jC9uFdQ1G9sea0UX"><th data-page-node-id="9RLeFGfjpaADwpDoV0fO7K">命名空间</th><th data-page-node-id="Fj4zRgnU6bEIZjXuUzTqwT">数量</th><th data-page-node-id="bCfsDnSaZxovb6RDgFuSu9">定位</th><th data-page-node-id="2bVYdqcofG2xK8TwncoHQw">典型命令</th></tr>
+<tr data-page-node-id="ThmgfZCukia3X5bTBMAGzX"><td data-page-node-id="bWEJr2uA5WqCHcfAcxHxGT"><code data-page-node-id="kTSpvoGfR17oLD3SLFGPaC">browser.*</code></td><td data-page-node-id="EsEJ5DCWaJJsctaO8tzuZ5">14</td><td data-page-node-id="5I7xc65PEsUht9xSNbe9r6">网页自动化</td><td data-page-node-id="JEbO6dchM7GDoDNh7UnH8T">打开网页、点击元素、输入文本、抓取列表</td></tr>
+<tr data-page-node-id="BJtpCN8OaGJvjAzw9oHz2K"><td data-page-node-id="MSTAVmlWnzQPR1ZXECBAzc"><code data-page-node-id="wLFkuvMD5uKa4MunPvLoeb">desktop.*</code>（UIA）</td><td data-page-node-id="tQNWYanZwfHLh528zaUp44">17</td><td data-page-node-id="lRjeyFO8EHnChHD8m6xKIK">桌面应用（现代控件树）</td><td data-page-node-id="sBf0JJ5lFn9MzxRG2NgiRE">附着窗口、点击控件、查找控件</td></tr>
+<tr data-page-node-id="KLn0NfvbGeE9udzZIW357Q"><td data-page-node-id="J2VtiiF6FNqKo094e4KF6x"><code data-page-node-id="J8C0nOWIADX6Cqg5SPOBGo">desktop_win32.*</code></td><td data-page-node-id="GDDVNIqOgTG0eZWPv6MEYe">19</td><td data-page-node-id="45rATBXhy34KbkU2EUffrx">桌面应用（传统句柄）</td><td data-page-node-id="hyF8Qbu6spEHJRuRIemARp">同上 + 热键、菜单选择</td></tr>
+<tr data-page-node-id="Ai5QAATqmIXvibAgks7CEA"><td data-page-node-id="ktD4p9IRSJIhlf3eaFagr8"><code data-page-node-id="cIgrqGFXcnx8OcxBAtwcWb">data.*</code></td><td data-page-node-id="JVSD3vWM22zF2OoWIRcrXP">4</td><td data-page-node-id="SinMbDkd5pH7jgjgUhL0FO">数据处理与落盘</td><td data-page-node-id="MKnF24DbXhBRA4FaMabDLC">写入文本/JSON、截取前 N 条、格式化</td></tr>
+</table>
+
+<h3 data-page-node-id="7yDNIP3v9htlcLGABJ7mzn">架构特点：一条命令 = 一个 manifest，贯穿三层</h3>
+<p data-page-node-id="CHeNMQsbGFDs9fjBtIrBsG">每条命令是一个 JSON 清单，声明 <code data-page-node-id="s31dwCHs3vQtxfslVjEezj">input_schema</code>、<code data-page-node-id="RGHH22qGr89Tk9d1stCMn7">output_schema</code>、<code data-page-node-id="4ZELo13DVtR0faGcY0V1uz">x-outputs</code>（输出别名）、<code data-page-node-id="MVyzUQnVDoN48aP5J3fRgR">x-depends</code>（字段联动）、<code data-page-node-id="V05SInvTLe3iwxznc3D40e">kind</code>/<code data-page-node-id="5xNv9sDQWV8kGHsx17AWsN">effect</code>（副作用契约）、<code data-page-node-id="xOzU3BwcbssxcQZRJO8Au9">errors</code>、<code data-page-node-id="kwmqD9OW2vGNzc70EdDtpa">default_timeout_seconds</code>。这份清单同时被三层消费：</p>
+<ul data-page-node-id="YVbqr0rOzZ5VxrJhvBA0do">
+<li data-page-node-id="8yTZP3TkAhuRDnbSvH0s7v"><b data-page-node-id="iSdI5VWosjdImC3W3SfbuV">编辑器</b>：按 schema 生成表单，按 <code data-page-node-id="QtEXAgdtajVCByqTaeOg2q">x-depends</code> 动态显隐字段，按 <code data-page-node-id="BNPqayuR50A56aHBo93jre">x-outputs</code> 渲染「保存到变量」输入框</li>
+<li data-page-node-id="CrK8b22APWzzLOHRhtn7lm"><b data-page-node-id="tnGtqhDlZBCugiWhFn4MIn">编译器</b>：静态校验 <code data-page-node-id="MsAB3YvJkHdNbF10xlnoUL">${}</code> 引用合法性，拦截前向引用与未声明变量</li>
+<li data-page-node-id="x902i20IuxomRBUdjP2Cj4"><b data-page-node-id="yRbArU4kQkxuO18FTdkuag">运行时</b>：分派 executor，递归解析全部 inputs 中的变量，输出写入 <code data-page-node-id="7snyjneeBy3TfbzvWIn3NR">scopes</code></li>
+</ul>
+
+<h3 data-page-node-id="JnqfzIivhX2csb3SGyseWc">变量体系</h3>
+<p data-page-node-id="QkFSJuLxMXycetFqcNDfs8">用户在节点上给输出起别名（如「保存网页对象到 <code data-page-node-id="aJBjf6Ua1gXrEO3g423eIv">web_page1</code>」），运行时把该节点输出写入 <code data-page-node-id="Ovzaa09ZC5bPGdH3xvQVuJ">scopes["variables"]["web_page1"]</code>，下游用 <code data-page-node-id="TspDKZu7MzCa3aHWUIAVoO">${web_page1.sessionId}</code> 引用。引用根共 5 类：<code data-page-node-id="z4lTraic7fqNuVsKiRTL1C">inputs</code>（流程入参）、<code data-page-node-id="FrUHG6qOocU5vc1wQkLLQH">variables</code>（用户别名）、<code data-page-node-id="TKPFpxrs1qeW1wt2uWnMfh">steps</code>（步骤输出）、<code data-page-node-id="BDOonnuEvlp7JEIsIgnuoa">loop</code>（循环项）、<code data-page-node-id="RzLOrhH7qVf2w4ofMjHP6X">error</code>（异常对象）。</p>
+
+<h2 data-page-node-id="G3BO2RjKzFB7IaF1J6I2J3">二、做得好的地方</h2>
+<div class="card good" data-page-node-id="6TEwbeEg1YcDawuEGr7qa8">
+<ul data-page-node-id="FIobAh2TIn71lC5pMkG1RC">
+<li data-page-node-id="5zOEKmJE1TZSGVM0tF7MJV"><b data-page-node-id="ejLFpySwZF7AqXKMlQsaX7">渐进式披露到位</b>：参数数最多 10 个（打开网页），但必填仅 1 个（<code data-page-node-id="tO9jERTMMglOwhgMhfNBqy">url</code>）；必填中位数 2 个。默认参数大量内置，新手不被表单淹没，专家可展开调参。</li>
+<li data-page-node-id="uwsJlf29ECJe3aHVaebOI7"><b data-page-node-id="lEmD9Ms2Z54yaStotT81Wn">manifest 单一事实源</b>：字段联动（<code data-page-node-id="Lu8HOYsMukaxFOCCs3tloC">x-depends</code>）与输出别名（<code data-page-node-id="Ohu3OeZi704AkBwFCcci3k">x-outputs</code>）声明在清单里，新增命令无需改前端代码即可获得自适应表单。</li>
+<li data-page-node-id="fH0O3SnQiVpkxQkBBRTbVD"><b data-page-node-id="DPbWFphz73puwHNf1KDQEJ">按意图而非实现分组</b>：指令面板分「页面导航 / 元素操作 / 数据处理 / 桌面会话 / 桌面窗口 / 桌面控件」，用户按「我要做什么」找，而非按技术前缀。</li>
+<li data-page-node-id="opSQCxZG6GuWrwaACPzdza"><b data-page-node-id="yt6TUDAEPkqK8Yvpq9vgGz">输出别名是关键的思维跃迁</b>：把「第 3 步的 sessionId 输出」转译为「<code data-page-node-id="qIN9EgUUdECyzD0EWgXyUD">web_page1</code> 这个网页对象」，对齐影刀心智模型，流程可读性显著提升。</li>
+<li data-page-node-id="N3AMjP8J5Y3RrT0JIAFR3P"><b data-page-node-id="t6D6VBjOh8rs4Tu9Ev1WAe">错误前置到编译期</b>：引用未声明变量、前向引用在运行前就被拦截，而不是跑到一半才炸。</li>
+</ul>
+</div>
+
+<h2 data-page-node-id="cwoF9Dxag1R6taZ57tqXxl">三、问题清单（按严重度）</h2>
+
+<div class="card" data-page-node-id="lbSCAyT0noKQkoGkTfq5qH">
+<h3 data-page-node-id="cEW66YPTDFMX80tFD2YcEo"><span class="tag p0" data-page-node-id="YS5ISonuGK0HfWm41ClLx7">P0</span> 变量能力已实现，但界面几乎不暴露</h3>
+<p data-page-node-id="Br5B9bDc0Hlw38jglz2GYC">运行时对<b data-page-node-id="fuRgxJ3YY3SyGCKZP4YnaV">所有 54 条命令的全部字段</b>无差别递归解析 <code data-page-node-id="2Wclsd8Ayzz5mQmQIbNnxp">${}</code>，但编辑器只在极少数字段提示「可以填变量」。</p>
+<div class="evi" data-page-node-id="PkI8uUm7g9D5WoDkdF2BjU"><b data-page-node-id="ghF1roakonBpOKIU3DUaBV">实测</b>：字段级 <code data-page-node-id="JW9b461FtaqtDpDExBpyZG">x-fx</code> 仅 3 个（<code data-page-node-id="WZOI4C6VFiIvtxQF4Asvo6">browser.input</code> 的 selector/text、<code data-page-node-id="x803Ipmf3GnRDUMjZb7Uel">browser.navigate</code> 的 url）；<b data-page-node-id="OQUg8nSLWa26AkoGtaw1PI">命令级 <code data-page-node-id="W8hMn3BlkOi7BD2BbJ9syE">x-fx</code> = 0 条</b>。而 Vue 版 PropsPanel 读的正是命令级数组 <code data-page-node-id="kUVmCcxmDA6wr8Xsssetgo">manifest['x-fx']</code> → <b data-page-node-id="W98pCuHBYREGtaz23CIVqj">新版编辑器的 fx 按钮永远不会出现</b>（迁移引入的回归）。</div>
+<p data-page-node-id="2dw4vvdNx15npLnZXBEl77"><b data-page-node-id="GHxtZjoTQoUBcM8E5Dwf6J">后果</b>：51 条命令里用户其实都能填 <code data-page-node-id="TJQvZoRDugAVyM7HssbHPp">${web_page1.sessionId}</code>，运行时也能正确解析，但界面没有任何按钮、提示或补全引导——能力存在却无人知晓。</p>
+</div>
+
+<div class="card" data-page-node-id="b9vZB4HYCPrtWp0Pnx5Yya">
+<h3 data-page-node-id="4GtlFWndaaneFCY0sOjBEZ"><span class="tag p0" data-page-node-id="rgvNyeX1qa5Hob183Jny0s">P0</span> 不支持字符串插值，且静默失败</h3>
+<p data-page-node-id="Mt9PUgLbcwDTUMzoeebw71">引用语法要求<b data-page-node-id="dYWC16CSaFrKCzGNhfiCRb">整串完全匹配</b> <code data-page-node-id="039l4Qp6J2BdGKIxV6xbrQ">${...}</code>，不支持「文本 + 变量」拼接——而这恰恰是高频需求（拼文件名、URL、消息文案）。</p>
+<pre data-page-node-id="OqAA60xntNQ2ZEmCgvwhNr"><span class="c" data-page-node-id="srFBuVPF3i7RuSSNzgmX8b"># 实测结果（resolver.resolve）</span>
+'${web_page1.sessionId}'        -> 'S1'                    <span class="c" data-page-node-id="e0lISFTJYHku5z6Hk8HEIQ"># 正常</span>
+'订单${inputs.kw}已处理'         -> '订单${inputs.kw}已处理'  <span class="c" data-page-node-id="OpJQVgwMj8mAE21p3a7Gwt"># 原样返回，不报错</span>
+'前缀-${inputs.kw}'             -> '前缀-${inputs.kw}'      <span class="c" data-page-node-id="ICwj5303UDo0CPKZrJXTUf"># 原样返回，不报错</span>
+'${web_page1.missing}'          -> ERROR: Unknown reference
+'${unknownVar}'                 -> ERROR: Unknown reference</pre>
+<p data-page-node-id="Z230K3DA5IPYnSPfkL6E77"><b data-page-node-id="kWXPklQhji80EneLFk87CS">后果</b>：用户写 <code data-page-node-id="zsAXhQ85YFJXAEDuPQeCh1">订单${orderId}已处理</code>，流程不报错、不警告，原样把字面量写进文件或输入框。这是最难排查的失败类型——静默错误。影刀、UiPath 等工具均支持文本内插值。</p>
+</div>
+
+<div class="card" data-page-node-id="Ef5L9YLLuXavCDdArMpnCg">
+<h3 data-page-node-id="Davsdr5RCZnZHBDSvLY3mG"><span class="tag p1" data-page-node-id="ZSJn1E3plA7ZFYuNJB1dn6">P1</span> sessionId 管道负担：83% 的命令都要填</h3>
+<p data-page-node-id="chKTZmDGmDF4Av9p6KdD4x">45/54 条命令强制要求 <code data-page-node-id="IffioQBbOdQQH8E9VJBT0q">sessionId</code>，意味着每个节点都要重复声明「作用于哪个网页 / 窗口」。虽然编辑器已用下拉自动引用别名减轻负担，但用户仍必须先建立「会话对象」这个抽象概念。</p>
+<p data-page-node-id="1uQM02cn3geuZFKkMKQia9"><b data-page-node-id="SHQF8NzJIEiZiYBTiROrn0">对比</b>：影刀在「打开网页」后，后续指令默认作用于当前激活网页，无需逐条指定。<br data-page-node-id="Tm8VDqHnFFnlY0ZTjsDBBl">
+<b data-page-node-id="kBNNuW8Z2RttEz2XR1L2jO">建议</b>：支持「默认会话」——<code data-page-node-id="HaNjWTfMWV6lX7wgyLapcp">sessionId</code> 省略时自动使用最近激活的会话，可消除大部分重复填写，同时保留显式指定能力。</p>
+</div>
+
+<div class="card" data-page-node-id="DzWu0RiAz7HKS7aKWEgDwG">
+<h3 data-page-node-id="7ZjPhMczpWGwKp29RgpZMD"><span class="tag p1" data-page-node-id="fQeEUQoMoTQ4DjkVQwkvsM">P1</span> 错误码未中文化，且缺少修复建议</h3>
+<p data-page-node-id="my9n0zevc6XctvRzLVOobG">共 12 种错误码（<code data-page-node-id="DX0wP0PSFNVhkcj0PTPOxz">ELEMENT_NOT_FOUND</code>、<code data-page-node-id="Kx59V9PeuBcfh3D9VpUh3W">SESSION_LOST</code>、<code data-page-node-id="tDzAL44hDNN3DYhf3DWFdz">ELEMENT_AMBIGUOUS</code> 等），但 i18n 中<b data-page-node-id="QuZ2eXo6JXF3PIMHD9efZC">无中文映射</b>——编辑器界面已全面中文化，唯独运行错误直接抛英文码，体验断裂。</p>
+<p data-page-node-id="hbPolTDFMIF887KES76c0w"><b data-page-node-id="MrHNC9uV2ZAr7QiEJx93kF">建议</b>：错误码配中文文案 + 可操作建议。例如 <code data-page-node-id="g3soZt5zgbEIDvkdPTMBdE">ELEMENT_NOT_FOUND</code> 应提示「选择器未命中元素：请确认页面已加载完成，或重新捕获该元素」。</p>
+</div>
+
+<div class="card" data-page-node-id="nFKlpcwLZQQy5FlSPTLjQD">
+<h3 data-page-node-id="r4r269TSLVk1NTKDWLo71H"><span class="tag p2" data-page-node-id="Bc8KhdH8jL6KBhCpwrnwLZ">P2</span> 双后端命名向用户暴露技术细节</h3>
+<p data-page-node-id="d3QjNIRND5wocjO3uFY0sn"><code data-page-node-id="QzjVuwF88tFGVbaBPQfVHX">desktop.attachWindow</code>（UIA）与 <code data-page-node-id="ZF6Jy4f5xDTdy3cbSiz7KJ">desktop.win32.attachWindow</code>（Win32）并列，中文名「附着窗口（UIA）」。业务用户不理解 UIA / Win32 的差异，却被要求做技术选型。</p>
+<p data-page-node-id="NAAe8iD91XBYbffonZpcTe"><b data-page-node-id="Blznr4oovcDzVtX8gMMDvJ">建议</b>：默认提供「附着窗口」自动选后端（UIA 优先、失败降级 Win32），后端选择收进高级选项。</p>
+</div>
+
+<div class="card" data-page-node-id="e991BJ1YuKvJNIh2GZVZRk">
+<h3 data-page-node-id="PIdmi7uTfncPp9gRpYteMI"><span class="tag p2" data-page-node-id="sWNQYHxTGZkmcLHKXZWv1f">P2</span> 语义分组硬编码维护，新命令会掉队</h3>
+<p data-page-node-id="LWqVAA0JaK7NPoHSqPvT9r">分组规则是 app.js 里的 id 白名单数组，新增命令需手动改代码，否则掉进「按 id 前缀兜底」的组里，体验割裂；「桌面控件」组还依赖排除法判定，较为脆弱。</p>
+<p data-page-node-id="Bqp82vuyKZm2Q4CGJbj18t"><b data-page-node-id="9jHyvQMZCNjhaCkxm0RMbI">建议</b>：把分组下沉为 manifest 的 <code data-page-node-id="m9CZKkgdTJASVMBtjTqlag">x-group</code> 字段，命令与分类同处一处，与「单一事实源」原则一致。</p>
+</div>
+
+<h2 data-page-node-id="vR8fhkXeDePUrE0exLAyuf">四、建议优先级</h2>
+<table data-page-node-id="7Hb9ng6SWwhe4F0qta2KZ5">
+<tr data-page-node-id="CbrzFFJ0FjLHnkodnpNs2n"><th data-page-node-id="UXUqCQrCKGjFKObrxu9OSq">序</th><th data-page-node-id="geJ4UANbFttWNFAvlu9fkV">事项</th><th data-page-node-id="kIQZEKf7u7DL0MiPjM31ME">级别</th><th data-page-node-id="atPHVX2DitKcPFqyzysX82">改动范围</th><th data-page-node-id="TBOTxK90rXBenhfl4CUyH3">收益</th></tr>
+<tr data-page-node-id="a2XpwFNGDv3gWqr1SPb76o"><td data-page-node-id="kecrEBe6jJj5SexPbPatUh">1</td><td data-page-node-id="oWG8zG9xgaToEkfVok7KWG">修 Vue 版 fx 按钮回归（改读字段级 <code data-page-node-id="2m0DH1dDvO8OpoHfgk1i61">x-fx</code>），并给常用字符串字段补标记</td><td data-page-node-id="OeKCGVQYJfS6MCWAfnJcKr"><span class="tag p0" data-page-node-id="DQ0HJRTyOAQKlMd94TA4t0">P0</span></td><td data-page-node-id="XxgzEuAcL0TTHr4UXIZlpz">前端 PropsPanel + 部分 manifest</td><td data-page-node-id="x02d7SL4yVKgVclV4Rbzbn">让「能填变量」这件事被看见</td></tr>
+<tr data-page-node-id="OKKrePU0kceJqlOFrCzwj7"><td data-page-node-id="NdrE61pvFqp7L3XE97wgBp">2</td><td data-page-node-id="ZV2ugR1GpFShLWfB7d3mpE">支持文本内插值 <code data-page-node-id="9k0CkcnjgYx0RsPKmxhQ2l">文本${变量}文本</code></td><td data-page-node-id="7xRnD6RSO1idJYLX12iFfT"><span class="tag p0" data-page-node-id="vVYJst2EMDPEkXwnwSGe55">P0</span></td><td data-page-node-id="iazz8AgVd375gU172PzsDQ">resolver 正则 + 单测</td><td data-page-node-id="OPBuVfRHUL53CmmsgGMuCq">解除高频需求阻塞，消除静默错误</td></tr>
+<tr data-page-node-id="KdESzmNT5MEaSJWfu1CwCc"><td data-page-node-id="aVfdePTBiotGSx94dJg6Uh">3</td><td data-page-node-id="stRs8CmAVyeY01eK89wLJ8">插值/引用失败时给出编译期或运行期告警</td><td data-page-node-id="93H7YocUe5VIqWC2wXv4Eh"><span class="tag p0" data-page-node-id="gwfc0ixuFTK2UAdCb4yBzZ">P0</span></td><td data-page-node-id="mqK57CFC9fR2oHkhNWsw4J">resolver + compiler</td><td data-page-node-id="mM4mH0Bic4Gn45iEenXMB6">把静默失败变成可见反馈</td></tr>
+<tr data-page-node-id="KcfcrSKSeQcGdfQCpxC4AC"><td data-page-node-id="deLQewVnNn853UiUbs6ao8">4</td><td data-page-node-id="SjtYa4ohieCVBMDkI6qi9S">默认会话（省略 sessionId 用最近激活会话）</td><td data-page-node-id="YpjUskKNZeIlzPCLIkrbiw"><span class="tag p1" data-page-node-id="ZHdNAsLt5AMIFd30sYnc01">P1</span></td><td data-page-node-id="zbI0VxxLNsfOnaf1qrNFCW">executor + manifest required 调整</td><td data-page-node-id="S14F7mXoGz0QHyi9PvKAb7">消除 83% 命令的重复填写</td></tr>
+<tr data-page-node-id="TRCvjFU6ZMYH28uTxZLVBL"><td data-page-node-id="euoGfmoRv9j2v9L18mlvbN">5</td><td data-page-node-id="V1ntk8hvJRJGWMO7yqlLcV">错误码中文文案 + 修复建议</td><td data-page-node-id="6jmIO5DohRbX7QncuCXAW5"><span class="tag p1" data-page-node-id="xGUrOgHMLUwGehAtubMYpO">P1</span></td><td data-page-node-id="5CTNwAXiobfvwRlR2qhBUc">i18n + 错误映射表</td><td data-page-node-id="iEwpZBxhXkM0PtSnzENvdk">出错时能自助修复</td></tr>
+<tr data-page-node-id="DFbaT9tSLRSXrNW5rH7q7Q"><td data-page-node-id="IRXwDtIrOPsc3lepNr5rUY">6</td><td data-page-node-id="6y6Fcg2YhNdAweP4VfQbwu">双后端自动选择 + 高级选项</td><td data-page-node-id="hPF4yoVpjcRYNm02hyoFk1"><span class="tag p2" data-page-node-id="SLK3AHcra0HIAPX3ih80Zk">P2</span></td><td data-page-node-id="oEa5LHWjyu2HPeNWod6uXq">manifest 合并 + 路由层</td><td data-page-node-id="hvY0SNfsMWfstZfoePgrmy">降低桌面入门门槛</td></tr>
+<tr data-page-node-id="QdC5IbdCkGlhsxZmhWyYf0"><td data-page-node-id="lf0HAwdO8EXFuR4EGfpURp">7</td><td data-page-node-id="jK9Zmfd2oO862jmfwEPi8F">分组下沉 manifest（<code data-page-node-id="pnrwChiiXSBFryrZADkwKg">x-group</code>）</td><td data-page-node-id="xwype4AxU1VXOYuu4717ka"><span class="tag p2" data-page-node-id="YlbA8ETmV3kBx9jp6HAwNu">P2</span></td><td data-page-node-id="PDQ8VznS622H6TQv189LFQ">manifest + 前端分组逻辑</td><td data-page-node-id="i7FbtL3UhlC82X3SjIl1Lz">新命令自动归组，免维护</td></tr>
+</table>
+
+<p class="foot" data-page-node-id="h0DJQ5ayn1ZX9DGXycDYEQ">数据来源：<code data-page-node-id="8S33oyzdPLRhZ8EJ9qPvl0">commands/*/*.json</code> 全量解析、<code data-page-node-id="dkQ1J2NPOhVk3r8Kcych8l">resolver.resolve</code> 实测、<code data-page-node-id="5oS5sB0nQnFBuyT2OWuJPW">app.js</code> / <code data-page-node-id="mXbBHVS5D8sFe57VRCARYU">model/command.py</code> 代码走查。生成于 2026-09-09。</p>
+
+</div>
+</body>
+</html>

@@ -8,7 +8,7 @@
   "resources": ["desktop.session", "desktop.element"],
   "stability": "stable",
   "effect": {"kind": "read", "replay": "safe", "idempotency": "none"},
-  "input_schema": {"type": "object", "required": ["sessionId", "elementId"], "properties": {"sessionId": {"type": "string", "minLength": 1}, "elementId": {"type": "string", "minLength": 1}}, "additionalProperties": false},
+  "input_schema": {"type": "object", "required": ["elementId"], "properties": {"sessionId": {"type": "string", "minLength": 1}, "elementId": {"type": "string", "minLength": 1}}, "additionalProperties": false},
   "output_schema": {"type": "object", "required": ["text"], "properties": {"text": {"type": "string"}}, "additionalProperties": false},
   "x-outputs": {
     "text": {"label": "选中文本", "primary": true}

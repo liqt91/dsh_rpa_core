@@ -8,7 +8,7 @@
   "resources": ["desktop.session", "desktop.window"],
   "stability": "stable",
   "effect": {"kind": "session", "replay": "unsafe", "idempotency": "none"},
-  "input_schema": {"type": "object", "required": ["sessionId"], "properties": {"sessionId": {"type": "string", "minLength": 1}, "forceKill": {"type": "boolean", "description": "强制终止进程而不仅是关闭窗口", "default": false}}, "additionalProperties": false},
+  "input_schema": {"type": "object", "required": [], "properties": {"sessionId": {"type": "string", "minLength": 1}, "forceKill": {"type": "boolean", "description": "强制终止进程而不仅是关闭窗口", "default": false}}, "additionalProperties": false},
   "output_schema": {"type": "object", "additionalProperties": false},
   "errors": ["SESSION_NOT_FOUND", "SESSION_LOST", "TIMEOUT", "CANCELLED", "EXECUTOR_FAILED"],
   "implementation": {"handler": "desktop.win32:close_session"},

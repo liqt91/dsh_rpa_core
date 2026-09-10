@@ -1368,9 +1368,9 @@ function schemaField(node, key, propSchema, required) {
     sel.className = "session-pick";
     const sessionNodes = collectSessionNodes(filterRT);
     if (sessionNodes.length === 0) {
-      sel.innerHTML = '<option value="">— 无匹配的会话节点 —</option>';
+      sel.innerHTML = '<option value="">— 默认（最近会话）；无会话节点 —</option>';
     } else {
-      sel.innerHTML = '<option value="">— 引用创建会话的节点 —</option>';
+      sel.innerHTML = '<option value="">— 默认（最近会话）/ 选择会话节点 —</option>';
     }
     for (const s of sessionNodes) {
       const opt = document.createElement("option");
@@ -1383,14 +1383,22 @@ function schemaField(node, key, propSchema, required) {
       }
       sel.appendChild(opt);
     }
-    sel.title = "该命令的运行值绑定到「创建会话」节点的输出 sessionId，无需手填";
+    sel.title = "绑定「创建会话」节点的输出 sessionId；留空则默认作用于最近激活的会话";
     const hint = document.createElement("span");
     hint.className = "field-hint";
-    hint.textContent = "引用会话输出，无需手填";
+    hint.textContent = "引用会话输出；留空 = 默认作用于最近会话";
     pickWrap.appendChild(sel);
     pickWrap.appendChild(hint);
     sel.addEventListener("change", () => {
-      if (!sel.value) return;
+      if (!sel.value) {
+        // 留空 = 默认会话：运行时作用于最近激活（或唯一）的会话
+        setWith(node, key, "");
+        const inputEl0 = field.querySelector('input[data-field]');
+        if (inputEl0) inputEl0.value = "";
+        markDirty();
+        showCompileMessage("sessionId 已留空：默认作用于最近激活的会话", true);
+        return;
+      }
       const picked = sessionNodes.find((s) => s.id === sel.value);
       const ref = picked && picked.outputName
         ? `\${${picked.outputName}}`

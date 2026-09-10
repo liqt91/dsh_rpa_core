@@ -8,7 +8,7 @@
   "resources": ["desktop.session", "desktop.element"],
   "stability": "stable",
   "effect": {"kind": "unsafe-write", "replay": "unsafe", "idempotency": "none"},
-  "input_schema": {"type": "object", "required": ["sessionId", "elementId", "value"], "properties": {"sessionId": {"type": "string", "minLength": 1}, "elementId": {"type": "string", "minLength": 1}, "value": {"type": "string", "minLength": 1, "description": "选择项的值/标签/索引"}, "selectBy": {"type": "string", "enum": ["value", "label", "index"], "description": "选择方式", "default": "value"}}, "additionalProperties": false},
+  "input_schema": {"type": "object", "required": ["elementId", "value"], "properties": {"sessionId": {"type": "string", "minLength": 1}, "elementId": {"type": "string", "minLength": 1}, "value": {"type": "string", "minLength": 1, "description": "选择项的值/标签/索引"}, "selectBy": {"type": "string", "enum": ["value", "label", "index"], "description": "选择方式", "default": "value"}}, "additionalProperties": false},
   "output_schema": {"type": "object", "additionalProperties": false},
   "errors": ["ELEMENT_NOT_FOUND", "SESSION_NOT_FOUND", "SESSION_LOST", "EXECUTOR_FAILED"],
   "implementation": {"handler": "desktop.win32:selectOption"},

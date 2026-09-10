@@ -23,7 +23,7 @@ from rpa_core.model.command import (
 )
 from rpa_core.model.errors import ErrorCode
 
-from .base import CommandExecutor
+from .base import CommandExecutor, resolve_session_id
 from .browser_bsk import BskSession
 
 
@@ -34,6 +34,9 @@ class PlaywrightExecutor(CommandExecutor):
         self._bsk_sessions: dict[str, BskSession] = {}
         self._bsk_keep_open: dict[str, bool] = {}
         self._bsk_runner = bsk_runner
+        # 记录最近激活的会话，供省略 sessionId 的命令默认使用
+        self._last_session_id: str | None = None
+        self._last_bsk_session_id: str | None = None
 
     async def _ensure_runtime(self) -> Playwright:
         if self._playwright is None:
@@ -41,17 +44,24 @@ class PlaywrightExecutor(CommandExecutor):
         return self._playwright
 
     def _session(self, inputs: dict[str, Any]) -> tuple[str, Browser, BrowserContext, Page]:
-        session_id = str(inputs.get("sessionId") or "")
+        # sessionId 可省略：默认作用于最近激活（或唯一）的浏览器会话
+        session_id = resolve_session_id(
+            inputs.get("sessionId"), self._sessions, self._last_session_id
+        )
         if not session_id or session_id not in self._sessions:
-            raise LookupError(session_id)
+            raise LookupError(str(inputs.get("sessionId") or ""))
+        self._last_session_id = session_id
         browser, context, page = self._sessions[session_id]
         return session_id, browser, context, page
 
     def _bsk_session(self, inputs: dict[str, Any]) -> tuple[str, BskSession]:
-        session_id = str(inputs.get("sessionId") or "")
+        session_id = resolve_session_id(
+            inputs.get("sessionId"), self._bsk_sessions, self._last_bsk_session_id
+        )
         session = self._bsk_sessions.get(session_id)
         if session is None:
-            raise LookupError(session_id)
+            raise LookupError(str(inputs.get("sessionId") or ""))
+        self._last_bsk_session_id = session_id
         return session_id, session
 
     async def _run_bsk(self, func, *args):
@@ -100,6 +110,8 @@ class PlaywrightExecutor(CommandExecutor):
                     page = await context.new_page()
                 session_id = str(uuid.uuid4())
                 self._sessions[session_id] = (browser, context, page)
+                # 新建的会话即默认会话，后续命令可省略 sessionId
+                self._last_session_id = session_id
                 timeout_ms = int(inputs.get("timeoutMs", 30_000))
                 try:
                     await page.goto(
@@ -133,8 +145,12 @@ class PlaywrightExecutor(CommandExecutor):
                     diagnostics={"durationMs": int((time.monotonic() - started) * 1000)},
                 )
 
-            session_ref = str(inputs.get("sessionId") or "")
-            if session_ref in self._bsk_sessions:
+            explicit_session = str(inputs.get("sessionId") or "").strip()
+            # 显式指定按原样判断；省略时看默认会话是否落在 bsk 上
+            session_ref = explicit_session or resolve_session_id(
+                None, self._bsk_sessions, self._last_bsk_session_id
+            )
+            if session_ref and session_ref in self._bsk_sessions:
                 return await self._execute_bsk(
                     command, invocation, inputs, session_ref, started, cancellation
                 )
@@ -519,6 +535,7 @@ class PlaywrightExecutor(CommandExecutor):
         keep_open = bool(inputs.get("keepOpen", False))
         self._bsk_sessions[session_id] = session
         self._bsk_keep_open[session_id] = keep_open
+        self._last_bsk_session_id = session_id
         try:
             final_url = await self._run_bsk(session.navigate, str(inputs["url"]))
         except BskError as exc:

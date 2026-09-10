@@ -26,6 +26,11 @@ def python_files():
 
 def check_forbidden_calls(errors):
     for path in python_files():
+        # workers/ 是子进程执行面：按规则 5，用户 Python 只在 worker 子进程运行，
+        # py 表达式模式的动态求值因此限定在 workers/ 内；orchestrator 进程
+        # （runtime/executors/compiler/model/cli/devserver）仍然全面禁止 eval/exec。
+        if path.parent == (SRC / "workers"):
+            continue
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         for node in ast.walk(tree):
             if isinstance(node, ast.Call):

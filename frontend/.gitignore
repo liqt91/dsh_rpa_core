@@ -22,3 +22,6 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# 依赖重装时的临时备份目录
+node_modules.*

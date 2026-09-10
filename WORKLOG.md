@@ -1,5 +1,17 @@
 # 工作日志
 
+## 2026-09-10
+
+- **表达式双模式落地（x-fx 体系后端消费）**——用户定案：fx 用方括号标签、py 直写变量名且支持写回、sessionId 默认会话；其余 UX 建议均不采纳：
+  - **fx 标签语法**：`[name]` / `[name.field]` 替换变量值，支持文本混排拼接（「输出日志：这是变量[webpage1]」），弥补 `${}` 全串匹配不能拼接的硬伤；整串 `${}` 保持既有语义向后兼容；未定义标签运行报 INVALID_REFERENCE（不静默）。
+  - **py 模式**：worker 新增 `python.evalExpression`（子进程 exec/eval，与 data.* 同一隔离模型，规则 5/6 不破）；用户 Python 可直写变量名（`webpage1.url`）、可赋值；**赋值变量由 worker 回传、orchestrator 合并进 scopes.variables（规则 3 不破），跨节点可用**（端到端实证：n3 py 赋值 total → n4 fx 引用 [total]）。同节点多 py 字段共享命名空间；`__builtins__` 等内部键过滤；string schema 字段自动 str 化。
+  - **sessionId 默认会话**：45 条命令移除 input required 的 sessionId（output required 输出契约保留）；`resolve_session_id`（显式 > 最近激活 > 唯一会话，多会话无记录报错不猜测）接入 browser（playwright/bsk 双轨）/desktop/desktop_win32——「打开网页」后的后续命令可全部省略 sessionId。
+  - **编辑器**：Vue 版 PropsPanel 重做 fx 交互（textarea + [标签] chip 实时预览 + 光标处插入）并把 expr_modes 持久化到 node._exprModes（原先存组件 ref 切节点即丢）；旧版 app.js sessionId 下拉空值=默认会话；纠正此前误判（Vue 版实读字段级 x-fx，源码无回归——基于过期构建产物的判断）。
+  - **架构检查**：check_architecture 对 workers/ 豁免 eval/exec 扫描（规则 5 语义：动态求值限定在子进程执行面，orchestrator 仍全面禁止），附注释。
+  - **事故与修复**：vite build `emptyOutDir: true` 清空了 outDir——**删掉了线上 app.js/i18n.js/styles.css/catalog.html 并把 index.html 覆盖成 Vue 版**；git checkout 恢复全部线上文件，vite.config 改 `emptyOutDir: false` + 注释警示（迁移中间态严禁清空）；构建后 index.html 仍会被入口输出覆盖，需 git checkout 恢复（已知操作约束）。前端 node_modules 多处空壳损坏（rolldown/picomatch 等 junction 缺失），移走全量重装后构建通过。
+- 指令清单 UX 分析报告（docs/command-ux-analysis.html）：54 条命令实测（参数中位数 3、必填 2、45/54 需 sessionId）；两个 P0（变量能力已实现但 x-fx 仅 3 字段暴露、无插值且静默失败）——本日三项落地即针对其中 P0-1/P0-2 与 sessionId P1。
+- 新增测试：resolver 标签 9、python 表达式/端到端 15、resolve_session_id 6、browser 合同 2。
+
 ## 2026-09-09
 
 - 提交前说明：本次提交含两部分——(a) 此前未提交的 output-aliases 变量别名重构 + UIA 生产侧提速 + devserver SPA fallback/动态静态扫描（详见 PROGRESS 同日 output-aliases / uia-e2e-flakiness-production / spa-fallback-fix 条目）；(b) 本会话的打开网页合并与配套（下述）。工作区另有 Vue 前端迁移中间态（frontend/ 源码、static/assets/ 构建产物、favicon/icons.svg）未启用、未提交。

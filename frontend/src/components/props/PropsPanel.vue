@@ -72,46 +72,66 @@
                   class="expr-btn"
                   :class="{ active: exprMode(key) === 'fx' }"
                   @click="toggleFx(key)"
-                  title="变量引用"
+                  title="变量引用：可下拉插入变量标签，并支持与文本拼接"
                 >fx</button>
-                <div v-if="exprMode(key) === 'fx' && hasFx(key)" class="var-dropdown" ref="dropdownRef">
-                  <div v-if="node.with[key]" class="var-tag" @click="showDropdown = !showDropdown">
-                    <span class="var-tag-text">{{ node.with[key] }}</span>
-                    <button class="var-tag-remove" @click.stop="clearVar(key)">×</button>
-                  </div>
-                  <div v-else class="var-select" @click="showDropdown = !showDropdown">
-                    <span class="var-placeholder">选择变量</span>
-                    <span class="var-arrow">▾</span>
-                  </div>
-                  <div class="var-list" v-show="showDropdown">
-                    <div class="var-group-header">用户变量</div>
-                    <template v-for="v in filteredVars" :key="v.name">
-                      <div
-                        v-if="v.type === 'user'"
-                        class="var-item"
-                        :class="{ selected: node.with[key] === `\${${v.name}}` }"
-                        @mousedown.prevent="selectVar(v, key)"
-                      >
-                        <span class="var-item-icon" style="color: var(--accent)">●</span>
-                        {{ v.name }}
-                      </div>
-                    </template>
-                    <div v-if="filteredVars.filter(v => v.type === 'user').length === 0" class="var-empty">暂无用户变量</div>
 
-                    <div class="var-group-header">内置作用域</div>
-                    <template v-for="v in filteredVars" :key="v.name">
-                      <div
-                        v-if="v.type !== 'user'"
-                        class="var-item"
-                        :class="{ selected: node.with[key] === `\${${v.name}}` }"
-                        @mousedown.prevent="selectVar(v, key)"
-                      >
-                        <span class="var-item-icon" :style="{ color: v.type === 'builtin' ? 'var(--ok)' : v.type === 'loop' ? 'var(--warn)' : 'var(--bad)' }">●</span>
-                        {{ v.name }}
+                <div v-if="exprMode(key) === 'fx' && hasFx(key)" class="fx-field">
+                  <div class="fx-row">
+                    <textarea
+                      class="fx-editor"
+                      rows="2"
+                      :ref="(el) => setInputRef(key, el)"
+                      :value="node.with[key] || ''"
+                      @input="onFxInput(key, $event)"
+                      placeholder="文本可直接输入，用 [变量名] 插入标签"
+                    ></textarea>
+                    <div class="var-dropdown">
+                      <button
+                        class="var-pick-btn"
+                        @mousedown.prevent="toggleVarList(key)"
+                        title="插入变量"
+                      >＋ 变量</button>
+                      <div class="var-list" v-show="showDropdown && activeKey === key">
+                        <div class="var-group-header">用户变量</div>
+                        <template v-for="v in filteredVars" :key="v.name">
+                          <div
+                            v-if="v.type === 'user'"
+                            class="var-item"
+                            @mousedown.prevent="insertVar(v, key)"
+                          >
+                            <span class="var-item-icon" style="color: var(--accent)">●</span>
+                            {{ v.name }}
+                          </div>
+                        </template>
+                        <div v-if="filteredVars.filter((v) => v.type === 'user').length === 0" class="var-empty">
+                          暂无用户变量
+                        </div>
+
+                        <div class="var-group-header">内置作用域</div>
+                        <template v-for="v in filteredVars" :key="v.name">
+                          <div
+                            v-if="v.type !== 'user'"
+                            class="var-item"
+                            @mousedown.prevent="insertVar(v, key)"
+                          >
+                            <span
+                              class="var-item-icon"
+                              :style="{ color: v.type === 'builtin' ? 'var(--ok)' : v.type === 'loop' ? 'var(--warn)' : 'var(--bad)' }"
+                            >●</span>
+                            {{ v.name }}
+                          </div>
+                        </template>
                       </div>
+                    </div>
+                  </div>
+                  <div v-if="node.with[key]" class="fx-preview">
+                    <template v-for="(seg, i) in parseTags(node.with[key] || '')" :key="i">
+                      <span v-if="seg.type === 'tag'" class="fx-chip">{{ seg.name }}</span>
+                      <span v-else class="fx-text">{{ seg.value }}</span>
                     </template>
                   </div>
                 </div>
+
                 <input
                   v-else
                   class="props-input"
@@ -124,7 +144,7 @@
                   class="expr-btn py"
                   :class="{ active: exprMode(key) === 'py' }"
                   @click="togglePy(key)"
-                  title="Python 表达式"
+                  title="Python 表达式：直接写变量名，支持赋值"
                 >Py</button>
               </div>
             </div>
@@ -168,9 +188,23 @@ import { useWorkflowStore } from '../../stores/workflow'
 import { i18n } from '../../i18n'
 
 const store = useWorkflowStore()
-const exprModes = ref({})
 const showDropdown = ref(false)
-const dropdownRef = ref(null)
+const activeKey = ref(null)
+const inputRefs = {}
+
+// 表达式模式持久化到 node._exprModes（与 workflow JSON 一致），切换节点不丢失
+function exprMode(key) {
+  return node.value?._exprModes?.[key] || null
+}
+function setMode(key, mode) {
+  if (!node.value) return
+  if (!node.value._exprModes) node.value._exprModes = {}
+  if (mode) {
+    node.value._exprModes[key] = mode
+  } else {
+    delete node.value._exprModes[key]
+  }
+}
 
 const node = computed(() => {
   if (!store.selected) return null
@@ -290,18 +324,65 @@ const filteredVars = computed(() => {
   return allVars.value
 })
 
-function selectVar(v, key) {
-  node.value.with[key] = `\${${v.name}}`
+function setInputRef(key, el) {
+  if (el) inputRefs[key] = el
+  else delete inputRefs[key]
+}
+
+function onFxInput(key, event) {
+  node.value.with[key] = event.target.value
+}
+
+function toggleVarList(key) {
+  if (showDropdown.value && activeKey.value === key) {
+    showDropdown.value = false
+    return
+  }
+  activeKey.value = key
+  showDropdown.value = true
+}
+
+// 在光标处插入 [变量名] 标签，保留周围文本，支持拼接
+function insertVar(v, key) {
+  const el = inputRefs[key]
+  const current = node.value.with[key] || ''
+  const tag = `[${v.name}]`
+  if (el && typeof el.selectionStart === 'number') {
+    const start = el.selectionStart
+    const end = el.selectionEnd
+    node.value.with[key] = current.slice(0, start) + tag + current.slice(end)
+    requestAnimationFrame(() => {
+      el.focus()
+      const pos = start + tag.length
+      el.setSelectionRange(pos, pos)
+    })
+  } else {
+    node.value.with[key] = current + tag
+  }
   showDropdown.value = false
 }
 
-function clearVar(key) {
-  node.value.with[key] = ''
-  showDropdown.value = false
+// 把 "文本[变量]文本" 解析为可渲染片段，用于标签预览
+function parseTags(text) {
+  const segments = []
+  const pattern = /\[([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)\]/g
+  let last = 0
+  let match
+  while ((match = pattern.exec(text)) !== null) {
+    if (match.index > last) {
+      segments.push({ type: 'text', value: text.slice(last, match.index) })
+    }
+    segments.push({ type: 'tag', name: match[1] })
+    last = match.index + match[0].length
+  }
+  if (last < text.length) {
+    segments.push({ type: 'text', value: text.slice(last) })
+  }
+  return segments
 }
 
 function onDocClick(e) {
-  if (dropdownRef.value && !dropdownRef.value.contains(e.target)) {
+  if (!e.target.closest?.('.var-dropdown')) {
     showDropdown.value = false
   }
 }
@@ -325,19 +406,20 @@ function fieldEnumLabel(key, value) {
 
 function hasFx(key) { return fields.value[key]?.['x-fx'] === true }
 function hasPython(key) { return fields.value[key]?.['x-python'] === true }
-function exprMode(key) { return exprModes.value[key] || null }
 function toggleFx(key) {
-  const isActive = exprModes.value[key] === 'fx'
-  exprModes.value[key] = isActive ? null : 'fx'
+  const isActive = exprMode(key) === 'fx'
+  setMode(key, isActive ? null : 'fx')
   if (!isActive) {
+    activeKey.value = key
     showDropdown.value = true
   }
 }
-function togglePy(key) { exprModes.value[key] = exprModes.value[key] === 'py' ? null : 'py' }
+function togglePy(key) {
+  setMode(key, exprMode(key) === 'py' ? null : 'py')
+}
 
 function stringPlaceholder(key, schema) {
-  if (exprModes.value[key] === 'fx') return '输入或选择变量'
-  if (exprModes.value[key] === 'py') return 'lambda x: ...'
+  if (exprMode(key) === 'py') return '直接写变量名，如 total * 10'
   return schema.default !== undefined ? String(schema.default) : ''
 }
 
@@ -352,7 +434,8 @@ function isVisible(key) {
   return true
 }
 
-watch(() => store.selected, () => { exprModes.value = {} })
+// 模式存在节点上，切换节点只需收起变量下拉
+watch(() => store.selected, () => { showDropdown.value = false })
 </script>
 
 <style scoped>
@@ -424,7 +507,7 @@ watch(() => store.selected, () => { exprModes.value = {} })
 .props-group { margin-bottom: 16px; }
 .props-label { display: block; font-size: 12px; font-weight: 500; color: var(--text-secondary); margin-bottom: 6px; }
 .bool-field { display: flex; align-items: center; gap: 10px; }
-.var-dropdown { position: relative; flex: 1; }
+.var-dropdown { position: relative; flex-shrink: 0; }
 .var-select {
   display: flex;
   align-items: center;
@@ -480,8 +563,8 @@ watch(() => store.selected, () => { exprModes.value = {} })
 .var-list {
   position: absolute;
   top: 100%;
-  left: 0;
   right: 0;
+  min-width: 220px;
   max-height: 160px;
   overflow-y: auto;
   background: var(--bg-primary);
@@ -557,6 +640,61 @@ watch(() => store.selected, () => { exprModes.value = {} })
 .field-row { display: flex; flex-direction: column; gap: 6px; }
 .string-field { display: flex; gap: 6px; }
 .string-field .props-input { flex: 1; }
+.fx-field { flex: 1; min-width: 0; }
+.fx-row { display: flex; gap: 6px; align-items: flex-start; }
+.fx-editor {
+  flex: 1;
+  min-width: 0;
+  min-height: 52px;
+  padding: 8px 10px;
+  font-size: 13px;
+  font-family: Consolas, monospace;
+  line-height: 1.5;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  resize: vertical;
+}
+.fx-editor:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.15); }
+.fx-preview {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  margin-top: 6px;
+  padding: 6px 8px;
+  font-size: 12px;
+  background: var(--bg-hover);
+  border-radius: 6px;
+  min-height: 28px;
+}
+.fx-text { color: var(--text-secondary); white-space: pre-wrap; }
+.fx-chip {
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 8px;
+  font-family: Consolas, monospace;
+  font-size: 12px;
+  background: rgba(59, 130, 246, 0.12);
+  color: var(--accent);
+  border: 1px solid rgba(59, 130, 246, 0.35);
+  border-radius: 10px;
+}
+.var-pick-btn {
+  height: 52px;
+  padding: 0 10px;
+  font-size: 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-surface);
+  color: var(--text-secondary);
+  cursor: pointer;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+.var-pick-btn:hover { background: var(--bg-hover); }
 .expr-btn {
   width: 36px;
   height: 36px;

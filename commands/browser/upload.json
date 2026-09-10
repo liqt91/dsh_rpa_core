@@ -8,7 +8,7 @@
   "resources": ["browser.session"],
   "stability": "stable",
   "effect": {"kind": "unsafe-write", "replay": "unsafe", "idempotency": "none"},
-  "input_schema": {"type": "object", "required": ["sessionId", "selector", "files"], "properties": {"sessionId": {"type": "string"}, "selector": {"type": "string", "minLength": 1}, "files": {"type": "array", "items": {"type": "string"}, "minItems": 1, "description": "要上传的文件路径列表"}, "timeoutMs": {"type": "integer", "minimum": 1}}, "additionalProperties": false},
+  "input_schema": {"type": "object", "required": ["selector", "files"], "properties": {"sessionId": {"type": "string"}, "selector": {"type": "string", "minLength": 1}, "files": {"type": "array", "items": {"type": "string"}, "minItems": 1, "description": "要上传的文件路径列表"}, "timeoutMs": {"type": "integer", "minimum": 1}}, "additionalProperties": false},
   "output_schema": {"type": "object", "required": ["matchedCount", "sessionId"], "properties": {"matchedCount": {"type": "integer", "minimum": 1}, "sessionId": {"type": "string"}}, "additionalProperties": false},
   "x-outputs": {
     "matchedCount": {"label": "匹配数量"},

@@ -13,7 +13,7 @@ from rpa_core.model.command import CommandInvocation, CommandResult, EffectKind,
 from rpa_core.model.desktop import DesktopLocator
 from rpa_core.model.errors import ErrorCode
 
-from .base import CommandExecutor
+from .base import CommandExecutor, resolve_session_id
 
 
 @dataclass
@@ -27,6 +27,8 @@ class Win32DesktopExecutor(CommandExecutor):
     def __init__(self, operation_timeout_seconds: float = 15.0):
         self.operation_timeout_seconds = operation_timeout_seconds
         self._sessions: dict[str, _Win32Session] = {}
+        # 记录最近激活的会话，供省略 sessionId 的命令默认使用
+        self._last_session_id: str | None = None
         self._lock = asyncio.Lock()
         self._thread_pool: ThreadPoolExecutor | None = None
         self._closed = False
@@ -46,11 +48,17 @@ class Win32DesktopExecutor(CommandExecutor):
             "desktop.win32.getWindowList",
         )
         if invocation.command_id not in _no_session_commands:
-            session_id = str(invocation.inputs.get("sessionId") or "")
+            # sessionId 可省略：默认作用于最近激活（或唯一）的桌面会话
+            session_id = resolve_session_id(
+                invocation.inputs.get("sessionId"),
+                self._sessions,
+                self._last_session_id,
+            )
             if not session_id or session_id not in self._sessions:
                 return CommandResult.failure(
                     ErrorCode.SESSION_NOT_FOUND, "Desktop session not found"
                 )
+            self._last_session_id = session_id
         try:
             async with self._lock:
                 if self._thread_pool is None:
@@ -121,6 +129,8 @@ class Win32DesktopExecutor(CommandExecutor):
             native_handle = int(window.handle)
             pid = int(window.process_id())
             self._sessions[session_id] = _Win32Session(pid, native_handle, {})
+            # 新建的会话即默认会话，后续命令可省略 sessionId
+            self._last_session_id = session_id
             return CommandResult.success(
                 outputs={
                     "sessionId": session_id,
@@ -138,7 +148,11 @@ class Win32DesktopExecutor(CommandExecutor):
                 ],
             )
 
-        session_id = str(inputs.get("sessionId") or "")
+        session_id = resolve_session_id(
+            inputs.get("sessionId"), self._sessions, self._last_session_id
+        )
+        if session_id:
+            self._last_session_id = session_id
         session = self._sessions.get(session_id)
         if session is None:
             return CommandResult.failure(
