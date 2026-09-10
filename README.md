@@ -80,20 +80,39 @@ rpa_core/
   "root": {
     "type": "sequence",
     "children": [
-      { "type": "action", "id": "openPage", "command": "browser.navigate", "with": { "url": "http://127.0.0.1:8765/", "headless": true } },
+      { "type": "action", "id": "openPage", "command": "browser.navigate",
+        "output_aliases": { "sessionId": "web" },
+        "with": { "url": "http://127.0.0.1:8765/", "headless": true } },
       { "type": "action", "id": "input", "command": "browser.input",
-        "with": { "sessionId": "${steps.openPage.outputs.sessionId}",
+        "with": { "sessionId": "${web}",
                   "selector": "#query", "text": "${inputs.keyword}" } },
       { "type": "action", "id": "save", "command": "data.writeJson",
         "with": { "workspace": "${inputs.workspace}", "path": "${inputs.outputPath}",
-                  "data": "${steps.collect.outputs.items}" } },
-      { "type": "return", "value": "${steps.collect.outputs.items}" }
+                  "data": "${results}" } },
+      { "type": "return", "value": "${results}" }
     ]
   }
 }
 ```
 
-AST 节点：`sequence` / `action` / `if` / `forEach` / `try` / `return`；引用 `"${steps.<id>.outputs.<key>}"`、`"${inputs.<key>}"` 支持。
+AST 节点：`sequence` / `action` / `if` / `forEach` / `try` / `return`。
+
+### 用户变量
+
+命令的输出可命名（`output_aliases`），后续节点用 `${变量名}` 直接引用，不必写冗长的 `${steps.<id>.outputs.<key>}`：
+
+| 写法 | 含义 |
+|---|---|
+| `output_aliases: { "sessionId": "web" }` | 把该命令的 `sessionId` 输出命名为变量 `web` |
+| `${web}` | 引用变量整值 |
+| `${web.sessionId}` | 引用变量的子字段 |
+| `data.setVar` 命令 | 显式赋值：`{"varName": "keyword", "value": "${inputs.keyword}"}` |
+
+变量是**可写**的：同一变量可被后续 `data.setVar` 重新赋值（覆盖旧值），再被更后面的节点读到新值——即「节点 1 定义 → 节点 2 修改 → 节点 3 读取改后值」。
+
+编译期校验：变量名唯一（重复声明报 `Duplicate alias`）、不得占用内置作用域根名（`inputs` / `steps` / `loop`，报 `Reserved alias name`）、不得前向引用（先引用后声明报 `Forward variable reference`）。
+
+内置作用域（始终可用）：`${inputs.<key>}`、`${steps.<id>.outputs.<key>}`、`${loop.<item_var>}`、catch 块内的 `${<error_var>.code}`。
 
 ## 快速开始
 

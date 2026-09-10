@@ -256,6 +256,95 @@ function remapSubtreeIds(node) {
   }
 }
 
+// 收集整棵树已占用的变量名（output_aliases 别名 + data.setVar 的 varName 字面量）。
+function collectUsedVarNames() {
+  const used = new Set();
+  const visit = (node) => {
+    if (!node) return;
+    if (node.type === "action") {
+      for (const alias of Object.values(node.output_aliases || {})) {
+        if (alias) used.add(alias);
+      }
+      const manifest = manifestOf(node.command);
+      const varWrite = manifest && manifest["x-var-write"];
+      if (varWrite && varWrite.field) {
+        const target = node["with"] ? node["with"][varWrite.field] : undefined;
+        if (typeof target === "string" && target && !target.startsWith("${")) used.add(target);
+      }
+    }
+    for (const key of CONTAINER_LISTS[node.type] || []) {
+      for (const child of listOf(node, key) || []) visit(child);
+    }
+  };
+  if (state.workflow && state.workflow.root) visit(state.workflow.root);
+  return used;
+}
+
+// 粘贴时重命名撞车别名：旧名 → 新名映射，并同步改写子树内对旧名的引用。
+// 别名是扁平作用域，重复声明会在编译期被拦截（Duplicate alias），
+// 这里在粘贴阶段就消除冲突，避免用户复制节点后必然撞车。
+function remapSubtreeAliases(node, sharedUsed) {
+  const used = sharedUsed || collectUsedVarNames();
+  const rename = new Map(); // 旧别名 -> 新别名
+
+  const makeUnique = (base) => {
+    let candidate = `${base}_copy`;
+    let n = 2;
+    while (used.has(candidate)) {
+      candidate = `${base}_copy${n}`;
+      n += 1;
+    }
+    used.add(candidate);
+    return candidate;
+  };
+
+  // 第一遍：登记需要重命名的别名
+  const collect = (n) => {
+    if (!n) return;
+    if (n.type === "action") {
+      for (const [field, alias] of Object.entries(n.output_aliases || {})) {
+        if (alias && used.has(alias)) {
+          const fresh = makeUnique(alias);
+          rename.set(alias, fresh);
+          n.output_aliases[field] = fresh;
+        }
+      }
+    }
+    for (const key of CONTAINER_LISTS[n.type] || []) {
+      for (const child of listOf(n, key) || []) collect(child);
+    }
+  };
+  collect(node);
+
+  // 第二遍：改写子树内引用了被重命名别名的 ${...}
+  if (rename.size) {
+    const rewriteRefs = (value) => {
+      if (typeof value === "string") {
+        return value.replace(/\$\{([A-Za-z_]\w*)((?:\.\w+)*)\}/g, (whole, root, rest) =>
+          rename.has(root) ? `\${${rename.get(root)}${rest}}` : whole
+        );
+      }
+      if (Array.isArray(value)) return value.map(rewriteRefs);
+      if (value && typeof value === "object") {
+        for (const key of Object.keys(value)) value[key] = rewriteRefs(value[key]);
+        return value;
+      }
+      return value;
+    };
+    const rewriteNode = (n) => {
+      if (!n) return;
+      if (n.type === "action") {
+        n["with"] = rewriteRefs(n["with"] || {});
+      }
+      for (const key of CONTAINER_LISTS[n.type] || []) {
+        for (const child of listOf(n, key) || []) rewriteNode(child);
+      }
+    };
+    rewriteNode(node);
+  }
+  return rename;
+}
+
 function copySelection() {
   if (!state.multi.length) return;
   const nodes = state.multi.map((p) => structuredClone(findNode(p)));
@@ -275,10 +364,16 @@ function pasteClipboard() {
     key = last.key;
     index = last.index + 1;
   }
+  // 别名规划需在插入前统一完成：多个待粘贴节点共享同一份已占用集合，
+  // 否则逐个插入会让后一个节点误判前一个刚写入的别名是否冲突。
+  const usedVars = collectUsedVarNames();
+  const allRenamed = [];
   let lastPath = null;
   for (const source of state.clipboard.nodes) {
     const node = structuredClone(source);
     remapSubtreeIds(node);
+    const renamed = remapSubtreeAliases(node, usedVars);
+    for (const [from, to] of renamed) allRenamed.push(`${from} → ${to}`);
     insertNode(containerPath, key, index, node);
     lastPath = [...containerPath, { key, index }];
     index += 1;
@@ -287,6 +382,10 @@ function pasteClipboard() {
   selectSingle(lastPath);
   markDirty();
   render();
+  if (allRenamed.length) {
+    // 明确告知用户别名被重命名，避免"复制后变量名悄悄变了"的困惑
+    showCompileMessage(`已粘贴；为避免重名，变量已重命名：${allRenamed.join("、")}`, true);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -316,7 +415,8 @@ function newFlowNode(type) {
   if (type === "sequence") return { type: "sequence", id, children: [] };
   if (type === "if") return { type: "if", id, condition: { op: "truthy", left: "" }, then: [], else: [] };
   if (type === "forEach") return { type: "forEach", id, items: [], item_var: "item", children: [] };
-  if (type === "try") return { type: "try", id, children: [], catch: [], error_var: "error" };  return { type: "return", id, value: null };
+  if (type === "try") return { type: "try", id, children: [], catch: [], error_var: "error" };
+  return { type: "return", id, value: null };
 }
 
 // ---------------------------------------------------------------------------
@@ -342,11 +442,42 @@ const manifestOf = (command) => state.catalog.find((c) => c.id === command);
 // 变量补全：属性表单输入 ${ 时提示可引用路径（inputs / 各节点 outputs / loop / error）
 // ---------------------------------------------------------------------------
 
+// 收集流程中所有用户变量（别名 + 变量写入命令的 varName 字面量）。
+// 返回 [{name, source}]，source 用于下拉分组展示（如「用户变量」）。
+function collectUserVariables() {
+  const found = new Map(); // name -> source 描述
+  const visit = (node) => {
+    if (!node) return;
+    if (node.type === "action") {
+      for (const alias of Object.values(node.output_aliases || {})) {
+        if (alias && !found.has(alias)) found.set(alias, "输出别名");
+      }
+      const manifest = manifestOf(node.command);
+      const varWrite = manifest && manifest["x-var-write"];
+      if (varWrite && varWrite.field) {
+        const target = node["with"] ? node["with"][varWrite.field] : undefined;
+        if (typeof target === "string" && target && !target.startsWith("${") && !found.has(target)) {
+          found.set(target, "变量赋值");
+        }
+      }
+    }
+    for (const key of CONTAINER_LISTS[node.type] || []) {
+      for (const child of listOf(node, key) || []) visit(child);
+    }
+  };
+  if (state.workflow && state.workflow.root) visit(state.workflow.root);
+  return [...found.entries()].map(([name, source]) => ({ name, source }));
+}
+
 function computeReferencePaths() {
   const paths = [];
   if (!state.workflow) return paths;
   for (const key of Object.keys(state.workflow.inputs || {})) {
     paths.push(`\${inputs.${key}}`);
+  }
+  // 用户变量优先展示：别名/赋值变量是用户可读的主路径，直接 ${name} 即可引用
+  for (const v of collectUserVariables()) {
+    paths.push(`\${${v.name}}`);
   }
   const walk = (node) => {
     if (!node) return;
@@ -1353,6 +1484,36 @@ function schemaField(node, key, propSchema, required) {
     }
     field = textField(label, value === undefined ? "" : String(value), (v) => setWith(node, key, v), required, key, fxOpts.supportFx || fxOpts.supportPython ? fxOpts : undefined);
   }
+  if (key === "varName" && node.command === "data.setVar") {
+    // 变量写入目标：可选已有变量（重赋值）或新建变量名。
+    // 与 output_aliases 解耦——这里就是「赋值给哪个变量」的语义。
+    const pickWrap = document.createElement("div");
+    pickWrap.className = "var-target-row";
+    const sel = document.createElement("select");
+    sel.className = "var-target-pick";
+    const existing = collectUserVariables();
+    sel.innerHTML = '<option value="">— 选择已有变量（或直接输入新名） —</option>';
+    for (const v of existing) {
+      const opt = document.createElement("option");
+      opt.value = v.name;
+      opt.textContent = `${v.name}（${v.source}）`;
+      sel.appendChild(opt);
+    }
+    sel.addEventListener("change", () => {
+      if (!sel.value) return;
+      setWith(node, key, sel.value);
+      const inputEl = field.querySelector('input[data-field]');
+      if (inputEl) inputEl.value = sel.value;
+      markDirty();
+      showCompileMessage(`变量「${sel.value}」将被重赋值（覆盖旧值）`, true);
+    });
+    pickWrap.appendChild(sel);
+    const hint = document.createElement("span");
+    hint.className = "field-hint";
+    hint.textContent = "填新名=定义变量，选已有=覆盖赋值";
+    pickWrap.appendChild(hint);
+    field.appendChild(pickWrap);
+  }
   if (key === "sessionId") {
     // 会话引用字段：绑定创建会话的节点输出即可，无需手填。
     // 按当前命令的 resources 确定资源类型过滤：browser.session→webPage, desktop.session→windowHandle
@@ -1595,49 +1756,159 @@ function textField(labelText, value, onChange, required, rawKey, opts) {
   return wrap;
 }
 
-// fx 模式：替换文本框为变量下拉选择器
+// fx 模式：标签化变量编辑器。
+// 用户在文本中通过下拉插入变量，插入后渲染为 [变量名] 标签（chip）；
+// 底层仍存 ${变量名} 字符串，与编译/运行时完全兼容，零迁移。
 function replaceWithVarSelect(wrap, origInput, node, fieldKey, onChange) {
-  // 先清理已有的 select（防止重复创建）
-  if (wrap._fxSelect) {
-    wrap._fxSelect.remove();
-    delete wrap._fxSelect;
+  // 先清理已有的编辑器（防止重复创建）
+  if (wrap._fxEditor) {
+    wrap._fxEditor.remove();
+    delete wrap._fxEditor;
   }
-  const sel = document.createElement("select");
-  sel.className = "fx-var-select";
-  sel.dataset.field = origInput.dataset.field;
-  const paths = computeReferencePaths();
-  sel.innerHTML = '<option value="">— 选择变量 —</option>';
-  for (const p of paths) {
-    const opt = document.createElement("option");
-    opt.value = p;
-    opt.textContent = p;
-    sel.appendChild(opt);
-  }
-  // 设置当前值（如果是 ${...} 引用则选中）
-  const curVal = node["with"] ? node["with"][fieldKey] : undefined;
-  if (typeof curVal === "string" && curVal.startsWith("${")) {
-    sel.value = curVal;
-  }
-  sel.addEventListener("change", () => {
-    if (sel.value) {
-      setWith(node, fieldKey, sel.value);
-    } else {
-      setWith(node, fieldKey, null);
-    }
-    markDirty();
-  });
-  // 隐藏原 input，插入 select
   origInput.style.display = "none";
-  origInput.parentNode.insertBefore(sel, origInput.nextSibling);
-  // 存储引用以便恢复
-  wrap._fxSelect = sel;
+
+  const editor = document.createElement("div");
+  editor.className = "fx-tag-editor";
+  editor.dataset.field = origInput.dataset.field;
+  editor.setAttribute("contenteditable", "true");
+  editor.spellcheck = false;
+
+  // 底层值 <-> 标签视图互转：${name} → [name] chip，其余文本原样
+  const toView = (raw) => {
+    editor.textContent = "";
+    if (typeof raw !== "string" || !raw) return;
+    const re = /\$\{([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)\}/g;
+    let last = 0;
+    let m;
+    while ((m = re.exec(raw)) !== null) {
+      if (m.index > last) {
+        editor.appendChild(document.createTextNode(raw.slice(last, m.index)));
+      }
+      editor.appendChild(makeVarChip(m[1]));
+      last = re.lastIndex;
+    }
+    if (last < raw.length) {
+      editor.appendChild(document.createTextNode(raw.slice(last)));
+    }
+  };
+
+  // 从视图读回底层字符串：chip → ${name}，文本原样拼接
+  const fromView = () => {
+    let out = "";
+    for (const child of editor.childNodes) {
+      if (child.nodeType === Node.TEXT_NODE) {
+        out += child.textContent;
+      } else if (child.classList && child.classList.contains("fx-var-chip")) {
+        out += `\${${child.dataset.varName}}`;
+      } else {
+        out += child.textContent || "";
+      }
+    }
+    return out;
+  };
+
+  const commit = () => {
+    const raw = fromView();
+    setWith(node, fieldKey, raw || null);
+    markDirty();
+    if (typeof onChange === "function") onChange(raw);
+  };
+
+  editor.addEventListener("input", commit);
+  editor.addEventListener("blur", commit);
+
+  // 插入变量 chip 到光标处（或末尾）
+  const insertVar = (name) => {
+    const chip = makeVarChip(name);
+    const sel = window.getSelection();
+    let range = null;
+    if (sel && sel.rangeCount && editor.contains(sel.anchorNode)) {
+      range = sel.getRangeAt(0);
+    }
+    if (range) {
+      range.deleteContents();
+      range.insertNode(chip);
+      range.setStartAfter(chip);
+      range.collapse(true);
+      sel.removeAllRanges();
+      sel.addRange(range);
+    } else {
+      editor.appendChild(chip);
+    }
+    commit();
+  };
+
+  // 变量插入下拉：用户变量分组置顶
+  const picker = document.createElement("select");
+  picker.className = "fx-var-select";
+  const userVars = collectUserVariables();
+  const userNames = new Set(userVars.map((v) => v.name));
+  picker.innerHTML = '<option value="">＋ 插入变量</option>';
+  if (userVars.length) {
+    const group = document.createElement("optgroup");
+    group.label = "用户变量";
+    for (const v of userVars) {
+      const opt = document.createElement("option");
+      opt.value = v.name;
+      opt.textContent = `${v.name}（${v.source}）`;
+      group.appendChild(opt);
+    }
+    picker.appendChild(group);
+  }
+  const builtinGroup = document.createElement("optgroup");
+  builtinGroup.label = "内置作用域";
+  for (const p of computeReferencePaths()) {
+    const bare = p.replace(/^\$\{|\}$/g, "");
+    if (!bare.includes(".") && userNames.has(bare)) continue;
+    const opt = document.createElement("option");
+    opt.value = bare;
+    opt.textContent = bare;
+    builtinGroup.appendChild(opt);
+  }
+  picker.appendChild(builtinGroup);
+  picker.addEventListener("change", () => {
+    if (!picker.value) return;
+    insertVar(picker.value);
+    picker.value = "";
+  });
+
+  // 点击 chip 可删除
+  editor.addEventListener("click", (e) => {
+    const chip = e.target.closest && e.target.closest(".fx-var-chip");
+    if (chip && (e.altKey || e.metaKey)) {
+      e.preventDefault();
+      chip.remove();
+      commit();
+    }
+  });
+
+  toView(node["with"] ? node["with"][fieldKey] : undefined);
+  const row = wrap.querySelector(".expr-input-row");
+  const holder = row || wrap;
+  holder.appendChild(editor);
+  holder.appendChild(picker);
+  wrap._fxEditor = editor;
+}
+
+// 变量标签（chip）：点击选中、Alt+点击删除
+function makeVarChip(name) {
+  const chip = document.createElement("span");
+  chip.className = "fx-var-chip";
+  chip.dataset.varName = name;
+  chip.setAttribute("contenteditable", "false");
+  chip.textContent = `[${name}]`;
+  chip.title = `变量 ${name}（Alt+点击删除）`;
+  return chip;
 }
 
 // 恢复文本输入（从 fx 模式退回）
 function restoreTextField(wrap, origInput) {
-  if (wrap._fxSelect) {
-    wrap._fxSelect.remove();
-    delete wrap._fxSelect;
+  if (wrap._fxEditor) {
+    // 编辑器及其插入下拉一起移除
+    const picker = wrap.querySelector(".fx-var-select");
+    if (picker) picker.remove();
+    wrap._fxEditor.remove();
+    delete wrap._fxEditor;
   }
   origInput.style.display = "";
   // 确保 input 回到 row 中正确位置（如果被移除了）

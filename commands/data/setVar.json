@@ -1,0 +1,49 @@
+{
+  "id": "data.setVar",
+  "version": "1.0.0",
+  "executor": "python.worker",
+  "kind": "transform",
+  "risk": "read",
+  "capabilities": [],
+  "resources": [],
+  "stability": "stable",
+  "effect": {"kind": "pure", "replay": "safe", "idempotency": "none"},
+  "input_schema": {
+    "type": "object",
+    "required": ["varName", "value"],
+    "properties": {
+      "varName": {
+        "type": "string",
+        "pattern": "^[A-Za-z_]\\w*$",
+        "description": "目标变量名：可直接写新变量（定义），也可写已存在的变量名（重赋值，覆盖旧值）"
+      },
+      "value": {
+        "type": ["string", "number", "integer", "boolean", "object", "array", "null"],
+        "x-fx": true,
+        "x-python": true,
+        "description": "要赋给变量的值，可为任意类型；支持变量引用与 Python 表达式"
+      }
+    },
+    "additionalProperties": false
+  },
+  "output_schema": {
+    "type": "object",
+    "required": ["varName", "value"],
+    "properties": {
+      "varName": {"type": "string"},
+      "value": {
+        "type": ["string", "number", "integer", "boolean", "object", "array", "null"]
+      }
+    },
+    "additionalProperties": false
+  },
+  "x-outputs": {
+    "varName": {"label": "变量名", "hidden": true},
+    "value": {"label": "变量值", "hidden": true}
+  },
+  "x-var-write": {"field": "varName"},
+  "errors": ["INVALID_INPUT", "TIMEOUT", "CANCELLED"],
+  "implementation": {"handler": "python.worker:setVar"},
+  "default_timeout_seconds": 15,
+  "retryable": true
+}

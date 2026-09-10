@@ -69,6 +69,8 @@ def test_catalog_endpoint_matches_load_catalog(server):
         assert command["default_timeout_seconds"] == manifest.default_timeout_seconds
         if manifest.x_outputs:
             assert command["x-outputs"] == manifest.x_outputs
+        if manifest.x_var_write:
+            assert command["x-var-write"] == manifest.x_var_write
 
 
 def test_catalog_page_served(server):
@@ -295,3 +297,14 @@ def test_editor_page_rejects_post(server):
     status, payload = _request("POST", "/", {}, base=base)
     assert status == 405
     assert payload["error"] == "METHOD_NOT_ALLOWED"
+
+
+def test_setvar_command_exposes_var_write_declaration(server):
+    """data.setVar 的 x-var-write 声明需下发到前端（变量名下拉与别名收集依赖它）。"""
+    base = f"http://127.0.0.1:{server.port}"
+    status, payload = _request("GET", "/api/catalog", base=base)
+    assert status == 200
+    entry = next(c for c in payload["commands"] if c["id"] == "data.setVar")
+    assert entry["x-var-write"] == {"field": "varName"}
+    # 变量写入的输出别名不应暴露给用户（hidden），避免与「变量名」字段语义重复
+    assert entry["x-outputs"]["varName"].get("hidden") is True

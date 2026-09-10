@@ -17,6 +17,7 @@ window.RPA_I18N = {
     "data.writeText": "写入文本文件",
     "data.limit": "截取前 N 条",
     "data.format": "格式化文本",
+    "data.setVar": "设置变量",
     "desktop.attachWindow": "附着窗口（UIA）",
     "desktop.findElement": "查找控件（UIA）",
     "desktop.click": "点击控件（UIA）",
@@ -174,6 +175,7 @@ window.RPA_I18N = {
   // 按命令覆盖的字段标签：同名参数在不同命令下含义不同（如 args）
   commandFields: {
     "browser.navigate": { args: "命令行参数" },
+    "data.setVar": { varName: "变量名", value: "变量值" },
   },
   glossary: {
     action: "动作：对外部世界执行一次操作（点击、写入等）",

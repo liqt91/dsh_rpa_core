@@ -19,6 +19,19 @@ def _i18n_block(name: str) -> dict:
     return {m.group(1) for m in _ENTRY.finditer(match.group(1))}
 
 
+def _command_fields_overrides() -> dict[str, set[str]]:
+    """解析 commandFields（按命令覆盖字段标签）：{命令 id: {被覆盖的字段名}}。"""
+    text = I18N_PATH.read_text(encoding="utf-8")
+    block = re.search(
+        r'^\s*commandFields:\s*\{(.*?)\n  \}', text, re.DOTALL | re.MULTILINE
+    )
+    assert block, "i18n block not found: commandFields"
+    overrides: dict[str, set[str]] = {}
+    for command_id, body in re.findall(r'"([\w.]+)"\s*:\s*\{([^}]*)\}', block.group(1)):
+        overrides[command_id] = {m.group(1) for m in _ENTRY.finditer(body + ",")}
+    return overrides
+
+
 def test_i18n_commands_cover_entire_catalog():
     catalog = load_catalog(ROOT / "commands")
     mapping = _i18n_block("commands")
@@ -37,10 +50,12 @@ def test_i18n_kind_and_effect_and_op_keys_match_model():
 def test_i18n_fields_cover_required_input_schema_keys():
     catalog = load_catalog(ROOT / "commands")
     fields = _i18n_block("fields")
+    overrides = _command_fields_overrides()
     missing = {}
     for manifest in catalog.values():
         required = manifest.input_schema.get("required", [])
-        absent = [key for key in required if key not in fields]
+        covered = fields | overrides.get(manifest.id, set())
+        absent = [key for key in required if key not in covered]
         if absent:
             missing[manifest.id] = absent
     assert not missing, f"required input keys without Chinese labels: {missing}"

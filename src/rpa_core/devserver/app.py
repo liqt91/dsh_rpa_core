@@ -143,6 +143,8 @@ class DevServerApp:
             }
             if manifest.x_outputs:
                 entry["x-outputs"] = manifest.x_outputs
+            if manifest.x_var_write:
+                entry["x-var-write"] = manifest.x_var_write
             commands.append(entry)
         return {"digest": self._catalog.digest, "commands": commands}
 

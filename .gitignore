@@ -17,6 +17,9 @@ _tmp_*/
 # 本地 agent 技能目录
 /.agents/
 
+# 本地 agent 记忆目录
+/.workbuddy/
+
 # Node.js
 node_modules/
 frontend/dist/

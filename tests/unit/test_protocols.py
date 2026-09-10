@@ -22,7 +22,7 @@ def workflow(root):
 def test_catalog_is_loaded_and_digest_is_stable():
     first = catalog()
     second = catalog()
-    assert len(first) == 54
+    assert len(first) == 55
     assert first.digest == second.digest
     with pytest.raises(TypeError):
         first._commands["x"] = None
@@ -164,4 +164,144 @@ def test_compile_rejects_undeclared_variable_reference():
                 }
             ),
             {"browser.control", "browser.read", "process.start"},
+        )
+
+
+def test_compile_rejects_duplicate_alias():
+    """两个节点声明同名别名 → 编译期拦截（否则运行时静默覆盖）。"""
+    compiler = WorkflowCompiler(catalog())
+    with pytest.raises(WorkflowCompileError, match="Duplicate alias: 'web'"):
+        compiler.compile(
+            workflow(
+                {
+                    "type": "sequence",
+                    "id": "root",
+                    "children": [
+                        {
+                            "type": "action",
+                            "id": "open1",
+                            "command": "browser.navigate",
+                            "output_aliases": {"sessionId": "web"},
+                            "with": {"url": "https://x"},
+                        },
+                        {
+                            "type": "action",
+                            "id": "open2",
+                            "command": "browser.navigate",
+                            "output_aliases": {"sessionId": "web"},
+                            "with": {"url": "https://y"},
+                        },
+                    ],
+                }
+            ),
+            {"browser.control", "process.start"},
+        )
+
+
+@pytest.mark.parametrize("reserved", ["inputs", "steps", "loop"])
+def test_compile_rejects_reserved_alias_root(reserved):
+    """别名占用内置作用域根名 → 编译期拦截（否则静默遮蔽整个作用域）。"""
+    compiler = WorkflowCompiler(catalog())
+    with pytest.raises(WorkflowCompileError, match="Reserved alias name"):
+        compiler.compile(
+            workflow(
+                {
+                    "type": "sequence",
+                    "id": "root",
+                    "children": [
+                        {
+                            "type": "action",
+                            "id": "open",
+                            "command": "browser.navigate",
+                            "output_aliases": {"sessionId": reserved},
+                            "with": {"url": "https://x"},
+                        },
+                    ],
+                }
+            ),
+            {"browser.control", "process.start"},
+        )
+
+
+def test_compile_allows_var_write_reassignment():
+    """data.setVar 允许同名重赋值（定义 → 修改 → 再读），不参与重复拦截。"""
+    plan = WorkflowCompiler(catalog()).compile(
+        workflow(
+            {
+                "type": "sequence",
+                "id": "root",
+                "children": [
+                    {
+                        "type": "action",
+                        "id": "define",
+                        "command": "data.setVar",
+                        "with": {"varName": "webpage1", "value": "first"},
+                    },
+                    {
+                        "type": "action",
+                        "id": "reassign",
+                        "command": "data.setVar",
+                        "with": {"varName": "webpage1", "value": "second"},
+                    },
+                    {
+                        "type": "action",
+                        "id": "read",
+                        "command": "data.setVar",
+                        "with": {"varName": "snapshot", "value": "${webpage1}"},
+                    },
+                ],
+            }
+        ),
+        set(),
+    )
+    assert plan.workflow.root.children[1].with_["varName"] == "webpage1"
+
+
+def test_compile_rejects_var_write_to_reserved_root():
+    """data.setVar 的 varName 指向保留根名同样拦截。"""
+    with pytest.raises(WorkflowCompileError, match="Reserved alias name: 'inputs'"):
+        WorkflowCompiler(catalog()).compile(
+            workflow(
+                {
+                    "type": "sequence",
+                    "id": "root",
+                    "children": [
+                        {
+                            "type": "action",
+                            "id": "write",
+                            "command": "data.setVar",
+                            "with": {"varName": "inputs", "value": "x"},
+                        },
+                    ],
+                }
+            ),
+            set(),
+        )
+
+
+def test_compile_rejects_forward_reference_to_var_write():
+    """引用 data.setVar 尚未声明的变量 → 前向引用拦截。"""
+    with pytest.raises(WorkflowCompileError, match="Forward variable reference"):
+        WorkflowCompiler(catalog()).compile(
+            workflow(
+                {
+                    "type": "sequence",
+                    "id": "root",
+                    "children": [
+                        {
+                            "type": "action",
+                            "id": "read",
+                            "command": "data.setVar",
+                            "with": {"varName": "snapshot", "value": "${later}"},
+                        },
+                        {
+                            "type": "action",
+                            "id": "define",
+                            "command": "data.setVar",
+                            "with": {"varName": "later", "value": "x"},
+                        },
+                    ],
+                }
+            ),
+            set(),
         )
