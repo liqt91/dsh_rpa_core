@@ -15,6 +15,7 @@ const state = {
 };
 let dragState = null; // {type:"new", command} | {type:"new", flow} | {type:"move", path}
 let pendingDrop = null; // {containerPath, key, index}
+let fxPopupCleanup = null; // fx 变量浮层关闭函数（挂 body 的 fixed 弹层需在面板重渲染前主动关闭）
 const NAME_PATTERN = /^[A-Za-z][A-Za-z0-9_-]*$/;
 const REFERENCE_HINT = "支持引用：${inputs.x} / ${steps.节点.outputs.键} / ${loop.item} / ${error.code}";
 const UNDO_LIMIT = 50;
@@ -1233,6 +1234,8 @@ function renderCanvas() {
 // ---------------------------------------------------------------------------
 
 function renderProps() {
+  // fx 变量浮层挂在 body 上，面板重渲染前必须主动关闭（否则残留悬浮）
+  if (fxPopupCleanup) fxPopupCleanup();
   const body = $("props-body");
   body.textContent = "";
   if (state.multi.length > 1) {
@@ -1843,10 +1846,16 @@ function replaceWithVarSelect(wrap, origInput, node, fieldKey, onChange) {
     commit();
   };
 
-  // 变量插入浮层：点击编辑器弹出（不再内联占位），用户变量分组置顶。
+  // 变量插入浮层：点击编辑器弹出，挂 document.body + position:fixed——
+  // 不受 #props overflow-y:auto 裁剪（否则弹层被面板截断/位置歪）。
   // 用 mousedown + preventDefault 保证编辑器不失去焦点、光标位置不丢。
+  const ac = new AbortController();
   let varPopup = null;
-  const closeVarPopup = () => { if (varPopup) { varPopup.remove(); varPopup = null; } };
+  const closeVarPopup = () => {
+    ac.abort(); // 连带移除 scroll/resize 监听
+    if (varPopup) { varPopup.remove(); varPopup = null; }
+    if (fxPopupCleanup === closeVarPopup) fxPopupCleanup = null;
+  };
 
   const openVarPopup = () => {
     if (varPopup) return;
@@ -1854,10 +1863,6 @@ function replaceWithVarSelect(wrap, origInput, node, fieldKey, onChange) {
     const userNames = new Set(userVars.map((v) => v.name));
     varPopup = document.createElement("div");
     varPopup.className = "ref-completion fx-var-popup";
-    const row = wrap.querySelector(".expr-input-row");
-    const holder = row || wrap;
-    holder.style.position = "relative";
-    holder.appendChild(varPopup);
     const addGroup = (label, items) => {
       if (!items.length) return;
       const head = document.createElement("div");
@@ -1881,6 +1886,23 @@ function replaceWithVarSelect(wrap, origInput, node, fieldKey, onChange) {
       .map((p) => p.replace(/^\$\{|\}$/g, ""))
       .filter((bare) => bare.includes(".") || !userNames.has(bare))
       .map((bare) => ({ name: bare, label: bare })));
+    // mousedown 落在浮层上（含滚动条）也不让编辑器 blur
+    varPopup.addEventListener("mousedown", (e) => e.preventDefault());
+    document.body.appendChild(varPopup);
+    // 锚定编辑器正下方；右缘/下缘出视口时回收
+    const r = editor.getBoundingClientRect();
+    const pw = varPopup.offsetWidth;
+    const ph = varPopup.offsetHeight;
+    let left = r.left;
+    let top = r.bottom + 2;
+    if (left + pw > window.innerWidth - 8) left = window.innerWidth - 8 - pw;
+    if (top + ph > window.innerHeight - 8) top = Math.max(8, r.top - ph - 2);
+    varPopup.style.left = `${Math.round(left)}px`;
+    varPopup.style.top = `${Math.round(top)}px`;
+    // 面板滚动/窗口变化时关闭（fixed 定位不跟随锚点）
+    window.addEventListener("scroll", closeVarPopup, { capture: true, signal: ac.signal });
+    window.addEventListener("resize", closeVarPopup, { signal: ac.signal });
+    fxPopupCleanup = closeVarPopup;
   };
 
   editor.addEventListener("click", () => openVarPopup());
