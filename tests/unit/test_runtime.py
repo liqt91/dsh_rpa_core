@@ -165,3 +165,57 @@ def test_orchestrator_resolves_output_name_subfield_reference(tmp_path):
     assert consumer_events, "consumer stepCompleted event missing"
     # EchoExecutor 返回 consumer 收到的 ref（=${web} 别名解析值）
     assert consumer_events[-1]["payload"]["outputs"]["value"] == "sess-abc"
+
+
+def test_orchestrator_var_write_reassignment(tmp_path):
+    """data.setVar 可写变量：定义 → 重赋值 → 再读，后者拿到改后的值。"""
+    from pathlib import Path
+
+    from rpa_core.executors.python_worker import PythonWorkerExecutor
+
+    catalog = load_catalog(Path(__file__).resolve().parents[2] / "commands")
+    raw = {
+        "id": "var-write-test",
+        "name": "var-write-test",
+        "root": {
+            "type": "sequence",
+            "id": "root",
+            "children": [
+                {
+                    "type": "action",
+                    "id": "define",
+                    "command": "data.setVar",
+                    "with": {"varName": "webpage1", "value": "first"},
+                },
+                {
+                    "type": "action",
+                    "id": "reassign",
+                    "command": "data.setVar",
+                    "with": {"varName": "webpage1", "value": "second"},
+                },
+                {
+                    "type": "action",
+                    "id": "read",
+                    "command": "data.setVar",
+                    "with": {"varName": "snapshot", "value": "${webpage1}"},
+                },
+            ],
+        },
+    }
+    plan = WorkflowCompiler(catalog).compile(Workflow.model_validate(raw), set())
+
+    async def run():
+        runner = Orchestrator(
+            catalog,
+            ExecutorRegistry({"python.worker": PythonWorkerExecutor()}),
+            tmp_path / "runs",
+        )
+        return await runner.run(plan)
+
+    result = asyncio.run(run())
+    assert result.status.value == "succeeded"
+    checkpoint = json.loads(
+        (tmp_path / "runs" / result.run_id / "checkpoint.json").read_text(encoding="utf-8")
+    )
+    assert checkpoint["scopes"]["variables"]["webpage1"] == "second"
+    assert checkpoint["scopes"]["variables"]["snapshot"] == "second"

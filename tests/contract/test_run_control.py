@@ -113,3 +113,53 @@ def test_run_unknown_id_404(server):
     base = f"http://127.0.0.1:{server.port}"
     status, _ = _request("GET", "/api/runs/nope", base=base)
     assert status == 404
+
+
+UNSAFE_RETRY_WORKFLOW = {
+    "schema_version": "1.0",
+    "id": "rc-unsafe",
+    "name": "unsafe retry",
+    "inputs": {},
+    "root": {
+        "type": "sequence",
+        "id": "root",
+        "children": [
+            {"type": "action", "id": "openPage", "command": "browser.navigate",
+             "with": {"url": "https://example.test/", "transport": "extension"},
+             "retry_count": 3},
+        ],
+    },
+}
+
+
+def test_run_startup_failure_surfaces_compile_reason(server):
+    """启动即失败（编译不过）时，status 必须带出子进程 stderr 里的原因。
+
+    回归点：子进程在产出任何事件之前就退出 → result 为 null，界面只能显示
+    「exit 1」，用户完全不知道"为什么无法执行"。实战触发场景：不可重放指令
+    （browser.navigate）被配了重试次数，编译期直接拒绝。
+    """
+    base = f"http://127.0.0.1:{server.port}"
+    _save_workflow(base, "rc-unsafe-retry", UNSAFE_RETRY_WORKFLOW)
+
+    status, payload = _request("POST", "/api/runs", {"workflow": "rc-unsafe-retry"}, base=base)
+    assert status == 200
+    run_id = payload["runId"]
+
+    deadline = time.time() + 20
+    final = None
+    while time.time() < deadline:
+        status, s = _request("GET", f"/api/runs/{run_id}", base=base)
+        assert status == 200
+        if not s["running"]:
+            final = s
+            break
+        time.sleep(0.3)
+    assert final is not None, "run did not finish in time"
+    assert final["result"] is None
+    assert final["exitCode"] != 0
+    startup = final["startupError"]
+    assert "cannot be retried" in startup["message"]
+    assert "browser.navigate" in startup["message"]
+    # 原文也保留，便于对着 stderr 排查
+    assert startup["tail"] and "COMPILE_FAILED" in "\n".join(startup["tail"])

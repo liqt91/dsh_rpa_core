@@ -17,6 +17,12 @@ _tmp_*/
 # 本地 agent 技能目录
 /.agents/
 
+# 本地 agent 记忆目录
+/.workbuddy/
+
 # Node.js
 node_modules/
 frontend/dist/
+
+# 本机扩展配对 token（TOFU 生成/采纳，含本机凭据，不应入库）
+.capture-extension-token

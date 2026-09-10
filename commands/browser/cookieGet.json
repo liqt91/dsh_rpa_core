@@ -1,0 +1,67 @@
+{
+  "version": "1.0.0",
+  "executor": "browser.playwright",
+  "resources": [
+    "browser.session"
+  ],
+  "stability": "stable",
+  "id": "browser.cookieGet",
+  "kind": "query",
+  "risk": "read",
+  "capabilities": [
+    "browser.read"
+  ],
+  "effect": {
+    "kind": "read",
+    "replay": "safe",
+    "idempotency": "none"
+  },
+  "input_schema": {
+    "type": "object",
+    "required": [
+      "sessionId",
+      "name"
+    ],
+    "properties": {
+      "sessionId": {
+        "type": "string"
+      },
+      "name": {
+        "type": "string",
+        "minLength": 1,
+        "description": "Cookie 名称"
+      }
+    },
+    "additionalProperties": false
+  },
+  "output_schema": {
+    "type": "object",
+    "required": [
+      "value"
+    ],
+    "properties": {
+      "value": {
+        "type": "string"
+      }
+    },
+    "additionalProperties": false
+  },
+  "x-outputs": {
+    "value": {
+      "label": "Cookie 值",
+      "primary": true
+    }
+  },
+  "errors": [
+    "ELEMENT_NOT_FOUND",
+    "SESSION_NOT_FOUND",
+    "TIMEOUT",
+    "CANCELLED",
+    "EXECUTOR_FAILED"
+  ],
+  "implementation": {
+    "handler": "browser.playwright:cookieGet"
+  },
+  "default_timeout_seconds": 15,
+  "retryable": false
+}

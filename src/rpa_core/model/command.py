@@ -110,6 +110,14 @@ class CommandManifest(BaseModel):
     x_fx: list[str] | None = Field(default=None, alias="x-fx")
     x_python: list[str] | None = Field(default=None, alias="x-python")
     x_depends: dict[str, dict[str, Any]] | None = Field(default=None, alias="x-depends")
+    x_var_write: dict[str, Any] | None = Field(
+        default=None,
+        alias="x-var-write",
+        description=(
+            "变量写入声明：{\"field\": \"varName\"} 表示该命令的 varName 输入是"
+            "目标变量名，运行值写入 scopes.variables（允许覆盖同名变量，即重赋值）"
+        ),
+    )
 
     @model_validator(mode="after")
     def validate_retry_policy(self) -> "CommandManifest":

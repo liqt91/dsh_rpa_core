@@ -1,0 +1,70 @@
+{
+  "version": "1.0.0",
+  "executor": "browser.playwright",
+  "resources": [
+    "browser.session"
+  ],
+  "stability": "stable",
+  "id": "browser.cookieSet",
+  "kind": "action",
+  "risk": "browser-control",
+  "capabilities": [
+    "browser.control"
+  ],
+  "effect": {
+    "kind": "idempotent-write",
+    "replay": "idempotent",
+    "idempotency": "derived"
+  },
+  "input_schema": {
+    "type": "object",
+    "required": [
+      "sessionId",
+      "cookies"
+    ],
+    "properties": {
+      "sessionId": {
+        "type": "string"
+      },
+      "cookies": {
+        "type": "array",
+        "items": {
+          "type": "object"
+        },
+        "description": "Cookie 对象数组，每项至少含 name/value，且需提供 url 或 domain+path（Playwright 约束）；可选 expires/httpOnly/secure/sameSite"
+      }
+    },
+    "additionalProperties": false
+  },
+  "output_schema": {
+    "type": "object",
+    "required": [
+      "count"
+    ],
+    "properties": {
+      "count": {
+        "type": "integer",
+        "minimum": 1
+      }
+    },
+    "additionalProperties": false
+  },
+  "x-outputs": {
+    "count": {
+      "label": "写入数量",
+      "primary": true
+    }
+  },
+  "errors": [
+    "INVALID_INPUT",
+    "SESSION_NOT_FOUND",
+    "TIMEOUT",
+    "CANCELLED",
+    "EXECUTOR_FAILED"
+  ],
+  "implementation": {
+    "handler": "browser.playwright:cookieSet"
+  },
+  "default_timeout_seconds": 15,
+  "retryable": false
+}

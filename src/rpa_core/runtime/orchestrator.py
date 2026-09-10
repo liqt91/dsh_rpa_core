@@ -790,6 +790,16 @@ class Orchestrator:
         for field, alias in output_aliases.items():
             if field in result.outputs:
                 scopes.setdefault("variables", {})[alias] = result.outputs[field]
+        # 变量写入命令（manifest x-var-write）：varName 输入即目标变量名，运行值写入
+        # scopes.variables。与 output_aliases 不同，这里允许覆盖同名变量（重赋值），
+        # 因此编译期不对其做重复别名拦截。
+        manifest = self.catalog.get(node.command)
+        var_write = manifest.x_var_write if manifest else None
+        if var_write and var_write.get("field"):
+            name_field = var_write["field"]
+            target = result.outputs.get(name_field)
+            if isinstance(target, str) and target:
+                scopes.setdefault("variables", {})[target] = result.outputs.get("value")
         step_key = _node_path_key(path)
         await asyncio.to_thread(
             CheckpointStore(events.run_dir / "checkpoint.json").write,

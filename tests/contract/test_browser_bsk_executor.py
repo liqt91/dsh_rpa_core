@@ -17,6 +17,18 @@ def _invocation(command: str, inputs: dict, step: str = "s1") -> CommandInvocati
     )
 
 
+class _OfflineExt:
+    """离线扩展桩。
+
+    缺省通道解析（`_use_extension`）是「扩展在线 → 首选扩展；离线 → 回退 playwright」。
+    不注入桩时，本机若恰好开着自研扩展（开发常态），缺省通道会被扩展接管、
+    不创建 playwright 会话，这两个用例就会假失败——它们必须与宿主环境无关。
+    """
+
+    def status(self) -> dict:
+        return {"online": False}
+
+
 def _bsk_runner(script: list[tuple[tuple, dict]]):
     calls: list[list[str]] = []
 
@@ -80,9 +92,23 @@ async def test_navigate_bsk_returns_session_and_registers():
 
 
 @pytest.mark.asyncio
+async def test_navigate_channel_resolution_with_offline_extension():
+    """通道解析（不启动浏览器）：缺省 + 扩展离线 → playwright；显式 transport 优先。
+
+    这是 `test_navigate_default_stays_playwright` 的快速伴随用例——不依赖真实浏览器，
+    因此在浏览器不可用的环境（CI 沙箱 / 未 install chromium）里也能守住这条回归。
+    """
+    executor = PlaywrightExecutor(ext_session=_OfflineExt())
+    assert await executor._use_extension({"url": "about:blank"}) is False
+    assert await executor._use_extension({"transport": "playwright"}) is False
+    assert await executor._use_extension({"transport": "extension"}) is True
+    await executor.close()
+
+
+@pytest.mark.asyncio
 async def test_navigate_default_stays_playwright():
-    """transport 缺省 → 不创建 bsk session（走 playwright 路径，headless 缺省）。"""
-    executor = PlaywrightExecutor(bsk_runner=_count_runner())
+    """transport 缺省 + 扩展离线 → 回退 playwright（不创建 bsk session，headless 缺省）。"""
+    executor = PlaywrightExecutor(bsk_runner=_count_runner(), ext_session=_OfflineExt())
     result = await executor.execute(
         _invocation("browser.navigate", {"url": "about:blank", "headless": True}),
         asyncio.Event(),
@@ -97,7 +123,7 @@ async def test_navigate_default_stays_playwright():
 @pytest.mark.asyncio
 async def test_navigate_playwright_accepts_channel_and_args():
     """对标影刀「打开网页」：浏览器类型(channel) + 命令行参数(args) 透传 playwright。"""
-    executor = PlaywrightExecutor()
+    executor = PlaywrightExecutor(ext_session=_OfflineExt())
     result = await executor.execute(
         _invocation(
             "browser.navigate",

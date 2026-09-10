@@ -12,32 +12,16 @@
         "id": "openPage",
         "command": "browser.navigate",
         "with": {
-          "url": ""
+          "url": "https://baidu.com",
+          "action": "goto",
+          "transport": "extension",
+          "channel": "chromium"
         },
         "output_aliases": {
           "sessionId": "web_page1"
         },
-        "_exprModes": {}
-      },
-      {
-        "type": "action",
-        "id": "input",
-        "command": "browser.input",
-        "with": {
-          "sessionId": "${web_page1}",
-          "mode": "fill",
-          "append": false,
-          "pressEnter": false,
-          "keyIntervalMs": 50,
-          "clickBeforeInput": false,
-          "postDelayMs": 0,
-          "selector": "",
-          "text": ""
-        },
-        "_exprModes": {
-          "text": "python",
-          "selector": "fx"
-        }
+        "_exprModes": {},
+        "timeout_seconds": 30
       }
     ]
   }

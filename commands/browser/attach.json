@@ -1,0 +1,98 @@
+{
+  "version": "1.0.0",
+  "executor": "browser.playwright",
+  "resources": [
+    "browser.session"
+  ],
+  "stability": "stable",
+  "id": "browser.attach",
+  "kind": "lifecycle",
+  "risk": "browser-control",
+  "capabilities": [
+    "browser.control"
+  ],
+  "effect": {
+    "kind": "session",
+    "replay": "unsafe",
+    "idempotency": "none"
+  },
+  "input_schema": {
+    "type": "object",
+    "required": [
+      "sessionId",
+      "pattern"
+    ],
+    "properties": {
+      "sessionId": {
+        "type": "string",
+        "description": "同浏览器下的任一已有会话，用于定位 context"
+      },
+      "pattern": {
+        "type": "string",
+        "minLength": 1,
+        "description": "匹配内容"
+      },
+      "matchBy": {
+        "type": "string",
+        "enum": [
+          "url",
+          "title"
+        ],
+        "description": "按网址/按标题匹配",
+        "default": "url"
+      },
+      "useRegex": {
+        "type": "boolean",
+        "description": "pattern 是否为正则表达式",
+        "default": false
+      }
+    },
+    "additionalProperties": false
+  },
+  "output_schema": {
+    "type": "object",
+    "required": [
+      "sessionId",
+      "url",
+      "resourceType"
+    ],
+    "properties": {
+      "sessionId": {
+        "type": "string"
+      },
+      "url": {
+        "type": "string"
+      },
+      "resourceType": {
+        "type": "string",
+        "const": "webPage"
+      }
+    },
+    "additionalProperties": false
+  },
+  "x-outputs": {
+    "sessionId": {
+      "label": "保存网页对象到",
+      "primary": true
+    },
+    "url": {
+      "label": "最终网址",
+      "hidden": true
+    },
+    "resourceType": {
+      "label": "资源类型",
+      "hidden": true
+    }
+  },
+  "errors": [
+    "ELEMENT_NOT_FOUND",
+    "SESSION_NOT_FOUND",
+    "CANCELLED",
+    "EXECUTOR_FAILED"
+  ],
+  "implementation": {
+    "handler": "browser.playwright:attach"
+  },
+  "default_timeout_seconds": 15,
+  "retryable": false
+}

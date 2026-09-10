@@ -151,6 +151,14 @@ def execute(invocation: CommandInvocation) -> CommandResult:
             value=sliced,
             outputs={"items": sliced, "count": len(sliced)},
         )
+    if invocation.command_id == "data.setVar":
+        # 纯透传：变量写入由 orchestrator 依据 manifest x-var-write 完成（规则 3：
+        # handler 不得直接修改 scopes）。此处只回传 varName + value，任意类型原样保留。
+        var_name = str(invocation.inputs["varName"])
+        value = invocation.inputs["value"]
+        return CommandResult.success(
+            value=value, outputs={"varName": var_name, "value": value}
+        )
     if invocation.command_id == "data.format":
         template = str(invocation.inputs["template"])
         values = invocation.inputs["values"]

@@ -1,0 +1,88 @@
+{
+  "version": "1.0.0",
+  "executor": "browser.playwright",
+  "resources": [
+    "browser.session"
+  ],
+  "stability": "stable",
+  "id": "browser.check",
+  "kind": "action",
+  "risk": "browser-control",
+  "capabilities": [
+    "browser.control"
+  ],
+  "effect": {
+    "kind": "unsafe-write",
+    "replay": "unsafe",
+    "idempotency": "none"
+  },
+  "input_schema": {
+    "type": "object",
+    "required": [
+      "sessionId",
+      "selector"
+    ],
+    "properties": {
+      "sessionId": {
+        "type": "string"
+      },
+      "selector": {
+        "type": "string",
+        "minLength": 1
+      },
+      "operation": {
+        "type": "string",
+        "enum": [
+          "check",
+          "uncheck",
+          "toggle"
+        ],
+        "description": "勾选/取消勾选/反选",
+        "default": "check"
+      },
+      "timeoutMs": {
+        "type": "integer",
+        "minimum": 1
+      }
+    },
+    "additionalProperties": false
+  },
+  "output_schema": {
+    "type": "object",
+    "required": [
+      "checked",
+      "matchedCount"
+    ],
+    "properties": {
+      "checked": {
+        "type": "boolean"
+      },
+      "matchedCount": {
+        "type": "integer",
+        "minimum": 1
+      }
+    },
+    "additionalProperties": false
+  },
+  "x-outputs": {
+    "checked": {
+      "label": "最终勾选状态",
+      "primary": true
+    },
+    "matchedCount": {
+      "label": "匹配数量"
+    }
+  },
+  "errors": [
+    "ELEMENT_NOT_FOUND",
+    "SESSION_NOT_FOUND",
+    "TIMEOUT",
+    "CANCELLED",
+    "EXECUTOR_FAILED"
+  ],
+  "implementation": {
+    "handler": "browser.playwright:check"
+  },
+  "default_timeout_seconds": 15,
+  "retryable": false
+}

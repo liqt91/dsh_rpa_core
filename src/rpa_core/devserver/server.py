@@ -3,9 +3,10 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
-from urllib.parse import unquote, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 from rpa_core.catalog import CommandCatalog, load_catalog
+from rpa_core.extension_exec import DEFAULT_POLL_SECONDS
 
 from .app import ApiError, DevServerApp
 from .store import WorkflowDirStore
@@ -15,6 +16,7 @@ _DEFAULT_PORT = 8765
 _JSON_TYPE = "application/json; charset=utf-8"
 
 _WORKFLOW_SEGMENT_PREFIX = "/api/workflows/"
+_EXT_PREFIX = "/api/ext/"
 _CAPTURE_PREFIX = "/api/capture/"
 _STATIC_PREFIX = "/static/"
 
@@ -231,6 +233,8 @@ class _RequestHandler(BaseHTTPRequestHandler):
                         405, "METHOD_NOT_ALLOWED", "use GET/POST/DELETE for element resources"
                     )
             raise ApiError(404, "NOT_FOUND", f"no route for {path}")
+        if path.startswith(_EXT_PREFIX):
+            return self._route_extension_exec(path[len(_EXT_PREFIX) :], method)
         if path.startswith(_CAPTURE_PREFIX):
             segments = path[len(_CAPTURE_PREFIX) :].split("/")
             if len(segments) == 2 and segments[0] == "extension":
@@ -247,6 +251,68 @@ class _RequestHandler(BaseHTTPRequestHandler):
                 return self.app.capture_browser(action, body)
             raise ApiError(404, "NOT_FOUND", f"no route for {path}")
         raise ApiError(404, "NOT_FOUND", f"no route for {path}")
+
+    def _route_extension_exec(self, rest: str, method: str) -> dict:
+        """自研扩展执行通道：扩展侧（next/result）+ 执行器侧（submit）+ 状态/权限。"""
+        segments = rest.split("/")
+        if segments == ["status"]:
+            if method != "GET":
+                raise ApiError(405, "METHOD_NOT_ALLOWED", "use GET for hub status")
+            return self.app.extension_hub_status()
+        if segments == ["permissions"]:
+            if method == "GET":
+                return self.app.extension_hub_permissions(None)
+            if method in ("POST", "PUT"):
+                return self.app.extension_hub_permissions(self._read_json(required=True))
+            raise ApiError(405, "METHOD_NOT_ALLOWED", "use GET/POST for hub permissions")
+        if segments == ["command", "next"]:
+            if method != "GET":
+                raise ApiError(405, "METHOD_NOT_ALLOWED", "use GET for command polling")
+            return self.app.extension_command_next(
+                self.headers, self._wait_seconds(), self._host_report()
+            )
+        if segments == ["command", "result"]:
+            if method != "POST":
+                raise ApiError(405, "METHOD_NOT_ALLOWED", "use POST for command results")
+            return self.app.extension_command_result(
+                self.headers, self._read_json(required=True)
+            )
+        if segments == ["command", "submit"]:
+            if method != "POST":
+                raise ApiError(405, "METHOD_NOT_ALLOWED", "use POST to submit a command")
+            return self.app.extension_command_submit(self._read_json(required=True))
+        raise ApiError(404, "NOT_FOUND", f"no route for {_EXT_PREFIX}{rest}")
+
+    def _wait_seconds(self) -> float:
+        """长轮询 hold 时长（query `wait`，秒；默认 DEFAULT_POLL_SECONDS，上限 60）。"""
+        query = parse_qs(urlparse(self.path).query)
+        raw = (query.get("wait") or [""])[0]
+        if not raw:
+            return DEFAULT_POLL_SECONDS
+        try:
+            return max(0.0, min(60.0, float(raw)))
+        except ValueError:
+            raise ApiError(400, "BAD_REQUEST", "'wait' must be a number") from None
+
+    def _host_report(self) -> dict | None:
+        """扩展随长轮询上报的宿主身份（query: host / ver / platform / ua）。
+
+        宿主身份决定「打开网页」的 channel 能否兑现（见 extension_exec.channel_matches_host）。
+        """
+        query = parse_qs(urlparse(self.path).query)
+
+        def first(key: str) -> str:
+            return (query.get(key) or [""])[0].strip()
+
+        browser, user_agent = first("host"), first("ua")
+        if not browser and not user_agent:
+            return None
+        return {
+            "browser": browser,
+            "version": first("ver"),
+            "platform": first("platform"),
+            "userAgent": user_agent,
+        }
 
     def _route_capture_extension(self, action: str, method: str) -> dict:
         """content-script 扩展捕获通道：token 配对（编辑器侧）+ pending/result（扩展侧）。"""
@@ -306,6 +372,9 @@ class _RequestHandler(BaseHTTPRequestHandler):
         self.send_response(status)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
+        # 本地开发服务器：静态资源（app.js/styles.css）改完即生效。
+        # 不发此头时浏览器会启发式缓存旧 JS/CSS，前端改动"看起来没生效"。
+        self.send_header("Cache-Control", "no-cache")
         if status >= 400:
             self.close_connection = True
         self.end_headers()
@@ -365,6 +434,8 @@ class DevServer:
     def start(self) -> None:
         if self._thread is not None:
             raise RuntimeError("dev server already started")
+        # 扩展执行通道：run 子进程按该地址回连命令队列（一等公民通道）
+        self.app.set_extension_hub_url(self.base_url)
         self._thread = threading.Thread(target=self._httpd.serve_forever, daemon=True)
         self._thread.start()
 

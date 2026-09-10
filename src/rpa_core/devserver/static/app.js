@@ -12,9 +12,12 @@ const state = {
   dirty: false,
   elementsSeen: null, // 最近一次渲染的元素名集合（捕获自动刷新差集用）
   collapsedGroups: new Set(), // 指令面板已收起的分组名（默认全展开，点击收起）
+  extChannel: null, // 最近一次 /api/ext/status 结果 {online, host}
+  paramGroupsOpen: new Map(), // 属性面板参数分组的展开状态（key: `${nodeId}|${分组名}`；未记录时按分组缺省/是否已填值判定）
 };
 let dragState = null; // {type:"new", command} | {type:"new", flow} | {type:"move", path}
 let pendingDrop = null; // {containerPath, key, index}
+let fxPopupCleanup = null; // fx 变量浮层关闭函数（挂 body 的 fixed 弹层需在面板重渲染前主动关闭）
 const NAME_PATTERN = /^[A-Za-z][A-Za-z0-9_-]*$/;
 const REFERENCE_HINT = "支持引用：${inputs.x} / ${steps.节点.outputs.键} / ${loop.item} / ${error.code}";
 const UNDO_LIMIT = 50;
@@ -256,6 +259,95 @@ function remapSubtreeIds(node) {
   }
 }
 
+// 收集整棵树已占用的变量名（output_aliases 别名 + data.setVar 的 varName 字面量）。
+function collectUsedVarNames() {
+  const used = new Set();
+  const visit = (node) => {
+    if (!node) return;
+    if (node.type === "action") {
+      for (const alias of Object.values(node.output_aliases || {})) {
+        if (alias) used.add(alias);
+      }
+      const manifest = manifestOf(node.command);
+      const varWrite = manifest && manifest["x-var-write"];
+      if (varWrite && varWrite.field) {
+        const target = node["with"] ? node["with"][varWrite.field] : undefined;
+        if (typeof target === "string" && target && !target.startsWith("${")) used.add(target);
+      }
+    }
+    for (const key of CONTAINER_LISTS[node.type] || []) {
+      for (const child of listOf(node, key) || []) visit(child);
+    }
+  };
+  if (state.workflow && state.workflow.root) visit(state.workflow.root);
+  return used;
+}
+
+// 粘贴时重命名撞车别名：旧名 → 新名映射，并同步改写子树内对旧名的引用。
+// 别名是扁平作用域，重复声明会在编译期被拦截（Duplicate alias），
+// 这里在粘贴阶段就消除冲突，避免用户复制节点后必然撞车。
+function remapSubtreeAliases(node, sharedUsed) {
+  const used = sharedUsed || collectUsedVarNames();
+  const rename = new Map(); // 旧别名 -> 新别名
+
+  const makeUnique = (base) => {
+    let candidate = `${base}_copy`;
+    let n = 2;
+    while (used.has(candidate)) {
+      candidate = `${base}_copy${n}`;
+      n += 1;
+    }
+    used.add(candidate);
+    return candidate;
+  };
+
+  // 第一遍：登记需要重命名的别名
+  const collect = (n) => {
+    if (!n) return;
+    if (n.type === "action") {
+      for (const [field, alias] of Object.entries(n.output_aliases || {})) {
+        if (alias && used.has(alias)) {
+          const fresh = makeUnique(alias);
+          rename.set(alias, fresh);
+          n.output_aliases[field] = fresh;
+        }
+      }
+    }
+    for (const key of CONTAINER_LISTS[n.type] || []) {
+      for (const child of listOf(n, key) || []) collect(child);
+    }
+  };
+  collect(node);
+
+  // 第二遍：改写子树内引用了被重命名别名的 ${...}
+  if (rename.size) {
+    const rewriteRefs = (value) => {
+      if (typeof value === "string") {
+        return value.replace(/\$\{([A-Za-z_]\w*)((?:\.\w+)*)\}/g, (whole, root, rest) =>
+          rename.has(root) ? `\${${rename.get(root)}${rest}}` : whole
+        );
+      }
+      if (Array.isArray(value)) return value.map(rewriteRefs);
+      if (value && typeof value === "object") {
+        for (const key of Object.keys(value)) value[key] = rewriteRefs(value[key]);
+        return value;
+      }
+      return value;
+    };
+    const rewriteNode = (n) => {
+      if (!n) return;
+      if (n.type === "action") {
+        n["with"] = rewriteRefs(n["with"] || {});
+      }
+      for (const key of CONTAINER_LISTS[n.type] || []) {
+        for (const child of listOf(n, key) || []) rewriteNode(child);
+      }
+    };
+    rewriteNode(node);
+  }
+  return rename;
+}
+
 function copySelection() {
   if (!state.multi.length) return;
   const nodes = state.multi.map((p) => structuredClone(findNode(p)));
@@ -275,10 +367,16 @@ function pasteClipboard() {
     key = last.key;
     index = last.index + 1;
   }
+  // 别名规划需在插入前统一完成：多个待粘贴节点共享同一份已占用集合，
+  // 否则逐个插入会让后一个节点误判前一个刚写入的别名是否冲突。
+  const usedVars = collectUsedVarNames();
+  const allRenamed = [];
   let lastPath = null;
   for (const source of state.clipboard.nodes) {
     const node = structuredClone(source);
     remapSubtreeIds(node);
+    const renamed = remapSubtreeAliases(node, usedVars);
+    for (const [from, to] of renamed) allRenamed.push(`${from} → ${to}`);
     insertNode(containerPath, key, index, node);
     lastPath = [...containerPath, { key, index }];
     index += 1;
@@ -287,6 +385,10 @@ function pasteClipboard() {
   selectSingle(lastPath);
   markDirty();
   render();
+  if (allRenamed.length) {
+    // 明确告知用户别名被重命名，避免"复制后变量名悄悄变了"的困惑
+    showCompileMessage(`已粘贴；为避免重名，变量已重命名：${allRenamed.join("、")}`, true);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -316,7 +418,8 @@ function newFlowNode(type) {
   if (type === "sequence") return { type: "sequence", id, children: [] };
   if (type === "if") return { type: "if", id, condition: { op: "truthy", left: "" }, then: [], else: [] };
   if (type === "forEach") return { type: "forEach", id, items: [], item_var: "item", children: [] };
-  if (type === "try") return { type: "try", id, children: [], catch: [], error_var: "error" };  return { type: "return", id, value: null };
+  if (type === "try") return { type: "try", id, children: [], catch: [], error_var: "error" };
+  return { type: "return", id, value: null };
 }
 
 // ---------------------------------------------------------------------------
@@ -342,11 +445,42 @@ const manifestOf = (command) => state.catalog.find((c) => c.id === command);
 // 变量补全：属性表单输入 ${ 时提示可引用路径（inputs / 各节点 outputs / loop / error）
 // ---------------------------------------------------------------------------
 
+// 收集流程中所有用户变量（别名 + 变量写入命令的 varName 字面量）。
+// 返回 [{name, source}]，source 用于下拉分组展示（如「用户变量」）。
+function collectUserVariables() {
+  const found = new Map(); // name -> source 描述
+  const visit = (node) => {
+    if (!node) return;
+    if (node.type === "action") {
+      for (const alias of Object.values(node.output_aliases || {})) {
+        if (alias && !found.has(alias)) found.set(alias, "输出别名");
+      }
+      const manifest = manifestOf(node.command);
+      const varWrite = manifest && manifest["x-var-write"];
+      if (varWrite && varWrite.field) {
+        const target = node["with"] ? node["with"][varWrite.field] : undefined;
+        if (typeof target === "string" && target && !target.startsWith("${") && !found.has(target)) {
+          found.set(target, "变量赋值");
+        }
+      }
+    }
+    for (const key of CONTAINER_LISTS[node.type] || []) {
+      for (const child of listOf(node, key) || []) visit(child);
+    }
+  };
+  if (state.workflow && state.workflow.root) visit(state.workflow.root);
+  return [...found.entries()].map(([name, source]) => ({ name, source }));
+}
+
 function computeReferencePaths() {
   const paths = [];
   if (!state.workflow) return paths;
   for (const key of Object.keys(state.workflow.inputs || {})) {
     paths.push(`\${inputs.${key}}`);
+  }
+  // 用户变量优先展示：别名/赋值变量是用户可读的主路径，直接 ${name} 即可引用
+  for (const v of collectUserVariables()) {
+    paths.push(`\${${v.name}}`);
   }
   const walk = (node) => {
     if (!node) return;
@@ -1102,6 +1236,8 @@ function renderCanvas() {
 // ---------------------------------------------------------------------------
 
 function renderProps() {
+  // fx 变量浮层挂在 body 上，面板重渲染前必须主动关闭（否则残留悬浮）
+  if (fxPopupCleanup) fxPopupCleanup();
   const body = $("props-body");
   body.textContent = "";
   if (state.multi.length > 1) {
@@ -1123,15 +1259,14 @@ function renderProps() {
     renderControlProps(node, body);
     return;
   }
+  const manifest = manifestOf(node.command);
   body.appendChild(numberField("超时（秒，可选）", node.timeout_seconds, (v) => {
     if (v === null) delete node.timeout_seconds; else node.timeout_seconds = v;
     markDirty();
   }));
-  body.appendChild(numberField("重试次数", node.retry_count ?? 0, (v) => {
-    if (v === null || v === 0) delete node.retry_count; else node.retry_count = v;
-    markDirty();
-  }));
-  const manifest = manifestOf(node.command);
+  // 重试次数：仅 manifest 声明可重试的指令才出现（不支持时返回 null）
+  const retryField = retryCountField(node, manifest);
+  if (retryField) body.appendChild(retryField);
   const schema = manifest ? manifest.input_schema : {};
   const properties = schema.properties || {};
   const keys = Object.keys(properties);
@@ -1151,8 +1286,25 @@ function renderProps() {
     }));
   } else {
     const required = new Set(schema.required || []);
-    for (const key of keys) {
-      body.appendChild(schemaField(node, key, properties[key], required.has(key)));
+    const groups = Array.isArray(schema["x-param-groups"]) ? schema["x-param-groups"] : null;
+    if (groups && groups.length) {
+      // 对标影刀「常规/高级」分区：按 manifest x-param-groups 分组渲染，
+      // 当前通道不生效的字段自动归入底部折叠区（切换通道后重新渲染归位）。
+      renderGroupedFields(body, node, schema, properties, required, groups);
+    } else {
+      for (const key of keys) {
+        body.appendChild(schemaField(node, key, properties[key], required.has(key)));
+      }
+    }
+    // 通道解析预览：浏览器指令缺省走 extension 还是 playwright（与执行器同语义）
+    const transportInput = body.querySelector('[data-field="transport"]');
+    if (transportInput) {
+      const fieldEl = transportInput.closest(".field");
+      if (fieldEl) fieldEl.insertAdjacentElement("afterend", channelPreviewField(node));
+      for (const key of ["transport", "channel"]) {
+        const input = body.querySelector(`[data-field="${key}"]`);
+        if (input) input.addEventListener("change", () => renderProps());
+      }
     }
   }
   // 字段联动：x-depends 声明哪些字段依赖其他字段的特定值
@@ -1199,9 +1351,101 @@ function renderProps() {
   body.addEventListener("change", () => applyDependencies(body, node, schema));
 }
 
+// ---------------------------------------------------------------------------
+// 参数分组（对标影刀「常规/高级」分区）
+// ---------------------------------------------------------------------------
+
+// 分组规划：纯函数（无 DOM），判定各字段的归属分组与展开缺省——
+// node 侧测试与前端渲染共用同一套规则（scripts/check_param_groups.mjs）。
+// 规则：
+// - x-depends 未满足的字段不进其声明分组，归入底部「其他通道参数」折叠区（通道切换后重渲染自动归位）
+// - 未被 x-param-groups 声明的字段归入「其他」
+// - collapsed 组缺省收起，但组内任一字段已填值时自动展开（用户填过的东西不藏起来）
+function paramGroupPlan(schema, properties, withArgs, groups) {
+  const deps = schema["x-depends"] || {};
+  const active = [];
+  const inactive = [];
+  for (const key of Object.keys(properties)) {
+    const cond = deps[key];
+    if (!cond) { active.push(key); continue; }
+    const ctrlKey = Object.keys(cond)[0];
+    const isActive = (withArgs ? withArgs[ctrlKey] : undefined) === cond[ctrlKey];
+    (isActive ? active : inactive).push(key);
+  }
+  const claimed = new Set();
+  const plan = [];
+  for (const group of groups) {
+    const fields = (group.fields || []).filter(
+      (k) => properties[k] && active.includes(k) && !claimed.has(k)
+    );
+    if (!fields.length) continue;
+    for (const k of fields) claimed.add(k);
+    const hasValue = fields.some((k) => {
+      const v = withArgs ? withArgs[k] : undefined;
+      return v !== undefined && v !== null && v !== "";
+    });
+    plan.push({ label: group.label || "参数", fields, open: group.collapsed ? hasValue : true });
+  }
+  const rest = active.filter((k) => !claimed.has(k));
+  if (rest.length) plan.push({ label: "其他", fields: rest, open: true });
+  if (inactive.length) {
+    plan.push({ label: "__inactive__", fields: inactive, open: false });
+  }
+  return plan;
+}
+
+function renderGroupedFields(body, node, schema, properties, required, groups) {
+  const plan = paramGroupPlan(schema, properties, node["with"] || {}, groups);
+  for (const part of plan) {
+    body.appendChild(paramGroupSection(node, part, properties, required));
+  }
+}
+
+function paramGroupSection(node, part, properties, required) {
+  const wrap = document.createElement("div");
+  wrap.className = "props-group";
+  if (part.label === "__inactive__") wrap.classList.add("props-group-inactive");
+  const key = `${node.id}|${part.label}`;
+  const stored = state.paramGroupsOpen.get(key);
+  const open = stored === undefined ? part.open : stored;
+  if (!open) wrap.classList.add("collapsed");
+
+  const head = document.createElement("div");
+  head.className = "props-group-head";
+  const caret = document.createElement("span");
+  caret.className = "props-group-caret";
+  caret.textContent = "▾";
+  const title = document.createElement("span");
+  title.className = "props-group-title";
+  title.textContent = part.label === "__inactive__"
+    ? `其他通道参数（${part.fields.length}）`
+    : part.label;
+  const count = document.createElement("span");
+  count.className = "props-group-count";
+  count.textContent = String(part.fields.length);
+  head.append(caret, title, count);
+  if (part.label === "__inactive__") {
+    head.title = "这些参数属于其他执行通道，当前通道下不生效；切换通道后自动归位到所属分组";
+  }
+
+  const bodyEl = document.createElement("div");
+  bodyEl.className = "props-group-body";
+  for (const k of part.fields) {
+    bodyEl.appendChild(schemaField(node, k, properties[k], required.has(k)));
+  }
+  head.addEventListener("click", () => {
+    const nowCollapsed = wrap.classList.toggle("collapsed");
+    state.paramGroupsOpen.set(key, !nowCollapsed);
+  });
+  wrap.append(head, bodyEl);
+  return wrap;
+}
+
 // 字段联动：根据 x-depends 声明，禁用/启用依赖字段
 // x-depends 格式: { "headless": {"transport": "playwright"}, ... }
 // 含义: headless 仅当 transport === "playwright" 时启用
+// 展示策略：不隐藏、只禁用——参数"凭空消失"会让用户以为指令没有这个开关，
+// 禁用 + 说明能让用户看懂"它属于另一条通道"。
 function applyDependencies(body, node, schema) {
   const deps = schema["x-depends"];
   if (!deps) return;
@@ -1209,13 +1453,151 @@ function applyDependencies(body, node, schema) {
     const ctrlKey = Object.keys(condition)[0];
     const requiredValue = condition[ctrlKey];
     const ctrlValue = node["with"] ? node["with"][ctrlKey] : undefined;
-    const shouldDisable = ctrlValue !== requiredValue;
+    const active = ctrlValue === requiredValue;
     // 找到该字段的 wrapper（data-field 属性匹配）
     const wrap = body.querySelector(`[data-field="${field}"]`);
     if (!wrap) continue;
     const fieldWrap = wrap.closest(".field");
     if (!fieldWrap) continue;
-    fieldWrap.style.display = shouldDisable ? "none" : "";
+    fieldWrap.classList.toggle("field-inactive", !active);
+    for (const el of fieldWrap.querySelectorAll("input, select, textarea")) {
+      el.disabled = !active;
+      el.title = active
+        ? ""
+        : `仅当 ${ctrlKey}=${requiredValue} 时生效（当前 ${ctrlKey}=${ctrlValue === undefined ? "缺省" : ctrlValue}）`;
+    }
+    let note = fieldWrap.querySelector(".dep-note");
+    if (!active) {
+      if (!note) {
+        note = document.createElement("span");
+        note.className = "field-hint dep-note";
+        fieldWrap.appendChild(note);
+      }
+      note.textContent = `仅 ${ctrlKey}=${requiredValue} 时生效（当前 ${ctrlKey}=${ctrlValue === undefined ? "缺省" : ctrlValue}）`;
+    } else if (note) {
+      note.remove();
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 自研扩展执行通道状态（一等公民）：浏览器指令缺省走哪条通道、哪个浏览器
+// ---------------------------------------------------------------------------
+
+const HOST_BROWSER_LABELS = {
+  msedge: "Edge",
+  chrome: "Chrome",
+  chromium: "Chromium",
+  brave: "Brave",
+  opera: "Opera",
+  vivaldi: "Vivaldi",
+  firefox: "Firefox",
+  safari: "Safari",
+  unknown: "未知浏览器",
+};
+
+const CHROMIUM_HOSTS = ["chrome", "msedge", "brave", "opera", "vivaldi", "chromium"];
+
+function hostBrowserLabel(name) {
+  if (!name) return "";
+  return HOST_BROWSER_LABELS[name] || name;
+}
+
+function channelHostBrowser(status) {
+  return status && status.host ? status.host.browser : null;
+}
+
+function channelMatchesHost(channel, status) {
+  // 语义与后端 extension_exec.channel_matches_host 保持一致（两侧必须同步改）
+  const expected = String(channel || "").toLowerCase();
+  if (!expected) return true; // channel 缺省 = 跟随宿主
+  const actual = String(channelHostBrowser(status) || "").toLowerCase();
+  if (!actual) return false; // 宿主未上报：无法确认，不假装成功
+  if (expected === actual) return true;
+  if (expected === "chromium") return CHROMIUM_HOSTS.includes(actual);
+  return false;
+}
+
+// 通道解析预览：与执行器 _use_extension 同语义——显式 transport 优先；
+// 缺省时扩展在线且 channel 不与宿主冲突 → extension，否则 playwright。
+function resolveChannelPreview(node) {
+  const args = (node && node["with"]) || {};
+  if (args.transport) {
+    if (args.transport === "extension" && args.channel && !channelMatchesHost(args.channel, state.extChannel)) {
+      const host = hostBrowserLabel(channelHostBrowser(state.extChannel)) || "未上报";
+      return {
+        channel: "extension(将失败)",
+        reason: `扩展宿主为 ${host}，与 channel=${args.channel} 不符；请把插件装到 ${args.channel}，或改用 transport=playwright`,
+      };
+    }
+    return { channel: args.transport, reason: "已在参数中显式指定" };
+  }
+  const status = state.extChannel;
+  if (!status || !status.online) {
+    return { channel: "playwright", reason: "自研插件未在线（未安装/未重载/devserver 未运行）" };
+  }
+  const hostName = hostBrowserLabel(channelHostBrowser(status));
+  if (args.channel && !channelMatchesHost(args.channel, status)) {
+    return {
+      channel: "playwright",
+      reason: `插件宿主为 ${hostName || "未知"}，无法满足 channel=${args.channel}，按 channel 启动独立浏览器`,
+    };
+  }
+  return { channel: "extension", reason: `自研插件在线（宿主 ${hostName || "未知，请重载插件"}）` };
+}
+
+function channelPreviewField(node) {
+  const row = document.createElement("div");
+  row.className = "field channel-preview";
+  const hint = document.createElement("span");
+  hint.className = "field-hint";
+  const resolved = resolveChannelPreview(node);
+  hint.textContent = resolved.channel === "extension"
+    ? `当前将走自研插件：${resolved.reason}`
+    : resolved.channel === "extension(将失败)"
+      ? `通道冲突：${resolved.reason}`
+      : `当前将走 ${resolved.channel}：${resolved.reason}`;
+  if (resolved.channel === "extension(将失败)") hint.classList.add("bad");
+  row.appendChild(hint);
+  return row;
+}
+
+async function refreshExtChannel() {
+  const previous = state.extChannel;
+  let status = { online: false, host: null };
+  try {
+    status = await api("GET", "/api/ext/status");
+  } catch { /* devserver 未运行或通道异常：按离线展示 */ }
+  state.extChannel = status;
+  const badge = $("ext-channel-badge");
+  if (badge) {
+    const hostName = hostBrowserLabel(channelHostBrowser(status));
+    const authFailures = Number(status.authFailures || 0);
+    if (status.online) {
+      badge.textContent = `扩展通道：在线${hostName ? `（${hostName}）` : ""}`;
+      badge.className = "ext-badge ext-channel-badge ok";
+      badge.title = `自研插件在线，浏览器指令缺省走 extension 通道；宿主浏览器：${hostName || "未上报（请在扩展页重载插件）"}`;
+    } else if (authFailures) {
+      // 最隐蔽的一种：插件装了、也在轮询，但 token 与本机 devserver 不匹配
+      badge.textContent = "扩展通道：配对失败";
+      badge.className = "ext-badge ext-channel-badge off";
+      badge.title = `${authFailures} 次连接被拒（token 不匹配）。处置：删除 workflows/.capture-extension-token 后重启 devserver（扩展会自动重新配对），或点左侧「⇲ 插件」重新配对`;
+    } else {
+      badge.textContent = "扩展通道：离线";
+      badge.className = "ext-badge ext-channel-badge off";
+      badge.title = "自研插件未在线：浏览器指令缺省回退 playwright。点左侧「⇲ 插件」安装/重载";
+    }
+  }
+  // 状态真正变化且当前选中的是浏览器指令 → 刷新通道预览（避免定时重渲染打断输入）
+  const changed = !previous
+    || previous.online !== status.online
+    || Number(previous.authFailures || 0) !== Number(status.authFailures || 0)
+    || channelHostBrowser(previous) !== channelHostBrowser(status);
+  if (changed && state.selected) {
+    const node = findNode(state.selected);
+    if (node && node.type === "action" && String(node.command || "").startsWith("browser.")) {
+      renderProps();
+    }
   }
 }
 
@@ -1352,6 +1734,36 @@ function schemaField(node, key, propSchema, required) {
       fxOpts.fieldKey = key;
     }
     field = textField(label, value === undefined ? "" : String(value), (v) => setWith(node, key, v), required, key, fxOpts.supportFx || fxOpts.supportPython ? fxOpts : undefined);
+  }
+  if (key === "varName" && node.command === "data.setVar") {
+    // 变量写入目标：可选已有变量（重赋值）或新建变量名。
+    // 与 output_aliases 解耦——这里就是「赋值给哪个变量」的语义。
+    const pickWrap = document.createElement("div");
+    pickWrap.className = "var-target-row";
+    const sel = document.createElement("select");
+    sel.className = "var-target-pick";
+    const existing = collectUserVariables();
+    sel.innerHTML = '<option value="">— 选择已有变量（或直接输入新名） —</option>';
+    for (const v of existing) {
+      const opt = document.createElement("option");
+      opt.value = v.name;
+      opt.textContent = `${v.name}（${v.source}）`;
+      sel.appendChild(opt);
+    }
+    sel.addEventListener("change", () => {
+      if (!sel.value) return;
+      setWith(node, key, sel.value);
+      const inputEl = field.querySelector('input[data-field]');
+      if (inputEl) inputEl.value = sel.value;
+      markDirty();
+      showCompileMessage(`变量「${sel.value}」将被重赋值（覆盖旧值）`, true);
+    });
+    pickWrap.appendChild(sel);
+    const hint = document.createElement("span");
+    hint.className = "field-hint";
+    hint.textContent = "填新名=定义变量，选已有=覆盖赋值";
+    pickWrap.appendChild(hint);
+    field.appendChild(pickWrap);
   }
   if (key === "sessionId") {
     // 会话引用字段：绑定创建会话的节点输出即可，无需手填。
@@ -1603,62 +2015,220 @@ function textField(labelText, value, onChange, required, rawKey, opts) {
   return wrap;
 }
 
-// fx 模式：替换文本框为变量下拉选择器
+// fx 模式：标签化变量编辑器。
+// 用户在文本中通过下拉插入变量，插入后渲染为 [变量名] 标签（chip）；
+// 底层仍存 ${变量名} 字符串，与编译/运行时完全兼容，零迁移。
 function replaceWithVarSelect(wrap, origInput, node, fieldKey, onChange) {
-  // 先清理已有的 select（防止重复创建）
-  if (wrap._fxSelect) {
-    wrap._fxSelect.remove();
-    delete wrap._fxSelect;
+  // 先清理已有的编辑器（防止重复创建）
+  if (wrap._fxEditor) {
+    wrap._fxEditor.remove();
+    delete wrap._fxEditor;
   }
-  const sel = document.createElement("select");
-  sel.className = "fx-var-select";
-  sel.dataset.field = origInput.dataset.field;
-  const paths = computeReferencePaths();
-  sel.innerHTML = '<option value="">— 选择变量 —</option>';
-  for (const p of paths) {
-    const opt = document.createElement("option");
-    opt.value = p;
-    opt.textContent = p;
-    sel.appendChild(opt);
-  }
-  // 设置当前值（如果是 ${...} 引用则选中）
-  const curVal = node["with"] ? node["with"][fieldKey] : undefined;
-  if (typeof curVal === "string" && curVal.startsWith("${")) {
-    sel.value = curVal;
-  }
-  sel.addEventListener("change", () => {
-    if (sel.value) {
-      setWith(node, fieldKey, sel.value);
-    } else {
-      setWith(node, fieldKey, null);
+  // 离开文本输入框（避免占位/挤占按钮位置）；保留引用，restoreTextField 时插回。
+  // 这里不能仅 display:none：隐藏的 input 仍占据 flex 槽位，
+  // 会让 row 变成 [Py, hidden-input, fx, editor, picker]——fx 视觉上
+  // 跳到 input 前面，并且浏览器对 hidden 元素的尺寸计算也容易触发 select 拉高。
+  wrap._fxHiddenInput = origInput;
+  origInput.remove();
+
+  const editor = document.createElement("div");
+  editor.className = "fx-tag-editor";
+  editor.dataset.field = origInput.dataset.field;
+  editor.setAttribute("contenteditable", "true");
+  editor.spellcheck = false;
+
+  // 底层值 <-> 标签视图互转：${name} → [name] chip，其余文本原样
+  const toView = (raw) => {
+    editor.textContent = "";
+    if (typeof raw !== "string" || !raw) return;
+    const re = /\$\{([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)\}/g;
+    let last = 0;
+    let m;
+    while ((m = re.exec(raw)) !== null) {
+      if (m.index > last) {
+        editor.appendChild(document.createTextNode(raw.slice(last, m.index)));
+      }
+      editor.appendChild(makeVarChip(m[1]));
+      last = re.lastIndex;
     }
+    if (last < raw.length) {
+      editor.appendChild(document.createTextNode(raw.slice(last)));
+    }
+  };
+
+  // 从视图读回底层字符串：chip → ${name}，文本原样拼接
+  const fromView = () => {
+    let out = "";
+    for (const child of editor.childNodes) {
+      if (child.nodeType === Node.TEXT_NODE) {
+        out += child.textContent;
+      } else if (child.classList && child.classList.contains("fx-var-chip")) {
+        out += `\${${child.dataset.varName}}`;
+      } else {
+        out += child.textContent || "";
+      }
+    }
+    return out;
+  };
+
+  const commit = () => {
+    const raw = fromView();
+    setWith(node, fieldKey, raw || null);
     markDirty();
+    if (typeof onChange === "function") onChange(raw);
+  };
+
+  editor.addEventListener("input", commit);
+  editor.addEventListener("blur", commit);
+
+  // 插入变量 chip 到光标处（或末尾）
+  const insertVar = (name) => {
+    const chip = makeVarChip(name);
+    const sel = window.getSelection();
+    let range = null;
+    if (sel && sel.rangeCount && editor.contains(sel.anchorNode)) {
+      range = sel.getRangeAt(0);
+    }
+    if (range) {
+      range.deleteContents();
+      range.insertNode(chip);
+      range.setStartAfter(chip);
+      range.collapse(true);
+      sel.removeAllRanges();
+      sel.addRange(range);
+    } else {
+      editor.appendChild(chip);
+    }
+    commit();
+  };
+
+  // 变量插入浮层：点击编辑器弹出，挂 document.body + position:fixed——
+  // 不受 #props overflow-y:auto 裁剪（否则弹层被面板截断/位置歪）。
+  // 用 mousedown + preventDefault 保证编辑器不失去焦点、光标位置不丢。
+  const ac = new AbortController();
+  let varPopup = null;
+  const closeVarPopup = () => {
+    ac.abort(); // 连带移除 scroll/resize 监听
+    if (varPopup) { varPopup.remove(); varPopup = null; }
+    if (fxPopupCleanup === closeVarPopup) fxPopupCleanup = null;
+  };
+
+  const openVarPopup = () => {
+    if (varPopup) return;
+    const userVars = collectUserVariables();
+    const userNames = new Set(userVars.map((v) => v.name));
+    varPopup = document.createElement("div");
+    varPopup.className = "ref-completion fx-var-popup";
+    const addGroup = (label, items) => {
+      if (!items.length) return;
+      const head = document.createElement("div");
+      head.className = "fx-var-popup-group";
+      head.textContent = label;
+      varPopup.appendChild(head);
+      for (const it of items) {
+        const item = document.createElement("div");
+        item.className = "ref-item";
+        item.textContent = it.label;
+        item.addEventListener("mousedown", (e) => {
+          e.preventDefault();
+          insertVar(it.name);
+          closeVarPopup();
+        });
+        varPopup.appendChild(item);
+      }
+    };
+    addGroup("用户变量", userVars.map((v) => ({ name: v.name, label: `${v.name}（${v.source}）` })));
+    addGroup("内置作用域", computeReferencePaths()
+      .map((p) => p.replace(/^\$\{|\}$/g, ""))
+      .filter((bare) => bare.includes(".") || !userNames.has(bare))
+      .map((bare) => ({ name: bare, label: bare })));
+    // mousedown 落在浮层上（含滚动条）也不让编辑器 blur
+    varPopup.addEventListener("mousedown", (e) => e.preventDefault());
+    document.body.appendChild(varPopup);
+    // 锚定编辑器正下方；右缘/下缘出视口时回收
+    const r = editor.getBoundingClientRect();
+    const pw = varPopup.offsetWidth;
+    const ph = varPopup.offsetHeight;
+    let left = r.left;
+    let top = r.bottom + 2;
+    if (left + pw > window.innerWidth - 8) left = window.innerWidth - 8 - pw;
+    if (top + ph > window.innerHeight - 8) top = Math.max(8, r.top - ph - 2);
+    varPopup.style.left = `${Math.round(left)}px`;
+    varPopup.style.top = `${Math.round(top)}px`;
+    // 面板滚动/窗口变化时关闭（fixed 定位不跟随锚点）；
+    // 浮层自身内部滚动（列表超过 max-height）不算，不能误关。
+    window.addEventListener("scroll", (e) => {
+      if (varPopup && e.target instanceof Node && varPopup.contains(e.target)) return;
+      closeVarPopup();
+    }, { capture: true, signal: ac.signal });
+    window.addEventListener("resize", closeVarPopup, { signal: ac.signal });
+    fxPopupCleanup = closeVarPopup;
+  };
+
+  editor.addEventListener("click", () => openVarPopup());
+  editor.addEventListener("blur", () => setTimeout(closeVarPopup, 150));
+  editor.addEventListener("keydown", (e) => { if (e.key === "Escape") closeVarPopup(); });
+
+  // 点击 chip 可删除
+  editor.addEventListener("click", (e) => {
+    const chip = e.target.closest && e.target.closest(".fx-var-chip");
+    if (chip && (e.altKey || e.metaKey)) {
+      e.preventDefault();
+      chip.remove();
+      commit();
+    }
   });
-  // 隐藏原 input，插入 select
-  origInput.style.display = "none";
-  origInput.parentNode.insertBefore(sel, origInput.nextSibling);
-  // 存储引用以便恢复
-  wrap._fxSelect = sel;
+
+  toView(node["with"] ? node["with"][fieldKey] : undefined);
+  const row = wrap.querySelector(".expr-input-row");
+  const holder = row || wrap;
+  // 找到 fx-btn，把 editor 插到 fx-btn 之前，让 row 最终顺序为
+  // [Py, editor, fx]，fx 按钮保持在最右端。
+  const fxBtn = holder.querySelector(".fx-btn");
+  if (fxBtn) {
+    holder.insertBefore(editor, fxBtn);
+  } else {
+    holder.appendChild(editor);
+  }
+  wrap._fxEditor = editor;
+  wrap._closeFxPopup = closeVarPopup;
+}
+
+// 变量标签（chip）：点击选中、Alt+点击删除
+function makeVarChip(name) {
+  const chip = document.createElement("span");
+  chip.className = "fx-var-chip";
+  chip.dataset.varName = name;
+  chip.setAttribute("contenteditable", "false");
+  chip.textContent = `[${name}]`;
+  chip.title = `变量 ${name}（Alt+点击删除）`;
+  return chip;
 }
 
 // 恢复文本输入（从 fx 模式退回）
 function restoreTextField(wrap, origInput) {
-  if (wrap._fxSelect) {
-    wrap._fxSelect.remove();
-    delete wrap._fxSelect;
+  if (wrap._fxEditor) {
+    // 浮层变量下拉一起关闭
+    if (typeof wrap._closeFxPopup === "function") wrap._closeFxPopup();
+    wrap._fxEditor.remove();
+    delete wrap._fxEditor;
+    delete wrap._closeFxPopup;
   }
-  origInput.style.display = "";
-  // 确保 input 回到 row 中正确位置（如果被移除了）
-  const row = wrap.querySelector(".expr-input-row");
-  if (row && !row.contains(origInput)) {
-    // 找到 fx-btn 的位置，在它前面插入 input
-    const fxBtn = row.querySelector(".fx-btn");
-    if (fxBtn) {
-      row.insertBefore(origInput, fxBtn);
-    } else {
-      row.appendChild(origInput);
+  // 解除 detach：把 input 重新插入到 row 中的 fx-btn 之前。
+  // 这样 row 顺序回到 [Py, input, fx]，按钮位置稳定。
+  if (wrap._fxHiddenInput === origInput) {
+    delete wrap._fxHiddenInput;
+    const row = wrap.querySelector(".expr-input-row");
+    if (row && !row.contains(origInput)) {
+      const fxBtn = row.querySelector(".fx-btn");
+      if (fxBtn) {
+        row.insertBefore(origInput, fxBtn);
+      } else {
+        row.appendChild(origInput);
+      }
     }
   }
+  origInput.style.display = "";
 }
 
 // 条件左值/右值：${...} 引用保持字符串，其余按 JSON 字面量解析（数组/对象/数字/布尔）。
@@ -1680,6 +2250,55 @@ function literalField(labelText, value, onChange, required, rawKey) {
     onChange(raw);
   });
   return wrapField(labelText, required, input, "引用 ${...} 或 JSON 字面量", rawKey);
+}
+
+// 重试能力判定：manifest 是唯一事实源（与运行时编排器门禁一致——
+// orchestrator 的可重试条件 = error.retryable AND manifest.retryable）。
+// 因此「不能重试」= manifest.retryable !== true，分两种原因：
+//   - unsafe-replay：重放不安全（重复开网页/重复提交），编译器直接拒绝运行
+//   - not-declared：指令未声明可重试，运行时静默忽略 retry_count
+// 纯函数（无 DOM）：scripts/check_retry_policy.mjs 从同一份源码抽取校验。
+function retryPolicy(manifest) {
+  if (!manifest) return { allowed: false, reason: "unknown" };
+  if (manifest.retryable === true) return { allowed: true, reason: "declared" };
+  const replay = manifest.effect ? manifest.effect.replay : undefined;
+  if (replay === "unsafe") return { allowed: false, reason: "unsafe-replay" };
+  return { allowed: false, reason: "not-declared" };
+}
+
+// 重试次数：只有 manifest 声明 retryable=true 的指令才渲染输入框。
+// 不能重试的指令根本不出现这个变量——参数面板不该摆一个「填了也不生效」的开关
+// （旧版是置灰 + 警告，仍然占位、仍然让人想填）。手改 workflow.json 遗留的非法值
+// 给一条说明 + 一键清除，不留静默陷阱。
+function retryCountField(node, manifest) {
+  const policy = retryPolicy(manifest);
+  if (policy.allowed) {
+    return numberField("重试次数", node.retry_count ?? 0, (v) => {
+      if (v === null || v === 0) delete node.retry_count; else node.retry_count = v;
+      markDirty();
+    });
+  }
+  if (!node.retry_count) return null;
+  const field = document.createElement("div");
+  field.className = "field field-invalid";
+  const note = document.createElement("span");
+  note.className = "field-hint bad wrap";
+  note.textContent = policy.reason === "unsafe-replay"
+    ? `⚠ 该指令重放不安全（重复执行会产生重复副作用，如重复打开网页/重复提交），不能重试；当前值 ${node.retry_count} 会导致编译失败`
+    : `⚠ 该指令未声明支持重试，当前值 ${node.retry_count} 不会生效`;
+  const fix = document.createElement("button");
+  fix.type = "button";
+  fix.className = "retry-clear-btn";
+  fix.textContent = "清除重试次数";
+  fix.addEventListener("click", () => {
+    pushUndo();
+    delete node.retry_count;
+    markDirty();
+    renderProps();
+    showCompileMessage(`已清除「重试次数」：${node.command} 不支持重试`, true);
+  });
+  field.append(note, fix);
+  return field;
 }
 
 function numberField(labelText, value, onChange, required, rawKey) {
@@ -1710,12 +2329,19 @@ function selectField(labelText, propSchema, required, value, onChange, rawKey) {
   const input = document.createElement("select");
   const empty = document.createElement("option");
   empty.value = "";
-  empty.textContent = "（未设置）";
+  // 空选项文案按字段语义区分：transport/channel 的"不填"有明确缺省行为，说清楚而不是"未设置"
+  const emptyLabels = {
+    transport: "（缺省：自研插件优先）",
+    channel: "（缺省：跟随扩展宿主）",
+  };
+  empty.textContent = emptyLabels[rawKey] || "（未设置）";
   input.appendChild(empty);
   for (const option of propSchema.enum) {
     const element = document.createElement("option");
     element.value = String(option);
-    element.textContent = (I18N && I18N.ops[option]) || String(option);
+    // 选项文案优先级：manifest x-enum-labels（指令自带，随 catalog 下发）> i18n ops > 原值
+    const labels = propSchema["x-enum-labels"];
+    element.textContent = (labels && labels[option]) || (I18N && I18N.ops[option]) || String(option);
     input.appendChild(element);
   }
   input.value = value === undefined ? "" : String(value);
@@ -2352,6 +2978,16 @@ async function runWorkflow() {
   if (state.dirty) await saveWorkflow();
   const inputs = await collectRunInputs();
   if (inputs === null) return; // 用户在参数对话框点了取消
+  // 运行前先编译：失败直接摊开原因（否则子进程会在产出事件前退出，界面只会显示 exit 1）
+  try {
+    const check = await api("POST", "/api/compile", { workflow: state.workflow });
+    if (!check.valid) {
+      showCompileErrorsAsRunError(check.errors);
+      return;
+    }
+  } catch (err) {
+    // 编译接口不可用时不阻塞运行，由运行侧的启动失败提示兜底
+  }
   try {
     const body = { workflow: flow };
     if (Object.keys(inputs).length) body.inputs = inputs;
@@ -2359,11 +2995,58 @@ async function runWorkflow() {
     activeRunId = result.runId;
     $("run-panel").classList.remove("hidden");
     $("btn-run-cancel").classList.remove("hidden");
+    renderRunError(null); // 新一次运行先清掉上一轮的失败说明
     $("run-status-text").textContent = `运行中… ${flow} (${activeRunId})`;
     pollRunStatus();
   } catch (err) {
     showCompileMessage(`运行启动失败：${err.message || err}`, false);
   }
+}
+
+// 运行失败时把原因摊开：只写「完成：failed」时用户完全不知道"没打开浏览器"从何而来
+// status 可选：子进程在产出任何事件前就退出（编译/校验失败）时用来显示启动失败原因。
+function renderRunError(result, status) {
+  const box = $("run-error");
+  if (!box) return;
+  const startup = status && status.startupError;
+  if (startup) {
+    const lines = [`运行未能启动（退出码 ${status.exitCode}）`];
+    if (startup.message) lines.push(startup.message);
+    for (const line of startup.tail || []) lines.push(line);
+    lines.push("常见原因：指令参数不合法（如「重放不安全」的指令配了重试次数）、流程校验未通过。");
+    box.textContent = lines.join("\n");
+    box.classList.remove("hidden");
+    return;
+  }
+  const error = result && result.error;
+  if (!error) {
+    box.textContent = "";
+    box.classList.add("hidden");
+    return;
+  }
+  const details = error.details || {};
+  const lines = [
+    `失败：${error.code || "ERROR"}${details.nodeId ? ` · 节点 ${details.nodeId}` : ""}`,
+  ];
+  if (error.message) lines.push(error.message);
+  if (details.transport || details.reason) {
+    lines.push(`通道：${details.transport || "-"}${details.reason ? `（${details.reason}）` : ""}`);
+  }
+  if (details.commandId) lines.push(`指令：${details.commandId}`);
+  box.textContent = lines.join("\n");
+  box.classList.remove("hidden");
+}
+
+// 运行前先编译：编译不过就直接说原因，不白启动子进程（对照影刀：编译错误不进入运行）
+function showCompileErrorsAsRunError(errors) {
+  const box = $("run-error");
+  $("run-panel").classList.remove("hidden");
+  if (!box) return;
+  const lines = ["运行未启动：流程编译未通过"];
+  for (const err of errors || []) lines.push(`• ${err.message || err}`);
+  box.textContent = lines.join("\n");
+  box.classList.remove("hidden");
+  $("run-status-text").textContent = "未启动（编译失败）";
 }
 
 async function pollRunStatus() {
@@ -2376,7 +3059,10 @@ async function pollRunStatus() {
     } else {
       const result = s.result;
       const status = result ? result.status : `exit ${s.exitCode}`;
-      $("run-status-text").textContent = `完成：${status} (${activeRunId})`;
+      const error = result && result.error;
+      const summary = error ? `${status} · ${error.code}` : status;
+      $("run-status-text").textContent = `完成：${summary} (${activeRunId})`;
+      renderRunError(result, s);
       $("btn-run-cancel").classList.add("hidden");
       activeRunId = null;
       loadRunEventsOnce();
@@ -2433,6 +3119,23 @@ async function loadExtensionStatus() {
   $("extension-dir-path").value = data.extensionDir || "";
   renderBrowserButtons("extension-open-browsers", data);
   renderStatusRows("extension-browsers", data);
+  await loadExtensionPairing();
+}
+
+// 执行通道配对状态：扩展与本机 devserver 必须持有同一 token。
+// 插件重装/升级后会换 token，此时扩展每 3s 被 403 重试、通道永远离线——
+// 这是"插件重载了却怎么都不生效"的最常见成因，故在此显式暴露 + 一键重置。
+async function loadExtensionPairing() {
+  const el = $("extension-pair-state");
+  if (!el) return;
+  try {
+    const data = await api("GET", "/api/capture/extension/token");
+    el.textContent = data.configured
+      ? `已配对（token ${String(data.token || "").slice(0, 12)}…）`
+      : "未配对：扩展首次连接时自动配对";
+  } catch (err) {
+    el.textContent = `配对状态读取失败：${err.message || err}`;
+  }
 }
 
 // 第 2 步：每浏览器一个「打开浏览器」按钮
@@ -2658,6 +3361,24 @@ async function init() {
   });
   // 仅「关闭」按钮关闭模态框；点击遮罩不关闭（避免误触丢失引导上下文）
   $("extension-dialog-close").addEventListener("click", () => toggleExtensionDialog(false));
+  $("btn-ext-reset-pair").addEventListener("click", async (e) => {
+    const btn = e.currentTarget;
+    btn.disabled = true;
+    try {
+      const data = await api("POST", "/api/capture/extension/token", { token: "" });
+      showExtensionResult(
+        data.reset
+          ? "已重置配对：等 3~5 秒，扩展下次轮询会自动重新配对（顶部「扩展通道」徽标应转为在线）"
+          : "重置未生效，请手动删除 workflows/.capture-extension-token",
+        true,
+      );
+      await loadExtensionPairing();
+    } catch (err) {
+      showExtensionResult(`重置失败：${err.message || err}`, false);
+    } finally {
+      btn.disabled = false;
+    }
+  });
   $("btn-run-status").addEventListener("click", () => {
     loadRunStatus().catch((err) => showCompileMessage(String(err.message || err), false));
   });
@@ -2675,6 +3396,8 @@ async function init() {
   initPanelResize();
   startElementPolling();
   loadElements();
+  refreshExtChannel();
+  setInterval(refreshExtChannel, 5000);
 }
 
 // 输入框聚焦时快捷键不劫持（复制粘贴/撤销留给文本编辑）。

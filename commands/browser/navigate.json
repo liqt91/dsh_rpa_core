@@ -1,36 +1,117 @@
 {
   "id": "browser.navigate",
-  "version": "2.0.0",
+  "version": "2.5.0",
   "executor": "browser.playwright",
   "kind": "action",
   "risk": "browser-control",
-  "capabilities": ["browser.control", "process.start"],
-  "resources": ["browser.session"],
+  "capabilities": [
+    "browser.control",
+    "process.start"
+  ],
+  "resources": [
+    "browser.session"
+  ],
   "stability": "stable",
-  "effect": {"kind": "session", "replay": "unsafe", "idempotency": "none"},
+  "effect": {
+    "kind": "session",
+    "replay": "unsafe",
+    "idempotency": "none"
+  },
   "input_schema": {
     "type": "object",
-    "required": ["url"],
+    "required": [],
     "properties": {
-      "url": {"type": "string", "x-fx": true},
-      "timeoutMs": {"type": "integer", "minimum": 1},
+      "action": {
+        "type": "string",
+        "enum": [
+          "goto",
+          "back",
+          "forward",
+          "reload"
+        ],
+        "x-enum-labels": {
+          "goto": "打开新网址",
+          "back": "后退",
+          "forward": "前进",
+          "reload": "重新加载（刷新）"
+        },
+        "description": "跳转方式（对标影刀「跳转至新网址」）：goto=打开新网页（默认，需 url，启动/复用浏览器）；back=后退；forward=前进；reload=重新加载（刷新），三者需提供已有 sessionId",
+        "default": "goto"
+      },
+      "url": {
+        "type": "string",
+        "x-fx": true
+      },
+      "waitUntil": {
+        "type": "string",
+        "enum": [
+          "load",
+          "domcontentloaded",
+          "commit",
+          "networkidle"
+        ],
+        "x-enum-labels": {
+          "domcontentloaded": "DOM 就绪即返回",
+          "load": "全部资源加载完成",
+          "networkidle": "网络空闲",
+          "commit": "收到响应即返回"
+        },
+        "description": "等待网页加载完成的事件策略（对标影刀「等待网页加载完成」参数）：domcontentloaded=DOM就绪即返回（默认）；load=等待全部资源加载；networkidle=网络空闲；commit=收到响应即返回",
+        "default": "domcontentloaded"
+      },
+      "timeoutMs": {
+        "type": "integer",
+        "minimum": 1
+      },
       "channel": {
         "type": "string",
-        "enum": ["chromium", "chrome", "msedge"],
-        "description": "浏览器类型（对标影刀浏览器类型）：chromium=内置浏览器（默认）；chrome/msedge=复用本机安装的 Chrome/Edge"
+        "enum": [
+          "chromium",
+          "chrome",
+          "msedge",
+          "firefox",
+          "webkit"
+        ],
+        "x-enum-labels": {
+          "chromium": "内置 Chromium（默认）",
+          "chrome": "Google Chrome",
+          "msedge": "Microsoft Edge",
+          "firefox": "Firefox",
+          "webkit": "WebKit（试验）"
+        },
+        "description": "浏览器类型（对标影刀浏览器类型）。playwright 通道=启动/复用该内核的独立浏览器（chromium=内置浏览器默认，chrome/msedge/firefox/webkit=本机已装内核）；extension 通道（自研插件，一等公民）=校验扩展宿主浏览器是否匹配（浏览器 = 扩展装在哪，无法启动），chromium 表示任意 Chromium 内核发行版；宿主不匹配时缺省通道会自动让位给 playwright，显式 transport=extension 则报错。国产壳（ie/360se/QQ）不在支持范围"
       },
       "args": {
         "type": "array",
-        "items": {"type": "string"},
+        "items": {
+          "type": "string"
+        },
         "description": "命令行参数（可为空）：必须是目标浏览器支持的命令行，如 --incognito、--start-maximized、--user-data-dir=..."
       },
-      "headless": {"type": "boolean"},
-      "userAgent": {"type": "string", "minLength": 1},
-      "userDataDir": {"type": "string", "minLength": 1},
+      "headless": {
+        "type": "boolean"
+      },
+      "userAgent": {
+        "type": "string",
+        "minLength": 1
+      },
+      "userDataDir": {
+        "type": "string",
+        "minLength": 1
+      },
       "transport": {
         "type": "string",
-        "enum": ["playwright", "bsk"],
-        "description": "playwright=独立自动化浏览器（默认，headless/userAgent/userDataDir 生效）；bsk=BrowserSkill 单扩展，复用用户真实已登录浏览器（Agent Window），能力差异：CSS selector only、仅主 frame（iframe 不支持）；headless/userAgent/userDataDir 在 bsk 下被忽略"
+        "enum": [
+          "extension",
+          "playwright",
+          "bsk"
+        ],
+        "x-enum-labels": {
+          "extension": "自研插件（真实已登录浏览器）",
+          "playwright": "独立自动化浏览器",
+          "bsk": "BrowserSkill 三方件"
+        },
+        "description": "执行通道（一等公民=自研扩展）：extension=自研 MV3 扩展，在用户真实已登录浏览器里新建标签页（浏览器=扩展宿主，默认权限为整个浏览器）；playwright=独立自动化浏览器（headless/userAgent/userDataDir/channel 生效）；bsk=BrowserSkill 三方件（CSS selector only、仅主 frame）。缺省时：扩展在线且（未指定 channel 或宿主匹配）→extension，否则回退 playwright"
       },
       "browserInstanceId": {
         "type": "string",
@@ -43,24 +124,116 @@
       }
     },
     "additionalProperties": false,
+    "x-param-groups": [
+      {
+        "label": "常规",
+        "fields": [
+          "action",
+          "url"
+        ]
+      },
+      {
+        "label": "浏览器",
+        "fields": [
+          "transport",
+          "channel"
+        ]
+      },
+      {
+        "label": "高级",
+        "fields": [
+          "timeoutMs"
+        ],
+        "collapsed": true
+      },
+      {
+        "label": "启动选项（仅 playwright 通道）",
+        "fields": [
+          "waitUntil",
+          "args",
+          "headless",
+          "userAgent",
+          "userDataDir"
+        ],
+        "collapsed": true
+      },
+      {
+        "label": "BrowserSkill 三方件（仅 bsk 通道）",
+        "fields": [
+          "browserInstanceId",
+          "keepOpen"
+        ],
+        "collapsed": true
+      }
+    ],
     "x-depends": {
-      "channel": {"transport": "playwright"},
-      "args": {"transport": "playwright"},
-      "headless": {"transport": "playwright"},
-      "userAgent": {"transport": "playwright"},
-      "userDataDir": {"transport": "playwright"},
-      "browserInstanceId": {"transport": "bsk"},
-      "keepOpen": {"transport": "bsk"}
+      "waitUntil": {
+        "transport": "playwright"
+      },
+      "args": {
+        "transport": "playwright"
+      },
+      "headless": {
+        "transport": "playwright"
+      },
+      "userAgent": {
+        "transport": "playwright"
+      },
+      "userDataDir": {
+        "transport": "playwright"
+      },
+      "browserInstanceId": {
+        "transport": "bsk"
+      },
+      "keepOpen": {
+        "transport": "bsk"
+      }
     }
   },
-  "output_schema": {"type": "object", "required": ["sessionId", "url", "resourceType"], "properties": {"sessionId": {"type": "string"}, "url": {"type": "string"}, "resourceType": {"type": "string", "const": "webPage", "description": "资源类型标签：webPage=浏览器网页对象，windowHandle=桌面窗口句柄"}}, "additionalProperties": false},
-  "x-outputs": {
-    "sessionId": {"label": "保存网页对象到", "primary": true},
-    "url": {"label": "最终网址", "hidden": true},
-    "resourceType": {"label": "资源类型", "hidden": true}
+  "output_schema": {
+    "type": "object",
+    "required": [
+      "sessionId",
+      "url",
+      "resourceType"
+    ],
+    "properties": {
+      "sessionId": {
+        "type": "string"
+      },
+      "url": {
+        "type": "string"
+      },
+      "resourceType": {
+        "type": "string",
+        "const": "webPage",
+        "description": "资源类型标签：webPage=浏览器网页对象，windowHandle=桌面窗口句柄"
+      }
+    },
+    "additionalProperties": false
   },
-  "errors": ["TIMEOUT", "CANCELLED", "EXECUTOR_FAILED"],
-  "implementation": {"handler": "browser.playwright:navigate"},
+  "x-outputs": {
+    "sessionId": {
+      "label": "保存网页对象到",
+      "primary": true
+    },
+    "url": {
+      "label": "最终网址",
+      "hidden": true
+    },
+    "resourceType": {
+      "label": "资源类型",
+      "hidden": true
+    }
+  },
+  "errors": [
+    "TIMEOUT",
+    "CANCELLED",
+    "EXECUTOR_FAILED"
+  ],
+  "implementation": {
+    "handler": "browser.playwright:navigate"
+  },
   "default_timeout_seconds": 30,
   "retryable": false
 }

@@ -5,6 +5,8 @@ import sys
 from importlib import metadata as importlib_metadata
 from pathlib import Path
 
+from pydantic import ValidationError
+
 from rpa_core.capture import (
     BrowserBskCaptureSession,
     BrowserCaptureSession,
@@ -14,6 +16,7 @@ from rpa_core.capture import (
 )
 from rpa_core.catalog import load_catalog
 from rpa_core.compiler import WorkflowCompiler
+from rpa_core.compiler.compiler import WorkflowCompileError
 from rpa_core.devserver import DevServer
 from rpa_core.executors import (
     DesktopExecutor,
@@ -32,6 +35,23 @@ from rpa_core.runtime.checkpoint import CheckpointError
 
 def _load_workflow(path: Path) -> Workflow:
     return Workflow.model_validate_json(path.read_text(encoding="utf-8"))
+
+
+def _cli_fail(code: str, message: str) -> None:
+    """用法/编译类失败：结构化错误打到 stderr（devserver 会原样取出展示），不甩 traceback。"""
+    print(
+        json.dumps({"error": code, "message": message}, ensure_ascii=False),
+        file=sys.stderr,
+    )
+
+
+def _validation_summary(exc: ValidationError) -> str:
+    """把 pydantic 校验错误压成人类可读的一行摘要（取前 3 条：位置 + 原因）。"""
+    parts = []
+    for error in exc.errors()[:3]:
+        location = ".".join(str(item) for item in error.get("loc", ())) or "<root>"
+        parts.append(f"{location}: {error.get('msg', 'invalid')}")
+    return "；".join(parts) or "工作流 JSON 不符合 schema"
 
 
 def _commands_root() -> Path:
@@ -547,7 +567,18 @@ def main() -> int:
         return _cmd_unauth()
     if args.action == "install-extension":
         return _cmd_install_extension(args)
-    _root, catalog, plan = _compile(args.workflow)
+    try:
+        _root, catalog, plan = _compile(args.workflow)
+    except FileNotFoundError as exc:
+        _cli_fail("WORKFLOW_NOT_FOUND", f"工作流文件不存在：{exc}")
+        return 2
+    except WorkflowCompileError as exc:
+        # 编译失败是用法问题，不该甩 traceback：结构化输出便于 devserver 原样呈现给用户
+        _cli_fail("COMPILE_FAILED", str(exc))
+        return 2
+    except ValidationError as exc:
+        _cli_fail("INVALID_WORKFLOW", _validation_summary(exc))
+        return 2
     if args.action == "validate":
         print(json.dumps({"valid": True, "catalogDigest": catalog.digest}, indent=2))
         return 0

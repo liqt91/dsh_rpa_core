@@ -1,4 +1,4 @@
-:root { --border: #d0d7de; --muted: #656d76; --accent: #0969da; --ok: #1a7f37; --bad: #cf222e; --bg: #f6f8fa; --canvas: #e9edf1; }
+:root { --border: #d0d7de; --muted: #656d76; --accent: #0969da; --ok: #1a7f37; --bad: #cf222e; --bg: #f6f8fa; --canvas: #e9edf1; --surface: #ffffff; }
 * { box-sizing: border-box; }
 body { margin: 0; font: 14px/1.5 -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif; color: #1f2328; height: 100vh; display: flex; flex-direction: column; }
 header { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--border); background: var(--bg); flex-wrap: wrap; }
@@ -116,17 +116,36 @@ button:disabled { opacity: .45; cursor: default; }
 .props-section { margin: 12px 0 8px; padding: 4px 8px; font-size: 12px; font-weight: 600; border-radius: 4px; }
 .props-section-in { color: var(--fg); background: rgba(9, 105, 218, .08); border-left: 3px solid var(--blue, #0969da); }
 .props-section-out { color: var(--fg); background: rgba(26, 127, 55, .08); border-left: 3px solid var(--ok, #1a7f55); }
+/* 参数分组（对标影刀「常规/高级」分区）：可折叠，通道不生效字段归入底部折叠区 */
+.props-group { margin: 0 0 4px; }
+.props-group-head {
+  display: flex; align-items: center; gap: 5px; padding: 4px 2px;
+  font-size: 11px; font-weight: 600; color: var(--muted);
+  cursor: pointer; user-select: none; border-bottom: 1px dashed var(--border);
+}
+.props-group-head:hover { color: var(--fg); }
+.props-group-caret { font-size: 9px; transition: transform .12s ease; }
+.props-group.collapsed .props-group-caret { transform: rotate(-90deg); }
+.props-group-title { flex: 1; }
+.props-group-count { font-weight: 400; font-size: 10px; color: var(--faint, #8b949e); }
+.props-group-body { padding-top: 6px; }
+.props-group.collapsed .props-group-body { display: none; }
+.props-group-inactive > .props-group-head { color: var(--faint, #8b949e); border-bottom-style: dotted; }
 .field label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 2px; }
 .field .req { color: var(--bad); }
 .field input[type=text], .field input[type=number], .field select, .field textarea { width: 100%; }
 .field textarea { font-family: Consolas, monospace; min-height: 64px; }
-.expr-input-row { display: flex; align-items: stretch; gap: 0; }
+.expr-input-row { display: flex; align-items: stretch; gap: 0; position: relative; }
+/* 行内控件统一高度 30px，避免 native <select> 拉高整行。
+   只约束行内控件；绝对定位的浮层（fx-var-popup）不在此列。 */
+.expr-input-row > input, .expr-input-row > select, .expr-input-row > button { height: 30px; }
 .expr-input-row input[type=text], .expr-input-row select {
   flex: 1; min-width: 0; border-radius: 0; border-left: none; border-right: none;
+  height: 30px;
 }
 .expr-input-row input[type=text]:first-child, .expr-input-row select:first-child { border-left: 1px solid var(--border); }
 .expr-btn {
-  width: 28px; min-width: 28px; display: flex; align-items: center; justify-content: center;
+  width: 28px; min-width: 28px; height: 30px; display: flex; align-items: center; justify-content: center;
   font-size: 11px; font-weight: 600; cursor: pointer; border: 1px solid var(--border);
   background: var(--bg); color: var(--muted); transition: all 0.15s;
 }
@@ -136,7 +155,27 @@ button:disabled { opacity: .45; cursor: default; }
 .expr-btn.active { background: var(--accent); color: #fff; border-color: var(--accent); z-index: 1; }
 .expr-btn.active + input[type=text], .expr-btn.active + select { border-color: var(--accent); }
 .py-mode { background: #1e1e2e !important; color: #cdd6f4 !important; border-color: #45475a !important; }
-.fx-var-select { width: 100% !important; }
+.fx-var-popup .fx-var-popup-group {
+  padding: 4px 10px 2px; font-size: 11px; color: var(--muted);
+  font-weight: 600; user-select: none;
+}
+/* fx 标签化编辑器：文本 + [变量] chip 混排；内容换行自适应增高（min-height 起步） */
+.fx-tag-editor {
+  flex: 1; min-width: 0; box-sizing: border-box;
+  min-height: 30px; padding: 4px 8px;
+  border: 1px solid var(--accent); border-right: none; border-radius: 0 0 0 0;
+  background: var(--bg); font-size: 13px; line-height: 20px;
+  white-space: pre-wrap; word-break: break-word; overflow-y: auto;
+  outline: none;
+}
+.fx-var-chip {
+  display: inline-block; margin: 0 2px; padding: 0 6px;
+  border-radius: 4px; background: rgba(59, 130, 246, 0.12);
+  color: var(--accent); border: 1px solid rgba(59, 130, 246, 0.35);
+  font-family: Consolas, monospace; font-size: 12px; cursor: pointer;
+  user-select: none;
+}
+.fx-var-chip:hover { background: rgba(59, 130, 246, 0.2); }
 .hint { font-size: 12px; color: var(--muted); }
 .field-key { font-family: Consolas, monospace; font-size: 11px; color: var(--faint); font-weight: 400; }
 .element-pick-row { display: flex; align-items: center; gap: 6px; margin: 2px 0 4px; }
@@ -148,6 +187,32 @@ button:disabled { opacity: .45; cursor: default; }
 .session-pick { flex: 1; min-width: 0; }
 .field-hint { font-size: 11px; color: var(--muted); white-space: nowrap; }
 .field-hint.ok { color: var(--ok); }
+/* 长文案提示要能折行（字段说明/非法值告警），默认 nowrap 会溢出面板 */
+.field-hint.wrap { white-space: normal; line-height: 1.45; display: block; margin-top: 2px; }
+.field-hint.bad { color: var(--bad); }
+/* 非法值：字段整体标红 + 一键修复按钮（如「重放不安全」指令配了重试次数） */
+.field.field-invalid input, .field.field-invalid select { border-color: var(--bad); }
+.field .retry-clear-btn {
+  margin-top: 4px; padding: 3px 8px; font-size: 11px; cursor: pointer;
+  border: 1px solid var(--border); border-radius: 4px;
+  background: var(--surface, #fff); color: var(--fg);
+}
+.field .retry-clear-btn:hover { border-color: var(--bad); color: var(--bad); }
+/* x-depends 未生效字段：不隐藏、只禁用 + 说明（参数凭空消失会让用户以为指令没这个开关） */
+.field.field-inactive { opacity: .55; }
+.field.field-inactive input, .field.field-inactive select, .field.field-inactive textarea {
+  background: var(--bg); cursor: not-allowed;
+}
+.field .dep-note, .channel-preview .field-hint {
+  white-space: normal; line-height: 1.4; display: block; margin-top: 2px;
+}
+/* 通道解析预览（浏览器指令：缺省走 extension 还是 playwright） */
+.channel-preview { margin-top: -4px; }
+.channel-preview .field-hint { color: var(--accent); }
+.channel-preview .field-hint.bad { color: var(--bad); }
+/* header 扩展执行通道状态徽标 */
+.ext-channel-badge { cursor: default; }
+.ext-channel-badge.off { background: #6e7781; }
 footer { border-top: 1px solid var(--border); padding: 8px 12px; max-height: 180px; overflow-y: auto; background: var(--bg); }
 #glossary { margin-top: 6px; font-size: 12px; }
 #glossary summary { cursor: pointer; color: var(--muted); }
@@ -208,6 +273,10 @@ body.resizing-bottom * { cursor: row-resize !important; }
 }
 .ref-completion .ref-item:hover { background: var(--bg); }
 
+/* fx 变量插入浮层：fixed 挂 body，不受 #props overflow 裁剪；位置由 JS 按编辑器矩形计算。
+   必须放在 .ref-completion 之后——覆盖其 position:absolute/left/top/margin。 */
+.fx-var-popup { position: fixed; margin: 0; min-width: 200px; max-width: 340px; }
+
 /* 运行状态高亮 */
 #canvas li[data-node].run-succeeded { border-left: 4px solid var(--ok); }
 #canvas li[data-node].run-failed { border-left: 4px solid var(--bad); }
@@ -220,6 +289,13 @@ body.resizing-bottom * { cursor: row-resize !important; }
 #run-events-toggle { cursor: pointer; color: var(--accent); }
 #run-events { margin-top: 6px; max-height: 140px; overflow-y: auto; font-family: Consolas, monospace; font-size: 11px; }
 .run-event-line { padding: 1px 0; color: var(--faint); }
+/* 运行失败原因：只写「完成：failed」会让用户完全不知道没跑起来的原因 */
+#run-error {
+  margin-top: 6px; padding: 6px 8px; border-radius: 6px; white-space: pre-wrap;
+  background: rgba(207, 34, 46, .06); border-left: 3px solid var(--bad);
+  color: #1f2328; font-size: 12px; line-height: 1.5;
+}
+#run-error.hidden { display: none; }
 
 /* 元素库捕获入口 */
 .capture-entry { position: relative; display: flex; gap: 4px; align-items: center; }

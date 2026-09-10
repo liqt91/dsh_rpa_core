@@ -7,6 +7,10 @@ from pydantic import ValidationError
 
 from rpa_core.catalog import CommandCatalog
 from rpa_core.compiler.compiler import WorkflowCompileError, WorkflowCompiler
+from rpa_core.extension_exec import (
+    DEFAULT_COMMAND_TIMEOUT_SECONDS,
+    ExtensionExecHub,
+)
 from rpa_core.extension_installer import (
     ExtensionInstallError,
     clear_uninstall_block,
@@ -79,6 +83,8 @@ class DevServerApp:
         self._capture_lock = threading.RLock()
         self._capture_seq = 0
         self._runs = RunManager(store.root)
+        # 自研扩展执行通道（M15）：命令队列 + 长轮询下发（默认整个浏览器权限）
+        self._extension_hub = ExtensionExecHub()
 
     def close(self) -> None:
         self._runs.close()
@@ -143,6 +149,8 @@ class DevServerApp:
             }
             if manifest.x_outputs:
                 entry["x-outputs"] = manifest.x_outputs
+            if manifest.x_var_write:
+                entry["x-var-write"] = manifest.x_var_write
             commands.append(entry)
         return {"digest": self._catalog.digest, "commands": commands}
 
@@ -360,10 +368,22 @@ class DevServerApp:
             return None
 
     def extension_token(self, body: Any) -> dict:
-        """配对 token：PUT/POST body {"token": "..."} 显式写入；GET 返回当前状态与值。"""
-        if isinstance(body, dict) and body.get("token"):
-            self._token_path.write_text(str(body["token"]), encoding="utf-8")
-            return {"configured": True, "token": str(body["token"])}
+        """配对 token：body {"token": "..."} 写入；{"token": ""} 重置；GET 查状态与值。
+
+        重置（空 token）= 删掉本机 token 文件，扩展下次长轮询时按 TOFU 重新采纳——
+        插件重装/升级后会换 token，这一步免去用户手动删文件（就是「插件不在线」的
+        最常见成因）。
+        """
+        if isinstance(body, dict) and "token" in body:
+            token = str(body.get("token") or "").strip()
+            if not token:
+                try:
+                    self._token_path.unlink()
+                except FileNotFoundError:
+                    pass
+                return {"configured": False, "token": None, "reset": True}
+            self._token_path.write_text(token, encoding="utf-8")
+            return {"configured": True, "token": token}
         return {"configured": self._read_token() is not None,
                 "token": self._read_token()}
 
@@ -371,6 +391,7 @@ class DevServerApp:
         expected = self._read_token()
         provided = headers.get("X-Capture-Token", "")
         if not provided:
+            self._extension_hub.record_auth_failure("missing token")
             raise ApiError(403, "FORBIDDEN", "missing capture extension token")
         if expected is None:
             # TOFU（trust on first use）：loopback 本地工具，首次接触自动采纳并持久化，
@@ -378,6 +399,7 @@ class DevServerApp:
             self._token_path.write_text(provided, encoding="utf-8")
             return
         if provided != expected:
+            self._extension_hub.record_auth_failure("token mismatch")
             raise ApiError(403, "FORBIDDEN", "invalid capture extension token")
 
     def _pending_extension_session(self) -> str | None:
@@ -406,6 +428,55 @@ class DevServerApp:
             raise ApiError(404, "NOT_FOUND", f"no pending extension session: {session_id}")
         session.submit(body.get("descriptor", body))
         return {"received": True, "sessionId": session_id}
+
+    # -- 自研扩展执行通道（M15）：命令队列 + 长轮询 + 权限（默认整个浏览器）--
+
+    def set_extension_hub_url(self, base_url: str) -> None:
+        """run 子进程经该地址回连命令队列（扩展执行通道的宿主端点）。"""
+        self._runs.hub_url = base_url.rstrip("/")
+
+    def extension_hub_status(self) -> dict:
+        return self._extension_hub.status()
+
+    def extension_hub_permissions(self, body: Any) -> dict:
+        """权限查询/收窄：默认 `{"mode": "browser"}`（整个浏览器）；预留 tabs/origins。"""
+        if not body:
+            return self._extension_hub.permissions
+        if not isinstance(body, dict):
+            raise ApiError(400, "BAD_REQUEST", "permissions body must be a JSON object")
+        try:
+            return self._extension_hub.set_permissions(body)
+        except ValueError as exc:
+            raise ApiError(400, "BAD_REQUEST", str(exc)) from exc
+
+    def extension_command_next(
+        self, headers, wait_seconds: float, host_report: dict | None = None
+    ) -> dict:
+        """扩展 background 长轮询领命令（同时作为在线心跳 + 宿主身份上报）。"""
+        self._require_extension_token(headers)
+        return {"command": self._extension_hub.next_command(wait_seconds, host_report)}
+
+    def extension_command_result(self, headers, body: Any) -> dict:
+        """扩展回传命令结果。未知/已超时 id 返回 received=false（不报错）。"""
+        self._require_extension_token(headers)
+        if not isinstance(body, dict):
+            raise ApiError(400, "BAD_REQUEST", "result body must be a JSON object")
+        matched = self._extension_hub.deliver_result(body)
+        return {"received": matched, "id": body.get("id")}
+
+    def extension_command_submit(self, body: Any) -> dict:
+        """执行器侧提交命令并阻塞等结果（run 子进程 → devserver）。"""
+        if not isinstance(body, dict):
+            raise ApiError(400, "BAD_REQUEST", "request body must be a JSON object")
+        op = str(body.get("op") or "")
+        if not op:
+            raise ApiError(400, "BAD_REQUEST", "missing 'op'")
+        try:
+            timeout_seconds = float(body.get("timeoutSeconds") or DEFAULT_COMMAND_TIMEOUT_SECONDS)
+        except (TypeError, ValueError):
+            raise ApiError(400, "BAD_REQUEST", "'timeoutSeconds' must be a number") from None
+        command = {"op": op, "args": body.get("args") or {}}
+        return self._extension_hub.submit(command, max(0.1, timeout_seconds) + 1.0)
 
     # -- 扩展静默安装托管（update manifest XML + CRX，见 docs/extension-install.md）--
 
