@@ -187,6 +187,17 @@ button:disabled { opacity: .45; cursor: default; }
 .session-pick { flex: 1; min-width: 0; }
 .field-hint { font-size: 11px; color: var(--muted); white-space: nowrap; }
 .field-hint.ok { color: var(--ok); }
+/* 长文案提示要能折行（字段说明/非法值告警），默认 nowrap 会溢出面板 */
+.field-hint.wrap { white-space: normal; line-height: 1.45; display: block; margin-top: 2px; }
+.field-hint.bad { color: var(--bad); }
+/* 非法值：字段整体标红 + 一键修复按钮（如「重放不安全」指令配了重试次数） */
+.field.field-invalid input, .field.field-invalid select { border-color: var(--bad); }
+.field .retry-clear-btn {
+  margin-top: 4px; padding: 3px 8px; font-size: 11px; cursor: pointer;
+  border: 1px solid var(--border); border-radius: 4px;
+  background: var(--surface, #fff); color: var(--fg);
+}
+.field .retry-clear-btn:hover { border-color: var(--bad); color: var(--bad); }
 /* x-depends 未生效字段：不隐藏、只禁用 + 说明（参数凭空消失会让用户以为指令没这个开关） */
 .field.field-inactive { opacity: .55; }
 .field.field-inactive input, .field.field-inactive select, .field.field-inactive textarea {

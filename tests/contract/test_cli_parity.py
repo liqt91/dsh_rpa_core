@@ -202,3 +202,43 @@ def test_cli_elements_missing_and_forbidden(tmp_path, capsys):
     code, out = _run(["elements", "list", "--flow", ".."], capsys)
     assert code == 3
     assert json.loads(out)["error"] == "FORBIDDEN"
+
+
+def test_cli_run_compile_failure_is_clean_structured_error(tmp_path, capsys):
+    """编译失败要输出结构化错误 + 退出码 2，不能甩一屏 traceback。
+
+    回归点：`browser.navigate`（replay=unsafe）配了重试次数时，CLI 原来直接抛
+    WorkflowCompileError 透出 traceback；devserver 侧看不到原因，界面只剩 exit 1。
+    """
+    workflow = {
+        "schema_version": "1.0",
+        "id": "cli-unsafe",
+        "name": "unsafe retry",
+        "inputs": {},
+        "root": {
+            "type": "sequence",
+            "id": "root",
+            "children": [
+                {"type": "action", "id": "openPage", "command": "browser.navigate",
+                 "with": {"url": "https://example.test/", "transport": "extension"},
+                 "retry_count": 3},
+            ],
+        },
+    }
+    path = tmp_path / "unsafe.json"
+    path.write_text(json.dumps(workflow, ensure_ascii=False), encoding="utf-8")
+
+    old = sys.argv
+    sys.argv = ["rpa-core", "run", str(path), "--artifacts", str(tmp_path / "art")]
+    try:
+        code = cli.main()
+    finally:
+        sys.argv = old
+    captured = capsys.readouterr()
+
+    assert code == 2
+    assert "Traceback" not in captured.err
+    payload = json.loads(captured.err.strip().splitlines()[-1])
+    assert payload["error"] == "COMPILE_FAILED"
+    assert "cannot be retried" in payload["message"]
+    assert "browser.navigate" in payload["message"]

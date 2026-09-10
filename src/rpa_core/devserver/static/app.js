@@ -1259,15 +1259,12 @@ function renderProps() {
     renderControlProps(node, body);
     return;
   }
+  const manifest = manifestOf(node.command);
   body.appendChild(numberField("超时（秒，可选）", node.timeout_seconds, (v) => {
     if (v === null) delete node.timeout_seconds; else node.timeout_seconds = v;
     markDirty();
   }));
-  body.appendChild(numberField("重试次数", node.retry_count ?? 0, (v) => {
-    if (v === null || v === 0) delete node.retry_count; else node.retry_count = v;
-    markDirty();
-  }));
-  const manifest = manifestOf(node.command);
+  body.appendChild(retryCountField(node, manifest));
   const schema = manifest ? manifest.input_schema : {};
   const properties = schema.properties || {};
   const keys = Object.keys(properties);
@@ -2245,6 +2242,46 @@ function literalField(labelText, value, onChange, required, rawKey) {
   return wrapField(labelText, required, input, "引用 ${...} 或 JSON 字面量", rawKey);
 }
 
+// 重试次数：对「重放不安全」指令（如 browser.navigate 会重复开网页）直接禁用——
+// 编译器与运行时都会拒绝（Unsafe replay command cannot be retried），
+// 与其等运行时报错，不如在面板上说清楚；已有非法值给一键清除。
+function retryCountField(node, manifest) {
+  const field = numberField("重试次数", node.retry_count ?? 0, (v) => {
+    if (v === null || v === 0) delete node.retry_count; else node.retry_count = v;
+    markDirty();
+  });
+  const unsafe = !!(manifest && manifest.effect && manifest.effect.replay === "unsafe");
+  if (!unsafe) return field;
+  const input = field.querySelector("input");
+  if (input) {
+    input.disabled = true;
+    input.title = "该指令重放不安全（重复执行会产生重复副作用，如重复打开网页/重复提交），不支持重试";
+  }
+  const hint = document.createElement("span");
+  hint.className = "field-hint wrap";
+  hint.textContent = "该指令重放不安全，不支持重试";
+  field.appendChild(hint);
+  if (node.retry_count) {
+    field.classList.add("field-invalid");
+    const note = document.createElement("span");
+    note.className = "field-hint bad wrap";
+    note.textContent = `⚠ 当前值 ${node.retry_count} 会导致编译失败，流程无法运行`;
+    const fix = document.createElement("button");
+    fix.type = "button";
+    fix.className = "retry-clear-btn";
+    fix.textContent = "清除重试次数";
+    fix.addEventListener("click", () => {
+      pushUndo();
+      delete node.retry_count;
+      markDirty();
+      renderProps();
+      showCompileMessage(`已清除「重试次数」：${node.command} 重放不安全，不能重试`, true);
+    });
+    field.append(note, fix);
+  }
+  return field;
+}
+
 function numberField(labelText, value, onChange, required, rawKey) {
   const input = document.createElement("input");
   input.type = "number";
@@ -2922,6 +2959,16 @@ async function runWorkflow() {
   if (state.dirty) await saveWorkflow();
   const inputs = await collectRunInputs();
   if (inputs === null) return; // 用户在参数对话框点了取消
+  // 运行前先编译：失败直接摊开原因（否则子进程会在产出事件前退出，界面只会显示 exit 1）
+  try {
+    const check = await api("POST", "/api/compile", { workflow: state.workflow });
+    if (!check.valid) {
+      showCompileErrorsAsRunError(check.errors);
+      return;
+    }
+  } catch (err) {
+    // 编译接口不可用时不阻塞运行，由运行侧的启动失败提示兜底
+  }
   try {
     const body = { workflow: flow };
     if (Object.keys(inputs).length) body.inputs = inputs;
@@ -2938,9 +2985,20 @@ async function runWorkflow() {
 }
 
 // 运行失败时把原因摊开：只写「完成：failed」时用户完全不知道"没打开浏览器"从何而来
-function renderRunError(result) {
+// status 可选：子进程在产出任何事件前就退出（编译/校验失败）时用来显示启动失败原因。
+function renderRunError(result, status) {
   const box = $("run-error");
   if (!box) return;
+  const startup = status && status.startupError;
+  if (startup) {
+    const lines = [`运行未能启动（退出码 ${status.exitCode}）`];
+    if (startup.message) lines.push(startup.message);
+    for (const line of startup.tail || []) lines.push(line);
+    lines.push("常见原因：指令参数不合法（如「重放不安全」的指令配了重试次数）、流程校验未通过。");
+    box.textContent = lines.join("\n");
+    box.classList.remove("hidden");
+    return;
+  }
   const error = result && result.error;
   if (!error) {
     box.textContent = "";
@@ -2960,6 +3018,18 @@ function renderRunError(result) {
   box.classList.remove("hidden");
 }
 
+// 运行前先编译：编译不过就直接说原因，不白启动子进程（对照影刀：编译错误不进入运行）
+function showCompileErrorsAsRunError(errors) {
+  const box = $("run-error");
+  $("run-panel").classList.remove("hidden");
+  if (!box) return;
+  const lines = ["运行未启动：流程编译未通过"];
+  for (const err of errors || []) lines.push(`• ${err.message || err}`);
+  box.textContent = lines.join("\n");
+  box.classList.remove("hidden");
+  $("run-status-text").textContent = "未启动（编译失败）";
+}
+
 async function pollRunStatus() {
   if (!activeRunId) return;
   try {
@@ -2973,7 +3043,7 @@ async function pollRunStatus() {
       const error = result && result.error;
       const summary = error ? `${status} · ${error.code}` : status;
       $("run-status-text").textContent = `完成：${summary} (${activeRunId})`;
-      renderRunError(result);
+      renderRunError(result, s);
       $("btn-run-cancel").classList.add("hidden");
       activeRunId = null;
       loadRunEventsOnce();

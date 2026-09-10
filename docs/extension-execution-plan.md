@@ -150,3 +150,16 @@ playwright 通道同名单测/合同已存在，扩展通道照 manifest 实现�
 2. **运行面板**：失败时显示 `失败：<code> · 节点 <nodeId>` + 原因 + 通道；
 3. **立即失败 vs 等 30 秒**：扩展通道命令是「入队等扩展来领」，扩展不在线时若不预检要躺满 `timeoutMs`（默认 30s）才以 TIMEOUT 收场——用户只会看到"没打开浏览器"。现在执行前先探通道：离线 **<1s** 失败并给出「① 浏览器已打开 ② 扩展已加载并启用 ③ devserver 在运行」的清单；
 4. **TIMEOUT 只在真超时时出现**：扩展在线但没在时限内回应（浏览器挂起 / MV3 service worker 休眠），错误信息指向这一点；连接不上 hub（`RPA_EXT_HUB_URL` 端口不对）另给「重启 devserver」的说明。
+
+### 4. 「运行后什么都没发生」：先看运行面板的启动失败说明
+
+子进程在产出任何事件前退出（编译/校验失败）时，界面过去只显示 `完成：exit 1`，原因全丢在 stderr 里（而且 stderr 管道根本没被读取）。现在：
+
+- `RunManager` 持续读取子进程 stderr（顺带消除管道写满导致的阻塞风险），当**没有结果且非零退出**时，`GET /api/runs/{id}` 返回 `startupError: {message, tail}`；
+- CLI 编译/校验失败改为结构化错误（`{"error": "COMPILE_FAILED", "message": "..."}` + 退出码 2），不再甩 traceback；
+- 前端运行面板显示「运行未能启动（退出码 N）」+ 原因，并在**运行前先编译**（`POST /api/compile`，能力集与 CLI 一致），编译不过就直接摊开错误、不白启动子进程。
+
+实战触发场景：**不可重放指令配了重试次数**。`browser.navigate` 的 `effect.replay = unsafe`，编译期与运行时都会拒绝重试（重复执行会产生重复副作用，如重复开标签页），报 `Unsafe replay command cannot be retried: browser.navigate`。属性面板现在对该类指令**禁用「重试次数」**，历史非法值会标红并给出「清除重试次数」一键修复。
+
+若确实希望某类跳转可重试，属于 manifest 的 `effect.replay` 策略问题（例如把 `back/forward/reload` 视为幂等），需单独评估，不要绕过编译期校验。
+

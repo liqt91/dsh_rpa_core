@@ -51,11 +51,15 @@ class RunManager:
             text=True, encoding="utf-8", errors="replace",
             cwd=str(self._workflows_root.parent),
         )
-        entry = {"proc": proc, "stdout_lines": [], "real_run_id": None}
+        entry = {"proc": proc, "stdout_lines": [], "stderr_lines": [], "real_run_id": None}
         reader = threading.Thread(
             target=self._read_stdout, args=(proc, entry), daemon=True
         )
         reader.start()
+        err_reader = threading.Thread(
+            target=self._read_stderr, args=(proc, entry), daemon=True
+        )
+        err_reader.start()
         with self._lock:
             self._seq += 1
             run_id = f"run-{self._seq}-{proc.pid}"
@@ -112,6 +116,33 @@ class RunManager:
                 proc.kill()
         return {"runId": run_id, "cancelled": True}
 
+    def _read_stderr(self, proc: subprocess.Popen, entry: dict) -> None:
+        """必须持续读取：不读会写满管道缓冲导致子进程阻塞，且启动失败的原因全在 stderr。"""
+        assert proc.stderr is not None
+        for line in proc.stderr:
+            entry["stderr_lines"].append(line.rstrip("\n"))
+
+    def _startup_error(self, entry: dict) -> dict:
+        """子进程未产出任何结果就退出（编译/校验失败）时的原因摘要。
+
+        `rpa-core run` 编译失败会以结构化 JSON 打到 stderr（见 cli.py），
+        这里优先取它；取不到就退回 stderr 尾部原文（比如未捕获异常）。
+        """
+        lines = [line for line in entry.get("stderr_lines", []) if line.strip()]
+        message = None
+        for line in reversed(lines):
+            stripped = line.strip()
+            if not stripped.startswith("{"):
+                continue
+            try:
+                payload = json.loads(stripped)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(payload, dict) and payload.get("message"):
+                message = str(payload["message"])
+                break
+        return {"message": message, "tail": lines[-12:]}
+
     def status(self, run_id: str) -> dict:
         entry = self._procs.get(run_id)
         if entry is None:
@@ -124,12 +155,16 @@ class RunManager:
             result_file = self._artifacts / real / "result.json"
             if result_file.is_file():
                 result = json.loads(result_file.read_text(encoding="utf-8"))
-        return {
+        payload = {
             "runId": run_id,
             "running": running,
             "exitCode": proc.poll(),
             "result": result,
         }
+        # 没有结果且非零退出 = 启动即失败（编译/校验/加载失败），把 stderr 的原因带出来
+        if result is None and not running and proc.returncode not in (0, None):
+            payload["startupError"] = self._startup_error(entry)
+        return payload
 
     def events(self, run_id: str) -> dict:
         entry = self._procs.get(run_id)
