@@ -8,7 +8,7 @@
   "resources": ["browser.session"],
   "stability": "stable",
   "effect": {"kind": "read", "replay": "safe", "idempotency": "none"},
-  "input_schema": {"type": "object", "required": ["sessionId", "selector"], "properties": {"sessionId": {"type": "string"}, "selector": {"type": "string", "minLength": 1}, "timeoutMs": {"type": "integer", "minimum": 1}}, "additionalProperties": false},
+  "input_schema": {"type": "object", "required": ["sessionId", "selector"], "properties": {"sessionId": {"type": "string"}, "selector": {"type": "string", "minLength": 1}, "infoType": {"type": "string", "enum": ["text", "html", "outerHTML", "value", "href"], "description": "信息类型（对标影刀「获取元素信息」）：text=可见文本（默认）；html=元素内部 HTML；outerHTML=元素完整 HTML；value=表单值；href=链接地址", "default": "text"}, "timeoutMs": {"type": "integer", "minimum": 1}}, "additionalProperties": false},
   "output_schema": {"type": "object", "required": ["value"], "properties": {"value": {"type": "string"}}, "additionalProperties": false},
   "x-outputs": {
     "value": {"label": "文本内容", "primary": true}

@@ -1,0 +1,84 @@
+{
+  "version": "1.0.0",
+  "executor": "browser.playwright",
+  "resources": [
+    "browser.session"
+  ],
+  "stability": "stable",
+  "id": "browser.drag",
+  "kind": "action",
+  "risk": "browser-control",
+  "capabilities": [
+    "browser.control"
+  ],
+  "effect": {
+    "kind": "unsafe-write",
+    "replay": "unsafe",
+    "idempotency": "none"
+  },
+  "input_schema": {
+    "type": "object",
+    "required": [
+      "sessionId",
+      "selector",
+      "targetSelector"
+    ],
+    "properties": {
+      "sessionId": {
+        "type": "string"
+      },
+      "selector": {
+        "type": "string",
+        "minLength": 1,
+        "description": "被拖拽元素"
+      },
+      "targetSelector": {
+        "type": "string",
+        "minLength": 1,
+        "description": "拖拽目标位置元素"
+      },
+      "timeoutMs": {
+        "type": "integer",
+        "minimum": 1
+      }
+    },
+    "additionalProperties": false
+  },
+  "output_schema": {
+    "type": "object",
+    "required": [
+      "matchedCount",
+      "sessionId"
+    ],
+    "properties": {
+      "matchedCount": {
+        "type": "integer",
+        "minimum": 1
+      },
+      "sessionId": {
+        "type": "string"
+      }
+    },
+    "additionalProperties": false
+  },
+  "x-outputs": {
+    "matchedCount": {
+      "label": "匹配数量"
+    },
+    "sessionId": {
+      "label": "浏览器实例"
+    }
+  },
+  "errors": [
+    "ELEMENT_NOT_FOUND",
+    "SESSION_NOT_FOUND",
+    "TIMEOUT",
+    "CANCELLED",
+    "EXECUTOR_FAILED"
+  ],
+  "implementation": {
+    "handler": "browser.playwright:drag"
+  },
+  "default_timeout_seconds": 15,
+  "retryable": false
+}

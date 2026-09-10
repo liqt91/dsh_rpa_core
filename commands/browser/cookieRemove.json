@@ -1,0 +1,64 @@
+{
+  "version": "1.0.0",
+  "executor": "browser.playwright",
+  "resources": [
+    "browser.session"
+  ],
+  "stability": "stable",
+  "id": "browser.cookieRemove",
+  "kind": "action",
+  "risk": "browser-control",
+  "capabilities": [
+    "browser.control"
+  ],
+  "effect": {
+    "kind": "unsafe-write",
+    "replay": "unsafe",
+    "idempotency": "none"
+  },
+  "input_schema": {
+    "type": "object",
+    "required": [
+      "sessionId"
+    ],
+    "properties": {
+      "sessionId": {
+        "type": "string"
+      },
+      "name": {
+        "type": "string",
+        "minLength": 1,
+        "description": "要删除的 Cookie 名称；缺省则清空全部 Cookie"
+      }
+    },
+    "additionalProperties": false
+  },
+  "output_schema": {
+    "type": "object",
+    "required": [
+      "sessionId"
+    ],
+    "properties": {
+      "sessionId": {
+        "type": "string"
+      }
+    },
+    "additionalProperties": false
+  },
+  "x-outputs": {
+    "sessionId": {
+      "label": "浏览器实例"
+    }
+  },
+  "errors": [
+    "SESSION_NOT_FOUND",
+    "TIMEOUT",
+    "CANCELLED",
+    "EXECUTOR_FAILED"
+  ],
+  "implementation": {
+    "handler": "browser.playwright:cookieRemove"
+  },
+  "default_timeout_seconds": 15,
+  "retryable": false
+}

@@ -5,18 +5,20 @@
 用途：以影刀「网页自动化」44 条指令为基准，逐条映射 rpa_core 现有 `browser.*` 命令（14 条），明确已覆盖 / 部分覆盖 / 缺失，为命令面补齐提供清单。
 数据来源：影刀官方文档实机抓取，原始正文 + 参数截图见 `docs/yingdao-cmds/<指令名>.md`（44 条，177 张参数截图）；指令模型抽象见 `docs/yingdao-command-model.md`。
 
+> **落地记录 2026-09-10**：P0+P1 建议已采纳实现——新增 `browser.waitLoad / scroll / check / cookieSet / cookieGetAll / cookieGet / cookieRemove / attach / listPages / drag`（catalog 55→65），扩展 `browser.navigate`（action=goto/back/forward/reload）、`browser.getText`（infoType=text/html/outerHTML/value/href）、`browser.waitFor`（state=visible/hidden/detached/attached）。真机 E2E 24 项断言全部通过。P2 待元素句柄/监听协议设计后实施。
+
 ---
 
 ## 一、覆盖总览
 
 | 状态 | 条数 | 占比 | 说明 |
 |---|---|---|---|
-| ✅ 已覆盖 | 9 | 20% | rpa_core 有直接对应命令，参数面基本对齐 |
-| 🟡 部分覆盖 | 13 | 30% | 有相近命令但参数/语义有缺口 |
-| ❌ 缺失 | 22 | 50% | rpa_core 无对应命令 |
-| 合计 | **44** | 100% | rpa_core 现有 `browser.*` 共 14 条 |
+| ✅ 已覆盖 | 22 | 50% | rpa_core 有直接对应命令，参数面基本对齐 |
+| 🟡 部分覆盖 | 8 | 18% | 有相近命令但参数/语义有缺口 |
+| ❌ 缺失 | 14 | 32% | rpa_core 无对应命令 |
+| 合计 | **44** | 100% | rpa_core 现有 `browser.*` 共 24 条 |
 
-> 结论：**元素交互主链路（打开→点击→输入→下拉→截图→JS→上传）已对齐**；缺口集中在 **Cookie 管理、页面级导航/滚动控制、元素信息读取、数据抓取、网络监听** 五块。
+> 结论（2026-09-10 P0+P1 落地后更新）：元素交互主链路、Cookie 管理、页面级导航/滚动/等待、元素信息读取、多标签管理、拖拽均已对齐（14 条新增 + 3 条扩展）；剩余缺口集中在 **元素对象句柄、批量数据抓取、网络监听、系统级对话框细节**（均依赖 P2 架构决策，见 §四）。
 
 ---
 
@@ -30,12 +32,12 @@
 |---|---|---|---|---|---|
 | 1 | [打开网页](yingdao-cmds/打开网页.md) | 浏览器类型(7值枚举)、网址、加载超时、命令行参数（→网页对象） | `browser.navigate` | ✅ | 参数面差异：影刀「浏览器类型」是用户语义枚举（cef/chrome/edge/ie/360se/firefox/QQBrowser）；我们拆成 `transport`(playwright/bsk)+`channel`。输出同样为会话对象 |
 | 2 | [选择浏览器用户](yingdao-cmds/选择浏览器用户.md) | 浏览器类型（→用户配置对象） | — | ❌ | 多账号/用户配置文件切换，依赖登录态的场景需要 |
-| 3 | [获取已打开的网页对象](yingdao-cmds/获取已打开的网页对象.md) | 浏览器类型、标题/URL匹配（→网页对象） | — | 🟡 | `navigate` 的 `browserInstanceId` 可复用实例，但无「按标题/URL 匹配已开页面并 attach」的用户语义 |
+| 3 | [获取已打开的网页对象](yingdao-cmds/获取已打开的网页对象.md) | 浏览器类型、标题/URL匹配（→网页对象） | `browser.attach` | ✅ | 同 context 按 title/url 子串或正则匹配，产出独立网页会话 |
 | 4 | [关闭网页](yingdao-cmds/关闭网页.md) | 操作(关闭指定/关闭所有)、终止浏览器进程、忽略确认离开对话框 | `browser.close` | 🟡 | 有 `forceKill`/`ignoreUnload`；缺「关闭所有网页」（跨会话批量） |
-| 5 | [跳转至新网址](yingdao-cmds/跳转至新网址.md) | 网页对象、跳转方式(新页面/**后退/前进/重新加载**)、加载超时 | `browser.navigate` | 🟡 | navigate 只能 goto url；缺 back/forward/reload |
-| 6 | [等待网页加载完成](yingdao-cmds/等待网页加载完成.md) | 网页对象、超时时间(s) | — | ❌ | 我们的 `waitFor` 是元素级；缺页面级 load 等待 |
+| 5 | [跳转至新网址](yingdao-cmds/跳转至新网址.md) | 网页对象、跳转方式(新页面/**后退/前进/重新加载**)、加载超时 | `browser.navigate` | ✅ | `action=goto/back/forward/reload`（bsk 通道经 history JS 支持） |
+| 6 | [等待网页加载完成](yingdao-cmds/等待网页加载完成.md) | 网页对象、超时时间(s) | `browser.waitLoad` | ✅ | state=load/domcontentloaded/networkidle |
 | 7 | [停止网页加载](yingdao-cmds/停止网页加载.md) | 网页对象 | — | ❌ | 对应 `page.stopLoading` 类原语 |
-| 8 | [鼠标滚动网页](yingdao-cmds/鼠标滚动网页.md) | 网页对象、在指定元素上滚动、位置(顶/底/指定/一屏)、平滑/瞬间 | — | ❌ | 长页面加载触发懒加载的必备指令 |
+| 8 | [鼠标滚动网页](yingdao-cmds/鼠标滚动网页.md) | 网页对象、在指定元素上滚动、位置(顶/底/指定/一屏)、平滑/瞬间 | `browser.scroll` | ✅ | position=top/bottom/point/page + 可选元素内滚动 + smooth |
 | 9 | [自动处理弹框(web)](yingdao-cmds/自动处理弹框_web.md) | 网页对象、处理方式(接受/Dismiss) | `browser.handleDialog` | 🟡 | 影刀是「挂自动策略，弹了就按方式处理」；我们是「弹窗出现后主动调用一次」。语义不同，建议补 auto 模式 |
 
 ### 2. 元素操作（11 条）
@@ -47,11 +49,11 @@
 | 12 | [填写输入框(web)](yingdao-cmds/填写输入框_web.md) | 网页对象、操作目标、内容、输入模式(set_value/模拟人工/逐字按键)、追加、Enter、执行后延迟、等待存在(s) | `browser.input` | ✅ | mode/append/pressEnter/keyIntervalMs/postDelayMs 对齐 |
 | 13 | [填写密码框(web)](yingdao-cmds/填写密码框_web.md) | 同输入框，值为密码 | `browser.input` | 🟡 | input 可填，但无密码框专用语义（防泄露/掩码展示），编辑器体验差异 |
 | 14 | [设置下拉框(web)](yingdao-cmds/设置下拉框_web.md) | 网页对象、操作目标、选择方式(按文字/索引/值)、等待存在(s) | `browser.select` | ✅ | `selectBy` 对齐 |
-| 15 | [设置复选框(web)](yingdao-cmds/设置复选框_web.md) | 网页对象、操作目标、操作(勾选/取消/**反选**)、延迟、等待存在(s) | — | 🟡 | 可用 click 凑合，但「反选/幂等勾选到目标状态」无保证 |
+| 15 | [设置复选框(web)](yingdao-cmds/设置复选框_web.md) | 网页对象、操作目标、操作(勾选/取消/**反选**)、延迟、等待存在(s) | `browser.check` | ✅ | operation=check/uncheck/toggle，幂等到目标状态 |
 | 16 | [设置元素值(web)](yingdao-cmds/设置元素值_web.md) | 网页对象、操作目标、设置方式(value/innerText/…) | — | ❌ | 直改 DOM 属性绕过事件，补 JS 事件触发可选 |
 | 17 | [设置元素属性(web)](yingdao-cmds/设置元素属性_web.md) | 网页对象、操作目标、属性名、属性值 | — | ❌ | 可由 executeScript 变通，但缺结构化命令 |
-| 18 | [拖拽元素(web)](yingdao-cmds/拖拽元素_web.md) | 网页对象、操作目标、目标位置、拖拽方式 | — | ❌ | 滑块/看板类场景必备 |
-| 19 | [等待元素(web)](yingdao-cmds/等待元素_web.md) | 网页对象、操作目标、条件(**出现/消失/可见/不可见**)、超时(s) | `browser.waitFor` | 🟡 | 只有出现等待；缺状态枚举（消失/可见/不可见） |
+| 18 | [拖拽元素(web)](yingdao-cmds/拖拽元素_web.md) | 网页对象、操作目标、目标位置、拖拽方式 | `browser.drag` | ✅ | selector → targetSelector（Playwright drag_to） |
+| 19 | [等待元素(web)](yingdao-cmds/等待元素_web.md) | 网页对象、操作目标、条件(**出现/消失/可见/不可见**)、超时(s) | `browser.waitFor` | ✅ | state=visible/hidden/detached/attached |
 | 20 | [获取元素对象(web)](yingdao-cmds/获取元素对象_web.md) | 网页对象、操作目标（→元素对象变量） | — | ❌ | 影刀有独立「元素对象」句柄可复用（配合关联元素/相似元素）；我们每条命令直接用 selector，无元素句柄概念 |
 
 ### 3. 数据提取（9 条）
@@ -59,12 +61,12 @@
 | # | 影刀指令 | 影刀核心参数（→输出） | rpa_core 对应 | 状态 | 差距备注 |
 |---|---|---|---|---|---|
 | 21 | [获取元素位置(web)](yingdao-cmds/获取元素位置_web.md) | 网页对象、操作目标（→x,y,宽,高） | — | ❌ | 坐标级校验/人类操作模拟依赖 |
-| 22 | [获取元素信息(web)](yingdao-cmds/获取元素信息_web.md) | 操作目标、信息类型(文本/源代码/值/链接地址)、智能补全前缀（→字符串） | `browser.getText` | 🟡 | 只有 text；缺 html/outerHTML/value/href 枚举（可并入一个 getInfo 或扩展 getText） |
+| 22 | [获取元素信息(web)](yingdao-cmds/获取元素信息_web.md) | 操作目标、信息类型(文本/源代码/值/链接地址)、智能补全前缀（→字符串） | `browser.getText` | ✅ | infoType=text/html/outerHTML/value/href（bsk 通道仅 text） |
 | 23 | [获取下拉框选项(web)](yingdao-cmds/获取下拉框选项_web.md) | 网页对象、操作目标（→选项列表） | — | ❌ | 与 select 成对，动态选择场景常用 |
 | 24 | [获取相似元素列表(web)](yingdao-cmds/获取相似元素列表_web.md) | 网页对象、操作目标（→相似元素列表） | `browser.queryAll` | 🟡 | queryAll 返回文本列表；影刀返回「元素对象列表」可逐个操作（依赖 #20 元素句柄） |
 | 25 | [获取关联元素(web)](yingdao-cmds/获取关联元素_web.md) | 操作目标、关联方式(父/子/兄弟/前一个/后一个)（→关联元素对象） | — | ❌ | 依赖元素对象模型 |
 | 26 | [获取网页信息](yingdao-cmds/获取网页信息.md) | 网页对象（→标题/URL/文本长度） | — | 🟡 | executeScript 可变通；建议给 navigate 输出补 title 或加独立命令 |
-| 27 | [获取网页对象列表](yingdao-cmds/获取网页对象列表.md) | —（→网页对象列表） | — | ❌ | 多标签页管理的基础 |
+| 27 | [获取网页对象列表](yingdao-cmds/获取网页对象列表.md) | —（→网页对象列表） | `browser.listPages` | ✅ | 输出同 context 全部标签页 index/url/title |
 | 28 | [获取滚动条位置](yingdao-cmds/获取滚动条位置.md) | 网页对象（→滚动位置） | — | ❌ | 与 #8 滚动成对 |
 | 29 | [网页截图](yingdao-cmds/网页截图.md) | 截图区域(元素/可视区域/**整个网页**)、保存文件夹、随机文件名、剪切板输出（→文件路径） | `browser.screenshot` | ✅ | selector(元素)/fullPage(整页) 对齐；缺「保存到剪切板」输出方式 |
 
@@ -78,10 +80,10 @@
 
 | # | 影刀指令 | 影刀核心参数（→输出） | rpa_core 对应 | 状态 | 差距备注 |
 |---|---|---|---|---|---|
-| 31 | [设置Cookie](yingdao-cmds/设置Cookie.md) | 网页对象、浏览器类型、cookie数据 | — | ❌ | 登录态复用（跳过登录）核心指令 |
-| 32 | [获取筛选所有Cookie](yingdao-cmds/获取筛选所有Cookie.md) | 筛选(domain/path/name)（→Cookie列表） | — | ❌ | |
-| 33 | [获取指定Cookie信息](yingdao-cmds/获取指定Cookie信息.md) | cookie名称（→cookie值） | — | ❌ | |
-| 34 | [移除指定Cookie](yingdao-cmds/移除指定Cookie.md) | cookie名称 | — | ❌ | |
+| 31 | [设置Cookie](yingdao-cmds/设置Cookie.md) | 网页对象、浏览器类型、cookie数据 | `browser.cookieSet` | ✅ | Cookie 对象数组（name/value + url 或 domain+path） |
+| 32 | [获取筛选所有Cookie](yingdao-cmds/获取筛选所有Cookie.md) | 筛选(domain/path/name)（→Cookie列表） | `browser.cookieGetAll` | ✅ | name 精确 + domain/path 子串筛选 |
+| 33 | [获取指定Cookie信息](yingdao-cmds/获取指定Cookie信息.md) | cookie名称（→cookie值） | `browser.cookieGet` | ✅ | |
+| 34 | [移除指定Cookie](yingdao-cmds/移除指定Cookie.md) | cookie名称 | `browser.cookieRemove` | ✅ | 缺省 name = 清空全部 |
 
 ### 6. 网络请求监听（3 条）
 
@@ -118,22 +120,22 @@
 
 ---
 
-## 四、补齐建议（按优先级）
+## 四、补齐建议与落地状态
 
-**P0 — 高频主链路缺口**
-- 页面导航组：`browser.back/forward/reload`（或 navigate 加 `action` 参数）、`browser.waitLoad`（页面级等待）、`browser.scroll`
-- 元素信息组：`getText` 扩展为 `getInfo`（text/html/value/href 枚举）、`waitFor` 加状态枚举（visible/hidden/detached）
-- `browser.check`（复选框：勾选/取消/反选幂等语义）
+**P0 — 高频主链路缺口（✅ 已落地 2026-09-10）**
+- ✅ 页面导航组：navigate 加 `action=goto/back/forward/reload`；`browser.waitLoad`；`browser.scroll`
+- ✅ 元素信息组：`getText` 加 `infoType`（text/html/outerHTML/value/href）；`waitFor` 加 `state`（visible/hidden/detached/attached）
+- ✅ `browser.check`（勾选/取消/反选幂等语义）
 
-**P1 — 登录态与多标签**
-- Cookie 四件套（set/getAll/get/remove）——登录态复用是最常见客户诉求
-- `browser.attach`（按标题/URL 匹配已开页面）、`browser.listPages`（网页对象列表）
-- `browser.drag`（拖拽）
+**P1 — 登录态与多标签（✅ 已落地 2026-09-10）**
+- ✅ Cookie 四件套：`browser.cookieSet / cookieGetAll / cookieGet / cookieRemove`
+- ✅ `browser.attach`（按标题/URL 匹配已开页面，产出独立会话）、`browser.listPages`
+- ✅ `browser.drag`
 
-**P2 — 进阶能力（依赖元素对象模型/监听协议）**
-- 元素句柄模型（获取元素对象/关联元素/相似元素对象列表）
-- 批量数据抓取（结构化表格）
-- 网络监听三件套（配合自研扩展 background 通道）
-- 对话框 auto 策略模式 + alert 内容回读
+**P2 — 进阶能力（待设计，依赖元素对象模型/监听协议）**
+- [ ] 元素句柄模型（获取元素对象/关联元素/相似元素对象列表）
+- [ ] 批量数据抓取（结构化表格）
+- [ ] 网络监听三件套（配合自研扩展 background 通道）
+- [ ] 对话框 auto 策略模式 + alert 内容回读
 
-> 每补一条命令，同步在 `commands/browser/` 落 manifest，并回填本表状态列。
+**实现边界说明**：新命令均为 playwright 通道一等实现；bsk 通道能力受限（CSS only），waitFor 仅 visible、getText 仅 text、navigate 的 back/forward/reload 经 history JS 支持，其余新命令在 bsk 会话下显式报 COMMAND_NOT_FOUND（与 upload/download/handleDialog 现状一致）。

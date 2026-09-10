@@ -1,6 +1,6 @@
 {
   "id": "browser.navigate",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "executor": "browser.playwright",
   "kind": "action",
   "risk": "browser-control",
@@ -10,8 +10,14 @@
   "effect": {"kind": "session", "replay": "unsafe", "idempotency": "none"},
   "input_schema": {
     "type": "object",
-    "required": ["url"],
+    "required": [],
     "properties": {
+      "action": {
+        "type": "string",
+        "enum": ["goto", "back", "forward", "reload"],
+        "description": "跳转方式（对标影刀「跳转至新网址」）：goto=打开新网页（默认，需 url，启动/复用浏览器）；back=后退；forward=前进；reload=重新加载（刷新），三者需提供已有 sessionId",
+        "default": "goto"
+      },
       "url": {"type": "string", "x-fx": true},
       "timeoutMs": {"type": "integer", "minimum": 1},
       "channel": {

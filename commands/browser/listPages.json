@@ -1,0 +1,82 @@
+{
+  "version": "1.0.0",
+  "executor": "browser.playwright",
+  "resources": [
+    "browser.session"
+  ],
+  "stability": "stable",
+  "id": "browser.listPages",
+  "kind": "query",
+  "risk": "read",
+  "capabilities": [
+    "browser.read"
+  ],
+  "effect": {
+    "kind": "read",
+    "replay": "safe",
+    "idempotency": "none"
+  },
+  "input_schema": {
+    "type": "object",
+    "required": [
+      "sessionId"
+    ],
+    "properties": {
+      "sessionId": {
+        "type": "string"
+      }
+    },
+    "additionalProperties": false
+  },
+  "output_schema": {
+    "type": "object",
+    "required": [
+      "pages",
+      "count"
+    ],
+    "properties": {
+      "pages": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "index": {
+              "type": "integer"
+            },
+            "url": {
+              "type": "string"
+            },
+            "title": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "count": {
+        "type": "integer",
+        "minimum": 0
+      }
+    },
+    "additionalProperties": false
+  },
+  "x-outputs": {
+    "pages": {
+      "label": "网页列表",
+      "primary": true
+    },
+    "count": {
+      "label": "数量"
+    }
+  },
+  "errors": [
+    "SESSION_NOT_FOUND",
+    "TIMEOUT",
+    "CANCELLED",
+    "EXECUTOR_FAILED"
+  ],
+  "implementation": {
+    "handler": "browser.playwright:listPages"
+  },
+  "default_timeout_seconds": 15,
+  "retryable": false
+}

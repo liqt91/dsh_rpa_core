@@ -1,0 +1,95 @@
+{
+  "version": "1.0.0",
+  "executor": "browser.playwright",
+  "resources": [
+    "browser.session"
+  ],
+  "stability": "stable",
+  "id": "browser.scroll",
+  "kind": "action",
+  "risk": "browser-control",
+  "capabilities": [
+    "browser.control"
+  ],
+  "effect": {
+    "kind": "unsafe-write",
+    "replay": "unsafe",
+    "idempotency": "none"
+  },
+  "input_schema": {
+    "type": "object",
+    "required": [
+      "sessionId",
+      "position"
+    ],
+    "properties": {
+      "sessionId": {
+        "type": "string"
+      },
+      "position": {
+        "type": "string",
+        "enum": [
+          "top",
+          "bottom",
+          "point",
+          "page"
+        ],
+        "description": "滚动位置：top=顶部 bottom=底部 point=指定坐标(x,y) page=向下滚动一屏",
+        "default": "bottom"
+      },
+      "selector": {
+        "type": "string",
+        "minLength": 1,
+        "description": "可选：在指定元素内部滚动（元素有独立滚动条时），缺省滚动整个页面"
+      },
+      "x": {
+        "type": "number",
+        "description": "横向目标位置（position=point 时生效）"
+      },
+      "y": {
+        "type": "number",
+        "description": "纵向目标位置（position=point 时生效）"
+      },
+      "smooth": {
+        "type": "boolean",
+        "description": "平滑滚动（区别于瞬间滚动）",
+        "default": false
+      },
+      "timeoutMs": {
+        "type": "integer",
+        "minimum": 1
+      }
+    },
+    "additionalProperties": false
+  },
+  "output_schema": {
+    "type": "object",
+    "required": [
+      "scrollY"
+    ],
+    "properties": {
+      "scrollY": {
+        "type": "number"
+      }
+    },
+    "additionalProperties": false
+  },
+  "x-outputs": {
+    "scrollY": {
+      "label": "纵向滚动位置",
+      "primary": true
+    }
+  },
+  "errors": [
+    "ELEMENT_NOT_FOUND",
+    "SESSION_NOT_FOUND",
+    "TIMEOUT",
+    "CANCELLED",
+    "EXECUTOR_FAILED"
+  ],
+  "implementation": {
+    "handler": "browser.playwright:scroll"
+  },
+  "default_timeout_seconds": 15,
+  "retryable": false
+}
