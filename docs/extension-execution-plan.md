@@ -121,6 +121,15 @@ playwright 通道同名单测/合同已存在，扩展通道照 manifest 实现�
 | `扩展通道：配对失败` | `online:false, authFailures>0` | **扩展在轮询，但 token 与本机 devserver 不匹配** | 插件面板点「重置配对」（或删 `workflows/.capture-extension-token`），3~5 秒自动恢复 |
 | `扩展通道：在线（Edge）` | `online:true, host.browser` | 通道可用 | — |
 
+### 1.5 属性面板的参数分区（对标影刀「常规/高级」）
+
+「打开网页」参数较多（12 个），且很多只属于某一条通道。属性面板（navigate 2.5.0）按 manifest `input_schema.x-param-groups` 分区渲染：
+
+- **常规**：跳转方式、网址；**浏览器**：执行通道 + 浏览器类型（"指定 Edge" 就在这两个下拉里，选项已中文化）；
+- **高级 / 启动选项（playwright）/ BrowserSkill 三方件（bsk）**：可折叠，组内任一字段填过值时自动展开；
+- **其他通道参数（N）**：x-depends 不满足的字段自动归入底部折叠区，不再平铺占地方；切换通道后重渲染自动归位；
+- 未声明分组的指令仍按原平铺渲染，`x-param-groups` 是纯增量能力（放在 input_schema 内，随 catalog 下发，无需后端改动）。
+
 ### 2. 「配对失败」是最隐蔽的一类（实战踩过）
 
 配对走 TOFU：本机 token 文件 `workflows/.capture-extension-token` 只认**第一次**接触的 token。扩展侧 token 存在浏览器 `chrome.storage.local`：

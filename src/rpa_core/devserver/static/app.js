@@ -13,6 +13,7 @@ const state = {
   elementsSeen: null, // 最近一次渲染的元素名集合（捕获自动刷新差集用）
   collapsedGroups: new Set(), // 指令面板已收起的分组名（默认全展开，点击收起）
   extChannel: null, // 最近一次 /api/ext/status 结果 {online, host}
+  paramGroupsOpen: new Map(), // 属性面板参数分组的展开状态（key: `${nodeId}|${分组名}`；未记录时按分组缺省/是否已填值判定）
 };
 let dragState = null; // {type:"new", command} | {type:"new", flow} | {type:"move", path}
 let pendingDrop = null; // {containerPath, key, index}
@@ -1286,8 +1287,15 @@ function renderProps() {
     }));
   } else {
     const required = new Set(schema.required || []);
-    for (const key of keys) {
-      body.appendChild(schemaField(node, key, properties[key], required.has(key)));
+    const groups = Array.isArray(schema["x-param-groups"]) ? schema["x-param-groups"] : null;
+    if (groups && groups.length) {
+      // 对标影刀「常规/高级」分区：按 manifest x-param-groups 分组渲染，
+      // 当前通道不生效的字段自动归入底部折叠区（切换通道后重新渲染归位）。
+      renderGroupedFields(body, node, schema, properties, required, groups);
+    } else {
+      for (const key of keys) {
+        body.appendChild(schemaField(node, key, properties[key], required.has(key)));
+      }
     }
     // 通道解析预览：浏览器指令缺省走 extension 还是 playwright（与执行器同语义）
     const transportInput = body.querySelector('[data-field="transport"]');
@@ -1342,6 +1350,96 @@ function renderProps() {
   // 字段联动：监听所有 input 变化，重新评估依赖关系
   body.addEventListener("input", () => applyDependencies(body, node, schema));
   body.addEventListener("change", () => applyDependencies(body, node, schema));
+}
+
+// ---------------------------------------------------------------------------
+// 参数分组（对标影刀「常规/高级」分区）
+// ---------------------------------------------------------------------------
+
+// 分组规划：纯函数（无 DOM），判定各字段的归属分组与展开缺省——
+// node 侧测试与前端渲染共用同一套规则（scripts/check_param_groups.mjs）。
+// 规则：
+// - x-depends 未满足的字段不进其声明分组，归入底部「其他通道参数」折叠区（通道切换后重渲染自动归位）
+// - 未被 x-param-groups 声明的字段归入「其他」
+// - collapsed 组缺省收起，但组内任一字段已填值时自动展开（用户填过的东西不藏起来）
+function paramGroupPlan(schema, properties, withArgs, groups) {
+  const deps = schema["x-depends"] || {};
+  const active = [];
+  const inactive = [];
+  for (const key of Object.keys(properties)) {
+    const cond = deps[key];
+    if (!cond) { active.push(key); continue; }
+    const ctrlKey = Object.keys(cond)[0];
+    const isActive = (withArgs ? withArgs[ctrlKey] : undefined) === cond[ctrlKey];
+    (isActive ? active : inactive).push(key);
+  }
+  const claimed = new Set();
+  const plan = [];
+  for (const group of groups) {
+    const fields = (group.fields || []).filter(
+      (k) => properties[k] && active.includes(k) && !claimed.has(k)
+    );
+    if (!fields.length) continue;
+    for (const k of fields) claimed.add(k);
+    const hasValue = fields.some((k) => {
+      const v = withArgs ? withArgs[k] : undefined;
+      return v !== undefined && v !== null && v !== "";
+    });
+    plan.push({ label: group.label || "参数", fields, open: group.collapsed ? hasValue : true });
+  }
+  const rest = active.filter((k) => !claimed.has(k));
+  if (rest.length) plan.push({ label: "其他", fields: rest, open: true });
+  if (inactive.length) {
+    plan.push({ label: "__inactive__", fields: inactive, open: false });
+  }
+  return plan;
+}
+
+function renderGroupedFields(body, node, schema, properties, required, groups) {
+  const plan = paramGroupPlan(schema, properties, node["with"] || {}, groups);
+  for (const part of plan) {
+    body.appendChild(paramGroupSection(node, part, properties, required));
+  }
+}
+
+function paramGroupSection(node, part, properties, required) {
+  const wrap = document.createElement("div");
+  wrap.className = "props-group";
+  if (part.label === "__inactive__") wrap.classList.add("props-group-inactive");
+  const key = `${node.id}|${part.label}`;
+  const stored = state.paramGroupsOpen.get(key);
+  const open = stored === undefined ? part.open : stored;
+  if (!open) wrap.classList.add("collapsed");
+
+  const head = document.createElement("div");
+  head.className = "props-group-head";
+  const caret = document.createElement("span");
+  caret.className = "props-group-caret";
+  caret.textContent = "▾";
+  const title = document.createElement("span");
+  title.className = "props-group-title";
+  title.textContent = part.label === "__inactive__"
+    ? `其他通道参数（${part.fields.length}）`
+    : part.label;
+  const count = document.createElement("span");
+  count.className = "props-group-count";
+  count.textContent = String(part.fields.length);
+  head.append(caret, title, count);
+  if (part.label === "__inactive__") {
+    head.title = "这些参数属于其他执行通道，当前通道下不生效；切换通道后自动归位到所属分组";
+  }
+
+  const bodyEl = document.createElement("div");
+  bodyEl.className = "props-group-body";
+  for (const k of part.fields) {
+    bodyEl.appendChild(schemaField(node, k, properties[k], required.has(k)));
+  }
+  head.addEventListener("click", () => {
+    const nowCollapsed = wrap.classList.toggle("collapsed");
+    state.paramGroupsOpen.set(key, !nowCollapsed);
+  });
+  wrap.append(head, bodyEl);
+  return wrap;
 }
 
 // 字段联动：根据 x-depends 声明，禁用/启用依赖字段
@@ -2175,12 +2273,19 @@ function selectField(labelText, propSchema, required, value, onChange, rawKey) {
   const input = document.createElement("select");
   const empty = document.createElement("option");
   empty.value = "";
-  empty.textContent = rawKey === "transport" ? "（缺省：自研插件优先）" : "（未设置）";
+  // 空选项文案按字段语义区分：transport/channel 的"不填"有明确缺省行为，说清楚而不是"未设置"
+  const emptyLabels = {
+    transport: "（缺省：自研插件优先）",
+    channel: "（缺省：跟随扩展宿主）",
+  };
+  empty.textContent = emptyLabels[rawKey] || "（未设置）";
   input.appendChild(empty);
   for (const option of propSchema.enum) {
     const element = document.createElement("option");
     element.value = String(option);
-    element.textContent = (I18N && I18N.ops[option]) || String(option);
+    // 选项文案优先级：manifest x-enum-labels（指令自带，随 catalog 下发）> i18n ops > 原值
+    const labels = propSchema["x-enum-labels"];
+    element.textContent = (labels && labels[option]) || (I18N && I18N.ops[option]) || String(option);
     input.appendChild(element);
   }
   input.value = value === undefined ? "" : String(value);

@@ -173,7 +173,7 @@ window.RPA_I18N = {
     channel: "浏览器类型",
     userAgent: "User-Agent",
     userDataDir: "用户数据目录",
-    transport: "传输方式",
+    transport: "执行通道",
     browserInstanceId: "浏览器实例 ID",
     keepOpen: "结束后保持打开",
     item_var: "循环变量名",
