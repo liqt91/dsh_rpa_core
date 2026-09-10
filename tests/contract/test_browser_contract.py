@@ -60,6 +60,13 @@ def test_browser_session_commands_fail_explicitly_without_session():
         ("browser.cookieRemove", {}),
         ("browser.listPages", {}),
         ("browser.drag", {"selector": "#a", "targetSelector": "#b"}),
+        # 纯 DOM 原语命令（对标影刀）：会话缺失必须显式报 SESSION_NOT_FOUND
+        ("browser.stopLoading", {}),
+        ("browser.setValue", {"selector": "#v", "value": "x"}),
+        ("browser.setAttribute", {"selector": "#v", "name": "data-x", "value": "y"}),
+        ("browser.getPosition", {"selector": "#v"}),
+        ("browser.getSelectOptions", {"selector": "#sel"}),
+        ("browser.getScrollPosition", {}),
     ]
     for command_id, extra in commands:
         async def run(command_id=command_id, extra=extra):

@@ -1,0 +1,84 @@
+{
+  "id": "browser.setValue",
+  "version": "1.0.0",
+  "executor": "browser.playwright",
+  "kind": "action",
+  "risk": "browser-control",
+  "capabilities": [
+    "browser.control"
+  ],
+  "resources": [
+    "browser.session"
+  ],
+  "stability": "stable",
+  "effect": {
+    "kind": "unsafe-write",
+    "replay": "unsafe",
+    "idempotency": "none"
+  },
+  "input_schema": {
+    "type": "object",
+    "required": [
+      "selector",
+      "value"
+    ],
+    "properties": {
+      "sessionId": {
+        "type": "string"
+      },
+      "selector": {
+        "type": "string",
+        "minLength": 1
+      },
+      "setWay": {
+        "type": "string",
+        "enum": [
+          "value",
+          "innerText",
+          "innerHTML"
+        ],
+        "description": "设置方式（对标影刀「设置元素值_web」）：value=表单元素值；innerText=可见文本；innerHTML=元素内部 HTML",
+        "default": "value"
+      },
+      "value": {
+        "type": "string",
+        "description": "要设置的值"
+      },
+      "timeoutMs": {
+        "type": "integer",
+        "minimum": 1
+      }
+    },
+    "additionalProperties": false
+  },
+  "output_schema": {
+    "type": "object",
+    "required": [
+      "matchedCount"
+    ],
+    "properties": {
+      "matchedCount": {
+        "type": "integer",
+        "minimum": 1
+      }
+    },
+    "additionalProperties": false
+  },
+  "x-outputs": {
+    "matchedCount": {
+      "label": "匹配数量"
+    }
+  },
+  "errors": [
+    "ELEMENT_NOT_FOUND",
+    "SESSION_NOT_FOUND",
+    "TIMEOUT",
+    "CANCELLED",
+    "EXECUTOR_FAILED"
+  ],
+  "implementation": {
+    "handler": "browser.playwright:setValue"
+  },
+  "default_timeout_seconds": 15,
+  "retryable": false
+}

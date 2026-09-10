@@ -1,6 +1,6 @@
 {
   "project": "rpa_core",
-  "phase": "editor-tree-interactions",
+  "phase": "command-parity-extension-editor",
   "status": "active",
   "completed_milestone": "M19-editor-interactions",
   "active_milestone": null,
@@ -8,6 +8,7 @@
   "active_feature": null,
   "next_milestone": null,
   "later_milestones": [],
+  "notes": "M19 收口后已持续推进：影刀命令对标（catalog 55→65+，navigate 逐参数对齐）、自研扩展执行通道（extension_exec + channel 校验 + 配对诊断）、用户变量体系可写化 + fx/py 表达式、session 默认会话、编辑器属性面板参数分区与 fx 浮层。无 active 里程碑，全部进入 feature 迭代。",
   "task_index": ".harness/tasks/BACKLOG.md",
   "scope": {
     "in": [

@@ -605,13 +605,16 @@ const CATEGORY_COLORS = { blue: "#0969da", green: "#1a7f37", purple: "#8250df", 
 const SEMANTIC_GROUPS = [
   {
     label: "页面导航", icon: "browser", color: "blue",
-    member: (id) => ["browser.navigate", "browser.close"].includes(id),
+    member: (id) => ["browser.navigate", "browser.close", "browser.stopLoading"].includes(id),
   },
   {
     label: "元素操作", icon: "play", color: "blue",
     member: (id) => ["browser.click", "browser.input", "browser.getText",
                     "browser.queryAll", "browser.waitFor", "browser.hover",
-                    "browser.executeScript", "browser.screenshot", "browser.select"].includes(id),
+                    "browser.executeScript", "browser.screenshot", "browser.select",
+                    "browser.setValue", "browser.setAttribute",
+                    "browser.getPosition", "browser.getSelectOptions",
+                    "browser.getScrollPosition"].includes(id),
   },
   {
     label: "数据处理", icon: "data", color: "green",

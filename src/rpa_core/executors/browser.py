@@ -833,6 +833,168 @@ class PlaywrightExecutor(CommandExecutor):
                         )
                     ],
                 )
+            if command == "browser.stopLoading":
+                await page.evaluate("window.stop()")
+                return CommandResult.success(
+                    outputs={"url": page.url},
+                    effects=[
+                        EffectRecord.committed(
+                            invocation,
+                            kind=EffectKind.UNSAFE_WRITE,
+                            resource=f"browser.session:{session_id}",
+                            details={"operation": "stopLoading"},
+                        )
+                    ],
+                )
+            if command == "browser.setValue":
+                locator = page.locator(str(inputs["selector"]))
+                count = await locator.count()
+                if count == 0:
+                    return CommandResult.failure(
+                        ErrorCode.ELEMENT_NOT_FOUND,
+                        "Target element did not match",
+                        details={"selector": inputs["selector"], "matchedCount": 0},
+                    )
+                set_way = str(inputs.get("setWay") or "value")
+                value = str(inputs.get("value") or "")
+                if set_way not in ("value", "innerText", "innerHTML"):
+                    return CommandResult.failure(
+                        ErrorCode.INVALID_INPUT, f"Unsupported setWay: {set_way}"
+                    )
+                await locator.first.evaluate(
+                    "(el, [way, val]) => {"
+                    "  if (way === 'value') { el.value = val; }"
+                    "  else if (way === 'innerText') { el.innerText = val; }"
+                    "  else { el.innerHTML = val; }"
+                    "}",
+                    [set_way, value],
+                )
+                return CommandResult.success(
+                    outputs={"matchedCount": count},
+                    effects=[
+                        EffectRecord.committed(
+                            invocation,
+                            kind=EffectKind.UNSAFE_WRITE,
+                            resource=f"browser.session:{session_id}:selector:{inputs['selector']}",
+                            details={"operation": "setValue", "setWay": set_way},
+                        )
+                    ],
+                )
+            if command == "browser.setAttribute":
+                locator = page.locator(str(inputs["selector"]))
+                count = await locator.count()
+                if count == 0:
+                    return CommandResult.failure(
+                        ErrorCode.ELEMENT_NOT_FOUND,
+                        "Target element did not match",
+                        details={"selector": inputs["selector"], "matchedCount": 0},
+                    )
+                name = str(inputs["name"])
+                attr_value = str(inputs.get("value") or "")
+                await locator.first.evaluate(
+                    "(el, [n, v]) => el.setAttribute(n, v)",
+                    [name, attr_value],
+                )
+                return CommandResult.success(
+                    outputs={"matchedCount": count},
+                    effects=[
+                        EffectRecord.committed(
+                            invocation,
+                            kind=EffectKind.UNSAFE_WRITE,
+                            resource=f"browser.session:{session_id}:selector:{inputs['selector']}",
+                            details={"operation": "setAttribute", "name": name},
+                        )
+                    ],
+                )
+            if command == "browser.getPosition":
+                locator = page.locator(str(inputs["selector"]))
+                count = await locator.count()
+                if count == 0:
+                    return CommandResult.failure(
+                        ErrorCode.ELEMENT_NOT_FOUND,
+                        "Target element did not match",
+                        details={"selector": inputs["selector"], "matchedCount": 0},
+                    )
+                box = await locator.first.bounding_box()
+                if box is None:
+                    return CommandResult.failure(
+                        ErrorCode.ELEMENT_NOT_FOUND,
+                        "Element has no bounding box (not visible?)",
+                        details={"selector": inputs["selector"]},
+                    )
+                return CommandResult.success(
+                    outputs={
+                        "x": box["x"],
+                        "y": box["y"],
+                        "width": box["width"],
+                        "height": box["height"],
+                    },
+                    effects=[
+                        EffectRecord.committed(
+                            invocation,
+                            kind=EffectKind.READ,
+                            resource=f"browser.session:{session_id}:selector:{inputs['selector']}",
+                            details={"operation": "getPosition"},
+                        )
+                    ],
+                )
+            if command == "browser.getSelectOptions":
+                locator = page.locator(str(inputs["selector"]))
+                count = await locator.count()
+                if count == 0:
+                    return CommandResult.failure(
+                        ErrorCode.ELEMENT_NOT_FOUND,
+                        "Target element did not match",
+                        details={"selector": inputs["selector"], "matchedCount": 0},
+                    )
+                options = await locator.first.evaluate(
+                    "(el) => Array.from(el.options).map((o, i) => ({"
+                    "  index: i, value: o.value, label: o.text || o.label,"
+                    "  selected: o.selected,"
+                    "}))"
+                )
+                return CommandResult.success(
+                    outputs={"options": options, "count": len(options)},
+                    effects=[
+                        EffectRecord.committed(
+                            invocation,
+                            kind=EffectKind.READ,
+                            resource=f"browser.session:{session_id}:selector:{inputs['selector']}",
+                            details={"operation": "getSelectOptions", "count": len(options)},
+                        )
+                    ],
+                )
+            if command == "browser.getScrollPosition":
+                selector = inputs.get("selector")
+                if selector:
+                    locator = page.locator(str(selector))
+                    count = await locator.count()
+                    if count == 0:
+                        return CommandResult.failure(
+                            ErrorCode.ELEMENT_NOT_FOUND,
+                            "Target element did not match",
+                            details={"selector": str(selector), "matchedCount": 0},
+                        )
+                    scroll_x, scroll_y = await locator.first.evaluate(
+                        "(el) => [el.scrollLeft, el.scrollTop]"
+                    )
+                    resource_extra = f":selector:{selector}"
+                else:
+                    scroll_x, scroll_y = await page.evaluate(
+                        "() => [window.scrollX, window.scrollY]"
+                    )
+                    resource_extra = ""
+                return CommandResult.success(
+                    outputs={"scrollX": scroll_x, "scrollY": scroll_y},
+                    effects=[
+                        EffectRecord.committed(
+                            invocation,
+                            kind=EffectKind.READ,
+                            resource=f"browser.session:{session_id}:scroll{resource_extra}",
+                            details={"operation": "getScrollPosition"},
+                        )
+                    ],
+                )
             return CommandResult.failure(
                 ErrorCode.COMMAND_NOT_FOUND, f"Unsupported command: {command}"
             )

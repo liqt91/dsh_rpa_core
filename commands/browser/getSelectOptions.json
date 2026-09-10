@@ -1,0 +1,100 @@
+{
+  "id": "browser.getSelectOptions",
+  "version": "1.0.0",
+  "executor": "browser.playwright",
+  "kind": "query",
+  "risk": "read",
+  "capabilities": [
+    "browser.read"
+  ],
+  "resources": [
+    "browser.session"
+  ],
+  "stability": "stable",
+  "effect": {
+    "kind": "read",
+    "replay": "safe",
+    "idempotency": "none"
+  },
+  "input_schema": {
+    "type": "object",
+    "required": [
+      "selector"
+    ],
+    "properties": {
+      "sessionId": {
+        "type": "string"
+      },
+      "selector": {
+        "type": "string",
+        "minLength": 1
+      },
+      "timeoutMs": {
+        "type": "integer",
+        "minimum": 1
+      }
+    },
+    "additionalProperties": false
+  },
+  "output_schema": {
+    "type": "object",
+    "required": [
+      "options",
+      "count"
+    ],
+    "properties": {
+      "options": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "required": [
+            "index",
+            "value",
+            "label",
+            "selected"
+          ],
+          "properties": {
+            "index": {
+              "type": "integer"
+            },
+            "value": {
+              "type": "string"
+            },
+            "label": {
+              "type": "string"
+            },
+            "selected": {
+              "type": "boolean"
+            }
+          }
+        }
+      },
+      "count": {
+        "type": "integer",
+        "minimum": 0
+      }
+    },
+    "additionalProperties": false
+  },
+  "x-outputs": {
+    "options": {
+      "label": "选项列表",
+      "primary": true
+    },
+    "count": {
+      "label": "选项数量"
+    }
+  },
+  "errors": [
+    "ELEMENT_NOT_FOUND",
+    "SESSION_NOT_FOUND",
+    "TIMEOUT",
+    "CANCELLED",
+    "EXECUTOR_FAILED"
+  ],
+  "implementation": {
+    "handler": "browser.playwright:getSelectOptions"
+  },
+  "default_timeout_seconds": 15,
+  "retryable": true
+}

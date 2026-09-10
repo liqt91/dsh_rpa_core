@@ -1,0 +1,80 @@
+{
+  "id": "browser.setAttribute",
+  "version": "1.0.0",
+  "executor": "browser.playwright",
+  "kind": "action",
+  "risk": "browser-control",
+  "capabilities": [
+    "browser.control"
+  ],
+  "resources": [
+    "browser.session"
+  ],
+  "stability": "stable",
+  "effect": {
+    "kind": "unsafe-write",
+    "replay": "unsafe",
+    "idempotency": "none"
+  },
+  "input_schema": {
+    "type": "object",
+    "required": [
+      "selector",
+      "name",
+      "value"
+    ],
+    "properties": {
+      "sessionId": {
+        "type": "string"
+      },
+      "selector": {
+        "type": "string",
+        "minLength": 1
+      },
+      "name": {
+        "type": "string",
+        "minLength": 1,
+        "description": "属性名（对标影刀「设置元素属性_web」）"
+      },
+      "value": {
+        "type": "string",
+        "description": "属性值"
+      },
+      "timeoutMs": {
+        "type": "integer",
+        "minimum": 1
+      }
+    },
+    "additionalProperties": false
+  },
+  "output_schema": {
+    "type": "object",
+    "required": [
+      "matchedCount"
+    ],
+    "properties": {
+      "matchedCount": {
+        "type": "integer",
+        "minimum": 1
+      }
+    },
+    "additionalProperties": false
+  },
+  "x-outputs": {
+    "matchedCount": {
+      "label": "匹配数量"
+    }
+  },
+  "errors": [
+    "ELEMENT_NOT_FOUND",
+    "SESSION_NOT_FOUND",
+    "TIMEOUT",
+    "CANCELLED",
+    "EXECUTOR_FAILED"
+  ],
+  "implementation": {
+    "handler": "browser.playwright:setAttribute"
+  },
+  "default_timeout_seconds": 15,
+  "retryable": false
+}

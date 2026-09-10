@@ -1,0 +1,75 @@
+{
+  "id": "browser.getScrollPosition",
+  "version": "1.0.0",
+  "executor": "browser.playwright",
+  "kind": "query",
+  "risk": "read",
+  "capabilities": [
+    "browser.read"
+  ],
+  "resources": [
+    "browser.session"
+  ],
+  "stability": "stable",
+  "effect": {
+    "kind": "read",
+    "replay": "safe",
+    "idempotency": "none"
+  },
+  "input_schema": {
+    "type": "object",
+    "required": [],
+    "properties": {
+      "sessionId": {
+        "type": "string"
+      },
+      "selector": {
+        "type": "string",
+        "minLength": 1,
+        "description": "可选：指定内部有独立滚动条的元素，缺省读取整个页面的滚动位置"
+      },
+      "timeoutMs": {
+        "type": "integer",
+        "minimum": 1
+      }
+    },
+    "additionalProperties": false
+  },
+  "output_schema": {
+    "type": "object",
+    "required": [
+      "scrollX",
+      "scrollY"
+    ],
+    "properties": {
+      "scrollX": {
+        "type": "number"
+      },
+      "scrollY": {
+        "type": "number"
+      }
+    },
+    "additionalProperties": false
+  },
+  "x-outputs": {
+    "scrollX": {
+      "label": "横向滚动位置"
+    },
+    "scrollY": {
+      "label": "纵向滚动位置",
+      "primary": true
+    }
+  },
+  "errors": [
+    "ELEMENT_NOT_FOUND",
+    "SESSION_NOT_FOUND",
+    "TIMEOUT",
+    "CANCELLED",
+    "EXECUTOR_FAILED"
+  ],
+  "implementation": {
+    "handler": "browser.playwright:getScrollPosition"
+  },
+  "default_timeout_seconds": 15,
+  "retryable": true
+}

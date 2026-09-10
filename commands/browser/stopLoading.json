@@ -1,0 +1,62 @@
+{
+  "id": "browser.stopLoading",
+  "version": "1.0.0",
+  "executor": "browser.playwright",
+  "kind": "action",
+  "risk": "browser-control",
+  "capabilities": [
+    "browser.control"
+  ],
+  "resources": [
+    "browser.session"
+  ],
+  "stability": "stable",
+  "effect": {
+    "kind": "unsafe-write",
+    "replay": "unsafe",
+    "idempotency": "none"
+  },
+  "input_schema": {
+    "type": "object",
+    "required": [],
+    "properties": {
+      "sessionId": {
+        "type": "string"
+      },
+      "timeoutMs": {
+        "type": "integer",
+        "minimum": 1
+      }
+    },
+    "additionalProperties": false
+  },
+  "output_schema": {
+    "type": "object",
+    "required": [
+      "url"
+    ],
+    "properties": {
+      "url": {
+        "type": "string"
+      }
+    },
+    "additionalProperties": false
+  },
+  "x-outputs": {
+    "url": {
+      "label": "当前网址",
+      "primary": true
+    }
+  },
+  "errors": [
+    "SESSION_NOT_FOUND",
+    "TIMEOUT",
+    "CANCELLED",
+    "EXECUTOR_FAILED"
+  ],
+  "implementation": {
+    "handler": "browser.playwright:stopLoading"
+  },
+  "default_timeout_seconds": 15,
+  "retryable": false
+}
