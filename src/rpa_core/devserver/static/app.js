@@ -12,6 +12,7 @@ const state = {
   dirty: false,
   elementsSeen: null, // 最近一次渲染的元素名集合（捕获自动刷新差集用）
   collapsedGroups: new Set(), // 指令面板已收起的分组名（默认全展开，点击收起）
+  extChannel: null, // 最近一次 /api/ext/status 结果 {online, host}
 };
 let dragState = null; // {type:"new", command} | {type:"new", flow} | {type:"move", path}
 let pendingDrop = null; // {containerPath, key, index}
@@ -1288,6 +1289,16 @@ function renderProps() {
     for (const key of keys) {
       body.appendChild(schemaField(node, key, properties[key], required.has(key)));
     }
+    // 通道解析预览：浏览器指令缺省走 extension 还是 playwright（与执行器同语义）
+    const transportInput = body.querySelector('[data-field="transport"]');
+    if (transportInput) {
+      const fieldEl = transportInput.closest(".field");
+      if (fieldEl) fieldEl.insertAdjacentElement("afterend", channelPreviewField(node));
+      for (const key of ["transport", "channel"]) {
+        const input = body.querySelector(`[data-field="${key}"]`);
+        if (input) input.addEventListener("change", () => renderProps());
+      }
+    }
   }
   // 字段联动：x-depends 声明哪些字段依赖其他字段的特定值
   applyDependencies(body, node, schema);
@@ -1336,6 +1347,8 @@ function renderProps() {
 // 字段联动：根据 x-depends 声明，禁用/启用依赖字段
 // x-depends 格式: { "headless": {"transport": "playwright"}, ... }
 // 含义: headless 仅当 transport === "playwright" 时启用
+// 展示策略：不隐藏、只禁用——参数"凭空消失"会让用户以为指令没有这个开关，
+// 禁用 + 说明能让用户看懂"它属于另一条通道"。
 function applyDependencies(body, node, schema) {
   const deps = schema["x-depends"];
   if (!deps) return;
@@ -1343,13 +1356,142 @@ function applyDependencies(body, node, schema) {
     const ctrlKey = Object.keys(condition)[0];
     const requiredValue = condition[ctrlKey];
     const ctrlValue = node["with"] ? node["with"][ctrlKey] : undefined;
-    const shouldDisable = ctrlValue !== requiredValue;
+    const active = ctrlValue === requiredValue;
     // 找到该字段的 wrapper（data-field 属性匹配）
     const wrap = body.querySelector(`[data-field="${field}"]`);
     if (!wrap) continue;
     const fieldWrap = wrap.closest(".field");
     if (!fieldWrap) continue;
-    fieldWrap.style.display = shouldDisable ? "none" : "";
+    fieldWrap.classList.toggle("field-inactive", !active);
+    for (const el of fieldWrap.querySelectorAll("input, select, textarea")) {
+      el.disabled = !active;
+      el.title = active
+        ? ""
+        : `仅当 ${ctrlKey}=${requiredValue} 时生效（当前 ${ctrlKey}=${ctrlValue === undefined ? "缺省" : ctrlValue}）`;
+    }
+    let note = fieldWrap.querySelector(".dep-note");
+    if (!active) {
+      if (!note) {
+        note = document.createElement("span");
+        note.className = "field-hint dep-note";
+        fieldWrap.appendChild(note);
+      }
+      note.textContent = `仅 ${ctrlKey}=${requiredValue} 时生效（当前 ${ctrlKey}=${ctrlValue === undefined ? "缺省" : ctrlValue}）`;
+    } else if (note) {
+      note.remove();
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 自研扩展执行通道状态（一等公民）：浏览器指令缺省走哪条通道、哪个浏览器
+// ---------------------------------------------------------------------------
+
+const HOST_BROWSER_LABELS = {
+  msedge: "Edge",
+  chrome: "Chrome",
+  chromium: "Chromium",
+  brave: "Brave",
+  opera: "Opera",
+  vivaldi: "Vivaldi",
+  firefox: "Firefox",
+  safari: "Safari",
+  unknown: "未知浏览器",
+};
+
+const CHROMIUM_HOSTS = ["chrome", "msedge", "brave", "opera", "vivaldi", "chromium"];
+
+function hostBrowserLabel(name) {
+  if (!name) return "";
+  return HOST_BROWSER_LABELS[name] || name;
+}
+
+function channelHostBrowser(status) {
+  return status && status.host ? status.host.browser : null;
+}
+
+function channelMatchesHost(channel, status) {
+  // 语义与后端 extension_exec.channel_matches_host 保持一致（两侧必须同步改）
+  const expected = String(channel || "").toLowerCase();
+  if (!expected) return true; // channel 缺省 = 跟随宿主
+  const actual = String(channelHostBrowser(status) || "").toLowerCase();
+  if (!actual) return false; // 宿主未上报：无法确认，不假装成功
+  if (expected === actual) return true;
+  if (expected === "chromium") return CHROMIUM_HOSTS.includes(actual);
+  return false;
+}
+
+// 通道解析预览：与执行器 _use_extension 同语义——显式 transport 优先；
+// 缺省时扩展在线且 channel 不与宿主冲突 → extension，否则 playwright。
+function resolveChannelPreview(node) {
+  const args = (node && node["with"]) || {};
+  if (args.transport) {
+    if (args.transport === "extension" && args.channel && !channelMatchesHost(args.channel, state.extChannel)) {
+      const host = hostBrowserLabel(channelHostBrowser(state.extChannel)) || "未上报";
+      return {
+        channel: "extension(将失败)",
+        reason: `扩展宿主为 ${host}，与 channel=${args.channel} 不符；请把插件装到 ${args.channel}，或改用 transport=playwright`,
+      };
+    }
+    return { channel: args.transport, reason: "已在参数中显式指定" };
+  }
+  const status = state.extChannel;
+  if (!status || !status.online) {
+    return { channel: "playwright", reason: "自研插件未在线（未安装/未重载/devserver 未运行）" };
+  }
+  const hostName = hostBrowserLabel(channelHostBrowser(status));
+  if (args.channel && !channelMatchesHost(args.channel, status)) {
+    return {
+      channel: "playwright",
+      reason: `插件宿主为 ${hostName || "未知"}，无法满足 channel=${args.channel}，按 channel 启动独立浏览器`,
+    };
+  }
+  return { channel: "extension", reason: `自研插件在线（宿主 ${hostName || "未知，请重载插件"}）` };
+}
+
+function channelPreviewField(node) {
+  const row = document.createElement("div");
+  row.className = "field channel-preview";
+  const hint = document.createElement("span");
+  hint.className = "field-hint";
+  const resolved = resolveChannelPreview(node);
+  hint.textContent = resolved.channel === "extension"
+    ? `当前将走自研插件：${resolved.reason}`
+    : resolved.channel === "extension(将失败)"
+      ? `通道冲突：${resolved.reason}`
+      : `当前将走 ${resolved.channel}：${resolved.reason}`;
+  if (resolved.channel === "extension(将失败)") hint.classList.add("bad");
+  row.appendChild(hint);
+  return row;
+}
+
+async function refreshExtChannel() {
+  const previous = state.extChannel;
+  let status = { online: false, host: null };
+  try {
+    status = await api("GET", "/api/ext/status");
+  } catch { /* devserver 未运行或通道异常：按离线展示 */ }
+  state.extChannel = status;
+  const badge = $("ext-channel-badge");
+  if (badge) {
+    const hostName = hostBrowserLabel(channelHostBrowser(status));
+    badge.textContent = status.online
+      ? `扩展通道：在线${hostName ? `（${hostName}）` : ""}`
+      : "扩展通道：离线";
+    badge.className = `ext-badge ext-channel-badge ${status.online ? "ok" : "off"}`;
+    badge.title = status.online
+      ? `自研插件在线，浏览器指令缺省走 extension 通道；宿主浏览器：${hostName || "未上报（请在扩展页重载插件）"}`
+      : "自研插件未在线：浏览器指令缺省回退 playwright。点左侧「⇲ 插件」安装/重载";
+  }
+  // 状态真正变化且当前选中的是浏览器指令 → 刷新通道预览（避免定时重渲染打断输入）
+  const changed = !previous
+    || previous.online !== status.online
+    || channelHostBrowser(previous) !== channelHostBrowser(status);
+  if (changed && state.selected) {
+    const node = findNode(state.selected);
+    if (node && node.type === "action" && String(node.command || "").startsWith("browser.")) {
+      renderProps();
+    }
   }
 }
 
@@ -2024,7 +2166,7 @@ function selectField(labelText, propSchema, required, value, onChange, rawKey) {
   const input = document.createElement("select");
   const empty = document.createElement("option");
   empty.value = "";
-  empty.textContent = "（未设置）";
+  empty.textContent = rawKey === "transport" ? "（缺省：自研插件优先）" : "（未设置）";
   input.appendChild(empty);
   for (const option of propSchema.enum) {
     const element = document.createElement("option");
@@ -2989,6 +3131,8 @@ async function init() {
   initPanelResize();
   startElementPolling();
   loadElements();
+  refreshExtChannel();
+  setInterval(refreshExtChannel, 5000);
 }
 
 // 输入框聚焦时快捷键不劫持（复制粘贴/撤销留给文本编辑）。

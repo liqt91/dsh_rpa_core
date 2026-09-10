@@ -15,7 +15,7 @@ from playwright.async_api import (
 )
 
 from rpa_core.bsk_client import BskError, BskSessionGoneError
-from rpa_core.extension_exec import ExtensionChannelError
+from rpa_core.extension_exec import CHROMIUM_FAMILY, ExtensionChannelError, channel_matches_host
 from rpa_core.model.command import (
     CommandInvocation,
     CommandResult,
@@ -930,19 +930,73 @@ class PlaywrightExecutor(CommandExecutor):
         一等公民策略：装了扩展且在线 → 默认走扩展（用户真实登录态浏览器）；
         扩展离线（未安装/休眠/devserver 未运行）→ 静默回退 playwright，流程不阻塞。
         需要强制旧通道时显式 `transport=playwright`。
+
+        浏览器类型（channel）参与缺省选择：扩展通道里浏览器 = 扩展宿主，无法"启动"目标
+        浏览器；因此缺省通道 + 显式 channel 且宿主不匹配时让位给 playwright（只有它能
+        真正按 channel 启动目标浏览器）。显式 `transport=extension` 时不在此让位，
+        由 `_extension_channel_guard` 给出明确失败。
         """
         transport = inputs.get("transport")
         if transport:
             return str(transport) == "extension"
         try:
-            return bool(await asyncio.to_thread(self._ext.online))
+            status = await asyncio.to_thread(self._ext.status)
         except Exception:
             return False
+        if not bool(status.get("online")):
+            return False
+        channel = str(inputs.get("channel") or "").strip().lower()
+        if not channel:
+            return True
+        host = status.get("host") if isinstance(status.get("host"), dict) else {}
+        return channel_matches_host(channel, str(host.get("browser") or "") or None)
+
+    async def _extension_channel_guard(self, inputs: dict[str, Any]) -> CommandResult | None:
+        """扩展通道下校验 channel 能否兑现（不能返回失败结果，能则返回 None）。
+
+        扩展通道没有"启动浏览器"语义：能用的浏览器只有扩展宿主那一个。
+        """
+        channel = str(inputs.get("channel") or "").strip().lower()
+        if not channel:
+            return None
+        if channel not in CHROMIUM_FAMILY:
+            return CommandResult.failure(
+                ErrorCode.INVALID_INPUT,
+                f"extension 通道只能在 Chromium 内核浏览器里执行（扩展装在哪就用哪），"
+                f"不支持 channel={channel}；如需 {channel} 请改用 transport=playwright",
+                details={"transport": "extension", "channel": channel},
+            )
+        try:
+            host = await asyncio.to_thread(self._ext.host)
+        except Exception:
+            host = None
+        actual = str((host or {}).get("browser") or "")
+        if channel_matches_host(channel, actual or None):
+            return None
+        if not actual:
+            hint = "扩展未上报宿主浏览器（扩展版本过旧）：请在浏览器扩展页重载本扩展后重试"
+        else:
+            hint = (
+                f"当前扩展宿主为 {actual}，与 channel={channel} 不符——"
+                f"请把扩展安装到 {channel}，或改用 transport=playwright（可启动指定浏览器）"
+            )
+        return CommandResult.failure(
+            ErrorCode.INVALID_INPUT,
+            f"extension 通道无法在 {channel} 打开网页：{hint}",
+            details={
+                "transport": "extension",
+                "channel": channel,
+                "hostBrowser": actual or None,
+            },
+        )
 
     async def _open_extension(
         self, invocation: CommandInvocation, inputs: dict[str, Any], started: float
     ) -> CommandResult:
         """打开网页（扩展传输）= 在用户真实浏览器里新建标签页（无启动浏览器概念）。"""
+        mismatch = await self._extension_channel_guard(inputs)
+        if mismatch is not None:
+            return mismatch
         url = str(inputs["url"])
         timeout_s = int(inputs.get("timeoutMs", 30_000)) / 1000.0
         try:

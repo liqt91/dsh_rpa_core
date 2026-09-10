@@ -22,6 +22,39 @@ async function getToken() {
   return token;
 }
 
+// ---------------------------------------------------------------- 宿主身份
+// 扩展装在哪个浏览器里，执行通道就用哪个浏览器（扩展通道没有"启动浏览器"概念）。
+// 宿主身份经长轮询 query 上报 devserver，供「打开网页」的 channel 参数校验兑现。
+function detectHostBrowser() {
+  const ua = navigator.userAgent || "";
+  // 顺序敏感：Edge/Opera/Brave 的 UA 里都含 "Chrome/"，必须先判壳
+  if (/Edg\//.test(ua) || /EdgA\//.test(ua)) return "msedge";
+  if (/OPR\//.test(ua) || /Opera/.test(ua)) return "opera";
+  if (/Brave/.test(ua)) return "brave";
+  if (/Vivaldi/.test(ua)) return "vivaldi";
+  if (/Firefox\//.test(ua)) return "firefox";
+  if (/Chrome\//.test(ua)) return "chrome";
+  if (/Safari\//.test(ua)) return "safari";
+  return "unknown";
+}
+
+function hostInfo() {
+  return {
+    browser: detectHostBrowser(),
+    version: navigator.userAgentData && navigator.userAgentData.brands
+      ? (navigator.userAgentData.brands.find((b) => /Chromium/.test(b.brand)) || {}).version || ""
+      : "",
+    platform: navigator.platform || "",
+    userAgent: navigator.userAgent || "",
+  };
+}
+
+function hostQuery() {
+  const info = hostInfo();
+  return `&host=${encodeURIComponent(info.browser)}&ver=${encodeURIComponent(info.version)}`
+    + `&platform=${encodeURIComponent(info.platform)}&ua=${encodeURIComponent(info.userAgent)}`;
+}
+
 // ---------------------------------------------------------------- 捕获通道
 
 async function poll() {
@@ -127,7 +160,7 @@ async function execLoop() {
     let resp;
     try {
       resp = await fetch(
-        `${DEVSERVER}/api/ext/command/next?wait=${EXEC_HOLD_S}`,
+        `${DEVSERVER}/api/ext/command/next?wait=${EXEC_HOLD_S}${hostQuery()}`,
         { headers: { "X-Capture-Token": token } },
       );
     } catch {
@@ -176,7 +209,11 @@ async function executeCommand(cmd) {
   const args = cmd.args || {};
   switch (cmd.op) {
     case "ping":
-      return { version: chrome.runtime.getManifest().version, permissions: await getPermission() };
+      return {
+        version: chrome.runtime.getManifest().version,
+        host: hostInfo(),
+        permissions: await getPermission(),
+      };
     case "tabs.list": {
       const tabs = await chrome.tabs.query({});
       return {
@@ -429,6 +466,14 @@ function waitComplete(tabId, timeoutMs) {
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
+
+// popup 查询宿主身份（"打开网页"指令的 channel 校验依据）
+chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+  if (msg && msg.type === "rpa-ext-host-info") {
+    sendResponse({ host: hostInfo(), devserver: DEVSERVER });
+  }
+  return false;
+});
 
 // 启动即开始：捕获轮询 + 执行长轮询
 poll();

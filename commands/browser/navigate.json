@@ -1,6 +1,6 @@
 {
   "id": "browser.navigate",
-  "version": "2.3.0",
+  "version": "2.4.0",
   "executor": "browser.playwright",
   "kind": "action",
   "risk": "browser-control",
@@ -60,7 +60,7 @@
           "firefox",
           "webkit"
         ],
-        "description": "浏览器类型（对标影刀浏览器类型）：chromium=内置浏览器（默认）；chrome/msedge/firefox/webkit=复用本机安装的对应内核浏览器；影刀的 ie/360se/QQ 等国产壳内核浏览器不在支持范围（复用用户真实已登录浏览器请用 transport=bsk）"
+        "description": "浏览器类型（对标影刀浏览器类型）。playwright 通道=启动/复用该内核的独立浏览器（chromium=内置浏览器默认，chrome/msedge/firefox/webkit=本机已装内核）；extension 通道（自研插件，一等公民）=校验扩展宿主浏览器是否匹配（浏览器 = 扩展装在哪，无法启动），chromium 表示任意 Chromium 内核发行版；宿主不匹配时缺省通道会自动让位给 playwright，显式 transport=extension 则报错。国产壳（ie/360se/QQ）不在支持范围"
       },
       "args": {
         "type": "array",
@@ -87,7 +87,7 @@
           "playwright",
           "bsk"
         ],
-        "description": "执行通道（一等公民=自研扩展）：extension=自研 MV3 扩展，在用户真实已登录浏览器里新建标签页（默认权限为整个浏览器）；playwright=独立自动化浏览器（headless/userAgent/userDataDir 生效）；bsk=BrowserSkill 三方件（CSS selector only、仅主 frame）。缺省时：扩展在线→extension，否则回退 playwright"
+        "description": "执行通道（一等公民=自研扩展）：extension=自研 MV3 扩展，在用户真实已登录浏览器里新建标签页（浏览器=扩展宿主，默认权限为整个浏览器）；playwright=独立自动化浏览器（headless/userAgent/userDataDir/channel 生效）；bsk=BrowserSkill 三方件（CSS selector only、仅主 frame）。缺省时：扩展在线且（未指定 channel 或宿主匹配）→extension，否则回退 playwright"
       },
       "browserInstanceId": {
         "type": "string",
@@ -102,9 +102,6 @@
     "additionalProperties": false,
     "x-depends": {
       "waitUntil": {
-        "transport": "playwright"
-      },
-      "channel": {
         "transport": "playwright"
       },
       "args": {

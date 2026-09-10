@@ -435,10 +435,12 @@ class DevServerApp:
         except ValueError as exc:
             raise ApiError(400, "BAD_REQUEST", str(exc)) from exc
 
-    def extension_command_next(self, headers, wait_seconds: float) -> dict:
-        """扩展 background 长轮询领命令（同时作为在线心跳）。"""
+    def extension_command_next(
+        self, headers, wait_seconds: float, host_report: dict | None = None
+    ) -> dict:
+        """扩展 background 长轮询领命令（同时作为在线心跳 + 宿主身份上报）。"""
         self._require_extension_token(headers)
-        return {"command": self._extension_hub.next_command(wait_seconds)}
+        return {"command": self._extension_hub.next_command(wait_seconds, host_report)}
 
     def extension_command_result(self, headers, body: Any) -> dict:
         """扩展回传命令结果。未知/已超时 id 返回 received=false（不报错）。"""

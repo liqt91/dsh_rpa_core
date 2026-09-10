@@ -43,6 +43,14 @@ class ExtensionExecSession:
     def online(self) -> bool:
         return self._client.online()
 
+    def status(self) -> dict[str, Any]:
+        """通道状态（含 host：扩展宿主浏览器）；探测失败返回 {"online": False}。"""
+        return self._client.status_cached()
+
+    def host(self) -> dict[str, Any] | None:
+        """扩展宿主浏览器信息（browser/version/userAgent/platform）；未上报返回 None。"""
+        return self._client.host()
+
     # -- 能力探测 ------------------------------------------------------------
 
     def ping(self, *, timeout_seconds: float = 5.0) -> dict[str, Any]:

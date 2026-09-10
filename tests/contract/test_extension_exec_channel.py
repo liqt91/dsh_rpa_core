@@ -11,6 +11,7 @@ import json
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -54,12 +55,16 @@ def _request(method: str, path: str, payload=None, base: str = "", token: str | 
 
 
 class FakeExtension:
-    """扮演扩展 background：长轮询领命令 → 回调执行 → 回传结果。"""
+    """扮演扩展 background：长轮询领命令 → 回调执行 → 回传结果。
 
-    def __init__(self, base: str, handlers: dict | None = None):
+    `host`：宿主浏览器标识（随长轮询 query 上报，None = 不上报，模拟旧版扩展）。
+    """
+
+    def __init__(self, base: str, handlers: dict | None = None, host: str | None = "msedge"):
         self.base = base
         self.token = TOKEN
         self.handlers: dict = handlers or {}
+        self.host = host
         self.seen: list[tuple[str, dict]] = []
         self._stop = False
         self._thread = threading.Thread(target=self._loop, daemon=True)
@@ -73,9 +78,12 @@ class FakeExtension:
         self._thread.join(timeout=3)
 
     def _loop(self):
+        query = "/api/ext/command/next?wait=1"
+        if self.host:
+            query += f"&host={self.host}&ua={urllib.parse.quote('Mozilla/5.0 ' + self.host)}"
         while not self._stop:
             status, payload = _request(
-                "GET", "/api/ext/command/next?wait=1", base=self.base, token=self.token
+                "GET", query, base=self.base, token=self.token
             )
             if status != 200:
                 time.sleep(0.2)
@@ -388,3 +396,146 @@ def test_executor_extension_boundary_and_offline_fallback(server):
             await offline.close()
 
     asyncio.run(offline_check())
+
+
+# ---------------------------------------------------- 通道 / 浏览器类型（channel）
+
+
+def test_status_reports_host_browser_after_poll(server):
+    """宿主浏览器身份随长轮询上报：/api/ext/status 暴露 host，供 channel 校验兑现。"""
+    base = f"http://127.0.0.1:{server.port}"
+    fake = FakeExtension(base, dict(_DEFAULT_HANDLERS), host="msedge").start()
+    try:
+        _wait_online(base)
+        deadline = time.monotonic() + 3
+        payload = {}
+        while time.monotonic() < deadline:
+            _, payload = _request("GET", "/api/ext/status", base=base)
+            if payload.get("host"):
+                break
+            time.sleep(0.05)
+        assert payload["host"]["browser"] == "msedge"
+        assert str(payload["host"]["userAgent"]).startswith("Mozilla/5.0")
+    finally:
+        fake.stop()
+
+
+def test_legacy_extension_without_host_report_stays_online(server):
+    """旧版扩展不上报宿主身份：在线判定不受影响，host 为 None。"""
+    base = f"http://127.0.0.1:{server.port}"
+    fake = FakeExtension(base, dict(_DEFAULT_HANDLERS), host=None).start()
+    try:
+        _wait_online(base)
+        _, payload = _request("GET", "/api/ext/status", base=base)
+        assert payload["online"] is True
+        assert payload["host"] is None
+    finally:
+        fake.stop()
+
+
+def test_executor_extension_channel_validates_host_browser(server):
+    """extension 通道下 channel = 校验宿主浏览器：匹配放行、不匹配/非 Chromium 失败。"""
+    base = f"http://127.0.0.1:{server.port}"
+    fake = FakeExtension(base, dict(_DEFAULT_HANDLERS), host="msedge").start()
+    executor = _executor(base)
+    _wait_online(base)
+
+    async def go():
+        try:
+            same = await executor.execute(
+                _invocation(
+                    "browser.navigate",
+                    {"url": "https://a.test/one", "transport": "extension", "channel": "msedge"},
+                ),
+                asyncio.Event(),
+            )
+            assert same.status == "success", same.error
+
+            any_chromium = await executor.execute(
+                _invocation(
+                    "browser.navigate",
+                    {"url": "https://a.test/two", "transport": "extension", "channel": "chromium"},
+                ),
+                asyncio.Event(),
+            )
+            assert any_chromium.status == "success", any_chromium.error  # 任意 Chromium 内核
+
+            mismatch = await executor.execute(
+                _invocation(
+                    "browser.navigate",
+                    {"url": "https://a.test/three", "transport": "extension", "channel": "chrome"},
+                ),
+                asyncio.Event(),
+            )
+            assert mismatch.status == "error"
+            assert mismatch.error.code == "INVALID_INPUT"
+            assert mismatch.error.details["hostBrowser"] == "msedge"
+
+            unsupported = await executor.execute(
+                _invocation(
+                    "browser.navigate",
+                    {"url": "https://a.test/four", "transport": "extension", "channel": "firefox"},
+                ),
+                asyncio.Event(),
+            )
+            assert unsupported.status == "error"
+            assert unsupported.error.code == "INVALID_INPUT"
+        finally:
+            await executor.close()
+
+    try:
+        asyncio.run(go())
+    finally:
+        fake.stop()
+
+
+def test_executor_extension_channel_without_host_report_fails(server):
+    """显式 transport=extension + 指定 channel，但扩展未上报宿主：明确失败而非静默放行。"""
+    base = f"http://127.0.0.1:{server.port}"
+    fake = FakeExtension(base, dict(_DEFAULT_HANDLERS), host=None).start()
+    executor = _executor(base)
+    _wait_online(base)
+
+    async def go():
+        try:
+            result = await executor.execute(
+                _invocation(
+                    "browser.navigate",
+                    {"url": "https://a.test/one", "transport": "extension", "channel": "msedge"},
+                ),
+                asyncio.Event(),
+            )
+            assert result.status == "error"
+            assert result.error.code == "INVALID_INPUT"
+            assert result.error.details["hostBrowser"] is None
+            assert "重载" in result.error.message
+        finally:
+            await executor.close()
+
+    try:
+        asyncio.run(go())
+    finally:
+        fake.stop()
+
+
+def test_executor_auto_channel_defers_to_playwright_on_host_mismatch(server):
+    """缺省通道 + channel 与宿主冲突 → 让位 playwright（只有它能按 channel 启动浏览器）。"""
+    base = f"http://127.0.0.1:{server.port}"
+    fake = FakeExtension(base, dict(_DEFAULT_HANDLERS), host="chrome").start()
+    executor = _executor(base)
+    _wait_online(base)
+
+    async def go():
+        try:
+            assert await executor._use_extension({}) is True
+            assert await executor._use_extension({"channel": "chrome"}) is True
+            assert await executor._use_extension({"channel": "chromium"}) is True
+            assert await executor._use_extension({"channel": "msedge"}) is False
+            assert await executor._use_extension({"channel": "firefox"}) is False
+        finally:
+            await executor.close()
+
+    try:
+        asyncio.run(go())
+    finally:
+        fake.stop()

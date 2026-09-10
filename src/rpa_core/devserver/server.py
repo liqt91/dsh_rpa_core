@@ -268,7 +268,9 @@ class _RequestHandler(BaseHTTPRequestHandler):
         if segments == ["command", "next"]:
             if method != "GET":
                 raise ApiError(405, "METHOD_NOT_ALLOWED", "use GET for command polling")
-            return self.app.extension_command_next(self.headers, self._wait_seconds())
+            return self.app.extension_command_next(
+                self.headers, self._wait_seconds(), self._host_report()
+            )
         if segments == ["command", "result"]:
             if method != "POST":
                 raise ApiError(405, "METHOD_NOT_ALLOWED", "use POST for command results")
@@ -291,6 +293,26 @@ class _RequestHandler(BaseHTTPRequestHandler):
             return max(0.0, min(60.0, float(raw)))
         except ValueError:
             raise ApiError(400, "BAD_REQUEST", "'wait' must be a number") from None
+
+    def _host_report(self) -> dict | None:
+        """扩展随长轮询上报的宿主身份（query: host / ver / platform / ua）。
+
+        宿主身份决定「打开网页」的 channel 能否兑现（见 extension_exec.channel_matches_host）。
+        """
+        query = parse_qs(urlparse(self.path).query)
+
+        def first(key: str) -> str:
+            return (query.get(key) or [""])[0].strip()
+
+        browser, user_agent = first("host"), first("ua")
+        if not browser and not user_agent:
+            return None
+        return {
+            "browser": browser,
+            "version": first("ver"),
+            "platform": first("platform"),
+            "userAgent": user_agent,
+        }
 
     def _route_capture_extension(self, action: str, method: str) -> dict:
         """content-script 扩展捕获通道：token 配对（编辑器侧）+ pending/result（扩展侧）。"""

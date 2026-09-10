@@ -33,7 +33,62 @@ PERMISSION_MODES = ("browser", "tabs", "origins")
 # 长轮询保持时长（扩展侧 next / 执行器侧 submit 的默认 hold）
 DEFAULT_POLL_SECONDS = 20.0
 DEFAULT_COMMAND_TIMEOUT_SECONDS = 30.0
-ONLINE_WINDOW_SECONDS = 15.0
+# 在线判定窗口：必须 **大于** 扩展侧单次长轮询 hold（extension.EXEC_HOLD_S = 20），
+# 否则两次轮询之间的 15~20 秒会被误判离线，导致缺省通道时偶发回退 playwright。
+ONLINE_WINDOW_SECONDS = 30.0
+
+# 浏览器类型取值与 commands/browser/navigate.json 的 channel 对齐
+BROWSER_CHANNELS = ("chromium", "chrome", "msedge", "firefox", "webkit")
+
+# Chromium 内核家族（扩展宿主只要落在这个集合里，channel=chromium 即视为匹配）
+CHROMIUM_FAMILY = frozenset({"chrome", "msedge", "brave", "opera", "vivaldi", "chromium"})
+
+
+def browser_name_from_user_agent(user_agent: str) -> str | None:
+    """从 UA 推断宿主浏览器标识（取值与 navigate.channel 对齐；无法识别返回 None）。
+
+    顺序敏感：Edge / Opera / Brave 的 UA 里都含 `Chrome/`，必须先判这些壳。
+    """
+    ua = str(user_agent or "")
+    if not ua:
+        return None
+    if "Edg/" in ua or "EdgA/" in ua or "EdgiOS/" in ua or "EdgDev/" in ua:
+        return "msedge"
+    if "OPR/" in ua or "Opera" in ua:
+        return "opera"
+    if "Brave" in ua:
+        return "brave"
+    if "Vivaldi" in ua:
+        return "vivaldi"
+    if "Firefox/" in ua or "FxiOS/" in ua:
+        return "firefox"
+    if "Chrome/" in ua or "CriOS/" in ua:
+        return "chrome"
+    if "Safari/" in ua:
+        return "safari"
+    return None
+
+
+def channel_matches_host(channel: str, host_browser: str | None) -> bool:
+    """扩展通道下判定「期望浏览器」与「扩展实际宿主浏览器」是否一致。
+
+    语义（扩展通道没有"启动浏览器"概念，浏览器 = 扩展装在哪）：
+    - channel 为空 → True（跟随宿主，不校验）
+    - channel=chromium → 宿主为任意 Chromium 内核发行版即通过
+    - 其余 → 必须同名（chrome / msedge 等）
+    - 宿主未上报（旧版扩展）→ False（无法确认，不假装成功）
+    """
+    expected = str(channel or "").strip().lower()
+    if not expected:
+        return True
+    actual = str(host_browser or "").strip().lower()
+    if not actual:
+        return False
+    if expected == actual:
+        return True
+    if expected == "chromium":
+        return actual in CHROMIUM_FAMILY
+    return False
 
 
 class ExtensionChannelError(RuntimeError):
@@ -60,6 +115,39 @@ class ExtensionExecHub:
         self._online_window = online_window_seconds
         self._last_poll = 0.0
         self._seq = 0
+        # 扩展宿主浏览器身份（由扩展侧长轮询/ping 上报）：决定"指定 Edge"能否兑现
+        self._host: dict[str, Any] | None = None
+
+    # -- 宿主身份 ------------------------------------------------------------
+
+    @property
+    def host(self) -> dict[str, Any] | None:
+        """最近一次上报的宿主浏览器信息；未上报返回 None。"""
+        with self._cond:
+            return dict(self._host) if self._host else None
+
+    def record_host(self, report: dict[str, Any] | None) -> dict[str, Any] | None:
+        """记录扩展宿主浏览器（浏览器名优先用上报值，缺省从 UA 推断）。
+
+        同时刷新在线心跳——扩展能上报身份即证明它在线。
+        """
+        if not report:
+            return self.host
+        user_agent = str(report.get("userAgent") or "")
+        browser = str(report.get("browser") or "").strip().lower()
+        if not browser:
+            browser = browser_name_from_user_agent(user_agent) or ""
+        host = {
+            "browser": browser or None,
+            "version": str(report.get("version") or "") or None,
+            "userAgent": user_agent or None,
+            "platform": str(report.get("platform") or "") or None,
+            "reportedAt": time.time(),
+        }
+        with self._cond:
+            self._last_poll = time.monotonic()
+            self._host = host
+        return dict(host)
 
     # -- 权限（预留接口：默认整个浏览器） ------------------------------------
 
@@ -140,8 +228,16 @@ class ExtensionExecHub:
             "error": {"code": "TIMEOUT", "message": f"{command_id}: {detail}"},
         }
 
-    def next_command(self, wait_seconds: float) -> dict[str, Any] | None:
-        """扩展长轮询取命令；无命令则保持到超时返回 None（同时作为在线心跳）。"""
+    def next_command(
+        self, wait_seconds: float, host_report: dict[str, Any] | None = None
+    ) -> dict[str, Any] | None:
+        """扩展长轮询取命令；无命令则保持到超时返回 None（同时作为在线心跳）。
+
+        `host_report`：扩展可随每次轮询上报宿主身份（浏览器名/版本/UA）——心跳即身份，
+        避免额外一次 ping 往返。
+        """
+        if host_report:
+            self.record_host(host_report)
         with self._cond:
             self._last_poll = time.monotonic()
             deadline = time.monotonic() + max(0.0, wait_seconds)
@@ -175,6 +271,7 @@ class ExtensionExecHub:
                 "queued": len(self._queue),
                 "inflight": len(self._inflight),
                 "permissions": dict(self._permissions),
+                "host": dict(self._host) if self._host else None,
             }
 
 
@@ -184,7 +281,7 @@ class ExtensionExecClient:
     def __init__(self, *, base_url: str | None = None, hub_online_ttl: float = 2.0):
         self.base_url = (base_url or os.environ.get(HUB_URL_ENV) or DEFAULT_HUB_URL).rstrip("/")
         self._online_ttl = hub_online_ttl
-        self._online_cache: tuple[float, bool] | None = None
+        self._status_cache: tuple[float, dict[str, Any]] | None = None
 
     # -- 传输 ----------------------------------------------------------------
 
@@ -209,16 +306,24 @@ class ExtensionExecClient:
 
     def online(self) -> bool:
         """扩展是否在线（短 TTL 缓存，避免每步探测）。"""
+        return bool(self.status_cached().get("online"))
+
+    def status_cached(self, ttl: float | None = None) -> dict[str, Any]:
+        """带 TTL 的通道状态（含宿主浏览器）；探测失败返回 `{"online": False}`。"""
         now = time.monotonic()
-        if self._online_cache and now - self._online_cache[0] < self._online_ttl:
-            return self._online_cache[1]
+        if self._status_cache and now - self._status_cache[0] < (ttl or self._online_ttl):
+            return self._status_cache[1]
         try:
-            payload = self._request("GET", "/api/ext/status", None, timeout=1.5)
-            online = bool(payload.get("online"))
+            payload = dict(self._request("GET", "/api/ext/status", None, timeout=1.5))
         except ExtensionChannelError:
-            online = False
-        self._online_cache = (now, online)
-        return online
+            payload = {"online": False, "host": None}
+        self._status_cache = (now, payload)
+        return payload
+
+    def host(self) -> dict[str, Any] | None:
+        """扩展宿主浏览器信息（未安装/离线/旧版扩展返回 None）。"""
+        host = self.status_cached().get("host")
+        return dict(host) if isinstance(host, dict) else None
 
     def status(self) -> dict[str, Any]:
         return self._request("GET", "/api/ext/status", None, timeout=3.0)
