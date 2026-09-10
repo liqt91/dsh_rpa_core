@@ -110,3 +110,34 @@ playwright 通道同名单测/合同已存在，扩展通道照 manifest 实现�
 - 宿主名优先取扩展自报，缺省用 UA 推断（`extension_exec.browser_name_from_user_agent`，顺序敏感：Edge/Opera/Brave 的 UA 都含 `Chrome/`）。
 - 判定规则集中在 `extension_exec.channel_matches_host`（后端）+ 扩展 `assertAllowed`（收窄模式），两处同语义。
 - 前端 `app.js` 的 `channelMatchesHost` 是后端判定的等价副本（面板要即时预览，不能每次求后端）；改一处必须同步另一处，用 `node scripts/check_channel_preview.mjs` 跑判定矩阵做同步检查。
+
+## 五、排障：插件装了、也重载了，为什么执行还是没打开浏览器
+
+### 1. 三种「离线」形态，处置完全不同
+
+| 顶部徽标 | `/api/ext/status` | 含义 | 处置 |
+|---|---|---|---|
+| `扩展通道：离线` | `online:false, authFailures:0` | 没有扩展在轮询：没装 / 没启用 / 宿主浏览器没开 | 按「⇲ 插件」四步加载；确认目标浏览器正在运行 |
+| `扩展通道：配对失败` | `online:false, authFailures>0` | **扩展在轮询，但 token 与本机 devserver 不匹配** | 插件面板点「重置配对」（或删 `workflows/.capture-extension-token`），3~5 秒自动恢复 |
+| `扩展通道：在线（Edge）` | `online:true, host.browser` | 通道可用 | — |
+
+### 2. 「配对失败」是最隐蔽的一类（实战踩过）
+
+配对走 TOFU：本机 token 文件 `workflows/.capture-extension-token` 只认**第一次**接触的 token。扩展侧 token 存在浏览器 `chrome.storage.local`：
+
+- 重装扩展 / 换浏览器 profile / 清扩展数据 → 扩展生成新 token；
+- devserver 仍只认旧 token → 扩展每个 `next` 请求都 403；
+- 扩展侧只做 3s 退避重试、不弹窗 → 现象就是「静默地怎么都不生效」，而 `lastPollSecondsAgo` 永远是 `null`。
+
+观测与修复：
+
+- hub 记录 `authFailures` / `lastAuthFailure`（成功轮询即清零），`/api/ext/status` 暴露 → 前端徽标显示「配对失败」；
+- 一键修复：插件面板「重置配对」= `POST /api/capture/extension/token` body `{"token": ""}` → 删除本机 token，扩展下次轮询自动重新配对；
+- 兜底：手工删除 `workflows/.capture-extension-token`。
+
+### 3. 排障顺序（都可从界面看到，不必翻日志）
+
+1. **顶部徽标**：区分「没装/没开」与「配对失败」；
+2. **运行面板**：失败时显示 `失败：<code> · 节点 <nodeId>` + 原因 + 通道；
+3. **立即失败 vs 等 30 秒**：扩展通道命令是「入队等扩展来领」，扩展不在线时若不预检要躺满 `timeoutMs`（默认 30s）才以 TIMEOUT 收场——用户只会看到"没打开浏览器"。现在执行前先探通道：离线 **<1s** 失败并给出「① 浏览器已打开 ② 扩展已加载并启用 ③ devserver 在运行」的清单；
+4. **TIMEOUT 只在真超时时出现**：扩展在线但没在时限内回应（浏览器挂起 / MV3 service worker 休眠），错误信息指向这一点；连接不上 hub（`RPA_EXT_HUB_URL` 端口不对）另给「重启 devserver」的说明。

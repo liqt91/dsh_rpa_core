@@ -117,6 +117,10 @@ class ExtensionExecHub:
         self._seq = 0
         # 扩展宿主浏览器身份（由扩展侧长轮询/ping 上报）：决定"指定 Edge"能否兑现
         self._host: dict[str, Any] | None = None
+        # 鉴权失败观测：扩展与本机 devserver token 不匹配时，扩展侧只静默重试，
+        # 表现是"插件装了却永远不在线"；留痕后 /api/ext/status 才能解释这个状态。
+        self._auth_failures = 0
+        self._last_auth_failure: dict[str, Any] | None = None
 
     # -- 宿主身份 ------------------------------------------------------------
 
@@ -240,6 +244,9 @@ class ExtensionExecHub:
             self.record_host(host_report)
         with self._cond:
             self._last_poll = time.monotonic()
+            # 能成功轮询 = token 已配对，清掉历史鉴权失败留痕
+            self._auth_failures = 0
+            self._last_auth_failure = None
             deadline = time.monotonic() + max(0.0, wait_seconds)
             while not self._queue:
                 remaining = deadline - time.monotonic()
@@ -249,6 +256,16 @@ class ExtensionExecHub:
             command_id = self._queue.pop(0)
             entry = self._inflight.get(command_id)
             return dict(entry["command"]) if entry else None
+
+    def record_auth_failure(self, reason: str) -> None:
+        """记录一次 token 校验失败（扩展装了但与本机 devserver 未配对）。
+
+        这是"插件明明重载了却不在线"的最隐蔽原因：扩展侧 403 后只退避重试，
+        用户毫无感知。留痕后前端可提示"重装/重置配对"。
+        """
+        with self._cond:
+            self._auth_failures += 1
+            self._last_auth_failure = {"reason": reason, "at": time.time()}
 
     def deliver_result(self, payload: dict[str, Any]) -> bool:
         """扩展回传结果；未知 id / 已超时返回 False（前端记录用，不报错）。"""
@@ -272,6 +289,10 @@ class ExtensionExecHub:
                 "inflight": len(self._inflight),
                 "permissions": dict(self._permissions),
                 "host": dict(self._host) if self._host else None,
+                "authFailures": self._auth_failures,
+                "lastAuthFailure": (
+                    dict(self._last_auth_failure) if self._last_auth_failure else None
+                ),
             }
 
 

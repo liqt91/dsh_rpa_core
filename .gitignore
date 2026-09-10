@@ -23,3 +23,6 @@ _tmp_*/
 # Node.js
 node_modules/
 frontend/dist/
+
+# 本机扩展配对 token（TOFU 生成/采纳，含本机凭据，不应入库）
+.capture-extension-token

@@ -263,6 +263,13 @@ body.resizing-bottom * { cursor: row-resize !important; }
 #run-events-toggle { cursor: pointer; color: var(--accent); }
 #run-events { margin-top: 6px; max-height: 140px; overflow-y: auto; font-family: Consolas, monospace; font-size: 11px; }
 .run-event-line { padding: 1px 0; color: var(--faint); }
+/* 运行失败原因：只写「完成：failed」会让用户完全不知道没跑起来的原因 */
+#run-error {
+  margin-top: 6px; padding: 6px 8px; border-radius: 6px; white-space: pre-wrap;
+  background: rgba(207, 34, 46, .06); border-left: 3px solid var(--bad);
+  color: #1f2328; font-size: 12px; line-height: 1.5;
+}
+#run-error.hidden { display: none; }
 
 /* 元素库捕获入口 */
 .capture-entry { position: relative; display: flex; gap: 4px; align-items: center; }

@@ -539,3 +539,115 @@ def test_executor_auto_channel_defers_to_playwright_on_host_mismatch(server):
         asyncio.run(go())
     finally:
         fake.stop()
+
+
+def test_status_surfaces_auth_failures_and_clears_after_pairing(server):
+    """配对失败留痕：扩展装了但 token 与本机 devserver 不匹配（静默 403）→ status 可见。
+
+    这是"插件重载了却始终不在线"的最隐蔽原因，扩展侧只会退避重试，用户毫无感知。
+    """
+    base = f"http://127.0.0.1:{server.port}"
+    # 先完成 TOFU 配对（首次接触采纳并持久化）
+    status, _ = _request("GET", "/api/ext/command/next?wait=0", base=base, token=TOKEN)
+    assert status == 200
+
+    # 另一个 token（模拟扩展侧持久化了旧 token）→ 403 并留痕
+    rejected, _ = _request(
+        "GET", "/api/ext/command/next?wait=0", base=base, token="stale-token"
+    )
+    assert rejected == 403
+    _, payload = _request("GET", "/api/ext/status", base=base)
+    assert payload["authFailures"] >= 1
+    assert payload["lastAuthFailure"]["reason"] == "token mismatch"
+
+    # 正确 token 恢复轮询 → 留痕清零（说明配对已恢复正常）
+    ok_status, ok_payload = _request(
+        "GET", "/api/ext/command/next?wait=0", base=base, token=TOKEN
+    )
+    assert ok_status == 200 and ok_payload["command"] is None
+    _, cleared = _request("GET", "/api/ext/status", base=base)
+    assert cleared["authFailures"] == 0
+    assert cleared["lastAuthFailure"] is None
+    assert cleared["online"] is True
+
+
+def test_executor_extension_offline_fails_fast_with_actionable_error(server):
+    """扩展通道离线：立即失败（不白等 timeoutMs），并给出可照着做的排查步骤。
+
+    回归点：命令是「入队等扩展来领」，离线时原先要躺满 timeoutMs 才以 TIMEOUT 收场，
+    用户看到的只是"执行后没有打开浏览器"，无从判断是插件没装、浏览器没开还是配错了。
+    """
+    base = f"http://127.0.0.1:{server.port}"
+    executor = _executor(base)
+
+    async def go():
+        try:
+            started = time.monotonic()
+            result = await executor.execute(
+                _invocation(
+                    "browser.navigate",
+                    {"url": "https://a.test/one", "transport": "extension"},
+                ),
+                asyncio.Event(),
+            )
+            elapsed = time.monotonic() - started
+            assert result.status == "error", result.outputs
+            assert result.error.code == "EXECUTOR_FAILED"
+            assert "extension 通道当前离线" in result.error.message
+            assert "playwright" in result.error.message  # 给出替代通道
+            assert result.error.details["reason"] == "channel_offline"
+            assert result.error.details["transport"] == "extension"
+            assert elapsed < 5.0, f"离线未快速失败，耗时 {elapsed:.1f}s"
+        finally:
+            await executor.close()
+
+    asyncio.run(go())
+
+
+def test_executor_offline_error_reports_auth_mismatch(server):
+    """配对失败时，执行报错应指向「配对」而不是笼统的「扩展没装」。"""
+    base = f"http://127.0.0.1:{server.port}"
+    _request("GET", "/api/ext/command/next?wait=0", base=base, token=TOKEN)
+    _request("GET", "/api/ext/command/next?wait=0", base=base, token="stale-token")
+    executor = _executor(base)
+
+    async def go():
+        try:
+            result = await executor.execute(
+                _invocation(
+                    "browser.navigate",
+                    {"url": "https://a.test/one", "transport": "extension"},
+                ),
+                asyncio.Event(),
+            )
+            assert result.status == "error"
+            assert result.error.details["reason"] == "auth_mismatch"
+            assert result.error.details["authFailures"] >= 1
+            assert "配对失败" in result.error.message
+            assert "capture-extension-token" in result.error.message
+        finally:
+            await executor.close()
+
+    asyncio.run(go())
+
+
+def test_extension_token_reset_clears_pairing_for_repair(server):
+    """一键重置配对：删本机 token → 扩展下次轮询按 TOFU 自动重新配对。
+
+    覆盖「插件重装后 token 变了、通道一直离线」的修复路径（用户不必手删文件）。
+    """
+    base = f"http://127.0.0.1:{server.port}"
+    _request("GET", "/api/ext/command/next?wait=0", base=base, token=TOKEN)  # 先配对
+    _, before = _request("GET", "/api/capture/extension/token", base=base)
+    assert before["configured"] is True
+
+    _, reset = _request("POST", "/api/capture/extension/token", {"token": ""}, base=base)
+    assert reset["reset"] is True
+    assert reset["configured"] is False
+
+    # 重置后：扩展（持有新 token）的第一次轮询被 TOFU 采纳并正常工作
+    status, _ = _request("GET", "/api/ext/command/next?wait=0", base=base, token="fresh-uuid")
+    assert status == 200
+    _, after = _request("GET", "/api/capture/extension/token", base=base)
+    assert after["token"] == "fresh-uuid"
+    assert after["configured"] is True

@@ -368,10 +368,22 @@ class DevServerApp:
             return None
 
     def extension_token(self, body: Any) -> dict:
-        """配对 token：PUT/POST body {"token": "..."} 显式写入；GET 返回当前状态与值。"""
-        if isinstance(body, dict) and body.get("token"):
-            self._token_path.write_text(str(body["token"]), encoding="utf-8")
-            return {"configured": True, "token": str(body["token"])}
+        """配对 token：body {"token": "..."} 写入；{"token": ""} 重置；GET 查状态与值。
+
+        重置（空 token）= 删掉本机 token 文件，扩展下次长轮询时按 TOFU 重新采纳——
+        插件重装/升级后会换 token，这一步免去用户手动删文件（就是「插件不在线」的
+        最常见成因）。
+        """
+        if isinstance(body, dict) and "token" in body:
+            token = str(body.get("token") or "").strip()
+            if not token:
+                try:
+                    self._token_path.unlink()
+                except FileNotFoundError:
+                    pass
+                return {"configured": False, "token": None, "reset": True}
+            self._token_path.write_text(token, encoding="utf-8")
+            return {"configured": True, "token": token}
         return {"configured": self._read_token() is not None,
                 "token": self._read_token()}
 
@@ -379,6 +391,7 @@ class DevServerApp:
         expected = self._read_token()
         provided = headers.get("X-Capture-Token", "")
         if not provided:
+            self._extension_hub.record_auth_failure("missing token")
             raise ApiError(403, "FORBIDDEN", "missing capture extension token")
         if expected is None:
             # TOFU（trust on first use）：loopback 本地工具，首次接触自动采纳并持久化，
@@ -386,6 +399,7 @@ class DevServerApp:
             self._token_path.write_text(provided, encoding="utf-8")
             return
         if provided != expected:
+            self._extension_hub.record_auth_failure("token mismatch")
             raise ApiError(403, "FORBIDDEN", "invalid capture extension token")
 
     def _pending_extension_session(self) -> str | None:

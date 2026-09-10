@@ -19,6 +19,11 @@ MV3 零构建扩展（Chrome/Edge），两条通道：
 
 扩展首次轮询 devserver 时自动生成 token 并携带——devserver **TOFU（首次接触自动采纳）**并持久化到 `workflows/.capture-extension-token`，之后只认这个 token。无需任何手动配对操作。popup 里可查看 token / 重新生成（重新生成后需删除 devserver 的 `.capture-extension-token` 文件再轮换）。
 
+**换过 token 怎么办**：重装扩展 / 换浏览器 profile / 清扩展数据后，扩展会生成**新 token**，而 devserver 仍只认旧的 → 每个请求 403，且扩展侧只做 3s 退避重试，表现为「插件明明重载了、通道却一直离线」。
+
+- 识别：`/api/ext/status` 的 `authFailures > 0` / `lastAuthFailure.reason == "token mismatch"`；编辑器顶部徽标显示「扩展通道：配对失败」。
+- 修复：编辑器「⇲ 插件」面板点**重置配对**（= `POST /api/capture/extension/token` body `{"token":""}`，删除本机 token）→ 扩展下次轮询（~3s）自动重新配对；也可手工删 `workflows/.capture-extension-token`。
+
 ## 使用
 
 - 编辑器元素库「＋捕获」（或 `rpa-core capture browser --transport extension`）发起捕获 → 扩展 content script 在所有页面激活 hover 高亮 → 鼠标移到目标 Ctrl+Click 捕获 → 描述符回传编辑器（可改名/改 selector 后入库）

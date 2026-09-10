@@ -1475,17 +1475,26 @@ async function refreshExtChannel() {
   const badge = $("ext-channel-badge");
   if (badge) {
     const hostName = hostBrowserLabel(channelHostBrowser(status));
-    badge.textContent = status.online
-      ? `扩展通道：在线${hostName ? `（${hostName}）` : ""}`
-      : "扩展通道：离线";
-    badge.className = `ext-badge ext-channel-badge ${status.online ? "ok" : "off"}`;
-    badge.title = status.online
-      ? `自研插件在线，浏览器指令缺省走 extension 通道；宿主浏览器：${hostName || "未上报（请在扩展页重载插件）"}`
-      : "自研插件未在线：浏览器指令缺省回退 playwright。点左侧「⇲ 插件」安装/重载";
+    const authFailures = Number(status.authFailures || 0);
+    if (status.online) {
+      badge.textContent = `扩展通道：在线${hostName ? `（${hostName}）` : ""}`;
+      badge.className = "ext-badge ext-channel-badge ok";
+      badge.title = `自研插件在线，浏览器指令缺省走 extension 通道；宿主浏览器：${hostName || "未上报（请在扩展页重载插件）"}`;
+    } else if (authFailures) {
+      // 最隐蔽的一种：插件装了、也在轮询，但 token 与本机 devserver 不匹配
+      badge.textContent = "扩展通道：配对失败";
+      badge.className = "ext-badge ext-channel-badge off";
+      badge.title = `${authFailures} 次连接被拒（token 不匹配）。处置：删除 workflows/.capture-extension-token 后重启 devserver（扩展会自动重新配对），或点左侧「⇲ 插件」重新配对`;
+    } else {
+      badge.textContent = "扩展通道：离线";
+      badge.className = "ext-badge ext-channel-badge off";
+      badge.title = "自研插件未在线：浏览器指令缺省回退 playwright。点左侧「⇲ 插件」安装/重载";
+    }
   }
   // 状态真正变化且当前选中的是浏览器指令 → 刷新通道预览（避免定时重渲染打断输入）
   const changed = !previous
     || previous.online !== status.online
+    || Number(previous.authFailures || 0) !== Number(status.authFailures || 0)
     || channelHostBrowser(previous) !== channelHostBrowser(status);
   if (changed && state.selected) {
     const node = findNode(state.selected);
@@ -2815,11 +2824,35 @@ async function runWorkflow() {
     activeRunId = result.runId;
     $("run-panel").classList.remove("hidden");
     $("btn-run-cancel").classList.remove("hidden");
+    renderRunError(null); // 新一次运行先清掉上一轮的失败说明
     $("run-status-text").textContent = `运行中… ${flow} (${activeRunId})`;
     pollRunStatus();
   } catch (err) {
     showCompileMessage(`运行启动失败：${err.message || err}`, false);
   }
+}
+
+// 运行失败时把原因摊开：只写「完成：failed」时用户完全不知道"没打开浏览器"从何而来
+function renderRunError(result) {
+  const box = $("run-error");
+  if (!box) return;
+  const error = result && result.error;
+  if (!error) {
+    box.textContent = "";
+    box.classList.add("hidden");
+    return;
+  }
+  const details = error.details || {};
+  const lines = [
+    `失败：${error.code || "ERROR"}${details.nodeId ? ` · 节点 ${details.nodeId}` : ""}`,
+  ];
+  if (error.message) lines.push(error.message);
+  if (details.transport || details.reason) {
+    lines.push(`通道：${details.transport || "-"}${details.reason ? `（${details.reason}）` : ""}`);
+  }
+  if (details.commandId) lines.push(`指令：${details.commandId}`);
+  box.textContent = lines.join("\n");
+  box.classList.remove("hidden");
 }
 
 async function pollRunStatus() {
@@ -2832,7 +2865,10 @@ async function pollRunStatus() {
     } else {
       const result = s.result;
       const status = result ? result.status : `exit ${s.exitCode}`;
-      $("run-status-text").textContent = `完成：${status} (${activeRunId})`;
+      const error = result && result.error;
+      const summary = error ? `${status} · ${error.code}` : status;
+      $("run-status-text").textContent = `完成：${summary} (${activeRunId})`;
+      renderRunError(result);
       $("btn-run-cancel").classList.add("hidden");
       activeRunId = null;
       loadRunEventsOnce();
@@ -2889,6 +2925,23 @@ async function loadExtensionStatus() {
   $("extension-dir-path").value = data.extensionDir || "";
   renderBrowserButtons("extension-open-browsers", data);
   renderStatusRows("extension-browsers", data);
+  await loadExtensionPairing();
+}
+
+// 执行通道配对状态：扩展与本机 devserver 必须持有同一 token。
+// 插件重装/升级后会换 token，此时扩展每 3s 被 403 重试、通道永远离线——
+// 这是"插件重载了却怎么都不生效"的最常见成因，故在此显式暴露 + 一键重置。
+async function loadExtensionPairing() {
+  const el = $("extension-pair-state");
+  if (!el) return;
+  try {
+    const data = await api("GET", "/api/capture/extension/token");
+    el.textContent = data.configured
+      ? `已配对（token ${String(data.token || "").slice(0, 12)}…）`
+      : "未配对：扩展首次连接时自动配对";
+  } catch (err) {
+    el.textContent = `配对状态读取失败：${err.message || err}`;
+  }
 }
 
 // 第 2 步：每浏览器一个「打开浏览器」按钮
@@ -3114,6 +3167,24 @@ async function init() {
   });
   // 仅「关闭」按钮关闭模态框；点击遮罩不关闭（避免误触丢失引导上下文）
   $("extension-dialog-close").addEventListener("click", () => toggleExtensionDialog(false));
+  $("btn-ext-reset-pair").addEventListener("click", async (e) => {
+    const btn = e.currentTarget;
+    btn.disabled = true;
+    try {
+      const data = await api("POST", "/api/capture/extension/token", { token: "" });
+      showExtensionResult(
+        data.reset
+          ? "已重置配对：等 3~5 秒，扩展下次轮询会自动重新配对（顶部「扩展通道」徽标应转为在线）"
+          : "重置未生效，请手动删除 workflows/.capture-extension-token",
+        true,
+      );
+      await loadExtensionPairing();
+    } catch (err) {
+      showExtensionResult(`重置失败：${err.message || err}`, false);
+    } finally {
+      btn.disabled = false;
+    }
+  });
   $("btn-run-status").addEventListener("click", () => {
     loadRunStatus().catch((err) => showCompileMessage(String(err.message || err), false));
   });

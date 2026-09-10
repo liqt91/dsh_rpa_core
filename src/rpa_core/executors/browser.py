@@ -951,6 +951,49 @@ class PlaywrightExecutor(CommandExecutor):
         host = status.get("host") if isinstance(status.get("host"), dict) else {}
         return channel_matches_host(channel, str(host.get("browser") or "") or None)
 
+    async def _extension_preflight(self, inputs: dict[str, Any]) -> CommandResult | None:
+        """扩展通道前置检查：扩展必须在线（离线立即失败，不白等整段命令超时）。
+
+        为什么必须前置：扩展通道的命令是「入队等扩展来领」，扩展不在线时命令会在队列里
+        躺满 timeoutMs（默认 30s）才以 TIMEOUT 返回。用户看到的现象只是「执行后没有打开
+        浏览器」，完全无从判断是插件没装、浏览器没开、还是配对失败。这里提前 <1s 给出
+        可操作的失败原因。
+        """
+        try:
+            status = await asyncio.to_thread(self._ext.status)
+        except Exception:  # noqa: BLE001 - 探测失败一律按离线处理
+            status = {"online": False}
+        auth_failures = int(status.get("authFailures") or 0)
+        # 成功轮询会清零 authFailures，所以 authFailures>0 表示「最近一次接触是失败的」——
+        # 即使 online 仍为真（窗口内曾成功轮询过），也说明配对已经掉了，必须报出来。
+        if status.get("online") and not auth_failures:
+            return None
+        if auth_failures:
+            hint = (
+                f"检测到扩展已尝试连接但配对失败（token 不匹配，累计 {auth_failures} 次）："
+                "删除 workflows/.capture-extension-token 后重启 devserver，"
+                "或在编辑器顶部点「插件」重新配对"
+            )
+            reason = "auth_mismatch"
+        else:
+            hint = (
+                "请依次确认 ① 目标浏览器（Chrome/Edge）已打开；② 扩展已加载并启用"
+                "（edge://extensions 或 chrome://extensions 里点「重新加载」）；"
+                "③ devserver 正在运行且扩展指向的端口一致"
+            )
+            reason = "channel_offline"
+        return CommandResult.failure(
+            ErrorCode.EXECUTOR_FAILED,
+            f"extension 通道当前离线：没有检测到浏览器里的自研插件在轮询命令。{hint}。"
+            "若本轮不依赖登录态，把 transport 改为 playwright（独立自动化浏览器）"
+            "或 bsk 即可立即执行。",
+            details={
+                "transport": "extension",
+                "reason": reason,
+                "authFailures": auth_failures,
+            },
+        )
+
     async def _extension_channel_guard(self, inputs: dict[str, Any]) -> CommandResult | None:
         """扩展通道下校验 channel 能否兑现（不能返回失败结果，能则返回 None）。
 
@@ -994,6 +1037,9 @@ class PlaywrightExecutor(CommandExecutor):
         self, invocation: CommandInvocation, inputs: dict[str, Any], started: float
     ) -> CommandResult:
         """打开网页（扩展传输）= 在用户真实浏览器里新建标签页（无启动浏览器概念）。"""
+        offline = await self._extension_preflight(inputs)
+        if offline is not None:
+            return offline
         mismatch = await self._extension_channel_guard(inputs)
         if mismatch is not None:
             return mismatch
@@ -1053,6 +1099,11 @@ class PlaywrightExecutor(CommandExecutor):
                     invocation, EffectKind.SESSION, resource, {"operation": "detach"},
                     outputs={"sessionId": session_id},
                 )
+            # 关闭（解绑）不依赖扩展在线；其余命令前先确认扩展还在轮询，
+            # 否则会白等 timeoutMs（默认 30s）才报 TIMEOUT。
+            offline = await self._extension_preflight(inputs)
+            if offline is not None:
+                return offline
             if command == "browser.navigate":
                 action = str(inputs.get("action") or "goto")
                 if action == "goto":
@@ -1309,9 +1360,25 @@ class PlaywrightExecutor(CommandExecutor):
         )
 
     def _ext_channel_failure(self, exc: ExtensionChannelError) -> CommandResult:
-        code = ErrorCode.TIMEOUT if exc.code == "TIMEOUT" else ErrorCode.EXECUTOR_FAILED
+        """扩展通道错误整形：把协议码翻译成用户能照着做的说明。"""
+        if exc.code == "TIMEOUT":
+            return CommandResult.failure(
+                ErrorCode.TIMEOUT,
+                "extension channel: 命令已下发但扩展未在时限内回应——浏览器可能已关闭、"
+                "扩展被禁用，或浏览器被挂起（MV3 service worker 休眠）。"
+                "请确认目标浏览器仍在运行且扩展已启用后重试。",
+                details={"channel": "extension", "code": exc.code, "reason": "no_response"},
+            )
+        if exc.code == "CHANNEL_OFFLINE":
+            return CommandResult.failure(
+                ErrorCode.EXECUTOR_FAILED,
+                "extension channel: 连不上本机 devserver 的命令端点（RPA_EXT_HUB_URL）——"
+                "请确认 devserver 正在运行；重启过端口变化时需一并重启 devserver，"
+                "让 run 子进程拿到正确端口。",
+                details={"channel": "extension", "code": exc.code, "reason": "hub_unreachable"},
+            )
         return CommandResult.failure(
-            code,
+            ErrorCode.EXECUTOR_FAILED,
             f"extension channel: {exc}",
             details={"channel": "extension", "code": exc.code},
         )

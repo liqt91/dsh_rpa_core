@@ -102,6 +102,12 @@
     <div class="ext-guide-step"><b>第 4 步</b>：开启「开发者模式」→ 点「加载已解压的扩展程序」，选第 1 步的目录</div>
     <p class="hint">加载完成后本页状态应显示「已启用」；扩展管理页需在地址栏粘贴 chrome://extensions（浏览器不允许外部直接打开）。</p>
 
+    <div class="ext-guide-step"><b>第 5 步</b>：执行通道配对（扩展与本机 devserver 必须持有同一 token）</div>
+    <div class="ext-manual-row">
+      <span id="extension-pair-state">检测中…</span>
+      <button id="btn-ext-reset-pair" title="删除本机 token，扩展下次轮询时自动重新配对（重装/升级插件后 token 变化、执行通道一直显示离线时用）">重置配对</button>
+    </div>
+
     <div id="extension-result" class="hidden"></div>
     <div class="dlg-actions">
       <button id="extension-dialog-close">关闭</button>
@@ -115,6 +121,7 @@
       <span id="run-status-text"></span>
       <span id="run-events-toggle">事件流 ▾</span>
     </div>
+    <div id="run-error" class="hidden"></div>
     <div id="run-events" class="hidden"></div>
   </div>
   <details id="glossary">
