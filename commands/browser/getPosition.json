@@ -1,5 +1,6 @@
 {
   "id": "browser.getPosition",
+  "x-palette-order": 21,
   "version": "1.0.0",
   "executor": "browser.playwright",
   "kind": "query",

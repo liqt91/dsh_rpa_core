@@ -118,6 +118,14 @@ class CommandManifest(BaseModel):
             "目标变量名，运行值写入 scopes.variables（允许覆盖同名变量，即重赋值）"
         ),
     )
+    x_palette_order: int | None = Field(
+        default=None,
+        alias="x-palette-order",
+        description=(
+            "命令在左侧命令面板同命名空间内的展示顺序权重"
+            "（升序，缺省按命令 id 字母序兜底）"
+        ),
+    )
 
     @model_validator(mode="after")
     def validate_retry_policy(self) -> "CommandManifest":

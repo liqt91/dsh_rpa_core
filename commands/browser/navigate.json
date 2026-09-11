@@ -1,6 +1,7 @@
 {
   "id": "browser.navigate",
-  "version": "2.6.0",
+  "x-palette-order": 1,
+  "version": "3.5.0",
   "executor": "browser.playwright",
   "kind": "action",
   "risk": "browser-control",
@@ -19,8 +20,23 @@
   },
   "input_schema": {
     "type": "object",
-    "required": [],
+    "required": [
+      "browserType"
+    ],
     "properties": {
+      "browserType": {
+        "type": "string",
+        "enum": [
+          "msedge",
+          "chrome"
+        ],
+        "x-enum-labels": {
+          "msedge": "Edge",
+          "chrome": "Chrome"
+        },
+        "default": "msedge",
+        "description": "指定由哪个浏览器的自研插件打开网页（Edge/Chrome）。Chrome 与 Edge 可各自安装插件，命令会路由到所选浏览器的插件执行；未安装插件的浏览器在编辑器中置灰，运行时会快速失败"
+      },
       "action": {
         "type": "string",
         "enum": [
@@ -35,81 +51,37 @@
           "forward": "前进",
           "reload": "重新加载（刷新）"
         },
-        "description": "跳转方式（对标影刀「跳转至新网址」）：goto=打开新网页（默认，需 url，启动/复用浏览器）；back=后退；forward=前进；reload=重新加载（刷新），三者需提供已有 sessionId",
+        "description": "跳转方式（对标影刀「跳转至新网址」）：goto=打开新网页（默认，需 url，在用户真实浏览器里新建标签页）；back=后退；forward=前进；reload=重新加载（刷新），三者需提供已有 sessionId",
         "default": "goto"
       },
       "url": {
         "type": "string",
-        "x-fx": true
-      },
-      "waitUntil": {
-        "type": "string",
-        "enum": [
-          "load",
-          "domcontentloaded",
-          "commit",
-          "networkidle"
-        ],
-        "x-enum-labels": {
-          "domcontentloaded": "DOM 就绪即返回",
-          "load": "全部资源加载完成",
-          "networkidle": "网络空闲",
-          "commit": "收到响应即返回"
-        },
-        "description": "等待网页加载完成的事件策略（对标影刀「等待网页加载完成」参数）：domcontentloaded=DOM就绪即返回（默认）；load=等待全部资源加载；networkidle=网络空闲；commit=收到响应即返回",
-        "default": "domcontentloaded"
+        "x-fx": true,
+        "description": "目标网址（action=goto 必填）。可省略 http(s):// 前导协议（如填 baidu.com 自动补全为 https://baidu.com）"
       },
       "timeoutMs": {
         "type": "integer",
         "minimum": 1
       },
-      "channel": {
+      "onTimeout": {
         "type": "string",
         "enum": [
-          "chromium",
-          "chrome",
-          "msedge",
-          "firefox",
-          "webkit"
+          "error",
+          "stop"
         ],
         "x-enum-labels": {
-          "chromium": "内置 Chromium（默认）",
-          "chrome": "Google Chrome",
-          "msedge": "Microsoft Edge",
-          "firefox": "Firefox",
-          "webkit": "WebKit（试验）"
+          "error": "报错（走错误处理）",
+          "stop": "停止网页加载并继续"
         },
-        "description": "浏览器类型（对标影刀浏览器类型）。playwright 通道=启动/复用该内核的独立浏览器（chromium=内置浏览器默认，chrome/msedge/firefox/webkit=本机已装内核）；extension 通道（自研插件，一等公民）=校验扩展宿主浏览器是否匹配（浏览器 = 扩展装在哪，无法启动），chromium 表示任意 Chromium 内核发行版；宿主不匹配时缺省通道会自动让位给 playwright，显式 transport=extension 则报错。国产壳（ie/360se/QQ）不在支持范围"
+        "default": "error",
+        "description": "加载超时后执行（对标影刀「加载超时后执行」）：页在 timeoutMs 内未加载完成时的处理——error=视为超时失败（走引擎错误处理，可配重试/忽略）；stop=停止网页加载并继续后续流程"
       },
-      "args": {
+      "commandLineArgs": {
         "type": "array",
         "items": {
           "type": "string"
         },
-        "description": "命令行参数（可为空）：必须是目标浏览器支持的命令行，如 --incognito、--start-maximized、--user-data-dir=..."
-      },
-      "headless": {
-        "type": "boolean"
-      },
-      "userAgent": {
-        "type": "string",
-        "minLength": 1
-      },
-      "userDataDir": {
-        "type": "string",
-        "minLength": 1
-      },
-      "transport": {
-        "type": "string",
-        "enum": [
-          "extension",
-          "playwright"
-        ],
-        "x-enum-labels": {
-          "extension": "自研插件（真实已登录浏览器）",
-          "playwright": "独立自动化浏览器"
-        },
-        "description": "执行通道（一等公民=自研扩展）：extension=自研 MV3 扩展，在用户真实已登录浏览器里新建标签页（浏览器=扩展宿主，默认权限为整个浏览器）；playwright=独立自动化浏览器（headless/userAgent/userDataDir/channel 生效）。缺省时：扩展在线且（未指定 channel 或宿主匹配）→extension，否则回退 playwright"
+        "description": "浏览器命令行参数（仅当目标浏览器离线自动拉起时生效，如 --user-data-dir=<独立配置目录> 以可靠注入插件、--incognito 等）；目标浏览器已在线时忽略"
       }
     },
     "additionalProperties": false,
@@ -117,53 +89,21 @@
       {
         "label": "常规",
         "fields": [
-          "action",
-          "url"
-        ]
-      },
-      {
-        "label": "浏览器",
-        "fields": [
-          "transport",
-          "channel"
+          "browserType",
+          "url",
+          "action"
         ]
       },
       {
         "label": "高级",
         "fields": [
-          "timeoutMs"
-        ],
-        "collapsed": true
-      },
-      {
-        "label": "启动选项（仅 playwright 通道）",
-        "fields": [
-          "waitUntil",
-          "args",
-          "headless",
-          "userAgent",
-          "userDataDir"
+          "timeoutMs",
+          "onTimeout",
+          "commandLineArgs"
         ],
         "collapsed": true
       }
-    ],
-    "x-depends": {
-      "waitUntil": {
-        "transport": "playwright"
-      },
-      "args": {
-        "transport": "playwright"
-      },
-      "headless": {
-        "transport": "playwright"
-      },
-      "userAgent": {
-        "transport": "playwright"
-      },
-      "userDataDir": {
-        "transport": "playwright"
-      }
-    }
+    ]
   },
   "output_schema": {
     "type": "object",
@@ -183,6 +123,19 @@
         "type": "string",
         "const": "webPage",
         "description": "资源类型标签：webPage=浏览器网页对象，windowHandle=桌面窗口句柄"
+      },
+      "browserInstance": {
+        "type": ["string", "null"],
+        "description": "实际创建该网页对象的浏览器实例唯一 id（同一 profile 多窗口同一 id，不同 profile 各自独立）"
+      },
+      "browserType": {
+        "type": "string",
+        "enum": ["msedge", "chrome"],
+        "description": "打开时指定的浏览器类型"
+      },
+      "tabId": {
+        "type": "string",
+        "description": "该网页对象在浏览器里的标签页 id（浏览器进程内，跨运行可能变化，仅供定位）"
       }
     },
     "additionalProperties": false
@@ -198,6 +151,18 @@
     },
     "resourceType": {
       "label": "资源类型",
+      "hidden": true
+    },
+    "browserInstance": {
+      "label": "浏览器实例",
+      "primary": true
+    },
+    "browserType": {
+      "label": "浏览器类型",
+      "hidden": true
+    },
+    "tabId": {
+      "label": "标签页 ID",
       "hidden": true
     }
   },

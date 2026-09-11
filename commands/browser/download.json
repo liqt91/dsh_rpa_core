@@ -1,5 +1,6 @@
 {
   "id": "browser.download",
+  "x-palette-order": 39,
   "version": "1.0.0",
   "executor": "browser.playwright",
   "kind": "action",

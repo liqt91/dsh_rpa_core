@@ -1,5 +1,6 @@
 {
   "id": "browser.screenshot",
+  "x-palette-order": 29,
   "version": "1.0.0",
   "executor": "browser.playwright",
   "kind": "action",

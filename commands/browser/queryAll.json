@@ -1,5 +1,6 @@
 {
   "id": "browser.queryAll",
+  "x-palette-order": 24,
   "version": "1.0.0",
   "executor": "browser.playwright",
   "kind": "query",

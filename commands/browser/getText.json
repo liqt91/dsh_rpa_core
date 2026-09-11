@@ -1,5 +1,6 @@
 {
   "id": "browser.getText",
+  "x-palette-order": 22,
   "version": "1.0.0",
   "executor": "browser.playwright",
   "kind": "query",

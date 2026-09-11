@@ -6,6 +6,7 @@
   ],
   "stability": "stable",
   "id": "browser.attach",
+  "x-palette-order": 3,
   "kind": "lifecycle",
   "risk": "browser-control",
   "capabilities": [

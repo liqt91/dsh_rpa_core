@@ -6,6 +6,7 @@
   ],
   "stability": "stable",
   "id": "browser.waitLoad",
+  "x-palette-order": 6,
   "kind": "query",
   "risk": "read",
   "capabilities": [

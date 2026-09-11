@@ -206,7 +206,7 @@ button:disabled { opacity: .45; cursor: default; }
 .field .dep-note, .channel-preview .field-hint {
   white-space: normal; line-height: 1.4; display: block; margin-top: 2px;
 }
-/* 通道解析预览（浏览器指令：缺省走 extension 还是 playwright） */
+/* 会话/宿主预览（扩展单通道：缺省即走宿主浏览器） */
 .channel-preview { margin-top: -4px; }
 .channel-preview .field-hint { color: var(--accent); }
 .channel-preview .field-hint.bad { color: var(--bad); }

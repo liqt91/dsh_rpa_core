@@ -15,16 +15,13 @@ if (start < 0 || end < 0 || end <= start) {
 }
 const paramGroupPlan = new Function(`${source.slice(start, end)}\nreturn paramGroupPlan;`)();
 
-// navigate.json 的分组声明（与 manifest 保持一致）
+// navigate.json 3.4.0 的分组声明：常规(browserType+url+action) + 高级(timeoutMs+onTimeout+commandLineArgs 折叠)
 const properties = {
-  action: {}, url: {}, waitUntil: {}, timeoutMs: {}, channel: {}, args: {},
-  headless: {}, userAgent: {}, userDataDir: {}, transport: {},
+  browserType: {}, url: {}, action: {}, timeoutMs: {}, onTimeout: {}, commandLineArgs: {},
 };
 const groups = [
-  { label: "常规", fields: ["action", "url"] },
-  { label: "浏览器", fields: ["transport", "channel"] },
-  { label: "高级", fields: ["timeoutMs"], collapsed: true },
-  { label: "启动选项（仅 playwright 通道）", fields: ["waitUntil", "args", "headless", "userAgent", "userDataDir"], collapsed: true },
+  { label: "常规", fields: ["browserType", "url", "action"] },
+  { label: "高级", fields: ["timeoutMs", "onTimeout", "commandLineArgs"], collapsed: true },
 ];
 
 let failed = 0;
@@ -34,44 +31,31 @@ const check = (label, got, expected) => {
   console.log(`${ok ? "PASS" : "FAIL"} | ${label}${ok ? "" : ` → got ${JSON.stringify(got)} want ${JSON.stringify(expected)}`}`);
 };
 
-const planLabels = (withArgs) => paramGroupPlan({ "x-depends": DEPS }, properties, withArgs, groups)
+const planLabels = (withArgs) => paramGroupPlan({}, properties, withArgs, groups)
   .map((p) => [p.label, p.fields, p.open]);
-const DEPS = {
-  waitUntil: { transport: "playwright" },
-  args: { transport: "playwright" },
-  headless: { transport: "playwright" },
-  userAgent: { transport: "playwright" },
-  userDataDir: { transport: "playwright" },
-};
 
-// 缺省（extension 通道）：playwright 专属字段全部进「其他通道参数」折叠区
 check(
-  "缺省通道： inactive=5 个专属字段，折叠",
-  planLabels({ url: "https://x" }).filter((p) => p[0] === "__inactive__"),
-  [["__inactive__", ["waitUntil", "args", "headless", "userAgent", "userDataDir"], false]],
+  "常规组：browserType + url + action 归位按序遍历并展开",
+  planLabels({ url: "https://x" }).find((p) => p[0] === "常规"),
+  ["常规", ["browserType", "url", "action"], true],
 );
 check(
-  "缺省通道：高级组因 timeoutMs 未填值而收起",
+  "高级组：timeoutMs 未填值 → 收起",
   planLabels({}).find((p) => p[0] === "高级")[2],
   false,
 );
 check(
-  "填了 timeoutMs → 高级组自动展开",
+  "填了 timeoutMs → 高级组展开",
   planLabels({ timeoutMs: 5000 }).find((p) => p[0] === "高级")[2],
   true,
 );
-
-// playwright 通道：启动选项字段归位到「启动选项」组，无 inactive
-const pw = planLabels({ transport: "playwright", headless: true });
 check(
-  "playwright 通道：启动选项组归位 5 字段并展开",
-  pw.find((p) => p[0] === "启动选项（仅 playwright 通道）"),
-  ["启动选项（仅 playwright 通道）", ["waitUntil", "args", "headless", "userAgent", "userDataDir"], true],
-);
-check(
-  "playwright 通道：无 inactive 字段",
-  pw.find((p) => p[0] === "__inactive__"),
-  undefined,
+  "无通道参数：两组归位、不出现其他/折叠残留字段",
+  planLabels({}),
+  [
+    ["常规", ["browserType", "url", "action"], true],
+    ["高级", ["timeoutMs", "onTimeout", "commandLineArgs"], false],
+  ],
 );
 
 console.log(failed ? `\n${failed} 项失败` : "\n全部通过");

@@ -6,6 +6,7 @@
   ],
   "stability": "stable",
   "id": "browser.cookieSet",
+  "x-palette-order": 31,
   "kind": "action",
   "risk": "browser-control",
   "capabilities": [
@@ -31,7 +32,7 @@
         "items": {
           "type": "object"
         },
-        "description": "Cookie 对象数组，每项至少含 name/value，且需提供 url 或 domain+path（Playwright 约束）；可选 expires/httpOnly/secure/sameSite"
+        "description": "Cookie 对象数组，每项至少含 name/value，且需提供 url 或 domain+path；可选 expires/httpOnly/secure/sameSite"
       }
     },
     "additionalProperties": false

@@ -1,5 +1,6 @@
 {
   "id": "browser.stopLoading",
+  "x-palette-order": 7,
   "version": "1.0.0",
   "executor": "browser.playwright",
   "kind": "action",

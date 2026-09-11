@@ -6,6 +6,7 @@
   ],
   "stability": "stable",
   "id": "browser.check",
+  "x-palette-order": 15,
   "kind": "action",
   "risk": "browser-control",
   "capabilities": [

@@ -6,6 +6,7 @@
   ],
   "stability": "stable",
   "id": "browser.cookieGet",
+  "x-palette-order": 33,
   "kind": "query",
   "risk": "read",
   "capabilities": [

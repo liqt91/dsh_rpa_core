@@ -1,5 +1,6 @@
 {
   "id": "browser.getScrollPosition",
+  "x-palette-order": 28,
   "version": "1.0.0",
   "executor": "browser.playwright",
   "kind": "query",

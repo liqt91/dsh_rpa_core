@@ -1,5 +1,6 @@
 {
   "id": "browser.input",
+  "x-palette-order": 12,
   "version": "1.0.0",
   "executor": "browser.playwright",
   "kind": "action",

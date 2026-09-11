@@ -6,6 +6,7 @@
   ],
   "stability": "stable",
   "id": "browser.scroll",
+  "x-palette-order": 8,
   "kind": "action",
   "risk": "browser-control",
   "capabilities": [

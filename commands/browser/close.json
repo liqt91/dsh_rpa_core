@@ -1,5 +1,6 @@
 {
   "id": "browser.close",
+  "x-palette-order": 4,
   "version": "1.0.0",
   "executor": "browser.playwright",
   "kind": "lifecycle",

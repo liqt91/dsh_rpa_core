@@ -1,5 +1,6 @@
 {
   "id": "browser.setAttribute",
+  "x-palette-order": 17,
   "version": "1.0.0",
   "executor": "browser.playwright",
   "kind": "action",

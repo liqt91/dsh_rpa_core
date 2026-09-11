@@ -9,19 +9,15 @@
     "children": [
       {
         "type": "action",
-        "id": "openPage",
+        "id": "navigate",
         "command": "browser.navigate",
         "with": {
-          "url": "https://baidu.com",
+          "browserType": "chrome",
           "action": "goto",
-          "transport": "extension",
-          "channel": "chromium"
+          "onTimeout": "error",
+          "url": "baidu.com"
         },
-        "output_aliases": {
-          "sessionId": "web_page1"
-        },
-        "_exprModes": {},
-        "timeout_seconds": 30
+        "_exprModes": {}
       }
     ]
   }

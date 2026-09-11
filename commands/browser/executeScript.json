@@ -1,5 +1,6 @@
 {
   "id": "browser.executeScript",
+  "x-palette-order": 44,
   "version": "1.0.0",
   "executor": "browser.playwright",
   "kind": "action",

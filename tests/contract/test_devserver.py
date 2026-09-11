@@ -50,7 +50,17 @@ def test_catalog_endpoint_matches_load_catalog(server):
     assert status == 200
     catalog = load_catalog(COMMANDS)
     assert payload["digest"] == catalog.digest
-    assert [command["id"] for command in payload["commands"]] == sorted(catalog)
+    # 展示顺序：优先 x_palette_order(升序)，缺省回退命令 id 字母序（与 catalog_overview 一致）
+    expected_ids = sorted(
+        catalog,
+        key=lambda cid: (
+            catalog[cid].x_palette_order
+            if catalog[cid].x_palette_order is not None
+            else float("inf"),
+            cid,
+        ),
+    )
+    assert [command["id"] for command in payload["commands"]] == expected_ids
     for command in payload["commands"]:
         manifest = catalog[command["id"]]
         assert command["version"] == manifest.version
@@ -71,6 +81,49 @@ def test_catalog_endpoint_matches_load_catalog(server):
             assert command["x-outputs"] == manifest.x_outputs
         if manifest.x_var_write:
             assert command["x-var-write"] == manifest.x_var_write
+
+
+def test_browser_palette_ordered_by_yingdao(server):
+    """browser.* 在左侧命令面板按影刀网页自动化指令顺序排列（x_palette_order 回归保护）。"""
+    base = f"http://127.0.0.1:{server.port}"
+    status, payload = _request("GET", "/api/catalog", base=base)
+    assert status == 200
+    browser_ids = [command["id"] for command in payload["commands"]
+                   if command["id"].startswith("browser.")]
+    expected_browser_order = [
+        # 影刀「网页自动化」章节编号（见 docs/yingdao-web-cmds-benchmark.md §二）
+        "browser.navigate",        # 1  打开网页
+        "browser.attach",          # 3  获取已打开的网页对象
+        "browser.close",           # 4  关闭网页
+        "browser.waitLoad",        # 6  等待网页加载完成
+        "browser.stopLoading",     # 7  停止网页加载
+        "browser.scroll",          # 8  鼠标滚动网页
+        "browser.handleDialog",    # 9  自动处理弹框
+        "browser.click",           # 10 点击元素
+        "browser.hover",           # 11 鼠标悬停
+        "browser.input",           # 12 填写输入框
+        "browser.select",          # 14 设置下拉框
+        "browser.check",           # 15 设置复选框
+        "browser.setValue",        # 16 设置元素值
+        "browser.setAttribute",    # 17 设置元素属性
+        "browser.drag",            # 18 拖拽元素
+        "browser.waitFor",         # 19 等待元素
+        "browser.getPosition",     # 21 获取元素位置
+        "browser.getText",         # 22 获取元素信息
+        "browser.getSelectOptions",  # 23 获取下拉框选项
+        "browser.queryAll",        # 24 获取相似元素列表
+        "browser.listPages",       # 27 获取网页对象列表
+        "browser.getScrollPosition",  # 28 获取滚动条位置
+        "browser.screenshot",      # 29 网页截图
+        "browser.cookieSet",       # 31 设置Cookie
+        "browser.cookieGetAll",    # 32 获取筛选所有Cookie
+        "browser.cookieGet",       # 33 获取指定Cookie信息
+        "browser.cookieRemove",    # 34 移除指定Cookie
+        "browser.upload",          # 38 上传文件
+        "browser.download",        # 39 下载文件
+        "browser.executeScript",   # 44 执行JS脚本
+    ]
+    assert browser_ids == expected_browser_order
 
 
 def test_catalog_page_served(server):
@@ -201,12 +254,12 @@ def test_capture_endpoints_without_backend_are_501(server):
     assert status == 501
     assert payload["error"] == "NOT_IMPLEMENTED"
 
-    start_body = {"transport": "persistent"}
+    start_body = {"transport": "extension"}
     status, payload = _request("POST", "/api/capture/browser/start", start_body, base=base)
     assert status == 501
     assert payload["error"] == "NOT_IMPLEMENTED"
 
-    # 请求体校验（400）优先于后端配置检查（501）
+    # 请求体校验（400）优先于后端配置检查（501）；非 extension 传输已随 playwright 移除
     bad = _request("POST", "/api/capture/browser/start", {"transport": "cookie-magic"}, base=base)
     assert bad[0] == 400
     assert bad[1]["error"] == "BAD_REQUEST"

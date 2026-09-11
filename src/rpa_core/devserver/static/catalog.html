@@ -56,6 +56,19 @@ td.mono, code { font-family: Consolas, monospace; }
 .errs { font-size: 12px; color: var(--muted); }
 .errs code { background: var(--bg); padding: 1px 5px; border-radius: 4px; margin-right: 4px; }
 .dep { color: var(--purple); font-size: 11px; }
+tr.pgroup td { background: var(--bg); color: var(--faint); font-weight: 600; font-size: 12px; letter-spacing: .3px; }
+.view-btn.active { background: var(--blue); border-color: var(--blue); color: #fff; }
+#table-view .tbl-wrap { background: #fff; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; margin-bottom: 12px; }
+#table-view table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+#table-view th { background: var(--bg); }
+#table-view th, #table-view td { padding: 6px 10px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: middle; white-space: nowrap; }
+#table-view td.desc-cell, #table-view td.expand-cell { white-space: normal; }
+#table-view tr.trow { cursor: pointer; }
+#table-view tr.trow:hover, #table-view tr.trow.open { background: var(--bg); }
+#table-view tr.trow > td:first-child { font-weight: 600; }
+#table-view .tog { color: var(--faint); font-size: 11px; display: inline-block; width: 14px; }
+#table-view tr.expand-row > td { border-bottom: none; background: #fbfcfe; }
+#table-view tr.expand-row:last-child td { border-bottom: 1px solid var(--line); }
 </style>
 </head>
 <body>
@@ -63,6 +76,8 @@ td.mono, code { font-family: Consolas, monospace; }
   <h1>指令清单</h1>
   <span class="meta" id="meta">加载中…</span>
   <input id="q" placeholder="搜索：中文名 / id / 参数字段…">
+  <button id="view-cards" class="view-btn">卡片视图</button>
+  <button id="view-table" class="view-btn">表格视图</button>
   <button id="expand-all">全部展开</button>
   <button id="collapse-all">全部收起</button>
   <button onclick="location.href='/'">← 返回编辑器</button>
@@ -76,7 +91,8 @@ td.mono, code { font-family: Consolas, monospace; }
     输出区 <span class="primary-mark">★</span> = 主输出；灰色行 = hidden 内部输出（不给别名框，运行值仍可 ${} 引用）。
     类型写法：<code>string / number / integer / boolean / array&lt;T&gt; / object / any</code>。
   </div>
-  <div id="list"></div>
+  <div id="card-view"></div>
+  <div id="table-view" hidden></div>
 </div>
 <script src="/static/i18n.js"></script>
 <script>
@@ -112,7 +128,25 @@ function inputRows(cmd, schema) {
   const deps = (schema && schema["x-depends"]) || {};
   const keys = Object.keys(props);
   if (!keys.length) return '<div class="none">无输入参数</div>';
-  const rows = keys.map((k) => {
+
+  // 展示顺序：有 x-param-groups 则按 分组+组内 fields 顺序；无则退回 manifest 书写顺序
+  let plan;
+  const groups = schema && schema["x-param-groups"];
+  if (Array.isArray(groups) && groups.length) {
+    const seen = new Set();
+    plan = [];
+    for (const g of groups) {
+      const f = (g.fields || []).filter((k) => props[k] !== undefined);
+      f.forEach((k) => seen.add(k));
+      plan.push({ label: g.label, keys: f });
+    }
+    const rest = keys.filter((k) => !seen.has(k));
+    if (rest.length) plan.push({ label: "其他", keys: rest });
+  } else {
+    plan = [{ label: null, keys }];
+  }
+
+  const row = (k) => {
     const p = props[k];
     const dep = deps[k]
       ? `<div class="dep">仅当 ${esc(Object.keys(deps[k])[0])} = ${esc(Object.values(deps[k])[0])}</div>` : "";
@@ -123,8 +157,13 @@ function inputRows(cmd, schema) {
       <td class="mono">${esc(typeOf(p))}</td>
       <td class="desc">${esc(p.description || "")}${def}${dep}</td>
     </tr>`;
-  }).join("");
-  return `<table><tr><th>字段</th><th>名称</th><th>类型</th><th>说明</th></tr>${rows}</table>`;
+  };
+  const rows = [];
+  for (const g of plan) {
+    if (g.label) rows.push(`<tr class="pgroup"><td colspan="4">${esc(g.label)}</td></tr>`);
+    g.keys.forEach((k) => rows.push(row(k)));
+  }
+  return `<table><tr><th>字段</th><th>名称</th><th>类型</th><th>说明</th></tr>${rows.join("")}</table>`;
 }
 
 function outputRows(cmd, schema, xOutputs) {
@@ -149,6 +188,24 @@ function outputRows(cmd, schema, xOutputs) {
   return `<table><tr><th>字段</th><th>别名框标签</th><th>类型</th><th>说明</th></tr>${rows}</table>`;
 }
 
+function cmdDetailHTML(c) {
+  return `<div class="detail">
+    <div class="kv">
+      <span>executor <code>${esc(c.executor)}</code></span>
+      <span>risk <b>${esc(c.risk)}</b></span>
+      <span>默认超时 <b>${esc(c.default_timeout_seconds)}s</b></span>
+      ${(c.capabilities || []).length ? `<span>能力 <code>${c.capabilities.map(esc).join(", ")}</code></span>` : ""}
+      ${(c.resources || []).length ? `<span>资源 <code>${c.resources.map(esc).join(", ")}</code></span>` : ""}
+    </div>
+    <h3 class="ptitle in">输入参数</h3>
+    ${inputRows(c.id, c.input_schema)}
+    <h3 class="ptitle out">输出参数</h3>
+    ${outputRows(c.id, c.output_schema, c["x-outputs"])}
+    <h3 class="ptitle">错误码</h3>
+    <div class="errs">${(c.errors || []).map((x) => `<code>${esc(x)}</code>`).join("") || "无"}</div>
+  </div>`;
+}
+
 function cmdCard(c) {
   const e = c.effect || {};
   const badges = [
@@ -164,22 +221,72 @@ function cmdCard(c) {
       <span class="id">${esc(c.id)} <span class="desc">v${esc(c.version)}</span></span>
       ${badges}
     </summary>
-    <div class="detail">
-      <div class="kv">
-        <span>executor <code>${esc(c.executor)}</code></span>
-        <span>risk <b>${esc(c.risk)}</b></span>
-        <span>默认超时 <b>${esc(c.default_timeout_seconds)}s</b></span>
-        ${(c.capabilities || []).length ? `<span>能力 <code>${c.capabilities.map(esc).join(", ")}</code></span>` : ""}
-        ${(c.resources || []).length ? `<span>资源 <code>${c.resources.map(esc).join(", ")}</code></span>` : ""}
-      </div>
-      <h3 class="ptitle in">输入参数</h3>
-      ${inputRows(c.id, c.input_schema)}
-      <h3 class="ptitle out">输出参数</h3>
-      ${outputRows(c.id, c.output_schema, c["x-outputs"])}
-      <h3 class="ptitle">错误码</h3>
-      <div class="errs">${(c.errors || []).map((x) => `<code>${esc(x)}</code>`).join("") || "无"}</div>
-    </div>
+    ${cmdDetailHTML(c)}
   </details>`;
+}
+
+// 总表视图：每命令一行概览，点行展开/收起该命令的字段详情（复用 cmdDetailHTML）
+const TABLE_HEAD = ["命令", "版本", "类别", "执行器", "风险", "超时(s)", "重试", "effect", "面板序", "输入/输出"];
+function countFields(schema) {
+  return schema && schema.properties ? Object.keys(schema.properties).length : 0;
+}
+function tableGroupHTML(label, members) {
+  const rows = members.map((c) => {
+    const e = c.effect || {};
+    const iCount = countFields(c.input_schema), oCount = countFields(c.output_schema);
+    return `<tr class="trow" data-id="${esc(c.id)}"
+        data-search="${esc((c.id + " " + cmdName(c.id)).toLowerCase())}">
+      <td><span class="tog">▸</span> ${esc(cmdName(c.id))}<br><span class="id">${esc(c.id)}</span></td>
+      <td class="mono">v${esc(c.version)}</td>
+      <td><span class="badge kind-${esc(c.kind)}">${esc(kindName(c.kind))}</span></td>
+      <td class="mono">${esc(c.executor)}</td>
+      <td class="mono">${esc(c.risk)}</td>
+      <td class="mono">${esc(c.default_timeout_seconds)}</td>
+      <td class="mono">${c.retryable ? "✔" : ""}</td>
+      <td class="mono">${esc(e.kind)}·${esc(e.replay)}</td>
+      <td class="mono">${c.x_palette_order !== undefined ? esc(c.x_palette_order) : ""}</td>
+      <td class="mono expand-cell">${iCount} / ${oCount}</td>
+    </tr>`;
+  }).join("");
+  return `<div class="tbl-wrap" data-group="${esc(label)}">
+    <h2 class="group">${esc(label)} <span class="count">${members.length} 条</span></h2>
+    <table><tr>${TABLE_HEAD.map((h) => `<th>${esc(h)}</th>`).join("")}</tr>${rows}</table>
+  </div>`;
+}
+
+function toggleRow(tbody, cmd) {
+  const exists = tbody.querySelector(`tr.expand-row[data-id="${cmd.id}"]`);
+  const head = tbody.querySelector(`tr.trow[data-id="${cmd.id}"]`);
+  head.classList.toggle("open", !exists);
+  head.querySelector(".tog").textContent = exists ? "▸" : "▾";
+  if (exists) { exists.remove(); return; }
+  const row = document.createElement("tr");
+  row.className = "expand-row";
+  row.dataset.id = cmd.id;
+  row.innerHTML = `<td colspan="${TABLE_HEAD.length}" class="expand-cell">${cmdDetailHTML(cmd)}</td>`;
+  head.insertAdjacentElement("afterend", row);
+}
+
+function renderTable(commands, byId) {
+  const groups = []; // 与卡片视图一致的分组顺序
+  const used = new Set();
+  for (const g of GROUPS) {
+    const members = commands.filter((c) => g.match(c.id) && !used.has(c.id));
+    members.forEach((c) => used.add(c.id));
+    if (members.length) groups.push([g.label, members]);
+  }
+  const rest = commands.filter((c) => !used.has(c.id));
+  if (rest.length) groups.push(["其他", rest]);
+  document.getElementById("table-view").innerHTML = groups
+    .map(([label, members]) => tableGroupHTML(label, members))
+    .join("");
+  // 行点击展开/收起（事件委托，含展开详情行内的点击不冒泡展开其它行）
+  document.getElementById("table-view").onclick = (evt) => {
+    const head = evt.target.closest("tr.trow");
+    if (!head) return;
+    const table = head.parentElement;
+    toggleRow(table, byId.get(head.dataset.id));
+  };
 }
 
 async function main() {
@@ -187,7 +294,10 @@ async function main() {
   const data = await res.json();
   const commands = data.commands || [];
   $("meta").textContent = `共 ${commands.length} 条 · digest ${String(data.digest || "").slice(0, 12)}… · 实时来自 /api/catalog`;
-  const list = $("list");
+  const byId = new Map(commands.map((c) => [c.id, c]));
+  const cardView = $("card-view"), tableView = $("table-view");
+
+  // 卡片视图渲染（保留原分组顺序）
   const used = new Set();
   let html = "";
   for (const g of GROUPS) {
@@ -202,24 +312,47 @@ async function main() {
     html += `<h2 class="group">其他 <span class="count">${rest.length} 条</span></h2>`;
     html += rest.map(cmdCard).join("");
   }
-  list.innerHTML = html;
+  cardView.innerHTML = html;
+  renderTable(commands, byId);
 
-  $("q").addEventListener("input", () => {
-    const q = $("q").value.trim().toLowerCase();
+  // 视图切换（卡片/表格），互斥高亮
+  const setView = (which) => {
+    cardView.hidden = which !== "cards";
+    tableView.hidden = which !== "table";
+    $("view-cards").classList.toggle("active", which === "cards");
+    $("view-table").classList.toggle("active", which === "table");
+  };
+  $("view-cards").addEventListener("click", () => setView("cards"));
+  $("view-table").addEventListener("click", () => setView("table"));
+  setView("cards");
+
+  // 搜索在两种视图下都过滤：卡片按 .cmd 行、表格按 .trow 行；命中即自动展开
+  const applySearch = (q) => {
     document.querySelectorAll(".cmd").forEach((el) => {
       const hay = q && el.textContent.toLowerCase();
       el.style.display = !q || el.dataset.search.includes(q) || hay.includes(q) ? "" : "none";
       if (q && el.style.display !== "none") el.open = true;
     });
-    document.querySelectorAll("h2.group").forEach((h) => {
-      let el = h.nextElementSibling, any = false;
-      while (el && el.classList && el.classList.contains("cmd")) {
+    document.querySelectorAll("#table-view tr.trow").forEach((el) => {
+      const hay = q && el.textContent.toLowerCase();
+      el.style.display = !q || el.dataset.search.includes(q) || hay.includes(q) ? "" : "none";
+    });
+    // 隐藏空组：卡片视图按 h2.group 的兄弟 .cmd 遍历；表格视图整体隐藏空 .tbl-wrap
+    document.querySelectorAll("#card-view h2.group").forEach((h) => {
+      let any = false, el = h.nextElementSibling;
+      while (el && el.classList.contains("cmd")) {
         if (el.style.display !== "none") any = true;
         el = el.nextElementSibling;
       }
       h.style.display = any ? "" : "none";
     });
-  });
+    document.querySelectorAll("#table-view .tbl-wrap").forEach((wrap) => {
+      const any = [...wrap.querySelectorAll("tr.trow")].some((el) => el.style.display !== "none");
+      wrap.style.display = any ? "" : "none";
+    });
+  };
+  $("q").addEventListener("input", () => applySearch($("q").value.trim().toLowerCase()));
+
   $("expand-all").addEventListener("click", () =>
     document.querySelectorAll(".cmd").forEach((el) => { el.open = true; }));
   $("collapse-all").addEventListener("click", () =>

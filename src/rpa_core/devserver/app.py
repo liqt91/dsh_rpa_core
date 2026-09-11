@@ -51,7 +51,7 @@ DEFAULT_CAPABILITIES = frozenset(
 )
 
 _CAPTURE_ACTIONS = frozenset({"start", "pick", "cancel"})
-_BROWSER_TRANSPORTS = frozenset({"persistent", "user-browser", "extension"})
+_BROWSER_TRANSPORTS = frozenset({"extension"})
 
 
 class ApiError(Exception):
@@ -129,7 +129,17 @@ class DevServerApp:
 
     def catalog_overview(self) -> dict:
         commands = []
-        for command_id in sorted(self._catalog):
+        # 按 x_palette_order(升序)排序，缺省回退命令 id 字母序；其余命名空间因此保持原顺序
+        ordered_ids = sorted(
+            self._catalog,
+            key=lambda command_id: (
+                self._catalog[command_id].x_palette_order
+                if self._catalog[command_id].x_palette_order is not None
+                else float("inf"),
+                command_id,
+            ),
+        )
+        for command_id in ordered_ids:
             manifest = self._catalog[command_id]
             entry = {
                 "id": manifest.id,
@@ -151,6 +161,8 @@ class DevServerApp:
                 entry["x-outputs"] = manifest.x_outputs
             if manifest.x_var_write:
                 entry["x-var-write"] = manifest.x_var_write
+            if manifest.x_palette_order is not None:
+                entry["x_palette_order"] = manifest.x_palette_order
             commands.append(entry)
         return {"digest": self._catalog.digest, "commands": commands}
 
@@ -298,30 +310,17 @@ class DevServerApp:
         if action not in _CAPTURE_ACTIONS:
             raise ApiError(404, "NOT_FOUND", f"unknown capture action: {action}")
         body = body if isinstance(body, dict) else {}
-        transport = body.get("transport") if action == "start" else "persistent"
+        transport = body.get("transport") if action == "start" else "extension"
         if action == "start" and transport not in _BROWSER_TRANSPORTS:
             raise ApiError(
                 400,
                 "BAD_REQUEST",
-                "'transport' must be one of: persistent, user-browser, extension",
+                "'transport' must be one of: extension",
             )
         factory = self._require_capture(self._browser_capture_factory, "browser capture")
         if action == "start":
-            kwargs: dict[str, Any] = {"transport": transport}
-            if transport == "persistent":
-                if body.get("userDataDir"):
-                    kwargs["user_data_dir"] = str(body["userDataDir"])
-                kwargs["headless"] = bool(body.get("headless", False))
-            elif transport == "extension":
-                pass  # content-script 扩展：无启动参数，picker 已在所有页面待命
-            else:
-                kwargs["browser_type"] = str(body.get("browserType", "edge"))
-                if body.get("userDataDir"):
-                    kwargs["user_data_dir"] = str(body["userDataDir"])
-                if body.get("pageUrl"):
-                    kwargs["page_url"] = str(body["pageUrl"])
-            if body.get("startUrl"):
-                kwargs["start_url"] = str(body["startUrl"])
+            # 自研扩展单通道：无启动参数，picker 已在 content-script 待命
+            kwargs: dict[str, Any] = {"transport": "extension"}
             with self._capture_lock:
                 session_id = self._next_capture_id("browser")
                 session = self._browser_sessions[session_id] = factory(**kwargs)
@@ -423,7 +422,10 @@ class DevServerApp:
             timeout_seconds = float(body.get("timeoutSeconds") or DEFAULT_COMMAND_TIMEOUT_SECONDS)
         except (TypeError, ValueError):
             raise ApiError(400, "BAD_REQUEST", "'timeoutSeconds' must be a number") from None
-        command = {"op": op, "args": body.get("args") or {}}
+        command: dict[str, Any] = {"op": op, "args": body.get("args") or {}}
+        target_host = (body.get("targetHost") or "").strip()
+        if target_host:
+            command["targetHost"] = target_host
         return self._extension_hub.submit(command, max(0.1, timeout_seconds) + 1.0)
 
     # -- 扩展静默安装托管（update manifest XML + CRX，见 docs/extension-install.md）--

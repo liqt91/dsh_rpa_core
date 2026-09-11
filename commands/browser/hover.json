@@ -1,5 +1,6 @@
 {
   "id": "browser.hover",
+  "x-palette-order": 11,
   "version": "1.0.0",
   "executor": "browser.playwright",
   "kind": "action",

@@ -118,12 +118,15 @@ window.RPA_I18N = {
   fields: {
     sessionId: "会话 ID",
     resourceType: "资源类型",
+    browserType: "浏览器类型",
     output_name: "输出变量名",
     url: "网址",
     selector: "选择器",
     text: "文本",
     keys: "按键",
     timeoutMs: "超时（毫秒）",
+    onTimeout: "加载超时后",
+    commandLineArgs: "命令行参数",
     clickType: "点击方式",
     button: "鼠标按钮",
     modifiers: "辅助按键",
@@ -188,7 +191,6 @@ window.RPA_I18N = {
   },
   // 按命令覆盖的字段标签：同名参数在不同命令下含义不同（如 args）
   commandFields: {
-    "browser.navigate": { args: "命令行参数", waitUntil: "等待网页加载完成" },
     "data.setVar": { varName: "变量名", value: "变量值" },
     "browser.scroll": { position: "滚动位置", x: "横向位置", y: "纵向位置", smooth: "平滑滚动" },
     "browser.check": { operation: "操作" },
