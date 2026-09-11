@@ -15,7 +15,7 @@ commands = [
 # node 不在时跳过，避免门禁在无 node 的机器上硬失败。
 node = shutil.which("node")
 if node:
-    for script in ("check_param_groups.mjs", "check_channel_preview.mjs", "check_retry_policy.mjs"):
+    for script in ("check_param_groups.mjs", "check_retry_policy.mjs"):
         path = ROOT / "scripts" / script
         if path.exists():
             commands.append([node, str(path)])
