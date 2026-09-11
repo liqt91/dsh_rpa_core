@@ -1,6 +1,6 @@
 {
   "id": "browser.navigate",
-  "version": "2.5.0",
+  "version": "2.6.0",
   "executor": "browser.playwright",
   "kind": "action",
   "risk": "browser-control",
@@ -103,24 +103,13 @@
         "type": "string",
         "enum": [
           "extension",
-          "playwright",
-          "bsk"
+          "playwright"
         ],
         "x-enum-labels": {
           "extension": "自研插件（真实已登录浏览器）",
-          "playwright": "独立自动化浏览器",
-          "bsk": "BrowserSkill 三方件"
+          "playwright": "独立自动化浏览器"
         },
-        "description": "执行通道（一等公民=自研扩展）：extension=自研 MV3 扩展，在用户真实已登录浏览器里新建标签页（浏览器=扩展宿主，默认权限为整个浏览器）；playwright=独立自动化浏览器（headless/userAgent/userDataDir/channel 生效）；bsk=BrowserSkill 三方件（CSS selector only、仅主 frame）。缺省时：扩展在线且（未指定 channel 或宿主匹配）→extension，否则回退 playwright"
-      },
-      "browserInstanceId": {
-        "type": "string",
-        "minLength": 1,
-        "description": "bsk 传输专用：多浏览器在线时指定实例（bsk browsers 查询）"
-      },
-      "keepOpen": {
-        "type": "boolean",
-        "description": "bsk 传输专用：流程结束后不 session.stop（Agent Window 留给 bsk daemon 持有，空闲超时兜底，可继续人工操作）；默认 false = 流程结束即回收"
+        "description": "执行通道（一等公民=自研扩展）：extension=自研 MV3 扩展，在用户真实已登录浏览器里新建标签页（浏览器=扩展宿主，默认权限为整个浏览器）；playwright=独立自动化浏览器（headless/userAgent/userDataDir/channel 生效）。缺省时：扩展在线且（未指定 channel 或宿主匹配）→extension，否则回退 playwright"
       }
     },
     "additionalProperties": false,
@@ -156,14 +145,6 @@
           "userDataDir"
         ],
         "collapsed": true
-      },
-      {
-        "label": "BrowserSkill 三方件（仅 bsk 通道）",
-        "fields": [
-          "browserInstanceId",
-          "keepOpen"
-        ],
-        "collapsed": true
       }
     ],
     "x-depends": {
@@ -181,12 +162,6 @@
       },
       "userDataDir": {
         "transport": "playwright"
-      },
-      "browserInstanceId": {
-        "transport": "bsk"
-      },
-      "keepOpen": {
-        "transport": "bsk"
       }
     }
   },

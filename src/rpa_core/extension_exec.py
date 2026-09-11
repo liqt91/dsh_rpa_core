@@ -1,13 +1,13 @@
 """自研扩展执行通道（M15 Phase 1）：协议 + 宿主端队列 + 执行器端客户端。
 
 战略前提（维护者决策）：浏览器自动化优先走**自研 MV3 扩展**（一等公民），
-`playwright` / `bsk` 为二等（回退保留）。本模块是该通道的唯一定义点：
+`playwright` 为二等（回退保留）。本模块是该通道的唯一定义点：
 
 - `ExtensionExecHub`：devserver 进程持有，命令队列 + 长轮询下发 + 结果回收。
 - `ExtensionExecClient`：执行器侧（`rpa-core run` 子进程）经 HTTP 提交命令等结果。
 - 权限：**默认整个浏览器**（`{"mode": "browser"}`）；`tabs` / `origins` 两种收窄模式
-  为预留接口（协议与校验点先立，收窄只是配置变更，不改协议）——参考 bsk 的
-  session/tab borrow 粒度，但默认不限制范围。
+  为预留接口（协议与校验点先立，收窄只是配置变更，不改协议）——对应 persistent
+  捕获的会话粒度先立，默认不限制范围。
 
 分层：devserver 与 executors 均可 import（本模块不入 model/，不在 devserver 隔离
 禁列表内）。传输协议：HTTP + JSON（与捕获通道同构；无 token 配对——devserver 仅

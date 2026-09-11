@@ -51,7 +51,7 @@ DEFAULT_CAPABILITIES = frozenset(
 )
 
 _CAPTURE_ACTIONS = frozenset({"start", "pick", "cancel"})
-_BROWSER_TRANSPORTS = frozenset({"persistent", "user-browser", "bsk", "extension"})
+_BROWSER_TRANSPORTS = frozenset({"persistent", "user-browser", "extension"})
 
 
 class ApiError(Exception):
@@ -303,7 +303,7 @@ class DevServerApp:
             raise ApiError(
                 400,
                 "BAD_REQUEST",
-                "'transport' must be one of: persistent, user-browser, bsk",
+                "'transport' must be one of: persistent, user-browser, extension",
             )
         factory = self._require_capture(self._browser_capture_factory, "browser capture")
         if action == "start":
@@ -312,11 +312,6 @@ class DevServerApp:
                 if body.get("userDataDir"):
                     kwargs["user_data_dir"] = str(body["userDataDir"])
                 kwargs["headless"] = bool(body.get("headless", False))
-            elif transport == "bsk":
-                if body.get("browserInstanceId"):
-                    kwargs["browser_instance_id"] = str(body["browserInstanceId"])
-                if body.get("pageUrl"):
-                    kwargs["page_url"] = str(body["pageUrl"])
             elif transport == "extension":
                 pass  # content-script 扩展：无启动参数，picker 已在所有页面待命
             else:

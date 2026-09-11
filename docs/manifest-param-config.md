@@ -87,7 +87,7 @@ manifest 的参数配置分四层：**能力骨架已具备，但除 `x-outputs`
 
 **P0-3　字段联动只覆盖 1/65，且表达能力单一**
 `x-depends` 只支持「某控制字段 == 某值」一种条件（`{transport: "playwright"}`），
-不支持 `in`、`!=`、多条件与/或，也不支持「当前值不满足时清空」。通道类命令（bsk/playwright/extension）尤其需要。
+不支持 `in`、`!=`、多条件与/或，也不支持「当前值不满足时清空」。通道类命令（playwright/extension）尤其需要。
 
 **P0-4　参数控件类型无声明 → 前端按 key 名硬编码**
 `app.js` 里仍有三处特判：

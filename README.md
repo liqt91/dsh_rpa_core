@@ -10,7 +10,7 @@ Clean-room 类型化 RPA 运行时核心实验：**显式 workflow 语义、隔�
 
 ```text
 Workflow AST → validation/compiler → execution plan → orchestrator
-  → browser.playwright（playwright 默认 / bsk 复用真实浏览器）/ desktop.uia / desktop.win32 / python.worker
+  → browser.playwright（playwright 独立自动化 / 自研扩展复用真实已登录浏览器）/ desktop.uia / desktop.win32 / python.worker
   → typed results + events.jsonl + result.json
 ```
 

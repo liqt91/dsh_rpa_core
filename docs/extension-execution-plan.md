@@ -20,7 +20,7 @@
 **两条路不是二选一，而是上下游关系。** 理由：
 
 1. **指令对标的 manifest 层已基本完成**（24/44 直接覆盖，参数已对齐）。剩余 ❌14 里价值最高的一批——网络监听×3、对话框内容提取、批量数据抓取、元素句柄×3、元素库（elementRef）接入命令参数——**只能在扩展通道上实现**（chrome.debugger/webRequest/scripting 是唯一解）。先在 playwright 上堆这些等于给二等公民装修。
-2. **产品差异化在用户真实登录态浏览器**：bsk 已验证这条需求线，但它是三方件（CSS only / 仅主 frame / 未来可能放弃）。投入应转移到自有可控的扩展上。
+2. **产品差异化在用户真实登录态浏览器**：曾由三方件 bsk 验证这条需求线（已于 2026-09-11 移除，限于 CSS only / 仅主 frame）。投入已转移到自有可控的自研扩展上。
 3. 剩余 ❌ 中纯 DOM 原语类（设置元素值/属性、获取位置、下拉选项、滚动条位置、停止加载）playwright 顺手可补，**不阻塞、不占用主航道**，按需穿插。
 
 ## 一、现状盘点
@@ -29,7 +29,7 @@
 |---|---|---|
 | `extension/`（MV3，190 行 JS） | 仅捕获：hover 高亮 + Ctrl+Click 回传描述符；权限只有 storage+alarms | **无执行协议**；无 scripting/tabs/cookies/downloads/webNavigation 权限 |
 | devserver `/api/capture/extension/*` | 短轮询（1.2s/5s）+ POST 回传，无 token 配对（仅绑定 127.0.0.1），已稳定 | 需新增命令下发通道（轮询模型对低频捕获够用，对执行需长轮询降低延迟） |
-| `executors/browser.py` | playwright 一等实现全部 24 条；bsk 部分 + 显式 COMMAND_NOT_FOUND | 需加 extension transport 分发 + 扩展会话模型 |
+| `executors/browser.py` | playwright 一等实现全部 24 条 | 已加 extension transport 分发 + 扩展会话模型 |
 | `elementRef` | capture 产物是结构化描述符，但命令参数仍是裸 selector 字符串 | 元素库接入命令参数（横切差距 #4） |
 
 ## 二、分期计划
@@ -39,7 +39,7 @@
 - **协议**：`GET /api/ext/command/next`（长轮询，hold ~25s，按 sessionId 出队）+ `POST /api/ext/command/result`；复用 capture 的 TOFU token 与心跳。命令携带 `id/type/payload/timeoutMs`，结果携带 `ok/value/error`。
 - **扩展**：manifest 加 `scripting/tabs/cookies/downloads/webNavigation` 权限（`debugger` 按需另议）；background 增加命令轮询循环（alarms 保活已有）并路由：tabs/cookies/history/下载类 background 自处理，DOM 类经 `chrome.tabs.sendMessage` 转发 content script。
 - **执行器**：`browser.py` 加 extension 分支；**扩展会话模型** = 用户浏览器单例 + `sessionId ↔ tabId` 映射（无"启动浏览器"概念，`navigate goto` = 新建 tab 或当前 tab 跳转，`attach/listPages` = `chrome.tabs.query`）。
-- **transport 语义**：`transport=extension/playwright/bsk`（通道）。**channel（浏览器类型）两条通道都生效，但语义不同**：playwright = 启动/复用该内核的独立浏览器；extension = 校验扩展宿主浏览器（浏览器 = 插件装在哪，无法"启动"）。缺省通道下二者冲突时自动让位 playwright，详见 §四。
+- **transport 语义**：`transport=extension/playwright`（通道）。**channel（浏览器类型）两条通道都生效，但语义不同**：playwright = 启动/复用该内核的独立浏览器；extension = 校验扩展宿主浏览器（浏览器 = 插件装在哪，无法"启动"）。缺省通道下二者冲突时自动让位 playwright，详见 §四。
 
 ### Phase 2 — 核心命令集（~15 条，manifest 已就绪 = 对标验收用例）
 
@@ -55,7 +55,7 @@ playwright 通道同名单测/合同已存在，扩展通道照 manifest 实现�
 
 ### Phase 4 — 一等公民落位
 
-扩展在线 → `transport` 默认 extension；playwright 显式回退（含设计期/headless 场景）；bsk 冻结不再投入。
+扩展在线 → `transport` 默认 extension；playwright 显式回退（含设计期/headless 场景）。
 
 ## 三、风险与边界
 
@@ -71,7 +71,7 @@ playwright 通道同名单测/合同已存在，扩展通道照 manifest 实现�
 
 | 参数 | 取值 | 作用 |
 | --- | --- | --- |
-| `transport` | 缺省 / `extension` / `playwright` / `bsk` | 走哪条执行通道 |
+| `transport` | 缺省 / `extension` / `playwright` | 走哪条执行通道 |
 | `channel` | 缺省 / `chromium` / `chrome` / `msedge` / `firefox` / `webkit` | 用哪个浏览器 |
 
 ### 1. 指定「用自研插件」
@@ -125,7 +125,7 @@ playwright 通道同名单测/合同已存在，扩展通道照 manifest 实现�
 「打开网页」参数较多（12 个），且很多只属于某一条通道。属性面板（navigate 2.5.0）按 manifest `input_schema.x-param-groups` 分区渲染：
 
 - **常规**：跳转方式、网址；**浏览器**：执行通道 + 浏览器类型（"指定 Edge" 就在这两个下拉里，选项已中文化）；
-- **高级 / 启动选项（playwright）/ BrowserSkill 三方件（bsk）**：可折叠，组内任一字段填过值时自动展开；
+- **高级 / 启动选项（playwright）**：可折叠，组内任一字段填过值时自动展开；
 - **其他通道参数（N）**：x-depends 不满足的字段自动归入底部折叠区，不再平铺占地方；切换通道后重渲染自动归位；
 - 未声明分组的指令仍按原平铺渲染，`x-param-groups` 是纯增量能力（放在 input_schema 内，随 catalog 下发，无需后端改动）。
 

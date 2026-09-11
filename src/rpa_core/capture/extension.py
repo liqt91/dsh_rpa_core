@@ -1,6 +1,6 @@
 """content-script 扩展捕获会话（M14 无缝捕获路线）。
 
-与 bsk/persistent 的差异：没有可控浏览器进程，picker 跑在扩展的 content
+与 persistent / user-browser 捕获会话的差异：没有可控浏览器进程，picker 跑在扩展的 content
 script 里（用户真实浏览器的所有页面）。devserver 只维护 pending 标记：
 - start() 标记 pending（扩展 background 轮询到后广播 arm 到全部标签页）
 - 扩展 Ctrl+Click 捕获 → POST /api/capture/extension/result → submit() 唤醒 pick

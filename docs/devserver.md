@@ -33,7 +33,7 @@ uv run python -m rpa_core.cli devserver --port 9000 --workflows D:\tmp\workflows
 | `/api/runs/{runId}/events` | GET | 运行事件流（轮询 events.jsonl） |
 | `/api/runs/{runId}/cancel` | POST | 取消运行（终止子进程，run 落 cancelled） |
 | `/api/capture/desktop/{start,pick,cancel}` | POST | 桌面 UIA 捕获（M10 实装，见下） |
-| `/api/capture/browser/{start,pick,cancel}` | POST | 浏览器捕获；start 需 `{"transport": "bsk" \| "persistent" \| "user-browser" \| "extension"}`（M14：bsk 为主，extension 为无缝跨页主路线） |
+| `/api/capture/browser/{start,pick,cancel}` | POST | 浏览器捕获；start 需 `{"transport": "persistent" \| "user-browser" \| "extension"}`（extension 为无缝跨页主路线） |
 | `/api/capture/extension/pending` | GET | 扩展轮询捕获激活状态 |
 | `/api/capture/extension/result` | POST | 扩展 content script 捕获结果回传 |
 
@@ -121,20 +121,6 @@ Invoke-RestMethod -Method Post -Uri "$base/api/capture/browser/pick" `
 - `saveAs` 可选——指定后描述符落库到该 `flow` 流程的元素资产 `<流程名>/elements/{name}.json`（需同时传 `flow`，缺省 400），可用 `GET /api/workflows/{flow}/elements/{name}` 读回
 - `cancel` 结束会话：桌面会终止 agent 子进程，浏览器会清理注入并断开（不关闭你的浏览器）
 - 桌面捕获优先级：`windowHandle` > 前台窗口 > 屏幕级 hit-test（窗口作用域可免疫安全软件覆盖层，见 `docs/capture-transport.md`）
-
-**浏览器捕获 — bsk**（BrowserSkill 单扩展，用户真实已登录浏览器，零弹窗，M14 主路线）：
-
-```powershell
-$s = Invoke-RestMethod -Method Post -Uri "$base/api/capture/browser/start" `
-  -ContentType "application/json" `
-  -Body (@{transport="bsk"; browserInstanceId="5680266e"} | ConvertTo-Json)   # 多浏览器在线时指定
-# Agent Window 打开目标页面（Ctrl+Click 捕获元素，普通点击导航不干扰）：
-Invoke-RestMethod -Method Post -Uri "$base/api/capture/browser/pick" `
-  -ContentType "application/json" `
-  -Body (@{sessionId=$s.sessionId; timeoutSeconds=60; saveAs="loginPageEl"; flow="myFlow"} | ConvertTo-Json)
-```
-
-bsk 捕获交互：hover 高亮（elementsFromPoint 变体绕过 bsk 的 ControlOverlay 遮罩）→ **Ctrl+Click 捕获**（普通点击穿透不捕获，可正常导航找到目标）→ Esc 取消；`cancel` 强制 `bsk session stop` 回收 Agent Window。
 
 **浏览器捕获 — extension**（自研 content-script 扩展，无缝跨浏览器/跨页主路线，零逐次授权）：
 

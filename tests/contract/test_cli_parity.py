@@ -84,30 +84,7 @@ def test_cli_catalog_matches_load_catalog(capsys):
     assert [command["id"] for command in payload["commands"]] == sorted(catalog)
 
 
-def test_cli_capture_browser_bsk_dispatch_and_save(monkeypatch, tmp_path, capsys):
-    monkeypatch.setattr(cli, "BrowserBskCaptureSession", _FakeBrowserSession)
-    monkeypatch.setattr(cli, "BrowserCaptureSession", _FakeBrowserSession)
-    _FakeBrowserSession.instances = []
-    workflows = tmp_path / "workflows"
-    code, out = _run([
-        "capture", "browser", "--transport", "bsk", "--browser-instance-id", "edge1",
-        "--save-as", "goBtn", "--flow", "demo", "--workflows", str(workflows),
-    ], capsys)
-    assert code == 0
-    payload = json.loads(out)
-    assert payload["savedAs"] == "goBtn"
-    assert payload["flow"] == "demo"
-    session = _FakeBrowserSession.instances[0]
-    assert session.kwargs["transport"] == "bsk"
-    assert session.kwargs["browser_instance_id"] == "edge1"
-    assert session.started and session.cancelled and session.closed
-    stored = workflows / "demo" / "elements" / "goBtn.json"
-    assert stored.is_file()
-    assert json.loads(stored.read_text(encoding="utf-8"))["selector"] == {"css": "#go"}
-
-
 def test_cli_capture_browser_persistent_dispatch(monkeypatch, tmp_path, capsys):
-    monkeypatch.setattr(cli, "BrowserBskCaptureSession", _FakeBrowserSession)
     monkeypatch.setattr(cli, "BrowserCaptureSession", _FakeBrowserSession)
     _FakeBrowserSession.instances = []
     code, _ = _run([
@@ -150,7 +127,6 @@ def test_cli_capture_desktop_hover_passthrough(monkeypatch, tmp_path, capsys):
 
 
 def test_cli_capture_save_requires_flow(monkeypatch, tmp_path, capsys):
-    monkeypatch.setattr(cli, "BrowserBskCaptureSession", _FakeBrowserSession)
     monkeypatch.setattr(cli, "BrowserCaptureSession", _FakeBrowserSession)
     _FakeBrowserSession.instances = []
     code, out = _run([

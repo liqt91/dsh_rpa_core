@@ -1,7 +1,7 @@
 """自研扩展执行会话（M15 Phase 1）：browser.* 命令的扩展通道底层操作集。
 
 一等公民通道的执行侧：本模块只做「op 封装」（tabs / page / cookies），命令 →
-op 的映射与结果整形在 `browser.PlaywrightExecutor`（与 bsk 通道同构，便于对照）。
+op 的映射与结果整形在 `browser.PlaywrightExecutor`（两条浏览器通道共用）。
 通信走 `rpa_core.extension_exec.ExtensionExecClient`（HTTP → devserver → 扩展
 background → content/scripting），阻塞语义由调用方放线程池调度（规则 11）。
 

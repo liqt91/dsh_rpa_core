@@ -167,7 +167,7 @@ def _win32_root_at(x: int, y: int) -> int:
     return _root_window_handle(deepest) or deepest
 
 
-# 网页 DOM 内容宿主（数千节点的无障碍树，属 bsk 页内捕获领域）：
+# 网页 DOM 内容宿主（数千节点的无障碍树，属页内 DOM 捕获领域）：
 # DFS 时跳过其子树，但浏览器 UI 骨架（TabStrip/Toolbar 等兄弟分支）照走
 _DOM_HOST_MARKERS = ("Chrome_RenderWidgetHostHWND", "RootWebArea")
 
@@ -277,7 +277,7 @@ def _drill_to_leaf(info, x: int, y: int, *, max_depth: int = 12,
 
     UIA ElementFromPoint 常返回粗粒度容器（窗口/Pane）；小控件/小文字需要
     沿树向下钻到最深叶子。仅沿点路径钻取（O(深度×每层子数)），大容器
-    （如浏览器 Document 数千子节点）超过 max_children 即停（那是 bsk 的领域）。
+    （如浏览器 Document 数千子节点）超过 max_children 即停（属页内 DOM 捕获领域）。
     鸭子类型：info 需有 .children()/.rectangle/.handle（便于单测替身）。
     """
     current = info

@@ -30,11 +30,11 @@
 
 | # | 影刀指令 | 影刀核心参数（→输出） | rpa_core 对应 | 状态 | 差距备注 |
 |---|---|---|---|---|---|
-| 1 | [打开网页](yingdao-cmds/打开网页.md) | 浏览器类型(7值枚举)、网址、加载超时、命令行参数（→网页对象） | `browser.navigate` | ✅ | 参数面差异：影刀「浏览器类型」是用户语义枚举（cef/chrome/edge/ie/360se/firefox/QQBrowser）；我们拆成 `transport`(extension/playwright/bsk)+`channel`。**channel 两条通道都生效**：extension 通道下 = 校验插件宿主浏览器（插件装在哪就在哪执行），playwright 通道下 = 启动/复用该内核独立浏览器；缺省通道冲突时自动让位 playwright。**参数面板已对标影刀「常规/高级」分区**（navigate 2.5.0）：常规=跳转方式+网址，浏览器=transport+channel（中文选项标签），高级/启动选项/三方件折叠，当前通道不生效的字段自动归入底部「其他通道参数」折叠区，切换通道自动归位。输出同样为会话对象 |
+| 1 | [打开网页](yingdao-cmds/打开网页.md) | 浏览器类型(7值枚举)、网址、加载超时、命令行参数（→网页对象） | `browser.navigate` | ✅ | 参数面差异：影刀「浏览器类型」是用户语义枚举（cef/chrome/edge/ie/360se/firefox/QQBrowser）；我们拆成 `transport`(extension/playwright)+`channel`。**channel 两条通道都生效**：extension 通道下 = 校验插件宿主浏览器（插件装在哪就在哪执行），playwright 通道下 = 启动/复用该内核独立浏览器；缺省通道冲突时自动让位 playwright。**参数面板已对标影刀「常规/高级」分区**（navigate 2.6.0）：常规=跳转方式+网址，浏览器=transport+channel（中文选项标签），高级/启动选项折叠，当前通道不生效的字段自动归入底部「其他通道参数」折叠区，切换通道自动归位。输出同样为会话对象 |
 | 2 | [选择浏览器用户](yingdao-cmds/选择浏览器用户.md) | 浏览器类型（→用户配置对象） | — | ❌ | 多账号/用户配置文件切换，依赖登录态的场景需要 |
 | 3 | [获取已打开的网页对象](yingdao-cmds/获取已打开的网页对象.md) | 浏览器类型、标题/URL匹配（→网页对象） | `browser.attach` | ✅ | 同 context 按 title/url 子串或正则匹配，产出独立网页会话 |
 | 4 | [关闭网页](yingdao-cmds/关闭网页.md) | 操作(关闭指定/关闭所有)、终止浏览器进程、忽略确认离开对话框 | `browser.close` | 🟡 | 有 `forceKill`/`ignoreUnload`；缺「关闭所有网页」（跨会话批量） |
-| 5 | [跳转至新网址](yingdao-cmds/跳转至新网址.md) | 网页对象、跳转方式(新页面/**后退/前进/重新加载**)、加载超时 | `browser.navigate` | ✅ | `action=goto/back/forward/reload`（bsk 通道经 history JS 支持） |
+| 5 | [跳转至新网址](yingdao-cmds/跳转至新网址.md) | 网页对象、跳转方式(新页面/**后退/前进/重新加载**)、加载超时 | `browser.navigate` | ✅ | `action=goto/back/forward/reload` |
 | 6 | [等待网页加载完成](yingdao-cmds/等待网页加载完成.md) | 网页对象、超时时间(s) | `browser.waitLoad` | ✅ | state=load/domcontentloaded/networkidle |
 | 7 | [停止网页加载](yingdao-cmds/停止网页加载.md) | 网页对象 | — | ❌ | 对应 `page.stopLoading` 类原语 |
 | 8 | [鼠标滚动网页](yingdao-cmds/鼠标滚动网页.md) | 网页对象、在指定元素上滚动、位置(顶/底/指定/一屏)、平滑/瞬间 | `browser.scroll` | ✅ | position=top/bottom/point/page + 可选元素内滚动 + smooth |
@@ -61,7 +61,7 @@
 | # | 影刀指令 | 影刀核心参数（→输出） | rpa_core 对应 | 状态 | 差距备注 |
 |---|---|---|---|---|---|
 | 21 | [获取元素位置(web)](yingdao-cmds/获取元素位置_web.md) | 网页对象、操作目标（→x,y,宽,高） | — | ❌ | 坐标级校验/人类操作模拟依赖 |
-| 22 | [获取元素信息(web)](yingdao-cmds/获取元素信息_web.md) | 操作目标、信息类型(文本/源代码/值/链接地址)、智能补全前缀（→字符串） | `browser.getText` | ✅ | infoType=text/html/outerHTML/value/href（bsk 通道仅 text） |
+| 22 | [获取元素信息(web)](yingdao-cmds/获取元素信息_web.md) | 操作目标、信息类型(文本/源代码/值/链接地址)、智能补全前缀（→字符串） | `browser.getText` | ✅ | infoType=text/html/outerHTML/value/href |
 | 23 | [获取下拉框选项(web)](yingdao-cmds/获取下拉框选项_web.md) | 网页对象、操作目标（→选项列表） | — | ❌ | 与 select 成对，动态选择场景常用 |
 | 24 | [获取相似元素列表(web)](yingdao-cmds/获取相似元素列表_web.md) | 网页对象、操作目标（→相似元素列表） | `browser.queryAll` | 🟡 | queryAll 返回文本列表；影刀返回「元素对象列表」可逐个操作（依赖 #20 元素句柄） |
 | 25 | [获取关联元素(web)](yingdao-cmds/获取关联元素_web.md) | 操作目标、关联方式(父/子/兄弟/前一个/后一个)（→关联元素对象） | — | ❌ | 依赖元素对象模型 |
@@ -138,4 +138,4 @@
 - [ ] 网络监听三件套（配合自研扩展 background 通道）
 - [ ] 对话框 auto 策略模式 + alert 内容回读
 
-**实现边界说明**：新命令均为 playwright 通道一等实现；bsk 通道能力受限（CSS only），waitFor 仅 visible、getText 仅 text、navigate 的 back/forward/reload 经 history JS 支持，其余新命令在 bsk 会话下显式报 COMMAND_NOT_FOUND（与 upload/download/handleDialog 现状一致）。
+**实现边界说明**：新命令均为 playwright 通道一等实现。

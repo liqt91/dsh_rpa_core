@@ -394,7 +394,7 @@ function fieldLabel(key) { return i18n.fields[key] || key }
 
 function fieldEnumLabel(key, value) {
   const labels = {
-    transport: { bsk: 'BrowserStateKit', playwright: 'Playwright' },
+    transport: { playwright: 'Playwright' },
     clickType: { single: '单击', double: '双击', right: '右键' },
     button: { left: '左键', middle: '中键', right: '右键' },
     mode: { typeChars: '逐字输入', setValues: '设置值' },

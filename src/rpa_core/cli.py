@@ -8,7 +8,6 @@ from pathlib import Path
 from pydantic import ValidationError
 
 from rpa_core.capture import (
-    BrowserBskCaptureSession,
     BrowserCaptureSession,
     DesktopCaptureSession,
     ExtensionCaptureSession,
@@ -80,9 +79,7 @@ def _compile(path: Path):
 
 
 def _browser_capture_factory(**kwargs):
-    """devserver 捕获工厂分发：transport=bsk 走 BrowserBskCaptureSession（用户真实浏览器）。"""
-    if kwargs.get("transport") == "bsk":
-        return BrowserBskCaptureSession(**kwargs)
+    """devserver 捕获工厂分发：extension 走扩展会话，其余走 BrowserCaptureSession。"""
     if kwargs.get("transport") == "extension":
         return ExtensionCaptureSession(**kwargs)
     return BrowserCaptureSession(**kwargs)
@@ -168,7 +165,6 @@ def _cmd_capture(args) -> int:
     if args.target == "browser":
         session = _browser_capture_factory(
             transport=args.transport,
-            browser_instance_id=args.browser_instance_id,
             start_url=args.start_url,
             user_data_dir=args.user_data_dir,
             headless=args.headless,
@@ -508,10 +504,9 @@ def main() -> int:
         if action == "capture":
             cap_sub = sub.add_subparsers(dest="target", required=True)
             browser = cap_sub.add_parser("browser")
-            browser.add_argument("--transport", choices=["bsk", "persistent", "user-browser",
+            browser.add_argument("--transport", choices=["persistent", "user-browser",
                                                          "extension"],
-                                 default="bsk")
-            browser.add_argument("--browser-instance-id")
+                                 default="persistent")
             browser.add_argument("--browser-type", default="edge")
             browser.add_argument("--start-url")
             browser.add_argument("--page-url")

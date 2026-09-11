@@ -14,7 +14,6 @@ from playwright.async_api import (
     TimeoutError as PlaywrightTimeoutError,
 )
 
-from rpa_core.bsk_client import BskError, BskSessionGoneError
 from rpa_core.extension_exec import CHROMIUM_FAMILY, ExtensionChannelError, channel_matches_host
 from rpa_core.model.command import (
     CommandInvocation,
@@ -25,7 +24,6 @@ from rpa_core.model.command import (
 from rpa_core.model.errors import ErrorCode
 
 from .base import CommandExecutor, resolve_session_id
-from .browser_bsk import BskSession
 from .browser_ext import ExtensionExecSession
 
 # 滚动 JS：window 全页滚动 / 元素内部滚动（position: top|bottom|point|page）
@@ -59,15 +57,11 @@ _EXT_PAGE_METHODS = {
 
 
 class PlaywrightExecutor(CommandExecutor):
-    def __init__(self, bsk_runner=None, ext_session=None):
+    def __init__(self, ext_session=None):
         self._playwright: Playwright | None = None
         self._sessions: dict[str, tuple[Browser, BrowserContext, Page]] = {}
-        self._bsk_sessions: dict[str, BskSession] = {}
-        self._bsk_keep_open: dict[str, bool] = {}
-        self._bsk_runner = bsk_runner
         # 记录最近激活的会话，供省略 sessionId 的命令默认使用
         self._last_session_id: str | None = None
-        self._last_bsk_session_id: str | None = None
         # 自研扩展通道（一等公民）：会话 = 用户浏览器里的一个标签页句柄
         self._ext = ext_session or ExtensionExecSession()
         self._ext_sessions: dict[str, str] = {}  # sessionId -> tabId
@@ -87,20 +81,6 @@ class PlaywrightExecutor(CommandExecutor):
         self._last_session_id = session_id
         browser, context, page = self._sessions[session_id]
         return session_id, browser, context, page
-
-    def _bsk_session(self, inputs: dict[str, Any]) -> tuple[str, BskSession]:
-        session_id = resolve_session_id(
-            inputs.get("sessionId"), self._bsk_sessions, self._last_bsk_session_id
-        )
-        session = self._bsk_sessions.get(session_id)
-        if session is None:
-            raise LookupError(str(inputs.get("sessionId") or ""))
-        self._last_bsk_session_id = session_id
-        return session_id, session
-
-    async def _run_bsk(self, func, *args):
-        """bsk 子进程调用放线程池，保持 asyncio 取消响应（规则 11）。"""
-        return await asyncio.to_thread(func, *args)
 
     async def execute(
         self, invocation: CommandInvocation, cancellation: asyncio.Event
@@ -127,8 +107,6 @@ class PlaywrightExecutor(CommandExecutor):
                         ErrorCode.INVALID_INPUT, "url is required when action=goto"
                     )
                 # 打开网页 = 启动浏览器 + 导航（不单独维护浏览器实例指令）
-                if inputs.get("transport") == "bsk":
-                    return await self._open_bsk(invocation, inputs, started)
                 if await self._use_extension(inputs):
                     return await self._open_extension(invocation, inputs, started)
                 runtime = await self._ensure_runtime()
@@ -194,16 +172,6 @@ class PlaywrightExecutor(CommandExecutor):
                         )
                     ],
                     diagnostics={"durationMs": int((time.monotonic() - started) * 1000)},
-                )
-
-            explicit_session = str(inputs.get("sessionId") or "").strip()
-            # 显式指定按原样判断；省略时看默认会话是否落在 bsk 上
-            session_ref = explicit_session or resolve_session_id(
-                None, self._bsk_sessions, self._last_bsk_session_id
-            )
-            if session_ref and session_ref in self._bsk_sessions:
-                return await self._execute_bsk(
-                    command, invocation, inputs, session_ref, started, cancellation
                 )
 
             session_id, browser, context, page = self._session(inputs)
@@ -1010,43 +978,7 @@ class PlaywrightExecutor(CommandExecutor):
     async def _navigate_action(
         self, action: str, invocation: CommandInvocation, inputs: dict[str, Any], started: float
     ) -> CommandResult:
-        session_ref = str(inputs.get("sessionId") or "")
         timeout_ms = int(inputs.get("timeoutMs", 30_000))
-        if session_ref in self._bsk_sessions:
-            session = self._bsk_sessions[session_ref]
-            js_by_action = {
-                "back": "history.back()",
-                "forward": "history.forward()",
-                "reload": "location.reload()",
-            }
-            js = js_by_action.get(action)
-            if js is None:
-                return CommandResult.failure(
-                    ErrorCode.INVALID_INPUT, f"Unsupported navigate action: {action}"
-                )
-            try:
-                await self._run_bsk(session.evaluate, js)
-                final_url = await self._run_bsk(session.evaluate, "location.href")
-            except BskError as exc:
-                return CommandResult.failure(
-                    ErrorCode.EXECUTOR_FAILED, str(exc), details={"code": exc.code}
-                )
-            return CommandResult.success(
-                outputs={
-                    "sessionId": session_ref,
-                    "url": final_url,
-                    "resourceType": "webPage",
-                },
-                effects=[
-                    EffectRecord.committed(
-                        invocation,
-                        kind=EffectKind.UNSAFE_WRITE,
-                        resource=f"browser.session:{session_ref}",
-                        details={"operation": f"navigate:{action}", "transport": "bsk"},
-                    )
-                ],
-                diagnostics={"durationMs": int((time.monotonic() - started) * 1000)},
-            )
         try:
             _sid, _browser, _context, page = self._session(inputs)
         except LookupError:
@@ -1151,8 +1083,7 @@ class PlaywrightExecutor(CommandExecutor):
         return CommandResult.failure(
             ErrorCode.EXECUTOR_FAILED,
             f"extension 通道当前离线：没有检测到浏览器里的自研插件在轮询命令。{hint}。"
-            "若本轮不依赖登录态，把 transport 改为 playwright（独立自动化浏览器）"
-            "或 bsk 即可立即执行。",
+            "若本轮不依赖登录态，把 transport 改为 playwright（独立自动化浏览器）即可立即执行。",
             details={
                 "transport": "extension",
                 "reason": reason,
@@ -1548,285 +1479,9 @@ class PlaywrightExecutor(CommandExecutor):
             details={"channel": "extension", "code": exc.code},
         )
 
-    # -- bsk 传输（M14a：用户真实浏览器，能力差异 CSS only / 仅主 frame） -----
-
-    async def _open_bsk(
-        self, invocation: CommandInvocation, inputs: dict[str, Any], started: float
-    ) -> CommandResult:
-        """打开网页（bsk 传输）= session start + navigate 一步完成。"""
-        session = BskSession(
-            browser_instance_id=(
-                str(inputs["browserInstanceId"]) if inputs.get("browserInstanceId") else None
-            ),
-            runner=self._bsk_runner,
-        )
-        try:
-            await self._run_bsk(session.start)
-        except BskError as exc:
-            return CommandResult.failure(ErrorCode.EXECUTOR_FAILED, str(exc))
-        session_id = str(uuid.uuid4())
-        keep_open = bool(inputs.get("keepOpen", False))
-        self._bsk_sessions[session_id] = session
-        self._bsk_keep_open[session_id] = keep_open
-        self._last_bsk_session_id = session_id
-        try:
-            final_url = await self._run_bsk(session.navigate, str(inputs["url"]))
-        except BskError as exc:
-            # 导航失败：回收刚建的 bsk 会话（规则 11）
-            self._bsk_sessions.pop(session_id, None)
-            self._bsk_keep_open.pop(session_id, None)
-            try:
-                await self._run_bsk(session.stop)
-            except BskError:
-                pass
-            return CommandResult.failure(ErrorCode.EXECUTOR_FAILED, str(exc))
-        return CommandResult.success(
-            outputs={
-                "sessionId": session_id,
-                "url": final_url,
-                "resourceType": "webPage",
-            },
-            effects=[
-                EffectRecord.committed(
-                    invocation,
-                    kind=EffectKind.SESSION,
-                    resource=f"browser.session:{session_id}",
-                    details={"operation": "navigate", "transport": "bsk", "url": final_url},
-                )
-            ],
-            diagnostics={"durationMs": int((time.monotonic() - started) * 1000)},
-        )
-
-    async def _execute_bsk(
-        self,
-        command: str,
-        invocation: CommandInvocation,
-        inputs: dict[str, Any],
-        session_id: str,
-        started: float,
-        cancellation: asyncio.Event,
-    ) -> CommandResult:
-        session = self._bsk_sessions[session_id]
-        selector = str(inputs.get("selector") or "")
-        timeout_ms = int(inputs.get("timeoutMs", 30_000))
-        timeout_s = timeout_ms / 1000.0
-        effect_kind = EffectKind.READ
-        resource = f"browser.session:{session_id}"
-
-        try:
-            if command == "browser.click":
-                count = await self._run_bsk(session.count, selector)
-                if count == 0:
-                    return self._bsk_not_found(inputs)
-                await self._run_bsk(session.click, selector)
-                effect_kind = EffectKind.UNSAFE_WRITE
-                resource += f":selector:{selector}"
-                return self._bsk_success(
-                    invocation, effect_kind, resource,
-                    {"operation": "click", "matchedCount": count},
-                    outputs={"matchedCount": count, "sessionId": session_id},
-                )
-            if command == "browser.input":
-                count = await self._run_bsk(session.count, selector)
-                if count == 0:
-                    return self._bsk_not_found(inputs)
-                await self._run_bsk(session.fill, selector, str(inputs["text"]))
-                effect_kind = EffectKind.UNSAFE_WRITE
-                resource += f":selector:{selector}"
-                return self._bsk_success(
-                    invocation, effect_kind, resource,
-                    {"operation": "input", "matchedCount": count},
-                    outputs={"matchedCount": count, "sessionId": session_id},
-                )
-            if command == "browser.hover":
-                count = await self._run_bsk(session.count, selector)
-                if count == 0:
-                    return self._bsk_not_found(inputs)
-                await self._run_bsk(session.hover, selector)
-                effect_kind = EffectKind.UNSAFE_WRITE
-                resource += f":selector:{selector}"
-                return self._bsk_success(
-                    invocation, effect_kind, resource,
-                    {"operation": "hover", "matchedCount": count},
-                    outputs={"matchedCount": count, "sessionId": session_id},
-                )
-            if command == "browser.waitFor":
-                wait_state = str(inputs.get("state") or "visible")
-                if wait_state != "visible":
-                    return CommandResult.failure(
-                        ErrorCode.EXECUTOR_FAILED,
-                        f"bsk transport only supports waitFor state=visible, got: {wait_state}",
-                    )
-                found = await self._run_bsk(
-                    session.wait_for, selector, timeout_s, cancellation.is_set
-                )
-                if cancellation.is_set():
-                    return CommandResult(status="cancelled")
-                if not found:
-                    return CommandResult.failure(
-                        ErrorCode.TIMEOUT,
-                        f"selector did not appear within {timeout_ms}ms: {selector}",
-                        retryable=True,
-                        details={"selector": selector},
-                    )
-                count = await self._run_bsk(session.count, selector)
-                resource += f":selector:{selector}"
-                return self._bsk_success(
-                    invocation, EffectKind.READ, resource,
-                    {"operation": "waitFor", "matchedCount": count},
-                    outputs={"matchedCount": count},
-                )
-            if command == "browser.getText":
-                count = await self._run_bsk(session.count, selector)
-                if count == 0:
-                    return self._bsk_not_found(inputs)
-                value = await self._run_bsk(session.inner_text, selector)
-                resource += f":selector:{selector}"
-                return self._bsk_success(
-                    invocation, EffectKind.READ, resource,
-                    {"operation": "getText"},
-                    outputs={"value": value},
-                    value=value,
-                )
-            if command == "browser.queryAll":
-                values = await self._run_bsk(session.inner_texts, selector)
-                resource += f":selector:{selector}"
-                return self._bsk_success(
-                    invocation, EffectKind.READ, resource,
-                    {"operation": "queryAll", "count": len(values)},
-                    outputs={"items": values, "count": len(values)},
-                    value=values,
-                )
-            if command == "browser.close":
-                await self._run_bsk(session.stop)
-                self._bsk_sessions.pop(session_id, None)
-                return self._bsk_success(
-                    invocation, EffectKind.SESSION, resource,
-                    {"operation": "close", "transport": "bsk"},
-                )
-            if command == "browser.executeScript":
-                script = str(inputs["script"])
-                result = await self._run_bsk(session.evaluate, script)
-                return self._bsk_success(
-                    invocation, EffectKind.UNSAFE_WRITE, resource,
-                    {"operation": "executeScript"},
-                    outputs={"result": result, "sessionId": session_id},
-                    value=result,
-                )
-            if command == "browser.screenshot":
-                save_path = str(inputs["savePath"])
-                full_page = inputs.get("fullPage", False)
-                import base64
-                if full_page:
-                    await self._run_bsk(
-                        session.evaluate,
-                        "document.body.style.overflow='hidden'"
-                    )
-                b64_data = await self._run_bsk(
-                    session.evaluate,
-                    "(() => { const c = document.createElement('canvas');"
-                    " c.width = document.documentElement.clientWidth;"
-                    " c.height = document.documentElement.clientHeight;"
-                    " return c.toDataURL('image/png').split(',')[1]; })()"
-                )
-                if b64_data:
-                    import os
-
-                    os.makedirs(os.path.dirname(save_path) or ".", exist_ok=True)
-                    data = base64.b64decode(b64_data)
-                    await asyncio.to_thread(
-                        lambda: open(save_path, "wb").write(data)
-                    )
-                return self._bsk_success(
-                    invocation, EffectKind.IDEMPOTENT_WRITE, resource,
-                    {"operation": "screenshot", "filePath": save_path},
-                    outputs={"filePath": save_path},
-                )
-            if command == "browser.select":
-                import json as _json
-                selector = str(inputs["selector"])
-                value = str(inputs["value"])
-                select_by = inputs.get("selectBy", "value")
-                count = await self._run_bsk(session.count, selector)
-                if count == 0:
-                    return self._bsk_not_found(inputs)
-                sel_js = _json.dumps(selector)
-                val_js = _json.dumps(value)
-                if select_by == "index":
-                    js = (f"(() => {{ const s = document.querySelector({sel_js});"
-                          f" s.selectedIndex = {int(value)};"
-                          f" s.dispatchEvent(new Event('change')); }})()")
-                elif select_by == "label":
-                    js = (f"(() => {{ const s = document.querySelector({sel_js});"
-                          f" for (const o of s.options) {{"
-                          f" if (o.text === {val_js}) {{"
-                          f" s.value = o.value; break; }} }}"
-                          f" s.dispatchEvent(new Event('change')); }})()")
-                else:
-                    js = (f"(() => {{ const s = document.querySelector({sel_js});"
-                          f" s.value = {val_js};"
-                          f" s.dispatchEvent(new Event('change')); }})()")
-                await self._run_bsk(session.evaluate, js)
-                effect_kind = EffectKind.UNSAFE_WRITE
-                resource += f":selector:{selector}"
-                return self._bsk_success(
-                    invocation, effect_kind, resource,
-                    {"operation": "selectOption", "matchedCount": count},
-                    outputs={"matchedCount": count, "sessionId": session_id},
-                )
-            return CommandResult.failure(
-                ErrorCode.COMMAND_NOT_FOUND, f"Unsupported command: {command}"
-            )
-        except BskSessionGoneError as exc:
-            self._bsk_sessions.pop(session_id, None)
-            return CommandResult.failure(
-                ErrorCode.SESSION_NOT_FOUND,
-                f"bsk session lost: {exc}",
-                details={"code": exc.code},
-            )
-        except BskError as exc:
-            return CommandResult.failure(
-                ErrorCode.EXECUTOR_FAILED, str(exc), details={"code": exc.code}
-            )
-
-    def _bsk_success(
-        self,
-        invocation: CommandInvocation,
-        kind: EffectKind,
-        resource: str,
-        details: dict[str, Any],
-        *,
-        outputs: dict[str, Any] | None = None,
-        value: Any = None,
-    ) -> CommandResult:
-        return CommandResult.success(
-            value=value,
-            outputs=outputs or {},
-            effects=[
-                EffectRecord.committed(invocation, kind=kind, resource=resource,
-                                       details=details)
-            ],
-        )
-
-    def _bsk_not_found(self, inputs: dict[str, Any]) -> CommandResult:
-        return CommandResult.failure(
-            ErrorCode.ELEMENT_NOT_FOUND,
-            "Target element did not match",
-            details={"selector": inputs.get("selector"), "matchedCount": 0},
-        )
-
     async def close(self) -> None:
         # 扩展会话（M15）：只解绑，不动用户浏览器里的标签页（默认整浏览器权限≠代管生命周期）
         self._ext_sessions.clear()
-        # bsk keepOpen 会话（流程结束仍保留 Agent Window 供人工继续，daemon 空闲超时兜底）
-        # 不在此停；非 keepOpen 的一律回收（规则 11）
-        for sid in list(self._bsk_sessions):
-            if self._bsk_keep_open.get(sid):
-                self._bsk_sessions.pop(sid, None)
-                continue
-            await self._run_bsk(self._bsk_sessions[sid].stop)
-        self._bsk_sessions.clear()
-        self._bsk_keep_open.clear()
         for browser, _context, _page in list(self._sessions.values()):
             await browser.close()
         self._sessions.clear()

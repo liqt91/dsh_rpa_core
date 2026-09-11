@@ -3,7 +3,7 @@
 用真实 HTTP 扮演扩展 background（长轮询领命令 + 回结果），覆盖：
 - hub 协议：无鉴权长轮询 / 命令下发回收 / 超时 / 在线心跳 / 权限（默认整浏览器 + tabs 收窄）
 - 执行器：扩展会话路由（navigate / click / getText / attach / listPages）、
-  缺省通道解析（扩展在线 → 优先走扩展）、bsk 式边界（不支持的命令显式报错）
+  缺省通道解析（扩展在线 → 优先走扩展）、通道边界（不支持的命令显式报错）
 """
 
 import asyncio

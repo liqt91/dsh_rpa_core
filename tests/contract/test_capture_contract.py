@@ -341,38 +341,3 @@ def test_element_put_rejects_invalid_document(capture_server):
         base=base,
     )
     assert status == 404
-
-
-def test_browser_bsk_transport_flow_saves_to_flow(capture_server):
-    """transport=bsk 走 devserver 契约层（FakeBrowserSession 兼容 bsk 签名）。"""
-    base = f"http://127.0.0.1:{capture_server.port}"
-    status, payload = _request(
-        "POST",
-        "/api/capture/browser/start",
-        {"transport": "bsk", "browserInstanceId": "edge1"},
-        base=base,
-    )
-    assert status == 200
-    session_id = payload["sessionId"]
-
-    status, payload = _request(
-        "POST",
-        "/api/capture/browser/pick",
-        {"sessionId": session_id, "saveAs": "bskButton", "flow": FLOW, "timeoutSeconds": 5},
-        base=base,
-    )
-    assert status == 200
-    assert payload["savedAs"] == "bskButton"
-    assert payload["flow"] == FLOW
-
-    status, element = _request("GET", _elements(element="bskButton"), base=base)
-    assert status == 200
-    assert element["kind"] == "browser"
-    assert element["selector"] == {"css": "#go"}
-
-    status, payload = _request(
-        "POST", "/api/capture/browser/cancel", {"sessionId": session_id}, base=base
-    )
-    assert status == 200
-    assert payload["cancelled"] is True
-    assert capture_server.app._browser_sessions == {}
