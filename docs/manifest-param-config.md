@@ -86,8 +86,8 @@ manifest 的参数配置分四层：**能力骨架已具备，但除 `x-outputs`
 无法对标影刀的「常规/高级」折叠，长表单难扫读。
 
 **P0-3　字段联动只覆盖 1/65，且表达能力单一**
-`x-depends` 只支持「某控制字段 == 某值」一种条件（`{transport: "playwright"}`），
-不支持 `in`、`!=`、多条件与/或，也不支持「当前值不满足时清空」。通道类命令（playwright/extension）尤其需要。
+`x-depends` 只支持「某控制字段 == 某值」一种条件（如 `{browserType: "msedge"}`），
+不支持 `in`、`!=`、多条件与/或，也不支持「当前值不满足时清空」。联动类命令尤其需要。
 
 **P0-4　参数控件类型无声明 → 前端按 key 名硬编码**
 `app.js` 里仍有三处特判：
@@ -98,8 +98,8 @@ manifest 的参数配置分四层：**能力骨架已具备，但除 `x-outputs`
 
 ### P1 — 影响填写体验与对标度
 
-**P1-5　枚举值中文化只覆盖 4/32**
-仅 `navigate.json` 的 `action/waitUntil/channel/transport` 有 `x-enum-labels`。
+**P1-5　枚举值中文化只覆盖 2/30**
+仅 `navigate.json` 的 `action/waitUntil` 有 `x-enum-labels`。
 其余 28 个字段（`clickType: single/double`、`button: left/right/middle`、
 `state: visible/hidden/detached/attached`、`matchBy`/`matchMode`/`selectBy`…）在面板里显示**英文原值**。
 前端虽有 `i18n.ops` 兜底，但它只覆盖 8 个条件运算符键，兜不住这些。
@@ -112,8 +112,7 @@ manifest 的参数配置分四层：**能力骨架已具备，但除 `x-outputs`
 当前只能靠手写 `x-param-groups` 的 `fields` 列表，**新增字段忘了登记就会掉进「其他」组**（默认行为，但不显式）。
 
 **P1-8　缺条件必填 / 互斥**
-只有 `required`（静态）。没有 `requiredIf`（如 `action=goto` 时 `url` 必填）、
-`oneOfRequired`（channel 与 transport 二选一）、`mutuallyExclusive`。
+只有 `required`（静态）。没有 `requiredIf`（如 `action=goto` 时 `url` 必填）、`mutuallyExclusive`。
 
 **P1-9　`x-fx` / `x-python` 覆盖率极低**
 241 个字段里只有 4 个声明 `x-fx`、2 个声明 `x-python`。
@@ -194,7 +193,7 @@ manifest 的参数配置分四层：**能力骨架已具备，但除 `x-outputs`
       { "label": "常规", "auto": true },            // auto：非 advanced 字段自动归入，免手写 fields
       { "label": "高级", "fields": ["timeoutMs"], "collapsed": true }
     ],
-    "x-depends": { "userDataDir": { "transport": { "in": ["playwright"] } } }  // 扩展条件表达
+    "x-depends": { "userDataDir": { "action": { "in": ["launch"] } } }  // 条件联动
   }
 }
 ```

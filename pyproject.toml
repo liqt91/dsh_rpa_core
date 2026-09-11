@@ -6,7 +6,6 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
   "pydantic>=2.10,<3",
-  "playwright>=1.49,<2",
   "jsonschema>=4.23,<5",
   "pywinauto>=0.6.9,<0.7; sys_platform == 'win32'",
 ]

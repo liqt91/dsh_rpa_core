@@ -10,7 +10,7 @@ Clean-room 类型化 RPA 运行时核心实验：**显式 workflow 语义、隔�
 
 ```text
 Workflow AST → validation/compiler → execution plan → orchestrator
-  → browser.playwright（playwright 独立自动化 / 自研扩展复用真实已登录浏览器）/ desktop.uia / desktop.win32 / python.worker
+  → browser.extension（自研扩展单通道，复用用户真实已登录浏览器）/ desktop.uia / desktop.win32 / python.worker
   → typed results + events.jsonl + result.json
 ```
 
@@ -54,7 +54,7 @@ rpa_core/
 │  ├─ catalog/                # 命令目录加载（不可变快照 + digest）
 │  ├─ compiler/               # 静态编译：引用/能力/unsafe-retry → ExecutionPlan
 │  ├─ runtime/                # orchestrator、checkpoint、事件、resolver、恢复
-│  ├─ executors/              # browser.playwright / desktop.uia / desktop.win32
+│  ├─ executors/              # browser.extension（扩展单通道）/ desktop.uia / desktop.win32
 │  ├─ workers/                # python.worker 子进程（隔离用户代码）
 │  ├─ model/                  # workflow / command / runtime / capture / desktop 类型
 │  ├─ capture/                # 桌面 UIA hit-test、浏览器 picker 注入
@@ -118,7 +118,6 @@ AST 节点：`sequence` / `action` / `if` / `forEach` / `try` / `return`。
 
 ```powershell
 uv sync --all-groups
-uv run python -m playwright install chromium        # E2E / 浏览器执行需要
 
 # CLI 试跑确定性示例
 uv run python -m rpa_core.cli run examples/search-and-save/workflow.json
@@ -195,14 +194,14 @@ uv run python -m rpa_core.cli devserver
 | `api-usage` | 进程内 API 四步 + run→读证据→pause→resume |
 | `windows-desktop` / `uia-desktop` | 记事本 / WinForms 桌面垂直切片 |
 
-`browser.navigate`（打开网页）一步完成启动浏览器 + 导航，输出网页对象 `sessionId` 供后续命令引用；`browser.close`（关闭网页）回收。传输：`playwright`（默认，独立自动化浏览器）/ `bsk`（BrowserSkill 单扩展，复用用户真实已登录浏览器；能力差异 CSS only、仅主 frame；M14）。
+`browser.navigate`（打开网页）在用户真实浏览器里新建标签页（经自研扩展），输出网页对象 `sessionId` 供后续命令引用；`browser.close`（关闭网页）回收。**浏览器执行与网页捕获统一收敛到自研扩展单通道**——复用用户真实已登录的浏览器，无独立自动化浏览器。
 
 ## 测试与质量门禁
 
 ```powershell
-uv run pytest                            # unit + contract + e2e（含真实 Chromium / Windows 桌面）
+uv run pytest                            # unit + contract + e2e（含 Windows 桌面）
 uv run ruff check .
-uv run python .harness/scripts/check_architecture.py   # 架构不变量（38 py / 26 manifest）
+uv run python .harness/scripts/check_architecture.py   # 架构不变量（43 py / 71 manifest）
 uv run python .harness/scripts/check_all.py            # 完整门禁：测试 + 架构 + 任务一致性 + 前端一致性脚本
 ```
 
@@ -210,11 +209,8 @@ uv run python .harness/scripts/check_all.py            # 完整门禁：测试 +
 
 ```powershell
 node scripts/check_param_groups.mjs     # 参数分组/字段联动判定
-node scripts/check_channel_preview.mjs  # 通道解析预览与宿主浏览器匹配
 node scripts/check_retry_policy.mjs     # 重试能力判定 vs manifest.retryable（并交叉校验全量 manifest）
 ```
-
-E2E 依赖 `playwright install chromium`；桌面 E2E 在 Windows + pywinauto 上运行。
 
 ## 文档导航
 

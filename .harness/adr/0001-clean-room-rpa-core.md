@@ -16,7 +16,7 @@ Build a bounded architecture-validation project with:
 - static compilation to a catalog-pinned plan;
 - an orchestrator that exclusively owns workflow state;
 - explicit executors returning `CommandResult`;
-- Playwright as the first browser driver;
+- self-developed browser extension as the sole browser channel (formerly "Playwright first", superseded by ADR 0013);
 - subprocess isolation for Python commands;
 - append-only run events and terminal results;
 - a lightweight mechanical harness.

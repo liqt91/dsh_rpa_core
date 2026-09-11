@@ -30,7 +30,7 @@ rectangle "rpa_core\n系统边界" as system_boundary {
   }
 }
 
-rectangle "Chromium / Edge / Browser Apps\n(Playwright)" as browser #E9FFF3
+rectangle "Chromium / Edge / Browser Apps\n(Self-developed Extension Host)" as browser #E9FFF3
 rectangle "Windows Desktop Applications\n(Notepad / WinForms / WPF / Enterprise Apps)" as desktop_apps #FFF0F0
 rectangle "Python Subprocess Worker\n(rpa_core.workers.python_worker)" as py_worker #F2F0FF
 rectangle "Local Filesystem\n(workflows / commands / artifacts / fixtures)" as fs #F8F4FF

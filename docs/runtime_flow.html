@@ -152,7 +152,7 @@
     </div>
     <div class="term">
       <b>executor（执行器）</b><span class="en">executors/</span>
-      <p>真正<b>动手干活的组件</b>：browser.playwright 开浏览器点页面、desktop.uia / desktop.win32 操作 Windows 窗口控件、python.worker 在子进程里跑用户 Python。输入一条 <code>CommandInvocation</code>（这次调用谁、参数是什么），回一张 <code>CommandResult</code>（结果回执），仅此而已。≈ <span class="sim">各工种厨师</span>。</p>
+      <p>真正<b>动手干活的组件</b>：browser.playwright（键沿用，现为**自研扩展单通道**，复用用户真实已登录浏览器做导航/输入/点击/读回文本）点页面、desktop.uia / desktop.win32 操作 Windows 窗口控件、python.worker 在子进程里跑用户 Python。输入一条 <code>CommandInvocation</code>（这次调用谁、参数是什么），回一张 <code>CommandResult</code>（结果回执），仅此而已。≈ <span class="sim">各工种厨师</span>。</p>
     </div>
     <div class="term">
       <b>ExecutorRegistry（执行器注册表）</b><span class="en">executors/registry.py</span>

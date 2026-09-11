@@ -55,7 +55,7 @@ asyncio.run(main())
 
 | registry 键 | 覆盖命令 | 依赖 |
 |---|---|---|
-| `browser.playwright` | `browser.*` | playwright + 本地 Chromium |
+| `browser.playwright` | `browser.*` | 浏览器执行统一走自研扩展单通道（复用用户真实已登录浏览器） |
 | `desktop.uia` / `desktop.win32` | `desktop.*` | Windows + pywinauto |
 | `python.worker` | `data.*` | 无外部依赖 |
 

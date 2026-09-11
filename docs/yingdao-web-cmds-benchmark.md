@@ -30,7 +30,7 @@
 
 | # | 影刀指令 | 影刀核心参数（→输出） | rpa_core 对应 | 状态 | 差距备注 |
 |---|---|---|---|---|---|
-| 1 | [打开网页](yingdao-cmds/打开网页.md) | 浏览器类型(7值枚举)、网址、加载超时、命令行参数（→网页对象） | `browser.navigate` | ✅ | 参数面差异：影刀「浏览器类型」是用户语义枚举（cef/chrome/edge/ie/360se/firefox/QQBrowser）；我们拆成 `transport`(extension/playwright)+`channel`。**channel 两条通道都生效**：extension 通道下 = 校验插件宿主浏览器（插件装在哪就在哪执行），playwright 通道下 = 启动/复用该内核独立浏览器；缺省通道冲突时自动让位 playwright。**参数面板已对标影刀「常规/高级」分区**（navigate 2.6.0）：常规=跳转方式+网址，浏览器=transport+channel（中文选项标签），高级/启动选项折叠，当前通道不生效的字段自动归入底部「其他通道参数」折叠区，切换通道自动归位。输出同样为会话对象 |
+| 1 | [打开网页](yingdao-cmds/打开网页.md) | 浏览器类型(7值枚举)、网址、加载超时、命令行参数（→网页对象） | `browser.navigate` | ✅ | 参数面差异：影刀「浏览器类型」是用户语义枚举（cef/chrome/edge/ie/360se/firefox/QQBrowser），我们收敛为**自研扩展单通道**、仅支持 Edge/Chrome 插件，故 `browserType` 只取 `msedge`/`chrome`（必选一，默认 msedge，无 auto）；playwright / bsk 已彻底移除。多浏览器各自装了插件时，命令按 `browserType` 路由到对应扩展实例，未装插件的浏览器在编辑器下拉置灰、运行期快速失败（TARGET_HOST_OFFLINE）。参数：`browserType/url/action/timeoutMs`（分组：浏览器 + 常规 + 高级）。输出为会话（网页）对象 |
 | 2 | [选择浏览器用户](yingdao-cmds/选择浏览器用户.md) | 浏览器类型（→用户配置对象） | — | ❌ | 多账号/用户配置文件切换，依赖登录态的场景需要 |
 | 3 | [获取已打开的网页对象](yingdao-cmds/获取已打开的网页对象.md) | 浏览器类型、标题/URL匹配（→网页对象） | `browser.attach` | ✅ | 同 context 按 title/url 子串或正则匹配，产出独立网页会话 |
 | 4 | [关闭网页](yingdao-cmds/关闭网页.md) | 操作(关闭指定/关闭所有)、终止浏览器进程、忽略确认离开对话框 | `browser.close` | 🟡 | 有 `forceKill`/`ignoreUnload`；缺「关闭所有网页」（跨会话批量） |
@@ -138,4 +138,4 @@
 - [ ] 网络监听三件套（配合自研扩展 background 通道）
 - [ ] 对话框 auto 策略模式 + alert 内容回读
 
-**实现边界说明**：新命令均为 playwright 通道一等实现。
+**实现边界说明**：新命令统一为自研扩展单通道实现。

@@ -3,7 +3,7 @@
 MV3 零构建扩展（Chrome/Edge），两条通道：
 
 1. **捕获通道**：捕获模式下在任意页面 hover 高亮、Ctrl+Click 捕获元素描述符回传 rpa_core devserver。无缝跨浏览器/跨页（无标签页借用、无逐次授权）。
-2. **执行通道（M15，一等公民）**：长轮询 devserver 命令队列，在**用户真实已登录浏览器**里执行浏览器自动化（tabs / scripting / cookies / webNavigation）。rpa_core 的 `browser.*` 命令在扩展在线时默认走本通道，`playwright` / `bsk` 为二等回退。
+2. **执行通道（M15，一等公民，唯一通道）**：长轮询 devserver 命令队列，在**用户真实已登录浏览器**里执行浏览器自动化（tabs / scripting / cookies / webNavigation）。rpa_core 的 `browser.*` 命令统一走本通道；`playwright` / `bsk` 已彻底移除，无回退。
 
 ## 安装（开发者模式）
 
@@ -41,15 +41,11 @@ MV3 零构建扩展（Chrome/Edge），两条通道：
 - `GET /api/ext/status` → `{online, lastPollSecondsAgo, queued, inflight, permissions, host}`
 - `GET|POST /api/ext/permissions` → 权限查询/收窄
 
-## 如何指定「走本插件」和「用哪个浏览器」
+## 用哪个浏览器
 
-浏览器指令（如「打开网页」`browser.navigate`）两个参数：
+`browser.*` 命令统一走自研扩展单通道：**扩展装在哪个浏览器，执行就在哪个浏览器**（没有"启动/切换浏览器"概念）。`transport` / `channel` 参数已随 playwright 一并移除，`browser.navigate` 不再暴露。
 
-- `transport`：**不填即缺省走本插件**（在线时）；`extension` = 强制（不可用时报错，不静默回退）；`playwright` = 强制独立自动化浏览器。
-- `channel`：**本插件通道下是校验，不是启动**——本插件装在哪个浏览器，执行就在哪个浏览器。`channel=msedge` 表示"要求宿主是 Edge"，不匹配时缺省通道会自动让位给 playwright，显式 `transport=extension` 则直接报错。`chromium` = 任意 Chromium 内核发行版；`firefox`/`webkit` 不支持（插件只跑 Chromium 内核）。
-
-> 想让流程操作用户真实已登录的 Edge：把本插件装到 Edge，其余留空即可。
-> 想开一个干净的 Edge：`transport=playwright` + `channel=msedge`。
+> 想操作浏览器（如 Edge）上的真实已登录会话：把本插件装到 Edge，其余留空即可。
 
 编辑器顶部「扩展通道」徽标显示本插件的在线状态与宿主浏览器（5s 刷新）；插件弹窗里也能看到宿主浏览器和 devserver 识别状态。
 
