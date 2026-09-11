@@ -8,7 +8,6 @@ from pathlib import Path
 from pydantic import ValidationError
 
 from rpa_core.capture import (
-    BrowserCaptureSession,
     DesktopCaptureSession,
     ExtensionCaptureSession,
     HybridCaptureSession,
@@ -79,10 +78,9 @@ def _compile(path: Path):
 
 
 def _browser_capture_factory(**kwargs):
-    """devserver 捕获工厂分发：extension 走扩展会话，其余走 BrowserCaptureSession。"""
-    if kwargs.get("transport") == "extension":
-        return ExtensionCaptureSession(**kwargs)
-    return BrowserCaptureSession(**kwargs)
+    """浏览器捕获工厂：已统一收敛到自研扩展单通道（无独立浏览器进程）。"""
+    kwargs["transport"] = "extension"
+    return ExtensionCaptureSession(**kwargs)
 
 
 def _desktop_capture_factory(**kwargs):
@@ -504,9 +502,9 @@ def main() -> int:
         if action == "capture":
             cap_sub = sub.add_subparsers(dest="target", required=True)
             browser = cap_sub.add_parser("browser")
-            browser.add_argument("--transport", choices=["persistent", "user-browser",
-                                                         "extension"],
-                                 default="persistent")
+            browser.add_argument("--transport", choices=["extension"],
+                                 default="extension",
+                                 help="浏览器捕获通道：自研扩展单通道")
             browser.add_argument("--browser-type", default="edge")
             browser.add_argument("--start-url")
             browser.add_argument("--page-url")

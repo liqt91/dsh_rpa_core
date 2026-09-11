@@ -1,7 +1,7 @@
 """自研扩展执行会话（M15 Phase 1）：browser.* 命令的扩展通道底层操作集。
 
 一等公民通道的执行侧：本模块只做「op 封装」（tabs / page / cookies），命令 →
-op 的映射与结果整形在 `browser.PlaywrightExecutor`（两条浏览器通道共用）。
+op 的映射与结果整形在 `browser.PlaywrightExecutor`（扩展单通道宿主的旧称，沿用类名不变）。
 通信走 `rpa_core.extension_exec.ExtensionExecClient`（HTTP → devserver → 扩展
 background → content/scripting），阻塞语义由调用方放线程池调度（规则 11）。
 
@@ -27,6 +27,14 @@ PAGE_CALL_METHODS = (
     "select",
     "check",
     "scroll",
+    # 阶段 D 补齐：DOM 读取/写入原语
+    "queryAll",
+    "getPosition",
+    "getScrollPosition",
+    "getSelectOptions",
+    "setValue",
+    "setAttribute",
+    "drag",
 )
 
 
@@ -69,20 +77,28 @@ class ExtensionExecSession:
         *,
         active: bool = True,
         timeout_seconds: float = DEFAULT_COMMAND_TIMEOUT_SECONDS,
+        target_host: str | None = None,
     ) -> dict[str, Any]:
         return self._client.submit(
             "tabs.create",
             {"url": url, "active": active},
             timeout_seconds=timeout_seconds,
+            target_host=target_host,
         )
 
     def tabs_navigate(
-        self, tab_id: str, url: str, *, timeout_seconds: float = DEFAULT_COMMAND_TIMEOUT_SECONDS
+        self,
+        tab_id: str,
+        url: str,
+        *,
+        timeout_seconds: float = DEFAULT_COMMAND_TIMEOUT_SECONDS,
+        target_host: str | None = None,
     ) -> dict[str, Any]:
         return self._client.submit(
             "tabs.navigate",
             {"tabId": tab_id, "url": url},
             timeout_seconds=timeout_seconds,
+            target_host=target_host,
         )
 
     def tabs_history(
@@ -91,18 +107,25 @@ class ExtensionExecSession:
         action: str,
         *,
         timeout_seconds: float = DEFAULT_COMMAND_TIMEOUT_SECONDS,
+        target_host: str | None = None,
     ) -> dict[str, Any]:
         return self._client.submit(
             "tabs.history",
             {"tabId": tab_id, "action": action},
             timeout_seconds=timeout_seconds,
+            target_host=target_host,
         )
 
     def tabs_close(
-        self, tab_id: str, *, timeout_seconds: float = DEFAULT_COMMAND_TIMEOUT_SECONDS
+        self,
+        tab_id: str,
+        *,
+        timeout_seconds: float = DEFAULT_COMMAND_TIMEOUT_SECONDS,
+        target_host: str | None = None,
     ) -> dict[str, Any]:
         return self._client.submit(
-            "tabs.close", {"tabId": tab_id}, timeout_seconds=timeout_seconds
+            "tabs.close", {"tabId": tab_id},
+            timeout_seconds=timeout_seconds, target_host=target_host,
         )
 
     # -- 页面（scripting 注入，主 frame） ------------------------------------
@@ -115,6 +138,7 @@ class ExtensionExecSession:
         *,
         args: dict[str, Any] | None = None,
         timeout_seconds: float = DEFAULT_COMMAND_TIMEOUT_SECONDS,
+        target_host: str | None = None,
     ) -> dict[str, Any]:
         if method not in PAGE_CALL_METHODS:
             raise ValueError(f"unsupported page method: {method}")
@@ -122,6 +146,7 @@ class ExtensionExecSession:
             "page.call",
             {"tabId": tab_id, "selector": selector, "method": method, "args": args or {}},
             timeout_seconds=timeout_seconds,
+            target_host=target_host,
         )
 
     def page_eval(
@@ -131,43 +156,102 @@ class ExtensionExecSession:
         *,
         args: list[Any] | None = None,
         timeout_seconds: float = DEFAULT_COMMAND_TIMEOUT_SECONDS,
+        target_host: str | None = None,
     ) -> dict[str, Any]:
         return self._client.submit(
             "page.eval",
             {"tabId": tab_id, "script": script, "args": args or []},
             timeout_seconds=timeout_seconds,
+            target_host=target_host,
         )
 
     # -- Cookie（chrome.cookies，浏览器级） ----------------------------------
 
     def cookies_get_all(self, *, filters: dict[str, Any] | None = None,
-                        timeout_seconds: float = DEFAULT_COMMAND_TIMEOUT_SECONDS) -> list[dict]:
+                        timeout_seconds: float = DEFAULT_COMMAND_TIMEOUT_SECONDS,
+                        target_host: str | None = None) -> list[dict]:
         payload = self._client.submit(
-            "cookies.getAll", dict(filters or {}), timeout_seconds=timeout_seconds
+            "cookies.getAll", dict(filters or {}),
+            timeout_seconds=timeout_seconds, target_host=target_host,
         )
         cookies = payload.get("cookies")
         return [dict(c) for c in cookies] if isinstance(cookies, list) else []
 
     def cookies_get(self, name: str, *, url: str | None = None,
-                    timeout_seconds: float = DEFAULT_COMMAND_TIMEOUT_SECONDS) -> str | None:
+                    timeout_seconds: float = DEFAULT_COMMAND_TIMEOUT_SECONDS,
+                    target_host: str | None = None) -> str | None:
         args: dict[str, Any] = {"name": name}
         if url:
             args["url"] = url
-        payload = self._client.submit("cookies.get", args, timeout_seconds=timeout_seconds)
+        payload = self._client.submit(
+            "cookies.get", args, timeout_seconds=timeout_seconds, target_host=target_host,
+        )
         value = payload.get("value")
         return None if value is None else str(value)
 
     def cookies_set(self, cookies: list[dict], *,
-                    timeout_seconds: float = DEFAULT_COMMAND_TIMEOUT_SECONDS) -> int:
+                    timeout_seconds: float = DEFAULT_COMMAND_TIMEOUT_SECONDS,
+                    target_host: str | None = None) -> int:
         payload = self._client.submit(
-            "cookies.set", {"cookies": cookies}, timeout_seconds=timeout_seconds
+            "cookies.set", {"cookies": cookies},
+            timeout_seconds=timeout_seconds, target_host=target_host,
         )
         return int(payload.get("count") or 0)
 
     def cookies_remove(self, name: str, *, url: str | None = None,
-                       timeout_seconds: float = DEFAULT_COMMAND_TIMEOUT_SECONDS) -> int:
+                       timeout_seconds: float = DEFAULT_COMMAND_TIMEOUT_SECONDS,
+                       target_host: str | None = None) -> int:
         args: dict[str, Any] = {"name": name}
         if url:
             args["url"] = url
-        payload = self._client.submit("cookies.remove", args, timeout_seconds=timeout_seconds)
+        payload = self._client.submit(
+            "cookies.remove", args, timeout_seconds=timeout_seconds, target_host=target_host,
+        )
         return int(payload.get("count") or 0)
+
+    # -- 阶段 D 补齐：浏览器级原语（background 扩展 API） ---------------------
+
+    def screenshot(
+        self,
+        tab_id: str,
+        *,
+        quality: int | None = None,
+        timeout_seconds: float = DEFAULT_COMMAND_TIMEOUT_SECONDS,
+        target_host: str | None = None,
+    ) -> dict[str, Any]:
+        """整页/可见区截图（background 经 chrome.tabs.captureVisibleTab）：
+        返回 `{"dataUrl": "data:image/png;base64,..."}`，由执行器落盘。
+        """
+        args: dict[str, Any] = {"tabId": tab_id}
+        if quality is not None:
+            args["quality"] = quality
+        return self._client.submit(
+            "screenshot", args, timeout_seconds=timeout_seconds, target_host=target_host,
+        )
+
+    def stop_loading(
+        self,
+        tab_id: str,
+        *,
+        timeout_seconds: float = DEFAULT_COMMAND_TIMEOUT_SECONDS,
+        target_host: str | None = None,
+    ) -> dict[str, Any]:
+        """停止当前页加载（background 对 tab 调 window.stop），返回当前 url。"""
+        return self._client.submit(
+            "tabs.stopLoading", {"tabId": tab_id},
+            timeout_seconds=timeout_seconds, target_host=target_host,
+        )
+
+    def wait_load(
+        self,
+        tab_id: str,
+        *,
+        timeout_ms: int = 30_000,
+        timeout_seconds: float = DEFAULT_COMMAND_TIMEOUT_SECONDS,
+        target_host: str | None = None,
+    ) -> dict[str, Any]:
+        """等待页面加载完成（background 复用 waitComplete），返回当前 url。"""
+        return self._client.submit(
+            "tabs.waitLoad", {"tabId": tab_id, "timeoutMs": timeout_ms},
+            timeout_seconds=timeout_seconds, target_host=target_host,
+        )

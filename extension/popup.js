@@ -40,7 +40,7 @@ async function loadHost() {
     }
   } catch { /* SW 重启中：忽略 */ }
   const name = host ? (HOST_LABELS[host.browser] || host.browser || "未知") : "未知";
-  infoEl.textContent = `宿主浏览器：${name}（channel 校验依据）`;
+  infoEl.textContent = `宿主浏览器：${name}（执行宿主）`;
   try {
     const resp = await fetch(`${devserverUrl}/api/ext/status`);
     const data = await resp.json();
@@ -49,7 +49,7 @@ async function loadHost() {
       : `devserver 已连上，但尚未识别本扩展：保持本页/devserver 存活几秒后重开`;
     hubEl.className = data.online ? "ok" : "bad";
   } catch {
-    hubEl.textContent = "devserver 未运行：编辑器「▶ 运行」时会自动拉起；浏览器指令暂回退 playwright";
+    hubEl.textContent = "devserver 未运行：需先启动 devserver 并保持本扩展在线，浏览器指令才能执行";
     hubEl.className = "bad";
   }
 }

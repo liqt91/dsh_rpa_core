@@ -295,7 +295,7 @@ class _RequestHandler(BaseHTTPRequestHandler):
     def _host_report(self) -> dict | None:
         """扩展随长轮询上报的宿主身份（query: host / ver / platform / ua）。
 
-        宿主身份决定「打开网页」的 channel 能否兑现（见 extension_exec.channel_matches_host）。
+        宿主身份用于状态展示「扩展安装在哪个浏览器」（现已无独立浏览器通道）。
         """
         query = parse_qs(urlparse(self.path).query)
 
@@ -307,6 +307,7 @@ class _RequestHandler(BaseHTTPRequestHandler):
             return None
         return {
             "browser": browser,
+            "instanceId": first("iid"),
             "version": first("ver"),
             "platform": first("platform"),
             "userAgent": user_agent,

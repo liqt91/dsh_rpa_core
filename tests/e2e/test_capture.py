@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from rpa_core.capture import BrowserCaptureSession, DesktopCaptureSession
+from rpa_core.capture import DesktopCaptureSession, ExtensionCaptureSession
 from rpa_core.devserver import DevServer
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -27,7 +27,7 @@ def server(tmp_path):
         commands_root=ROOT / "commands",
         workflows_root=tmp_path / "workflows",
         port=0,
-        browser_capture_factory=BrowserCaptureSession,
+        browser_capture_factory=ExtensionCaptureSession,
         desktop_capture_factory=DesktopCaptureSession,
     )
     dev.start()
@@ -54,21 +54,48 @@ def _request(method: str, path: str, payload=None, base: str = ""):
         return exc.code, json.loads(exc.read().decode("utf-8"))
 
 
-def test_browser_persistent_capture_end_to_end(server):
+def test_browser_capture_extension_only_end_to_end(server):
+    """浏览器捕获已收敛为自研扩展单通道：persistent 拒绝，extension 经 result 回传播补流程。"""
     base = f"http://127.0.0.1:{server.port}"
+
+    # persistent/user-browser 通道已随 playwright 移除 → 必须拒绝
     status, payload = _request(
         "POST",
         "/api/capture/browser/start",
-        {"transport": "persistent", "headless": True, "startUrl": TEST_PAGE},
+        {"transport": "persistent", "headless": True},
+        base=base,
+    )
+    assert status == 400
+    assert payload["error"] == "BAD_REQUEST"
+
+    # 仅自研扩展单通道
+    status, payload = _request(
+        "POST",
+        "/api/capture/browser/start",
+        {"transport": "extension"},
         base=base,
     )
     assert status == 200
     session_id = payload["sessionId"]
 
+    # content-script 回传描述符 → pick 被唤醒
+    descriptor = {
+        "kind": "browser",
+        "selector": {"css": "#go"},
+        "verifyCount": 1,
+        "metadata": {"tag": "button"},
+    }
+    status, payload = _request(
+        "POST",
+        "/api/capture/extension/result",
+        {"sessionId": session_id, **descriptor},
+        base=base,
+    )
+    assert status == 200
     status, payload = _request(
         "POST",
         "/api/capture/browser/pick",
-        {"sessionId": session_id, "clickCss": "#go", "timeoutSeconds": 15},
+        {"sessionId": session_id, "timeoutSeconds": 15},
         base=base,
     )
     assert status == 200
@@ -76,26 +103,6 @@ def test_browser_persistent_capture_end_to_end(server):
     assert payload["selector"]["css"] == "#go"
     assert payload["verifyCount"] == 1
     assert payload["metadata"]["tag"] == "button"
-
-    status, payload = _request(
-        "POST",
-        "/api/capture/browser/pick",
-        {
-            "sessionId": session_id,
-            "clickCss": "#go",
-            "saveAs": "goButton",
-            "flow": "demo",
-            "timeoutSeconds": 15,
-        },
-        base=base,
-    )
-    assert status == 200
-    assert payload["savedAs"] == "goButton"
-
-    status, element = _request("GET", "/api/workflows/demo/elements/goButton", base=base)
-    assert status == 200
-    assert element["kind"] == "browser"
-    assert element["selector"] == {"css": "#go"}
 
     status, payload = _request(
         "POST", "/api/capture/browser/cancel", {"sessionId": session_id}, base=base

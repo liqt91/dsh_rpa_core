@@ -2,6 +2,8 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 from rpa_core import cli
 from rpa_core.catalog import load_catalog
 
@@ -84,17 +86,31 @@ def test_cli_catalog_matches_load_catalog(capsys):
     assert [command["id"] for command in payload["commands"]] == sorted(catalog)
 
 
-def test_cli_capture_browser_persistent_dispatch(monkeypatch, tmp_path, capsys):
-    monkeypatch.setattr(cli, "BrowserCaptureSession", _FakeBrowserSession)
+def test_cli_capture_browser_dispatch_forces_extension(monkeypatch, tmp_path, capsys):
+    """浏览器捕获 CLI 已收敛为自研扩展单通道：默认且仅允许 extension。"""
+    monkeypatch.setattr(cli, "ExtensionCaptureSession", _FakeBrowserSession)
     _FakeBrowserSession.instances = []
     code, _ = _run([
-        "capture", "browser", "--transport", "persistent", "--headless",
-        "--start-url", "https://example.com",
+        "capture", "browser", "--headless", "--start-url", "https://example.com",
     ], capsys)
     assert code == 0
     session = _FakeBrowserSession.instances[0]
-    assert session.kwargs["transport"] == "persistent"
+    assert session.kwargs["transport"] == "extension"
     assert session.kwargs["headless"] is True
+
+
+def test_cli_capture_browser_rejects_unknown_transport(monkeypatch, tmp_path, capsys):
+    """非 extension 传输选择已随 playwright 移除：argparse 直接拒绝（不会实例化会话）。"""
+    monkeypatch.setattr(cli, "ExtensionCaptureSession", _FakeBrowserSession)
+    _FakeBrowserSession.instances = []
+    old = sys.argv
+    sys.argv = ["rpa-core", "capture", "browser", "--transport", "persistent"]
+    try:
+        with pytest.raises(SystemExit):
+            cli.main()
+    finally:
+        sys.argv = old
+    assert _FakeBrowserSession.instances == []
 
 
 def test_cli_capture_desktop_point_and_save(monkeypatch, tmp_path, capsys):
@@ -127,7 +143,7 @@ def test_cli_capture_desktop_hover_passthrough(monkeypatch, tmp_path, capsys):
 
 
 def test_cli_capture_save_requires_flow(monkeypatch, tmp_path, capsys):
-    monkeypatch.setattr(cli, "BrowserCaptureSession", _FakeBrowserSession)
+    monkeypatch.setattr(cli, "ExtensionCaptureSession", _FakeBrowserSession)
     _FakeBrowserSession.instances = []
     code, out = _run([
         "capture", "browser", "--save-as", "x", "--workflows", str(tmp_path / "w"),
@@ -196,7 +212,7 @@ def test_cli_run_compile_failure_is_clean_structured_error(tmp_path, capsys):
             "id": "root",
             "children": [
                 {"type": "action", "id": "openPage", "command": "browser.navigate",
-                 "with": {"url": "https://example.test/", "transport": "extension"},
+                 "with": {"url": "https://example.test/"},
                  "retry_count": 3},
             ],
         },

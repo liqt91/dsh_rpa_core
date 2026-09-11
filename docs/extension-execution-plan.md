@@ -4,6 +4,8 @@
 日期：2026-09-10
 前置：`yingdao-command-model.md` §〇（维护者决策 2026-09-08：自研扩展一等公民，playwright/bsk 二等）、`yingdao-web-cmds-benchmark.md`（44 条对标，✅22/🟡8/❌14）
 
+> **2026-09-11 更新（现状覆盖）**：playwright 已**彻底移除**（执行 + 捕获 + 依赖），浏览器执行/捕获统一收敛到**自研扩展单通道**。旧的「扩展在线优先 / 离线静默回退 playwright / transport+channel 双轴」均不再成立：`browser.navigate` 已无 `transport`/`channel` 参数；扩展离线时命令**立即失败**（不白等、不回退）。本计划文档保留为历史提案记录，现行行为以 `ADR 0009` 为准。下文中凡把 playwright 作为可用通道讲述的段落均属历史描述，不再适用。
+
 > **落地记录 2026-09-10（Phase 1）**：协议 v2 + 通道骨架完成。
 > - 宿主侧 `rpa_core/extension_exec.py`：`ExtensionExecHub`（命令队列 + 长轮询 + 结果回收 + 权限钩子）与 `ExtensionExecClient`（执行器侧 HTTP 客户端）。
 > - 路由：`GET /api/ext/command/next?wait=N`（长轮询 + 心跳）、`POST /api/ext/command/result`、`POST /api/ext/command/submit`、`GET /api/ext/status`、`GET|POST /api/ext/permissions`；无 token（devserver 仅绑定 127.0.0.1，无应用层鉴权）。
@@ -110,6 +112,16 @@ playwright 通道同名单测/合同已存在，扩展通道照 manifest 实现�
 - 宿主名优先取扩展自报，缺省用 UA 推断（`extension_exec.browser_name_from_user_agent`，顺序敏感：Edge/Opera/Brave 的 UA 都含 `Chrome/`）。
 - 判定规则集中在 `extension_exec.channel_matches_host`（后端）+ 扩展 `assertAllowed`（收窄模式），两处同语义。
 - 前端 `app.js` 的 `channelMatchesHost` 是后端判定的等价副本（面板要即时预览，不能每次求后端）；改一处必须同步另一处，用 `node scripts/check_channel_preview.mjs` 跑判定矩阵做同步检查。
+
+### 6. 实例级身份（instanceId）与多浏览器路由
+
+一个流程可能同时操作 Edge、Chrome，甚至同浏览器的多个 profile（不同用户数据目录）。只用浏览器名路由会撞键：同浏览器多 profile 在 hub 里共享一个浏览器名，无法区分。为此引入**实例级唯一 id**：
+
+- **实例 = 一个浏览器 profile**：扩展 `background.js` 用 `chrome.storage.local` 持久化 `rpaInstanceId`（`crypto.randomUUID()` 生成一次）。同一 profile 的多窗口/页签共享同一 storage + 同一 background SW → 同一 id；不同 profile 各自生成 → 不同 id。
+- **上报**：长轮询 `GET /api/ext/command/next` 额外带 `iid=<instanceId>`；devserver `_host_report` 读 `iid` 存入 report 的 `instanceId`。
+- **hub 归档/路由**：`record_host` 改按 `instanceId` 为 key 归档（旧版扩展无 id 时退化为浏览器名）；`next_command` 匹配 target 当且仅当 `target == 浏览器名 or target == instanceId`；命令结果由 hub 为 `tabs.create` 补带 `instanceId`（执行该命令的真实实例）。`status()` 新增 `instances`（在线实例详情），`hosts` 仍为浏览器名去重（供前端置灰）。
+- **离线快失败**：`submit` 遇「明确 target 但从未在线」→ 立即返回 `TARGET_HOST_OFFLINE`，不白等超时。
+- **executor 会话绑定**：`browser.navigate` 建会话后 `_ext_session_hosts[sessionId] = 回应真实 instanceId`（拿不到退浏览器名）；`navigate` 输出新增 `browserInstance`（实例唯一 id）+ `browserType` + `tabId`。
 
 ## 五、排障：插件装了、也重载了，为什么执行还是没打开浏览器
 

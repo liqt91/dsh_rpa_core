@@ -123,7 +123,7 @@ def test_browser_capture_flow_saves_and_reads_element(capture_server):
     status, payload = _request(
         "POST",
         "/api/capture/browser/start",
-        {"transport": "persistent", "headless": True},
+        {"transport": "extension"},
         base=base,
     )
     assert status == 200
@@ -225,7 +225,7 @@ def test_capture_pick_save_requires_flow(capture_server):
     status, payload = _request(
         "POST",
         "/api/capture/browser/start",
-        {"transport": "persistent", "headless": True},
+        {"transport": "extension"},
         base=base,
     )
     session_id = payload["sessionId"]

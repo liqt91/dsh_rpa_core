@@ -57,10 +57,12 @@ class FakeExtension:
     `host`：宿主浏览器标识（随长轮询 query 上报，None = 不上报，模拟旧版扩展）。
     """
 
-    def __init__(self, base: str, handlers: dict | None = None, host: str | None = "msedge"):
+    def __init__(self, base: str, handlers: dict | None = None, host: str | None = "msedge",
+                 instance_id: str | None = None):
         self.base = base
         self.handlers: dict = handlers or {}
         self.host = host
+        self.instance_id = instance_id
         self.seen: list[tuple[str, dict]] = []
         self._stop = False
         self._thread = threading.Thread(target=self._loop, daemon=True)
@@ -77,6 +79,8 @@ class FakeExtension:
         query = "/api/ext/command/next?wait=1"
         if self.host:
             query += f"&host={self.host}&ua={urllib.parse.quote('Mozilla/5.0 ' + self.host)}"
+        if self.instance_id:
+            query += f"&iid={self.instance_id}"
         while not self._stop:
             status, payload = _request("GET", query, base=self.base)
             if status != 200:
@@ -376,24 +380,12 @@ def test_executor_extension_boundary_and_offline_fallback(server):
     finally:
         fake.stop()
 
-    # 扩展离线（无 devserver/扩展在监听）：缺省 transport 不再走扩展，回退 playwright 分支
-    offline = _executor("http://127.0.0.1:9")
 
-    async def offline_check():
-        try:
-            assert await offline._use_extension({}) is False
-            assert await offline._use_extension({"transport": "extension"}) is True
-        finally:
-            await offline.close()
-
-    asyncio.run(offline_check())
-
-
-# ---------------------------------------------------- 通道 / 浏览器类型（channel）
+# ---------------------------------------------------- 通道 / 宿主浏览器身份
 
 
 def test_status_reports_host_browser_after_poll(server):
-    """宿主浏览器身份随长轮询上报：/api/ext/status 暴露 host，供 channel 校验兑现。"""
+    """宿主浏览器身份随长轮询上报：/api/ext/status 暴露 host（状态展示用）。"""
     base = f"http://127.0.0.1:{server.port}"
     fake = FakeExtension(base, dict(_DEFAULT_HANDLERS), host="msedge").start()
     try:
@@ -424,114 +416,6 @@ def test_legacy_extension_without_host_report_stays_online(server):
         fake.stop()
 
 
-def test_executor_extension_channel_validates_host_browser(server):
-    """extension 通道下 channel = 校验宿主浏览器：匹配放行、不匹配/非 Chromium 失败。"""
-    base = f"http://127.0.0.1:{server.port}"
-    fake = FakeExtension(base, dict(_DEFAULT_HANDLERS), host="msedge").start()
-    executor = _executor(base)
-    _wait_online(base)
-
-    async def go():
-        try:
-            same = await executor.execute(
-                _invocation(
-                    "browser.navigate",
-                    {"url": "https://a.test/one", "transport": "extension", "channel": "msedge"},
-                ),
-                asyncio.Event(),
-            )
-            assert same.status == "success", same.error
-
-            any_chromium = await executor.execute(
-                _invocation(
-                    "browser.navigate",
-                    {"url": "https://a.test/two", "transport": "extension", "channel": "chromium"},
-                ),
-                asyncio.Event(),
-            )
-            assert any_chromium.status == "success", any_chromium.error  # 任意 Chromium 内核
-
-            mismatch = await executor.execute(
-                _invocation(
-                    "browser.navigate",
-                    {"url": "https://a.test/three", "transport": "extension", "channel": "chrome"},
-                ),
-                asyncio.Event(),
-            )
-            assert mismatch.status == "error"
-            assert mismatch.error.code == "INVALID_INPUT"
-            assert mismatch.error.details["hostBrowser"] == "msedge"
-
-            unsupported = await executor.execute(
-                _invocation(
-                    "browser.navigate",
-                    {"url": "https://a.test/four", "transport": "extension", "channel": "firefox"},
-                ),
-                asyncio.Event(),
-            )
-            assert unsupported.status == "error"
-            assert unsupported.error.code == "INVALID_INPUT"
-        finally:
-            await executor.close()
-
-    try:
-        asyncio.run(go())
-    finally:
-        fake.stop()
-
-
-def test_executor_extension_channel_without_host_report_fails(server):
-    """显式 transport=extension + 指定 channel，但扩展未上报宿主：明确失败而非静默放行。"""
-    base = f"http://127.0.0.1:{server.port}"
-    fake = FakeExtension(base, dict(_DEFAULT_HANDLERS), host=None).start()
-    executor = _executor(base)
-    _wait_online(base)
-
-    async def go():
-        try:
-            result = await executor.execute(
-                _invocation(
-                    "browser.navigate",
-                    {"url": "https://a.test/one", "transport": "extension", "channel": "msedge"},
-                ),
-                asyncio.Event(),
-            )
-            assert result.status == "error"
-            assert result.error.code == "INVALID_INPUT"
-            assert result.error.details["hostBrowser"] is None
-            assert "重载" in result.error.message
-        finally:
-            await executor.close()
-
-    try:
-        asyncio.run(go())
-    finally:
-        fake.stop()
-
-
-def test_executor_auto_channel_defers_to_playwright_on_host_mismatch(server):
-    """缺省通道 + channel 与宿主冲突 → 让位 playwright（只有它能按 channel 启动浏览器）。"""
-    base = f"http://127.0.0.1:{server.port}"
-    fake = FakeExtension(base, dict(_DEFAULT_HANDLERS), host="chrome").start()
-    executor = _executor(base)
-    _wait_online(base)
-
-    async def go():
-        try:
-            assert await executor._use_extension({}) is True
-            assert await executor._use_extension({"channel": "chrome"}) is True
-            assert await executor._use_extension({"channel": "chromium"}) is True
-            assert await executor._use_extension({"channel": "msedge"}) is False
-            assert await executor._use_extension({"channel": "firefox"}) is False
-        finally:
-            await executor.close()
-
-    try:
-        asyncio.run(go())
-    finally:
-        fake.stop()
-
-
 def test_executor_extension_offline_fails_fast_with_actionable_error(server):
     """扩展通道离线：立即失败（不白等 timeoutMs），并给出可照着做的排查步骤。
 
@@ -545,21 +429,321 @@ def test_executor_extension_offline_fails_fast_with_actionable_error(server):
         try:
             started = time.monotonic()
             result = await executor.execute(
-                _invocation(
-                    "browser.navigate",
-                    {"url": "https://a.test/one", "transport": "extension"},
-                ),
-                asyncio.Event(),
+                _invocation("browser.navigate", {"url": "https://a.test/one"}), asyncio.Event()
             )
             elapsed = time.monotonic() - started
             assert result.status == "error", result.outputs
             assert result.error.code == "EXECUTOR_FAILED"
-            assert "extension 通道当前离线" in result.error.message
-            assert "playwright" in result.error.message  # 给出替代通道
+            assert "浏览器执行通道当前离线" in result.error.message
+            assert "chrome://extensions" in result.error.message  # 给出可操作排查方向
             assert result.error.details["reason"] == "channel_offline"
-            assert result.error.details["transport"] == "extension"
             assert elapsed < 5.0, f"离线未快速失败，耗时 {elapsed:.1f}s"
         finally:
             await executor.close()
 
     asyncio.run(go())
+
+
+# ---------------------------------------------------- 多浏览器（targetHost）路由
+
+
+def test_status_reports_hosts_list_for_multiple_browsers(server):
+    """多个浏览器的扩展各自上报身份：/api/ext/status 的 hosts 列出在线浏览器名。"""
+    base = f"http://127.0.0.1:{server.port}"
+    edge = FakeExtension(base, dict(_DEFAULT_HANDLERS), host="msedge").start()
+    chrome = FakeExtension(base, dict(_DEFAULT_HANDLERS), host="chrome").start()
+    try:
+        deadline = time.monotonic() + 5
+        hosts: list[str] = []
+        while time.monotonic() < deadline and sorted(hosts) != ["chrome", "msedge"]:
+            _, payload = _request("GET", "/api/ext/status", base=base)
+            hosts = [str(h) for h in (payload.get("hosts") or [])]
+            time.sleep(0.05)
+        assert sorted(hosts) == ["chrome", "msedge"]
+    finally:
+        edge.stop()
+        chrome.stop()
+
+
+def test_submit_routes_by_target_host(server):
+    """targetHost 明确时，命令仅由对应浏览器的扩展领取（不串台）。"""
+    base = f"http://127.0.0.1:{server.port}"
+    edge = FakeExtension(base, {"ping": lambda args: {"who": "edge"}}, host="msedge").start()
+    chrome = FakeExtension(base, {"ping": lambda args: {"who": "chrome"}}, host="chrome").start()
+    try:
+        # 等待两个扩展均在线，避免命中 targetHost 快失败
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            _, payload = _request("GET", "/api/ext/status", base=base)
+            if sorted(payload.get("hosts") or []) == ["chrome", "msedge"]:
+                break
+            time.sleep(0.05)
+
+        _, edge_val = _request(
+            "POST",
+            "/api/ext/command/submit",
+            {"op": "ping", "targetHost": "msedge", "timeoutSeconds": 5},
+            base=base,
+        )
+        assert edge_val["ok"] is True and edge_val["value"]["who"] == "edge"
+
+        _, chrome_val = _request(
+            "POST",
+            "/api/ext/command/submit",
+            {"op": "ping", "targetHost": "chrome", "timeoutSeconds": 5},
+            base=base,
+        )
+        assert chrome_val["ok"] is True and chrome_val["value"]["who"] == "chrome"
+    finally:
+        edge.stop()
+        chrome.stop()
+
+
+def test_submit_target_host_offline_fast_fails(server):
+    """明确 targetHost 但目标从未来过（既非浏览器名也非实例 id）→ TARGET_HOST_OFFLINE 快失败。
+
+    区别于「有活跃宿主但目标插件休眠到无人领取」（那类仍入队到超时 TIMEOUT）。
+    """
+    base = f"http://127.0.0.1:{server.port}"
+    started = time.monotonic()
+    status, payload = _request(
+        "POST",
+        "/api/ext/command/submit",
+        {"op": "ping", "targetHost": "chrome", "timeoutSeconds": 1},
+        base=base,
+    )
+    elapsed = time.monotonic() - started
+    assert status == 200
+    assert payload["ok"] is False
+    assert payload["error"]["code"] == "TARGET_HOST_OFFLINE"
+    assert elapsed < 0.9, f"目标从未在线应快速失败，却耗时 {elapsed:.1f}s"
+
+
+def test_executor_navigate_with_browser_type_routes_to_chrome(server):
+    """browser.navigate 带 browserType=chrome → 命令路由到 Chrome 扩展（不误落 Edge）。"""
+    base = f"http://127.0.0.1:{server.port}"
+    chrome = FakeExtension(base, dict(_DEFAULT_HANDLERS), host="chrome").start()
+    executor = _executor(base)
+    try:
+        # 等 chrome 上线（此时 Edge 无插件在线）
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            _, payload = _request("GET", "/api/ext/status", base=base)
+            if "chrome" in (payload.get("hosts") or []):
+                break
+            time.sleep(0.05)
+
+        async def go():
+            try:
+                result = await executor.execute(
+                    _invocation(
+                        "browser.navigate",
+                        {"url": "https://a.test/one", "browserType": "chrome"},
+                    ),
+                    asyncio.Event(),
+                )
+                assert result.status == "success", result.error
+                assert result.outputs["url"] == "https://a.test/one"
+            finally:
+                await executor.close()
+
+        asyncio.run(go())
+        assert ("tabs.create", {"url": "https://a.test/one", "active": True}) in chrome.seen
+    finally:
+        chrome.stop()
+
+
+def test_executor_navigate_with_default_browser_type_routes_to_edge(server):
+    """browser.navigate 未显式给 browserType → 默认 msedge，路由到 Edge 扩展。"""
+    base = f"http://127.0.0.1:{server.port}"
+    edge = FakeExtension(base, dict(_DEFAULT_HANDLERS), host="msedge").start()
+    executor = _executor(base)
+    try:
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            _, payload = _request("GET", "/api/ext/status", base=base)
+            if "msedge" in (payload.get("hosts") or []):
+                break
+            time.sleep(0.05)
+
+        async def go():
+            try:
+                result = await executor.execute(
+                    _invocation("browser.navigate", {"url": "https://a.test/one"}),
+                    asyncio.Event(),
+                )
+                assert result.status == "success", result.error
+            finally:
+                await executor.close()
+
+        asyncio.run(go())
+        assert ("tabs.create", {"url": "https://a.test/one", "active": True}) in edge.seen
+    finally:
+        edge.stop()
+
+
+# ---------------------------------------------------- 加载超时后执行（onTimeout）
+
+
+def test_executor_navigate_timeout_on_error_fails(server):
+    """页面未在 timeoutMs 内加载完成且 onTimeout=error（默认）→ 视为超时失败。"""
+    base = f"http://127.0.0.1:{server.port}"
+    handlers = dict(_DEFAULT_HANDLERS)
+    handlers["tabs.create"] = lambda args: {
+        "tabId": 99, "url": args["url"], "title": "", "completed": False, "timedOut": True,
+    }
+    fake = FakeExtension(base, handlers, host="msedge").start()
+    executor = _executor(base)
+    try:
+        _wait_online(base)
+
+        async def go():
+            try:
+                result = await executor.execute(
+                    _invocation(
+                        "browser.navigate",
+                        {"url": "https://a.test/one", "timeoutMs": 500, "onTimeout": "error"},
+                    ),
+                    asyncio.Event(),
+                )
+                assert result.status == "error", result.outputs
+                assert result.error.code == "TIMEOUT"
+                assert "页面加载超时" in result.error.message
+                assert result.error.details["reason"] == "navigate_load_timeout"
+            finally:
+                await executor.close()
+
+        asyncio.run(go())
+    finally:
+        fake.stop()
+
+
+def test_executor_navigate_timeout_on_stop_continues(server):
+    """页面加载超时且 onTimeout=stop → 停止网页加载并继续（成功）。"""
+    base = f"http://127.0.0.1:{server.port}"
+    handlers = dict(_DEFAULT_HANDLERS)
+    handlers["tabs.create"] = lambda args: {
+        "tabId": 99, "url": args["url"], "title": "", "completed": False, "timedOut": True,
+    }
+    handlers["tabs.stopLoading"] = lambda args: {"url": args.get("tabId") and "https://a.test/one"}
+    fake = FakeExtension(base, handlers, host="msedge").start()
+    executor = _executor(base)
+    try:
+        _wait_online(base)
+
+        async def go():
+            try:
+                result = await executor.execute(
+                    _invocation(
+                        "browser.navigate",
+                        {"url": "https://a.test/one", "timeoutMs": 500, "onTimeout": "stop"},
+                    ),
+                    asyncio.Event(),
+                )
+                assert result.status == "success", result.error
+                assert result.outputs["url"] == "https://a.test/one"
+            finally:
+                await executor.close()
+
+        asyncio.run(go())
+        assert ("tabs.stopLoading", {"tabId": "99"}) in fake.seen
+    finally:
+        fake.stop()
+
+
+# ---------------------------------------------------- 同浏览器多实例（instanceId）路由
+
+
+def _wait_instances(base: str, want: set[str], timeout: float = 5.0) -> None:
+    """等 /api/ext/status 的 instances 齐集指定 instanceId 集合。
+
+    同浏览器多实例在线时，hosts（去重浏览器名）无法区分，只能按 instances 判断。
+    """
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        _, payload = _request("GET", "/api/ext/status", base=base)
+        alive = {
+            str(inst.get("instanceId"))
+            for inst in (payload.get("instances") or [])
+            if inst.get("instanceId")
+        }
+        if want <= alive:
+            return
+        time.sleep(0.05)
+    raise AssertionError(f"instances {want} not all online, got {alive!r}")
+
+
+def test_submit_routes_by_instance_id_same_browser(server):
+    """同浏览器（均 msedge）多实例：按 instanceId 精确路由，互不串台。
+
+    这正是「一个流程分别操作两个 Edge profile」的基础：hosts 去重成同一个 msedge，
+    只有实例 id 能把命令送到正确的那个实例。
+    """
+    base = f"http://127.0.0.1:{server.port}"
+    edge_a = FakeExtension(
+        base, {"ping": lambda args: {"who": "edge-a"}}, host="msedge", instance_id="edge-a"
+    ).start()
+    edge_b = FakeExtension(
+        base, {"ping": lambda args: {"who": "edge-b"}}, host="msedge", instance_id="edge-b"
+    ).start()
+    try:
+        _wait_instances(base, {"edge-a", "edge-b"})
+
+        _, a_val = _request(
+            "POST",
+            "/api/ext/command/submit",
+            {"op": "ping", "targetHost": "edge-a", "timeoutSeconds": 5},
+            base=base,
+        )
+        assert a_val["ok"] is True and a_val["value"]["who"] == "edge-a"
+
+        _, b_val = _request(
+            "POST",
+            "/api/ext/command/submit",
+            {"op": "ping", "targetHost": "edge-b", "timeoutSeconds": 5},
+            base=base,
+        )
+        assert b_val["ok"] is True and b_val["value"]["who"] == "edge-b"
+    finally:
+        edge_a.stop()
+        edge_b.stop()
+
+
+def test_executor_navigate_outputs_browser_instance_fields(server):
+    """browser.navigate 输出三字段：browserInstance（实例级唯一 id）/ browserType / tabId。
+
+    browserInstance 来自 Hub 给 tabs.create 结果补带的 instanceId（执行该命令的实例）；
+    后续元素操作按该实例路由，而非笼统的浏览器名。
+    """
+    base = f"http://127.0.0.1:{server.port}"
+    fake = FakeExtension(
+        base, dict(_DEFAULT_HANDLERS), host="msedge", instance_id="edge-a"
+    ).start()
+    executor = _executor(base)
+    try:
+        _wait_instances(base, {"edge-a"})
+
+        async def go():
+            try:
+                result = await executor.execute(
+                    _invocation("browser.navigate", {"url": "https://a.test/one"}),
+                    asyncio.Event(),
+                )
+                assert result.status == "success", result.error
+                assert result.outputs["browserInstance"] == "edge-a"
+                assert result.outputs["browserType"] == "msedge"
+                assert result.outputs["tabId"] == "41"
+                session_id = result.outputs["sessionId"]
+
+                # 会话绑定实例后，后续操作按实例 id 精确路由
+                clicked = await executor.execute(
+                    _invocation("browser.click", {"sessionId": session_id, "selector": "#go"}),
+                    asyncio.Event(),
+                )
+                assert clicked.status == "success", clicked.error
+            finally:
+                await executor.close()
+
+        asyncio.run(go())
+    finally:
+        fake.stop()

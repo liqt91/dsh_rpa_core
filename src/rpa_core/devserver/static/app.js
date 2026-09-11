@@ -13,6 +13,7 @@ const state = {
   elementsSeen: null, // 最近一次渲染的元素名集合（捕获自动刷新差集用）
   collapsedGroups: new Set(), // 指令面板已收起的分组名（默认全展开，点击收起）
   extChannel: null, // 最近一次 /api/ext/status 结果 {online, host}
+  extHosts: [], // 在线扩展宿主浏览器名列表（用于 browserType 下拉置灰）
   paramGroupsOpen: new Map(), // 属性面板参数分组的展开状态（key: `${nodeId}|${分组名}`；未记录时按分组缺省/是否已填值判定）
 };
 let dragState = null; // {type:"new", command} | {type:"new", flow} | {type:"move", path}
@@ -1263,10 +1264,17 @@ function renderProps() {
     return;
   }
   const manifest = manifestOf(node.command);
-  body.appendChild(numberField("超时（秒，可选）", node.timeout_seconds, (v) => {
-    if (v === null) delete node.timeout_seconds; else node.timeout_seconds = v;
-    markDirty();
-  }));
+  // 命令自带超时参数（如 navigate 的 timeoutMs「网页加载超时」）时隐藏引擎级节点超时，
+  // 避免同一面板出现两个「超时」（对标影刀：只有 1 个加载超时）。
+  const hasOwnTimeout = Boolean(
+    manifest?.input_schema?.properties && "timeoutMs" in manifest.input_schema.properties
+  );
+  if (!hasOwnTimeout) {
+    body.appendChild(numberField("超时（秒，可选）", node.timeout_seconds, (v) => {
+      if (v === null) delete node.timeout_seconds; else node.timeout_seconds = v;
+      markDirty();
+    }));
+  }
   // 重试次数：仅 manifest 声明可重试的指令才出现（不支持时返回 null）
   const retryField = retryCountField(node, manifest);
   if (retryField) body.appendChild(retryField);
@@ -1297,16 +1305,6 @@ function renderProps() {
     } else {
       for (const key of keys) {
         body.appendChild(schemaField(node, key, properties[key], required.has(key)));
-      }
-    }
-    // 通道解析预览：浏览器指令缺省走 extension 还是 playwright（与执行器同语义）
-    const transportInput = body.querySelector('[data-field="transport"]');
-    if (transportInput) {
-      const fieldEl = transportInput.closest(".field");
-      if (fieldEl) fieldEl.insertAdjacentElement("afterend", channelPreviewField(node));
-      for (const key of ["transport", "channel"]) {
-        const input = body.querySelector(`[data-field="${key}"]`);
-        if (input) input.addEventListener("change", () => renderProps());
       }
     }
   }
@@ -1445,8 +1443,7 @@ function paramGroupSection(node, part, properties, required) {
 }
 
 // 字段联动：根据 x-depends 声明，禁用/启用依赖字段
-// x-depends 格式: { "headless": {"transport": "playwright"}, ... }
-// 含义: headless 仅当 transport === "playwright" 时启用
+// x-depends 格式: { "headless": {"channel": "x"}, ... }
 // 展示策略：不隐藏、只禁用——参数"凭空消失"会让用户以为指令没有这个开关，
 // 禁用 + 说明能让用户看懂"它属于另一条通道"。
 function applyDependencies(body, node, schema) {
@@ -1499,8 +1496,6 @@ const HOST_BROWSER_LABELS = {
   unknown: "未知浏览器",
 };
 
-const CHROMIUM_HOSTS = ["chrome", "msedge", "brave", "opera", "vivaldi", "chromium"];
-
 function hostBrowserLabel(name) {
   if (!name) return "";
   return HOST_BROWSER_LABELS[name] || name;
@@ -1510,61 +1505,6 @@ function channelHostBrowser(status) {
   return status && status.host ? status.host.browser : null;
 }
 
-function channelMatchesHost(channel, status) {
-  // 语义与后端 extension_exec.channel_matches_host 保持一致（两侧必须同步改）
-  const expected = String(channel || "").toLowerCase();
-  if (!expected) return true; // channel 缺省 = 跟随宿主
-  const actual = String(channelHostBrowser(status) || "").toLowerCase();
-  if (!actual) return false; // 宿主未上报：无法确认，不假装成功
-  if (expected === actual) return true;
-  if (expected === "chromium") return CHROMIUM_HOSTS.includes(actual);
-  return false;
-}
-
-// 通道解析预览：与执行器 _use_extension 同语义——显式 transport 优先；
-// 缺省时扩展在线且 channel 不与宿主冲突 → extension，否则 playwright。
-function resolveChannelPreview(node) {
-  const args = (node && node["with"]) || {};
-  if (args.transport) {
-    if (args.transport === "extension" && args.channel && !channelMatchesHost(args.channel, state.extChannel)) {
-      const host = hostBrowserLabel(channelHostBrowser(state.extChannel)) || "未上报";
-      return {
-        channel: "extension(将失败)",
-        reason: `扩展宿主为 ${host}，与 channel=${args.channel} 不符；请把插件装到 ${args.channel}，或改用 transport=playwright`,
-      };
-    }
-    return { channel: args.transport, reason: "已在参数中显式指定" };
-  }
-  const status = state.extChannel;
-  if (!status || !status.online) {
-    return { channel: "playwright", reason: "自研插件未在线（未安装/未重载/devserver 未运行）" };
-  }
-  const hostName = hostBrowserLabel(channelHostBrowser(status));
-  if (args.channel && !channelMatchesHost(args.channel, status)) {
-    return {
-      channel: "playwright",
-      reason: `插件宿主为 ${hostName || "未知"}，无法满足 channel=${args.channel}，按 channel 启动独立浏览器`,
-    };
-  }
-  return { channel: "extension", reason: `自研插件在线（宿主 ${hostName || "未知，请重载插件"}）` };
-}
-
-function channelPreviewField(node) {
-  const row = document.createElement("div");
-  row.className = "field channel-preview";
-  const hint = document.createElement("span");
-  hint.className = "field-hint";
-  const resolved = resolveChannelPreview(node);
-  hint.textContent = resolved.channel === "extension"
-    ? `当前将走自研插件：${resolved.reason}`
-    : resolved.channel === "extension(将失败)"
-      ? `通道冲突：${resolved.reason}`
-      : `当前将走 ${resolved.channel}：${resolved.reason}`;
-  if (resolved.channel === "extension(将失败)") hint.classList.add("bad");
-  row.appendChild(hint);
-  return row;
-}
-
 async function refreshExtChannel() {
   const previous = state.extChannel;
   let status = { online: false, host: null };
@@ -1572,23 +1512,27 @@ async function refreshExtChannel() {
     status = await api("GET", "/api/ext/status");
   } catch { /* devserver 未运行或通道异常：按离线展示 */ }
   state.extChannel = status;
+  const prevHosts = state.extHosts;
+  state.extHosts = Array.isArray(status.hosts) ? status.hosts.map(String) : [];
   const badge = $("ext-channel-badge");
   if (badge) {
     const hostName = hostBrowserLabel(channelHostBrowser(status));
     if (status.online) {
       badge.textContent = `扩展通道：在线${hostName ? `（${hostName}）` : ""}`;
       badge.className = "ext-badge ext-channel-badge ok";
-      badge.title = `自研插件在线，浏览器指令缺省走 extension 通道；宿主浏览器：${hostName || "未上报（请在扩展页重载插件）"}`;
+      badge.title = `自研插件在线；宿主浏览器：${hostName || "未上报（请在扩展页重载插件）"}`;
     } else {
       badge.textContent = "扩展通道：离线";
       badge.className = "ext-badge ext-channel-badge off";
-      badge.title = "自研插件未在线：浏览器指令缺省回退 playwright。点左侧「⇲ 插件」安装/重载";
+      badge.title = "自研插件未在线：浏览器指令将失败。点左侧「⇲ 插件」安装/重载";
     }
   }
-  // 状态真正变化且当前选中的是浏览器指令 → 刷新通道预览（避免定时重渲染打断输入）
+  const hostsChanged = JSON.stringify(prevHosts) !== JSON.stringify(state.extHosts);
+  // 状态真正变化且当前选中的是浏览器指令 → 刷新面板（避免定时重渲染打断输入）
   const changed = !previous
     || previous.online !== status.online
-    || channelHostBrowser(previous) !== channelHostBrowser(status);
+    || channelHostBrowser(previous) !== channelHostBrowser(status)
+    || hostsChanged;
   if (changed && state.selected) {
     const node = findNode(state.selected);
     if (node && node.type === "action" && String(node.command || "").startsWith("browser.")) {
@@ -2325,12 +2269,7 @@ function selectField(labelText, propSchema, required, value, onChange, rawKey) {
   const input = document.createElement("select");
   const empty = document.createElement("option");
   empty.value = "";
-  // 空选项文案按字段语义区分：transport/channel 的"不填"有明确缺省行为，说清楚而不是"未设置"
-  const emptyLabels = {
-    transport: "（缺省：自研插件优先）",
-    channel: "（缺省：跟随扩展宿主）",
-  };
-  empty.textContent = emptyLabels[rawKey] || "（未设置）";
+  empty.textContent = "（未设置）";
   input.appendChild(empty);
   for (const option of propSchema.enum) {
     const element = document.createElement("option");
@@ -2338,6 +2277,17 @@ function selectField(labelText, propSchema, required, value, onChange, rawKey) {
     // 选项文案优先级：manifest x-enum-labels（指令自带，随 catalog 下发）> i18n ops > 原值
     const labels = propSchema["x-enum-labels"];
     element.textContent = (labels && labels[option]) || (I18N && I18N.ops[option]) || String(option);
+    // browserType：已检测到浏览器名单时，非在线的那一款置灰提示；
+    // 若完全没检测到在线插件则不做判断（保留默认项可选，运行期由 TARGET_HOST_OFFLINE 兜底）
+    if (
+      rawKey === "browserType"
+      && option !== ""
+      && state.extHosts.length > 0
+      && !state.extHosts.includes(String(option))
+    ) {
+      element.disabled = true;
+      element.title = "未检测到该浏览器的插件在线，请先在 Chrome/Edge 安装并启用插件";
+    }
     input.appendChild(element);
   }
   input.value = value === undefined ? "" : String(value);

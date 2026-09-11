@@ -10,12 +10,32 @@ const POLL_ACTIVE_MS = 1200;   // 有待捕获会话时
 const POLL_IDLE_MS = 5000;     // 空闲时
 const EXEC_HOLD_S = 20;        // 命令长轮询保持（秒）
 const PERMISSION_KEY = "rpaExecPermission";
+const INSTANCE_KEY = "rpaInstanceId";
 let pollMs = POLL_IDLE_MS;
 let execRunning = false;
+let cachedInstanceId = "";
+// 持久 per-profile 实例 id：同一 profile 的多个窗口/页签（同一 storage）共用同一 id，
+// 不同用户数据目录各自生成 —— 正好区分"同浏览器不同实例"（多 profile）。
+async function ensureInstanceId() {
+  if (cachedInstanceId) return cachedInstanceId;
+  try {
+    const { [INSTANCE_KEY]: stored } = await chrome.storage.local.get(INSTANCE_KEY);
+    if (typeof stored === "string" && stored) {
+      cachedInstanceId = stored;
+    } else {
+      cachedInstanceId = (crypto.randomUUID && crypto.randomUUID()) || String(Date.now());
+      await chrome.storage.local.set({ [INSTANCE_KEY]: cachedInstanceId });
+    }
+  } catch {
+    // storage 不可用（极端）：退回运行时随机 id，实例区分退化为"当轮运行时"
+    cachedInstanceId = (crypto.randomUUID && crypto.randomUUID()) || String(Date.now());
+  }
+  return cachedInstanceId;
+}
 
 // ---------------------------------------------------------------- 宿主身份
 // 扩展装在哪个浏览器里，执行通道就用哪个浏览器（扩展通道没有"启动浏览器"概念）。
-// 宿主身份经长轮询 query 上报 devserver，供「打开网页」的 channel 参数校验兑现。
+// 宿主身份经长轮询 query 上报 devserver，供「打开网页」校验执行宿主。
 function detectHostBrowser() {
   const ua = navigator.userAgent || "";
   // 顺序敏感：Edge/Opera/Brave 的 UA 里都含 "Chrome/"，必须先判壳
@@ -32,6 +52,7 @@ function detectHostBrowser() {
 function hostInfo() {
   return {
     browser: detectHostBrowser(),
+    instanceId: cachedInstanceId || "",
     version: navigator.userAgentData && navigator.userAgentData.brands
       ? (navigator.userAgentData.brands.find((b) => /Chromium/.test(b.brand)) || {}).version || ""
       : "",
@@ -42,7 +63,8 @@ function hostInfo() {
 
 function hostQuery() {
   const info = hostInfo();
-  return `&host=${encodeURIComponent(info.browser)}&ver=${encodeURIComponent(info.version)}`
+  return `&host=${encodeURIComponent(info.browser)}&iid=${encodeURIComponent(info.instanceId)}`
+    + `&ver=${encodeURIComponent(info.version)}`
     + `&platform=${encodeURIComponent(info.platform)}&ua=${encodeURIComponent(info.userAgent)}`;
 }
 
@@ -209,7 +231,7 @@ async function executeCommand(cmd) {
     case "tabs.create": {
       const tab = await chrome.tabs.create({ url: args.url, active: args.active !== false });
       const done = await waitComplete(tab.id, args.timeoutMs || 30000);
-      return { tabId: tab.id, url: done.url || args.url, title: done.title || "" };
+      return { tabId: tab.id, url: done.url || args.url, title: done.title || "", completed: done.completed, timedOut: done.timedOut };
     }
     case "tabs.navigate": {
       const tabId = Number(args.tabId);
@@ -232,6 +254,29 @@ async function executeCommand(cmd) {
     case "tabs.activate":
       await chrome.tabs.update(Number(args.tabId), { active: true });
       return { tabId: args.tabId };
+    case "tabs.stopLoading": {
+      const tabId = Number(args.tabId);
+      const results = await chrome.scripting.executeScript({
+        target: { tabId },
+        func: () => { window.stop(); return location.href; },
+      });
+      const tab = await chrome.tabs.get(tabId).catch(() => ({}));
+      return { url: tab.url || (results && results[0] && results[0].result) || "" };
+    }
+    case "tabs.waitLoad": {
+      const tabId = Number(args.tabId);
+      const done = await waitComplete(tabId, args.timeoutMs || 30000);
+      return { url: done.url || "" };
+    }
+    case "screenshot": {
+      const tabId = Number(args.tabId);
+      const tab = await chrome.tabs.get(tabId);
+      if (!tab.windowId) throw new Error("no window for screenshot");
+      const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, {
+        format: args.format || "png",
+      });
+      return { dataUrl: dataUrl || "" };
+    }
     case "page.call":
       return await pageCall(args);
     case "page.eval":
@@ -241,22 +286,27 @@ async function executeCommand(cmd) {
       for (const key of ["url", "name", "domain", "path"]) {
         if (args[key]) filter[key] = args[key];
       }
+      const url = args.url || await tabUrl(args.tabId);
+      if (url && !filter.url) filter.url = url;
       return { cookies: await chrome.cookies.getAll(filter) };
     }
     case "cookies.get": {
-      const cookie = await chrome.cookies.get({ url: args.url, name: args.name });
+      const url = args.url || await tabUrl(args.tabId);
+      const cookie = await chrome.cookies.get({ url, name: args.name });
       return { value: cookie ? cookie.value : null };
     }
     case "cookies.set": {
       let count = 0;
+      const url = args.url || await tabUrl(args.tabId);
       for (const cookie of args.cookies || []) {
-        await chrome.cookies.set(cookie);
+        await chrome.cookies.set({ ...cookie, url: cookie.url || url });
         count += 1;
       }
       return { count };
     }
     case "cookies.remove": {
-      const removed = await chrome.cookies.remove({ url: args.url, name: args.name });
+      const url = args.url || await tabUrl(args.tabId);
+      const removed = await chrome.cookies.remove({ url, name: args.name });
       return { count: removed ? 1 : 0 };
     }
     default:
@@ -311,12 +361,71 @@ function domOp(payload) {
       result: target ? host.scrollTop : window.scrollY,
     };
   }
+  if (method === "queryAll") {
+    const list = selector ? Array.from(document.querySelectorAll(selector)) : [];
+    const items = list.map((n) => (n.innerText == null ? n.textContent : n.innerText) || "");
+    return { matchedCount: items.length, result: items };
+  }
+  if (method === "getScrollPosition") {
+    const target = selector ? document.querySelector(selector) : null;
+    if (selector && !target) return { matchedCount: 0, result: null };
+    if (target) {
+      return { matchedCount: 1, result: { scrollX: target.scrollLeft || 0, scrollY: target.scrollTop || 0 } };
+    }
+    return { matchedCount: 1, result: { scrollX: window.scrollX, scrollY: window.scrollY } };
+  }
 
   const el = selector ? document.querySelector(selector) : null;
   const matchedCount = selector ? document.querySelectorAll(selector).length : 0;
   if (!el || matchedCount === 0) return { matchedCount: 0, result: null };
 
   switch (method) {
+    case "getPosition": {
+      const r = el.getBoundingClientRect();
+      return { matchedCount, result: { x: r.x, y: r.y, width: r.width, height: r.height } };
+    }
+    case "getSelectOptions": {
+      const options = Array.from(el.options || []).map((o, index) => ({
+        index, value: o.value || "", label: o.label || o.text || "", selected: !!o.selected,
+      }));
+      return { matchedCount, result: { options, count: options.length } };
+    }
+    case "setValue": {
+      const way = args.setWay || "value";
+      const value = args.value == null ? "" : String(args.value);
+      if (way === "innerText") el.innerText = value;
+      else if (way === "innerHTML") el.innerHTML = value;
+      else { el.value = value; el.dispatchEvent(new Event("input", { bubbles: true })); }
+      el.dispatchEvent(new Event("change", { bubbles: true }));
+      return { matchedCount, result: true };
+    }
+    case "setAttribute": {
+      el.setAttribute(String(args.name || ""), String(args.value == null ? "" : args.value));
+      return { matchedCount, result: true };
+    }
+    case "drag": {
+      const target = document.querySelector(String(args.targetSelector || ""));
+      if (!target) return { matchedCount: 0, result: null };
+      const srcRect = el.getBoundingClientRect();
+      const dstRect = target.getBoundingClientRect();
+      const steps = 8;
+      const dx = (dstRect.x + dstRect.width / 2 - srcRect.x - srcRect.width / 2) / steps;
+      const dy = (dstRect.y + dstRect.height / 2 - srcRect.y - srcRect.height / 2) / steps;
+      const base = { bubbles: true, cancelable: true, view: window };
+      fire(el, "pointerdown", base);
+      fire(el, "mousedown", { ...base, button: 0 });
+      const sx = srcRect.x + srcRect.width / 2;
+      const sy = srcRect.y + srcRect.height / 2;
+      for (let i = 1; i <= steps; i += 1) {
+        const evt = new MouseEvent("mousemove", { ...base, clientX: sx + dx * i, clientY: sy + dy * i, button: 0 });
+        fire(el, "pointermove", { ...base, clientX: sx + dx * i, clientY: sy + dy * i });
+        (document.elementFromPoint(sx + dx * i, sy + dy * i) || el).dispatchEvent(evt);
+      }
+      fire(target, "pointerup", base);
+      fire(target, "mouseup", { ...base, button: 0 });
+      fire(target, "drop", { ...base, clientX: dstRect.x + dstRect.width / 2, clientY: dstRect.y + dstRect.height / 2 });
+      return { matchedCount, result: true };
+    }
     case "click": {
       el.scrollIntoView({ block: "center", inline: "nearest" });
       const button = args.button === "right" ? 2 : (args.button === "middle" ? 1 : 0);
@@ -438,8 +547,20 @@ function waitComplete(tabId, timeoutMs) {
       try {
         tab = await chrome.tabs.get(tabId);
       } catch { /* tab 已关闭 */ }
-      if (tab && tab.status === "complete") return resolve(tab);
-      if (Date.now() > deadline) return resolve(tab || { id: tabId, url: "" });
+      const timedOut = Date.now() >= deadline;
+      // 页面加载完成或到达超时窗口即返回；超时如实上报 completed/timedOut，
+      // 供执行器按 onTimeout 策略（报错或停止加载继续）处理。
+      if ((tab && tab.status === "complete") || timedOut) {
+        resolve({
+          id: tabId,
+          url: (tab && tab.url) || "",
+          title: (tab && tab.title) || "",
+          status: tab ? tab.status : "unloaded",
+          completed: !!(tab && tab.status === "complete"),
+          timedOut,
+        });
+        return;
+      }
       setTimeout(tick, 200);
     };
     tick();
@@ -450,7 +571,18 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-// popup 查询宿主身份（"打开网页"指令的 channel 校验依据）
+// 取 tab 当前 URL：cookie 等浏览器级操作需要 url 做作用域，但会话只存 tabId
+async function tabUrl(tabId) {
+  if (tabId == null) return "";
+  try {
+    const tab = await chrome.tabs.get(Number(tabId));
+    return tab.url || "";
+  } catch {
+    return "";
+  }
+}
+
+// popup 查询宿主身份（状态展示「扩展装在哪」）
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg && msg.type === "rpa-ext-host-info") {
     sendResponse({ host: hostInfo(), devserver: DEVSERVER });
@@ -458,6 +590,6 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   return false;
 });
 
-// 启动即开始：捕获轮询 + 执行长轮询
+// 启动即开始：捕获轮询 + 执行长轮询（先确保实例 id 落位，随首个心跳/targetHost 一起上报）
 poll();
-startExecLoop();
+ensureInstanceId().then(startExecLoop);
