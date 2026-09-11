@@ -17,7 +17,7 @@
         "id": "navigate",
         "command": "browser.navigate",
         "output_aliases": {"sessionId": "web"},
-        "with": {"url": "${inputs.url}", "headless": true}
+        "with": {"url": "${inputs.url}", "headless": true, "transport": "playwright"}
       },
       {
         "type": "action",

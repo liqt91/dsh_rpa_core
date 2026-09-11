@@ -75,11 +75,9 @@ def server(tmp_path):
         dev.stop()
 
 
-def _request(method: str, path: str, payload=None, base: str = "", token: str | None = None):
+def _request(method: str, path: str, payload=None, base: str = ""):
     data = json.dumps(payload).encode("utf-8") if payload is not None else None
     headers = {"Content-Type": "application/json"} if data else {}
-    if token:
-        headers["X-Capture-Token"] = token
     request = urllib.request.Request(
         f"{base}{path}", data=data, method=method, headers=headers,
     )
@@ -88,10 +86,6 @@ def _request(method: str, path: str, payload=None, base: str = "", token: str | 
             return response.status, json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
         return exc.code, json.loads(exc.read().decode("utf-8"))
-
-
-def _pair(base):
-    _request("POST", "/api/capture/extension/token", {"token": "tok"}, base=base)
 
 
 def _start_hover(base):
@@ -103,24 +97,15 @@ def _start_hover(base):
     return payload["sessionId"]
 
 
-def test_hover_without_pairing_stays_plain_hover(server):
-    """未配对扩展时 hover 不启用 hybrid。"""
+def test_hover_defaults_to_hybrid(server):
+    """无鉴权后 hover 默认即 hybrid：会话带扩展鸭子类型 + pending 可见（不再依赖配对）。"""
     base = f"http://127.0.0.1:{server.port}"
-    session_id = _start_hover(base)
-    session = server.app._desktop_sessions[session_id]
-    assert not getattr(session, "is_extension_capture", False)
-
-
-def test_hybrid_auto_enabled_after_pairing(server):
-    """配对后 hover 自动变 hybrid：会话带扩展鸭子类型 + 扩展 pending 可见。"""
-    base = f"http://127.0.0.1:{server.port}"
-    _pair(base)
     session_id = _start_hover(base)
     session = server.app._desktop_sessions[session_id]
     assert getattr(session, "is_extension_capture", False)
     assert session.pending
     status, payload = _request(
-        "GET", "/api/capture/extension/pending", base=base, token="tok"
+        "GET", "/api/capture/extension/pending", base=base
     )
     assert payload == {"pending": True, "sessionId": session_id}
 
@@ -128,7 +113,6 @@ def test_hybrid_auto_enabled_after_pairing(server):
 def test_hybrid_extension_result_wins(server):
     """扩展先回传 → pick 返回浏览器描述符，桌面 agent 被取消。"""
     base = f"http://127.0.0.1:{server.port}"
-    _pair(base)
     session_id = _start_hover(base)
     session = server.app._desktop_sessions[session_id]
     FakeDesktopSession.instances[-1].pick_delay = 3.0  # 桌面慢，扩展先回传
@@ -149,7 +133,7 @@ def test_hybrid_extension_result_wins(server):
     status, ack = _request(
         "POST", "/api/capture/extension/result",
         {"sessionId": session_id, "descriptor": _BROWSER_DESCRIPTOR},
-        base=base, token="tok",
+        base=base,
     )
     assert status == 200
     thread.join(timeout=5)
@@ -163,7 +147,6 @@ def test_hybrid_extension_result_wins(server):
 def test_hybrid_desktop_result_wins(server):
     """桌面先回传 → pick 返回桌面描述符。"""
     base = f"http://127.0.0.1:{server.port}"
-    _pair(base)
     session_id = _start_hover(base)
     status, result = _request(
         "POST", "/api/capture/desktop/pick",
@@ -177,7 +160,6 @@ def test_hybrid_desktop_result_wins(server):
 def test_hybrid_save_extension_result_to_flow(server):
     """混合会话里扩展回传的描述符可落库 flow 元素资产。"""
     base = f"http://127.0.0.1:{server.port}"
-    _pair(base)
     session_id = _start_hover(base)
     FakeDesktopSession.instances[-1].pick_delay = 3.0
 
@@ -199,7 +181,7 @@ def test_hybrid_save_extension_result_to_flow(server):
     _request(
         "POST", "/api/capture/extension/result",
         {"sessionId": session_id, "descriptor": _BROWSER_DESCRIPTOR},
-        base=base, token="tok",
+        base=base,
     )
     thread.join(timeout=5)
     status, result = picked["result"]

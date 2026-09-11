@@ -268,9 +268,9 @@ class DevServerApp:
                 kwargs["window_handle"] = int(body["windowHandle"])
             if body.get("hover"):
                 kwargs["hover"] = True
-                # 混合捕获：已配对扩展时自动双通道（网页走扩展、桌面走 UIA），
+                # 混合捕获：默认双通道（网页走扩展、桌面走 UIA），
                 # 可用 body hybrid:false 显式关闭
-                if body.get("hybrid", True) and self._read_token() is not None:
+                if body.get("hybrid", True):
                     kwargs["hybrid"] = True
             with self._capture_lock:
                 session_id = self._next_capture_id("desktop")
@@ -355,52 +355,9 @@ class DevServerApp:
         session.close()
         return {"cancelled": True, "sessionId": session_id}
 
-    # -- content-script 扩展捕获（M14 无缝路线）：token 配对 + pending/result --
-
-    @property
-    def _token_path(self):
-        return self._store.root / ".capture-extension-token"
-
-    def _read_token(self) -> str | None:
-        try:
-            return self._token_path.read_text(encoding="utf-8").strip() or None
-        except OSError:
-            return None
-
-    def extension_token(self, body: Any) -> dict:
-        """配对 token：body {"token": "..."} 写入；{"token": ""} 重置；GET 查状态与值。
-
-        重置（空 token）= 删掉本机 token 文件，扩展下次长轮询时按 TOFU 重新采纳——
-        插件重装/升级后会换 token，这一步免去用户手动删文件（就是「插件不在线」的
-        最常见成因）。
-        """
-        if isinstance(body, dict) and "token" in body:
-            token = str(body.get("token") or "").strip()
-            if not token:
-                try:
-                    self._token_path.unlink()
-                except FileNotFoundError:
-                    pass
-                return {"configured": False, "token": None, "reset": True}
-            self._token_path.write_text(token, encoding="utf-8")
-            return {"configured": True, "token": token}
-        return {"configured": self._read_token() is not None,
-                "token": self._read_token()}
-
-    def _require_extension_token(self, headers) -> None:
-        expected = self._read_token()
-        provided = headers.get("X-Capture-Token", "")
-        if not provided:
-            self._extension_hub.record_auth_failure("missing token")
-            raise ApiError(403, "FORBIDDEN", "missing capture extension token")
-        if expected is None:
-            # TOFU（trust on first use）：loopback 本地工具，首次接触自动采纳并持久化，
-            # 免手动配对；此后只认这个 token，轮换需删 .capture-extension-token
-            self._token_path.write_text(provided, encoding="utf-8")
-            return
-        if provided != expected:
-            self._extension_hub.record_auth_failure("token mismatch")
-            raise ApiError(403, "FORBIDDEN", "invalid capture extension token")
+    # -- content-script 扩展捕获（M14 无缝路线）：无鉴权 + pending/result --
+    # 移除 token 配对机制：devserver 仅绑定 127.0.0.1（loopback），本机任意进程
+    # 本就能触达，token 只增加"重装/升级后 token 不匹配"的维护负担，故移除。
 
     def _pending_extension_session(self) -> str | None:
         for registry in (self._browser_sessions, self._desktop_sessions):
@@ -409,15 +366,13 @@ class DevServerApp:
                     return session_id
         return None
 
-    def extension_pending(self, headers) -> dict:
+    def extension_pending(self) -> dict:
         """扩展 background 轮询：是否有激活的扩展捕获会话。"""
-        self._require_extension_token(headers)
         session_id = self._pending_extension_session()
         return {"pending": session_id is not None, "sessionId": session_id}
 
-    def extension_result(self, headers, body: Any) -> dict:
+    def extension_result(self, body: Any) -> dict:
         """扩展 content script 捕获结果回传。"""
-        self._require_extension_token(headers)
         if not isinstance(body, dict):
             raise ApiError(400, "BAD_REQUEST", "result body must be a JSON object")
         session_id = str(body.get("sessionId") or self._pending_extension_session() or "")
@@ -450,15 +405,13 @@ class DevServerApp:
             raise ApiError(400, "BAD_REQUEST", str(exc)) from exc
 
     def extension_command_next(
-        self, headers, wait_seconds: float, host_report: dict | None = None
+        self, wait_seconds: float, host_report: dict | None = None
     ) -> dict:
         """扩展 background 长轮询领命令（同时作为在线心跳 + 宿主身份上报）。"""
-        self._require_extension_token(headers)
         return {"command": self._extension_hub.next_command(wait_seconds, host_report)}
 
-    def extension_command_result(self, headers, body: Any) -> dict:
+    def extension_command_result(self, body: Any) -> dict:
         """扩展回传命令结果。未知/已超时 id 返回 received=false（不报错）。"""
-        self._require_extension_token(headers)
         if not isinstance(body, dict):
             raise ApiError(400, "BAD_REQUEST", "result body must be a JSON object")
         matched = self._extension_hub.deliver_result(body)

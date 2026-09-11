@@ -269,14 +269,12 @@ class _RequestHandler(BaseHTTPRequestHandler):
             if method != "GET":
                 raise ApiError(405, "METHOD_NOT_ALLOWED", "use GET for command polling")
             return self.app.extension_command_next(
-                self.headers, self._wait_seconds(), self._host_report()
+                self._wait_seconds(), self._host_report()
             )
         if segments == ["command", "result"]:
             if method != "POST":
                 raise ApiError(405, "METHOD_NOT_ALLOWED", "use POST for command results")
-            return self.app.extension_command_result(
-                self.headers, self._read_json(required=True)
-            )
+            return self.app.extension_command_result(self._read_json(required=True))
         if segments == ["command", "submit"]:
             if method != "POST":
                 raise ApiError(405, "METHOD_NOT_ALLOWED", "use POST to submit a command")
@@ -315,21 +313,15 @@ class _RequestHandler(BaseHTTPRequestHandler):
         }
 
     def _route_capture_extension(self, action: str, method: str) -> dict:
-        """content-script 扩展捕获通道：token 配对（编辑器侧）+ pending/result（扩展侧）。"""
-        if action == "token":
-            if method == "GET":
-                return self.app.extension_token(None)
-            if method in ("POST", "PUT"):
-                return self.app.extension_token(self._read_json(required=True))
-            raise ApiError(405, "METHOD_NOT_ALLOWED", "use GET/POST for extension token")
+        """content-script 扩展捕获通道：pending/result（扩展侧）。"""
         if action == "pending":
             if method != "GET":
                 raise ApiError(405, "METHOD_NOT_ALLOWED", "use GET for extension pending")
-            return self.app.extension_pending(self.headers)
+            return self.app.extension_pending()
         if action == "result":
             if method != "POST":
                 raise ApiError(405, "METHOD_NOT_ALLOWED", "use POST for extension result")
-            return self.app.extension_result(self.headers, self._read_json(required=True))
+            return self.app.extension_result(self._read_json(required=True))
         raise ApiError(404, "NOT_FOUND", f"no route for extension action {action}")
 
     def _drain_body(self, length: int) -> None:

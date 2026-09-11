@@ -6,19 +6,10 @@
   .row { display: flex; gap: 6px; margin: 8px 0; }
   input { flex: 1; font-family: monospace; font-size: 12px; padding: 4px; }
   button { padding: 4px 10px; font-size: 12px; }
-  #status { font-size: 12px; margin-top: 8px; }
   .ok { color: #1a7f37; } .bad { color: #cf222e; }
 </style></head>
 <body>
   <h3>rpa_core 捕获扩展</h3>
-  <div id="hint" style="font-size:12px;color:#57606a;margin-bottom:6px;">
-    已自动配对（devserver 首次接触自动采纳）。无需手动操作。
-  </div>
-  <div class="row">
-    <input id="token" type="text" readonly>
-    <button id="gen">重新生成</button>
-  </div>
-  <div id="status"></div>
   <h3 style="margin-top:12px;">执行权限</h3>
   <div style="font-size:12px;color:#57606a;">默认：整个浏览器（全部窗口/标签页/Cookie）</div>
   <div class="row">

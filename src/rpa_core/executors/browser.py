@@ -1134,32 +1134,20 @@ class PlaywrightExecutor(CommandExecutor):
 
         为什么必须前置：扩展通道的命令是「入队等扩展来领」，扩展不在线时命令会在队列里
         躺满 timeoutMs（默认 30s）才以 TIMEOUT 返回。用户看到的现象只是「执行后没有打开
-        浏览器」，完全无从判断是插件没装、浏览器没开、还是配对失败。这里提前 <1s 给出
-        可操作的失败原因。
+        浏览器」，完全无从判断是插件没装、浏览器没开。这里提前 <1s 给出可操作的失败原因。
         """
         try:
             status = await asyncio.to_thread(self._ext.status)
         except Exception:  # noqa: BLE001 - 探测失败一律按离线处理
             status = {"online": False}
-        auth_failures = int(status.get("authFailures") or 0)
-        # 成功轮询会清零 authFailures，所以 authFailures>0 表示「最近一次接触是失败的」——
-        # 即使 online 仍为真（窗口内曾成功轮询过），也说明配对已经掉了，必须报出来。
-        if status.get("online") and not auth_failures:
+        if status.get("online"):
             return None
-        if auth_failures:
-            hint = (
-                f"检测到扩展已尝试连接但配对失败（token 不匹配，累计 {auth_failures} 次）："
-                "删除 workflows/.capture-extension-token 后重启 devserver，"
-                "或在编辑器顶部点「插件」重新配对"
-            )
-            reason = "auth_mismatch"
-        else:
-            hint = (
-                "请依次确认 ① 目标浏览器（Chrome/Edge）已打开；② 扩展已加载并启用"
-                "（edge://extensions 或 chrome://extensions 里点「重新加载」）；"
-                "③ devserver 正在运行且扩展指向的端口一致"
-            )
-            reason = "channel_offline"
+        hint = (
+            "请依次确认 ① 目标浏览器（Chrome/Edge）已打开；② 扩展已加载并启用"
+            "（edge://extensions 或 chrome://extensions 里点「重新加载」）；"
+            "③ devserver 正在运行且扩展指向的端口一致"
+        )
+        reason = "channel_offline"
         return CommandResult.failure(
             ErrorCode.EXECUTOR_FAILED,
             f"extension 通道当前离线：没有检测到浏览器里的自研插件在轮询命令。{hint}。"
@@ -1168,7 +1156,6 @@ class PlaywrightExecutor(CommandExecutor):
             details={
                 "transport": "extension",
                 "reason": reason,
-                "authFailures": auth_failures,
             },
         )
 

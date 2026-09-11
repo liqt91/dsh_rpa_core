@@ -41,7 +41,7 @@ FastAPI、数据库、React UI、DSH 插件、MCP、调度器、安装器、分�
 | M1 垂直切片 → M7 命令面 | done | 运行时/恢复/桌面/数据命令/API 契约打底 |
 | M8 devserver / M9 编辑器 / M11 树画布 / M12 中文层 | done | 设计期工具与可视化编辑器 |
 | M10 元素捕获 / M13 编辑器元素库 | done | 桌面 UIA + 浏览器双传输捕获；库面板 + 插入/删除/verify + 一键捕获 |
-| M14 自研捕获扩展 | **active** | token 配对反连 dev server，免弹窗 |
+| M14 自研捕获扩展 | **active** | content-script 扩展反连 dev server，无缝捕获免弹窗 |
 
 进度表：`.harness/PROGRESS.md`；完整计划与后续项：`.harness/tasks/BACKLOG.md`；最近完成项由 `.harness/project_state.json` 指向。命令目录当前共 26 条：`browser.*`(8)、`data.*`(4)、`desktop.*`(UIA, 6)、`desktop.win32.*`(8)。
 

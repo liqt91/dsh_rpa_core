@@ -6,7 +6,7 @@
 
 > **落地记录 2026-09-10（Phase 1）**：协议 v2 + 通道骨架完成。
 > - 宿主侧 `rpa_core/extension_exec.py`：`ExtensionExecHub`（命令队列 + 长轮询 + 结果回收 + 权限钩子）与 `ExtensionExecClient`（执行器侧 HTTP 客户端）。
-> - 路由：`GET /api/ext/command/next?wait=N`（长轮询 + 心跳）、`POST /api/ext/command/result`、`POST /api/ext/command/submit`、`GET /api/ext/status`、`GET|POST /api/ext/permissions`；token 复用捕获通道的 TOFU 配对。
+> - 路由：`GET /api/ext/command/next?wait=N`（长轮询 + 心跳）、`POST /api/ext/command/result`、`POST /api/ext/command/submit`、`GET /api/ext/status`、`GET|POST /api/ext/permissions`；无 token（devserver 仅绑定 127.0.0.1，无应用层鉴权）。
 > - `rpa-core run` 子进程经 `RPA_EXT_HUB_URL` 回连宿主（RunManager 注入真实端口）。
 > - 执行器 `extension` 通道：navigate(goto/back/forward/reload)、listPages、attach、executeScript、getText、click、hover、input、scroll、check、select、waitFor、close（解绑）。会话模型 = 用户浏览器里的 tabId 句柄；`browser.close` 只解绑不代关标签页。
 > - 一等公民路由：`transport` 缺省时**扩展在线即优先走扩展**，离线静默回退 playwright（显式 `transport=playwright` 可强制）。
@@ -28,7 +28,7 @@
 | 组件 | 现状 | 缺口 |
 |---|---|---|
 | `extension/`（MV3，190 行 JS） | 仅捕获：hover 高亮 + Ctrl+Click 回传描述符；权限只有 storage+alarms | **无执行协议**；无 scripting/tabs/cookies/downloads/webNavigation 权限 |
-| devserver `/api/capture/extension/*` | 短轮询（1.2s/5s）+ POST 回传 + TOFU token 配对，已稳定 | 需新增命令下发通道（轮询模型对低频捕获够用，对执行需长轮询降低延迟） |
+| devserver `/api/capture/extension/*` | 短轮询（1.2s/5s）+ POST 回传，无 token 配对（仅绑定 127.0.0.1），已稳定 | 需新增命令下发通道（轮询模型对低频捕获够用，对执行需长轮询降低延迟） |
 | `executors/browser.py` | playwright 一等实现全部 24 条；bsk 部分 + 显式 COMMAND_NOT_FOUND | 需加 extension transport 分发 + 扩展会话模型 |
 | `elementRef` | capture 产物是结构化描述符，但命令参数仍是裸 selector 字符串 | 元素库接入命令参数（横切差距 #4） |
 
@@ -117,8 +117,7 @@ playwright 通道同名单测/合同已存在，扩展通道照 manifest 实现�
 
 | 顶部徽标 | `/api/ext/status` | 含义 | 处置 |
 |---|---|---|---|
-| `扩展通道：离线` | `online:false, authFailures:0` | 没有扩展在轮询：没装 / 没启用 / 宿主浏览器没开 | 按「⇲ 插件」四步加载；确认目标浏览器正在运行 |
-| `扩展通道：配对失败` | `online:false, authFailures>0` | **扩展在轮询，但 token 与本机 devserver 不匹配** | 插件面板点「重置配对」（或删 `workflows/.capture-extension-token`），3~5 秒自动恢复 |
+| `扩展通道：离线` | `online:false` | 没有扩展在轮询：没装 / 没启用 / 宿主浏览器没开 | 按「⇲ 插件」四步加载；确认目标浏览器正在运行 |
 | `扩展通道：在线（Edge）` | `online:true, host.browser` | 通道可用 | — |
 
 ### 1.5 属性面板的参数分区（对标影刀「常规/高级」）
@@ -130,23 +129,13 @@ playwright 通道同名单测/合同已存在，扩展通道照 manifest 实现�
 - **其他通道参数（N）**：x-depends 不满足的字段自动归入底部折叠区，不再平铺占地方；切换通道后重渲染自动归位；
 - 未声明分组的指令仍按原平铺渲染，`x-param-groups` 是纯增量能力（放在 input_schema 内，随 catalog 下发，无需后端改动）。
 
-### 2. 「配对失败」是最隐蔽的一类（实战踩过）
+### 2. 无配对机制
 
-配对走 TOFU：本机 token 文件 `workflows/.capture-extension-token` 只认**第一次**接触的 token。扩展侧 token 存在浏览器 `chrome.storage.local`：
-
-- 重装扩展 / 换浏览器 profile / 清扩展数据 → 扩展生成新 token；
-- devserver 仍只认旧 token → 扩展每个 `next` 请求都 403；
-- 扩展侧只做 3s 退避重试、不弹窗 → 现象就是「静默地怎么都不生效」，而 `lastPollSecondsAgo` 永远是 `null`。
-
-观测与修复：
-
-- hub 记录 `authFailures` / `lastAuthFailure`（成功轮询即清零），`/api/ext/status` 暴露 → 前端徽标显示「配对失败」；
-- 一键修复：插件面板「重置配对」= `POST /api/capture/extension/token` body `{"token": ""}` → 删除本机 token，扩展下次轮询自动重新配对；
-- 兜底：手工删除 `workflows/.capture-extension-token`。
+扩展通道**已移除 token 配对**（devserver 仅绑定 `127.0.0.1`，loopback 本地工具不做应用层鉴权）。不再存在「token 不匹配 / 配对失败」形态：扩展装了且在轮询就能用，也不再有「重置配对」按钮和 `.capture-extension-token` 文件。离线只可能是 `online:false`（没装 / 没启用 / 宿主浏览器没开）。
 
 ### 3. 排障顺序（都可从界面看到，不必翻日志）
 
-1. **顶部徽标**：区分「没装/没开」与「配对失败」；
+1. **顶部徽标**：`在线` / `离线`；
 2. **运行面板**：失败时显示 `失败：<code> · 节点 <nodeId>` + 原因 + 通道；
 3. **立即失败 vs 等 30 秒**：扩展通道命令是「入队等扩展来领」，扩展不在线时若不预检要躺满 `timeoutMs`（默认 30s）才以 TIMEOUT 收场——用户只会看到"没打开浏览器"。现在执行前先探通道：离线 **<1s** 失败并给出「① 浏览器已打开 ② 扩展已加载并启用 ③ devserver 在运行」的清单；
 4. **TIMEOUT 只在真超时时出现**：扩展在线但没在时限内回应（浏览器挂起 / MV3 service worker 休眠），错误信息指向这一点；连接不上 hub（`RPA_EXT_HUB_URL` 端口不对）另给「重启 devserver」的说明。

@@ -22,7 +22,10 @@ async def _open(executor, port):
     inv = CommandInvocation(
         command_id="browser.navigate", command_version="2.5.0",
         run_id="run", step_id="open",
-        inputs={"url": f"http://127.0.0.1:{port}/", "headless": True},
+        # 显式 playwright：本测试验证 playwright 通道的纯 DOM 原语，
+        # 不随扩展在线状态路由到扩展通道
+        inputs={"url": f"http://127.0.0.1:{port}/", "headless": True,
+                "transport": "playwright"},
     )
     result = await executor.execute(inv, asyncio.Event())
     assert result.status == "success", result.error
@@ -49,13 +52,19 @@ def test_pure_dom_primitives(tmp_path):
                 )
 
             # 1) 设置元素值（value —— 直改属性，绕过事件）
-            r = await invoke("browser.setValue", {"selector": "#query", "value": "typed-by-setValue"})
+            r = await invoke(
+                "browser.setValue",
+                {"selector": "#query", "value": "typed-by-setValue"},
+            )
             assert r.status == "success" and r.outputs["matchedCount"] == 1
             r = await invoke("browser.getText", {"selector": "#query", "infoType": "value"})
             assert r.status == "success" and r.outputs["value"] == "typed-by-setValue"
 
             # 2) 设置元素属性
-            r = await invoke("browser.setAttribute", {"selector": "#query", "name": "data-mark", "value": "hot"})
+            r = await invoke(
+                "browser.setAttribute",
+                {"selector": "#query", "name": "data-mark", "value": "hot"},
+            )
             assert r.status == "success" and r.outputs["matchedCount"] == 1
             r = await invoke("browser.getText", {"selector": "#query", "infoType": "outerHTML"})
             assert r.status == "success" and 'data-mark="hot"' in r.outputs["value"]

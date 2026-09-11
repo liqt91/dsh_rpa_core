@@ -1,7 +1,7 @@
 """自研扩展执行通道合同测试（M15 Phase 1）。
 
 用真实 HTTP 扮演扩展 background（长轮询领命令 + 回结果），覆盖：
-- hub 协议：token 鉴权 / 命令下发回收 / 超时 / 在线心跳 / 权限（默认整浏览器 + tabs 收窄）
+- hub 协议：无鉴权长轮询 / 命令下发回收 / 超时 / 在线心跳 / 权限（默认整浏览器 + tabs 收窄）
 - 执行器：扩展会话路由（navigate / click / getText / attach / listPages）、
   缺省通道解析（扩展在线 → 优先走扩展）、bsk 式边界（不支持的命令显式报错）
 """
@@ -24,7 +24,6 @@ from rpa_core.extension_exec import ExtensionExecClient
 from rpa_core.model.command import CommandInvocation
 
 ROOT = Path(__file__).resolve().parents[2]
-TOKEN = "tok-ext-1"
 
 
 @pytest.fixture()
@@ -41,11 +40,9 @@ def server(tmp_path):
         dev.stop()
 
 
-def _request(method: str, path: str, payload=None, base: str = "", token: str | None = None):
+def _request(method: str, path: str, payload=None, base: str = ""):
     data = json.dumps(payload).encode("utf-8") if payload is not None else None
     headers = {"Content-Type": "application/json"} if data else {}
-    if token:
-        headers["X-Capture-Token"] = token
     request = urllib.request.Request(f"{base}{path}", data=data, method=method, headers=headers)
     try:
         with urllib.request.urlopen(request, timeout=30) as response:
@@ -62,7 +59,6 @@ class FakeExtension:
 
     def __init__(self, base: str, handlers: dict | None = None, host: str | None = "msedge"):
         self.base = base
-        self.token = TOKEN
         self.handlers: dict = handlers or {}
         self.host = host
         self.seen: list[tuple[str, dict]] = []
@@ -82,9 +78,7 @@ class FakeExtension:
         if self.host:
             query += f"&host={self.host}&ua={urllib.parse.quote('Mozilla/5.0 ' + self.host)}"
         while not self._stop:
-            status, payload = _request(
-                "GET", query, base=self.base, token=self.token
-            )
+            status, payload = _request("GET", query, base=self.base)
             if status != 200:
                 time.sleep(0.2)
                 continue
@@ -109,19 +103,16 @@ class FakeExtension:
                 "ok": False,
                 "error": {"code": "EXECUTOR_FAILED", "message": str(exc)},
             }
-        _request("POST", "/api/ext/command/result", body, base=self.base, token=self.token)
+        _request("POST", "/api/ext/command/result", body, base=self.base)
 
 
 # ---------------------------------------------------------------- hub 协议
 
 
-def test_command_polling_requires_token(server):
+def test_command_polling_without_token(server):
+    """移除配对后：长轮询无鉴权，直接可访问（devserver 仅绑定 127.0.0.1）。"""
     base = f"http://127.0.0.1:{server.port}"
-    status, _ = _request("GET", "/api/ext/command/next?wait=0", base=base)
-    assert status == 403
-    status, payload = _request(
-        "GET", "/api/ext/command/next?wait=0", base=base, token=TOKEN
-    )
+    status, payload = _request("GET", "/api/ext/command/next?wait=0", base=base)
     assert status == 200
     assert payload == {"command": None}
 
@@ -163,7 +154,7 @@ def test_status_reports_online_after_poll(server):
     status, payload = _request("GET", "/api/ext/status", base=base)
     assert payload["online"] is False
     assert payload["permissions"] == {"mode": "browser"}  # 默认整个浏览器
-    _request("GET", "/api/ext/command/next?wait=0", base=base, token=TOKEN)
+    _request("GET", "/api/ext/command/next?wait=0", base=base)
     status, payload = _request("GET", "/api/ext/status", base=base)
     assert payload["online"] is True
     assert payload["lastPollSecondsAgo"] is not None
@@ -541,36 +532,6 @@ def test_executor_auto_channel_defers_to_playwright_on_host_mismatch(server):
         fake.stop()
 
 
-def test_status_surfaces_auth_failures_and_clears_after_pairing(server):
-    """配对失败留痕：扩展装了但 token 与本机 devserver 不匹配（静默 403）→ status 可见。
-
-    这是"插件重载了却始终不在线"的最隐蔽原因，扩展侧只会退避重试，用户毫无感知。
-    """
-    base = f"http://127.0.0.1:{server.port}"
-    # 先完成 TOFU 配对（首次接触采纳并持久化）
-    status, _ = _request("GET", "/api/ext/command/next?wait=0", base=base, token=TOKEN)
-    assert status == 200
-
-    # 另一个 token（模拟扩展侧持久化了旧 token）→ 403 并留痕
-    rejected, _ = _request(
-        "GET", "/api/ext/command/next?wait=0", base=base, token="stale-token"
-    )
-    assert rejected == 403
-    _, payload = _request("GET", "/api/ext/status", base=base)
-    assert payload["authFailures"] >= 1
-    assert payload["lastAuthFailure"]["reason"] == "token mismatch"
-
-    # 正确 token 恢复轮询 → 留痕清零（说明配对已恢复正常）
-    ok_status, ok_payload = _request(
-        "GET", "/api/ext/command/next?wait=0", base=base, token=TOKEN
-    )
-    assert ok_status == 200 and ok_payload["command"] is None
-    _, cleared = _request("GET", "/api/ext/status", base=base)
-    assert cleared["authFailures"] == 0
-    assert cleared["lastAuthFailure"] is None
-    assert cleared["online"] is True
-
-
 def test_executor_extension_offline_fails_fast_with_actionable_error(server):
     """扩展通道离线：立即失败（不白等 timeoutMs），并给出可照着做的排查步骤。
 
@@ -602,52 +563,3 @@ def test_executor_extension_offline_fails_fast_with_actionable_error(server):
             await executor.close()
 
     asyncio.run(go())
-
-
-def test_executor_offline_error_reports_auth_mismatch(server):
-    """配对失败时，执行报错应指向「配对」而不是笼统的「扩展没装」。"""
-    base = f"http://127.0.0.1:{server.port}"
-    _request("GET", "/api/ext/command/next?wait=0", base=base, token=TOKEN)
-    _request("GET", "/api/ext/command/next?wait=0", base=base, token="stale-token")
-    executor = _executor(base)
-
-    async def go():
-        try:
-            result = await executor.execute(
-                _invocation(
-                    "browser.navigate",
-                    {"url": "https://a.test/one", "transport": "extension"},
-                ),
-                asyncio.Event(),
-            )
-            assert result.status == "error"
-            assert result.error.details["reason"] == "auth_mismatch"
-            assert result.error.details["authFailures"] >= 1
-            assert "配对失败" in result.error.message
-            assert "capture-extension-token" in result.error.message
-        finally:
-            await executor.close()
-
-    asyncio.run(go())
-
-
-def test_extension_token_reset_clears_pairing_for_repair(server):
-    """一键重置配对：删本机 token → 扩展下次轮询按 TOFU 自动重新配对。
-
-    覆盖「插件重装后 token 变了、通道一直离线」的修复路径（用户不必手删文件）。
-    """
-    base = f"http://127.0.0.1:{server.port}"
-    _request("GET", "/api/ext/command/next?wait=0", base=base, token=TOKEN)  # 先配对
-    _, before = _request("GET", "/api/capture/extension/token", base=base)
-    assert before["configured"] is True
-
-    _, reset = _request("POST", "/api/capture/extension/token", {"token": ""}, base=base)
-    assert reset["reset"] is True
-    assert reset["configured"] is False
-
-    # 重置后：扩展（持有新 token）的第一次轮询被 TOFU 采纳并正常工作
-    status, _ = _request("GET", "/api/ext/command/next?wait=0", base=base, token="fresh-uuid")
-    assert status == 200
-    _, after = _request("GET", "/api/capture/extension/token", base=base)
-    assert after["token"] == "fresh-uuid"
-    assert after["configured"] is True

@@ -15,14 +15,9 @@ MV3 零构建扩展（Chrome/Edge），两条通道：
 > 编辑器工具条「⇲ 插件」引导页自动打开本目录/复制路径。chrome:// 与 edge:// 扩展页
 > 需手动在地址栏输入（外部无法直接导航）。详见 `docs/extension-install.md` §6.5.1。
 
-## 配对（自动，零操作）
+## 配对（已移除，无需配对）
 
-扩展首次轮询 devserver 时自动生成 token 并携带——devserver **TOFU（首次接触自动采纳）**并持久化到 `workflows/.capture-extension-token`，之后只认这个 token。无需任何手动配对操作。popup 里可查看 token / 重新生成（重新生成后需删除 devserver 的 `.capture-extension-token` 文件再轮换）。
-
-**换过 token 怎么办**：重装扩展 / 换浏览器 profile / 清扩展数据后，扩展会生成**新 token**，而 devserver 仍只认旧的 → 每个请求 403，且扩展侧只做 3s 退避重试，表现为「插件明明重载了、通道却一直离线」。
-
-- 识别：`/api/ext/status` 的 `authFailures > 0` / `lastAuthFailure.reason == "token mismatch"`；编辑器顶部徽标显示「扩展通道：配对失败」。
-- 修复：编辑器「⇲ 插件」面板点**重置配对**（= `POST /api/capture/extension/token` body `{"token":""}`，删除本机 token）→ 扩展下次轮询（~3s）自动重新配对；也可手工删 `workflows/.capture-extension-token`。
+捕获/执行通道**无 token 配对**（devserver 仅绑定 `127.0.0.1`，loopback 本地工具不做应用层鉴权）。扩展首次加载并轮询 devserver 即可用，无需任何手动配对操作。
 
 ## 使用
 
@@ -34,11 +29,11 @@ MV3 零构建扩展（Chrome/Edge），两条通道：
 
 捕获通道：
 
-- `GET /api/capture/extension/pending`（头 `X-Capture-Token`）→ `{pending, sessionId}`
-- `POST /api/capture/extension/result`（头 `X-Capture-Token`）body `{sessionId, descriptor}`
+- `GET /api/capture/extension/pending` → `{pending, sessionId}`
+- `POST /api/capture/extension/result` body `{sessionId, descriptor}`
 - 短轮询：捕获激活 1.2s / 空闲 5s
 
-执行通道（`X-Capture-Token` 同一 token）：
+执行通道：
 
 - `GET /api/ext/command/next?wait=20&host=msedge&ver=...&platform=...&ua=...` → `{command: {id, op, args} | null}`（长轮询；空转即心跳，同时上报宿主浏览器身份）
 - `POST /api/ext/command/result` body `{id, ok, value}` 或 `{id, ok:false, error:{code,message}}`

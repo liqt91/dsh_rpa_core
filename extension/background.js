@@ -1,6 +1,6 @@
 // rpa_core 扩展 background service worker
 // ① 捕获通道：短轮询 devserver pending 状态（捕获期间激活），把 content script 的
-//    捕获结果 POST 回 devserver。token 配对一次（popup 输入，chrome.storage.local 持久）。
+//    捕获结果 POST 回 devserver。无鉴权：devserver 仅绑定 127.0.0.1。
 // ② 执行通道（M15，一等公民）：长轮询 /api/ext/command/next 领命令 → 本地执行
 //    （tabs/scripting/cookies）→ /api/ext/command/result 回结果。
 // 权限：默认「整个浏览器」（全部窗口/标签页/Cookie）；可用 chrome.storage.local 的
@@ -12,15 +12,6 @@ const EXEC_HOLD_S = 20;        // 命令长轮询保持（秒）
 const PERMISSION_KEY = "rpaExecPermission";
 let pollMs = POLL_IDLE_MS;
 let execRunning = false;
-
-async function getToken() {
-  // 自动配对：未配对时自动生成并持久化（devserver 侧 TOFU 首次接触采纳）
-  const data = await chrome.storage.local.get("rpaCaptureToken");
-  if (data.rpaCaptureToken) return data.rpaCaptureToken;
-  const token = crypto.randomUUID();
-  await chrome.storage.local.set({ rpaCaptureToken: token });
-  return token;
-}
 
 // ---------------------------------------------------------------- 宿主身份
 // 扩展装在哪个浏览器里，执行通道就用哪个浏览器（扩展通道没有"启动浏览器"概念）。
@@ -58,12 +49,8 @@ function hostQuery() {
 // ---------------------------------------------------------------- 捕获通道
 
 async function poll() {
-  const token = await getToken();
-  if (!token) { schedule(); return; }
   try {
-    const resp = await fetch(`${DEVSERVER}/api/capture/extension/pending`, {
-      headers: { "X-Capture-Token": token },
-    });
+    const resp = await fetch(`${DEVSERVER}/api/capture/extension/pending`);
     if (!resp.ok) { schedule(); return; }
     const data = await resp.json();
     const pending = data.pending === true;
@@ -106,12 +93,10 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 });
 
 async function postResult(descriptor) {
-  const token = await getToken();
-  if (!token) return;
   try {
     await fetch(`${DEVSERVER}/api/capture/extension/result`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", "X-Capture-Token": token },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify(descriptor),
     });
     pollMs = POLL_IDLE_MS;
@@ -156,12 +141,10 @@ function startExecLoop() {
 
 async function execLoop() {
   for (;;) {
-    const token = await getToken();
     let resp;
     try {
       resp = await fetch(
         `${DEVSERVER}/api/ext/command/next?wait=${EXEC_HOLD_S}${hostQuery()}`,
-        { headers: { "X-Capture-Token": token } },
       );
     } catch {
       await sleep(3000);   // devserver 不在线：退避重试
@@ -171,11 +154,11 @@ async function execLoop() {
     const data = await resp.json();
     const cmd = data.command;
     if (!cmd) continue;    // 长轮询空转，直接续下一轮（同时充当心跳）
-    await runCommand(cmd, token);
+    await runCommand(cmd);
   }
 }
 
-async function runCommand(cmd, token) {
+async function runCommand(cmd) {
   let payload;
   try {
     await assertAllowed(cmd);
@@ -191,7 +174,7 @@ async function runCommand(cmd, token) {
   try {
     await fetch(`${DEVSERVER}/api/ext/command/result`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", "X-Capture-Token": token },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     });
   } catch { /* devserver 掉线：结果丢弃，宿主侧按超时处理 */ }

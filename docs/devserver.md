@@ -1,4 +1,4 @@
-﻿# dev server 手册（M8/M9）
+# dev server 手册（M8/M9）
 
 设计期 HTTP 工具，为编辑器（M9）与捕获（M10）提供 catalog / compile / workflow 文件 API。定位与边界见 ADR 0007：**不承载 run**，进程内无 orchestrator / registry；仅复用 `catalog` 与 `compiler`（架构检查断言不 import `runtime` / `executors`）。
 
@@ -34,9 +34,8 @@ uv run python -m rpa_core.cli devserver --port 9000 --workflows D:\tmp\workflows
 | `/api/runs/{runId}/cancel` | POST | 取消运行（终止子进程，run 落 cancelled） |
 | `/api/capture/desktop/{start,pick,cancel}` | POST | 桌面 UIA 捕获（M10 实装，见下） |
 | `/api/capture/browser/{start,pick,cancel}` | POST | 浏览器捕获；start 需 `{"transport": "bsk" \| "persistent" \| "user-browser" \| "extension"}`（M14：bsk 为主，extension 为无缝跨页主路线） |
-| `/api/capture/extension/token` | GET / POST | 扩展 token（POST 显式写入；**TOFU**：未配对时首个带 token 的请求自动采纳持久化——免手动配对；存 `workflows/.capture-extension-token`） |
-| `/api/capture/extension/pending` | GET | 扩展轮询捕获激活状态（头 `X-Capture-Token`） |
-| `/api/capture/extension/result` | POST | 扩展 content script 捕获结果回传（头 `X-Capture-Token`） |
+| `/api/capture/extension/pending` | GET | 扩展轮询捕获激活状态 |
+| `/api/capture/extension/result` | POST | 扩展 content script 捕获结果回传 |
 
 错误形态统一为 `{"error": <CODE>, "message": <str>}`：`BAD_REQUEST`(400)、`FORBIDDEN`(403)、`NOT_FOUND`(404)、`METHOD_NOT_ALLOWED`(405)、`PAYLOAD_TOO_LARGE`(413)、`NOT_IMPLEMENTED`(501)。
 
@@ -68,7 +67,7 @@ PowerShell 全流程（`$base = "http://127.0.0.1:8765"`）：
 $base = "http://127.0.0.1:8765"
 $s = Invoke-RestMethod -Method Post -Uri "$base/api/capture/desktop/start" `
   -ContentType "application/json"   -Body '{"hover":true,"timeoutSeconds":60}'
-# → {"sessionId":"desktop-1","mode":"hover"}（已配对扩展时自动升级 hybrid：mode 回 "hybrid"）；
+# → {"sessionId":"desktop-1","mode":"hover"}（hover 默认即 hybrid：mode 回 "hybrid"）；
 # 移动鼠标（红色高亮框跟随），到目标控件按 F9 或 Ctrl+Click
 # 混合捕获（hybrid）：鼠标进浏览器网页内容区时桌面高亮让位给扩展页内 picker，
 # Ctrl+Click 走扩展捕获；浏览器 UI 骨架与桌面应用仍走 UIA。先回传者胜，另一侧自动回收。
@@ -140,7 +139,7 @@ bsk 捕获交互：hover 高亮（elementsFromPoint 变体绕过 bsk 的 Control
 **浏览器捕获 — extension**（自研 content-script 扩展，无缝跨浏览器/跨页主路线，零逐次授权）：
 
 ```powershell
-# 配对零操作：扩展首次轮询自动带 token，devserver TOFU 采纳（无需手动写入）
+# 无 token 配对：扩展安装并运行即自动可用（devserver 仅绑定 127.0.0.1）
 # 捕获：捕获期间所有浏览器的所有页面 hover 高亮自动激活，Ctrl+Click 捕获：
 Invoke-RestMethod -Method Post -Uri "$base/api/capture/browser/start" `
   -ContentType "application/json" -Body '{"transport":"extension"}'

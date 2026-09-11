@@ -34,11 +34,9 @@ def server(tmp_path):
         dev.stop()
 
 
-def _request(method: str, path: str, payload=None, base: str = "", token: str | None = None):
+def _request(method: str, path: str, payload=None, base: str = ""):
     data = json.dumps(payload).encode("utf-8") if payload is not None else None
     headers = {"Content-Type": "application/json"} if data else {}
-    if token:
-        headers["X-Capture-Token"] = token
     request = urllib.request.Request(
         f"{base}{path}", data=data, method=method, headers=headers,
     )
@@ -49,48 +47,8 @@ def _request(method: str, path: str, payload=None, base: str = "", token: str | 
         return exc.code, json.loads(exc.read().decode("utf-8"))
 
 
-def _pair(base):
-    status, payload = _request(
-        "POST", "/api/capture/extension/token", {"token": "tok-1"}, base=base
-    )
-    assert status == 200
-    assert payload == {"configured": True, "token": "tok-1"}
-
-
-def test_token_pairing_roundtrip(server):
-    base = f"http://127.0.0.1:{server.port}"
-    status, payload = _request("GET", "/api/capture/extension/token", base=base)
-    assert payload == {"configured": False, "token": None}
-    _pair(base)
-    status, payload = _request("GET", "/api/capture/extension/token", base=base)
-    assert payload == {"configured": True, "token": "tok-1"}
-
-
-def test_pending_requires_configured_token(server):
-    base = f"http://127.0.0.1:{server.port}"
-    # 未配对且请求不带 token → 403（缺凭据）
-    status, payload = _request("GET", "/api/capture/extension/pending", base=base)
-    assert status == 403
-    # TOFU：首次带 token 接触自动采纳并持久化（免手动配对）
-    status, payload = _request(
-        "GET", "/api/capture/extension/pending", base=base, token="tok-1"
-    )
-    assert status == 200
-    assert payload == {"pending": False, "sessionId": None}
-
-
-def test_pending_rejects_wrong_token(server):
-    base = f"http://127.0.0.1:{server.port}"
-    _pair(base)
-    status, payload = _request(
-        "GET", "/api/capture/extension/pending", base=base, token="wrong"
-    )
-    assert status == 403
-
-
 def test_extension_capture_flow_via_result_post(server):
     base = f"http://127.0.0.1:{server.port}"
-    _pair(base)
     status, payload = _request(
         "POST", "/api/capture/browser/start", {"transport": "extension"}, base=base
     )
@@ -98,7 +56,7 @@ def test_extension_capture_flow_via_result_post(server):
     session_id = payload["sessionId"]
 
     status, payload = _request(
-        "GET", "/api/capture/extension/pending", base=base, token="tok-1"
+        "GET", "/api/capture/extension/pending", base=base
     )
     assert payload == {"pending": True, "sessionId": session_id}
 
@@ -115,7 +73,7 @@ def test_extension_capture_flow_via_result_post(server):
     status, payload = _request(
         "POST", "/api/capture/extension/result",
         {"sessionId": session_id, "descriptor": _DESCRIPTOR},
-        base=base, token="tok-1",
+        base=base,
     )
     assert status == 200
     assert payload == {"received": True, "sessionId": session_id}
@@ -126,24 +84,22 @@ def test_extension_capture_flow_via_result_post(server):
     assert pick_result["verifyCount"] == 1
 
     status, payload = _request(
-        "GET", "/api/capture/extension/pending", base=base, token="tok-1"
+        "GET", "/api/capture/extension/pending", base=base
     )
     assert payload["pending"] is False
 
 
 def test_extension_result_unknown_session_404(server):
     base = f"http://127.0.0.1:{server.port}"
-    _pair(base)
     status, payload = _request(
         "POST", "/api/capture/extension/result",
-        {"sessionId": "nope", "descriptor": _DESCRIPTOR}, base=base, token="tok-1",
+        {"sessionId": "nope", "descriptor": _DESCRIPTOR}, base=base,
     )
     assert status == 404
 
 
 def test_extension_capture_save_to_flow(server):
     base = f"http://127.0.0.1:{server.port}"
-    _pair(base)
     status, payload = _request(
         "POST", "/api/capture/browser/start", {"transport": "extension"}, base=base
     )
@@ -163,7 +119,7 @@ def test_extension_capture_save_to_flow(server):
     thread.start()
     _request(
         "POST", "/api/capture/extension/result",
-        {"sessionId": session_id, "descriptor": _DESCRIPTOR}, base=base, token="tok-1",
+        {"sessionId": session_id, "descriptor": _DESCRIPTOR}, base=base,
     )
     thread.join(timeout=5)
     status, pick_result = picked["result"]
@@ -180,7 +136,6 @@ def test_extension_capture_save_to_flow(server):
 
 def test_extension_cancel_unpends(server):
     base = f"http://127.0.0.1:{server.port}"
-    _pair(base)
     status, payload = _request(
         "POST", "/api/capture/browser/start", {"transport": "extension"}, base=base
     )
@@ -190,6 +145,6 @@ def test_extension_cancel_unpends(server):
     )
     assert payload["cancelled"] is True
     status, payload = _request(
-        "GET", "/api/capture/extension/pending", base=base, token="tok-1"
+        "GET", "/api/capture/extension/pending", base=base
     )
     assert payload["pending"] is False
