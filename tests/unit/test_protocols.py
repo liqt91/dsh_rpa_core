@@ -1,8 +1,9 @@
+import json
 from pathlib import Path
 
 import pytest
 
-from rpa_core.catalog import load_catalog
+from rpa_core.catalog import clear_catalog_cache, load_catalog
 from rpa_core.compiler import WorkflowCompileError, WorkflowCompiler
 from rpa_core.model.workflow import Workflow
 
@@ -21,11 +22,75 @@ def workflow(root):
 
 def test_catalog_is_loaded_and_digest_is_stable():
     first = catalog()
+    # 清掉快照缓存，逼出一次真正独立的读盘 + 校验：digest 必须仍然一致
+    # （否则「同一份 manifest 集合」就不构成稳定契约）。
+    clear_catalog_cache()
     second = catalog()
+    assert first is not second
     assert len(first) == 83
     assert first.digest == second.digest
     with pytest.raises(TypeError):
         first._commands["x"] = None
+
+
+def test_catalog_snapshot_is_reused_while_directory_is_unchanged():
+    """目录内容未变时复用同一份快照。
+
+    这条用例是性能契约的守卫：命令目录有 83 条 manifest，每次重新解析都要读
+    83 个文件 + 166 次 JSON Schema 自检；一旦缓存被去掉，整套门禁会从分钟级
+    回到十几分钟级（devserver 测试的 `server` fixture 每个都要加载一次）。
+    """
+    assert catalog() is catalog()
+
+
+def _probe_manifest(version: str, command_id: str = "probe.echo") -> dict:
+    return {
+        "id": command_id,
+        "version": version,
+        "executor": "probe",
+        "kind": "action",
+        "risk": "read",
+        "capabilities": [],
+        "resources": [],
+        "stability": "stable",
+        "effect": {"kind": "pure", "replay": "safe", "idempotency": "none"},
+        "input_schema": {"type": "object"},
+        "output_schema": {"type": "object"},
+        "errors": ["EXECUTOR_FAILED"],
+        "implementation": {"handler": "probe:execute"},
+    }
+
+
+def test_catalog_snapshot_follows_manifest_changes(tmp_path):
+    """改写 / 新增 / 删除 manifest 都必须让缓存失效，不能读到旧快照。"""
+    root = tmp_path / "commands"
+    root.mkdir()
+    target = root / "echo.json"
+    target.write_text(json.dumps(_probe_manifest("1.0.0")), encoding="utf-8")
+    original = load_catalog(root)
+
+    target.write_text(json.dumps(_probe_manifest("2.0.0")), encoding="utf-8")
+    rewritten = load_catalog(root)
+    assert rewritten["probe.echo"].version == "2.0.0"
+    assert rewritten.digest != original.digest
+
+    (root / "other.json").write_text(
+        json.dumps(_probe_manifest("1.0.0", "probe.other")), encoding="utf-8"
+    )
+    assert len(load_catalog(root)) == 2
+
+    (root / "other.json").unlink()
+    assert len(load_catalog(root)) == 1
+
+
+def test_catalog_snapshot_failure_is_not_cached(tmp_path):
+    """空目录报错后，补齐 manifest 应当能正常加载（异常不进缓存）。"""
+    root = tmp_path / "commands"
+    root.mkdir()
+    with pytest.raises(ValueError, match="No command manifests found"):
+        load_catalog(root)
+    (root / "echo.json").write_text(json.dumps(_probe_manifest("1.0.0")), encoding="utf-8")
+    assert len(load_catalog(root)) == 1
 
 
 def test_compile_accepts_explicit_references_and_capabilities():

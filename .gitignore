@@ -2,6 +2,8 @@
 __pycache__/
 *.py[cod]
 .pytest_cache/
+# 受限执行环境下 pytest 的兜底 basetemp（见 tests/conftest.py）
+.pytest_tmp/
 .ruff_cache/
 dist/
 build/

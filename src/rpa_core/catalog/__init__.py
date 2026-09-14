@@ -1,3 +1,3 @@
-from .loader import CommandCatalog, load_catalog
+from .loader import CommandCatalog, clear_catalog_cache, load_catalog
 
-__all__ = ["CommandCatalog", "load_catalog"]
+__all__ = ["CommandCatalog", "clear_catalog_cache", "load_catalog"]
