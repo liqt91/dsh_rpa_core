@@ -1,0 +1,129 @@
+"""pytest 全局约定（跨平台门禁自足性的前提）。
+
+## 1. 默认执行通道必须是离线的
+
+扩展执行通道的默认地址是 `RPA_EXT_HUB_URL`（缺省 `http://127.0.0.1:8765`）。
+开发者本机常驻 devserver + 浏览器扩展时，那些没有显式注入 client 的用例
+（如 `tests/contract/test_browser_contract.py` 里直接 `PlaywrightExecutor()`）
+会真的经扩展通道读/操作**开发者本人浏览器**——门禁结论随本机环境漂移，
+同一份代码在不同机器上跑出不同结果，甚至产生真实副作用。
+
+这里在收集测试前把缺省地址指向一个必然拒绝连接的端口，让「默认通道」成为
+确定性的离线状态。需要真实通道的用例一律显式构造
+`ExtensionExecClient(base_url=...)`（见 `test_extension_exec_channel.py`），
+`RunManager` 也会为 `rpa-core run` 子进程显式覆写该变量（见 devserver/runs.py），
+因此本改动不影响这两条路径。
+
+## 2. 受限执行环境下临时根要能真正建出来
+
+pytest 的 `tmp_path` 基目录默认取 `tempfile.gettempdir()`，并在其下建
+`pytest-of-<user>`（已存在则 `mkdir(mode=0o700, exist_ok=True)`）。受限执行环境
+（把 host 文件操作代理给宿主的沙箱/容器）会拒绝「对已存在路径再次带 mode 的
+mkdir」，而抛出的 `PermissionError` 不是 `FileExistsError`，`exist_ok=True`
+**兜不住**——于是所有依赖 `tmp_path` 的用例在 setup 阶段整片 ERROR，表象是
+`PermissionError: EEXIST .../pytest-of-unknown`，真实原因既不在用例也不在产品代码。
+
+注意这个故障是**有状态**的：目录不存在时首次创建会成功，第二次运行才炸。
+
+这里只在默认临时根确实不可用时，改用一个**本次运行专用的全新 basetemp**：
+
+- 全新 → 绕开「对已存在路径 mkdir」；
+- 全新且为空 → pytest 拿到 `--basetemp` 时会先 `rm_rf` 再 `mkdir`，目标为空时
+  这次清理不构成任何批量删除。受限环境最不该在**启动阶段**做批量删除（失败即
+  整个 session 崩），所以刻意挑一个要么不存在、要么为空的路径。
+- 目录建完后 best-effort 回收，回收失败不影响结论。
+
+正常机器上探测通过、一切保持 pytest 原生目录布局；显式 `--basetemp` 优先级更高。
+"""
+
+import getpass
+import os
+import shutil
+import tempfile
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+
+# 9/tcp 是 discard 端口，本机不监听 → 连接被立即拒绝，用例走「扩展离线」分支。
+os.environ["RPA_EXT_HUB_URL"] = "http://127.0.0.1:9"
+
+# 默认临时根不可用时的候选 basetemp 父目录：先系统临时区（不污染工作区），
+# 最后一个兜底放工作区内（工作区几乎总是可写的），已被 .gitignore 排除。
+_FALLBACK_PARENTS = (
+    Path(tempfile.gettempdir()) / "rpa-core-pytest",
+    Path("/tmp") / "rpa-core-pytest",
+    REPO_ROOT / ".pytest_tmp",
+)
+
+_provisioned: str | None = None
+
+
+def _current_user() -> str:
+    try:
+        return getpass.getuser()
+    except (ImportError, OSError, KeyError):  # 部分环境根本没有 passwd 条目
+        return "unknown"
+
+
+def _directory_is_writable(directory: Path) -> bool:
+    probe = directory / f"pytest-probe-{os.getpid()}"
+    try:
+        probe.mkdir()
+    except OSError:
+        return False
+    try:
+        probe.rmdir()
+    except OSError:
+        pass
+    return True
+
+
+def _default_basetemp_is_usable() -> bool:
+    """复刻 pytest 建默认基目录的动作，判断它在这个环境里能否成立。
+
+    pytest 只对 `pytest-of-<user>` 与 `pytest-of-unknown` 这两个名字操作，任何一个
+    成功就继续；两个都失败整个 session 就崩。因此这两个名字都被拒时，即使临时根
+    本身可写，也判为不可用。
+    """
+    temproot = Path(tempfile.gettempdir()).resolve()
+    for name in (f"pytest-of-{_current_user()}", "pytest-of-unknown"):
+        rootdir = temproot / name
+        if not rootdir.exists():
+            # 路径还不存在时 pytest 会新建它，父目录可写即可成功。这里刻意不去建它：
+            # 一旦被探测行为抢先建出来，就把「新建」变成了「已存在」，反而触发故障。
+            return _directory_is_writable(temproot)
+        try:
+            # 已存在时 pytest 会再 mkdir 一次（带 mode）——受限环境正是卡在这一步。
+            rootdir.mkdir(mode=0o700, exist_ok=True)
+        except OSError:
+            continue
+        return True
+    return False
+
+
+def _provision_basetemp() -> str | None:
+    """在可写的父目录下开一个本次运行专用的空目录，作为 basetemp。"""
+    for parent in _FALLBACK_PARENTS:
+        try:
+            parent.mkdir(parents=True, exist_ok=True)
+            return tempfile.mkdtemp(dir=parent, prefix="run-")
+        except OSError:
+            continue
+    return None
+
+
+def pytest_configure(config):
+    global _provisioned
+    if config.option.basetemp:
+        return  # 显式 --basetemp 优先，不覆盖
+    if _default_basetemp_is_usable():
+        return  # 正常环境：保持 pytest 原生目录布局
+    _provisioned = _provision_basetemp()
+    if _provisioned is not None:
+        config.option.basetemp = _provisioned
+
+
+def pytest_unconfigure(config):
+    # 回收本次运行专用的 basetemp；受限环境可能拒绝这次删除，失败不影响任何结论。
+    if _provisioned is not None:
+        shutil.rmtree(_provisioned, ignore_errors=True)
