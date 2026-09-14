@@ -21,6 +21,7 @@ import hashlib
 import importlib.metadata
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -491,7 +492,16 @@ def remove_external_registry_entries(extension_id: str) -> dict[str, int]:
 
 
 def browser_user_data_dirs(browser: str) -> list[Path]:
-    """返回某浏览器 User Data 目录候选（本地用户目录；不存在的目录剔除）。"""
+    """返回某浏览器 User Data 目录候选（本地用户目录；不存在的目录剔除）。
+
+    三平台各持一张相对路径表：
+    - win32：``%LOCALAPPDATA%`` 下 ``Google/Chrome/User Data``、``Microsoft/Edge/User Data``
+    - darwin：``~/Library/Application Support/Google/Chrome``、``…/Microsoft Edge``
+      （macOS 上 Chrome/Edge **不**用 ``~/.config``，Edge 也不在 ``Microsoft/Edge`` 下；
+      漏了这张表会让 profile 探测恒空，进而把已装/已启用的插件误报为未安装）
+    - 其它（Linux）：``~/.config/google-chrome``、``~/.config/microsoft-edge``
+    """
+    home = Path.home()
     if sys.platform == "win32":
         local = os.environ.get("LOCALAPPDATA")
         if not local:
@@ -503,7 +513,15 @@ def browser_user_data_dirs(browser: str) -> list[Path]:
         if relative is None:
             return []
         return [Path(local) / relative]
-    home = Path.home()
+    if sys.platform == "darwin":
+        candidates = {
+            "chrome": (
+                Path("Library") / "Application Support" / "Google" / "Chrome",
+                Path("Library") / "Application Support" / "Chromium",
+            ),
+            "edge": (Path("Library") / "Application Support" / "Microsoft Edge",),
+        }.get(browser)
+        return [home / item for item in candidates] if candidates else []
     relative = {
         "chrome": Path(".config/google-chrome"),
         "edge": Path(".config/microsoft-edge"),
@@ -795,27 +813,65 @@ def clear_uninstall_block(
 
 _BROWSER_PROCESSES = {"chrome": "chrome.exe", "edge": "msedge.exe"}
 
+# POSIX（darwin/linux）按「整条命令行」匹配主进程：
+# - macOS 主进程即 /Applications/<Name>.app/Contents/MacOS/<Name>（Helper 子进程路径含
+#   "…Helper (Renderer)"，不会被下面这些子串命中）；
+# - Linux 走发行版安装的二进制名。
+_POSIX_BROWSER_PATTERNS = {
+    "chrome": (
+        r"Google Chrome\.app/Contents/MacOS/Google Chrome"
+        r"|/google-chrome(-stable)?\b|/chromium(-browser)?\b"
+    ),
+    "edge": (
+        r"Microsoft Edge\.app/Contents/MacOS/Microsoft Edge"
+        r"|/microsoft-edge(-stable|-beta|-dev)?\b"
+    ),
+}
+
+
+def _posix_process_matches(pattern: str) -> bool:
+    """POSIX 下是否有进程命令行匹配 pattern：优先 pgrep -f，缺失时退 ps。"""
+    try:
+        completed = subprocess.run(
+            ["pgrep", "-f", pattern],
+            capture_output=True, text=True, timeout=10, encoding="utf-8", errors="replace",
+        )
+        return bool(completed.stdout.strip())
+    except (OSError, subprocess.SubprocessError):
+        pass
+    try:
+        completed = subprocess.run(
+            ["ps", "-A", "-o", "command"],
+            capture_output=True, text=True, timeout=10, encoding="utf-8", errors="replace",
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return re.search(pattern, completed.stdout) is not None
+
 
 def browser_running(browser: str) -> bool:
-    """目标浏览器当前是否有进程在运行（win32；其他平台一律 False）。
+    """目标浏览器当前是否有进程在运行（win32 用 tasklist，darwin/linux 匹配命令行）。
 
     仅用于判断"卸载屏蔽清除是否可靠/loader 是否要等重启"——运行中的浏览器
     会在退出时用内存副本覆写 Preferences，导致清除被冲掉。
     """
-    if sys.platform != "win32":
+    if sys.platform == "win32":
+        exe = _BROWSER_PROCESSES.get(browser)
+        if exe is None:
+            return False
+        try:
+            completed = subprocess.run(
+                ["tasklist", "/FI", f"IMAGENAME eq {exe}"],
+                capture_output=True, text=True, timeout=10, encoding="utf-8",
+                errors="replace",
+            )
+        except (OSError, subprocess.SubprocessError):
+            return False
+        return exe.lower() in completed.stdout.lower()
+    pattern = _POSIX_BROWSER_PATTERNS.get(browser)
+    if pattern is None:
         return False
-    exe = _BROWSER_PROCESSES.get(browser)
-    if exe is None:
-        return False
-    try:
-        completed = subprocess.run(
-            ["tasklist", "/FI", f"IMAGENAME eq {exe}"],
-            capture_output=True, text=True, timeout=10, encoding="utf-8",
-            errors="replace",
-        )
-    except (OSError, subprocess.SubprocessError):
-        return False
-    return exe.lower() in completed.stdout.lower()
+    return _posix_process_matches(pattern)
 
 
 def install_external_guided(

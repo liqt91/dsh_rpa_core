@@ -1,8 +1,10 @@
 import json
+import re
 import sys
 import urllib.error
 import urllib.request
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -952,3 +954,95 @@ def test_env_status_base_shape(monkeypatch, tmp_path):
             "binary", "running", "installed", "enabled", "uninstallBlocked",
         }
         assert "online" not in info  # 心跳由调用方并，纯静态不含
+
+
+# ---- 平台化 User Data 目录与进程检测（macOS 适配）-----------------------------------
+
+
+def test_user_data_dirs_per_platform(monkeypatch, tmp_path):
+    """User Data 目录三平台各一张表：darwin 必须命中 ~/Library/Application Support。
+
+    回归：旧实现把非 win32 一律当 Linux（~/.config/...），macOS 上恒不命中 →
+    profile 探测为空 → 已装/已启用的插件被误报成未安装。
+    """
+    monkeypatch.setenv("HOME", str(tmp_path))
+
+    monkeypatch.setattr(sys, "platform", "darwin")
+    assert ext.browser_user_data_dirs("chrome") == [
+        tmp_path / "Library/Application Support/Google/Chrome",
+        tmp_path / "Library/Application Support/Chromium",
+    ]
+    # Edge 在 macOS 上是顶层 "Microsoft Edge"（不带 Microsoft/ 前缀）
+    assert ext.browser_user_data_dirs("edge") == [
+        tmp_path / "Library/Application Support/Microsoft Edge",
+    ]
+
+    monkeypatch.setattr(sys, "platform", "linux")
+    assert ext.browser_user_data_dirs("edge") == [tmp_path / ".config/microsoft-edge"]
+
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "local"))
+    assert ext.browser_user_data_dirs("edge") == [
+        tmp_path / "local" / "Microsoft" / "Edge" / "User Data",
+    ]
+
+
+def test_user_data_dirs_win32_without_localappdata(monkeypatch):
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.delenv("LOCALAPPDATA", raising=False)
+    assert ext.browser_user_data_dirs("chrome") == []
+
+
+def test_browser_running_posix_uses_process_match(monkeypatch):
+    """darwin/linux 用命令行匹配进程（pgrep -f），不再恒返回 False。"""
+    calls = []
+
+    def _run(argv, **_kwargs):
+        calls.append(argv)
+        stdout = "1167\n" if argv[0] == "pgrep" and "Edge" in argv[-1] else ""
+        return SimpleNamespace(returncode=0 if stdout else 1, stdout=stdout)
+
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr(ext.subprocess, "run", _run)
+    assert ext.browser_running("edge") is True
+    assert ext.browser_running("chrome") is False
+    assert calls[0][0] == "pgrep" and calls[0][1] == "-f"
+    # macOS 主进程路径命中，Helper（渲染/GPU）子进程不得误判为主浏览器进程
+    pattern = calls[0][2]
+    assert re.search(pattern, "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge -x")
+    assert not re.search(
+        pattern,
+        "/Applications/Microsoft Edge.app/Contents/Frameworks/Microsoft Edge Framework"
+        ".framework/Versions/148/Helpers/Microsoft Edge Helper.app/Contents/MacOS/"
+        "Microsoft Edge Helper",
+    )
+    assert ext.browser_running("unknown-browser") is False
+
+
+def test_browser_running_posix_falls_back_to_ps(monkeypatch):
+    """pgrep 不可用（极简 Linux）时退化为 ps 全量命令行扫描。"""
+    def _run(argv, **_kwargs):
+        if argv[0] == "pgrep":
+            raise FileNotFoundError("pgrep")
+        return SimpleNamespace(
+            returncode=0,
+            stdout="/usr/lib/microsoft-edge/microsoft-edge --type=renderer\n",
+        )
+
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(ext.subprocess, "run", _run)
+    assert ext.browser_running("edge") is True
+
+
+def test_browser_running_win32_keeps_tasklist(monkeypatch):
+    """win32 分支行为不变：仍用 tasklist 按镜像名过滤。"""
+    calls = []
+
+    def _run(argv, **_kwargs):
+        calls.append(argv)
+        return SimpleNamespace(returncode=0, stdout="msedge.exe  1234 Console  1  100 K")
+
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(ext.subprocess, "run", _run)
+    assert ext.browser_running("edge") is True
+    assert calls[0][:3] == ["tasklist", "/FI", "IMAGENAME eq msedge.exe"]

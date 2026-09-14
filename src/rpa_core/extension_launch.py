@@ -15,10 +15,11 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import sys
 from collections.abc import Sequence
 from pathlib import Path
 
-# 浏览器类型（manifest browserType 的取值）→ 候选可执行文件名
+# 浏览器类型（manifest browserType 的取值）→ 候选可执行文件名（PATH 兜底探测用）
 _EXE_NAMES: dict[str, tuple[str, ...]] = {
     "msedge": ("msedge.exe", "microsoft-edge", "MicrosoftEdge.exe"),
     "chrome": ("chrome.exe", "google-chrome", "chromium", "chromium-browser"),
@@ -40,6 +41,19 @@ _WIN_INSTALL_PATHS: dict[str, tuple[str, ...]] = {
     ),
 }
 
+# macOS：浏览器是 .app bundle，可执行文件在 Contents/MacOS/ 下，**不在 PATH 里**，
+# 也没有 `microsoft-edge` 这类命令名——只有这张表能定位到。
+_MAC_INSTALL_PATHS: dict[str, tuple[str, ...]] = {
+    "msedge": ("/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",),
+    "chrome": (
+        "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+        "~/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+    ),
+}
+
+# Linux：由 PATH / shutil.which 兜底（发行版安装位置五花八门，不维护绝对路径表）
+_LINUX_INSTALL_PATHS: dict[str, tuple[str, ...]] = {}
+
 # 环境变量可显式指定可执行文件（便于测试 / 非标准安装）
 _ENV_KEY: dict[str, str] = {"msedge": "RPA_MSEDGE_BIN", "chrome": "RPA_CHROME_BIN"}
 
@@ -49,17 +63,24 @@ class BrowserLaunchError(RuntimeError):
 
 
 def _expand_env(path: str) -> Path:
-    return Path(os.path.expandvars(path))
+    # expandvars 在 POSIX 上不展开 `%VAR%`（那是 Windows 语法），expanduser 负责 `~`
+    return Path(os.path.expanduser(os.path.expandvars(path)))
 
 
 def browser_binary_candidates(browser: str) -> list[Path]:
     """返回 browser（msedge/chrome，或 edge/chrome 别名）已知安装路径的候选。
 
     只列路径、不校验存在性；可供 find_browser_exe 与 extension_installer 共用，
-    保证「检测安装」与「自启定位」看到同一份路径表。
+    保证「检测安装」与「自启定位」看到同一份**当前平台**的路径表。
     """
     key = {"edge": "msedge"}.get(browser, browser)
-    return [_expand_env(p) for p in _WIN_INSTALL_PATHS.get(key, ())]
+    if sys.platform == "win32":
+        templates = _WIN_INSTALL_PATHS.get(key, ())
+    elif sys.platform == "darwin":
+        templates = _MAC_INSTALL_PATHS.get(key, ())
+    else:
+        templates = _LINUX_INSTALL_PATHS.get(key, ())
+    return [_expand_env(p) for p in templates]
 
 
 def find_browser_exe(browser: str) -> Path | None:
@@ -69,11 +90,10 @@ def find_browser_exe(browser: str) -> Path | None:
         exe = _expand_env(os.environ[env_key])
         if exe.is_file():
             return exe
-    # Windows：先探测已知安装路径，再兜底 PATH
-    if os.name == "nt":
-        for exe in browser_binary_candidates(browser):
-            if exe.is_file():
-                return exe
+    # 先探测当前平台的已知安装路径，再兜底 PATH
+    for exe in browser_binary_candidates(browser):
+        if exe.is_file():
+            return exe
     # PATH 探测（跨平台兜底）
     for name in _EXE_NAMES[browser]:
         exe = shutil.which(name)

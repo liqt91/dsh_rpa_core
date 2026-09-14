@@ -5,9 +5,12 @@ from pathlib import Path
 
 import pytest
 
+from rpa_core.catalog import load_catalog
+from rpa_core.compiler import WorkflowCompiler
 from rpa_core.executors import DesktopExecutor, Win32DesktopExecutor
 from rpa_core.model.command import CommandInvocation
 from rpa_core.model.desktop import DesktopLocator
+from rpa_core.model.workflow import Workflow
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -84,6 +87,9 @@ def test_desktop_close_is_idempotent_for_executor_shutdown():
 
 
 def test_win32_executor_close_is_idempotent_for_executor_shutdown():
+    if sys.platform != "win32":
+        pytest.skip("Windows-only：Win32DesktopExecutor 在非 win32 上是占位 None")
+
     async def run():
         executor = Win32DesktopExecutor()
         await executor.close()
@@ -93,9 +99,23 @@ def test_win32_executor_close_is_idempotent_for_executor_shutdown():
     assert asyncio.run(run()) == 0
 
 
-def test_desktop_e2e_workflow_fixture_is_present():
-    path = "D:/Users/Administrator/Documents/代码/rpa_core/examples/windows-desktop/workflow.json"
-    assert path.endswith("workflow.json")
+def test_desktop_e2e_workflow_fixtures_exist_and_compile():
+    """两个桌面 e2e fixture 必须在仓库里存在且能编译通过。
+
+    这里校验的是**仓库数据**（examples/ 下的 workflow.json），与当前操作系统无关：
+    e2e 用例会按平台整条 skip，但 fixture 漂移（改名/引用了已删命令/能力集写错）
+    不该也被一起 skip 掉，否则到 Windows 机器上才发现。
+
+    回归点：原用例断言的是一个硬编码的 Windows 本地绝对路径
+    （`D:/Users/Administrator/Documents/代码/...`），且只检查它 endswith("workflow.json")
+    ——既是恒真断言（零覆盖），又把开发者的机器路径带进了仓库。
+    """
+    catalog = load_catalog(ROOT / "commands")
+    for name in ("windows-desktop", "uia-desktop"):
+        fixture = ROOT / "examples" / name / "workflow.json"
+        assert fixture.is_file(), f"missing desktop e2e fixture: {fixture}"
+        workflow = Workflow.model_validate_json(fixture.read_text(encoding="utf-8"))
+        WorkflowCompiler(catalog).compile(workflow, {"desktop.control"})
 
 
 def test_uia_attach_unknown_window_reports_element_not_found():
@@ -118,6 +138,9 @@ def test_uia_attach_unknown_window_reports_element_not_found():
 
 
 def test_win32_attach_timeout_reports_element_not_found():
+    if sys.platform != "win32":
+        pytest.skip("Windows-only：Win32DesktopExecutor 在非 win32 上是占位 None")
+
     async def run():
         executor = Win32DesktopExecutor()
         return await executor.execute(
@@ -129,11 +152,8 @@ def test_win32_attach_timeout_reports_element_not_found():
         )
 
     result = asyncio.run(run())
-    if sys.platform == "win32":
-        assert result.error.code == "ELEMENT_NOT_FOUND"
-        assert result.error.details["matchedCount"] == 0
-    else:
-        assert result.error.code == "PLATFORM_UNSUPPORTED"
+    assert result.error.code == "ELEMENT_NOT_FOUND"
+    assert result.error.details["matchedCount"] == 0
 
 
 def test_uia_find_unknown_element_reports_element_not_found():

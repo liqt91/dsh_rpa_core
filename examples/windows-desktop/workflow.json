@@ -5,7 +5,7 @@
   "inputs": {
     "title": "无标题 - 记事本",
     "menuPath": ["文件(&F)", "打开(O)...\tCtrl+O"],
-    "filePath": "D:/Users/Administrator/Documents/代码/rpa_core/test.txt",
+    "filePath": "test.txt",
     "openedTitle": "test.txt - 记事本"
   },
   "root": {

@@ -59,7 +59,12 @@ CRX → devserver 托管（官方策略文档允许 http scheme）
 ### 1.2 平台范围
 
 - Firefox/Safari 不支持：扩展是 MV3 Chromium（service_worker），Firefox 移植与 Safari/MDM 路线均超出本切片。
-- macOS/Linux 需 root/MDM，暂缓。
+- **静默安装**（外部扩展注册表 / forcelist 策略）仅 Windows，macOS/Linux 需 root/MDM，暂缓——非 win32 调用显式抛 `PLATFORM_UNSUPPORTED`，不静默假装成功。
+- **执行通道**（`/api/ext/*` + MV3 扩展 + `extension_exec`）与平台无关，macOS 亲测可用：Edge 里 Load unpacked 加载本目录后，`browser.navigate` / `input` / `click` / `waitFor` / `screenshot` 全链路通过。
+- 本机检测（`extension_launch` / `extension_installer`）按平台取路径表，macOS 使用
+  `/Applications/<Name>.app/Contents/MacOS/<Name>` 与 `~/Library/Application Support/{Google/Chrome,Microsoft Edge}`；
+  `browser_running()` 在 POSIX 上走 `pgrep -f` 命令行匹配（macOS 主进程路径，不误判 Helper 子进程）。
+- macOS 上的安装方式是开发者模式 Load unpacked（`--load-extension` / 手动加载源码目录）——这也是 §1.0 的引导路线，无需注册表。
 
 ## 2. 与调研报告（extension-install-research.md）的实测修订
 

@@ -5,6 +5,7 @@
 """
 
 import asyncio
+import sys
 from types import SimpleNamespace
 
 import pytest
@@ -132,7 +133,9 @@ def test_launch_browser_missing_exe_raises(monkeypatch):
     monkeypatch.setattr("shutil.which", lambda _name: None)
     from rpa_core.extension_launch import launch_browser
 
-    monkeypatch.setattr("rpa_core.extension_launch._WIN_INSTALL_PATHS", {})
+    # 三平台候选表全部清空：否则在装了 Edge/Chrome 的机器上会真的命中并拉起浏览器
+    for table in ("_WIN_INSTALL_PATHS", "_MAC_INSTALL_PATHS", "_LINUX_INSTALL_PATHS"):
+        monkeypatch.setattr(f"rpa_core.extension_launch.{table}", {})
 
     with pytest.raises(BrowserLaunchError):
         launch_browser("msedge", "https://a.test/x")
@@ -281,3 +284,65 @@ def test_session_routes_followup_ops_to_bound_browser():
     # 打开网页时 target_host=chrome；随后的点击操作也必须 target_host=chrome
     assert ext.submitted[0] == ("tabs.create", "chrome")
     assert ("page.call:click", "chrome") in ext.submitted
+
+# ---- 平台化路径表（macOS 适配）-------------------------------------------------------
+
+
+def test_binary_candidates_are_platform_specific(monkeypatch):
+    """候选路径表按平台选择：win32 用 %VAR% 模板、darwin 用 .app bundle、其它走 PATH 兜底。"""
+    from rpa_core import extension_launch as el
+
+    monkeypatch.setattr(sys, "platform", "win32")
+    win = {str(p) for p in el.browser_binary_candidates("msedge")}
+    assert any(p.endswith("msedge.exe") for p in win)
+
+    monkeypatch.setattr(sys, "platform", "darwin")
+    mac = [str(p) for p in el.browser_binary_candidates("msedge")]
+    assert mac == ["/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge"]
+    mac_chrome = [str(p) for p in el.browser_binary_candidates("chrome")]
+    assert "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" in mac_chrome
+    # `~` 必须展开（POSIX 上字符串字面量 `~` 会被 expandvars 原样留下）
+    assert all("~" not in p for p in mac_chrome)
+
+    monkeypatch.setattr(sys, "platform", "linux")
+    assert el.browser_binary_candidates("chrome") == []
+
+
+def test_windows_templates_are_not_returned_off_windows(monkeypatch):
+    """回归：POSIX 上 expandvars 不展开 `%ProgramFiles%`，旧表会让检测拿到字面量假路径。"""
+    from rpa_core import extension_launch as el
+
+    monkeypatch.setattr(sys, "platform", "darwin")
+    for browser in ("chrome", "msedge"):
+        for path in el.browser_binary_candidates(browser):
+            assert "%" not in str(path)
+
+
+def test_find_browser_exe_detects_mac_bundle(monkeypatch, tmp_path):
+    """darwin 下 find_browser_exe 能命中 .app bundle 里的可执行文件（无需在 PATH 里）。"""
+    from rpa_core import extension_launch as el
+
+    bundle = tmp_path / "Microsoft Edge.app" / "Contents" / "MacOS"
+    bundle.mkdir(parents=True)
+    exe = bundle / "Microsoft Edge"
+    exe.write_bytes(b"\xcf\xfa\xed\xfe")
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr(el, "_MAC_INSTALL_PATHS", {"msedge": (str(exe),)})
+    monkeypatch.setattr("shutil.which", lambda _name: None)
+    monkeypatch.delenv("RPA_MSEDGE_BIN", raising=False)
+
+    assert el.find_browser_exe("msedge") == exe
+    assert el.find_browser_exe("edge") == exe  # edge 是 msedge 的别名
+
+
+def test_find_browser_exe_falls_back_to_path_on_linux(monkeypatch, tmp_path):
+    """Linux 不维护绝对路径表：候选为空时仍靠 PATH 探测兜底。"""
+    from rpa_core import extension_launch as el
+
+    exe = tmp_path / "google-chrome"
+    exe.write_bytes(b"\x7fELF")
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr("shutil.which", lambda name: str(exe) if name == "google-chrome" else None)
+    monkeypatch.delenv("RPA_CHROME_BIN", raising=False)
+
+    assert el.find_browser_exe("chrome") == exe

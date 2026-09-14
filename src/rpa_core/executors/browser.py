@@ -20,7 +20,7 @@ from rpa_core.model.command import (
 )
 from rpa_core.model.errors import ErrorCode
 
-from .base import CommandExecutor
+from .base import CommandExecutor, resolve_session_id
 from .browser_ext import ExtensionExecSession
 
 # 滚动 JS：window 全页滚动 / 元素内部滚动（position: top|bottom|point|page）
@@ -41,6 +41,11 @@ _SCROLL_ELEMENT_JS = """(el, [position, behavior, x, y]) => {
     else { el.scrollBy({top: el.clientHeight, behavior}); }
     return el.scrollTop;
 }"""
+
+# 不依赖已有会话的命令（与 desktop 的 attachWindow/getWindowList 同口径）：
+# attach 自己新建会话（绑定已有标签页），listPages 只列全部标签页——
+# 二者在「还没有任何会话」时也必须可用，否则只能先开网页才能列举/附着。
+_NO_SESSION_COMMANDS = ("browser.attach", "browser.listPages")
 
 # 扩展通道：命令 → page.call 原语（DOM 操作走扩展注入函数，规避页面 CSP 对 eval 的限制）
 _EXT_PAGE_METHODS = {
@@ -77,6 +82,8 @@ class PlaywrightExecutor(CommandExecutor):
         self._ext_sessions: dict[str, str] = {}  # sessionId -> tabId
         # sessionId -> 宿主浏览器（创建会话时绑定），后续元素操作据此路由到正确浏览器实例
         self._ext_session_hosts: dict[str, str] = {}
+        # 最近激活的会话：sessionId 可省略时按「最近激活 > 唯一会话」回退（同 desktop）
+        self._last_session_id: str | None = None
 
     async def execute(
         self, invocation: CommandInvocation, cancellation: asyncio.Event
@@ -87,20 +94,30 @@ class PlaywrightExecutor(CommandExecutor):
         command = invocation.command_id
         inputs = invocation.inputs
         try:
-            ext_session_id = str(inputs.get("sessionId") or "")
+            explicit = str(inputs.get("sessionId") or "")
+            # attach/listPages 不依赖已有会话：直接进扩展通道（会话缺失时不得被会话门拦下）
+            if command in _NO_SESSION_COMMANDS:
+                return await self._execute_extension(
+                    command, invocation, inputs, "", started, cancellation
+                )
             # 打开网页（action=goto）且尚无会话 → 在用户真实浏览器里新建标签页会话
             if (
                 command == "browser.navigate"
                 and str(inputs.get("action") or "goto") == "goto"
-                and (not ext_session_id or ext_session_id not in self._ext_sessions)
+                and (not explicit or explicit not in self._ext_sessions)
             ):
                 if not inputs.get("url"):
                     return CommandResult.failure(
                         ErrorCode.INVALID_INPUT, "url is required when action=goto"
                     )
                 return await self._open_extension(invocation, inputs, started)
-            # 其余命令（含既有会话上的 navigate goto/back/forward/reload）走扩展会话
+            # 其余命令（含既有会话上的 navigate goto/back/forward/reload）走扩展会话；
+            # sessionId 可省略：显式指定 > 最近激活 > 唯一会话（缺省会话解析，与 desktop 同口径）
+            ext_session_id = resolve_session_id(
+                explicit, self._ext_sessions, self._last_session_id
+            )
             if ext_session_id and ext_session_id in self._ext_sessions:
+                self._last_session_id = ext_session_id
                 return await self._execute_extension(
                     command, invocation, inputs, ext_session_id, started, cancellation
                 )
@@ -114,7 +131,7 @@ class PlaywrightExecutor(CommandExecutor):
                 "并确保自研扩展在线。",
                 details={
                     "requiredField": "sessionId",
-                    "sessionId": ext_session_id or None,
+                    "sessionId": explicit or None,
                 },
             )
         except ExtensionChannelError as exc:
@@ -306,6 +323,7 @@ class PlaywrightExecutor(CommandExecutor):
         session_id = str(uuid.uuid4())
         tab_id = str(opened.get("tabId") or "")
         self._ext_sessions[session_id] = tab_id
+        self._last_session_id = session_id  # 新建即激活：后续省略 sessionId 的命令默认作用于此
         # 绑定会话所属实例：优先取「实际创建该标签页的浏览器实例」的 instanceId（由 Hub 补带），
         # 拿不到才回退浏览器名（browserType / 自动）；后续元素操作按实例精确路由。
         instance_id = str(opened.get("instanceId") or "") or ""
@@ -350,7 +368,8 @@ class PlaywrightExecutor(CommandExecutor):
         tab_id = self._ext_sessions.get(session_id, "")
         selector = str(inputs.get("selector") or "")
         timeout_s = int(inputs.get("timeoutMs", 30_000)) / 1000.0
-        resource = f"browser.session:{session_id}"
+        # 无会话命令（attach/listPages）不带会话：resource 退化到浏览器级标签页
+        resource = f"browser.session:{session_id}" if session_id else "browser.tabs"
         # 会话所属浏览器：后续每个 tab/浏览器级操作都路由到它，多浏览器并存时不串台
         host = self._ext_session_hosts.get(session_id, "")
         try:
@@ -358,9 +377,11 @@ class PlaywrightExecutor(CommandExecutor):
                 # 扩展会话的「关闭」= 解绑：用户浏览器里的标签页留给用户，不代关
                 self._ext_sessions.pop(session_id, None)
                 self._ext_session_hosts.pop(session_id, None)
+                if self._last_session_id == session_id:
+                    self._last_session_id = None
                 return self._ext_success(
                     invocation, EffectKind.SESSION, resource, {"operation": "detach"},
-                    outputs={"sessionId": session_id},
+                    outputs={},
                 )
             # 关闭（解绑）不依赖扩展在线；其余命令前先确认扩展还在轮询，
             # 否则会白等 timeoutMs（默认 30s）才报 TIMEOUT。
@@ -410,6 +431,7 @@ class PlaywrightExecutor(CommandExecutor):
                 new_tab = str(matched.get("id") or "")
                 self._ext_sessions[new_session] = new_tab
                 self._ext_session_hosts[new_session] = ""  # attach 页签所在浏览器未知，按任意路由
+                self._last_session_id = new_session  # 附着即激活
                 matched_url = str(matched.get("url") or "")
                 return self._ext_success(
                     invocation, EffectKind.SESSION, f"browser.session:{new_session}",
@@ -447,10 +469,7 @@ class PlaywrightExecutor(CommandExecutor):
                 return self._ext_success(
                     invocation, EffectKind.READ, resource + f":selector:{selector}",
                     {"operation": "getText", "infoType": info_type, "matchedCount": count},
-                    outputs={
-                        "value": "" if value is None else str(value),
-                        "sessionId": session_id,
-                    },
+                    outputs={"value": "" if value is None else str(value)},
                     value=value,
                 )
             if command == "browser.waitFor":
@@ -498,9 +517,10 @@ class PlaywrightExecutor(CommandExecutor):
                 {"operation": "check", "matchedCount": count},
                 outputs={"checked": bool(payload.get("result")), "matchedCount": count},
             )
-        effect = EffectKind.READ if command == "browser.hover" else EffectKind.UNSAFE_WRITE
+        # 指针/键盘类原语（click/input/select/hover）统一 unsafe-write：hover 会触发页面
+        # mouseover 处理器，同样不可安全重放——必须与各自 manifest 的 effect.kind 严格一致
         return self._ext_success(
-            invocation, effect, resource,
+            invocation, EffectKind.UNSAFE_WRITE, resource,
             {"operation": command.rsplit(".", 1)[-1], "matchedCount": count},
             outputs={"matchedCount": count, "sessionId": session_id},
         )
@@ -554,14 +574,14 @@ class PlaywrightExecutor(CommandExecutor):
                 return self._ext_success(
                     invocation, effect, resource + f":selector:{selector}",
                     {"operation": op, "matchedCount": count},
-                    outputs={"items": items, "count": count, "sessionId": session_id},
+                    outputs={"items": items, "count": count},
                 )
             if command == "browser.getPosition":
                 box = dict(result) if isinstance(result, dict) else {}
                 return self._ext_success(
                     invocation, effect, resource + f":selector:{selector}",
                     {"operation": op, "matchedCount": count},
-                    outputs={**box, "sessionId": session_id},
+                    outputs=box,
                 )
             if command == "browser.getScrollPosition":
                 pos = dict(result) if isinstance(result, dict) else {}
@@ -578,10 +598,15 @@ class PlaywrightExecutor(CommandExecutor):
                     {"operation": op, "matchedCount": count},
                     outputs={"options": options, "count": int(data.get("count") or len(options))},
                 )
+            # outputs 与 manifest 严格对齐：setValue/setAttribute 只声明 matchedCount；
+            # drag 与 click/input/select 同属指针类原语，manifest 额外声明回带 sessionId。
+            outputs: dict[str, Any] = {"matchedCount": count}
+            if command == "browser.drag":
+                outputs["sessionId"] = session_id
             return self._ext_success(
                 invocation, effect, resource + f":selector:{selector}",
                 {"operation": op, "matchedCount": count},
-                outputs={"matchedCount": count, "sessionId": session_id},
+                outputs=outputs,
             )
         # -- Cookie（chrome.cookies，作用域 url 由扩展按 tab 当前页推导） -------
         if command == "browser.cookieGetAll":
@@ -664,8 +689,10 @@ class PlaywrightExecutor(CommandExecutor):
                     details={"channel": "extension"},
                 )
             file_path = await asyncio.to_thread(self._write_screenshot, save_path, raw)
+            # effect 必须与 manifest 声明严格一致（orchestrator 校验 kinds 相等）：
+            # screenshot 的 effect.kind = idempotent-write（同 savePath 重放覆盖同一文件）
             return self._ext_success(
-                invocation, EffectKind.SESSION, resource,
+                invocation, EffectKind.IDEMPOTENT_WRITE, resource + ":screenshot",
                 {"operation": "screenshot", "filePath": file_path},
                 outputs={"filePath": file_path},
             )

@@ -1,4 +1,5 @@
 import asyncio
+import sys
 
 from rpa_core.executors import PythonWorkerExecutor
 from rpa_core.model.command import CommandInvocation
@@ -97,9 +98,12 @@ def test_python_worker_write_text_string_and_rejects_escape(tmp_path):
     assert result.status == "success"
     assert (workspace / "note.txt").read_text(encoding="utf-8") == "标题：新闻"
 
-    escaping = asyncio.run(run("..\\escape.txt", {"text": "x"}))
+    # 越权路径必须被拒：POSIX 用 `/`（`\` 在那只是普通文件名字符），Windows 用 `\`
+    escaping_path = "..\\escape.txt" if sys.platform == "win32" else "../escape.txt"
+    escaping = asyncio.run(run(escaping_path, {"text": "x"}))
     assert escaping.status == "error"
     assert escaping.error.code == "CAPABILITY_DENIED"
+    assert not (tmp_path / "escape.txt").exists()
 
 
 def test_python_worker_limit_truncates_and_counts(tmp_path):

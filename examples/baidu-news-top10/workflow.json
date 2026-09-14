@@ -5,7 +5,7 @@
   "inputs": {
     "query": "新闻",
     "resultSelector": "#content_left h3",
-    "workspace": "D:/Users/Administrator/Documents/代码/rpa_core/run_artifacts"
+    "workspace": "run_artifacts"
   },
   "root": {
     "type": "sequence",

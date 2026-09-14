@@ -18,6 +18,11 @@ def _run_desktop_workflow(tmp_path: Path):
     fixture = ROOT / "examples" / "windows-desktop" / "workflow.json"
     workflow = Workflow.model_validate_json(fixture.read_text(encoding="utf-8"))
 
+    # fixture 的 filePath 默认值是相对文件名（仓库不能硬编码某台机器的绝对路径），
+    # 而记事本「打开」对话框按记事本自己的工作目录解析相对路径 → 这里注入仓库内
+    # test.txt 的绝对路径，保证这个切片在任何 Windows 机器上都能跑通。
+    inputs = {"filePath": str(ROOT / "test.txt")}
+
     def _kill_notepad() -> None:
         subprocess.run(
             ["taskkill", "/F", "/IM", "notepad.exe"],
@@ -34,7 +39,7 @@ def _run_desktop_workflow(tmp_path: Path):
             registry = ExecutorRegistry({"desktop.win32": Win32DesktopExecutor()})
             try:
                 runner = Orchestrator(catalog, registry, tmp_path / "runs")
-                return await runner.run(plan)
+                return await runner.run(plan, inputs)
             finally:
                 await registry.close()
         finally:

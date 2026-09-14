@@ -4,6 +4,8 @@
 - hub 协议：无鉴权长轮询 / 命令下发回收 / 超时 / 在线心跳 / 权限（默认整浏览器 + tabs 收窄）
 - 执行器：扩展会话路由（navigate / click / getText / attach / listPages）、
   缺省通道解析（扩展在线 → 优先走扩展）、通道边界（不支持的命令显式报错）
+- 契约门禁：每条 browser.* 的运行期 outputs / effect 必须与自身 manifest 严格一致
+  （含缺省会话解析：sessionId 可省略时按「最近激活 > 唯一会话」回退）
 """
 
 import asyncio
@@ -16,7 +18,9 @@ import urllib.request
 from pathlib import Path
 
 import pytest
+from jsonschema import Draft202012Validator
 
+from rpa_core.catalog import load_catalog
 from rpa_core.devserver import DevServer
 from rpa_core.executors import PlaywrightExecutor
 from rpa_core.executors.browser_ext import ExtensionExecSession
@@ -822,3 +826,262 @@ def test_next_command_focus_prefers_focused_instance(server):
     finally:
         focused_edge.stop()
         idle_edge.stop()
+
+
+# ------------------------------------------- browser.* 输出/效应契约门禁
+
+
+# 每条 browser 命令的最小合法输入（会话统一由用例内 navigate 现开，故此处不写 sessionId；
+# screenshot 的 savePath 由用例注入 tmp_path）。
+_BROWSER_CONTRACT_CASES: dict[str, dict] = {
+    "browser.navigate": {"action": "goto", "url": "https://a.test/one"},
+    "browser.close": {},
+    "browser.attach": {"pattern": "b.test", "matchBy": "url"},
+    "browser.listPages": {},
+    "browser.executeScript": {"script": "return 1"},
+    "browser.getText": {"selector": "h1"},
+    "browser.getPosition": {"selector": "#box"},
+    "browser.getScrollPosition": {"selector": "#box"},
+    "browser.getSelectOptions": {"selector": "#sel"},
+    "browser.queryAll": {"selector": "div"},
+    "browser.waitFor": {"selector": "h1", "state": "visible"},
+    "browser.click": {"selector": "#go"},
+    "browser.input": {"selector": "#q", "text": "hi"},
+    "browser.select": {"selector": "#sel", "value": "v2"},
+    "browser.check": {"selector": "#cb"},
+    "browser.hover": {"selector": "#go"},
+    "browser.scroll": {"selector": "#box", "position": "bottom"},
+    "browser.setValue": {"selector": "#q", "value": "x"},
+    "browser.setAttribute": {"selector": "#q", "name": "data-x", "value": "y"},
+    "browser.drag": {"selector": "#a", "targetSelector": "#b"},
+    "browser.stopLoading": {},
+    "browser.waitLoad": {},
+    "browser.screenshot": {},
+    "browser.cookieGetAll": {},
+    "browser.cookieGet": {"name": "k"},
+    "browser.cookieSet": {"cookies": [{"name": "k", "value": "v", "url": "https://a.test"}]},
+    "browser.cookieRemove": {"name": "k"},
+}
+
+# 扩展单通道下明确未实现的三条（manifest 字段保留，运行期给显式 COMMAND_NOT_FOUND）
+_BROWSER_UNIMPLEMENTED = ("browser.upload", "browser.download", "browser.handleDialog")
+
+# 阶段 D DOM 原语的返回值桩（形状要与执行器的整形逻辑匹配）
+_PAGE_CALL_RESULTS: dict[str, dict] = {
+    "queryAll": {"matchedCount": 1, "result": ["<div>a</div>", "<div>b</div>"]},
+    "getPosition": {"matchedCount": 1, "result": {"x": 1, "y": 2, "width": 3, "height": 4}},
+    "getScrollPosition": {"matchedCount": 1, "result": {"scrollX": 0, "scrollY": 10}},
+    "getSelectOptions": {
+        "matchedCount": 1,
+        "result": {
+            "options": [{"index": 0, "value": "v2", "label": "two", "selected": True}],
+            "count": 1,
+        },
+    },
+    "setValue": {"matchedCount": 1, "result": True},
+    "setAttribute": {"matchedCount": 1, "result": True},
+    "drag": {"matchedCount": 1, "result": True},
+}
+
+
+def _page_call_handler(args: dict) -> dict:
+    """page.call：阶段 D 原语补返回桩；其余沿用默认桩（未列方法返回 matchedCount=0）。"""
+    return _PAGE_CALL_RESULTS.get(args["method"]) or _DEFAULT_HANDLERS["page.call"](args)
+
+
+_CONTRACT_HANDLERS = {
+    **_DEFAULT_HANDLERS,
+    "page.call": _page_call_handler,
+    "cookies.getAll": lambda args: {"cookies": [{"name": "k", "value": "v"}]},
+    "cookies.set": lambda args: {"count": 1},
+    "cookies.remove": lambda args: {"count": 1},
+    "screenshot": lambda args: {"dataUrl": "data:image/png;base64,iVBORw0KGgo="},
+    "tabs.stopLoading": lambda args: {"tabId": args["tabId"], "url": "https://a.test/one"},
+    "tabs.waitLoad": lambda args: {"tabId": args["tabId"], "url": "https://a.test/one"},
+}
+
+
+def test_browser_commands_aligned_with_manifest_contract(server, tmp_path):
+    """门禁：每条 browser.* 的运行期 outputs 与 effect 必须与自身 manifest 严格一致。
+
+    manifest 是命令契约、executor 只是实现（AGENTS 规则 2）；orchestrator 会按
+    output_schema（additionalProperties: false）与 effect.kind（严格相等）逐条校验，
+    因此这里的偏离在真实运行中要么 INVALID_OUTPUT、要么「明明成功却整轮失败」。
+
+    本门禁固化 2026-09-14 审计发现的三个平台无关缺陷的修复：
+    - outputs 多带未声明的 sessionId（getText/getPosition/queryAll/setValue/setAttribute/close）；
+    - browser.screenshot 声明 idempotent-write、执行器却抛 session（截图已落盘仍判失败）；
+    - browser.hover 的 effect.kind 与 manifest 不符。
+    """
+    catalog = load_catalog(ROOT / "commands")
+    browser_ids = {cid for cid in catalog if cid.startswith("browser.")}
+    covered = set(_BROWSER_CONTRACT_CASES) | set(_BROWSER_UNIMPLEMENTED)
+    assert browser_ids == covered, (
+        f"契约门禁漏覆盖: {sorted(browser_ids - covered)}；"
+        f"表里已失效的: {sorted(covered - browser_ids)}"
+    )
+    base = f"http://127.0.0.1:{server.port}"
+    fake = FakeExtension(base, dict(_CONTRACT_HANDLERS)).start()
+    executor = _executor(base)
+    _wait_online(base)
+    failures: list[str] = []
+
+    async def _anchor() -> str:
+        opened = await executor.execute(
+            _invocation("browser.navigate", {"action": "goto", "url": "https://a.test/anchor"}),
+            asyncio.Event(),
+        )
+        assert opened.status == "success", opened.error
+        return str(opened.outputs["sessionId"])
+
+    async def go():
+        try:
+            for command_id in sorted(_BROWSER_CONTRACT_CASES):
+                manifest = catalog[command_id]
+                # 每条命令前重开会话：close 会解绑、navigate 会新开，避免用例互相干扰
+                session_id = await _anchor()
+                case_inputs = dict(_BROWSER_CONTRACT_CASES[command_id])
+                if command_id == "browser.screenshot":
+                    case_inputs["savePath"] = str(tmp_path / "shot.png")
+                # attach/listPages 故意不带会话：同时验证「不依赖会话」的命令确实可独立使用
+                if command_id not in ("browser.attach", "browser.listPages", "browser.navigate"):
+                    case_inputs["sessionId"] = session_id
+                result = await executor.execute(
+                    _invocation(command_id, case_inputs), asyncio.Event()
+                )
+                if result.status != "success":
+                    failures.append(f"{command_id}: status={result.status} error={result.error}")
+                    continue
+                kinds = sorted({str(effect.kind) for effect in result.effects})
+                if kinds != [manifest.effect.kind]:
+                    failures.append(
+                        f"{command_id}: effect={kinds} 与 manifest={manifest.effect.kind} 不符"
+                    )
+                errors = sorted(
+                    Draft202012Validator(manifest.output_schema).iter_errors(result.outputs),
+                    key=lambda item: list(item.path),
+                )
+                if errors:
+                    failures.append(
+                        f"{command_id}: outputs={sorted(result.outputs)} 违反 output_schema → "
+                        f"{errors[0].message} @ {list(errors[0].path)}"
+                    )
+            session_id = await _anchor()
+            for command_id in _BROWSER_UNIMPLEMENTED:
+                extra = {"selector": "#f", "files": ["a"]} if command_id == "browser.upload" else {}
+                result = await executor.execute(
+                    _invocation(command_id, {"sessionId": session_id, **extra}), asyncio.Event()
+                )
+                if result.status != "error" or result.error is None or (
+                    result.error.code != "COMMAND_NOT_FOUND"
+                ):
+                    failures.append(
+                        f"{command_id}: 期望 COMMAND_NOT_FOUND，实际 {result.status}/{result.error}"
+                    )
+        finally:
+            await executor.close()
+
+    try:
+        asyncio.run(go())
+    finally:
+        fake.stop()
+    assert not failures, "\n".join(failures)
+
+
+def test_browser_session_defaults_to_last_active(server):
+    """缺省会话：sessionId 可省略，按「最近激活 > 唯一会话」回退（与 desktop 执行器同口径）。
+
+    回归背景：移除 bsk 通道时连带删掉了 browser.py 的会话解析，扩展路径从此没有缺省回退，
+    只认显式 sessionId——「打开网页后直接点击控件」这类最普通的流程会报「缺少有效会话」。
+    """
+    base = f"http://127.0.0.1:{server.port}"
+    fake = FakeExtension(base, dict(_CONTRACT_HANDLERS)).start()
+    executor = _executor(base)
+    _wait_online(base)
+
+    async def go():
+        try:
+            opened = await executor.execute(
+                _invocation("browser.navigate", {"action": "goto", "url": "https://a.test/one"}),
+                asyncio.Event(),
+            )
+            assert opened.status == "success", opened.error
+            session_id = opened.outputs["sessionId"]
+
+            # 省略 sessionId → 落在最近激活会话上
+            text = await executor.execute(
+                _invocation("browser.getText", {"selector": "h1"}), asyncio.Event()
+            )
+            assert text.status == "success", text.error
+            assert text.outputs == {"value": "页面标题"}
+
+            # 显式指定其它会话时不被默认值覆盖：未知 sessionId 仍然显式失败
+            unknown = await executor.execute(
+                _invocation("browser.getText", {"sessionId": "not-a-session", "selector": "h1"}),
+                asyncio.Event(),
+            )
+            assert unknown.status == "error"
+            assert unknown.error.code == "EXECUTOR_FAILED"
+
+            # close 解绑最近激活会话后，省略 sessionId 不再命中
+            closed = await executor.execute(
+                _invocation("browser.close", {}), asyncio.Event()
+            )
+            assert closed.status == "success", closed.error
+            assert closed.outputs == {}
+            detached = await executor.execute(
+                _invocation("browser.getText", {"selector": "h1"}), asyncio.Event()
+            )
+            assert detached.status == "error"
+            assert detached.error.code == "EXECUTOR_FAILED"
+            assert session_id not in executor._ext_sessions
+        finally:
+            await executor.close()
+
+    try:
+        asyncio.run(go())
+    finally:
+        fake.stop()
+
+
+def test_browser_attach_and_list_pages_need_no_session(server):
+    """attach/listPages 不依赖已有会话：没有会话也能列举标签页、附着已有页面。
+
+    这两条命令本身不发会话上的命令（attach 建会话、listPages 只列举），
+    此前被会话门拦下，导致「附着到用户已开的页面」必须先随便开一个网页。
+    """
+    base = f"http://127.0.0.1:{server.port}"
+    fake = FakeExtension(base, dict(_CONTRACT_HANDLERS)).start()
+    executor = _executor(base)
+    _wait_online(base)
+
+    async def go():
+        try:
+            listed = await executor.execute(_invocation("browser.listPages", {}), asyncio.Event())
+            assert listed.status == "success", listed.error
+            assert listed.outputs["count"] == 2
+            assert [page["url"] for page in listed.outputs["pages"]] == [
+                "https://a.test/one", "https://b.test/two",
+            ]
+
+            attached = await executor.execute(
+                _invocation("browser.attach", {"pattern": "b.test", "matchBy": "url"}),
+                asyncio.Event(),
+            )
+            assert attached.status == "success", attached.error
+            assert attached.outputs["url"] == "https://b.test/two"
+            session_id = attached.outputs["sessionId"]
+
+            # attach 即激活：后续命令省略 sessionId 直接作用在附着页上
+            text = await executor.execute(
+                _invocation("browser.getText", {"selector": "h1"}), asyncio.Event()
+            )
+            assert text.status == "success", text.error
+            assert session_id in executor._ext_sessions
+        finally:
+            await executor.close()
+
+    try:
+        asyncio.run(go())
+    finally:
+        fake.stop()

@@ -36,7 +36,7 @@ def test_browser_command_without_session_fails_explicitly():
 
 
 def test_browser_session_commands_fail_explicitly_without_session():
-    """新增浏览器命令（cookie/导航/多标签/DOM 原语组）在会话缺失时必须显式报错，不回退。"""
+    """会话类命令在会话缺失时必须显式报错，不回退（attach/listPages 例外，见下一条）。"""
     commands = [
         ("browser.waitLoad", {}),
         ("browser.scroll", {"position": "bottom"}),
@@ -45,7 +45,6 @@ def test_browser_session_commands_fail_explicitly_without_session():
         ("browser.cookieGetAll", {}),
         ("browser.cookieGet", {"name": "k"}),
         ("browser.cookieRemove", {}),
-        ("browser.listPages", {}),
         ("browser.drag", {"selector": "#a", "targetSelector": "#b"}),
         # 纯 DOM 原语命令（对标影刀）：会话缺失必须显式报错
         ("browser.stopLoading", {}),
@@ -55,7 +54,6 @@ def test_browser_session_commands_fail_explicitly_without_session():
         ("browser.getSelectOptions", {"selector": "#sel"}),
         ("browser.getScrollPosition", {}),
         ("browser.queryAll", {"selector": "div"}),
-        ("browser.attach", {"pattern": "x"}),
     ]
     for command_id, extra in commands:
         result = _run(command_id, {"sessionId": "missing", **extra})
@@ -64,6 +62,25 @@ def test_browser_session_commands_fail_explicitly_without_session():
         assert result.error.code == "EXECUTOR_FAILED", (
             f"{command_id} unexpected error: {result.error.code}"
         )
+
+
+def test_browser_attach_and_list_pages_do_not_require_a_session():
+    """attach/listPages 不依赖会话：不该被「无效 sessionId」当会话类命令拦下。
+
+    attach 自己新建会话、listPages 只列举全部标签页；显式传一个无效 sessionId 时，
+    它们仍应发出真正的扩展命令（而不是报「缺少有效会话」）。因此只断言「不是会话缺失
+    报错」——扩展是否在线、标签页是否匹配由各自的环境决定。
+    """
+    for command_id, extra in (
+        ("browser.attach", {"pattern": "no-such-tab-probe"}),
+        ("browser.listPages", {}),
+    ):
+        result = _run(command_id, {"sessionId": "missing", **extra})
+        if result.status == "error":
+            assert result.error is not None
+            assert "缺少有效会话" not in result.error.message, (
+                f"{command_id} 不该被判为缺少会话：{result.error.message}"
+            )
 
 
 def test_browser_navigate_reload_requires_session():
