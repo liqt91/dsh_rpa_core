@@ -1,3 +1,5 @@
+import csv
+import io
 import json
 import os
 import re
@@ -124,3 +126,79 @@ class WorkflowDirStore(WorkflowStore):
 
     def _resolve(self, name: str) -> Path:
         return self.directory(name) / "workflow.json"
+
+
+class TableStore:
+    """流程数据表格存储：<root>/<name>/data/table.json（单表，流程附属资产）。
+
+    表文件与运行时 data.table.* 命令共用同一契约（workers/data_table.py），
+    编辑器在此读写 schema 与行数据。
+    """
+
+    def __init__(self, workflow_store: WorkflowDirStore):
+        self._workflows = workflow_store
+
+    def _path(self, flow: str) -> Path:
+        return self._workflows.directory(flow) / "data" / "table.json"
+
+    def _table_root(self, flow: str) -> Path:
+        return self._workflows.directory(flow) / "data"
+
+    def read(self, flow: str) -> dict:
+        """读取表对象；表文件不存在返回缺省空表结构。"""
+        path = self._path(flow)
+        if not path.is_file():
+            return {"schema_version": 1, "columns": [], "rows": [], "updated_at": ""}
+        try:
+            document = json.loads(path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+            raise WorkflowStoreError(f"flow table is not valid JSON: {flow}") from exc
+        if not isinstance(document, dict):
+            raise WorkflowStoreError(f"flow table must be a JSON object: {flow}")
+        return document
+
+    def write(self, flow: str, document: dict) -> int:
+        """整表原子写（列 schema + 行数据），复用 WorkflowStore._write_atomic。"""
+        if not isinstance(document, dict):
+            raise WorkflowStoreError("flow table document must be a JSON object")
+        self._table_root(flow).mkdir(parents=True, exist_ok=True)
+        return self._workflows._write_atomic(self._path(flow), document)
+
+    def clear(self, flow: str) -> dict:
+        """清空行数据保留列 schema，返回清除后的表对象。"""
+        document = self.read(flow)
+        document["rows"] = []
+        self.write(flow, document)
+        return document
+
+    def to_csv_bytes(self, flow: str) -> bytes:
+        """按列顺序导出 CSV（utf-8-sig 带 BOM）。
+
+        运行时序列化在 workers/data_table.py 独立实现；此处为编辑器导出在
+        devserver 侧自含实现（devserver 隔离禁列表禁止 import workers）。
+        """
+        return table_to_csv(self.read(flow))
+
+
+def table_to_csv(document: dict) -> bytes:
+    """把表对象序列化为 CSV 字节（utf-8-sig）。列顺序按 columns，行按列 key。"""
+    columns = document.get("columns") or []
+    rows = document.get("rows") or []
+    keys = [str(col.get("key", col.get("label", ""))) for col in columns]
+    buffer = io.StringIO()
+    writer = csv.writer(buffer, lineterminator="\n")
+    if keys:
+        writer.writerow(
+            [str(col.get("label", key)) for key, col in zip(keys, columns, strict=True)]
+        )
+    for row in rows:
+        writer.writerow([_table_csv_cell(row.get(key)) for key in keys])
+    return buffer.getvalue().encode("utf-8-sig")
+
+
+def _table_csv_cell(value) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, (dict, list)):
+        return json.dumps(value, ensure_ascii=False)
+    return str(value)

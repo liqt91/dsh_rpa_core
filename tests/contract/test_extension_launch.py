@@ -132,7 +132,7 @@ def test_launch_browser_missing_exe_raises(monkeypatch):
     monkeypatch.setattr("shutil.which", lambda _name: None)
     from rpa_core.extension_launch import launch_browser
 
-    monkeypatch.setattr("rpa_core.extension_launch._WIN_PATHS", {})
+    monkeypatch.setattr("rpa_core.extension_launch._WIN_INSTALL_PATHS", {})
 
     with pytest.raises(BrowserLaunchError):
         launch_browser("msedge", "https://a.test/x")

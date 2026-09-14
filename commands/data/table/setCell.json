@@ -1,0 +1,37 @@
+{
+  "id": "data.table.setCell",
+  "version": "1.0.0",
+  "executor": "python.worker",
+  "kind": "action",
+  "risk": "workflow-edit",
+  "capabilities": [],
+  "resources": [],
+  "stability": "stable",
+  "effect": {"kind": "idempotent-write", "replay": "idempotent", "idempotency": "derived"},
+  "input_schema": {
+    "type": "object",
+    "required": ["row", "column", "value"],
+    "properties": {
+      "flowDir": {"type": "string", "x-hidden": true, "description": "流程目录（运行时自动注入）。"},
+      "table": {"type": "string", "default": "default", "description": "数据表格名称（当前固定为 default）。"},
+      "row": {"type": "integer", "minimum": 1, "x-fx": true, "description": "目标行号（从 1 开始）。"},
+      "column": {"type": "string", "x-fx": true, "description": "目标列名（表格列 label，如「姓名」）。"},
+      "value": {"type": ["string", "number", "integer", "boolean", "object", "array", "null"], "x-fx": true, "x-python": true, "description": "要写入单元格的值。缺失的行会先补齐。"}
+    },
+    "additionalProperties": false
+  },
+  "output_schema": {
+    "type": "object",
+    "required": ["cellCount"],
+    "properties": {"cellCount": {"type": "integer"}},
+    "additionalProperties": false
+  },
+  "x-outputs": {
+    "cellCount": {"label": "本次写入单元格数"}
+  },
+  "x-runtime": {"inject": ["flowDir"]},
+  "errors": ["INVALID_INPUT", "TIMEOUT", "CANCELLED"],
+  "implementation": {"handler": "python.worker:table_set_cell"},
+  "default_timeout_seconds": 15,
+  "retryable": true
+}

@@ -361,3 +361,126 @@ def test_setvar_command_exposes_var_write_declaration(server):
     assert entry["x-var-write"] == {"field": "varName"}
     # 变量写入的输出别名不应暴露给用户（hidden），避免与「变量名」字段语义重复
     assert entry["x-outputs"]["varName"].get("hidden") is True
+
+
+def test_env_status_aggregate_endpoint(server):
+    """GET /api/env/status 聚合：双浏览器六字段 + 引擎版本 + 安装途径。"""
+    base = f"http://127.0.0.1:{server.port}"
+    status, payload = _request("GET", "/api/env/status", base=base)
+    assert status == 200
+    assert isinstance(payload["version"], str)
+    assert set(payload["browsers"]) == {"chrome", "edge"}
+    for info in payload["browsers"].values():
+        for key in ("binary", "running", "installed", "enabled", "uninstallBlocked", "online"):
+            assert key in info
+        # online 必为 bool（devserver 进程内 hub 一定能给到心跳值）
+        assert isinstance(info["online"], bool)
+
+
+def test_extension_status_includes_running_key(server):
+    """/api/extension/status 现在透出 running，且安装途径由实测推导（非写死）。"""
+    base = f"http://127.0.0.1:{server.port}"
+    status, payload = _request("GET", "/api/extension/status", base=base)
+    assert status == 200
+    for info in payload["browsers"].values():
+        assert "running" in info
+    assert payload["installMode"] in (
+        "load-unpacked", "packed-external-registry", "not-installed",
+    )
+
+
+def test_diagnostics_page_served(server):
+    """环境诊断页可从 static 发放并引用聚合端点。"""
+    base = f"http://127.0.0.1:{server.port}"
+    request = urllib.request.Request(f"{base}/static/diagnostics.html")
+    with urllib.request.urlopen(request) as response:
+        assert response.status == 200
+        assert "/api/env/status" in response.read().decode("utf-8")
+
+
+def _seed_workflow(server):
+    """建一个最小流程用于表格路由测试。"""
+    base = f"http://127.0.0.1:{server.port}"
+    status, _ = _request(
+        "PUT",
+        "/api/workflows/tbl",
+        payload={"workflow": VALID_WORKFLOW},
+        base=base,
+    )
+    assert status == 200
+
+
+def test_table_missing_returns_empty_default(server):
+    """未建的流程表按空表默认结构返回。"""
+    base = f"http://127.0.0.1:{server.port}"
+    _request("PUT", "/api/workflows/tbl", payload={"workflow": VALID_WORKFLOW}, base=base)
+    status, payload = _request("GET", "/api/workflows/tbl/table", base=base)
+    assert status == 200
+    table = payload["table"]
+    assert table["schema_version"] == 1
+    assert table["columns"] == [] and table["rows"] == []
+
+
+def test_table_put_get_roundtrip(server):
+    """整表 PUT 后 GET 往返一致。"""
+    base = f"http://127.0.0.1:{server.port}"
+    _seed_workflow(server)
+    doc = {
+        "schema_version": 1,
+        "columns": [{"key": "name", "label": "姓名", "type": "text"}],
+        "rows": [{"name": "张三"}, {"name": "李四"}],
+        "updated_at": "",
+    }
+    status, _ = _request("PUT", "/api/workflows/tbl/table", payload={"table": doc}, base=base)
+    assert status == 200
+    status, payload = _request("GET", "/api/workflows/tbl/table", base=base)
+    assert status == 200
+    assert payload["table"]["rows"] == [{"name": "张三"}, {"name": "李四"}]
+    assert payload["table"]["columns"][0]["label"] == "姓名"
+
+
+def test_table_clear_keeps_columns(server):
+    """clear 清空 rows 但保留 columns。"""
+    base = f"http://127.0.0.1:{server.port}"
+    _seed_workflow(server)
+    doc = {
+        "schema_version": 1,
+        "columns": [{"key": "a", "label": "甲", "type": "text"}],
+        "rows": [{"a": "x"}],
+        "updated_at": "",
+    }
+    _request("PUT", "/api/workflows/tbl/table", payload={"table": doc}, base=base)
+    status, payload = _request("POST", "/api/workflows/tbl/table/clear", base=base)
+    assert status == 200
+    assert payload["table"]["rows"] == []
+    assert payload["table"]["columns"][0]["label"] == "甲"
+
+
+def test_table_export_csv_roundtrip(server):
+    """导出 CSV 带 BOM 与列头，且含 Content-Disposition 下载头。"""
+    base = f"http://127.0.0.1:{server.port}"
+    _seed_workflow(server)
+    doc = {
+        "schema_version": 1,
+        "columns": [{"key": "name", "label": "姓名", "type": "text"}],
+        "rows": [{"name": "张三"}],
+        "updated_at": "",
+    }
+    _request("PUT", "/api/workflows/tbl/table", payload={"table": doc}, base=base)
+    request = urllib.request.Request(f"{base}/api/workflows/tbl/table/export.csv")
+    with urllib.request.urlopen(request) as response:
+        assert response.status == 200
+        assert "text/csv" in response.headers["Content-Type"]
+        assert response.headers["Content-Disposition"].startswith("attachment")
+        body = response.read()
+    assert body.startswith(b"\xef\xbb\xbf")  # utf-8-sig BOM
+    assert "姓名" in body.decode("utf-8-sig")
+    assert "张三" in body.decode("utf-8-sig")
+
+
+def test_table_put_rejects_non_object(server):
+    """PUT 请求体缺少 'table' 返回 400。"""
+    base = f"http://127.0.0.1:{server.port}"
+    _seed_workflow(server)
+    status, _ = _request("PUT", "/api/workflows/tbl/table", payload={"foo": 1}, base=base)
+    assert status == 400

@@ -17,6 +17,19 @@
         "pattern": "^[A-Za-z_]\\w*$",
         "description": "目标变量名：可直接写新变量（定义），也可写已存在的变量名（重赋值，覆盖旧值）"
       },
+      "varType": {
+        "type": "string",
+        "enum": ["string", "number", "boolean", "object", "array"],
+        "default": "string",
+        "x-enum-labels": {
+          "string": "字符串",
+          "number": "数字",
+          "boolean": "布尔",
+          "object": "对象",
+          "array": "数组"
+        },
+        "description": "变量类型：变量值会被格式化为对应类型并给默认值（对标影刀「设置变量」）"
+      },
       "value": {
         "type": ["string", "number", "integer", "boolean", "object", "array", "null"],
         "x-fx": true,

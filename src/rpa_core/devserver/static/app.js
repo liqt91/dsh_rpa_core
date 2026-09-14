@@ -11,7 +11,8 @@ const state = {
   clipboard: null,
   dirty: false,
   elementsSeen: null, // 最近一次渲染的元素名集合（捕获自动刷新差集用）
-  collapsedGroups: new Set(), // 指令面板已收起的分组名（默认全展开，点击收起）
+  collapsedGroups: new Set(), // 指令面板已收起的分组名（首次渲染默认全收起，单击分组展开；展开/收起状态记忆）
+  paletteCollapseApplied: false, // 首次渲染时把语义分组全预置为收起（默认折叠，指令多便于查找）
   extChannel: null, // 最近一次 /api/ext/status 结果 {online, host}
   extHosts: [], // 在线扩展宿主浏览器名列表（用于 browserType 下拉置灰）
   paramGroupsOpen: new Map(), // 属性面板参数分组的展开状态（key: `${nodeId}|${分组名}`；未记录时按分组缺省/是否已填值判定）
@@ -619,7 +620,14 @@ const SEMANTIC_GROUPS = [
   },
   {
     label: "数据处理", icon: "data", color: "green",
-    member: (id) => ["data.writeJson", "data.writeText", "data.format", "data.limit"].includes(id),
+    member: (id) => ["data.writeJson", "data.writeText", "data.format", "data.limit",
+                    "data.setVar", "data.readText", "data.appendText",
+                    "data.fileExists", "data.deletePath", "data.datetimeNow"].includes(id)
+                || id.startsWith("data.table."),
+  },
+  {
+    label: "流程控制", icon: "branch", color: "teal",
+    member: (id) => id.startsWith("workflow."),
   },
   {
     label: "桌面会话", icon: "window", color: "purple",
@@ -770,6 +778,12 @@ function renderPalette() {
   const filter = $("palette-filter").value.trim().toLowerCase();
   const list = $("palette-list");
   list.textContent = "";
+  // 首次渲染：把语义类别与「控制流」预置为收起，实现默认折叠（搜索时下方 forceExpand 强制展开不受影响）
+  if (!state.paletteCollapseApplied) {
+    state.paletteCollapseApplied = true;
+    for (const g of SEMANTIC_GROUPS) state.collapsedGroups.add(g.label);
+    state.collapsedGroups.add("控制流");
+  }
   const forceExpand = !!filter; // 搜索时强制所有分组展开（参考隔壁）
   const flowItems = FLOW_ITEMS.map((f) => flowPaletteItem(f, filter)).filter(Boolean);
   paletteGroup("控制流", flowItems, list, "branch", null, forceExpand);
@@ -796,7 +810,11 @@ function renderPalette() {
     const item = commandPaletteItem(manifest, filter);
     if (item) groups.get(prefix).push(item);
   }
-  for (const [prefix, items] of groups) paletteGroup(prefix, items, list, GROUP_ICONS[prefix], null, forceExpand);
+  for (const [prefix, items] of groups) {
+    // 兜底前缀分组同样默认收起（与语义分组一致；幂等 add，用户点开后 Set 移除该 key 生效记忆）
+    state.collapsedGroups.add(prefix);
+    paletteGroup(prefix, items, list, GROUP_ICONS[prefix], null, forceExpand);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1675,35 +1693,13 @@ function schemaField(node, key, propSchema, required) {
     }
     field = textField(label, value === undefined ? "" : String(value), (v) => setWith(node, key, v), required, key, fxOpts.supportFx || fxOpts.supportPython ? fxOpts : undefined);
   }
-  if (key === "varName" && node.command === "data.setVar") {
-    // 变量写入目标：可选已有变量（重赋值）或新建变量名。
-    // 与 output_aliases 解耦——这里就是「赋值给哪个变量」的语义。
-    const pickWrap = document.createElement("div");
-    pickWrap.className = "var-target-row";
-    const sel = document.createElement("select");
-    sel.className = "var-target-pick";
-    const existing = collectUserVariables();
-    sel.innerHTML = '<option value="">— 选择已有变量（或直接输入新名） —</option>';
-    for (const v of existing) {
-      const opt = document.createElement("option");
-      opt.value = v.name;
-      opt.textContent = `${v.name}（${v.source}）`;
-      sel.appendChild(opt);
-    }
-    sel.addEventListener("change", () => {
-      if (!sel.value) return;
-      setWith(node, key, sel.value);
-      const inputEl = field.querySelector('input[data-field]');
-      if (inputEl) inputEl.value = sel.value;
-      markDirty();
-      showCompileMessage(`变量「${sel.value}」将被重赋值（覆盖旧值）`, true);
-    });
-    pickWrap.appendChild(sel);
-    const hint = document.createElement("span");
-    hint.className = "field-hint";
-    hint.textContent = "填新名=定义变量，选已有=覆盖赋值";
-    pickWrap.appendChild(hint);
-    field.appendChild(pickWrap);
+  if (key === "varType" && node.command === "data.setVar") {
+    // 变量类型（对标影刀）：选特定类型时运行期格式化 value；缺省为「字符串」，不渲染「（未设置）」
+    field = selectField(
+      label, propSchema, required,
+      value === undefined ? "string" : value,
+      (v) => setWith(node, key, v), key, true
+    );
   }
   if (key === "sessionId") {
     // 会话引用字段：绑定创建会话的节点输出即可，无需手填。
@@ -2265,12 +2261,15 @@ function checkboxField(labelText, required, value, onChange, rawKey) {
   return wrapField(labelText, required, input, undefined, rawKey);
 }
 
-function selectField(labelText, propSchema, required, value, onChange, rawKey) {
+function selectField(labelText, propSchema, required, value, onChange, rawKey, noEmpty) {
   const input = document.createElement("select");
-  const empty = document.createElement("option");
-  empty.value = "";
-  empty.textContent = "（未设置）";
-  input.appendChild(empty);
+  // noEmpty=true（如 data.setVar.varType）不渲染「（未设置）」占位；缺省仍带占位
+  if (!noEmpty) {
+    const empty = document.createElement("option");
+    empty.value = "";
+    empty.textContent = "（未设置）";
+    input.appendChild(empty);
+  }
   for (const option of propSchema.enum) {
     const element = document.createElement("option");
     element.value = String(option);
@@ -2914,6 +2913,218 @@ function collectRunInputs() {
   });
 }
 
+// ---------------------------------------------------------------------------
+// 数据表格面板：每流程一张表（<flow>/data/table.json），跨运行累积；编辑后整表 PUT。
+// ---------------------------------------------------------------------------
+let tableDocument = { schema_version: 1, columns: [], rows: [], updated_at: "" };
+
+function tableBasePath(flow) {
+  return `/api/workflows/${encodeURIComponent(flow)}/table`;
+}
+
+// 底部面板 tab 切换：元素库 / 数据表格
+function setBottomTab(name) {
+  document.querySelectorAll("#bottom-tabs .bottom-tab").forEach((tab) => {
+    tab.classList.toggle("active", tab.dataset.panel === name);
+  });
+  $("elements-panel").classList.toggle("hidden", name !== "elements");
+  $("table-panel").classList.toggle("hidden", name !== "table");
+}
+
+async function refreshTablePanel(flow) {
+  const data = await api("GET", tableBasePath(flow));
+  tableDocument = data.table;
+  renderTableGrid();
+}
+
+function tableKeyFor(column, index) {
+  return column && column.key ? String(column.key) : `col${index + 1}`;
+}
+
+function renderTableGrid() {
+  const columns = tableDocument.columns || [];
+  const rows = tableDocument.rows || [];
+  const thead = $("table-thead");
+  const tbody = $("table-tbody");
+  thead.textContent = "";
+  tbody.textContent = "";
+
+  // 列头：label 可编辑 + type 下拉 + 删除列
+  const headRow = document.createElement("tr");
+  const corner = document.createElement("th");
+  corner.className = "table-corner";
+  corner.textContent = "行号";
+  headRow.appendChild(corner);
+  columns.forEach((column, ci) => {
+    const cell = document.createElement("th");
+    cell.className = "table-col-head";
+    const label = document.createElement("input");
+    label.className = "table-col-label";
+    label.value = column.label || tableKeyFor(column, ci);
+    label.placeholder = "列名";
+    label.dataset.ci = ci;
+    cell.appendChild(label);
+    const type = document.createElement("select");
+    type.className = "table-col-type";
+    for (const t of ["text", "number", "boolean"]) {
+      const opt = document.createElement("option");
+      opt.value = t;
+      opt.textContent = t;
+      if (column.type === t) opt.selected = true;
+      type.appendChild(opt);
+    }
+    type.dataset.ci = ci;
+    cell.appendChild(type);
+    const del = document.createElement("button");
+    del.className = "table-col-del";
+    del.textContent = "✕";
+    del.title = "删除该列";
+    del.dataset.ci = ci;
+    cell.appendChild(del);
+    headRow.appendChild(cell);
+  });
+  thead.appendChild(headRow);
+
+  // 数据行：每格可内联编辑；末尾删除行按钮
+  rows.forEach((row, ri) => {
+    const tr = document.createElement("tr");
+    const num = document.createElement("td");
+    num.className = "table-row-num";
+    num.textContent = String(ri + 1);
+    const delRow = document.createElement("button");
+    delRow.className = "table-row-del";
+    delRow.textContent = "✕";
+    delRow.title = `删除第 ${ri + 1} 行`;
+    delRow.dataset.ri = ri;
+    num.appendChild(delRow);
+    tr.appendChild(num);
+    columns.forEach((column, ci) => {
+      const key = tableKeyFor(column, ci);
+      const td = document.createElement("td");
+      const input = document.createElement("input");
+      input.className = "table-cell";
+      const val = row[key];
+      input.value = val === undefined || val === null ? "" : String(val);
+      if (column.type === "number") input.type = "number";
+      else if (column.type === "boolean") input.type = "checkbox";
+      input.dataset.ri = ri;
+      input.dataset.ci = ci;
+      if (column.type === "boolean") input.checked = !!val;
+      td.appendChild(input);
+      tr.appendChild(td);
+    });
+    tbody.appendChild(tr);
+  });
+}
+
+// 收集当前网格输入为整表 document（列增删/重命名即时生效）
+function collectTableFromGrid() {
+  const columns = tableDocument.columns || [];
+  const rows = [];
+  const inputs = Array.from(document.querySelectorAll("#table-tbody .table-cell"));
+  const byId = new Map();
+  for (const input of inputs) {
+    const key = `${input.dataset.ri}|${input.dataset.ci}`;
+    byId.set(key, input);
+  }
+  const rowCount = tableDocument.rows.length;
+  for (let ri = 0; ri < rowCount; ri++) {
+    const row = {};
+    columns.forEach((column, ci) => {
+      if (!column.key) column.key = `col${ci + 1}`;
+      const input = byId.get(`${ri}|${ci}`);
+      const key = String(column.key);
+      if (input) {
+        if (input.type === "checkbox") row[key] = input.checked;
+        else {
+          const text = input.value;
+          row[key] = column.type === "number" && text !== ""
+            ? Number(text) : text;
+        }
+      }
+    });
+    rows.push(row);
+  }
+  return {
+    schema_version: 1,
+    columns: columns.map((c, i) => ({
+      key: c.key || `col${i + 1}`,
+      label: c.label || `列${i + 1}`,
+      type: c.type || "text",
+    })),
+    rows,
+    updated_at: tableDocument.updated_at || "",
+  };
+}
+
+function addTableColumn() {
+  tableDocument.columns.push({ key: `col${tableDocument.columns.length + 1}`, label: "", type: "text" });
+  renderTableGrid();
+}
+
+function addTableRow() {
+  tableDocument.rows.push({});
+  renderTableGrid();
+}
+
+async function clearTableGrid() {
+  if (!confirm("清空所有数据行？（保留列结构）")) return;
+  const flow = currentFlow();
+  if (!flow) return;
+  const data = await api("POST", `${tableBasePath(flow)}/clear`);
+  tableDocument = data.table;
+  renderTableGrid();
+  showCompileMessage("已清空数据表格（保留列）", true);
+}
+
+async function exportTableCsv() {
+  const flow = currentFlow();
+  if (!flow) return;
+  window.location.href = `${tableBasePath(flow)}/export.csv`;
+}
+
+async function saveTableDialog() {
+  const flow = currentFlow();
+  if (!flow) return;
+  const doc = collectTableFromGrid();
+  await api("PUT", tableBasePath(flow), { table: doc });
+  tableDocument = doc;
+  showCompileMessage("数据表格已保存", true);
+}
+
+function tableGridDelegate(e) {
+  // 列头编辑：改 label/type
+  if (e.target.classList.contains("table-col-label")) {
+    const ci = Number(e.target.dataset.ci);
+    if (tableDocument.columns[ci]) tableDocument.columns[ci].label = e.target.value;
+  }
+  if (e.target.classList.contains("table-col-type")) {
+    const ci = Number(e.target.dataset.ci);
+    if (tableDocument.columns[ci]) tableDocument.columns[ci].type = e.target.value;
+  }
+  if (e.target.classList.contains("table-col-del")) {
+    const ci = Number(e.target.dataset.ci);
+    tableDocument.columns.splice(ci, 1);
+    tableDocument.rows.forEach((row) => { delete row[`col${ci + 1}`]; });
+    renderTableGrid();
+  }
+  if (e.target.classList.contains("table-row-del")) {
+    const ri = Number(e.target.dataset.ri);
+    tableDocument.rows.splice(ri, 1);
+    renderTableGrid();
+  }
+  if (e.target.classList.contains("table-cell")) {
+    const ri = Number(e.target.dataset.ri);
+    const ci = Number(e.target.dataset.ci);
+    const column = tableDocument.columns[ci];
+    if (!column || !column.key) return;
+    const input = e.target;
+    if (input.type === "checkbox") tableDocument.rows[ri][column.key] = input.checked;
+    else tableDocument.rows[ri][column.key] =
+      column.type === "number" && input.value !== "" ? Number(input.value) : input.value;
+  }
+}
+
 async function runWorkflow() {
   const flow = currentFlow();
   if (!flow) {
@@ -3062,54 +3273,94 @@ const EXTENSION_NAMES = { chrome: "Chrome", edge: "Edge" };
 
 async function loadExtensionStatus() {
   const data = await api("GET", "/api/extension/status");
+  // 插件「在线」心跳与「安装/启用」态解耦：在线名单来自 hub（长轮询心跳），
+  // 分开判断才能讲清「浏览器装了没开 / 开了但插件没上线」两类独立故障。
+  const online = new Set();
+  try {
+    const ext = await api("GET", "/api/ext/status");
+    for (const inst of ext.instances || []) {
+      if (inst.browser) online.add(String(inst.browser));
+    }
+  } catch { /* 心跳接口不可用不影响安装状态展示 */ }
   $("extension-dir-path").value = data.extensionDir || "";
   renderBrowserButtons("extension-open-browsers", data);
-  renderStatusRows("extension-browsers", data);
+  renderStatusRows("extension-browsers", data, online);
 }
 
-// 第 2 步：每浏览器一个「打开浏览器」按钮
+// hub 用 msedge，引导面板用 edge —— 在线名单比对时纠偏
+const HUB_BROWSER = { chrome: "chrome", edge: "msedge" };
+
+// 第 2 步：每浏览器一个「打开浏览器」按钮；浏览器未安装则禁用并提示
 function renderBrowserButtons(containerId, data) {
-  const box = $(containerId);
-  box.textContent = "";
-  for (const browser of ["chrome", "edge"]) {
-    const row = document.createElement("div");
-    row.className = "ext-row";
-    const btn = document.createElement("button");
-    btn.className = "ext-open-browser";
-    btn.dataset.browser = browser;
-    btn.textContent = `打开 ${EXTENSION_NAMES[browser]}`;
-    btn.addEventListener("click", async (e) => {
-      const el = e.currentTarget;
-      el.disabled = true;
-      try {
-        await api("POST", "/api/extension/open-browser", { browser });
-        showExtensionResult(`已打开 ${EXTENSION_NAMES[browser]}。下一步：按第 3 步输入扩展页地址。`, true);
-      } catch (err) {
-        showExtensionResult(`操作失败：${err.message || err}`, false);
-      } finally {
-        el.disabled = false;
-      }
-    });
-    row.innerHTML = `<span class="ext-name">${EXTENSION_NAMES[browser]}</span>`;
-    row.appendChild(btn);
-    box.appendChild(row);
-  }
-}
-
-// 第 3 步：扩展页不能从外部打开，只展示加载状态（打开方式见 HTML 文字）
-function renderStatusRows(containerId, data) {
   const box = $(containerId);
   box.textContent = "";
   for (const browser of ["chrome", "edge"]) {
     const info = data.browsers?.[browser] || {};
     const row = document.createElement("div");
     row.className = "ext-row";
+    const btn = document.createElement("button");
+    btn.className = "ext-open-browser";
+    btn.dataset.browser = browser;
+    btn.textContent = `打开 ${EXTENSION_NAMES[browser]}`;
+    btn.title = "未检测到该浏览器已安装，无法打开";
+    btn.disabled = !info.binary;
+    if (info.binary) {
+      btn.addEventListener("click", async (e) => {
+        const el = e.currentTarget;
+        el.disabled = true;
+        try {
+          await api("POST", "/api/extension/open-browser", { browser });
+          showExtensionResult(`已打开 ${EXTENSION_NAMES[browser]}。下一步：按第 3 步输入扩展页地址。`, true);
+        } catch (err) {
+          showExtensionResult(`操作失败：${err.message || err}`, false);
+        } finally {
+          el.disabled = false;
+        }
+      });
+    }
+    row.innerHTML = `<span class="ext-name">${EXTENSION_NAMES[browser]}</span>`;
+    row.appendChild(binaryBadge(info));
+    row.appendChild(btn);
+    box.appendChild(row);
+  }
+}
+
+// 第 3 步：扩展页不能从外部打开，只展示状态。三维度并列：已安装 / 已启用 / 在线
+function renderStatusRows(containerId, data, online = new Set()) {
+  const box = $(containerId);
+  box.textContent = "";
+  for (const browser of ["chrome", "edge"]) {
+    const info = data.browsers?.[browser] || {};
+    const hubName = HUB_BROWSER[browser] || browser;
+    const row = document.createElement("div");
+    row.className = "ext-row";
     row.innerHTML = `
       <span class="ext-name">${EXTENSION_NAMES[browser]}</span>
+      ${binaryBadge(info)}
       ${statusBadge(info)}
+      ${runningBadge(info, online.has(hubName))}
     `;
     box.appendChild(row);
   }
+}
+
+// 浏览器可执行文件是否已安装（与插件安装无关）
+function binaryBadge(info) {
+  return info.binary
+    ? '<span class="ext-badge ok" title="已检测到浏览器可执行文件">已安装</span>'
+    : '<span class="ext-badge bad" title="未检测到浏览器可执行文件，请先安装浏览器">未安装</span>';
+}
+
+// 运行态 × 在线心跳 解耦：
+//   未运行 =（装没装看 statusBadge）；运行中但无心跳 =「开了但插件没上线」；有心跳 = 在线
+function runningBadge(info, isOnline) {
+  if (!info.running) {
+    return '<span class="ext-badge dim" title="该浏览器当前没有进程在运行">未运行</span>';
+  }
+  if (isOnline) {
+    return '<span class="ext-badge ok" title="浏览器运行中，插件心跳正常">在线</span>';
+  }
+  return '<span class="ext-badge warn" title="浏览器已在运行但插件未上线：请在扩展管理页确认已启用并重载插件">运行中·插件未上线</span>';
 }
 
 function statusBadge(info) {
@@ -3300,6 +3551,32 @@ async function init() {
     cancelRun().catch((err) => showCompileMessage(String(err.message || err), false));
   });
   $("run-events-toggle").addEventListener("click", toggleRunEvents);
+  // 底部面板 tab：元素库 / 数据表格
+  document.querySelectorAll("#bottom-tabs .bottom-tab").forEach((tab) => {
+    tab.addEventListener("click", () => {
+      setBottomTab(tab.dataset.panel);
+      if (tab.dataset.panel !== "table") return;
+      const flow = currentFlow();
+      if (!flow) {
+        showCompileMessage("先命名或打开一个流程再查看数据表格", false);
+        return;
+      }
+      refreshTablePanel(flow)
+        .catch((err) => showCompileMessage(String(err.message || err), false));
+    });
+  });
+  // 数据表格面板
+  $("table-add-column").addEventListener("click", addTableColumn);
+  $("table-add-row").addEventListener("click", addTableRow);
+  $("table-clear").addEventListener("click", () => {
+    clearTableGrid().catch((err) => showCompileMessage(String(err.message || err), false));
+  });
+  $("table-export").addEventListener("click", exportTableCsv);
+  $("table-save").addEventListener("click", () => {
+    saveTableDialog().catch((err) => showCompileMessage(String(err.message || err), false));
+  });
+  $("table-grid").addEventListener("input", tableGridDelegate);
+  $("table-grid").addEventListener("click", tableGridDelegate);
   window.addEventListener("keydown", handleEditorKeydown);
   window.addEventListener("beforeunload", (e) => {
     if (state.dirty || activeRunId) { e.preventDefault(); e.returnValue = ""; }

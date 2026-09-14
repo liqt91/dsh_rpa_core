@@ -20,6 +20,7 @@
   <button id="btn-run-cancel" class="hidden" title="取消运行">■ 取消</button>
   <span class="toolbar-sep"></span>
   <button id="btn-extension" title="浏览器捕获插件安装与状态">⇲ 插件</button>
+  <button id="btn-diagnostics" title="环境诊断：浏览器/插件/在线全链路（新窗口）" onclick="window.open('/static/diagnostics.html')">◆ 诊断</button>
   <span id="ext-channel-badge" class="ext-badge ext-channel-badge off" title="自研扩展执行通道状态（打开网页等指令的默认通道）">扩展通道：检测中…</span>
   <button id="btn-catalog" title="查看全部指令 manifest（新窗口）" onclick="window.open('/static/catalog.html')">☰ 指令清单</button>
   <span class="toolbar-sep"></span>
@@ -51,18 +52,40 @@
 </main>
 <div class="resize-h" id="bottom-resize" title="拖动调整底部面板高度"></div>
 <section id="bottom-panels">
-  <div id="elements-head">
-    <h2>元素库</h2>
-    <div class="capture-entry">
-      <button id="btn-element-capture" title="捕获新元素">＋捕获</button>
-      <button id="btn-elements-refresh" title="刷新元素库">↻</button>
-      <div id="capture-menu" class="hidden">
-        <button data-kind="browser">网页（无缝扩展）</button>
-        <button data-kind="desktop">桌面（hover）</button>
+  <nav id="bottom-tabs">
+    <button id="tab-launch-elements" class="bottom-tab active" data-panel="elements">元素库</button>
+    <button id="tab-launch-table" class="bottom-tab" data-panel="table">数据表格</button>
+  </nav>
+  <div id="elements-panel">
+    <div id="elements-head">
+      <h2>元素库</h2>
+      <div class="capture-entry">
+        <button id="btn-element-capture" title="捕获新元素">＋捕获</button>
+        <button id="btn-elements-refresh" title="刷新元素库">↻</button>
+        <div id="capture-menu" class="hidden">
+          <button data-kind="browser">网页（无缝扩展）</button>
+          <button data-kind="desktop">桌面（hover）</button>
+        </div>
       </div>
     </div>
+    <ul id="elements-list"></ul>
   </div>
-  <ul id="elements-list"></ul>
+  <div id="table-panel" class="hidden">
+    <div class="table-toolbar">
+      <button id="table-add-column" title="新增一列">＋加列</button>
+      <button id="table-add-row" title="新增一行">＋加行</button>
+      <button id="table-clear" title="清空所有数据行（保留列）">清空</button>
+      <button id="table-export" title="导出为 CSV 下载">导出 CSV</button>
+      <button id="table-save" title="保存对表结构/数据的修改">保存</button>
+      <span class="table-hint">表数据跨运行累积保留；可在流程开头用「清空数据表格」指令显式初始化。</span>
+    </div>
+    <div id="table-wrap">
+      <table id="table-grid">
+        <thead id="table-thead"></thead>
+        <tbody id="table-tbody"></tbody>
+      </table>
+    </div>
+  </div>
 </section>
 <div id="element-dialog-mask" class="hidden">
   <div id="element-dialog">

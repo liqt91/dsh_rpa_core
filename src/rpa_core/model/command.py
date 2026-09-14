@@ -126,6 +126,14 @@ class CommandManifest(BaseModel):
             "（升序，缺省按命令 id 字母序兜底）"
         ),
     )
+    x_runtime: dict[str, Any] | None = Field(
+        default=None,
+        alias="x-runtime",
+        description=(
+            "运行时注入声明：{\"inject\": [\"flowDir\"]} 表示执行前由 orchestrator"
+            "把对应运行时量注入到 command_inputs（如 flowDir = 流程目录绝对路径）"
+        ),
+    )
 
     @model_validator(mode="after")
     def validate_retry_policy(self) -> "CommandManifest":

@@ -88,11 +88,13 @@ class _RequestHandler(BaseHTTPRequestHandler):
 
     def _handle(self, method: str) -> None:
         try:
-            status, body, content_type = self._route(method)
+            result = self._route(method)
         except ApiError as exc:
             self._send_json(exc.status, {"error": exc.code, "message": exc.message})
             return
-        self._send(status, body, content_type)
+        status, body, content_type = result[:3]
+        headers = result[3] if len(result) > 3 else None
+        self._send(status, body, content_type, headers)
 
     def _route(self, method: str) -> tuple[int, bytes, str]:
         path = unquote(urlparse(self.path).path)
@@ -152,8 +154,24 @@ class _RequestHandler(BaseHTTPRequestHandler):
                 )
             payload = self.app.extension_open_browser_view(self._read_json(required=False))
             return 200, _encode(payload), _JSON_TYPE
+        export = self._match_table_export(method, path)
+        if export is not None:
+            return export
         payload = self._route_api(method, path)
         return 200, _encode(payload), _JSON_TYPE
+
+    def _match_table_export(self, method: str, path: str) -> tuple[int, bytes, str, dict] | None:
+        """匹配 `<flow>/table/export.csv` 下载路由；不匹配返回 None。"""
+        if not path.startswith(_WORKFLOW_SEGMENT_PREFIX):
+            return None
+        segments = path[len(_WORKFLOW_SEGMENT_PREFIX) :].split("/")
+        if len(segments) == 3 and segments[1] == "table" and segments[2] == "export.csv":
+            if method != "GET":
+                raise ApiError(405, "METHOD_NOT_ALLOWED", "use GET for table csv export")
+            payload, filename = self.app.export_table_csv(segments[0])
+            disposition = f'attachment; filename="{filename}"'
+            return 200, payload, "text/csv; charset=utf-8", {"Content-Disposition": disposition}
+        return None
 
     def _route_static(self, path: str) -> tuple[int, bytes, str]:
         name = path[len(_STATIC_PREFIX) :]
@@ -183,6 +201,10 @@ class _RequestHandler(BaseHTTPRequestHandler):
             if method != "GET":
                 raise ApiError(405, "METHOD_NOT_ALLOWED", "use GET")
             return self.app.latest_run_events()
+        if path == "/api/env/status":
+            if method != "GET":
+                raise ApiError(405, "METHOD_NOT_ALLOWED", "use GET for /api/env/status")
+            return self.app.env_status_view()
         if path == "/api/runs":
             if method != "POST":
                 raise ApiError(405, "METHOD_NOT_ALLOWED", "use POST to start a run")
@@ -232,6 +254,16 @@ class _RequestHandler(BaseHTTPRequestHandler):
                     raise ApiError(
                         405, "METHOD_NOT_ALLOWED", "use GET/POST/DELETE for element resources"
                     )
+            if len(segments) == 2 and segments[1] == "table":
+                if method == "GET":
+                    return self.app.get_table(name)
+                if method == "PUT":
+                    return self.app.put_table(name, self._read_json(required=True))
+                raise ApiError(405, "METHOD_NOT_ALLOWED", "use GET or PUT for table resource")
+            if len(segments) == 3 and segments[1] == "table" and segments[2] == "clear":
+                if method != "POST":
+                    raise ApiError(405, "METHOD_NOT_ALLOWED", "use POST for table clear")
+                return self.app.clear_table(name)
             raise ApiError(404, "NOT_FOUND", f"no route for {path}")
         if path.startswith(_EXT_PREFIX):
             return self._route_extension_exec(path[len(_EXT_PREFIX) :], method)
@@ -305,12 +337,18 @@ class _RequestHandler(BaseHTTPRequestHandler):
         browser, user_agent = first("host"), first("ua")
         if not browser and not user_agent:
             return None
+        # 焦点字段：foc=当前宿主是否前台聚焦(1/0)，focat=最近聚焦时刻(ms)。
+        # 供 Hub 同浏览器多实例焦点路由。
+        focus_raw = first("foc")
+        focus_at = first("focat")
         return {
             "browser": browser,
             "instanceId": first("iid"),
             "version": first("ver"),
             "platform": first("platform"),
             "userAgent": user_agent,
+            "focused": True if focus_raw == "1" else False,
+            "focusedAt": int(focus_at) if focus_at.isdigit() else 0,
         }
 
     def _route_capture_extension(self, action: str, method: str) -> dict:
@@ -361,9 +399,14 @@ class _RequestHandler(BaseHTTPRequestHandler):
     def _send_json(self, status: int, payload: dict) -> None:
         self._send(status, _encode(payload), _JSON_TYPE)
 
-    def _send(self, status: int, body: bytes, content_type: str) -> None:
+    def _send(
+        self, status: int, body: bytes, content_type: str, headers: dict | None = None
+    ) -> None:
         self.send_response(status)
         self.send_header("Content-Type", content_type)
+        if headers:
+            for key, value in headers.items():
+                self.send_header(key, value)
         self.send_header("Content-Length", str(len(body)))
         # 本地开发服务器：静态资源（app.js/styles.css）改完即生效。
         # 不发此头时浏览器会启发式缓存旧 JS/CSS，前端改动"看起来没生效"。

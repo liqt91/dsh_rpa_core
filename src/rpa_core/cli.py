@@ -388,6 +388,37 @@ def _install_extension_elevated(args, update_url: str) -> int:
     return 0 if result["status"] == "ok" else 1
 
 
+def _cmd_env_status() -> int:
+    """`env-status`：环境诊断，输出与 devserver `/api/env/status` 同一份结构。
+
+    纯静态部分（浏览器安装×运行×插件安装×安装途径×引擎版本）由
+    extension_installer.env_status_base 计算；在线心跳属 devserver 进程内 hub 状态，
+    CLI 尽力探测正在运行的 devserver（127.0.0.1:8765）并上实时在线名单，
+    探测不到则 online 标 null，不硬失败。
+    """
+    import urllib.request  # noqa: PLC0415 仅在 env-status 使用
+
+    from rpa_core.extension_exec import DEFAULT_HUB_URL
+    from rpa_core.extension_installer import env_status_base
+
+    result = env_status_base()
+    try:
+        with urllib.request.urlopen(
+            f"{DEFAULT_HUB_URL}/api/env/status", timeout=2
+        ) as resp:
+            live = json.loads(resp.read().decode("utf-8"))
+        for name, info in (live.get("browsers") or {}).items():
+            if name in result["browsers"] and "online" in info:
+                result["browsers"][name]["online"] = info["online"]
+        result["_online"] = "live"
+    except Exception:  # 无 devserver 或不可达：心跳无法观测，标 null
+        result["_online"] = "unavailable"
+        for info in result["browsers"].values():
+            info["online"] = None
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+    return 0
+
+
 def _cmd_elements(args) -> int:
     from rpa_core.devserver.store import (
         WorkflowDirStore,
@@ -468,13 +499,13 @@ def main() -> int:
     parser = argparse.ArgumentParser(prog="rpa-core")
     subparsers = parser.add_subparsers(dest="action", required=True)
     for action in ("validate", "run", "resume", "devserver", "catalog", "capture",
-                   "elements", "auth", "status", "unauth", "install-extension"):
+                   "elements", "auth", "status", "unauth", "install-extension", "env-status"):
         sub = subparsers.add_parser(action)
         if action == "devserver":
             sub.add_argument("--port", type=int, default=8765)
             sub.add_argument("--workflows", type=Path, default=Path("workflows"))
             continue
-        if action in ("catalog", "auth", "status", "unauth"):
+        if action in ("catalog", "auth", "status", "unauth", "env-status"):
             continue
         if action == "install-extension":
             sub.add_argument("--remove", action="store_true",
@@ -560,6 +591,8 @@ def main() -> int:
         return _cmd_unauth()
     if args.action == "install-extension":
         return _cmd_install_extension(args)
+    if args.action == "env-status":
+        return _cmd_env_status()
     try:
         _root, catalog, plan = _compile(args.workflow)
     except FileNotFoundError as exc:
@@ -576,6 +609,9 @@ def main() -> int:
         print(json.dumps({"valid": True, "catalogDigest": catalog.digest}, indent=2))
         return 0
 
+    # 流程目录 = workflow.json 所在目录（同步上下文计算，供运行时 data.table.* 命令定位表格文件）
+    flow_dir = Path(args.workflow).resolve().parent
+
     async def run() -> int:
         browser = PlaywrightExecutor()
         executors = {
@@ -588,7 +624,7 @@ def main() -> int:
             executors["desktop.win32"] = Win32DesktopExecutor()
         registry = ExecutorRegistry(executors)
         try:
-            orchestrator = Orchestrator(catalog, registry, args.artifacts)
+            orchestrator = Orchestrator(catalog, registry, args.artifacts, flow_dir=flow_dir)
             inputs = None
             if getattr(args, "inputs", None):
                 inputs = json.loads(args.inputs)

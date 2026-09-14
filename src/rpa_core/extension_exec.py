@@ -141,6 +141,9 @@ class ExtensionExecHub:
             "version": str(report.get("version") or "") or None,
             "userAgent": user_agent or None,
             "platform": str(report.get("platform") or "") or None,
+            # 焦点路由字段（影刀语义：同浏览器多实例按「聚焦→最后失去焦点」发放）
+            "focused": bool(report.get("focused")),
+            "focusedAt": int(report.get("focusedAt") or 0),
             "reportedAt": time.time(),
         }
         with self._cond:
@@ -271,6 +274,34 @@ class ExtensionExecHub:
                     return True
         return False
 
+    def _focus_beaten(self, browser: str, owner_key: str) -> bool:
+        """同浏览器多实例下，是否存在焦点严格更优的在线实例。
+
+        **注意**：调用方须已持有 `self._cond` 锁（next_command 扫描循环内调用），本方法不再加锁。
+
+        焦点序（对齐影刀「焦点优先 → 最后失去焦点」）：`focused=True` 优先，
+        其次比 `focusedAt`（最近聚焦时刻，越晚越优）。`owner_key` 自身不参与比较；
+        仅「严格大于」才让位，tie 归 owner（保持先到先得特权）。双方都无焦点信息
+        （focusedAt==0 且未聚焦）视为同优，不触发让位。
+        """
+        now = time.monotonic()
+        owner = self._hosts.get(owner_key, {}).get("record") or {}
+        o_focus = bool(owner.get("focused"))
+        o_at = int(owner.get("focusedAt") or 0)
+        for key, rec in self._hosts.items():
+            if key == owner_key:
+                continue
+            if now - rec["at"] >= self._online_window:
+                continue
+            record = rec["record"]
+            if record.get("browser") != browser:
+                continue
+            focus = bool(record.get("focused"))
+            at = int(record.get("focusedAt") or 0)
+            if (focus, at) > (o_focus, o_at):
+                return True
+        return False
+
     def next_command(
         self, wait_seconds: float, host_report: dict[str, Any] | None = None
     ) -> dict[str, Any] | None:
@@ -312,12 +343,20 @@ class ExtensionExecHub:
                         or (browser and target == browser)
                         or (instance_id and target == instance_id)
                     )
-                    if matched:
-                        picked_id = cid
-                        del self._queue[i]
-                        # 记录领取实例：供 submit 给结果补带实例 id（会话绑定用）
-                        entry["_hostInstanceId"] = owner_key
-                        break
+                    if not matched:
+                        continue
+                    # 焦点路由：target 为浏览器名且本实例按浏览器名匹配（非实例精确 id）时，
+                    # 若同浏览器存在焦点更优的在线实例，本实例不领取（让位给聚焦/最后失去焦点者）。
+                    if (
+                        browser and target == browser
+                    ) and not (instance_id and target == instance_id):
+                        if self._focus_beaten(target, owner_key):
+                            continue
+                    picked_id = cid
+                    del self._queue[i]
+                    # 记录领取实例：供 submit 给结果补带实例 id（会话绑定用）
+                    entry["_hostInstanceId"] = owner_key
+                    break
                 if picked_id is not None:
                     return dict(self._inflight[picked_id]["command"])
                 remaining = deadline - time.monotonic()

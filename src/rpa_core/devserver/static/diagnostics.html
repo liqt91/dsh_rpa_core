@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>环境诊断 · rpa_core</title>
+<style>
+:root { --fg:#1f2328; --muted:#656d76; --line:#d0d7de; --bg:#f6f8fa;
+  --ok:#1a7f37; --warn:#bf8700; --bad:#cf222e; --dim:#8c959f; }
+* { box-sizing: border-box; }
+body { margin: 0; font: 14px/1.6 -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+  color: var(--fg); background: var(--bg); }
+header.top { position: sticky; top: 0; z-index: 5; background: #fff; border-bottom: 1px solid var(--line);
+  padding: 10px 20px; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+header.top h1 { font-size: 16px; margin: 0; }
+header.top .meta { color: var(--muted); font-size: 12px; }
+header.top button { padding: 5px 10px; border: 1px solid var(--line); background: #fff;
+  border-radius: 6px; cursor: pointer; font-size: 12px; }
+header.top button:hover { background: var(--bg); }
+.wrap { max-width: 720px; margin: 16px auto 60px; padding: 0 16px; }
+.card { background: #fff; border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; margin-bottom: 12px; }
+.card h2 { font-size: 13px; margin: 0 0 10px; color: var(--fg); }
+table { border-collapse: collapse; width: 100%; font-size: 13px; }
+th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+th { color: var(--muted); font-weight: 600; font-size: 12px; }
+.mono { font-family: Consolas, monospace; }
+.badge { font-size: 11px; font-weight: 700; border-radius: 4px; padding: 2px 8px; color: #fff; white-space: nowrap; }
+.badge.ok { background: var(--ok); } .badge.warn { background: var(--warn); }
+.badge.bad { background: var(--bad); } .badge.dim { background: var(--dim); }
+.kv { display: flex; flex-wrap: wrap; gap: 6px 20px; font-size: 12px; color: var(--muted); }
+.kv b { color: var(--fg); }
+#status-line { font-size: 12px; color: var(--muted); }
+</style>
+</head>
+<body>
+<header class="top">
+  <h1>环境诊断</h1>
+  <span class="meta" id="env-meta">…</span>
+  <span id="status-line"></span>
+  <button id="refresh">刷新</button>
+  <button onclick="location.href='/'">← 返回编辑器</button>
+  <button id="auto">自动刷新：开</button>
+</header>
+<div class="wrap">
+  <div class="card">
+    <h2>浏览器 × 插件全链路</h2>
+    <table>
+      <thead><tr>
+        <th>浏览器</th><th>已安装</th><th>运行中</th><th>插件已装</th>
+        <th>已启用</th><th>在线心跳</th><th>卸载记录</th>
+      </tr></thead>
+      <tbody id="rows"></tbody>
+    </table>
+  </div>
+  <div class="card">
+    <h2>安装途径</h2>
+    <div class="kv" id="mode"></div>
+  </div>
+</div>
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const NAMES = { chrome: "Chrome", edge: "Edge" };
+const badge = (ok, okText, badText, badCls = "bad") =>
+  `<span class="badge ${ok ? "ok" : badCls}">${ok ? okText : badText}</span>`;
+let autoTimer = null;
+
+function render(data) {
+  $("env-meta").textContent = `引擎 rpa-core@${data.version || "?"}`;
+  const tbody = $("rows");
+  tbody.textContent = "";
+  for (const [name, b] of Object.entries(data.browsers || {})) {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td class="mono">${NAMES[name] || name}</td>
+      <td>${badge(b.binary, "已安装", "未安装")}</td>
+      <td>${badge(b.running, "运行中", "未运行", "dim")}</td>
+      <td>${badge(b.installed, "已装", "未装")}</td>
+      <td>${badge(b.enabled, "已启用", b.installed ? "已加载未启用" : "未启用")}</td>
+      <td>${b.online == null ? badge(false, "在线", "未知", "dim")
+        : badge(b.online, "在线", "未在线")}</td>
+      <td>${badge(b.uninstallBlocked, "有", "无", "dim")}</td>`;
+    tbody.appendChild(tr);
+  }
+  const MODE = { "load-unpacked": "开发者模式：Load unpacked（源码目录）",
+    "packed-external-registry": "外部注册表：打包 CRX 静默安装",
+    "not-installed": "尚未安装插件" };
+  $("mode").innerHTML = `<span><b>主动画方式</b>：${MODE[data.installMode] || data.installMode}</span>`;
+}
+
+async function load() {
+  try {
+    const res = await fetch("/api/env/status");
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    render(await res.json());
+    $("status-line").textContent = `更新于 ${new Date().toLocaleTimeString()}`;
+  } catch (err) {
+    $("status-line").textContent = `加载失败：${err.message || err}`;
+  }
+}
+
+function toggleAuto() {
+  if (autoTimer) { clearInterval(autoTimer); autoTimer = null; $("auto").textContent = "自动刷新：开"; }
+  else { autoTimer = setInterval(load, 5000); $("auto").textContent = "自动刷新：关"; }
+}
+
+$("refresh").addEventListener("click", load);
+$("auto").addEventListener("click", toggleAuto);
+load();
+</script>
+</body>
+</html>

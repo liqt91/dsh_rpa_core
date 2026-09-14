@@ -186,6 +186,16 @@
       "id": "var-system",
       "title": "User variable system: ActionNode.output_name + scopes.variables + ${var_name} reference",
       "passes": true
+    },
+    {
+      "id": "workflow-data-table",
+      "title": "Per-flow data table (yingdao-aligned): design-time columns + runtime data.table.* commands + editor grid + CSV export",
+      "passes": true
+    },
+    {
+      "id": "yingdao-batch1",
+      "title": "Yingdao-aligned batch1: data.readText/appendText/fileExists/deletePath/datetimeNow + workflow.sleep",
+      "passes": true
     }
   ]
 }

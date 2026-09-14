@@ -12,12 +12,14 @@
         "id": "navigate",
         "command": "browser.navigate",
         "with": {
-          "browserType": "chrome",
           "action": "goto",
           "onTimeout": "error",
-          "url": "baidu.com"
+          "url": "${url}",
+          "browserType": "msedge"
         },
-        "_exprModes": {}
+        "_exprModes": {
+          "url": "fx"
+        }
       }
     ]
   }

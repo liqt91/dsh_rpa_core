@@ -1,0 +1,33 @@
+{
+  "id": "data.readText",
+  "version": "1.0.0",
+  "executor": "python.worker",
+  "kind": "query",
+  "risk": "read",
+  "capabilities": [],
+  "resources": ["workspace.filesystem"],
+  "stability": "stable",
+  "effect": {"kind": "read", "replay": "safe", "idempotency": "none"},
+  "input_schema": {
+    "type": "object",
+    "required": ["workspace", "path"],
+    "properties": {
+      "workspace": {"type": "string", "minLength": 1},
+      "path": {"type": "string", "minLength": 1}
+    },
+    "additionalProperties": false
+  },
+  "output_schema": {
+    "type": "object",
+    "required": ["text", "path"],
+    "properties": {"text": {"type": "string"}, "path": {"type": "string"}},
+    "additionalProperties": false
+  },
+  "x-outputs": {
+    "text": {"label": "文件内容", "primary": true}
+  },
+  "errors": ["CAPABILITY_DENIED", "INVALID_INPUT", "SCRIPT_FAILED", "TIMEOUT", "CANCELLED"],
+  "implementation": {"handler": "python.worker:read_text"},
+  "default_timeout_seconds": 15,
+  "retryable": true
+}

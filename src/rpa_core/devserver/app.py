@@ -13,8 +13,11 @@ from rpa_core.extension_exec import (
 )
 from rpa_core.extension_installer import (
     ExtensionInstallError,
+    _derive_install_mode,
+    browser_running,
     clear_uninstall_block,
     default_build_dir,
+    env_status_base,
     extension_root,
     extension_status,
     install_external_guided,
@@ -34,6 +37,7 @@ from rpa_core.model.workflow import Workflow
 
 from .runs import RunManager
 from .store import (
+    TableStore,
     WorkflowNameError,
     WorkflowNotFoundError,
     WorkflowStore,
@@ -263,6 +267,53 @@ class DevServerApp:
             raise ApiError(400, "BAD_REQUEST", str(exc)) from exc
         return {"name": name, "bytes": size}
 
+    def _table_store(self, flow: str) -> TableStore:
+        return TableStore(self._store)
+
+    def get_table(self, flow: str) -> dict:
+        """读取流程数据表格（缺省返回空表结构，供前端初始化）。"""
+        try:
+            return {"table": self._table_store(flow).read(flow)}
+        except WorkflowNameError as exc:
+            raise ApiError(403, "FORBIDDEN", str(exc)) from exc
+        except WorkflowStoreError as exc:
+            raise ApiError(400, "BAD_REQUEST", str(exc)) from exc
+
+    def put_table(self, flow: str, body: Any) -> dict:
+        """整表保存（列 schema + 行数据）。"""
+        if not isinstance(body, dict) or "table" not in body:
+            raise ApiError(400, "BAD_REQUEST", "request body must contain a 'table' object")
+        table = body["table"]
+        if not isinstance(table, dict):
+            raise ApiError(400, "BAD_REQUEST", "table document must be a JSON object")
+        try:
+            size = self._table_store(flow).write(flow, table)
+        except WorkflowNameError as exc:
+            raise ApiError(403, "FORBIDDEN", str(exc)) from exc
+        except WorkflowStoreError as exc:
+            raise ApiError(400, "BAD_REQUEST", str(exc)) from exc
+        return {"flow": flow, "bytes": size}
+
+    def clear_table(self, flow: str) -> dict:
+        """清空行数据保留列 schema。"""
+        try:
+            table = self._table_store(flow).clear(flow)
+        except WorkflowNameError as exc:
+            raise ApiError(403, "FORBIDDEN", str(exc)) from exc
+        except WorkflowStoreError as exc:
+            raise ApiError(400, "BAD_REQUEST", str(exc)) from exc
+        return {"table": table}
+
+    def export_table_csv(self, flow: str) -> tuple[bytes, str]:
+        """导出表格为 CSV（服务端序列化，BOM 编码）。"""
+        try:
+            payload = self._table_store(flow).to_csv_bytes(flow)
+        except WorkflowNameError as exc:
+            raise ApiError(403, "FORBIDDEN", str(exc)) from exc
+        except WorkflowStoreError as exc:
+            raise ApiError(400, "BAD_REQUEST", str(exc)) from exc
+        return payload, f"{flow}-table.csv"
+
     def capture_desktop(self, action: str, body: Any) -> dict:
         if action not in _CAPTURE_ACTIONS:
             raise ApiError(404, "NOT_FOUND", f"unknown capture action: {action}")
@@ -455,12 +506,36 @@ class DevServerApp:
             self._extension_build_dir,
             extension_dir=source_dir,
         )
+        # 每浏览器是否「当前有进程在跑」——与插件安装态解耦，供前端区分
+        # 「浏览器没开 / 开了但插件没上线」两种独立故障。
+        for browser in ("chrome", "edge"):
+            status["browsers"][browser]["running"] = browser_running(browser)
         status["extensionDir"] = str(source_dir)
         status["enableHint"] = {
             "chrome": "chrome://extensions", "edge": "edge://extensions",
         }
-        status["installMode"] = "load-unpacked"
+        # 安装途径由实测推导，不再写死 load-unpacked：真实在用的那套才对。
+        status["installMode"] = _derive_install_mode(status)
         return status
+
+    def env_status_view(self) -> dict:
+        """/api/env/status 聚合诊断：浏览器安装×运行×插件安装×插件在线×安装途径×引擎版本。
+
+        纯静态部分复用 env_status_base（与 CLI `env-status` 同源），再并上本进程
+        hub 的实时在线心跳，一次看清浏览器/插件全链路。
+        """
+        base = env_status_base(self._extension_build_dir)
+        # 在线心跳：hub 按浏览器名上报（msedge），映射到安装器命名（edge）
+        online = {
+            str(inst.get("browser"))
+            for inst in self._extension_hub.status().get("instances", [])
+            if inst.get("browser")
+        }
+        hub_to_installer = {"msedge": "edge", "chrome": "chrome"}
+        for name in ("chrome", "edge"):
+            hub_name = {v: k for k, v in hub_to_installer.items()}[name]
+            base["browsers"][name]["online"] = hub_name in online
+        return base
 
     def extension_open_dir_view(self) -> dict:
         """在系统文件管理器打开扩展源码目录（Load unpacked 引导：方便定位/复制路径）。"""

@@ -1,0 +1,35 @@
+{
+  "id": "data.table.exportCsv",
+  "version": "1.0.0",
+  "executor": "python.worker",
+  "kind": "action",
+  "risk": "workflow-edit",
+  "capabilities": [],
+  "resources": [],
+  "stability": "stable",
+  "effect": {"kind": "idempotent-write", "replay": "idempotent", "idempotency": "derived"},
+  "input_schema": {
+    "type": "object",
+    "required": [],
+    "properties": {
+      "flowDir": {"type": "string", "x-hidden": true, "description": "流程目录（运行时自动注入）。"},
+      "table": {"type": "string", "default": "default", "description": "数据表格名称（当前固定为 default）。"},
+      "path": {"type": "string", "x-fx": true, "description": "导出文件路径（相对流程目录解析；缺省为 data/<table>.csv）。只允许导出到流程目录内。"}
+    },
+    "additionalProperties": false
+  },
+  "output_schema": {
+    "type": "object",
+    "required": ["path"],
+    "properties": {"path": {"type": "string"}},
+    "additionalProperties": false
+  },
+  "x-outputs": {
+    "path": {"label": "导出文件路径", "primary": true}
+  },
+  "x-runtime": {"inject": ["flowDir"]},
+  "errors": ["CAPABILITY_DENIED", "INVALID_INPUT", "TIMEOUT", "CANCELLED"],
+  "implementation": {"handler": "python.worker:table_export_csv"},
+  "default_timeout_seconds": 15,
+  "retryable": true
+}

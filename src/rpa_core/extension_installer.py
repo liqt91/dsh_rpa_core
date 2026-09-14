@@ -18,6 +18,7 @@
 
 import base64
 import hashlib
+import importlib.metadata
 import json
 import os
 import shutil
@@ -72,16 +73,14 @@ def default_build_dir() -> Path:
 
 
 def _browser_binary_candidates(browser: str) -> list[Path]:
-    if browser == "chrome":
-        relative = Path("Google") / "Chrome" / "Application" / "chrome.exe"
-    else:
-        relative = Path("Microsoft") / "Edge" / "Application" / "msedge.exe"
-    candidates = []
-    for env in ("ProgramFiles", "ProgramFiles(x86)", "LocalAppData"):
-        base = os.environ.get(env)
-        if base:
-            candidates.append(Path(base) / relative)
-    return candidates
+    """浏览器可执行文件候选——复用 extension_launch 的单一路径表。
+
+    收敛：原本本模块自带一份候选路径，与自启模块的查找表重复、易漂移；
+    现在统一从这里取，保证「检测安装」与「自启定位」看到同一份 Windows 路径。
+    """
+    from rpa_core.extension_launch import browser_binary_candidates as _candidates
+
+    return _candidates(browser)
 
 
 def find_browser_binary() -> Path | None:
@@ -704,6 +703,53 @@ def extension_status(
             ),
         }
     return {"packed": packed_info, "browsers": browsers}
+
+
+def _derive_install_mode(status: dict) -> str:
+    """从实测状态推导实际安装途径（不再写死 load-unpacked）。
+
+    优先级：开发者模式(Load unpacked) > 外部注册表 CRX > 仅打包未装。
+    """
+    for browser in ("chrome", "edge"):
+        info = status["browsers"][browser]
+        if any(p["enabled"] for p in info.get("unpackedProfiles", [])):
+            return "load-unpacked"
+    for browser in ("chrome", "edge"):
+        info = status["browsers"][browser]
+        if any(p["enabled"] for p in info.get("profiles", [])):
+            return "packed-external-registry"
+    if status.get("packed"):
+        return "packed-external-registry"
+    return "not-installed"
+
+
+def env_status_base(build_dir: Path | None = None) -> dict:
+    """环境诊断的「纯静态」部分：浏览器安装×运行×插件安装×安装途径 × 引擎版本。
+
+    `online`（在线心跳）属 devserver 进程内 hub 状态，不在本函数计算；由调用方
+    （devserver `/api/env/status` 或 CLI）按情况并上实时在线名单，保证两端同源。
+    """
+    try:
+        version = importlib.metadata.version("rpa-core-runtime")
+    except importlib.metadata.PackageNotFoundError:
+        from rpa_core import __version__ as version  # noqa: PLC0415
+
+    status = extension_status("", build_dir, extension_dir=extension_root())
+    browsers = {
+        name: {
+            "binary": bool(info["binary"]),
+            "running": browser_running(name),
+            "installed": bool(info["installed"]),
+            "enabled": bool(info["enabled"]),
+            "uninstallBlocked": bool(info["uninstallBlocked"]),
+        }
+        for name, info in status["browsers"].items()
+    }
+    return {
+        "version": version,
+        "installMode": _derive_install_mode(status),
+        "browsers": browsers,
+    }
 
 
 def clear_uninstall_block(

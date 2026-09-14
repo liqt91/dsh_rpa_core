@@ -99,10 +99,14 @@ class Orchestrator:
         catalog: CommandCatalog,
         executors: ExecutorRegistry,
         artifacts_root: Path,
+        flow_dir: Path | None = None,
     ):
         self.catalog = catalog
         self.executors = executors
         self.artifacts_root = artifacts_root
+        # 流程目录（workflow.json 所在目录）：供 data.table.* 等命令按 manifest
+        # x-runtime.inject 声明注入到 command_inputs
+        self._flow_dir = flow_dir
 
     def resume(
         self, plan: ExecutionPlan, run_id: str, *, allow_indeterminate: bool = False
@@ -615,6 +619,12 @@ class Orchestrator:
                 python_fields, scopes, run_id, node.id, cancellation, manifest.input_schema
             )
             command_inputs.update(evaluated)
+
+        # 运行时注入：按 manifest x-runtime.inject 声明，把 flowDir 等运行时量注入 input
+        # （必须在 schema 校验前，否则 additionalProperties:false 会拒绝注入字段）
+        for runtime_name in (manifest.x_runtime or {}).get("inject", []) or []:
+            if runtime_name == "flowDir" and self._flow_dir is not None:
+                command_inputs["flowDir"] = str(self._flow_dir)
 
         errors = sorted(
             Draft202012Validator(manifest.input_schema).iter_errors(command_inputs),

@@ -1,0 +1,39 @@
+{
+  "id": "data.table.appendRow",
+  "version": "1.0.0",
+  "executor": "python.worker",
+  "kind": "action",
+  "risk": "workflow-edit",
+  "capabilities": [],
+  "resources": [],
+  "stability": "stable",
+  "effect": {"kind": "unsafe-write", "replay": "unsafe", "idempotency": "none"},
+  "input_schema": {
+    "type": "object",
+    "required": ["row"],
+    "properties": {
+      "flowDir": {"type": "string", "x-hidden": true, "description": "流程目录（运行时自动注入）。"},
+      "table": {"type": "string", "default": "default", "description": "数据表格名称（当前固定为 default）。"},
+      "row": {"type": "object", "x-python": true, "description": "要追加到表尾的行数据：{列名: 值}。多次运行会持续累积（影刀语义：不清空则累加）。"}
+    },
+    "additionalProperties": false
+  },
+  "output_schema": {
+    "type": "object",
+    "required": ["index", "rowCount"],
+    "properties": {
+      "index": {"type": "integer", "description": "新行行号（从 1 开始）。"},
+      "rowCount": {"type": "integer"}
+    },
+    "additionalProperties": false
+  },
+  "x-outputs": {
+    "index": {"label": "新行行号"},
+    "rowCount": {"label": "当前总行数"}
+  },
+  "x-runtime": {"inject": ["flowDir"]},
+  "errors": ["INVALID_INPUT", "TIMEOUT", "CANCELLED"],
+  "implementation": {"handler": "python.worker:table_append_row"},
+  "default_timeout_seconds": 15,
+  "retryable": false
+}

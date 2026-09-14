@@ -1,0 +1,38 @@
+{
+  "id": "data.datetimeNow",
+  "version": "1.0.0",
+  "executor": "python.worker",
+  "kind": "query",
+  "risk": "read",
+  "capabilities": [],
+  "resources": [],
+  "stability": "stable",
+  "effect": {"kind": "pure", "replay": "safe", "idempotency": "none"},
+  "input_schema": {
+    "type": "object",
+    "required": [],
+    "properties": {
+      "format": {"type": "string", "description": "strftime 格式化模板；缺省输出 ISO 时间"}
+    },
+    "additionalProperties": false
+  },
+  "output_schema": {
+    "type": "object",
+    "required": ["value", "iso", "timestamp"],
+    "properties": {
+      "value": {"type": "string"},
+      "iso": {"type": "string"},
+      "timestamp": {"type": "integer"}
+    },
+    "additionalProperties": false
+  },
+  "x-outputs": {
+    "value": {"label": "格式化时间", "primary": true},
+    "iso": {"label": "ISO 时间"},
+    "timestamp": {"label": "时间戳(秒)"}
+  },
+  "errors": ["INVALID_INPUT", "SCRIPT_FAILED", "TIMEOUT", "CANCELLED"],
+  "implementation": {"handler": "python.worker:datetime_now"},
+  "default_timeout_seconds": 15,
+  "retryable": true
+}

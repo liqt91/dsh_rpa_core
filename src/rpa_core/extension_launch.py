@@ -24,8 +24,10 @@ _EXE_NAMES: dict[str, tuple[str, ...]] = {
     "chrome": ("chrome.exe", "google-chrome", "chromium", "chromium-browser"),
 }
 
-# Windows 常见安装路径（浏览器类型 → 候选绝对路径模板）
-_WIN_PATHS: dict[str, tuple[str, str, str, str]] = {
+# Windows 常见安装路径（浏览器类型 → 候选绝对路径模板）。
+# 这是「浏览器是否安装」的唯一候选来源：extension_installer 会复用本表，
+# 避免两份路径表（旧 installer._browser_binary_candidates）漂移。
+_WIN_INSTALL_PATHS: dict[str, tuple[str, ...]] = {
     # Edge 的 x86/标准 ProgramFiles；Chrome 的 x86/标准 ProgramFiles 和 LocalAppData 路径
     "msedge": (
         r"%ProgramFiles(x86)%\Microsoft\Edge\Application\msedge.exe",
@@ -50,6 +52,16 @@ def _expand_env(path: str) -> Path:
     return Path(os.path.expandvars(path))
 
 
+def browser_binary_candidates(browser: str) -> list[Path]:
+    """返回 browser（msedge/chrome，或 edge/chrome 别名）已知安装路径的候选。
+
+    只列路径、不校验存在性；可供 find_browser_exe 与 extension_installer 共用，
+    保证「检测安装」与「自启定位」看到同一份路径表。
+    """
+    key = {"edge": "msedge"}.get(browser, browser)
+    return [_expand_env(p) for p in _WIN_INSTALL_PATHS.get(key, ())]
+
+
 def find_browser_exe(browser: str) -> Path | None:
     """定位指定浏览器（msedge/chrome）的可执行文件；找不到返回 None。"""
     env_key = _ENV_KEY.get(browser)
@@ -59,8 +71,7 @@ def find_browser_exe(browser: str) -> Path | None:
             return exe
     # Windows：先探测已知安装路径，再兜底 PATH
     if os.name == "nt":
-        for template in _WIN_PATHS.get(browser, ()):
-            exe = _expand_env(template)
+        for exe in browser_binary_candidates(browser):
             if exe.is_file():
                 return exe
     # PATH 探测（跨平台兜底）

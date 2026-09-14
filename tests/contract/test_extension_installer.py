@@ -895,3 +895,60 @@ def test_extension_open_browser_endpoint_404_when_missing(packed_server, monkeyp
     status, body = _raw_post(base, "/api/extension/open-browser", {"browser": "chrome"})
     assert status == 404
     assert json.loads(body.decode("utf-8"))["error"] == "NOT_FOUND"
+
+
+def _status_for_install_mode(**overrides):
+    base = {
+        "packed": None,
+        "browsers": {
+            "chrome": {"profiles": [], "unpackedProfiles": []},
+            "edge": {"profiles": [], "unpackedProfiles": []},
+        },
+    }
+    base.update(overrides)
+    return base
+
+
+def test_derive_install_mode_precedence():
+    assert ext._derive_install_mode(
+        _status_for_install_mode()) == "not-installed"
+
+    # 注册表 CRX 启用 → packed-external-registry
+    assert ext._derive_install_mode(_status_for_install_mode(**{
+        "browsers": {"chrome": {"profiles": [{"enabled": True}], "unpackedProfiles": []},
+                     "edge": {"profiles": [], "unpackedProfiles": []}},
+    })) == "packed-external-registry"
+
+    # Load unpacked 启用 → load-unpacked，且优先于注册表
+    assert ext._derive_install_mode(_status_for_install_mode(**{
+        "browsers": {
+            "chrome": {"profiles": [{"enabled": True}], "unpackedProfiles": []},
+            "edge": {"profiles": [{"enabled": True}], "unpackedProfiles": [{"enabled": True}]},
+        },
+    })) == "load-unpacked"
+
+    # 仅打包无启用 → packed-external-registry
+    assert ext._derive_install_mode(
+        _status_for_install_mode(**{"packed": {"extensionId": "x"}})
+    ) == "packed-external-registry"
+
+
+def test_env_status_base_shape(monkeypatch, tmp_path):
+    """纯静态诊断同源结构：双浏览器六字段 + 版本 + 安装途径；不掺在线心跳。"""
+    from rpa_core import __version__
+    monkeypatch.setattr(
+        ext, "browser_user_data_dirs", lambda browser: [tmp_path / "nothing"]
+    )
+    monkeypatch.setattr(
+        ext, "_browser_binary_candidates", lambda browser: [tmp_path / "no-browser"]
+    )
+    monkeypatch.setattr(ext, "browser_running", lambda name: False)
+    result = ext.env_status_base()
+    assert set(result) == {"version", "installMode", "browsers"}
+    assert result["version"] in (__version__, "0.1.0")
+    assert set(result["browsers"]) == {"chrome", "edge"}
+    for info in result["browsers"].values():
+        assert set(info) == {
+            "binary", "running", "installed", "enabled", "uninstallBlocked",
+        }
+        assert "online" not in info  # 心跳由调用方并，纯静态不含

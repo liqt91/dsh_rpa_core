@@ -20,7 +20,7 @@ import pytest
 from rpa_core.devserver import DevServer
 from rpa_core.executors import PlaywrightExecutor
 from rpa_core.executors.browser_ext import ExtensionExecSession
-from rpa_core.extension_exec import ExtensionExecClient
+from rpa_core.extension_exec import ExtensionExecClient, ExtensionExecHub
 from rpa_core.model.command import CommandInvocation
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -55,14 +55,18 @@ class FakeExtension:
     """扮演扩展 background：长轮询领命令 → 回调执行 → 回传结果。
 
     `host`：宿主浏览器标识（随长轮询 query 上报，None = 不上报，模拟旧版扩展）。
+    `focused` / `focused_at`：随心跳上报窗口焦点（`foc`/`focat`），用于同浏览器多实例焦点路由测试。
     """
 
     def __init__(self, base: str, handlers: dict | None = None, host: str | None = "msedge",
-                 instance_id: str | None = None):
+                 instance_id: str | None = None, *, focused: bool = False,
+                 focused_at: int = 0):
         self.base = base
         self.handlers: dict = handlers or {}
         self.host = host
         self.instance_id = instance_id
+        self.focused = focused
+        self.focused_at = focused_at
         self.seen: list[tuple[str, dict]] = []
         self._stop = False
         self._thread = threading.Thread(target=self._loop, daemon=True)
@@ -81,6 +85,7 @@ class FakeExtension:
             query += f"&host={self.host}&ua={urllib.parse.quote('Mozilla/5.0 ' + self.host)}"
         if self.instance_id:
             query += f"&iid={self.instance_id}"
+        query += f"&foc={1 if self.focused else 0}&focat={self.focused_at}"
         while not self._stop:
             status, payload = _request("GET", query, base=self.base)
             if status != 200:
@@ -747,3 +752,73 @@ def test_executor_navigate_outputs_browser_instance_fields(server):
         asyncio.run(go())
     finally:
         fake.stop()
+
+
+# ---------------------------------------------------- 同浏览器多实例·焦点路由
+
+
+def _seed_host(hub: ExtensionExecHub, key: str, browser: str, focused: bool,
+               focused_at: int) -> None:
+    """向 Hub 注入一个在线的宿主实例（供 _focus_beaten 纯逻辑单测）。"""
+    with hub._cond:
+        hub._hosts[key] = {
+            "record": {
+                "browser": browser,
+                "instanceId": key,
+                "focused": focused,
+                "focusedAt": focused_at,
+            },
+            "at": time.monotonic(),
+        }
+
+
+def test_focus_beaten_ranking():
+    """焦点序判定：聚焦优先于 focusedAt；focusedAt 越晚（最后失去焦点）越优；tie 归 owner。"""
+    hub = ExtensionExecHub()
+
+    def beaten(owner_at: int, owner_focus: bool, rival_at: int, rival_focus: bool,
+               own_key="owner") -> bool:
+        _seed_host(hub, own_key, "msedge", owner_focus, owner_at)
+        _seed_host(hub, "rival", "msedge", rival_focus, rival_at)
+        with hub._cond:
+            return hub._focus_beaten("msedge", own_key)
+
+    # 聚焦实例 > 非聚焦（即使对方 focusedAt 更高）
+    assert beaten(100, True, 5000, False) is False          # 会话本身就聚焦 → 不让位
+    assert beaten(5000, False, 4000, True) is True          # 对手聚焦 → 让位
+    # 都无焦点：focusedAt 更晚（最后失去焦点）更优
+    assert beaten(200, False, 300, False) is True           # 对手最后聚焦更晚 → 让位
+    assert beaten(300, False, 200, False) is False          # 我最后聚焦更晚 → 不让位
+    # focused 布尔优先于 focusedAt 数值（近失焦但 focusedAt 高也排后）
+    assert beaten(1000, True, 900, False) is False
+    assert beaten(900, False, 1000, True) is True
+    # tie（均无焦点信息）→ 不触发让位（保持先到先得）
+    assert beaten(0, False, 0, False) is False
+
+
+def test_next_command_focus_prefers_focused_instance(server):
+    """targetHost 为该浏览器名、同浏览器多实例时，命令由「正在聚焦」的实例领取（对齐影刀）。"""
+    base = f"http://127.0.0.1:{server.port}"
+    focused_edge = FakeExtension(
+        base, {"ping": lambda args: {"who": "focused"}}, host="msedge",
+        instance_id="edge-a", focused=True, focused_at=5000,
+    ).start()
+    idle_edge = FakeExtension(
+        base, {"ping": lambda args: {"who": "idle"}}, host="msedge",
+        instance_id="edge-b", focused=False, focused_at=3000,
+    ).start()
+    try:
+        _wait_instances(base, {"edge-a", "edge-b"})
+
+        status, payload = _request(
+            "POST",
+            "/api/ext/command/submit",
+            {"op": "ping", "targetHost": "msedge", "timeoutSeconds": 5},
+            base=base,
+        )
+        assert status == 200
+        # 命令由聚焦实例 edge-a 领取，而非先到先得的任一实例
+        assert payload["ok"] is True and payload["value"]["who"] == "focused"
+    finally:
+        focused_edge.stop()
+        idle_edge.stop()

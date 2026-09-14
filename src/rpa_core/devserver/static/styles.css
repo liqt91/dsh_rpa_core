@@ -332,6 +332,45 @@ body.resizing-bottom * { cursor: row-resize !important; }
 #element-dialog .dlg-verify.bad { color: var(--bad); }
 #element-dialog .dlg-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 12px; }
 
+/* 数据表格面板（与元素库同级，tab 切换） */
+#bottom-tabs {
+  display: flex; gap: 2px; padding: 6px 12px 0; border-bottom: 1px solid var(--border);
+}
+#bottom-tabs .bottom-tab {
+  border: 1px solid transparent; border-bottom: none; background: transparent;
+  padding: 5px 14px; cursor: pointer; font-size: 12px; color: var(--muted);
+  border-radius: 6px 6px 0 0; font-weight: 600;
+}
+#bottom-tabs .bottom-tab:hover { color: var(--body); }
+#bottom-tabs .bottom-tab.active {
+  background: var(--surface, #fff); color: var(--accent, #0a7ea4);
+  border-color: var(--border);
+}
+#bottom-tabs .bottom-tab.active::after {
+  content: ""; display: block; height: 1px; background: var(--surface, #fff);
+  margin: 0 -14px; position: relative; top: 5px;
+}
+#elements-panel, #table-panel {
+  display: flex; flex-direction: column; flex: 1; min-height: 0;
+}
+#elements-panel.hidden, #table-panel.hidden { display: none; }
+.table-toolbar { display: flex; align-items: center; gap: 8px; padding: 6px 12px; flex-wrap: wrap; }
+.table-toolbar button { padding: 3px 10px; }
+.table-hint { margin-left: auto; font-size: 11px; color: var(--faint); }
+#table-wrap { overflow: auto; flex: 1; min-height: 0; border-top: 1px solid var(--border); }
+#table-grid { border-collapse: collapse; width: max-content; min-width: 100%; font-size: 12px; }
+#table-grid th, #table-grid td { border: 1px solid var(--border); padding: 2px 4px; }
+#table-grid thead th { position: sticky; top: 0; background: var(--bg); }
+.table-col-head { min-width: 120px; }
+.table-col-label { width: 70px; }
+.table-col-type { width: 70px; }
+.table-col-del, .table-row-del { border: none; background: none; color: var(--bad); cursor: pointer; padding: 0 4px; }
+.table-col-del:hover, .table-row-del:hover { color: #ff5a5a; }
+.table-corner { text-align: center; color: var(--muted); width: 46px; }
+.table-row-num { text-align: center; color: var(--muted); }
+.table-cell { width: 100%; box-sizing: border-box; }
+#table-grid td input.table-cell:not([type="checkbox"]) { min-width: 100px; }
+
 /* 浏览器捕获插件安装对话框 */
 #extension-dialog-mask {
   position: fixed; inset: 0; background: rgba(0,0,0,.35);
@@ -362,6 +401,7 @@ body.resizing-bottom * { cursor: row-resize !important; }
 .ext-badge.ok { background: #1a7f37; }
 .ext-badge.warn { background: #bf8700; }
 .ext-badge.bad { background: #cf222e; }
+.ext-badge.dim { background: #8c959f; }
 .ext-open-browser { margin-left: auto; font-size: 12px; }
 .ext-note { font-size: 12px; color: var(--muted); justify-content: center; }
 #extension-result { font-size: 12px; margin-top: 8px; white-space: pre-wrap; }

@@ -1,0 +1,33 @@
+{
+  "id": "data.fileExists",
+  "version": "1.0.0",
+  "executor": "python.worker",
+  "kind": "query",
+  "risk": "read",
+  "capabilities": [],
+  "resources": ["workspace.filesystem"],
+  "stability": "stable",
+  "effect": {"kind": "read", "replay": "safe", "idempotency": "none"},
+  "input_schema": {
+    "type": "object",
+    "required": ["workspace", "path"],
+    "properties": {
+      "workspace": {"type": "string", "minLength": 1},
+      "path": {"type": "string", "minLength": 1}
+    },
+    "additionalProperties": false
+  },
+  "output_schema": {
+    "type": "object",
+    "required": ["exists", "path"],
+    "properties": {"exists": {"type": "boolean"}, "path": {"type": "string"}},
+    "additionalProperties": false
+  },
+  "x-outputs": {
+    "exists": {"label": "是否存在", "primary": true}
+  },
+  "errors": ["CAPABILITY_DENIED", "SCRIPT_FAILED", "TIMEOUT", "CANCELLED"],
+  "implementation": {"handler": "python.worker:file_exists"},
+  "default_timeout_seconds": 15,
+  "retryable": true
+}

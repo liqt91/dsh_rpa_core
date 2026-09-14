@@ -1,0 +1,42 @@
+{
+  "id": "data.table.getCell",
+  "version": "1.0.0",
+  "executor": "python.worker",
+  "kind": "query",
+  "risk": "read",
+  "capabilities": [],
+  "resources": [],
+  "stability": "stable",
+  "effect": {"kind": "read", "replay": "safe", "idempotency": "none"},
+  "input_schema": {
+    "type": "object",
+    "required": ["row", "column", "varName"],
+    "properties": {
+      "flowDir": {"type": "string", "x-hidden": true, "description": "流程目录（运行时自动注入）。"},
+      "table": {"type": "string", "default": "default", "description": "数据表格名称（当前固定为 default）。"},
+      "row": {"type": "integer", "minimum": 1, "x-fx": true, "description": "目标行号（从 1 开始）。"},
+      "column": {"type": "string", "x-fx": true, "description": "目标列名（表格列 label，如「姓名」）。"},
+      "varName": {"type": "string", "pattern": "^[A-Za-z_]\\w*$", "description": "目标变量名，读取到的单元格值写入该变量。", "hidden": true}
+    },
+    "additionalProperties": false
+  },
+  "output_schema": {
+    "type": "object",
+    "required": ["varName", "value"],
+    "properties": {
+      "varName": {"type": "string"},
+      "value": {"type": ["string", "number", "integer", "boolean", "object", "array", "null"]}
+    },
+    "additionalProperties": false
+  },
+  "x-outputs": {
+    "varName": {"label": "变量名", "hidden": true},
+    "value": {"label": "单元格值"}
+  },
+  "x-var-write": {"field": "varName"},
+  "x-runtime": {"inject": ["flowDir"]},
+  "errors": ["INVALID_INPUT", "TIMEOUT", "CANCELLED"],
+  "implementation": {"handler": "python.worker:table_get_cell"},
+  "default_timeout_seconds": 15,
+  "retryable": true
+}

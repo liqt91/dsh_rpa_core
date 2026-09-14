@@ -61,11 +61,27 @@ function hostInfo() {
   };
 }
 
-function hostQuery() {
+// 最近一次检测到宿主浏览器窗口处于前台聚焦的时刻（wall clock ms）。
+// 仅内存缓存（SW 回收会丢，属可接受近似）；`focused` 与影刀「焦点优先→最后失去焦点」路由对应。
+let cachedFocusedAt = 0;
+
+async function focusedState() {
+  let focused = false;
+  try {
+    const win = await chrome.windows.getLastFocused();
+    focused = !!win.focused;
+  } catch { focused = false; }   // 无窗口/API 不可用统一按无焦点处理
+  if (focused) cachedFocusedAt = Date.now();
+  return { focused, focusedAt: cachedFocusedAt };
+}
+
+async function hostQuery() {
   const info = hostInfo();
+  const foc = await focusedState();
   return `&host=${encodeURIComponent(info.browser)}&iid=${encodeURIComponent(info.instanceId)}`
     + `&ver=${encodeURIComponent(info.version)}`
-    + `&platform=${encodeURIComponent(info.platform)}&ua=${encodeURIComponent(info.userAgent)}`;
+    + `&platform=${encodeURIComponent(info.platform)}&ua=${encodeURIComponent(info.userAgent)}`
+    + `&foc=${foc.focused ? 1 : 0}&focat=${foc.focusedAt}`;
 }
 
 // ---------------------------------------------------------------- 捕获通道
@@ -166,7 +182,7 @@ async function execLoop() {
     let resp;
     try {
       resp = await fetch(
-        `${DEVSERVER}/api/ext/command/next?wait=${EXEC_HOLD_S}${hostQuery()}`,
+        `${DEVSERVER}/api/ext/command/next?wait=${EXEC_HOLD_S}${await hostQuery()}`,
       );
     } catch {
       await sleep(3000);   // devserver 不在线：退避重试
