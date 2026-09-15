@@ -1,5 +1,47 @@
 # 工作日志
 
+## 2026-09-16
+
+- **修复 WorkBuddy 连接器「连接失败：Python 3.13.14 does not satisfy runtime requirement 3.12」**——根因是 `workbuddy-connector/cli.json` 把 `runtime.version` 写成了**裸版本号** `"3.12"`。裸版本在 specifier 语义下等价于**精确要求**（`==3.12`，`packaging` 甚至直接判 `InvalidSpecifier`），而宿主托管的 Python 只有一个「当前版本」3.13.x（本机 `binaries/python/versions/current` = 3.13.12，Windows 上 default venv = 3.13.14），于是必然不满足——宿主**不会**为单个连接器另装一个 3.12。
+  - **证据三条**（均为实测，非推测）：① 宿主版本池只有 3.13.x；② 连接器市场缓存里 41 个 CLI 连接器**一律用范围语法**（40 个 `>=x.y`），唯一的 Python 样本 `emr-query` 写 `">=3.11"`；③ 本包发布 wheel `rpa_core_runtime-0.1.0-py3-none-any.whl` 的 `requires_python = ">=3.12"`。`packaging` 实测：`==3.12` 对 3.13.14 → False，`>=3.12` → True。
+  - **修复**：`version` 改 `">=3.12"`（与 wheel metadata 同口径）；`connector-meta.json` 版本 0.1.0 → 0.1.1（配置修复按市场约定递增）；契约 **+2 防回归**——`runtime.version` 必须是范围语法（拒绝裸版本号），且必须与 `pyproject.toml` 的 `requires-python` **逐字一致**（宿主按 cli.json 备解释器、pip 按 wheel metadata 决定能否安装，口径不一致就会出现「能装但不给装」）。
+  - **顺带**：`workbuddy-connector.zip` 重新打包——原包是 09-04 快照，仍带 `.cmd` 入口、`win32` 的 init 缺 `install-extension`，**滞后于源文件两个修复**（若此前拿该 zip 提交/安装，那两个修复均未生效）。
+  - 排查方法留档：先看**官方市场缓存里同类连接器怎么写**（`~/.workbuddy/connectors-marketplace/connectors/<source>/cli.json`）比逆向宿主可靠得多——宿主 `app.asar`（298MB）用 ripgrep 搜不出任何文案（连 `minWorkbuddyVersion` 这种必然存在的字段名都搜不到）。
+
+## 2026-09-15
+
+- **桌面 GUI 从零打通到编辑闭环（切片 2-5）**：
+  - **切片2 流程卡片画布**：`flow_model.py` 把 Workflow AST 映射到 `QStandardItemModel`（虚拟组行承载 AST 无节点的分支，`iter_real_nodes` 导出时剔除）；自定义 MIME 只携节点 id，自实现 `mimeData`/`dropMimeData` 做同模型移动，拒绝移入自身后代防成环。`canvas.py` 的 `CardDelegate` 自绘复刻 Web 视觉：白底圆角卡片、选中 `#daedff`、4px 深度色线、拖柄/同级序号/粗体命令名/等宽参数摘要/命名空间徽标。
+  - **切片3 参数表单**：`param_form.py` 按 manifest `input_schema` 生成原生控件（enum → QComboBox 且真值存 itemData、array/object → 单行 JSON、必填标 `*`）；新增 `ROLE_ARGS_RAW` + `ArgsHolder` 存 Python 对象引用，避开 QVariantMap 的键序重排与类型丢失。
+  - **切片4 编辑闭环**：`model_to_workflow` 以节点 raw 为模板、只替换结构键（`with`/`children`/`then`/`else`/`catch`），GUI 不编辑的字段原样保留；保存前 `Workflow.model_validate` 校验，失败只进状态栏不写盘；`rowsInserted`/`rowsRemoved` 置脏 + 标题 `•` 前缀 + closeEvent 保存确认。顺带修正 SAMPLE 的 `itemVar` 错键（规范键为 `item_var`/`error_var`）。
+  - **切片5 节点增删**：`allocate_node_id` 生成全模型唯一 id；`insert_command(command_id, target)` 按容器/叶子的落点规则插入；左树双击新增、Delete 删除（根节点与虚拟组受保护）。
+  - 新增「新建 / 打开」（Ctrl+N / Ctrl+O）文件入口与 `--workflow` CLI 透传。
+- **GUI 三处交互硬修的诊断链**（都靠插桩/A-B 对照定位，非读代码猜测）：① **拖拽全程放不下**——`dragEnterEvent` 先用「无效 parent」探测模型能力，旧实现对无效 parent 一律 False，拖拽从入口即被整体拒绝（模型级单测直接调 `dropMimeData`，故未暴露）；② **拖拽松手后卡片消失**——`dropMimeData` 逻辑零 bug，真因是 Qt `InternalMove` 下 `startDrag` 在 `QDrag.exec()` 返回后再 `clearOrRemove()` 删一遍源行，而模型已用 `takeRow + insertRow` 原子移动完毕，旧索引必然删错；重写 `FlowTreeView.startDrag` 跳过基类清理；③ **（Windows）拖不动**——`cli.py` 顶层 `from rpa_core.executors import ...` 触发 pywinauto 模块加载期 `CoInitialize(COINIT_MULTITHREADED)`，随后 `QApplication` 的 `OleInitialize(STA)` 被拒 → OLE 拖放整体失效（stderr 有 `OleInitialize() failed: COM error 0x80010106`）；改为延迟导入，并把 orchestrator 的 executor 引用降为 TYPE_CHECKING 守卫。
+- **if 结构影刀式扁平化 + 结束标记行落点修正**：
+  - **落点 bug**（维护者实测：灰色 `结束 循环` 下方竟还能插进一个缩进的「返回」）——end-bracket 是容器的最后一个 child，凡按 `rowCount()` 追加都落到结束行**下方**，画面上在容器外、AST 里仍在容器内，视觉与语义相悖。新增 `_real_child_insert_row`，插入/同模型移动/落点解析统一走它，补 3 条回归用例。
+  - **顺带挖出 PySide6 所有权陷阱（SIGSEGV 级）**：`QStandardItem.insertRow(row, item)` **不转移所有权**（只有 C++ 签名为 `QList<QStandardItem*>` 的 list/tuple 形式才转移），调用方丢弃返回值会让 Python 引用归零 → C++ 对象被 GC 销毁 → 该行变 `None`，再往前走就是 `exit 139`。最小矩阵实测后全部改 `[new_item]` 并留注释。
+  - **扁平化**：去掉「则执行 / 否则执行」两层虚拟分组，改为 if 直属 then 子节点 + 「否则」指令行 + 「结束 如果」；`_branch_insert_row` 以标记行为界切 then / else。
+  - **「否则」按需化**（维护者口径：else 是单独指令、可拖放、有需要就加、默认不加）：`build_item` 只在 AST 有 else 段时才插该行，无 else 的 if 只剩 then + 「结束 如果」；它是**真指令**（可选中、可拖、可删，删掉即取消分支且其下节点自然并入 then 段、不丢节点）；无 AST id 却要参与拖拽定位，故用合成 id `@else:<if_id>`；拖动边界限定**同一个 if 内**（跨 if 迁移会静默改写两个 if 的分支归属，几乎不可能是用户意图）；左树新增固定「流程控制」组作为添加入口，`_apply_filter` 支持显示名 + 命令 id 双匹配。
+- **两处遗留清理**：`gui/app.py` 的 `# noqa: N802（Qt 命名）` 因**中文括号被 ruff 当成 code 列表的一部分**而判 `Invalid noqa directive`（说明移到上一行、行尾只留 code）；`tests/contract/test_extension_installer.py` 的私钥夹具从**模块级**读取改为 `lru_cache` 惰性 + `PermissionError` 降级为 `pytest.skip`——模块级读取一旦撞上沙箱敏感内容审批不可用，会让**整个文件**在收集阶段 ERROR（表现为大批 "ERROR at setup"）。
+- **门禁**：GUI 契约 69 例全绿（canvas/node_edit/save_roundtrip/param_form/smoke）；全量 pytest 0 failed 0 error；ruff / 架构（50 files、83 manifests）/ tasks（44 features）全过。
+
+## 2026-09-14
+
+- **每流程一张数据表格**（横空对齐影刀「数据表格」）：`data.table.*` 6 条命令落地（getCell/setCell/appendRow/deleteRow/clear/exportCsv），行数据**跨运行累积保留**、`data.table.clear` 显式清空；worker 原子读改写 + CSV(BOM) + 列 key 寻址；devserver 增 `TableStore` 与 `/api/workflows/<flow>/table` 四端点。
+- **影刀对齐第二批**：`.harness/yingdao-gap-matrix.md` 差距矩阵后选定「文件/CSV/文本 + 流程延时」方向，落地 6 条纯 worker 指令（零外部依赖、单测全覆盖）：`data.readText` / `data.appendText` / `data.fileExists` / `data.deletePath` / `data.datetimeNow` / `workflow.sleep`。
+- **`data.setVar` 补「变量类型」**（对标影刀「设置变量」的类型格式化）：enum `string/number/boolean/object/array`（默认 string，向后兼容），worker `_coerce_by_type` 按类型格式化取值；二轮按维护者意见去掉变量名下拉与 `auto`（写新名=定义、写已有名=覆盖）。
+- **浏览器三条平台无关缺陷修复 + macOS 可用性**：① 恢复 `resolve_session_id`（显式 > 最近激活 > 唯一会话）并把 attach/listPages 移入「不依赖既有会话」集合；② 修输出契约漂移——执行器在 outputs 里多带 manifest 未声明的 `sessionId`，在 `additionalProperties: false` 下命中运行期 `INVALID_OUTPUT`；③ `browser_user_data_dirs()` 补 darwin 分支、扩展启动路径表按平台拆分，macOS 从「静默失效」修到 Edge 四项检测全 true。
+- **门禁耗时治理**：画像先行（cProfile + `--durations`）证明耗时几乎全在 `load_catalog`——83 条 manifest 每次读盘 + 解析 + 166 次 JSON Schema 自检，沙箱里单次 5–6.6s，叠加各 fixture 后把门禁推到 **12m39s**；加**快照指纹缓存**后大幅下降。
+- **全量门禁跨平台排查**：证伪「Windows 专用指令导致卡住」的猜测——macOS 上完整 pytest 337 passed / 13 skipped / 0 failed，13 个 skip 全是 Windows-only 用例的正常守卫。
+- **左侧指令树默认收起**（维护者：指令多不方便找）：语义分组首次渲染即折叠、状态记忆、搜索时强制全展开。
+
+## 2026-09-11
+
+- **浏览器执行/捕获收敛到自研扩展单通道**（维护者：只保留自研插件）：先移除 BrowseSkill(bsk) 执行与捕获链路（删 `bsk_client.py`、`executors/browser_bsk.py`、`capture/browser_bsk.py` 及专项测试），随后**彻底移除 playwright**（pyproject 删依赖 + `uv.lock` 重锁）——执行器纯扩展化，扩展离线时做前置预检 <1s 显式失败（`channel_offline`，不回退、不白等），一批命令改用扩展的 DOM/页面原语。
+- **navigate「打开网页」对标影刀多轮收敛**：新增必选 `browserType`（msedge/chrome，多扩展宿主按标识路由——`_hosts` map + 心跳剔除 + 目标离线快速失败）；`channel` 收敛为**仅 playwright 通道生效**并删 firefox/webkit（实现走 `chromium.launch(channel=...)` 只支持 chromium 家族，事实不可用故不下发）；参数面板从 transport×channel 两层嵌套改为「单一下拉 + 通道透明」；session 绑定宿主浏览器避免多浏览器串台；**输出浏览器实例唯一 id + tabId**（同一 profile 多窗口 = 同一实例，`chrome.storage.local` 持久化 `rpaInstanceId`）；url 可省略协议（`_ensure_scheme`，缺失补 https）。
+- **移除扩展通道的 token 配对机制**（维护者：配对多余）：删掉 token 存储/TOFU/`_require_extension_token`、`/api/capture/extension/token` 路由、background.js 的 `getToken` 与 `X-Capture-Token` 头、popup 配对/重置与前端配对步骤；hybrid 改为**默认启用**（不再依赖已配对）。
+- **命令列表与参数顺序对标影刀**：新增 manifest 顶层 `x_palette_order` 整数字段，30 条 `browser.*` 按 benchmark 文档的影刀编号写入。
+
 ## 2026-09-10
 
 - **表达式双模式落地（x-fx 体系后端消费）**——用户定案：fx 用方括号标签、py 直写变量名且支持写回、sessionId 默认会话；其余 UX 建议均不采纳：
