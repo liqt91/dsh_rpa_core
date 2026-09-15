@@ -7,25 +7,15 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
-from rpa_core.capture import (
-    DesktopCaptureSession,
-    ExtensionCaptureSession,
-    HybridCaptureSession,
-)
+# 延迟导入说明：executors 与 capture 顶层包会在 __init__ 中导入 Win32DesktopExecutor，
+# 继而触发 pywinauto 的 COM CoInitialize（MTA）。若 QApplication 在这之后创建，
+# Qt 无法再把主线程初始化为 STA，OLE 拖放将彻底失效（CanDrop/Drop 永远收不到）。
+# 因此把这两类导入移到各自子命令内部，保证 GUI 路径（rpa-core gui）经过的
+# 模块链完全不触碰 pywin32 / pywinauto 的 COM 初始化。
 from rpa_core.catalog import load_catalog
 from rpa_core.compiler import WorkflowCompiler
 from rpa_core.compiler.compiler import WorkflowCompileError
 from rpa_core.devserver import DevServer
-from rpa_core.executors import (
-    DesktopExecutor,
-    ExecutorRegistry,
-    PlaywrightExecutor,
-    PythonWorkerExecutor,
-)
-
-# Win32DesktopExecutor仅在Windows上可用
-if sys.platform == "win32":
-    from rpa_core.executors import Win32DesktopExecutor
 from rpa_core.model.workflow import Workflow
 from rpa_core.runtime import Orchestrator
 from rpa_core.runtime.checkpoint import CheckpointError
@@ -79,12 +69,19 @@ def _compile(path: Path):
 
 def _browser_capture_factory(**kwargs):
     """浏览器捕获工厂：已统一收敛到自研扩展单通道（无独立浏览器进程）。"""
+    from rpa_core.capture import ExtensionCaptureSession  # 延迟导入，避开 GUI 路径 COM
+
     kwargs["transport"] = "extension"
     return ExtensionCaptureSession(**kwargs)
 
 
 def _desktop_capture_factory(**kwargs):
     """桌面捕获工厂：hybrid=True → 混合会话（桌面 hover + 扩展双通道）。"""
+    from rpa_core.capture import (  # 延迟导入，避开 GUI 路径 COM
+        DesktopCaptureSession,
+        HybridCaptureSession,
+    )
+
     if kwargs.pop("hybrid", False):
         return HybridCaptureSession(desktop_factory=DesktopCaptureSession, **kwargs)
     return DesktopCaptureSession(**kwargs)
@@ -172,7 +169,8 @@ def _cmd_capture(args) -> int:
         start = session.start
         pick = lambda timeout: session.pick(timeout_seconds=timeout, click_css=args.click_css)  # noqa: E731
     else:
-        session = DesktopCaptureSession(
+        # 桌面捕获：走工厂，保证延迟导入 capture 包
+        session = _desktop_capture_factory(
             hotkey=args.hotkey,
             timeout_seconds=args.timeout,
             point=_parse_point(args.point),
@@ -635,6 +633,14 @@ def main() -> int:
     flow_dir = Path(args.workflow).resolve().parent
 
     async def run() -> int:
+        # 延迟导入 executors：仅在实际跑工作流时加载，保证 GUI/catalog/validate
+        # 等子命令的导入链不触碰 pywinauto → COM 初始化。
+        from rpa_core.executors import (
+            DesktopExecutor,
+            ExecutorRegistry,
+            PlaywrightExecutor,
+            PythonWorkerExecutor,
+        )
         browser = PlaywrightExecutor()
         executors = {
             "browser.playwright": browser,
@@ -643,6 +649,8 @@ def main() -> int:
         }
         # Win32DesktopExecutor仅在Windows上可用
         if sys.platform == "win32":
+            from rpa_core.executors import Win32DesktopExecutor  # noqa: PLC0415 延迟导入
+
             executors["desktop.win32"] = Win32DesktopExecutor()
         registry = ExecutorRegistry(executors)
         try:

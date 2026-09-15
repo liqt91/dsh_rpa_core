@@ -88,7 +88,7 @@ def test_cli_catalog_matches_load_catalog(capsys):
 
 def test_cli_capture_browser_dispatch_forces_extension(monkeypatch, tmp_path, capsys):
     """浏览器捕获 CLI 已收敛为自研扩展单通道：默认且仅允许 extension。"""
-    monkeypatch.setattr(cli, "ExtensionCaptureSession", _FakeBrowserSession)
+    monkeypatch.setattr("rpa_core.capture.ExtensionCaptureSession", _FakeBrowserSession)
     _FakeBrowserSession.instances = []
     code, _ = _run([
         "capture", "browser", "--headless", "--start-url", "https://example.com",
@@ -101,7 +101,7 @@ def test_cli_capture_browser_dispatch_forces_extension(monkeypatch, tmp_path, ca
 
 def test_cli_capture_browser_rejects_unknown_transport(monkeypatch, tmp_path, capsys):
     """非 extension 传输选择已随 playwright 移除：argparse 直接拒绝（不会实例化会话）。"""
-    monkeypatch.setattr(cli, "ExtensionCaptureSession", _FakeBrowserSession)
+    monkeypatch.setattr("rpa_core.capture.ExtensionCaptureSession", _FakeBrowserSession)
     _FakeBrowserSession.instances = []
     old = sys.argv
     sys.argv = ["rpa-core", "capture", "browser", "--transport", "persistent"]
@@ -114,7 +114,7 @@ def test_cli_capture_browser_rejects_unknown_transport(monkeypatch, tmp_path, ca
 
 
 def test_cli_capture_desktop_point_and_save(monkeypatch, tmp_path, capsys):
-    monkeypatch.setattr(cli, "DesktopCaptureSession", _FakeDesktopSession)
+    monkeypatch.setattr("rpa_core.capture.DesktopCaptureSession", _FakeDesktopSession)
     _FakeDesktopSession.instances = []
     workflows = tmp_path / "workflows"
     code, out = _run([
@@ -132,7 +132,7 @@ def test_cli_capture_desktop_point_and_save(monkeypatch, tmp_path, capsys):
 
 
 def test_cli_capture_desktop_hover_passthrough(monkeypatch, tmp_path, capsys):
-    monkeypatch.setattr(cli, "DesktopCaptureSession", _FakeDesktopSession)
+    monkeypatch.setattr("rpa_core.capture.DesktopCaptureSession", _FakeDesktopSession)
     _FakeDesktopSession.instances = []
     code, _ = _run([
         "capture", "desktop", "--hover", "--timeout", "5",
@@ -143,7 +143,7 @@ def test_cli_capture_desktop_hover_passthrough(monkeypatch, tmp_path, capsys):
 
 
 def test_cli_capture_save_requires_flow(monkeypatch, tmp_path, capsys):
-    monkeypatch.setattr(cli, "ExtensionCaptureSession", _FakeBrowserSession)
+    monkeypatch.setattr("rpa_core.capture.ExtensionCaptureSession", _FakeBrowserSession)
     _FakeBrowserSession.instances = []
     code, out = _run([
         "capture", "browser", "--save-as", "x", "--workflows", str(tmp_path / "w"),

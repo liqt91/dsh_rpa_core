@@ -1,15 +1,22 @@
+from __future__ import annotations
+
 import asyncio
 import time
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from jsonschema import Draft202012Validator
 
 from rpa_core.catalog import CommandCatalog
 from rpa_core.compiler import ExecutionPlan
-from rpa_core.executors import ExecutorRegistry
+
+# ExecutorRegistry 仅作为类型标注引用（由 __future__.annotations 延迟求值），
+# 实际运行时由 cli.py 在 run() 内部导入后传入。避免 import orchestrator →
+# import executors → pywinauto 提前初始化 COM，阻断 GUI 路径的 OLE 拖放。
+if TYPE_CHECKING:
+    from rpa_core.executors import ExecutorRegistry
 from rpa_core.model.command import (
     CommandInvocation,
     CommandResult,
