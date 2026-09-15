@@ -28,3 +28,6 @@ frontend/dist/
 
 # 本机扩展配对 token（TOFU 生成/采纳，含本机凭据，不应入库）
 .capture-extension-token
+
+# PySide6 GUI 可行性 demo 的离屏截图（仅本地预览，不入库）
+.harness/demo/*.png
