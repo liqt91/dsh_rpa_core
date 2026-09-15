@@ -1,6 +1,6 @@
 # ADR 0014：编辑器宿主形态二 —— 独立桌面客户端的候选方案
 
-- 状态：**方案 E（PySide6 原生重写）已立项（2026-09-15）**；§8 为可行性实证，§9 为决策与前三切片（指令树 / 流程卡片画布 / 参数表单）落地记录，§10 为目标架构。其余候选（A–D）保留备查。
+- 状态：**方案 E（PySide6 原生重写）已立项（2026-09-15）**；§8 为可行性实证，§9 为决策与前四切片（指令树 / 流程卡片画布 / 参数表单 / 保存闭环）落地记录，§10 为目标架构。其余候选（A–D）保留备查。
 - 日期：2026-09-15
 - 关联：ADR 0010（编辑器宿主形态一：保持 Web）、ADR 0008（编辑器 UI 与零构建形态）、ADR 0011（运行控制 proxy）、ADR 0012（devserver 能力层复用）
 - 目的：列出「是否/以何种技术给编辑器一个独立桌面窗口」的可选路径，供维护者择定；本文不预设结论。
@@ -164,6 +164,13 @@ ADR 0010 曾以"捕获遮挡"为唯一诉求否决桌面客户端并列为远期
 - `flow_model.py` 新增 `ROLE_ARGS_RAW` 与 `ArgsHolder`：item 携带原始 with 参数 dict 的 Python 对象引用（不经 QVariantMap 转换，避免键序重排/类型丢失）；编辑参数时整体替换 holder。
 - `app.py` 右栏集成：画布选中 action 卡片即显示「滚动表单 + 应用参数」按钮，应用后 item 的参数与摘要同步更新（delegate 自动重绘）；容器/返回节点显示对应占位提示；参数修改目前仅在内存中，保存回 workflow.json 属后续切片。
 - `tests/contract/test_gui_param_form.py`：offscreen 12 例（enum 未设置项与中文标签、初始值选中、控件类型、收集跳过未设置、integer 类型、JSON 数组往返与非法 JSON、nullable 类型列表、必填星号、主窗口占位、选中出表单+应用回写、容器/返回提示、非法 JSON 应用进状态栏）。
+
+**第四切片（已落地）**：编辑闭环——模型回写 AST 与保存 workflow.json。
+
+- `flow_model.py`：`ArgsHolder` 增加 `raw`（节点原始 AST dict 模板），每个真实节点都携带；新增 `model_to_workflow(model, meta)` 与 `_rebuild_node`：以 raw 浅拷贝为模板，仅替换结构键（`with`/`children`/`then`/`else`/`catch`），GUI 不编辑的字段（condition/items/item_var/error_var/output_aliases/_exprModes 等）原样保留；虚拟组还原为 then/else/catch 列表，源文档省略的空 `else` 不自行补出。
+- `app.py`：工具栏「保存」（Ctrl+S）；`save_workflow(path)` 先回写 dict 再经 `Workflow.model_validate` 校验，通过后按 devserver 同款格式落盘（UTF-8、indent=2、末尾换行），校验失败进状态栏且不写文件；无源路径（内置示例）走 `QFileDialog` 另存为；参数应用与拖拽重排置脏（`rowsInserted/rowsRemoved` 信号，初始构建用 loading 守卫抑制），标题前缀 `•` 显示脏标记，保存后清除；`closeEvent` 对未保存修改弹保存/不保存/取消。`set_workflow` 统一深拷贝为 JSON 形状 dict，编辑不回写调用方对象；`run_gui` 透传 flow_path，打开真实文件后保存即原位写回。
+- 附带修正：内置示例的 `itemVar` 更正为规范键名 `item_var`（ForEachNode/TryNode 该字段无别名，Web 端同样用 item_var/error_var）。
+- `tests/contract/test_gui_save_roundtrip.py`：offscreen 9 例（未编辑 roundtrip 全等、try catch/error_var 保留、空 else 省略、参数编辑进 with、同级重排后顺序与 condition/items/item_var 保留、移入 then、落盘文件可被 Workflow 校验且格式正确+脏标记清除、拖拽置脏、pydantic 输入 roundtrip 保存）。
 
 ## 10. 目标架构：GUI 内嵌 ExtHub，Web 退化为形态之一（2026-09-15）
 

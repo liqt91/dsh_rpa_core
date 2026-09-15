@@ -9,7 +9,8 @@
 - 数据经 Qt ``UserRole`` 携带（节点 id / 节点类型 / 命令 id / 参数摘要），
   delegate 与后续的「模型 → AST」回写都从角色读取，不解析显示文本。
 - 拖拽：叶子 action/return 只可拖不可作为放置目标；容器与虚拟组可放置。
-  首版只做内存重排（``moveRow``），保存回 workflow.json 在后续切片接入。
+  首版只做内存重排（``moveRow``）；切片 4 起 ``model_to_workflow`` 可把
+  当前树（含重排与参数编辑）回写为 workflow dict 供保存。
 """
 
 from __future__ import annotations
@@ -50,14 +51,24 @@ _MIME_TYPE = "application/x-rpa-flow-node"
 
 
 class ArgsHolder:
-    """在 item 角色中携带 action 的 with 参数 dict。
+    """在 item 角色中携带 action 的 with 参数与所属节点的原始 AST dict。
 
     直接存 Python 对象引用：避免 setData(dict) 经 QVariantMap 转换时
-    重排键序（QMap 按键排序）或丢失复杂值类型。编辑参数时整体替换。
+    重排键序（QMap 按键排序）或丢失复杂值类型。
+
+    - ``args``：当前 with 参数（表单应用时整体替换，并同步回 ``raw["with"]``）；
+    - ``raw``：该节点的原始 AST dict（切片 4 回写时作为模板，保留 GUI
+      不编辑的字段——condition/items/item_var/error_var/output_aliases 等）。
     """
 
-    def __init__(self, args: dict[str, Any] | None = None) -> None:
+    def __init__(
+        self,
+        args: dict[str, Any] | None = None,
+        *,
+        raw: dict[str, Any] | None = None,
+    ) -> None:
         self.args: dict[str, Any] = dict(args or {})
+        self.raw: dict[str, Any] | None = raw
 
 
 def summarize_args(with_args: dict[str, Any], limit: int = 2) -> str:
@@ -228,14 +239,15 @@ def build_item(node: Any, *, label: Callable[[str], str] | None = None) -> QStan
         return _make_item(
             title=title, node_type="action", node_id=node_id,
             command_id=command_id, args_summary=summary,
-            args_holder=ArgsHolder(with_args),
+            args_holder=ArgsHolder(with_args, raw=raw),
         )
 
     if node_type == "return":
         value = raw.get("value")
         summary = "" if value is None else repr_json(value)
         return _make_item(
-            title="返回", node_type="return", node_id=node_id, args_summary=summary
+            title="返回", node_type="return", node_id=node_id,
+            args_summary=summary, args_holder=ArgsHolder(raw=raw),
         )
 
     # 容器节点
@@ -249,7 +261,10 @@ def build_item(node: Any, *, label: Callable[[str], str] | None = None) -> QStan
         title = "异常捕获"
     else:
         title = "顺序执行"
-    item = _make_item(title=title, node_type=node_type, node_id=node_id)
+    item = _make_item(
+        title=title, node_type=node_type, node_id=node_id,
+        args_holder=ArgsHolder(raw=raw),
+    )
 
     def attach_children(children: list[Any], parent: QStandardItem) -> None:
         for child in children:
@@ -306,3 +321,81 @@ def iter_real_nodes(model: FlowTreeModel):
     root = model.item(0)
     if root is not None:
         yield from walk(root)
+
+
+# ---- 模型 → Workflow dict 回写（切片 4：保存闭环） ------------------------
+def _rebuild_group(group: QStandardItem) -> list[dict[str, Any]]:
+    """虚拟分组（then/else/catch）→ 节点 dict 列表。"""
+    return [_rebuild_node(group.child(row)) for row in range(group.rowCount())]
+
+
+def _virtual_groups(item: QStandardItem) -> dict[str, QStandardItem]:
+    """收集 item 下的虚拟分组子 item（键为 branch-then/else/catch）。"""
+    groups: dict[str, QStandardItem] = {}
+    for row in range(item.rowCount()):
+        child = item.child(row)
+        if child.data(ROLE_IS_VIRTUAL):
+            groups[child.data(ROLE_NODE_TYPE)] = child
+    return groups
+
+
+def _rebuild_node(item: QStandardItem) -> dict[str, Any]:
+    """按树的当前结构把单个 item 还原为 AST 节点 dict。
+
+    以 item 携带的原始 raw dict 为模板浅拷贝，仅替换结构相关的键
+    （with/children/then/else/catch），GUI 不编辑的字段
+    （condition/items/item_var/error_var/output_aliases/_exprModes 等）原样保留。
+    """
+    holder: ArgsHolder = item.data(ROLE_ARGS_RAW)
+    node = dict(holder.raw)
+    node_type = item.data(ROLE_NODE_TYPE)
+
+    if node_type == "action":
+        node["with"] = dict(holder.args)
+        return node
+
+    if node_type in ("sequence", "forEach", "try"):
+        direct: list[dict[str, Any]] = []
+        for row in range(item.rowCount()):
+            child = item.child(row)
+            if not child.data(ROLE_IS_VIRTUAL):
+                direct.append(_rebuild_node(child))
+        node["children"] = direct
+        if node_type == "try":
+            catch_group = _virtual_groups(item).get("branch-catch")
+            if catch_group is not None:
+                node["catch"] = _rebuild_group(catch_group)
+            # 无 catch 虚拟组说明原本为空：保留 raw（缺省 []）
+        return node
+
+    if node_type == "if":
+        groups = _virtual_groups(item)
+        then_group = groups.get("branch-then")
+        node["then"] = (
+            _rebuild_group(then_group) if then_group is not None
+            else node.get("then", [])
+        )
+        else_group = groups.get("branch-else")
+        if else_group is not None:
+            node["else"] = _rebuild_group(else_group)
+        # 无 else 虚拟组说明原本为空：保留 raw（可能缺省或省略 else）
+        return node
+
+    # return 等叶子：raw 原样
+    return node
+
+
+def model_to_workflow(
+    model: FlowTreeModel, meta: dict[str, Any]
+) -> dict[str, Any]:
+    """把当前树模型回写为 workflow dict（JSON 形状，键名用 with/else 等别名）。
+
+    meta 提供工作流级字段（schema_version/id/name/inputs/timeout_seconds）；
+    返回结果应再经 ``Workflow.model_validate`` 校验后落盘。
+    """
+    root = model.item(0)
+    if root is None:
+        raise ValueError("空流程模型，无法回写")
+    document = dict(meta)
+    document["root"] = _rebuild_node(root)
+    return document

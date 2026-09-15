@@ -211,6 +211,11 @@
       "id": "desktop-gui-slice3",
       "title": "Native desktop client slice3: parameter schema form - input_schema to native widgets (enum/string/integer/boolean/JSON), right panel binds to selected canvas card with apply-to-model",
       "passes": true
+    },
+    {
+      "id": "desktop-gui-slice4",
+      "title": "Native desktop client slice4: edit round-trip - flow tree model rebuilds Workflow AST (preserving condition/items/item_var/catch), save to workflow.json with validation, dirty tracking and Save As",
+      "passes": true
     }
   ]
 }
