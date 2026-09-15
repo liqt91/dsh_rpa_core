@@ -3,6 +3,7 @@ import re
 import sys
 import urllib.error
 import urllib.request
+from functools import cache
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -29,8 +30,32 @@ ROOT = Path(__file__).resolve().parents[2]
 FIXTURES = ROOT / "tests" / "fixtures"
 # 夹具由 Git openssl（独立实现）生成：openssl rsa -pubout -outform DER 后 SHA-256 映射
 EXPECTED_ID = "mhiiampbndgpcpcdnilnkbnkafeofcem"
-_PKCS1 = (FIXTURES / "extension-test-key-pkcs1.pem").read_text(encoding="utf-8")
-_PKCS8 = (FIXTURES / "extension-test-key.pem").read_text(encoding="utf-8")
+
+
+@cache
+def _pem(name: str) -> str:
+    """惰性读取私钥夹具（每进程只读一次）。
+
+    刻意不做模块级读取：沙箱对私钥类文件的读取会触发敏感的审批流程，审批不可用
+    （后台任务无人批准）时会抛 PermissionError，甚至直接挂起被 SIGTERM——模块级
+    读取会让**整个文件**的用例在收集阶段就全军覆没（表现为大批 "ERROR at setup"）。
+    惰性读取把影响收敛到真正用到夹具的那几条用例，并且降级为 skip 而非 error，
+    门禁不会因为环境审批问题而报红。
+    """
+    try:
+        return (FIXTURES / name).read_text(encoding="utf-8")
+    except PermissionError as exc:  # pragma: no cover - 沙箱审批不可用时才触发
+        pytest.skip(f"私钥夹具不可读（敏感内容审批未通过）：{exc}")
+
+
+def _pkcs1() -> str:
+    """PKCS#1 私钥夹具。"""
+    return _pem("extension-test-key-pkcs1.pem")
+
+
+def _pkcs8() -> str:
+    """PKCS#8 私钥夹具。"""
+    return _pem("extension-test-key.pem")
 
 
 class FakeWinreg:
@@ -85,8 +110,8 @@ class FakeWinreg:
 
 
 def test_extension_id_matches_openssl_ground_truth():
-    assert extension_id_from_pem(_PKCS1) == EXPECTED_ID
-    assert extension_id_from_pem(_PKCS8) == EXPECTED_ID
+    assert extension_id_from_pem(_pkcs1()) == EXPECTED_ID
+    assert extension_id_from_pem(_pkcs8()) == EXPECTED_ID
     assert len(EXPECTED_ID) == 32
     assert all("a" <= char <= "p" for char in EXPECTED_ID)
 
@@ -271,7 +296,7 @@ def test_cli_install_defaults_to_guide_not_registry(_fake_registry, monkeypatch,
 def test_cli_registry_flag_writes_external_registry(_fake_registry, monkeypatch, tmp_path):
     build_dir = tmp_path / "build"
     build_dir.mkdir()
-    (build_dir / "extension.pem").write_text(_PKCS8, encoding="utf-8")
+    (build_dir / "extension.pem").write_text(_pkcs8(), encoding="utf-8")
     (build_dir / "extension.crx").write_bytes(b"Cr24-fake")
     monkeypatch.setattr(ext, "find_browser_binary", lambda: None)
     monkeypatch.setattr(ext, "browser_running", lambda browser: False)
@@ -296,7 +321,7 @@ def test_cli_registry_flag_writes_external_registry(_fake_registry, monkeypatch,
 def test_cli_policy_flag_uses_forcelist_route(_fake_registry, monkeypatch, tmp_path):
     build_dir = tmp_path / "build"
     build_dir.mkdir()
-    (build_dir / "extension.pem").write_text(_PKCS8, encoding="utf-8")
+    (build_dir / "extension.pem").write_text(_pkcs8(), encoding="utf-8")
     (build_dir / "extension.crx").write_bytes(b"Cr24-fake")
     monkeypatch.setattr(ext, "find_browser_binary", lambda: None)
     code, out = _cli(
@@ -315,7 +340,7 @@ def test_cli_policy_flag_uses_forcelist_route(_fake_registry, monkeypatch, tmp_p
 def test_cli_remove_extension_clears_both_mechanisms(_fake_registry, monkeypatch, tmp_path):
     build_dir = tmp_path / "build"
     build_dir.mkdir()
-    (build_dir / "extension.pem").write_text(_PKCS8, encoding="utf-8")
+    (build_dir / "extension.pem").write_text(_pkcs8(), encoding="utf-8")
     (build_dir / "extension.crx").write_bytes(b"Cr24-fake")
     monkeypatch.setattr(ext, "find_browser_binary", lambda: None)
     monkeypatch.setattr(ext, "open_path_in_explorer", lambda path: True)
@@ -360,7 +385,7 @@ def test_cli_registry_flag_errors_without_browser(_fake_registry, monkeypatch, t
 def test_cli_falls_back_to_elevated_on_registry_denied(_fake_registry, monkeypatch, tmp_path):
     build_dir = tmp_path / "build"
     build_dir.mkdir()
-    (build_dir / "extension.pem").write_text(_PKCS8, encoding="utf-8")
+    (build_dir / "extension.pem").write_text(_pkcs8(), encoding="utf-8")
     (build_dir / "extension.crx").write_bytes(b"Cr24-fake")
     monkeypatch.setattr(ext, "find_browser_binary", lambda: None)
 
@@ -418,7 +443,7 @@ def _raw(base: str, path: str, method: str = "GET"):
 def packed_server(tmp_path):
     build_dir = tmp_path / "build"
     build_dir.mkdir()
-    (build_dir / "extension.pem").write_text(_PKCS8, encoding="utf-8")
+    (build_dir / "extension.pem").write_text(_pkcs8(), encoding="utf-8")
     (build_dir / "extension.crx").write_bytes(b"Cr24-fake-bytes")
     server = DevServer(
         commands_root=ROOT / "commands",
@@ -722,7 +747,7 @@ def test_install_external_guided_respects_single_browser(monkeypatch):
 def test_cli_registry_single_browser_edge(_fake_registry, monkeypatch, tmp_path):
     build_dir = tmp_path / "build"
     build_dir.mkdir()
-    (build_dir / "extension.pem").write_text(_PKCS8, encoding="utf-8")
+    (build_dir / "extension.pem").write_text(_pkcs8(), encoding="utf-8")
     (build_dir / "extension.crx").write_bytes(b"Cr24-fake")
     monkeypatch.setattr(ext, "find_browser_binary", lambda: None)
     monkeypatch.setattr(ext, "browser_running", lambda browser: False)
@@ -740,7 +765,7 @@ def test_cli_registry_single_browser_edge(_fake_registry, monkeypatch, tmp_path)
 def test_cli_install_extension_status_is_read_only(_fake_registry, monkeypatch, tmp_path):
     build_dir = tmp_path / "build"
     build_dir.mkdir()
-    (build_dir / "extension.pem").write_text(_PKCS8, encoding="utf-8")
+    (build_dir / "extension.pem").write_text(_pkcs8(), encoding="utf-8")
     (build_dir / "extension.crx").write_bytes(b"Cr24-fake")
     monkeypatch.setattr(ext, "find_browser_binary", lambda: None)
     monkeypatch.setattr(ext, "extension_status",
@@ -771,7 +796,7 @@ def test_cli_install_extension_status_works_without_packing(_fake_registry, monk
 def test_cli_install_extension_unblock(_fake_registry, monkeypatch, tmp_path):
     build_dir = tmp_path / "build"
     build_dir.mkdir()
-    (build_dir / "extension.pem").write_text(_PKCS8, encoding="utf-8")
+    (build_dir / "extension.pem").write_text(_pkcs8(), encoding="utf-8")
     (build_dir / "extension.crx").write_bytes(b"Cr24-fake")
     monkeypatch.setattr(ext, "find_browser_binary", lambda: None)
     monkeypatch.setattr(ext, "clear_uninstall_block",
