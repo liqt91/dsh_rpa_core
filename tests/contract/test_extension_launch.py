@@ -297,9 +297,11 @@ def test_binary_candidates_are_platform_specific(monkeypatch):
     assert any(p.endswith("msedge.exe") for p in win)
 
     monkeypatch.setattr(sys, "platform", "darwin")
-    mac = [str(p) for p in el.browser_binary_candidates("msedge")]
+    # 本用例可能在 Windows 主机上模拟 darwin：Path() 会按主机规范成反斜杠，
+    # 因此统一以 as_posix() 的 POSIX 形态断言（真实 mac 主机上为恒等转换）。
+    mac = [p.as_posix() for p in el.browser_binary_candidates("msedge")]
     assert mac == ["/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge"]
-    mac_chrome = [str(p) for p in el.browser_binary_candidates("chrome")]
+    mac_chrome = [p.as_posix() for p in el.browser_binary_candidates("chrome")]
     assert "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" in mac_chrome
     # `~` 必须展开（POSIX 上字符串字面量 `~` 会被 expandvars 原样留下）
     assert all("~" not in p for p in mac_chrome)

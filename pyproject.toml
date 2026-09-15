@@ -10,6 +10,14 @@ dependencies = [
   "pywinauto>=0.6.9,<0.7; sys_platform == 'win32'",
 ]
 
+# 原生桌面 GUI（ADR 0014 方案 E）为可选能力：默认 `uv sync --all-groups` 不安装
+# Qt 重依赖，需要时用 `uv sync --extra gui` 启用；rpa-core gui 在缺依赖时友好报错。
+[project.optional-dependencies]
+gui = [
+  "PySide6-Essentials>=6.7,<7",
+  "QDarkStyle>=3.2,<4",
+]
+
 [project.scripts]
 rpa-core = "rpa_core.cli:main"
 
@@ -42,7 +50,8 @@ testpaths = ["tests"]
 target-version = "py312"
 line-length = 100
 # scripts/ 是一次性调研抓取脚本（非产品代码），不入 lint 门禁
-exclude = ["scripts/"]
+# .harness/demo/ 是 ADR 0014 的 GUI 技术选型实证脚手架，同样不入门禁
+exclude = ["scripts/", ".harness/demo/"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "ASYNC"]

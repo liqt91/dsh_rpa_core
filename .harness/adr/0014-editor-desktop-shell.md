@@ -1,6 +1,6 @@
 # ADR 0014：编辑器宿主形态二 —— 独立桌面客户端的候选方案
 
-- 状态：草稿（仅列候选与权衡，不定案）；§8 已补方案 E（PySide6 原生重写）的隔离 demo 实证
+- 状态：**方案 E（PySide6 原生重写）已立项（2026-09-15）**；§8 为可行性实证，§9 为决策与第一切片落地记录。其余候选（A–D）保留备查。
 - 日期：2026-09-15
 - 关联：ADR 0010（编辑器宿主形态一：保持 Web）、ADR 0008（编辑器 UI 与零构建形态）、ADR 0011（运行控制 proxy）、ADR 0012（devserver 能力层复用）
 - 目的：列出「是否/以何种技术给编辑器一个独立桌面窗口」的可选路径，供维护者择定；本文不预设结论。
@@ -136,3 +136,56 @@ ADR 0010 曾以"捕获遮挡"为唯一诉求否决桌面客户端并列为远期
 - 真实代价有三：**前端资产（`app.js`/`styles.css`）全部重写**、**卡片等非标准视觉需自绘 delegate 并自管深浅色调色板**、**交互动画顺滑度弱于 Web**。
 - 收益：独立桌面窗口、全局热键、捕获时程序化隐藏、原生系统集成，且仍在 Python 进程内复用能力层（ADR 0012 语义不变）。
 - demo 运行：临时 venv 下 `python .harness/demo/pyside6_demo.py card [qdark|material] panels`（默认 qlight）。是否立项 E 仍按 §4 触发条件由维护者裁决，本草稿不替其决定。
+
+## 9. 决策与第一切片落地（2026-09-15）
+
+维护者裁决采纳**方案 E（PySide6 原生重写）**，以「独立桌面客户端 + 原生观感」为方向，Web 编辑器（ADR 0010）继续保留，二者短期并存。
+
+**依赖形态（守住默认零重依赖）**：PySide6/QDarkStyle 不进默认依赖，声明为 optional extra `gui`（`uv sync --extra gui` 启用）；`uv sync --all-groups` 与 CI 默认不安装 Qt，GUI 测试在缺依赖时整组跳过。
+
+**第一切片（已落地）**：
+- `src/rpa_core/gui/`：`app.py`（qlight 皮肤、主窗口、真实 catalog 指令树 + 搜索过滤），包顶层不 import Qt；
+- CLI 新增 `rpa-core gui`，延迟导入，缺 extra 时返回结构化 `GUI_EXTRA_MISSING` 与安装提示，不影响其它子命令；
+- 指令树数据源是 `load_catalog` 不可变快照（规则 7），按命名空间分组（browser/data/workflow/desktop），不复制命令定义；
+- `tests/contract/test_gui_smoke.py`：offscreen 平台 6 例（分组顺序、83 条全量成叶、计数标签、过滤、清空恢复、选中回显）。
+
+**后续切片边界**：中部流程画布（卡片树 + 拖拽）、参数 schema 表单、素材库/数据表格面板、运行控制、i18n 中文名接入；运行仍走 `rpa-core run` 子进程（ADR 0011/0012 边界不破）。
+
+**第二切片（已落地）**：中部流程卡片画布。
+
+- `src/rpa_core/gui/flow_model.py`：Workflow AST → `QStandardItemModel`。容器节点（sequence/if/forEach/try）可展开；if 的 then/else、try 的 catch 以「虚拟组」行呈现（AST 中无对应节点，仅作视觉与拖放容器，`iter_real_nodes` 导出时剔除）。自定义 MIME 仅携带节点 id（`application/x-rpa-flow-node`），自实现 `mimeData/dropMimeData` 完成同模型内移动，并拒绝把节点移入自身后代（防成环）。
+- `src/rpa_core/gui/canvas.py`：`CardDelegate(QStyledItemDelegate)` 自绘卡片，复刻 Web 端视觉契约——白底圆角卡片、选中 `#daedff`、左侧 4px 深度色线（depth-0..5 同 Web 谱系）、拖柄、同级序号、粗体命令名、等宽参数摘要（前 2 个参数 + `+N` 计数）、命名空间徽标；虚拟组为浅灰条。
+- `app.py` 集成：中栏占位替换为真实画布，`MainWindow.set_workflow` 可装载真实 `workflow.json`，`rpa-core gui <flow>` 支持打开流程；`apply_theme` 增补跨平台中文字体回退（Microsoft YaHei / PingFang SC / Noto Sans CJK SC…），避免缺字渲染成方框。
+- `tests/contract/test_gui_canvas.py`：offscreen 10 例（真实流程映射、then/else/catch 虚拟组、参数摘要、同级重排、跨容器移入 then、防成环、flags 拖拽规则、行高 46、非法父节点拒绝）。
+
+## 10. 目标架构：GUI 内嵌 ExtHub，Web 退化为形态之一（2026-09-15）
+
+方案 E 立项后需澄清终态：**原生 GUI 与 Web 编辑器不是替换关系，而是同一能力层上的两个宿主形态**。
+
+### 10.1 devserver 现有三类负载（事实）
+
+`server.py` 当前把三组关注点装在同一条顺序路由链中：
+
+1. **编辑器宿主面（给人）**：`GET /` 与 `static/` 静态资产；`/api/catalog`、`/api/compile`、`/api/workflows*`（含 `elements`、`table`）、`/api/runs*`、`/api/env/status`。
+2. **扩展命令通道（给浏览器扩展）**：`/api/ext/*`（`_route_extension_exec`，扩展借 loopback 执行桌面命令，是 run 子进程回连的一等公民通道）。
+3. **捕获通道（给扩展与捕获器）**：`/api/capture/*`（desktop/browser 捕获、`extension/<action>` 回传）。
+
+### 10.2 终态形态
+
+- **原生 GUI（默认桌面形态）**：编辑器交互全部在进程内完成，`import` 复用 `DevServerApp` 能力层方法（ADR 0012 语义不变），**不经 HTTP 自取数据**；运行仍 spawn `rpa-core run` 子进程（ADR 0011 不破）。但浏览器扩展只认 HTTP loopback 契约，GUI **无法取代第 2、3 类负载**——因此 GUI 进程内必须内嵌一个仅服务扩展的 loopback 网关（下称 ExtHub）：只挂 `/api/ext/*` 与 `/api/capture/*`，不挂静态页与编辑器 API。
+- **Web 编辑器（零安装形态）**：保留现有 `rpa-core editor` 全量挂载（三组路由齐全），退化为「不想装 GUI / 临时在浏览器打开」的形态之一；零构建边界（ADR 0008）继续有效。
+
+即：能力层只有一份；差异只在「哪些路由被挂载、编辑器交互走进程内调用还是 HTTP」。
+
+### 10.3 路由拆分切片（未来切片，本文只定边界，不在本切片实现）
+
+现状 `_route_api` 的 if 链混装三组路由，无法选择性挂载。拆片方向：
+
+- 将路由按关注点重组为可独立选择的路由组（契约：路径、方法、JSON 负载、错误码全部不变，仅改分发组织）：
+  - `editor` 组：static + `/api/catalog`、`/api/compile`、`/api/workflows*`、`/api/runs*`、`/api/env/status`；
+  - `extension` 组：`/api/ext/*`；
+  - `capture` 组：`/api/capture/*`。
+- `DevServer` 增加挂载选择（构造参数或启动入口）：`editor` 形态挂 editor+extension+capture（等价现状）；GUI 内嵌 ExtHub 仅挂 extension+capture。
+- `set_extension_hub_url` 等既有接线不变；端口仍只绑 `127.0.0.1`。
+
+**验收口径**：① 拆分后现有 devserver 契约测试零修改全绿（契约不变的回归保证）；② GUI 形态下浏览器扩展经 ExtHub 执行命令、回传捕获成功；③ Web 形态行为与现状逐项一致；④ 未装 `gui` extra 时不影响 `editor`/`run` 任何路径。

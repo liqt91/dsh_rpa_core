@@ -196,6 +196,16 @@
       "id": "yingdao-batch1",
       "title": "Yingdao-aligned batch1: data.readText/appendText/fileExists/deletePath/datetimeNow + workflow.sleep",
       "passes": true
+    },
+    {
+      "id": "desktop-gui-slice1",
+      "title": "Native desktop client slice1 (ADR 0014 option E): PySide6 optional gui extra, rpa-core gui entry, catalog command tree with search/filter",
+      "passes": true
+    },
+    {
+      "id": "desktop-gui-slice2",
+      "title": "Native desktop client slice2: flow card canvas - Workflow AST to Qt tree model, then/else/catch virtual groups, card delegate, in-model drag/drop with cycle guard",
+      "passes": true
     }
   ]
 }

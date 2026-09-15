@@ -964,8 +964,12 @@ def test_user_data_dirs_per_platform(monkeypatch, tmp_path):
 
     回归：旧实现把非 win32 一律当 Linux（~/.config/...），macOS 上恒不命中 →
     profile 探测为空 → 已装/已启用的插件被误报成未安装。
+
+    注意：本测试在任意主机上模拟其它平台（Windows 主机跑 darwin 分支）。
+    Path.home() 在 Windows 上读 USERPROFILE 而非 HOME，因此不能只设 HOME 环境
+    变量，统一 monkeypatch Path.home（monkeypatch 在用例后自动还原）。
     """
-    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(ext.Path, "home", lambda: tmp_path)
 
     monkeypatch.setattr(sys, "platform", "darwin")
     assert ext.browser_user_data_dirs("chrome") == [

@@ -466,6 +466,25 @@ def _cmd_elements(args) -> int:
         return 2
 
 
+def _cmd_gui() -> int:
+    """启动原生桌面 GUI（ADR 0014 方案 E，可选 gui extra）。
+
+    Qt 绑定采用延迟导入：未安装 extra 时其它子命令与 --help 完全不受影响，
+    这里给出可操作的安装提示而不是裸 ImportError。
+    """
+    try:
+        from rpa_core.gui.app import run_gui
+    except ModuleNotFoundError as exc:
+        missing = getattr(exc, "name", "") or "PySide6"
+        _cli_fail(
+            "GUI_EXTRA_MISSING",
+            f"原生 GUI 缺少可选依赖 {missing}；请先执行 uv sync --extra gui"
+            "（或 pip install -e '.[gui]'）后再运行 rpa-core gui。",
+        )
+        return 2
+    return run_gui(_commands_root())
+
+
 def _serve(args) -> int:
     server = DevServer(
         commands_root=_commands_root(),
@@ -499,13 +518,14 @@ def main() -> int:
     parser = argparse.ArgumentParser(prog="rpa-core")
     subparsers = parser.add_subparsers(dest="action", required=True)
     for action in ("validate", "run", "resume", "devserver", "catalog", "capture",
-                   "elements", "auth", "status", "unauth", "install-extension", "env-status"):
+                   "elements", "auth", "status", "unauth", "install-extension",
+                   "env-status", "gui"):
         sub = subparsers.add_parser(action)
         if action == "devserver":
             sub.add_argument("--port", type=int, default=8765)
             sub.add_argument("--workflows", type=Path, default=Path("workflows"))
             continue
-        if action in ("catalog", "auth", "status", "unauth", "env-status"):
+        if action in ("catalog", "auth", "status", "unauth", "env-status", "gui"):
             continue
         if action == "install-extension":
             sub.add_argument("--remove", action="store_true",
@@ -593,6 +613,8 @@ def main() -> int:
         return _cmd_install_extension(args)
     if args.action == "env-status":
         return _cmd_env_status()
+    if args.action == "gui":
+        return _cmd_gui()
     try:
         _root, catalog, plan = _compile(args.workflow)
     except FileNotFoundError as exc:
