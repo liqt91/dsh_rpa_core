@@ -6,7 +6,8 @@
 - 圆角白卡片浮在浅灰画布上，选中浅蓝、hover 轻阴影；
 - 左侧 4px 深度彩色线（按树深度换色，对应 Web ``ol.children`` 的 border-left）；
 - 行内：拖柄 + 同级序号 + 命令名（粗体）+ 等宽参数摘要 + 类型徽标；
-- 虚拟分组（则执行/否则执行/异常处理）渲染为轻量分组条而非卡片；
+- 虚拟分组（异常处理）渲染为轻量分组条而非卡片；标记行（结束 X / 否则）渲染为
+  与父容器对齐的浅色指令行；
 - 拖拽重排走 Qt 原生 InternalMove，合法性由 FlowTreeModel.flags/canDropMimeData 约束。
 
 首版仅浅色（qlight）调色板；深色随全局皮肤切换在后续切片接入。
@@ -19,6 +20,7 @@ from PySide6.QtGui import QColor, QDrag, QFont, QPainter, QPen
 from PySide6.QtWidgets import QStyle, QStyledItemDelegate, QTreeView, QWidget
 
 from rpa_core.gui.flow_model import (
+    _ELSE_MARKER_TYPE,
     _END_BRACKET_TYPE,
     _TYPE_BADGE,
     ROLE_ARGS_SUMMARY,
@@ -53,6 +55,9 @@ _GRIP = "#9da9b5"
 _ROW_HEIGHT = 46
 _CARD_RADIUS = 6
 _BAR_WIDTH = 4
+# 树缩进步长：标记行（结束 X / 否则）按"减一级缩进"与父容器卡片对齐
+_INDENT = 22
+_GROUP_BG = "#eef1f4"
 
 
 def _index_depth(index: QModelIndex) -> int:
@@ -148,6 +153,25 @@ class FlowTreeView(QTreeView):
                 row = container_index.row() + 1
                 parent = container_index.parent()
                 indicator_y = rect.bottom()
+        elif target_type == _ELSE_MARKER_TYPE:
+            # if 的「否则」分割行：同样是 50/50——
+            #   上半 → then 分支末尾（否则行之前）
+            #   下半 → else 分支开头（否则行之后）
+            container_index = index.parent()  # 否则行的 parent 是 if 容器
+            if not container_index.isValid():
+                self._drag_target = None
+                self.viewport().update()
+                event.ignore()
+                return
+            parent = container_index
+            if y_ratio < 0.5:
+                mode = "else_above"
+                row = index.row()
+                indicator_y = rect.top()
+            else:
+                mode = "else_below"
+                row = index.row() + 1
+                indicator_y = rect.bottom()
         elif y_ratio < self._ABOVE_THRESHOLD:
             mode = "above"
             # 插到 index 的同级上方 → row=index.row(), parent=index.parent()
@@ -238,11 +262,24 @@ class CardDelegate(QStyledItemDelegate):
         node_type = index.data(ROLE_NODE_TYPE)
         if node_type == _END_BRACKET_TYPE:
             self._paint_end_bracket(painter, option, index)
+        elif node_type == _ELSE_MARKER_TYPE:
+            self._paint_else_marker(painter, option, index)
         elif index.data(ROLE_IS_VIRTUAL):
             self._paint_group(painter, option, index)
         else:
             self._paint_card(painter, option, index)
         painter.restore()
+
+    # ---- 标记行通用的"与父容器对齐"缩进补偿 -------------------------------
+    @staticmethod
+    def _marker_rect(option, index: QModelIndex) -> tuple[QRect, int]:
+        """返回（对齐到父容器后的 rect, 父容器深度）。
+
+        标记行是容器的 child（depth 比容器深 1），视觉上要与容器卡片对齐。
+        """
+        parent_depth = _index_depth(index.parent()) if index.parent().isValid() else 0
+        indent_offset = _index_depth(index) - parent_depth  # 应等于 1
+        return option.rect.adjusted(-indent_offset * _INDENT, 0, 0, 0), parent_depth
 
     # ---- 结束标记行：虚线连接 + 灰色文字 + 缩进减 1 ----------------------
     def _paint_end_bracket(self, painter: QPainter, option, index: QModelIndex) -> None:
@@ -253,11 +290,7 @@ class CardDelegate(QStyledItemDelegate):
         这样用户一眼能看出"到这里容器就结束了"。
         """
         # 视觉缩进 = depth(parent)，不是 depth(self)
-        parent_depth = _index_depth(index.parent()) if index.parent().isValid() else 0
-        indent_offset = _index_depth(index) - parent_depth  # 应该等于 1
-        rect = option.rect
-        # 手动补偿缩进让它和父容器对齐
-        adjusted_rect = rect.adjusted(-indent_offset * 22, 0, 0, 0)
+        adjusted_rect, parent_depth = self._marker_rect(option, index)
 
         # 左侧深度色线（用父容器的颜色）
         line_rect = QRect(adjusted_rect.left() + 4, adjusted_rect.top() + 6,
@@ -294,10 +327,33 @@ class CardDelegate(QStyledItemDelegate):
     def _paint_group(self, painter: QPainter, option, index: QModelIndex) -> None:
         rect = option.rect.adjusted(8, 3, -8, -3)
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor("#eef1f4"))
+        painter.setBrush(QColor(_GROUP_BG))
         painter.drawRoundedRect(rect, 4, 4)
         depth = _index_depth(index)
         painter.setBrush(QColor(_DEPTH_COLORS[depth % len(_DEPTH_COLORS)]))
+        painter.drawRoundedRect(QRect(rect.left() + 2, rect.top() + 2, 3, rect.height() - 4), 1, 1)
+        painter.setPen(QPen(QColor("#57606a")))
+        font = QFont(option.font)
+        font.setBold(True)
+        painter.setFont(font)
+        painter.drawText(rect.adjusted(12, 0, -8, 0),
+                         Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
+                         index.data(Qt.ItemDataRole.DisplayRole))
+
+    # ---- 「否则」指令行：与父 if 卡片对齐的浅色分割行 ---------------------
+    def _paint_else_marker(self, painter: QPainter, option, index: QModelIndex) -> None:
+        """if 的分支分割行（影刀式「否则」指令）。
+
+        它是 if 的 child，但视觉上与「结束 如果」一样对齐到 if 卡片（缩进减 1、
+        用父容器深度色），这样 then/else 两段子节点缩进一致，整体读起来正是
+        if → 否则 → 结束如果。
+        """
+        rect, parent_depth = self._marker_rect(option, index)
+        rect = rect.adjusted(0, 3, -8, -3)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(_GROUP_BG))
+        painter.drawRoundedRect(rect, 4, 4)
+        painter.setBrush(QColor(_DEPTH_COLORS[parent_depth % len(_DEPTH_COLORS)]))
         painter.drawRoundedRect(QRect(rect.left() + 2, rect.top() + 2, 3, rect.height() - 4), 1, 1)
         painter.setPen(QPen(QColor("#57606a")))
         font = QFont(option.font)
@@ -421,7 +477,7 @@ def build_canvas(model: FlowTreeModel, parent: QWidget | None = None) -> FlowTre
     tree.setItemDelegate(CardDelegate(tree))
     tree.setHeaderHidden(True)
     tree.setRootIsDecorated(False)  # 展开箭头自绘/点击行处理，保持卡片整洁
-    tree.setIndentation(22)
+    tree.setIndentation(_INDENT)
     tree.setExpandsOnDoubleClick(False)
     tree.setAnimated(False)  # widgets 无内建过渡，避免半开动画卡顿
     tree.setDragDropMode(QTreeView.DragDropMode.InternalMove)
@@ -438,8 +494,7 @@ def build_canvas(model: FlowTreeModel, parent: QWidget | None = None) -> FlowTre
     def _toggle_on_click(index: QModelIndex) -> None:
         # 隐藏了默认展开箭头后，单击容器/虚拟组行即切换展开（叶子点击不折叠）
         node_type = index.data(ROLE_NODE_TYPE)
-        if node_type in ("sequence", "if", "forEach", "try",
-                         "branch-then", "branch-else", "branch-catch"):
+        if node_type in ("sequence", "if", "forEach", "try", "branch-catch"):
             tree.setExpanded(index, not tree.isExpanded(index))
 
     tree.clicked.connect(_toggle_on_click)

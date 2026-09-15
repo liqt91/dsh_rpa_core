@@ -29,7 +29,6 @@ from PySide6.QtWidgets import QPushButton  # noqa: E402
 from rpa_core.gui.app import SAMPLE_WORKFLOW, MainWindow  # noqa: E402
 from rpa_core.gui.flow_model import (  # noqa: E402
     ROLE_ARGS_RAW,
-    ROLE_IS_VIRTUAL,
     ROLE_NODE_TYPE,
     build_model_from_workflow,
     model_to_workflow,
@@ -156,12 +155,12 @@ def test_move_action_into_then_group():
     doc = json.loads(json.dumps(SAMPLE_WORKFLOW))
     model = build_model_from_workflow(doc)
     if_item = model.find_by_id("check")
-    then_group = next(
-        if_item.child(row) for row in range(if_item.rowCount())
-        if if_item.child(row).data(ROLE_IS_VIRTUAL)
-        and if_item.child(row).data(ROLE_NODE_TYPE) == "branch-then"
+    # 扁平结构下 then 分支的边界是「否则」标记行：插到它之前即进 then
+    marker_row = next(
+        row for row in range(if_item.rowCount())
+        if if_item.child(row).data(ROLE_NODE_TYPE) == "else-marker"
     )
-    assert _drop(model, "done", then_group)
+    assert _drop(model, "done", if_item, row=marker_row)
 
     meta = {key: doc[key] for key in doc if key != "root"}
     result = model_to_workflow(model, meta)
@@ -170,6 +169,7 @@ def test_move_action_into_then_group():
     )
     then_ids = [node["id"] for node in check["then"]]
     assert "done" in then_ids
+    assert [node["id"] for node in check["else"]] == ["wait"]  # else 段未被串扰
     # return 移入后根下不再有 done
     root_ids = [child["id"] for child in result["root"]["children"]]
     assert "done" not in root_ids

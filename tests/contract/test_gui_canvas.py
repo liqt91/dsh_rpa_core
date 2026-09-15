@@ -20,6 +20,7 @@ from rpa_core.gui.flow_model import (  # noqa: E402
     ROLE_NODE_ID,
     ROLE_NODE_TYPE,
     build_model_from_workflow,
+    model_to_workflow,
     summarize_args,
 )
 from rpa_core.model.workflow import Workflow  # noqa: E402
@@ -87,13 +88,23 @@ def test_if_then_else_and_foreach_become_virtual_groups():
     model = build_model_from_workflow(workflow)
     root = model.item(0)
 
+    # if：扁平结构（影刀式）——then 子节点 → 「否则」行 → else 子节点 → 结束 如果
     if_item = _child(root, 0)
     assert if_item.data(ROLE_NODE_TYPE) == "if"
-    then_group, else_group = _child(if_item, 0), _child(if_item, 1)
-    assert then_group.data(ROLE_IS_VIRTUAL) and else_group.data(ROLE_IS_VIRTUAL)
-    assert then_group.data(ROLE_NODE_TYPE) == "branch-then"
-    assert _child(then_group, 0).data(ROLE_COMMAND_ID) == "data.setVar"
-    assert _child(else_group, 0).data(ROLE_COMMAND_ID) == "workflow.sleep"
+    rows = [
+        (if_item.child(r).data(ROLE_NODE_TYPE), if_item.child(r).data(ROLE_COMMAND_ID))
+        for r in range(if_item.rowCount())
+    ]
+    assert rows == [
+        ("action", "data.setVar"),
+        ("else-marker", None),
+        ("action", "workflow.sleep"),
+        ("end-bracket", None),
+    ]
+    then_row, marker, else_row, end_row = (if_item.child(r) for r in range(4))
+    assert not then_row.data(ROLE_IS_VIRTUAL)  # then 子节点是真实节点，不再是虚拟组
+    assert marker.data(ROLE_IS_VIRTUAL) and else_row.data(ROLE_COMMAND_ID) == "workflow.sleep"
+    assert end_row.data(Qt.ItemDataRole.DisplayRole) == "结束 如果"
 
     foreach = _child(root, 1)
     assert _child(foreach, 0).data(ROLE_COMMAND_ID) == "data.limit"
@@ -103,6 +114,22 @@ def test_if_then_else_and_foreach_become_virtual_groups():
     catch_group = _child(try_item, 1)
     assert catch_group.data(ROLE_NODE_TYPE) == "branch-catch"
     assert _child(catch_group, 0).data(ROLE_COMMAND_ID) == "data.setVar"
+
+
+def test_else_marker_is_always_present_even_for_if_without_else():
+    """「否则」行常驻：没有 else 的 if 也有明确落点，可直接拖进去建分支。"""
+    workflow = {
+        "schema_version": "1.0", "id": "s", "name": "s",
+        "root": {"type": "sequence", "id": "root", "children": [
+            {"type": "if", "id": "c", "condition": {"op": "truthy", "left": "${x}"},
+             "then": [{"type": "action", "id": "a1", "command": "data.setVar",
+                       "with": {}}]},
+        ]},
+    }
+    model = build_model_from_workflow(workflow)
+    if_item = _child(model.item(0), 0)
+    types = [if_item.child(r).data(ROLE_NODE_TYPE) for r in range(if_item.rowCount())]
+    assert types == ["action", "else-marker", "end-bracket"]
 
 
 def test_summarize_args_limits_pairs_and_truncates():
@@ -130,7 +157,8 @@ def test_same_level_reorder_via_drop(real_workflow):
     assert after == before[1:] + [before[0]]
 
 
-def test_cross_container_move_into_then_group():
+def test_cross_container_move_into_if_then_branch():
+    """跨容器拖拽：落到 if 的「否则」行之前 = 进 then 分支。"""
     workflow = {
         "schema_version": "1.0", "id": "s", "name": "s",
         "root": {"type": "sequence", "id": "root", "children": [
@@ -142,10 +170,15 @@ def test_cross_container_move_into_then_group():
     }
     model = build_model_from_workflow(workflow)
     root = model.item(0)
-    then_group = _child(_child(root, 1), 0)
-    assert _drop(model, "free", then_group)
-    assert model.find_by_id("free").parent() is then_group
+    if_item = _child(root, 1)
+    marker_row = 1  # then 子节点 after 之后、结束行之前
+    assert _drop(model, "free", if_item, row=marker_row)
+    moved = model.find_by_id("free")
+    assert moved.parent() is if_item
     assert root.rowCount() == 1  # 已移出根
+    assert [moved.row(), _child(if_item, moved.row() + 1).data(ROLE_NODE_TYPE)] == [
+        marker_row, "else-marker"
+    ]  # 落在 then 分支末尾，仍在「否则」行之前
 
 
 def test_drop_into_own_descendant_is_rejected():
@@ -160,12 +193,13 @@ def test_drop_into_own_descendant_is_rejected():
     model = build_model_from_workflow(workflow)
     root = model.item(0)
     if_item = _child(root, 0)
-    then_group = _child(if_item, 0)
-    # 把 if 自身拖进它的 then 组 → 成环，必须拒绝
-    assert not _drop(model, "c", then_group)
+    # 把 if 自身拖进它自己 → 成环，必须拒绝
+    assert not _drop(model, "c", if_item)
+    # 拖到 if 的「否则」标记行上 → 路由到 if 本身，同样成环，拒绝
+    marker = _child(if_item, 1)
+    assert not _drop(model, "c", marker)
     # 拖到 action 叶子上 → 叶子非容器，拒绝
-    leaf = _child(then_group, 0)
-    assert not _drop(model, "c", leaf)
+    assert not _drop(model, "c", _child(if_item, 0))
 
 
 def test_flags_enforce_drag_drop_rules(real_workflow):
@@ -224,3 +258,140 @@ def test_drag_enter_probe_with_invalid_parent_accepted(real_workflow):
     assert not model.canDropMimeData(
         QMimeData(), Qt.DropAction.MoveAction, -1, -1, QModelIndex()
     )
+
+
+# ---- 回归：结束标记行（end-bracket）的落点语义 -----------------------------
+# 结束行是容器自己的最后一个 child，所以"追加到容器末尾"不能用 rowCount()：
+# 那会落到结束行**下方**（画面上在容器外，AST 里却在容器内）。
+_BRACKET_WORKFLOW = {
+    "schema_version": "1.0", "id": "s", "name": "s",
+    "root": {"type": "sequence", "id": "root", "children": [
+        {"type": "action", "id": "free", "command": "data.setVar", "with": {}},
+        {"type": "forEach", "id": "loop", "items": "${rows}", "item_var": "row",
+         "children": [
+             {"type": "action", "id": "inner", "command": "data.limit", "with": {}},
+         ]},
+        {"type": "action", "id": "tail", "command": "data.setVar", "with": {}},
+    ]},
+}
+
+
+def test_drop_at_container_tail_lands_before_end_bracket():
+    """row=-1（拖到容器内部 / 结束行上半）必须插在「结束 X」之上。"""
+    model = build_model_from_workflow(_BRACKET_WORKFLOW)
+    loop = _child(model.item(0), 1)
+    assert loop.rowCount() == 2  # inner + 结束行
+    assert _drop(model, "free", loop, row=-1)
+    rows = [_child(loop, r).data(ROLE_NODE_ID) for r in range(loop.rowCount())]
+    assert rows == ["inner", "free", None]  # 结束行（无 id）仍在最后
+    assert _child(loop, loop.rowCount() - 1).data(ROLE_IS_VIRTUAL) is True
+
+
+def test_end_bracket_hit_test_splits_into_tail_and_sibling(qapp):
+    """结束行上半 → 容器末尾（结束行之前）；下半 → 容器的同级下方。
+
+    这是 canvas.FlowTreeView.dragMoveEvent 对结束行的 50/50 命中路由：
+    下半是把节点拖出容器、成为容器同级的**唯一**手法。
+    """
+    from PySide6.QtCore import QPoint
+    from PySide6.QtGui import QDragMoveEvent
+
+    model = build_model_from_workflow(_BRACKET_WORKFLOW)
+    loop = model.find_by_id("loop")
+    bracket = _child(loop, loop.rowCount() - 1)
+    view = build_canvas(model)
+    view.resize(640, 900)
+    view.show()
+    qapp.processEvents()
+    rect = view.visualRect(model.indexFromItem(bracket))
+    assert rect.isValid() and rect.height() > 0
+
+    mime = model.mimeData([model.indexFromItem(model.find_by_id("free"))])
+
+    def probe(y: int):
+        event = QDragMoveEvent(
+            QPoint(rect.center().x(), y), Qt.DropAction.MoveAction, mime,
+            Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier,
+        )
+        view.dragMoveEvent(event)
+        # _drag_target 是 dragMoveEvent 与 dropEvent/paintEvent 之间约定的落点状态
+        return view._drag_target
+
+    upper = probe(rect.top() + 2)
+    assert upper is not None and upper["mode"] == "end_above"
+    assert upper["row"] == -1
+    assert upper["parent"] == model.indexFromItem(loop)
+
+    lower = probe(rect.bottom() - 2)
+    assert lower is not None and lower["mode"] == "end_below"
+    assert lower["parent"] == model.indexFromItem(loop).parent()
+    view.deleteLater()
+
+
+_IF_WORKFLOW = {
+    "schema_version": "1.0", "id": "s", "name": "s",
+    "root": {"type": "sequence", "id": "root", "children": [
+        {"type": "action", "id": "free", "command": "data.setVar", "with": {}},
+        {"type": "if", "id": "c", "condition": {"op": "truthy", "left": "${x}"},
+         "then": [{"type": "action", "id": "t1", "command": "data.limit", "with": {}}],
+         "else": [{"type": "action", "id": "e1", "command": "workflow.sleep",
+                   "with": {}}]},
+    ]},
+}
+
+
+def test_else_marker_hit_test_splits_then_and_else(qapp):
+    """「否则」行上半 → then 分支末尾；下半 → else 分支开头。
+
+    影刀式扁平结构下，if 的两个分支由这条标记行分割，落点必须严格分侧：
+    画面上"放到 否则 上面"就该属于 then，"放到 否则 下面"才属于 else。
+    """
+    from PySide6.QtCore import QPoint
+    from PySide6.QtGui import QDragMoveEvent
+
+    model = build_model_from_workflow(_IF_WORKFLOW)
+    if_item = model.find_by_id("c")
+    marker = next(
+        if_item.child(r) for r in range(if_item.rowCount())
+        if if_item.child(r).data(ROLE_NODE_TYPE) == "else-marker"
+    )
+    view = build_canvas(model)
+    view.resize(640, 900)
+    view.show()
+    qapp.processEvents()
+    rect = view.visualRect(model.indexFromItem(marker))
+    assert rect.isValid() and rect.height() > 0
+
+    mime = model.mimeData([model.indexFromItem(model.find_by_id("free"))])
+
+    def drop_at(y: int) -> dict:
+        event = QDragMoveEvent(
+            QPoint(rect.center().x(), y), Qt.DropAction.MoveAction, mime,
+            Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier,
+        )
+        view.dragMoveEvent(event)
+        assert view._drag_target is not None
+        return view._drag_target
+
+    upper = drop_at(rect.top() + 2)
+    assert upper["mode"] == "else_above"
+    assert (upper["row"], upper["parent"]) == (marker.row(), model.indexFromItem(if_item))
+
+    lower = drop_at(rect.bottom() - 2)
+    assert lower["mode"] == "else_below"
+    assert (lower["row"], lower["parent"]) == (
+        marker.row() + 1, model.indexFromItem(if_item)
+    )
+
+    # 真投一次上半：节点必须落进 then，else 段原样
+    target = drop_at(rect.top() + 2)
+    assert model.dropMimeData(
+        mime, Qt.DropAction.MoveAction, target["row"], 0, target["parent"]
+    )
+    meta = {"schema_version": "1.0", "id": "s", "name": "s"}
+    check = next(
+        c for c in model_to_workflow(model, meta)["root"]["children"] if c["id"] == "c"
+    )
+    assert [c["id"] for c in check["then"]] == ["t1", "free"]
+    assert [c["id"] for c in check["else"]] == ["e1"]
+    view.deleteLater()

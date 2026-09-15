@@ -65,6 +65,14 @@ def _doc(model) -> dict:
     return model_to_workflow(model, meta)
 
 
+def _else_marker(if_item):
+    """取 if 下的「否则」分割行 item。"""
+    return next(
+        if_item.child(r) for r in range(if_item.rowCount())
+        if if_item.child(r).data(ROLE_NODE_TYPE) == "else-marker"
+    )
+
+
 # ---- 模型层：id 与新建 ----------------------------------------------------
 def test_allocate_node_id_unique(model):
     existing = model.existing_ids()
@@ -108,27 +116,34 @@ def test_insert_without_target_appends_to_root(model):
 
 
 def test_insert_targeting_if_goes_into_then(model):
+    """选中 if 卡片新增 → 追加进 then 分支（「否则」标记行之前）。"""
     if_item = model.find_by_id("check")
+    marker_row = _else_marker(if_item).row()
     new_item = model.insert_command("workflow.sleep", if_item)
-    # 新节点挂在 branch-then 虚拟组下
-    assert new_item.parent().data(ROLE_NODE_TYPE) == "branch-then"
+    assert new_item.parent() is if_item  # 不再是嵌套的 branch-then 虚拟组
+    assert new_item.row() == marker_row  # 顶在「否则」行原位置 = then 分支末位
+    assert _else_marker(if_item).row() == marker_row + 1
     doc = _doc(model)
     check = next(c for c in doc["root"]["children"] if c["id"] == "check")
     assert check["then"][-1]["command"] == "workflow.sleep"
+    assert [c["id"] for c in check["else"]] == ["wait"]  # else 段未被串扰
     Workflow.model_validate(doc)
 
 
-def test_insert_targeting_virtual_group(model):
+def test_insert_targeting_else_marker_appends_to_else_branch(model):
+    """选中「否则」行新增 → 追加进 else 分支（容器末尾、结束行之前）。"""
     if_item = model.find_by_id("check")
-    else_group = next(
-        if_item.child(r) for r in range(if_item.rowCount())
-        if if_item.child(r).data(ROLE_NODE_TYPE) == "branch-else"
-    )
-    new_item = model.insert_command("data.setVar", else_group)
-    assert new_item.parent() is else_group
+    marker = _else_marker(if_item)
+    before = [c.get("id") for c in _doc(model)["root"]["children"]]
+    new_item = model.insert_command("data.setVar", marker)
+    assert new_item.parent() is if_item
+    assert new_item.row() > marker.row()  # 落在 else 段
     doc = _doc(model)
     check = next(c for c in doc["root"]["children"] if c["id"] == "check")
-    assert check["else"][-1]["command"] == "data.setVar"
+    assert check["else"][-1]["command"] == "data.setVar"  # 追加在既有 else 之后
+    assert check["then"][-1]["command"] == "browser.getText"  # then 未被串扰
+    assert [c.get("id") for c in doc["root"]["children"]] == before  # 结构未变
+    Workflow.model_validate(doc)
 
 
 def test_insert_targeting_leaf_becomes_sibling(model):
@@ -139,6 +154,50 @@ def test_insert_targeting_leaf_becomes_sibling(model):
     assert model.item(0).child(model.item(0).rowCount() - 1) is new_item
 
 
+# ---- 回归：新增节点不得落到「结束 X」行下方 -------------------------------
+# end-bracket（结束标记行）是容器自己的最后一个 child，因此 rowCount() 不等于
+# "末位子节点的下一行"。曾经用 appendRow(rowCount()) 追加 → 节点画在结束线下方、
+# parent 却仍是该容器（画面在容器外、AST 在容器内，存盘重开后"跳"回容器体内）。
+def test_insert_into_container_stops_before_end_bracket(model):
+    loop = model.find_by_id("loop")
+    new_item = model.insert_command("data.setVar", loop)
+    assert new_item.parent() is loop
+    assert loop.child(loop.rowCount() - 1).data(ROLE_IS_VIRTUAL) is True  # 结束行仍在末尾
+    assert new_item.row() == loop.rowCount() - 2  # 紧跟真实子节点之后
+    # 回写：新节点仍是 loop.children 的末位（语义未变，只是不再画在结束线外）
+    loop_doc = next(c for c in _doc(model)["root"]["children"] if c["id"] == "loop")
+    assert [c["id"] for c in loop_doc["children"]] == [
+        "append", new_item.data(ROLE_NODE_ID)
+    ]
+    Workflow.model_validate(_doc(model))
+
+
+def test_insert_targeting_leaf_inside_container_stops_before_end_bracket(model):
+    """选中循环体内某个节点后新增：落点为其所在容器末尾，同样要停在结束行之前。"""
+    loop = model.find_by_id("loop")
+    new_item = model.insert_command("data.setVar", model.find_by_id("append"))
+    assert new_item.parent() is loop
+    assert loop.child(loop.rowCount() - 1).data(ROLE_IS_VIRTUAL) is True
+    assert new_item.row() == loop.rowCount() - 2
+
+
+def test_insert_into_if_stops_before_else_marker(model):
+    """if 里选中 then 分支的节点后新增：落点是 then 分支末尾（「否则」行之前）。
+
+    if 改用扁平结构后，then 分支的边界不再是虚拟组，而是「否则」标记行。
+    """
+    if_item = model.find_by_id("check")
+    marker_row = _else_marker(if_item).row()
+    new_item = model.insert_command("data.setVar", model.find_by_id("read"))
+    assert new_item.parent() is if_item
+    assert new_item.row() == marker_row  # 紧贴「否则」行原位置（顶在它之前）
+    assert _else_marker(if_item).row() == marker_row + 1  # 标记行被顶下去，仍在
+    doc = _doc(model)
+    check = next(c for c in doc["root"]["children"] if c["id"] == "check")
+    assert [c["id"] for c in check["then"]] == ["read", new_item.data(ROLE_NODE_ID)]
+    Workflow.model_validate(doc)
+
+
 # ---- 删除 -----------------------------------------------------------------
 def test_remove_leaf(model):
     leaf = model.find_by_id("open")
@@ -147,15 +206,15 @@ def test_remove_leaf(model):
     Workflow.model_validate(_doc(model))
 
 
-def test_root_and_virtual_group_protected(model):
+def test_root_and_marker_row_protected(model):
     assert model.remove_item(model.item(0)) is False
-    if_item = model.find_by_id("check")
-    then_group = next(
-        if_item.child(r) for r in range(if_item.rowCount())
-        if if_item.child(r).data(ROLE_NODE_TYPE) == "branch-then"
+    marker = _else_marker(model.find_by_id("check"))
+    assert marker.data(ROLE_IS_VIRTUAL) is True
+    assert model.remove_item(marker) is False  # 「否则」标记行不可删
+    end_bracket = model.find_by_id("loop").child(
+        model.find_by_id("loop").rowCount() - 1
     )
-    assert then_group.data(ROLE_IS_VIRTUAL) is True
-    assert model.remove_item(then_group) is False
+    assert model.remove_item(end_bracket) is False  # 结束行不可删
 
 
 def test_remove_container_takes_subtree(model):
