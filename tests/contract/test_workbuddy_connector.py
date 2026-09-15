@@ -39,6 +39,35 @@ def test_cli_json_required_fields():
     assert CLI_JSON.get("statusMatch")
 
 
+def test_cli_json_runtime_version_is_a_range_not_a_bare_pin():
+    """runtime.version 必须是范围语法，不能写裸版本号。
+
+    裸 "3.12" 会被宿主当作精确要求（==3.12）校验：托管运行时是 3.13.x 时直接
+    连接失败——"uses Python 3.13.14, which does not satisfy runtime requirement
+    3.12"。官方 CLI 连接器一律用范围写法（唯一的 Python 样本 emr-query 是
+    ">=3.11"），因此这里也必须是 ">=" 形式。
+    """
+    runtime = CLI_JSON["runtime"]
+    assert runtime["type"] == "python"
+    assert re.match(r"^(>=|>|<=|<|~=|\^)", runtime["version"]), (
+        f"runtime.version 应写范围（如 '>=3.12'），不能是裸版本号："
+        f"{runtime['version']!r}"
+    )
+
+
+def test_cli_json_runtime_matches_package_requires_python():
+    """连接器声明的运行时口径应与发布 wheel 的 requires-python 一致。
+
+    两处写同一个约束，避免以后改了一边忘了另一边（宿主按 cli.json 准备解释器，
+    pip 按 wheel metadata 决定是否可装，口径不一致就会出现"能装但不给装"或
+    "给了装不上"）。
+    """
+    pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    match = re.search(r'^requires-python\s*=\s*"([^"]+)"', pyproject, re.MULTILINE)
+    assert match, "pyproject.toml 缺少 requires-python"
+    assert CLI_JSON["runtime"]["version"] == match.group(1)
+
+
 def test_cli_json_win32_entries_do_not_reference_cmd_shims():
     """pip/distlib 在 Windows 只生成 .exe 入口脚本，不生成 .cmd（干净 venv 实测）。"""
     for section in ("init", "auth", "unAuth", "status"):

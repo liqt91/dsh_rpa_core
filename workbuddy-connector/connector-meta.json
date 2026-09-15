@@ -7,7 +7,7 @@
   "description_en": "Type-safe desktop & browser RPA automation: build workflows, capture elements, run them deterministically.",
   "source": "rpa-core",
   "type": "cli",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "minWorkbuddyVersion": "5.0.0",
   "examples_zh": [
     "帮我打开必应搜索 RPA 并保存前 10 条标题",
