@@ -23,8 +23,11 @@ from pathlib import Path
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QApplication,
+    QLabel,
     QLineEdit,
     QMainWindow,
+    QPushButton,
+    QScrollArea,
     QSplitter,
     QTreeWidget,
     QTreeWidgetItem,
@@ -165,9 +168,18 @@ class MainWindow(QMainWindow):
 
         splitter.addWidget(left)
         splitter.addWidget(self.canvas_holder)
+
+        # 右栏：参数表单区（选中画布 action 卡片后渲染 manifest 表单）
+        self.param_holder = QWidget()
+        self.param_layout = QVBoxLayout(self.param_holder)
+        self.param_layout.setContentsMargins(0, 0, 0, 0)
+        self._show_param_placeholder("从画布选择指令节点以编辑参数")
+        splitter.addWidget(self.param_holder)
+
         splitter.setStretchFactor(0, 0)
         splitter.setStretchFactor(1, 1)
-        splitter.setSizes([320, 960])
+        splitter.setStretchFactor(2, 0)
+        splitter.setSizes([280, 700, 300])
         self.setCentralWidget(splitter)
 
         self.statusBar().showMessage(
@@ -187,7 +199,86 @@ class MainWindow(QMainWindow):
         self.flow_model = build_model_from_workflow(workflow)
         self.canvas_view = build_canvas(self.flow_model, self.canvas_holder)
         self.canvas_layout.addWidget(self.canvas_view)
+        # 画布选中节点变化 → 右栏切换参数表单（每次重建 view 都需重新连接）
+        self.canvas_view.selectionModel().currentChanged.connect(
+            self._on_canvas_selection
+        )
         self.setWindowTitle(f"RPA Core 编辑器 — {name}")
+
+    # ---- 右栏参数表单 -----------------------------------------------------
+    def _clear_param_panel(self) -> None:
+        """清空右栏内容（旧控件延迟销毁）。"""
+        while self.param_layout.count():
+            old = self.param_layout.takeAt(0).widget()
+            if old is not None:
+                old.deleteLater()
+
+    def _show_param_placeholder(self, text: str) -> None:
+        """右栏占位提示。"""
+        self._clear_param_panel()
+        label = QLabel(text)
+        label.setWordWrap(True)
+        label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        label.setStyleSheet("color: #64707d; padding: 16px;")
+        self.param_layout.addWidget(label)
+
+    def _on_canvas_selection(self, current, previous) -> None:
+        """画布当前节点变化：action 显参数表单，其余显对应占位。"""
+        from rpa_core.gui.flow_model import (
+            ROLE_ARGS_RAW,
+            ROLE_COMMAND_ID,
+            ROLE_NODE_TYPE,
+        )
+
+        if not current.isValid():
+            self._show_param_placeholder("从画布选择指令节点以编辑参数")
+            return
+        node_type = current.data(ROLE_NODE_TYPE)
+        if node_type != "action":
+            hint = {
+                "return": "返回节点的编辑将在后续切片支持",
+            }.get(node_type, "该节点不接受参数")
+            self._show_param_placeholder(hint)
+            return
+
+        command_id = current.data(ROLE_COMMAND_ID)
+        manifest = self.catalog[command_id]
+        holder = current.data(ROLE_ARGS_RAW)
+        args = holder.args if holder is not None else {}
+        self._show_action_form(manifest, args, current, ROLE_ARGS_RAW)
+
+    def _show_action_form(self, manifest, args, index, role_args_raw) -> None:
+        """在右栏挂载「滚动表单 + 应用按钮」。"""
+        from rpa_core.gui.flow_model import (
+            ROLE_ARGS_SUMMARY,
+            ArgsHolder,
+            summarize_args,
+        )
+        from rpa_core.gui.param_form import ParamForm
+
+        self._clear_param_panel()
+        form = ParamForm(manifest.input_schema, args)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setWidget(form)
+        self.param_layout.addWidget(scroll, 1)
+
+        apply_button = QPushButton("应用参数")
+
+        def apply() -> None:
+            try:
+                values = form.values()
+            except ValueError as exc:
+                self.statusBar().showMessage(str(exc), 4000)
+                return
+            item = self.flow_model.itemFromIndex(index)
+            item.setData(ArgsHolder(values), role_args_raw)
+            item.setData(summarize_args(values), ROLE_ARGS_SUMMARY)
+            self.statusBar().showMessage("参数已更新（内存中，尚未保存到文件）", 4000)
+
+        apply_button.clicked.connect(apply)
+        self.param_layout.addWidget(apply_button)
 
 
 # 内置示例流程：覆盖全部容器结构（sequence/if/forEach/try/action/return），
@@ -201,7 +292,7 @@ SAMPLE_WORKFLOW = {
         "id": "root",
         "children": [
             {"type": "action", "id": "open", "command": "browser.navigate",
-             "with": {"url": "https://example.com", "waitUntil": "load"}},
+             "with": {"url": "https://example.com", "timeoutMs": 30000}},
             {
                 "type": "if",
                 "id": "check",

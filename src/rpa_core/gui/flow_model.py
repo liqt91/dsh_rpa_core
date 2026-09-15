@@ -28,6 +28,7 @@ ROLE_NODE_TYPE = Qt.ItemDataRole.UserRole + 11
 ROLE_COMMAND_ID = Qt.ItemDataRole.UserRole + 12
 ROLE_ARGS_SUMMARY = Qt.ItemDataRole.UserRole + 13
 ROLE_IS_VIRTUAL = Qt.ItemDataRole.UserRole + 14  # 虚拟分组（then/else/catch/循环体）
+ROLE_ARGS_RAW = Qt.ItemDataRole.UserRole + 15  # action 的原始 with 参数 dict（供表单编辑）
 
 # 容器节点类型（可放置子节点）；action/return 为叶子
 _CONTAINER_TYPES = {"sequence", "if", "forEach", "try"}
@@ -46,6 +47,17 @@ _TYPE_BADGE = {
 }
 
 _MIME_TYPE = "application/x-rpa-flow-node"
+
+
+class ArgsHolder:
+    """在 item 角色中携带 action 的 with 参数 dict。
+
+    直接存 Python 对象引用：避免 setData(dict) 经 QVariantMap 转换时
+    重排键序（QMap 按键排序）或丢失复杂值类型。编辑参数时整体替换。
+    """
+
+    def __init__(self, args: dict[str, Any] | None = None) -> None:
+        self.args: dict[str, Any] = dict(args or {})
 
 
 def summarize_args(with_args: dict[str, Any], limit: int = 2) -> str:
@@ -181,6 +193,7 @@ def _make_item(
     node_id: str | None,
     command_id: str | None = None,
     args_summary: str = "",
+    args_holder: ArgsHolder | None = None,
     virtual: bool = False,
 ) -> QStandardItem:
     item = QStandardItem(title)
@@ -188,16 +201,10 @@ def _make_item(
     item.setData(node_type, ROLE_NODE_TYPE)
     item.setData(command_id, ROLE_COMMAND_ID)
     item.setData(args_summary, ROLE_ARGS_SUMMARY)
+    item.setData(args_holder, ROLE_ARGS_RAW)
     item.setData(virtual, ROLE_IS_VIRTUAL)
     item.setEditable(False)
     return item
-
-
-def _action_title(node: Any) -> tuple[str, str]:
-    """返回 action 节点的（命令 id, 参数摘要）。"""
-    with_args = node.get("with", {}) if isinstance(node, dict) else node.with_
-    command_id = node["command"] if isinstance(node, dict) else node.command
-    return command_id, summarize_args(with_args)
 
 
 def _node_dict(node: Any) -> dict:
@@ -214,11 +221,14 @@ def build_item(node: Any, *, label: Callable[[str], str] | None = None) -> QStan
     node_id = raw["id"]
 
     if node_type == "action":
-        command_id, summary = _action_title(raw)
+        with_args = raw.get("with", {})
+        command_id = node["command"] if isinstance(node, dict) else node.command
+        summary = summarize_args(with_args)
         title = (label(command_id) if label else command_id) or command_id
         return _make_item(
             title=title, node_type="action", node_id=node_id,
             command_id=command_id, args_summary=summary,
+            args_holder=ArgsHolder(with_args),
         )
 
     if node_type == "return":

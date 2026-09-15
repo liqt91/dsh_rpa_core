@@ -1,6 +1,6 @@
 # ADR 0014：编辑器宿主形态二 —— 独立桌面客户端的候选方案
 
-- 状态：**方案 E（PySide6 原生重写）已立项（2026-09-15）**；§8 为可行性实证，§9 为决策与第一切片落地记录。其余候选（A–D）保留备查。
+- 状态：**方案 E（PySide6 原生重写）已立项（2026-09-15）**；§8 为可行性实证，§9 为决策与前三切片（指令树 / 流程卡片画布 / 参数表单）落地记录，§10 为目标架构。其余候选（A–D）保留备查。
 - 日期：2026-09-15
 - 关联：ADR 0010（编辑器宿主形态一：保持 Web）、ADR 0008（编辑器 UI 与零构建形态）、ADR 0011（运行控制 proxy）、ADR 0012（devserver 能力层复用）
 - 目的：列出「是否/以何种技术给编辑器一个独立桌面窗口」的可选路径，供维护者择定；本文不预设结论。
@@ -157,6 +157,13 @@ ADR 0010 曾以"捕获遮挡"为唯一诉求否决桌面客户端并列为远期
 - `src/rpa_core/gui/canvas.py`：`CardDelegate(QStyledItemDelegate)` 自绘卡片，复刻 Web 端视觉契约——白底圆角卡片、选中 `#daedff`、左侧 4px 深度色线（depth-0..5 同 Web 谱系）、拖柄、同级序号、粗体命令名、等宽参数摘要（前 2 个参数 + `+N` 计数）、命名空间徽标；虚拟组为浅灰条。
 - `app.py` 集成：中栏占位替换为真实画布，`MainWindow.set_workflow` 可装载真实 `workflow.json`，`rpa-core gui <flow>` 支持打开流程；`apply_theme` 增补跨平台中文字体回退（Microsoft YaHei / PingFang SC / Noto Sans CJK SC…），避免缺字渲染成方框。
 - `tests/contract/test_gui_canvas.py`：offscreen 10 例（真实流程映射、then/else/catch 虚拟组、参数摘要、同级重排、跨容器移入 then、防成环、flags 拖拽规则、行高 46、非法父节点拒绝）。
+
+**第三切片（已落地）**：参数 schema 表单。
+
+- `src/rpa_core/gui/param_form.py`：`ParamForm` 把 `manifest.input_schema`（JSON Schema dict）渲染为原生控件——string+enum 为 `QComboBox`（首项「未设置」，`x-enum-labels` 提供中文显示，itemData 存实际值）；string 为 `QLineEdit`（空 = 未设置，default 进 placeholder）；integer/number 为带校验器的 `QLineEdit`（空 = 未设置）；boolean 为 `QCheckBox`；array/object 等复合类型降级为单行 JSON 文本（非法 JSON 在收集时抛 ValueError）；`type: ["string","null"]` 取首个非 null 类型。必填字段 label 带 `*`，description 进 tooltip。
+- `flow_model.py` 新增 `ROLE_ARGS_RAW` 与 `ArgsHolder`：item 携带原始 with 参数 dict 的 Python 对象引用（不经 QVariantMap 转换，避免键序重排/类型丢失）；编辑参数时整体替换 holder。
+- `app.py` 右栏集成：画布选中 action 卡片即显示「滚动表单 + 应用参数」按钮，应用后 item 的参数与摘要同步更新（delegate 自动重绘）；容器/返回节点显示对应占位提示；参数修改目前仅在内存中，保存回 workflow.json 属后续切片。
+- `tests/contract/test_gui_param_form.py`：offscreen 12 例（enum 未设置项与中文标签、初始值选中、控件类型、收集跳过未设置、integer 类型、JSON 数组往返与非法 JSON、nullable 类型列表、必填星号、主窗口占位、选中出表单+应用回写、容器/返回提示、非法 JSON 应用进状态栏）。
 
 ## 10. 目标架构：GUI 内嵌 ExtHub，Web 退化为形态之一（2026-09-15）
 

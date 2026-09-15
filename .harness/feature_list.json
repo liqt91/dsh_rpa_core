@@ -206,6 +206,11 @@
       "id": "desktop-gui-slice2",
       "title": "Native desktop client slice2: flow card canvas - Workflow AST to Qt tree model, then/else/catch virtual groups, card delegate, in-model drag/drop with cycle guard",
       "passes": true
+    },
+    {
+      "id": "desktop-gui-slice3",
+      "title": "Native desktop client slice3: parameter schema form - input_schema to native widgets (enum/string/integer/boolean/JSON), right panel binds to selected canvas card with apply-to-model",
+      "passes": true
     }
   ]
 }
