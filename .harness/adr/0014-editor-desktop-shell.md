@@ -1,6 +1,6 @@
 # ADR 0014：编辑器宿主形态二 —— 独立桌面客户端的候选方案
 
-- 状态：**方案 E（PySide6 原生重写）已立项（2026-09-15）**；§8 为可行性实证，§9 为决策与前四切片（指令树 / 流程卡片画布 / 参数表单 / 保存闭环）落地记录，§10 为目标架构。其余候选（A–D）保留备查。
+- 状态：**方案 E（PySide6 原生重写）已立项（2026-09-15）**；§8 为可行性实证，§9 为决策与前五切片（指令树 / 流程卡片画布 / 参数表单 / 保存闭环 / 节点增删）落地记录，§10 为目标架构。其余候选（A–D）保留备查。
 - 日期：2026-09-15
 - 关联：ADR 0010（编辑器宿主形态一：保持 Web）、ADR 0008（编辑器 UI 与零构建形态）、ADR 0011（运行控制 proxy）、ADR 0012（devserver 能力层复用）
 - 目的：列出「是否/以何种技术给编辑器一个独立桌面窗口」的可选路径，供维护者择定；本文不预设结论。
@@ -171,6 +171,12 @@ ADR 0010 曾以"捕获遮挡"为唯一诉求否决桌面客户端并列为远期
 - `app.py`：工具栏「保存」（Ctrl+S）；`save_workflow(path)` 先回写 dict 再经 `Workflow.model_validate` 校验，通过后按 devserver 同款格式落盘（UTF-8、indent=2、末尾换行），校验失败进状态栏且不写文件；无源路径（内置示例）走 `QFileDialog` 另存为；参数应用与拖拽重排置脏（`rowsInserted/rowsRemoved` 信号，初始构建用 loading 守卫抑制），标题前缀 `•` 显示脏标记，保存后清除；`closeEvent` 对未保存修改弹保存/不保存/取消。`set_workflow` 统一深拷贝为 JSON 形状 dict，编辑不回写调用方对象；`run_gui` 透传 flow_path，打开真实文件后保存即原位写回。
 - 附带修正：内置示例的 `itemVar` 更正为规范键名 `item_var`（ForEachNode/TryNode 该字段无别名，Web 端同样用 item_var/error_var）。
 - `tests/contract/test_gui_save_roundtrip.py`：offscreen 9 例（未编辑 roundtrip 全等、try catch/error_var 保留、空 else 省略、参数编辑进 with、同级重排后顺序与 condition/items/item_var 保留、移入 then、落盘文件可被 Workflow 校验且格式正确+脏标记清除、拖拽置脏、pydantic 输入 roundtrip 保存）。
+
+**第五切片（已落地）**：节点增删——从指令树构建流程。
+
+- `flow_model.py`：`existing_ids()` 收集真实节点 id；`allocate_node_id()` 生成全模型唯一 id（n1、n2…跳过占用）；`create_action_item(command_id)` 用规范 raw 形状（`{"type":"action","id","command","with":{}}`）建空 action 树 item；`insert_command(command_id, target)` 按选中项决定落点——容器（sequence/forEach/try）与虚拟分组追加末位、if 追加进「则执行」、叶子追加为所在容器的末位同级；`remove_item(item)` 删除真实节点（容器连带整棵子树），根节点与 then/else/catch 虚拟分组受保护返回 False。
+- `app.py`：左树 `itemDoubleClicked` 连新增入口（分组节点 command id 为 None 自动忽略）；新增后自动展开落点父级、选中新节点（右栏随即可填参数），状态栏提示 Delete/Ctrl+S；画布绑定 `QShortcut(Delete)`，`WidgetShortcut` 作用域保证只在画布聚焦时生效，不误伤参数表单输入框里的 Delete 编辑键；删除后右栏复位占位。增删行复用切片 4 的 `rowsInserted/rowsRemoved` 信号自动置脏，无额外脏标记通路。
+- `tests/contract/test_gui_node_edit.py`：offscreen 14 例（唯一 id 分配/跳过占用、新建 item 形状、四种落点、删除叶子/根保护/虚拟组保护/容器连子树、双击入口含分组忽略、删除处理复位表单、增删后回写 Workflow 校验、新增节点经 save_workflow 落盘）。
 
 ## 10. 目标架构：GUI 内嵌 ExtHub，Web 退化为形态之一（2026-09-15）
 

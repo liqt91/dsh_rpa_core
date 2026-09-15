@@ -23,7 +23,7 @@ from pathlib import Path
 
 # Qt 绑定在模块顶层导入：本模块本身已被 CLI 延迟导入，未装 extra 时不会触达。
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QAction
+from PySide6.QtGui import QAction, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
     QFileDialog,
@@ -166,6 +166,8 @@ class MainWindow(QMainWindow):
         tree.setHeaderHidden(True)
         populate_command_tree(tree, catalog)
         search.textChanged.connect(lambda text: _apply_filter(tree, text))
+        # 双击指令叶子 → 在画布当前选中位置插入新 action（组节点忽略）
+        tree.itemDoubleClicked.connect(self._on_command_double_clicked)
         left_layout.addWidget(search)
         left_layout.addWidget(tree)
         self.command_tree = tree
@@ -244,7 +246,50 @@ class MainWindow(QMainWindow):
         self.canvas_view.selectionModel().currentChanged.connect(
             self._on_canvas_selection
         )
+        # Delete 删除选中节点：WidgetShortcut 保证只在画布聚焦时生效，
+        # 不会与参数表单输入框里的 Delete 编辑键冲突。
+        delete_shortcut = QShortcut(QKeySequence(Qt.Key.Key_Delete), self.canvas_view)
+        delete_shortcut.setContext(Qt.ShortcutContext.WidgetShortcut)
+        delete_shortcut.activated.connect(self._delete_selected_node)
         self._set_dirty(False)
+
+    # ---- 节点增删（切片 5） -----------------------------------------------
+    def _on_command_double_clicked(self, item: QTreeWidgetItem, column: int) -> None:
+        """左树双击：叶子命令插入画布；分组节点（command id 为 None）忽略。"""
+        command_id = item.data(0, ROLE_COMMAND_ID)
+        if command_id:
+            self.add_command(command_id)
+
+    def add_command(self, command_id: str):
+        """在画布当前选中位置插入新 action；无选中则追加到根容器末尾。"""
+        current = self.canvas_view.currentIndex()
+        target = (
+            self.flow_model.itemFromIndex(current) if current.isValid() else None
+        )
+        new_item = self.flow_model.insert_command(command_id, target)
+        # 展开落点父级并选中新节点，方便立刻在右栏填参数
+        self.canvas_view.setExpanded(
+            self.flow_model.indexFromItem(new_item.parent()), True
+        )
+        new_index = self.flow_model.indexFromItem(new_item)
+        self.canvas_view.setCurrentIndex(new_index)
+        self.statusBar().showMessage(
+            f"已添加 {command_id}（Delete 删除选中节点，Ctrl+S 保存）", 4000
+        )
+        return new_item
+
+    def _delete_selected_node(self) -> None:
+        """删除画布当前选中节点；根节点与虚拟分组受保护。"""
+        from rpa_core.gui.flow_model import ROLE_NODE_ID
+
+        current = self.canvas_view.currentIndex()
+        if not current.isValid():
+            return
+        item = self.flow_model.itemFromIndex(current)
+        node_id = item.data(ROLE_NODE_ID)
+        if self.flow_model.remove_item(item):
+            self.statusBar().showMessage(f"已删除节点 {node_id}（未保存）", 4000)
+            self._show_param_placeholder("从画布选择指令节点以编辑参数")
 
     def _on_structure_changed(self, *args) -> None:
         """模型结构行变化（拖拽重排）时置脏；初始构建期间忽略。"""

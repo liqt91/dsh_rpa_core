@@ -173,6 +173,79 @@ class FlowTreeModel(QStandardItemModel):
         root = self.item(0)
         return walk(root) if root is not None else None
 
+    # ---- 节点增删（切片 5） ----------------------------------------------
+    def existing_ids(self) -> set[str]:
+        """收集所有真实节点 id（虚拟组无 id）。"""
+        return {
+            item.data(ROLE_NODE_ID)
+            for item in iter_real_nodes(self)
+            if item.data(ROLE_NODE_ID)
+        }
+
+    def allocate_node_id(self, prefix: str = "n") -> str:
+        """生成全模型唯一的新节点 id：n1、n2…（跳过已占用）。"""
+        used = self.existing_ids()
+        counter = 1
+        while f"{prefix}{counter}" in used:
+            counter += 1
+        return f"{prefix}{counter}"
+
+    def create_action_item(self, command_id: str) -> QStandardItem:
+        """按命令 id 创建一个空参数的新 action 树 item（尚未挂到树上）。"""
+        node_id = self.allocate_node_id()
+        raw = {
+            "type": "action",
+            "id": node_id,
+            "command": command_id,
+            "with": {},
+        }
+        return build_item(raw)
+
+    def insert_command(
+        self, command_id: str, target: QStandardItem | None = None
+    ) -> QStandardItem:
+        """把新命令 action 插入到目标位置并返回新 item。
+
+        落点规则（target 为画布当前选中项，None 时取根）：
+        - 虚拟分组（then/else/catch）或 sequence/forEach/try 容器：追加为末位子节点；
+        - if：追加进「则执行」分组；
+        - 叶子（action/return）：作为其所在容器/分组的末位同级节点。
+        """
+        new_item = self.create_action_item(command_id)
+        root = self.item(0)
+        anchor = target if target is not None else root
+        if anchor is None:
+            raise ValueError("空流程模型，无法插入节点")
+
+        node_type = anchor.data(ROLE_NODE_TYPE)
+        if node_type in _VIRTUAL_GROUP_TYPES or node_type in (
+            "sequence", "forEach", "try"
+        ):
+            parent = anchor
+        elif node_type == "if":
+            parent = next(
+                anchor.child(row)
+                for row in range(anchor.rowCount())
+                if anchor.child(row).data(ROLE_NODE_TYPE) == "branch-then"
+            )
+        else:
+            # 叶子：插到其父容器/分组
+            parent = anchor.parent() or root
+        parent.appendRow(new_item)
+        return new_item
+
+    def remove_item(self, item: QStandardItem) -> bool:
+        """删除一个真实节点（整棵子树随父行移除）。
+
+        根节点与虚拟分组受保护不可删；返回是否实际删除。
+        """
+        if item is None or item.data(ROLE_IS_VIRTUAL):
+            return False
+        if not item.parent():  # 顶层根节点
+            return False
+        item.parent().takeRow(item.row())
+        return True
+
     def flags(self, index):
         base = super().flags(index)
         if not index.isValid():

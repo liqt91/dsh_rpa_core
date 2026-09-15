@@ -216,6 +216,11 @@
       "id": "desktop-gui-slice4",
       "title": "Native desktop client slice4: edit round-trip - flow tree model rebuilds Workflow AST (preserving condition/items/item_var/catch), save to workflow.json with validation, dirty tracking and Save As",
       "passes": true
+    },
+    {
+      "id": "desktop-gui-slice5",
+      "title": "Native desktop client slice5: node add/delete - double-click command tree appends new action at selection-aware target (container/then/sibling), Delete removes selected node with root/virtual-group protection, unique node ids",
+      "passes": true
     }
   ]
 }
