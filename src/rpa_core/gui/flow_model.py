@@ -112,8 +112,17 @@ class FlowTreeModel(QStandardItemModel):
         return data
 
     def canDropMimeData(self, data, action, row, column, parent) -> bool:
-        if not data.hasFormat(_MIME_TYPE) or not parent.isValid():
+        """放置可行性判定。
+
+        QTreeView 在拖拽进入（dragEnterEvent）时会先用「无效 parent +
+        row=-1」探测模型是否接受该 MIME；此处必须放行，否则拖拽从进入
+        控件起就被整体拒绝，后续带落点的 dragMove/drop 回调都不会发生。
+        具体落点是否合法在带有效 parent 的调用中再按容器类型判定。
+        """
+        if not data.hasFormat(_MIME_TYPE):
             return False
+        if not parent.isValid():
+            return True  # dragEnter 能力探测：格式可接受即可
         target = self.itemFromIndex(parent)
         return bool(target and target.data(ROLE_NODE_TYPE) in (
             _CONTAINER_TYPES | _VIRTUAL_GROUP_TYPES
@@ -125,14 +134,20 @@ class FlowTreeModel(QStandardItemModel):
         QStandardItemModel 默认 dropMimeData 只认内部 mime；本模型用自定义
         只携 id 的格式，因此自行实现移动。单选（QTreeView 默认单选）。
         """
-        if not self.canDropMimeData(data, action, row, column, parent):
+        # 真实放置必须有有效落点：canDrop 对 dragEnter 探测放行过无效 parent，
+        # 这里独立做完整防护，不能直接复用 canDropMimeData 的结论。
+        if not data.hasFormat(_MIME_TYPE) or not parent.isValid():
+            return False
+        target = self.itemFromIndex(parent)
+        if target is None or target.data(ROLE_NODE_TYPE) not in (
+            _CONTAINER_TYPES | _VIRTUAL_GROUP_TYPES
+        ):
             return False
         raw = bytes(data.data(_MIME_TYPE)).decode("utf-8")
         node_id = raw.split(";", 1)[0]
         source = self.find_by_id(node_id)
         if source is None:
             return False
-        target = self.itemFromIndex(parent)
         if source is target or self._is_descendant(source, target):
             return False  # 不能移入自身或自己的后代（成环）
 

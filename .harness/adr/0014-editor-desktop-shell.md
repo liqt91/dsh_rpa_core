@@ -175,8 +175,14 @@ ADR 0010 曾以"捕获遮挡"为唯一诉求否决桌面客户端并列为远期
 **第五切片（已落地）**：节点增删——从指令树构建流程。
 
 - `flow_model.py`：`existing_ids()` 收集真实节点 id；`allocate_node_id()` 生成全模型唯一 id（n1、n2…跳过占用）；`create_action_item(command_id)` 用规范 raw 形状（`{"type":"action","id","command","with":{}}`）建空 action 树 item；`insert_command(command_id, target)` 按选中项决定落点——容器（sequence/forEach/try）与虚拟分组追加末位、if 追加进「则执行」、叶子追加为所在容器的末位同级；`remove_item(item)` 删除真实节点（容器连带整棵子树），根节点与 then/else/catch 虚拟分组受保护返回 False。
-- `app.py`：左树 `itemDoubleClicked` 连新增入口（分组节点 command id 为 None 自动忽略）；新增后自动展开落点父级、选中新节点（右栏随即可填参数），状态栏提示 Delete/Ctrl+S；画布绑定 `QShortcut(Delete)`，`WidgetShortcut` 作用域保证只在画布聚焦时生效，不误伤参数表单输入框里的 Delete 编辑键；删除后右栏复位占位。增删行复用切片 4 的 `rowsInserted/rowsRemoved` 信号自动置脏，无额外脏标记通路。
+- `app.py`：左树 `itemDoubleClicked` 连新增入口（分组节点 command id 为 None 自动忽略）；新增后自动展开落点父级、选中新节点（右栏随即可填参数），状态栏提示 Delete/Ctrl+S；删除绑定工具栏 `QAction`（Delete，窗口级快捷键，焦点在文本编辑控件时暂停，详见同日实测修复段）；删除后右栏复位占位。增删行复用切片 4 的 `rowsInserted/rowsRemoved` 信号自动置脏，无额外脏标记通路。
 - `tests/contract/test_gui_node_edit.py`：offscreen 14 例（唯一 id 分配/跳过占用、新建 item 形状、四种落点、删除叶子/根保护/虚拟组保护/容器连子树、双击入口含分组忽略、删除处理复位表单、增删后回写 Workflow 校验、新增节点经 save_workflow 落盘）。
+
+第五切片人工实测缺陷修复（同日）：真实窗口暴露两处 offscreen 测试覆盖不到的交互断点——
+
+- **拖拽全程无法放置**：`QTreeView.dragEnterEvent` 进入控件时先用无效 parent（`QModelIndex()`、row=-1）调 `canDropMimeData` 做能力探测，旧实现对无效 parent 一律 False，导致拖拽从入口即被拒绝、后续 dragMove/drop 回调不再发生（模型级单测直接调 dropMimeData 故未暴露）。修复：无效 parent 仅校验 MIME 格式即放行；`dropMimeData` 不再复用 canDrop 结论，独立做「有效 parent + 容器/虚拟组类型 + 成环」完整防护，原「invalid parent 必须 False」契约不变。
+- **Delete 在左树聚焦时失效**：双击指令树添加节点后焦点停在左树，画布级 `QShortcut`（WidgetShortcut）不触发。改为工具栏 `QAction`（WindowShortcut），并经 `QApplication.focusChanged` 动态启停——焦点在 QLineEdit/QTextEdit/QAbstractSpinBox/可编辑 QComboBox 时禁用动作，让 Delete 正常用于文本编辑。
+- 新增 3 例 offscreen 测试（dragEnter 探测须放行且异格式拒绝、左树聚焦可删、参数输入框聚焦时删除暂停）；另加真实平台诊断脚本 `.harness/demo/diag_gui_interaction.py`（合成事件无法驱动 Windows OLE 放置，真实拖拽手感以人工实测为准）。
 
 ## 10. 目标架构：GUI 内嵌 ExtHub，Web 退化为形态之一（2026-09-15）
 

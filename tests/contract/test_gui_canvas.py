@@ -204,3 +204,23 @@ def test_invalid_parent_index_dropped(real_workflow):
     assert not model.dropMimeData(
         mime, Qt.DropAction.MoveAction, 0, 0, QModelIndex()
     )
+
+
+def test_drag_enter_probe_with_invalid_parent_accepted(real_workflow):
+    """QTreeView.dragEnterEvent 用无效 parent + row=-1 探测模型接受能力。
+
+    若此处拒绝，拖拽从进入控件起就被整体忽略（dragMove/drop 回调不再发生），
+    真实窗口将表现为「完全无法拖拽」；格式可接受时必须放行。
+    """
+    model = build_model_from_workflow(real_workflow)
+    source = model.item(0).child(0)
+    mime = model.mimeData([model.indexFromItem(source)])
+    assert model.canDropMimeData(
+        mime, Qt.DropAction.MoveAction, -1, -1, QModelIndex()
+    )
+    # 非本模型的 MIME 仍必须拒绝
+    from PySide6.QtCore import QMimeData
+
+    assert not model.canDropMimeData(
+        QMimeData(), Qt.DropAction.MoveAction, -1, -1, QModelIndex()
+    )

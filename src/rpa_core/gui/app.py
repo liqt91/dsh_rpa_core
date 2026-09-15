@@ -23,17 +23,21 @@ from pathlib import Path
 
 # Qt 绑定在模块顶层导入：本模块本身已被 CLI 延迟导入，未装 extra 时不会触达。
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QAction, QKeySequence, QShortcut
+from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
+    QAbstractSpinBox,
     QApplication,
+    QComboBox,
     QFileDialog,
     QLabel,
     QLineEdit,
     QMainWindow,
     QMessageBox,
+    QPlainTextEdit,
     QPushButton,
     QScrollArea,
     QSplitter,
+    QTextEdit,
     QTreeWidget,
     QTreeWidgetItem,
     QVBoxLayout,
@@ -201,7 +205,7 @@ class MainWindow(QMainWindow):
         )
 
     def _build_toolbar(self) -> None:
-        """顶部工具栏：保存（Ctrl+S）。"""
+        """顶部工具栏：保存（Ctrl+S）、删除节点（Delete）。"""
         toolbar = self.addToolBar("文件")
         toolbar.setMovable(False)
         save_action = QAction("保存", self)
@@ -209,6 +213,24 @@ class MainWindow(QMainWindow):
         save_action.setToolTip("保存到 workflow.json（Ctrl+S）")
         save_action.triggered.connect(self._save_action)
         toolbar.addAction(save_action)
+
+        # 删除节点用窗口级快捷键：焦点在左树（双击添加后的自然状态）或画布
+        # 时都能直接删；焦点在参数表单输入控件中时禁用，让 Delete 正常编辑文本。
+        self.delete_action = QAction("删除节点", self)
+        self.delete_action.setShortcut("Delete")
+        self.delete_action.setShortcutContext(Qt.ShortcutContext.WindowShortcut)
+        self.delete_action.setToolTip("删除画布选中节点（Delete）")
+        self.delete_action.triggered.connect(self._delete_selected_node)
+        toolbar.addAction(self.delete_action)
+        app = QApplication.instance()
+        app.focusChanged.connect(self._on_focus_changed)
+
+    def _on_focus_changed(self, old, now) -> None:
+        """焦点进入文本编辑控件时暂停 Delete 删除动作，避免吞掉编辑键。"""
+        editing = isinstance(
+            now, (QLineEdit, QTextEdit, QPlainTextEdit, QAbstractSpinBox)
+        ) or (isinstance(now, QComboBox) and now.isEditable())
+        self.delete_action.setEnabled(not editing)
 
     def set_workflow(self, workflow) -> None:
         """加载 Workflow（pydantic 或 dict）并重建画布；拖拽重排发生在该模型上。"""
@@ -246,11 +268,6 @@ class MainWindow(QMainWindow):
         self.canvas_view.selectionModel().currentChanged.connect(
             self._on_canvas_selection
         )
-        # Delete 删除选中节点：WidgetShortcut 保证只在画布聚焦时生效，
-        # 不会与参数表单输入框里的 Delete 编辑键冲突。
-        delete_shortcut = QShortcut(QKeySequence(Qt.Key.Key_Delete), self.canvas_view)
-        delete_shortcut.setContext(Qt.ShortcutContext.WidgetShortcut)
-        delete_shortcut.activated.connect(self._delete_selected_node)
         self._set_dirty(False)
 
     # ---- 节点增删（切片 5） -----------------------------------------------

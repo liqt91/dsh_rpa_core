@@ -22,6 +22,9 @@ import pytest  # noqa: E402
 
 pytest.importorskip("PySide6")
 
+from PySide6.QtCore import Qt  # noqa: E402
+from PySide6.QtWidgets import QLineEdit  # noqa: E402
+
 from rpa_core.gui.app import SAMPLE_WORKFLOW, MainWindow  # noqa: E402
 from rpa_core.gui.flow_model import (  # noqa: E402
     ROLE_ARGS_RAW,
@@ -211,6 +214,56 @@ def test_delete_handler_removes_selected_and_clears_form(catalog):
     window._delete_selected_node()
     assert window.flow_model.find_by_id("open") is None
     assert window._dirty is True
+
+
+def test_delete_works_while_command_tree_has_focus(catalog, qapp):
+    """双击左树添加后焦点停在左树：Delete 仍须删除画布选中节点。"""
+    window = MainWindow(catalog, SAMPLE_WORKFLOW)
+    # show 让焦点事件真实流转；收尾用 hide 而非 close（close 会弹未保存
+    # 确认框，QMessageBox.exec 在 offscreen 平台会访问冲突）。
+    window.show()
+    qapp.processEvents()
+    try:
+        index = window.flow_model.indexFromItem(
+            window.flow_model.find_by_id("open")
+        )
+        window.canvas_view.setCurrentIndex(index)
+        window.command_tree.setFocus()
+        qapp.processEvents()
+        # 窗口级快捷键，左树/画布聚焦都可用；仅在文本编辑控件内暂停
+        assert (
+            window.delete_action.shortcutContext()
+            == Qt.ShortcutContext.WindowShortcut
+        )
+        assert window.delete_action.isEnabled()
+        window.delete_action.trigger()
+        assert window.flow_model.find_by_id("open") is None
+    finally:
+        window.hide()
+        qapp.processEvents()
+
+
+def test_delete_suppressed_while_param_editor_focused(catalog, qapp):
+    """焦点在参数表单输入框时 Delete 交给编辑，不触发节点删除。"""
+    window = MainWindow(catalog, SAMPLE_WORKFLOW)
+    window.show()
+    qapp.processEvents()
+    try:
+        index = window.flow_model.indexFromItem(
+            window.flow_model.find_by_id("open")
+        )
+        window.canvas_view.setCurrentIndex(index)
+        qapp.processEvents()
+        editor = window.param_holder.findChild(QLineEdit)
+        assert editor is not None  # browser.navigate 的 url 为文本输入
+        editor.setFocus()
+        qapp.processEvents()
+        assert not window.delete_action.isEnabled()
+        window.delete_action.trigger()  # 禁用态 trigger 无动作
+        assert window.flow_model.find_by_id("open") is not None
+    finally:
+        window.hide()
+        qapp.processEvents()
 
 
 def test_added_node_roundtrips_through_save(catalog, tmp_path):
