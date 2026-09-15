@@ -133,6 +133,9 @@ class FlowTreeModel(QStandardItemModel):
 
         QStandardItemModel 默认 dropMimeData 只认内部 mime；本模型用自定义
         只携 id 的格式，因此自行实现移动。单选（QTreeView 默认单选）。
+
+        注意：配合 canvas.FlowTreeView.startDrag（重写）跳过 Qt 的
+        clearOrRemove，避免 InternalMove 下 Qt 用旧索引删错节点。
         """
         # 真实放置必须有有效落点：canDrop 对 dragEnter 探测放行过无效 parent，
         # 这里独立做完整防护，不能直接复用 canDropMimeData 的结论。

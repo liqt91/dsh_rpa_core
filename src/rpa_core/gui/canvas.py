@@ -15,7 +15,7 @@
 from __future__ import annotations
 
 from PySide6.QtCore import QModelIndex, QRect, QSize, Qt
-from PySide6.QtGui import QColor, QFont, QPainter, QPen
+from PySide6.QtGui import QColor, QDrag, QFont, QPainter, QPen
 from PySide6.QtWidgets import QStyle, QStyledItemDelegate, QTreeView, QWidget
 
 from rpa_core.gui.flow_model import (
@@ -62,6 +62,30 @@ def _index_depth(index: QModelIndex) -> int:
         depth += 1
         parent = parent.parent()
     return depth
+
+
+class FlowTreeView(QTreeView):
+    """卡片画布专用 QTreeView：重写 startDrag 跳过 Qt 的二次源行删除。
+
+    Qt 的 InternalMove 模式下，QAbstractItemView.startDrag() 在 QDrag.exec()
+    返回 MoveAction 后会调 clearOrRemove() 再删一遍源行。但我们的
+    FlowTreeModel.dropMimeData 已经用 takeRow + insertRow 完成了原子移动，
+    此时 Qt 再用旧索引删行必然删错节点。解决方式是重写 startDrag：
+    复制基类的 QDrag 创建和 exec 逻辑，但结果返回 MoveAction 时不做任何删除。
+    """
+
+    def startDrag(self, supportedActions: Qt.DropAction) -> None:
+        indices = self.selectionModel().selectedIndexes()
+        if not indices:
+            return
+        mime_data = self.model().mimeData(indices)
+        if mime_data is None:
+            return
+        drag = QDrag(self)
+        drag.setMimeData(mime_data)
+        # 仅 setMimeData + exec，不调基类 startDrag（它会在 exec 返回
+        # MoveAction 后调 clearOrRemove 二次删源行）。
+        drag.exec(supportedActions)
 
 
 class CardDelegate(QStyledItemDelegate):
@@ -204,9 +228,9 @@ class CardDelegate(QStyledItemDelegate):
         return "node", "#eaeef2", "#57606a"
 
 
-def build_canvas(model: FlowTreeModel, parent: QWidget | None = None) -> QTreeView:
-    """组装卡片画布：QTreeView + CardDelegate + 内部拖拽重排。"""
-    tree = QTreeView(parent)
+def build_canvas(model: FlowTreeModel, parent: QWidget | None = None) -> FlowTreeView:
+    """组装卡片画布：FlowTreeView（跳过 Qt 二次 clearOrRemove）+ CardDelegate。"""
+    tree = FlowTreeView(parent)
     tree.setModel(model)
     tree.setItemDelegate(CardDelegate(tree))
     tree.setHeaderHidden(True)
