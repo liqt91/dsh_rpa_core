@@ -5,11 +5,12 @@
 
 设计约定：
 - 每个 AST 节点对应一个树 item；``if`` 用扁平结构（影刀式）：then 子节点直接
-  挂在 if 下，一条常驻的「否则」标记行做分支分割，末尾一条「结束 如果」；
-  ``try`` 的 ``catch`` 仍建「异常处理」虚拟组；标记行/虚拟组不对应 AST 节点。
+  挂在 if 下，一条**按需添加**的「否则」指令行做分支分割，末尾一条「结束 如果」；
+  ``try`` 的 ``catch`` 仍建「异常处理」虚拟组；「否则」行与虚拟组不对应 AST 节点。
 - 数据经 Qt ``UserRole`` 携带（节点 id / 节点类型 / 命令 id / 参数摘要），
   delegate 与后续的「模型 → AST」回写都从角色读取，不解析显示文本。
 - 拖拽：叶子 action/return 只可拖不可作为放置目标；容器与虚拟组可放置。
+  「否则」行是可拖可删的指令行，但只能留在 if 内。
   首版只做内存重排（``moveRow``）；切片 4 起 ``model_to_workflow`` 可把
   当前树（含重排与参数编辑）回写为 workflow dict 供保存。
 """
@@ -35,10 +36,17 @@ ROLE_ARGS_RAW = Qt.ItemDataRole.UserRole + 15  # action 的原始 with 参数 di
 # 容器节点类型（可放置子节点）；action/return 为叶子
 _CONTAINER_TYPES = {"sequence", "if", "forEach", "try"}
 _VIRTUAL_GROUP_TYPES = {"branch-catch"}
-# if 的分支分割行（影刀式结构）：if 直接挂 then 子节点，中间一条常驻的
-# 「否则」指令行，末尾一条「结束 如果」。与 end-bracket 同属"标记行"：
-# 不对应 AST 节点、不可拖、可接受 drop。
-_ELSE_MARKER_TYPE = "else-marker"
+# if 的「否则」分支指令行（影刀式结构）：if 直接挂 then 子节点，需要分支时在
+# then 之后插一条「否则」指令，末尾一条「结束 如果」。
+#
+# 「否则」是一条**按需添加**的独立指令（影刀同款）：默认不加，只有 AST 里本来
+# 就有 else 段、或用户从指令树显式添加时才出现。它不对应 AST 节点（无真实 id），
+# 但作为一条"指令"参与选中 / 删除 / 拖放；拖出所在的 if 会被拒绝（脱离 if 无意义）。
+_ELSE_BRANCH_TYPE = "else-branch"
+# 「否则」行在拖拽 MIME 里使用的合成 id 前缀：它没有 AST id，但要能被拖动定位。
+# 带上所属 if 的 id（形如 @else:c），这样多个 if 都有否则行时也能精确定位到
+# 被拖的那一条；前缀里的 @ 保证不会与 allocate_node_id 生成的真实 id（n1、n2…）冲突。
+_ELSE_BRANCH_ID_PREFIX = "@else:"
 # 每个容器末尾自动追加的虚拟结束行，用于：
 #   1. 视觉边界：明确标出容器 children 的结束位置；
 #   2. 拖拽安全网：命中结束行的下半可精确落到容器同级下方（命中区比容器卡片本身更大）；
@@ -53,7 +61,7 @@ _TYPE_BADGE = {
     "try": "异常捕获",
     "return": "返回",
     "branch-catch": "异常处理",
-    "else-marker": "否则",
+    "else-branch": "否则",
 }
 
 _MIME_TYPE = "application/x-rpa-flow-node"
@@ -119,10 +127,10 @@ def _real_child_insert_row(parent: QStandardItem) -> int:
     return row
 
 
-def _else_marker_row(parent: QStandardItem) -> int | None:
-    """返回 parent 下「否则」标记行的行号（只有 if 有；没有则 None）。"""
+def _else_branch_row(parent: QStandardItem) -> int | None:
+    """返回 parent 下「否则」指令行的行号（只有 if 会持有；没有则 None）。"""
     for row in range(parent.rowCount()):
-        if parent.child(row).data(ROLE_NODE_TYPE) == _ELSE_MARKER_TYPE:
+        if parent.child(row).data(ROLE_NODE_TYPE) == _ELSE_BRANCH_TYPE:
             return row
     return None
 
@@ -130,12 +138,13 @@ def _else_marker_row(parent: QStandardItem) -> int | None:
 def _branch_insert_row(parent: QStandardItem, anchor: QStandardItem) -> int:
     """在 parent 内为 anchor 选定插入行：落在 anchor 所属**分支**的末尾。
 
-    if 的两个分支由「否则」标记行分割——标记行之前是 then、之后是 else，
-    所以"追加到分支末尾"分别等于"标记行之前"与"容器末尾（结束行之前）"。
-    其余容器（sequence/forEach/try/catch）没有标记行，即容器末尾。
+    if 的两个分支由「否则」指令行分割——它之前是 then、之后是 else，所以
+    "追加到分支末尾"分别等于"否则行之前"与"容器末尾（结束行之前）"。没有
+    「否则」行的 if（默认形态）只有 then 一个分支，即容器末尾。
+    其余容器（sequence/forEach/try/catch）没有否则行，同样是容器末尾。
     """
     tail = _real_child_insert_row(parent)
-    marker = _else_marker_row(parent)
+    marker = _else_branch_row(parent)
     if marker is None:
         return tail
     if anchor is parent or anchor.row() < marker:
@@ -157,10 +166,18 @@ class FlowTreeModel(QStandardItemModel):
     def mimeData(self, indexes) -> QMimeData:
         data = QMimeData()
         ids = [idx.data(ROLE_NODE_ID) for idx in indexes if idx.isValid()]
-        ids = [node_id for node_id in ids if node_id]  # 虚拟组不可拖
+        # 虚拟分组（branch-catch / 结束行）没有 id，天然不可拖；「否则」行带
+        # 合成 id（_ELSE_BRANCH_ID），因此可拖。
+        ids = [node_id for node_id in ids if node_id]
         if ids:
             data.setData(_MIME_TYPE, ";".join(ids).encode("utf-8"))
         return data
+
+    @staticmethod
+    def _dragged_id(data) -> str:
+        """从拖拽 MIME 里取出被拖节点的 id（目前只拖单个节点）。"""
+        raw = bytes(data.data(_MIME_TYPE)).decode("utf-8")
+        return raw.split(";", 1)[0]
 
     def canDropMimeData(self, data, action, row, column, parent) -> bool:
         """放置可行性判定。
@@ -174,14 +191,27 @@ class FlowTreeModel(QStandardItemModel):
             return False
         if not parent.isValid():
             return True  # dragEnter 能力探测：格式可接受即可
-        # 如果 parent 恰好落在 end-bracket 虚拟行上，路由到其真实容器
+        # 如果 parent 恰好落在 end-bracket / 「否则」行上，路由到其真实容器
         parent = self._resolve_drop_parent(parent)
         if not parent.isValid():
             return False
         target = self.itemFromIndex(parent)
-        return bool(target and target.data(ROLE_NODE_TYPE) in (
-            _CONTAINER_TYPES | _VIRTUAL_GROUP_TYPES
-        ))
+        if target is None:
+            return False
+        target_type = target.data(ROLE_NODE_TYPE)
+        if target_type not in (_CONTAINER_TYPES | _VIRTUAL_GROUP_TYPES):
+            return False
+        # 「否则」行只能在它的 if 内移动：跨 if 迁移会静默改写两个 if 的分支归属，
+        # 几乎不可能是用户意图；拖到别的容器 / 拖出树同样拒绝。
+        dragged = self._dragged_id(data)
+        if _is_else_branch_id(dragged):
+            source = self.find_by_id(dragged)
+            return (
+                target_type == "if"
+                and source is not None
+                and source.parent() is target
+            )
+        return True
 
     def dropMimeData(self, data, action, row, column, parent) -> bool:
         """执行移动：按节点 id 定位源 item，takeRow 后插入目标容器。
@@ -191,13 +221,13 @@ class FlowTreeModel(QStandardItemModel):
 
         注意：配合 canvas.FlowTreeView.startDrag（重写）跳过 Qt 的
         clearOrRemove，避免 InternalMove 下 Qt 用旧索引删错节点。
-        此外 FlowTreeView.dragMoveEvent 已接管 hit-test，将 end-bracket
-        虚拟行上的 drop 翻译成对其真实容器的操作；这里再做一次 fallback
+        此外 FlowTreeView.dragMoveEvent 已接管 hit-test，将 end-bracket /
+        「否则」行上的 drop 翻译成对其真实容器的操作；这里再做一次 fallback
         路由，防止 Qt 自身的 drop 路径绕过。
         """
         if not data.hasFormat(_MIME_TYPE) or not parent.isValid():
             return False
-        # end-bracket 虚拟行上的 drop 路由到其真实容器
+        # 结束行 / 否则行上的 drop 路由到其真实容器
         parent = self._resolve_drop_parent(parent)
         if not parent.isValid():
             return False
@@ -206,11 +236,14 @@ class FlowTreeModel(QStandardItemModel):
             _CONTAINER_TYPES | _VIRTUAL_GROUP_TYPES
         ):
             return False
-        raw = bytes(data.data(_MIME_TYPE)).decode("utf-8")
-        node_id = raw.split(";", 1)[0]
+        node_id = self._dragged_id(data)
         source = self.find_by_id(node_id)
         if source is None:
             return False
+        if _is_else_branch_id(node_id):
+            # 与 canDropMimeData 同口径：否则行只能留在同一个 if 内
+            if target.data(ROLE_NODE_TYPE) != "if" or source.parent() is not target:
+                return False
         if source is target or self._is_descendant(source, target):
             return False  # 不能移入自身或自己的后代（成环）
 
@@ -288,8 +321,8 @@ class FlowTreeModel(QStandardItemModel):
         落点规则（target 为画布当前选中项，None 时取根）：
         - 虚拟分组（catch）或 sequence/forEach/try 容器：追加为末位子节点
           （停在末尾 end-bracket 之前，不能落到「结束 X」行下方）；
-        - if：追加进 **then 分支**（即「否则」标记行之前）；选中「否则」行或
-          else 分支里的节点时，追加进 else 分支；
+        - if：追加进 **then 分支**（有「否则」行时即该行之前；默认无该行时
+          就是容器末尾）；选中「否则」行或 else 分支里的节点时，追加进 else 分支；
         - 叶子（action/return）：作为其所在**分支**的末位同级节点。
         """
         new_item = self.create_action_item(command_id)
@@ -316,16 +349,37 @@ class FlowTreeModel(QStandardItemModel):
         return new_item
 
     def remove_item(self, item: QStandardItem) -> bool:
-        """删除一个真实节点（整棵子树随父行移除）。
+        """删除一个真实节点或「否则」指令行（整棵子树随父行移除）。
 
-        根节点与虚拟分组受保护不可删；返回是否实际删除。
+        根节点与虚拟分组（异常处理 / 结束行）受保护不可删；返回是否实际删除。
+
+        「否则」行可删——它就是"取消 else 分支"：删掉分割行后，原本在它下面的
+        子节点顺序不变、parent 仍是同一个 if，于是自然并入 then 段末尾，不丢节点。
         """
-        if item is None or item.data(ROLE_IS_VIRTUAL):
+        if item is None:
+            return False
+        node_type = item.data(ROLE_NODE_TYPE)
+        if item.data(ROLE_IS_VIRTUAL) and node_type != _ELSE_BRANCH_TYPE:
             return False
         if not item.parent():  # 顶层根节点
             return False
         item.parent().takeRow(item.row())
         return True
+
+    def add_else_branch(self, if_item: QStandardItem) -> QStandardItem | None:
+        """给 if 添加一条「否则」指令行；已有则返回 None。
+
+        「否则」默认不加（影刀同款）：只有用户从指令树显式添加、或 AST 里本来
+        就有 else 段才会出现。插入位置是 then 段末尾（即末尾 end-bracket 之前），
+        添加后落在它下面的节点归 else 分支。
+        """
+        if if_item is None or if_item.data(ROLE_NODE_TYPE) != "if":
+            return None
+        if _else_branch_row(if_item) is not None:
+            return None
+        marker = _make_else_branch_item(if_item.data(ROLE_NODE_ID))
+        if_item.insertRow(_real_child_insert_row(if_item), [marker])
+        return marker
 
     def flags(self, index):
         base = super().flags(index)
@@ -335,11 +389,19 @@ class FlowTreeModel(QStandardItemModel):
         if not index.parent().isValid():
             return (base | Qt.ItemFlag.ItemIsDropEnabled) & ~Qt.ItemFlag.ItemIsDragEnabled
         node_type = index.data(ROLE_NODE_TYPE)
-        if node_type in (_END_BRACKET_TYPE, _ELSE_MARKER_TYPE):
-            # 标记行（结束行 / 否则行）：不对应 AST 节点，不可拖不可选，但接受
-            # drop——dragMoveEvent 会把它翻译成容器内对应分支的插入操作
+        if node_type == _END_BRACKET_TYPE:
+            # 结束标记行：不对应 AST 节点，不可拖不可选，但接受 drop
+            # （dragMoveEvent 会把它翻译成容器内末尾 / 容器同级后的插入）
             return (
                 Qt.ItemFlag.ItemIsEnabled
+                | Qt.ItemFlag.ItemIsDropEnabled
+            )
+        if node_type == _ELSE_BRANCH_TYPE:
+            # 「否则」是一条独立指令：可选中、可拖、可删，同时接受 drop
+            return (
+                Qt.ItemFlag.ItemIsEnabled
+                | Qt.ItemFlag.ItemIsSelectable
+                | Qt.ItemFlag.ItemIsDragEnabled
                 | Qt.ItemFlag.ItemIsDropEnabled
             )
         if node_type in _VIRTUAL_GROUP_TYPES:
@@ -359,11 +421,9 @@ class FlowTreeModel(QStandardItemModel):
 
     @staticmethod
     def _resolve_drop_parent(parent_index: QModelIndex) -> QModelIndex:
-        """标记行（end-bracket / else-marker）上的 drop 路由到其真实容器。"""
-        if (
-            parent_index.isValid()
-            and parent_index.data(ROLE_NODE_TYPE)
-            in (_END_BRACKET_TYPE, _ELSE_MARKER_TYPE)
+        """结束行 / 否则行上的 drop 路由到其真实容器。"""
+        if parent_index.isValid() and parent_index.data(ROLE_NODE_TYPE) in (
+            _END_BRACKET_TYPE, _ELSE_BRANCH_TYPE
         ):
             return parent_index.parent()
         return parent_index
@@ -388,6 +448,25 @@ def _make_item(
     item.setData(virtual, ROLE_IS_VIRTUAL)
     item.setEditable(False)
     return item
+
+
+def _is_else_branch_id(node_id: str | None) -> bool:
+    """是否为「否则」行的合成 id（形如 @else:c）。"""
+    return bool(node_id) and str(node_id).startswith(_ELSE_BRANCH_ID_PREFIX)
+
+
+def _make_else_branch_item(if_id: str) -> QStandardItem:
+    """构造 if 的「否则」分支指令行。
+
+    带合成 id（``@else:<if_id>``）以便参与拖拽定位，同时标 virtual=True：它不对应
+    AST 节点，因此不计入 existing_ids、也不被 iter_real_nodes 收集。
+    """
+    return _make_item(
+        title="否则",
+        node_type=_ELSE_BRANCH_TYPE,
+        node_id=f"{_ELSE_BRANCH_ID_PREFIX}{if_id}",
+        virtual=True,
+    )
 
 
 def _node_dict(node: Any) -> dict:
@@ -473,16 +552,20 @@ def build_item(node: Any, *, label: Callable[[str], str] | None = None) -> QStan
                 catch_group.appendRow(build_item(child, label=label))
             _add_end(catch_group, "异常处理")
     elif node_type == "if":
-        # 影刀式扁平结构：then 子节点直接挂在 if 下 → 「否则」指令行 → else 子节点
-        # → 「结束 如果」。两个分支的子节点缩进一致（都由 if 直接持有，「否则」
-        # 只做分割），因此不再有「则执行/否则执行」两层虚拟分组。
+        # 影刀式扁平结构：then 子节点直接挂在 if 下；有 else 段时在 then 之后插一条
+        # 「否则」指令行，再挂 else 子节点，末尾「结束 如果」。两个分支的子节点缩进
+        # 一致（都由 if 直接持有，「否则」只做分割），因此没有「则执行/否则执行」两层
+        # 虚拟分组。
+        #
+        # 「否则」按需存在：AST 没有 else 段就不插（默认不加），用户可在指令树里
+        # 显式添加——此时 then 段末尾就是插入位置（结束行之前）。
         for child in raw.get("then", []):
             item.appendRow(build_item(child, label=label))
-        item.appendRow(_make_item(
-            title="否则", node_type=_ELSE_MARKER_TYPE, node_id=None, virtual=True,
-        ))
-        for child in raw.get("else", []):
-            item.appendRow(build_item(child, label=label))
+        else_children = raw.get("else") or []
+        if else_children:
+            item.appendRow(_make_else_branch_item(node_id))
+            for child in else_children:
+                item.appendRow(build_item(child, label=label))
         _add_end(item, "如果")
     return item
 
@@ -527,11 +610,15 @@ def _rebuild_group(group: QStandardItem) -> list[dict[str, Any]]:
 
 
 def _virtual_groups(item: QStandardItem) -> dict[str, QStandardItem]:
-    """收集 item 下的虚拟分组子 item（目前只有 try 的 branch-catch）。"""
+    """收集 item 下的虚拟分组子 item（目前只有 try 的 branch-catch）。
+
+    只认 _VIRTUAL_GROUP_TYPES：if 的「否则」行同为 virtual，但它是指令行、
+    不是分组容器，混进来只会让"分组"语义含糊。
+    """
     groups: dict[str, QStandardItem] = {}
     for row in range(item.rowCount()):
         child = item.child(row)
-        if child.data(ROLE_IS_VIRTUAL):
+        if child.data(ROLE_NODE_TYPE) in _VIRTUAL_GROUP_TYPES:
             groups[child.data(ROLE_NODE_TYPE)] = child
     return groups
 
@@ -569,14 +656,15 @@ def _rebuild_node(item: QStandardItem) -> dict[str, Any]:
         return node
 
     if node_type == "if":
-        # 以「否则」标记行为界把 if 的子节点切成 then / else 两段
+        # 以「否则」指令行为界把 if 的子节点切成 then / else 两段；没有该行时
+        # （默认形态）所有子节点都归 then。
         then: list[dict[str, Any]] = []
         otherwise: list[dict[str, Any]] = []
         in_else = False
         for row in range(item.rowCount()):
             child = item.child(row)
             child_type = child.data(ROLE_NODE_TYPE)
-            if child_type == _ELSE_MARKER_TYPE:
+            if child_type == _ELSE_BRANCH_TYPE:
                 in_else = True
                 continue
             if child_type == _END_BRACKET_TYPE:
@@ -586,7 +674,7 @@ def _rebuild_node(item: QStandardItem) -> dict[str, Any]:
         if otherwise:
             node["else"] = otherwise
         else:
-            # 「否则」行是常驻的展示元素：else 段为空就不落盘 else 键，
+            # 「否则」行是可选指令：没添加、或添加了但下面是空的，都不落盘 else 键，
             # 免得每个 if 都多出一个空 else。
             node.pop("else", None)
         return node

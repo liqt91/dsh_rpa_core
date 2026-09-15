@@ -155,10 +155,10 @@ def test_move_action_into_then_group():
     doc = json.loads(json.dumps(SAMPLE_WORKFLOW))
     model = build_model_from_workflow(doc)
     if_item = model.find_by_id("check")
-    # 扁平结构下 then 分支的边界是「否则」标记行：插到它之前即进 then
+    # 扁平结构下 then 分支的边界是「否则」指令行：插到它之前即进 then
     marker_row = next(
         row for row in range(if_item.rowCount())
-        if if_item.child(row).data(ROLE_NODE_TYPE) == "else-marker"
+        if if_item.child(row).data(ROLE_NODE_TYPE) == "else-branch"
     )
     assert _drop(model, "done", if_item, row=marker_row)
 

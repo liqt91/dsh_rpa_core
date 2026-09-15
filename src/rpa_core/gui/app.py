@@ -59,6 +59,22 @@ NAMESPACE_LABELS = {
 # 分组在指令树中的固定展示顺序（高频在前），其余命名空间按名字追加在最后。
 NAMESPACE_ORDER = ["browser", "data", "workflow", "desktop"]
 
+# ---- 控制指令 -------------------------------------------------------------
+# catalog 之外的流程控制指令，固定挂在指令树最前面的「流程控制」组。
+# 「否则」是 if 的**可选**分支指令（影刀同款）：默认不加，需要时从这里双击添加。
+CONTROL_GROUP_LABEL = "流程控制"
+ELSE_COMMAND_ID = "@else"
+# （command id, 显示名, tooltip）
+_CONTROL_COMMANDS = [
+    (
+        ELSE_COMMAND_ID,
+        "否则",
+        "否则分支：先选中画布的「如果」节点（或其内部指令）再双击添加。\n"
+        "添加后位于它下面的指令属于否则分支；Delete 删除它即取消分支，"
+        "其下指令并入如果分支。",
+    ),
+]
+
 
 def apply_theme(app: QApplication) -> None:
     """套用 QDarkStyle 浅色主题（LightPalette）并设置跨平台中文字体回退。
@@ -93,12 +109,25 @@ def _ordered_namespaces(catalog: CommandCatalog) -> list[str]:
 def populate_command_tree(
     tree: QTreeWidget, catalog: CommandCatalog
 ) -> dict[str, QTreeWidgetItem]:
-    """把真实 catalog 填充进指令树，返回「命名空间 → 分组节点」映射。
+    """把控制指令与真实 catalog 填充进指令树，返回「命名空间 → 分组节点」映射。
 
     树为两级：分组节点（不可执行）→ 命令叶子（``ROLE_COMMAND_ID`` 存完整 id）。
+    最前面固定一组「流程控制」，承载 catalog 里没有的控制指令（目前是 if 的
+    「否则」分支）——它们与普通命令一样双击即可添加到画布。
     """
     tree.clear()
     groups: dict[str, QTreeWidgetItem] = {}
+
+    control_group = QTreeWidgetItem(
+        tree, [f"{CONTROL_GROUP_LABEL}（{len(_CONTROL_COMMANDS)}）"]
+    )
+    control_group.setData(0, ROLE_COMMAND_ID, None)
+    for command_id, label, tip in _CONTROL_COMMANDS:
+        control_leaf = QTreeWidgetItem(control_group, [label])
+        control_leaf.setData(0, ROLE_COMMAND_ID, command_id)
+        control_leaf.setToolTip(0, tip)
+    groups["control"] = control_group
+
     for namespace in _ordered_namespaces(catalog):
         label = NAMESPACE_LABELS.get(namespace, namespace)
         command_ids = sorted(
@@ -135,7 +164,10 @@ def _apply_filter(tree: QTreeWidget, keyword: str) -> None:
         visible = 0
         for child_index in range(group.childCount()):
             child = group.child(child_index)
-            matched = keyword in child.data(0, ROLE_COMMAND_ID).lower()
+            command_id = child.data(0, ROLE_COMMAND_ID) or ""
+            # 显示名与命令 id 一起匹配：控制指令的显示名是中文（否则）、
+            # 命令 id 是 @else，两者都应能被搜到
+            matched = keyword in f"{child.text(0)} {command_id}".lower()
             child.setHidden(not matched)
             visible += matched
         group.setHidden(visible == 0)
@@ -344,7 +376,13 @@ class MainWindow(QMainWindow):
             self.add_command(command_id)
 
     def add_command(self, command_id: str):
-        """在画布当前选中位置插入新 action；无选中则追加到根容器末尾。"""
+        """在画布当前选中位置插入新指令；返回新 item（添加失败时返回 None）。
+
+        来自 catalog 的命令插入 action；``@else`` 是控制指令「否则」——给画布
+        选中的 if（或其内部节点所属的 if）添加一条否则分支指令行。
+        """
+        if command_id == ELSE_COMMAND_ID:
+            return self._add_else_branch()
         current = self.canvas_view.currentIndex()
         target = (
             self.flow_model.itemFromIndex(current) if current.isValid() else None
@@ -361,18 +399,70 @@ class MainWindow(QMainWindow):
         )
         return new_item
 
+    def _add_else_branch(self):
+        """给画布选中的 if 添加「否则」指令行（默认不加，需要时才加）。
+
+        目标取当前选中项最近的 if 祖先（选中 if 本身、if 内任意指令、或已存在的
+        「否则」行都算）。没有 if 上下文或该 if 已有否则分支时，只在状态栏提示，
+        不静默失败。
+        """
+        current = self.canvas_view.currentIndex()
+        if_item = (
+            self._nearest_if(self.flow_model.itemFromIndex(current))
+            if current.isValid()
+            else None
+        )
+        if if_item is None:
+            self.statusBar().showMessage(
+                "请先在画布选中「如果」节点（或其内部的指令），再添加否则", 5000
+            )
+            return None
+        marker = self.flow_model.add_else_branch(if_item)
+        if marker is None:
+            self.statusBar().showMessage("该「如果」已经有否则分支了", 4000)
+            return None
+        self.canvas_view.setExpanded(self.flow_model.indexFromItem(if_item), True)
+        self.canvas_view.setCurrentIndex(self.flow_model.indexFromItem(marker))
+        self.statusBar().showMessage(
+            "已添加否则分支：它下面的指令属于否则分支（Delete 可取消分支）", 5000
+        )
+        return marker
+
+    @staticmethod
+    def _nearest_if(item):
+        """沿父链找到最近的 if item（item 自身是 if 时返回自身）。"""
+        from rpa_core.gui.flow_model import ROLE_NODE_TYPE
+
+        current = item
+        while current is not None:
+            if current.data(ROLE_NODE_TYPE) == "if":
+                return current
+            current = current.parent()
+        return None
+
     def _delete_selected_node(self) -> None:
-        """删除画布当前选中节点；根节点与虚拟分组受保护。"""
-        from rpa_core.gui.flow_model import ROLE_NODE_ID
+        """删除画布当前选中节点；根节点与虚拟分组受保护。
+
+        删「否则」行等价于取消 else 分支（其下指令顺序不变，自然并入 then 段）。
+        """
+        from rpa_core.gui.flow_model import _ELSE_BRANCH_TYPE, ROLE_NODE_ID, ROLE_NODE_TYPE
 
         current = self.canvas_view.currentIndex()
         if not current.isValid():
             return
         item = self.flow_model.itemFromIndex(current)
+        # 先取属性：remove_item 会把 item 从树上摘掉
+        node_type = item.data(ROLE_NODE_TYPE)
         node_id = item.data(ROLE_NODE_ID)
-        if self.flow_model.remove_item(item):
-            self.statusBar().showMessage(f"已删除节点 {node_id}（未保存）", 4000)
-            self._show_param_placeholder("从画布选择指令节点以编辑参数")
+        if not self.flow_model.remove_item(item):
+            return
+        what = (
+            "否则分支（其下指令已并入如果分支）"
+            if node_type == _ELSE_BRANCH_TYPE
+            else f"节点 {node_id}"
+        )
+        self.statusBar().showMessage(f"已删除{what}（未保存）", 4000)
+        self._show_param_placeholder("从画布选择指令节点以编辑参数")
 
     def _on_structure_changed(self, *args) -> None:
         """模型结构行变化（拖拽重排）时置脏；初始构建期间忽略。"""
@@ -430,7 +520,9 @@ class MainWindow(QMainWindow):
         self._set_dirty(False)
         return path
 
-    def closeEvent(self, event) -> None:  # noqa: N802（Qt 命名）
+    # Qt 覆写要求保留驼峰方法名，故豁免 N802（行尾不能写中文括号，
+    # 否则 ruff 会把说明当成 noqa code 列表的一部分而报 Invalid noqa directive）
+    def closeEvent(self, event) -> None:  # noqa: N802
         """有未保存修改时询问：保存 / 不保存 / 取消。"""
         if not self._dirty:
             event.accept()
@@ -472,6 +564,7 @@ class MainWindow(QMainWindow):
     def _on_canvas_selection(self, current, previous) -> None:
         """画布当前节点变化：action 显参数表单，其余显对应占位。"""
         from rpa_core.gui.flow_model import (
+            _ELSE_BRANCH_TYPE,
             ROLE_ARGS_RAW,
             ROLE_COMMAND_ID,
             ROLE_NODE_TYPE,
@@ -484,6 +577,8 @@ class MainWindow(QMainWindow):
         if node_type != "action":
             hint = {
                 "return": "返回节点的编辑将在后续切片支持",
+                _ELSE_BRANCH_TYPE: "否则分支指令：位于它下面的指令属于否则分支"
+                "（Delete 取消分支）",
             }.get(node_type, "该节点不接受参数")
             self._show_param_placeholder(hint)
             return

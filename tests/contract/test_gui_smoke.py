@@ -17,6 +17,9 @@ pytest.importorskip("PySide6", reason="原生 GUI 为可选能力，需 uv sync 
 from rpa_core.catalog import load_catalog  # noqa: E402
 from rpa_core.cli import _commands_root  # noqa: E402
 from rpa_core.gui.app import (  # noqa: E402
+    _CONTROL_COMMANDS,
+    CONTROL_GROUP_LABEL,
+    ELSE_COMMAND_ID,
     NAMESPACE_LABELS,
     NAMESPACE_ORDER,
     ROLE_COMMAND_ID,
@@ -57,8 +60,10 @@ def _all_leaves(tree):
 
 def test_tree_groups_follow_namespace_order(window, catalog):
     tree = window.command_tree
-    # 四个真实命名空间按固定顺序、用中文名成组
-    expected = [NAMESPACE_LABELS[name] for name in NAMESPACE_ORDER]
+    # 最前面是固定的「流程控制」组，其后四个真实命名空间按固定顺序、用中文名成组
+    expected = [CONTROL_GROUP_LABEL] + [
+        NAMESPACE_LABELS[name] for name in NAMESPACE_ORDER
+    ]
     actual = [tree.topLevelItem(i).text(0).split("（", 1)[0]
               for i in range(tree.topLevelItemCount())]
     assert actual == expected
@@ -66,17 +71,26 @@ def test_tree_groups_follow_namespace_order(window, catalog):
 
 def test_every_catalog_command_appears_once_as_leaf(window, catalog):
     tree = window.command_tree
-    assert tree.topLevelItemCount() == len(NAMESPACE_ORDER)
-    assert _leaf_count(tree) == len(catalog)
+    # 组数 = 4 个命名空间 + 1 个控制指令组
+    assert tree.topLevelItemCount() == len(NAMESPACE_ORDER) + 1
+    assert _leaf_count(tree) == len(catalog) + len(_CONTROL_COMMANDS)
     leaf_ids = {leaf.data(0, ROLE_COMMAND_ID) for leaf in _all_leaves(tree)}
-    assert leaf_ids == set(catalog)
+    # 除「否则」这类控制指令外，叶子与 catalog 一一对应
+    assert leaf_ids - {ELSE_COMMAND_ID} == set(catalog)
 
 
 def test_group_label_carries_command_count(window, catalog):
     tree = window.command_tree
-    # 第一组 browser：标签形如「浏览器（30）」，计数与 catalog 实际一致
+    # browser 组：标签形如「浏览器（30）」，计数与 catalog 实际一致
     browser_count = sum(1 for cid in catalog if cid.startswith("browser."))
-    assert tree.topLevelItem(0).text(0) == f"浏览器（{browser_count}）"
+    browser_group = next(
+        tree.topLevelItem(i) for i in range(tree.topLevelItemCount())
+        if tree.topLevelItem(i).text(0).startswith(NAMESPACE_LABELS["browser"])
+    )
+    assert browser_group.text(0) == f"浏览器（{browser_count}）"
+    # 控制指令组同样带计数
+    control_group = tree.topLevelItem(0)
+    assert control_group.text(0) == f"{CONTROL_GROUP_LABEL}（{len(_CONTROL_COMMANDS)}）"
 
 
 def test_filter_only_keeps_matching_leaves(window):
@@ -102,10 +116,23 @@ def test_clear_filter_restores_all_groups(window, catalog):
     tree = window.command_tree
     _apply_filter(tree, "navigate")
     _apply_filter(tree, "")
-    assert _leaf_count(tree) == len(catalog)
+    assert _leaf_count(tree) == len(catalog) + len(_CONTROL_COMMANDS)
     assert all(
         not tree.topLevelItem(g).isHidden() for g in range(tree.topLevelItemCount())
     )
+
+
+def test_filter_matches_control_command_by_chinese_label(window):
+    """控制指令既能按中文显示名（否则）搜到，也能按命令 id（@else）搜到。"""
+    tree = window.command_tree
+    for keyword in ("否则", "else"):
+        _apply_filter(tree, keyword)
+        visible = {
+            leaf.data(0, ROLE_COMMAND_ID)
+            for leaf in _all_leaves(tree) if not leaf.isHidden()
+        }
+        assert ELSE_COMMAND_ID in visible
+    _apply_filter(tree, "")
 
 
 def test_command_tree_selection_does_not_raise(window):

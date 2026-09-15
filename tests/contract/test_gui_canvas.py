@@ -63,7 +63,7 @@ def qapp():
     return build_application()
 
 
-def test_if_then_else_and_foreach_become_virtual_groups():
+def test_if_then_else_and_foreach_map_to_flat_structure():
     workflow = {
         "schema_version": "1.0", "id": "s", "name": "s",
         "root": {
@@ -88,7 +88,7 @@ def test_if_then_else_and_foreach_become_virtual_groups():
     model = build_model_from_workflow(workflow)
     root = model.item(0)
 
-    # if：扁平结构（影刀式）——then 子节点 → 「否则」行 → else 子节点 → 结束 如果
+    # if：扁平结构（影刀式）——then 子节点 → 「否则」指令行 → else 子节点 → 结束 如果
     if_item = _child(root, 0)
     assert if_item.data(ROLE_NODE_TYPE) == "if"
     rows = [
@@ -97,7 +97,7 @@ def test_if_then_else_and_foreach_become_virtual_groups():
     ]
     assert rows == [
         ("action", "data.setVar"),
-        ("else-marker", None),
+        ("else-branch", None),
         ("action", "workflow.sleep"),
         ("end-bracket", None),
     ]
@@ -116,8 +116,8 @@ def test_if_then_else_and_foreach_become_virtual_groups():
     assert _child(catch_group, 0).data(ROLE_COMMAND_ID) == "data.setVar"
 
 
-def test_else_marker_is_always_present_even_for_if_without_else():
-    """「否则」行常驻：没有 else 的 if 也有明确落点，可直接拖进去建分支。"""
+def test_if_without_else_has_no_else_row():
+    """「否则」按需添加：AST 里没有 else 段的 if 不显示否则行（默认不加）。"""
     workflow = {
         "schema_version": "1.0", "id": "s", "name": "s",
         "root": {"type": "sequence", "id": "root", "children": [
@@ -129,7 +129,10 @@ def test_else_marker_is_always_present_even_for_if_without_else():
     model = build_model_from_workflow(workflow)
     if_item = _child(model.item(0), 0)
     types = [if_item.child(r).data(ROLE_NODE_TYPE) for r in range(if_item.rowCount())]
-    assert types == ["action", "else-marker", "end-bracket"]
+    assert types == ["action", "end-bracket"]  # 没有 else-branch
+    # else 段为空时不落盘 else 键（默认形态不制造空 else）
+    doc = model_to_workflow(model, {"schema_version": "1.0", "id": "s", "name": "s"})
+    assert "else" not in doc["root"]["children"][0]
 
 
 def test_summarize_args_limits_pairs_and_truncates():
@@ -158,7 +161,7 @@ def test_same_level_reorder_via_drop(real_workflow):
 
 
 def test_cross_container_move_into_if_then_branch():
-    """跨容器拖拽：落到 if 的「否则」行之前 = 进 then 分支。"""
+    """跨容器拖拽：落到 if 内 then 段末尾（默认无否则行时即结束行之前）。"""
     workflow = {
         "schema_version": "1.0", "id": "s", "name": "s",
         "root": {"type": "sequence", "id": "root", "children": [
@@ -171,14 +174,13 @@ def test_cross_container_move_into_if_then_branch():
     model = build_model_from_workflow(workflow)
     root = model.item(0)
     if_item = _child(root, 1)
-    marker_row = 1  # then 子节点 after 之后、结束行之前
-    assert _drop(model, "free", if_item, row=marker_row)
+    then_tail = 1  # then 子节点 after 之后、结束行之前
+    assert _drop(model, "free", if_item, row=then_tail)
     moved = model.find_by_id("free")
     assert moved.parent() is if_item
     assert root.rowCount() == 1  # 已移出根
-    assert [moved.row(), _child(if_item, moved.row() + 1).data(ROLE_NODE_TYPE)] == [
-        marker_row, "else-marker"
-    ]  # 落在 then 分支末尾，仍在「否则」行之前
+    assert moved.row() == then_tail  # 落在 then 段末尾
+    assert _child(if_item, then_tail + 1).data(ROLE_NODE_TYPE) == "end-bracket"
 
 
 def test_drop_into_own_descendant_is_rejected():
@@ -195,11 +197,80 @@ def test_drop_into_own_descendant_is_rejected():
     if_item = _child(root, 0)
     # 把 if 自身拖进它自己 → 成环，必须拒绝
     assert not _drop(model, "c", if_item)
-    # 拖到 if 的「否则」标记行上 → 路由到 if 本身，同样成环，拒绝
-    marker = _child(if_item, 1)
-    assert not _drop(model, "c", marker)
+    # 拖到 if 的结束标记行上 → 路由到 if 本身，同样成环，拒绝
+    bracket = _child(if_item, if_item.rowCount() - 1)
+    assert bracket.data(ROLE_NODE_TYPE) == "end-bracket"
+    assert not _drop(model, "c", bracket)
     # 拖到 action 叶子上 → 叶子非容器，拒绝
     assert not _drop(model, "c", _child(if_item, 0))
+
+
+def test_add_else_branch_creates_optional_row():
+    """「否则」按需添加：默认没有，add_else_branch 之后才出现，且只加一次。"""
+    workflow = {
+        "schema_version": "1.0", "id": "s", "name": "s",
+        "root": {"type": "sequence", "id": "root", "children": [
+            {"type": "if", "id": "c", "condition": {"op": "truthy", "left": "${x}"},
+             "then": [{"type": "action", "id": "t1", "command": "data.limit",
+                       "with": {}}]},
+        ]},
+    }
+    model = build_model_from_workflow(workflow)
+    if_item = model.find_by_id("c")
+    assert [if_item.child(r).data(ROLE_NODE_TYPE) for r in range(if_item.rowCount())] == [
+        "action", "end-bracket"
+    ]
+    marker = model.add_else_branch(if_item)
+    assert marker is not None
+    assert marker.data(ROLE_NODE_TYPE) == "else-branch"
+    assert [if_item.child(r).data(ROLE_NODE_TYPE) for r in range(if_item.rowCount())] == [
+        "action", "else-branch", "end-bracket"  # 插在 then 之后、结束行之前
+    ]
+    assert model.add_else_branch(if_item) is None  # 已有则不重复添加
+    # 非 if 容器不允许添加否则
+    assert model.add_else_branch(model.item(0)) is None
+
+
+def test_else_branch_can_be_dragged_inside_if_but_not_out():
+    """「否则」是可拖指令，但只能在 if 内——拖到别的容器必须拒绝。"""
+    workflow = {
+        "schema_version": "1.0", "id": "s", "name": "s",
+        "root": {"type": "sequence", "id": "root", "children": [
+            {"type": "if", "id": "c", "condition": {"op": "truthy", "left": "${x}"},
+             "then": [{"type": "action", "id": "t1", "command": "data.limit",
+                       "with": {}}]},
+            {"type": "if", "id": "c2", "condition": {"op": "truthy", "left": "${y}"},
+             "then": [{"type": "action", "id": "t2", "command": "data.limit",
+                       "with": {}}]},
+        ]},
+    }
+    model = build_model_from_workflow(workflow)
+    if_item = model.find_by_id("c")
+    marker = model.add_else_branch(if_item)
+    marker_index = model.indexFromItem(marker)
+    # 它是"可拖放的指令"：可选中、可拖
+    assert model.flags(marker_index) & Qt.ItemFlag.ItemIsSelectable
+    assert model.flags(marker_index) & Qt.ItemFlag.ItemIsDragEnabled
+    mime = model.mimeData([marker_index])
+    assert model.canDropMimeData(
+        mime, Qt.DropAction.MoveAction, -1, 0, model.indexFromItem(if_item)
+    )
+    # 拖进另一个 if：会静默改写两个 if 的分支归属，拒绝
+    assert not model.canDropMimeData(
+        mime, Qt.DropAction.MoveAction, -1, 0, model.indexFromItem(model.find_by_id("c2"))
+    )
+    # 拖到根 sequence：非 if 容器，拒绝
+    assert not model.canDropMimeData(
+        mime, Qt.DropAction.MoveAction, -1, 0, model.indexFromItem(model.item(0))
+    )
+    # 在自己 if 内移动则合法：拖到最前面 → then 段清空，原 then 子节点改归 else
+    assert model.dropMimeData(
+        mime, Qt.DropAction.MoveAction, 0, 0, model.indexFromItem(if_item)
+    )
+    doc = model_to_workflow(model, {"schema_version": "1.0", "id": "s", "name": "s"})
+    check = doc["root"]["children"][0]
+    assert check["then"] == []
+    assert [c["id"] for c in check["else"]] == ["t1"]
 
 
 def test_flags_enforce_drag_drop_rules(real_workflow):
@@ -340,10 +411,10 @@ _IF_WORKFLOW = {
 }
 
 
-def test_else_marker_hit_test_splits_then_and_else(qapp):
+def test_else_branch_hit_test_splits_then_and_else(qapp):
     """「否则」行上半 → then 分支末尾；下半 → else 分支开头。
 
-    影刀式扁平结构下，if 的两个分支由这条标记行分割，落点必须严格分侧：
+    影刀式扁平结构下，if 的两个分支由这条指令行分割，落点必须严格分侧：
     画面上"放到 否则 上面"就该属于 then，"放到 否则 下面"才属于 else。
     """
     from PySide6.QtCore import QPoint
@@ -353,7 +424,7 @@ def test_else_marker_hit_test_splits_then_and_else(qapp):
     if_item = model.find_by_id("c")
     marker = next(
         if_item.child(r) for r in range(if_item.rowCount())
-        if if_item.child(r).data(ROLE_NODE_TYPE) == "else-marker"
+        if if_item.child(r).data(ROLE_NODE_TYPE) == "else-branch"
     )
     view = build_canvas(model)
     view.resize(640, 900)

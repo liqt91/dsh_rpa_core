@@ -13,6 +13,7 @@ offscreen Qt 平台；缺 PySide6 时整组跳过。
 from __future__ import annotations
 
 import copy
+import json
 import os
 
 # 必须在导入 Qt / 创建 QApplication 之前指定离屏平台
@@ -25,7 +26,7 @@ pytest.importorskip("PySide6")
 from PySide6.QtCore import Qt  # noqa: E402
 from PySide6.QtWidgets import QLineEdit  # noqa: E402
 
-from rpa_core.gui.app import SAMPLE_WORKFLOW, MainWindow  # noqa: E402
+from rpa_core.gui.app import ELSE_COMMAND_ID, SAMPLE_WORKFLOW, MainWindow  # noqa: E402
 from rpa_core.gui.flow_model import (  # noqa: E402
     ROLE_ARGS_RAW,
     ROLE_COMMAND_ID,
@@ -65,12 +66,13 @@ def _doc(model) -> dict:
     return model_to_workflow(model, meta)
 
 
-def _else_marker(if_item):
-    """取 if 下的「否则」分割行 item。"""
-    return next(
-        if_item.child(r) for r in range(if_item.rowCount())
-        if if_item.child(r).data(ROLE_NODE_TYPE) == "else-marker"
-    )
+def _else_branch(if_item):
+    """取 if 下的「否则」指令行 item；没有该行（默认形态）则 None。"""
+    for row in range(if_item.rowCount()):
+        child = if_item.child(row)
+        if child.data(ROLE_NODE_TYPE) == "else-branch":
+            return child
+    return None
 
 
 # ---- 模型层：id 与新建 ----------------------------------------------------
@@ -116,13 +118,13 @@ def test_insert_without_target_appends_to_root(model):
 
 
 def test_insert_targeting_if_goes_into_then(model):
-    """选中 if 卡片新增 → 追加进 then 分支（「否则」标记行之前）。"""
+    """选中 if 卡片新增 → 追加进 then 分支（「否则」指令行之前）。"""
     if_item = model.find_by_id("check")
-    marker_row = _else_marker(if_item).row()
+    marker_row = _else_branch(if_item).row()
     new_item = model.insert_command("workflow.sleep", if_item)
     assert new_item.parent() is if_item  # 不再是嵌套的 branch-then 虚拟组
     assert new_item.row() == marker_row  # 顶在「否则」行原位置 = then 分支末位
-    assert _else_marker(if_item).row() == marker_row + 1
+    assert _else_branch(if_item).row() == marker_row + 1
     doc = _doc(model)
     check = next(c for c in doc["root"]["children"] if c["id"] == "check")
     assert check["then"][-1]["command"] == "workflow.sleep"
@@ -130,10 +132,10 @@ def test_insert_targeting_if_goes_into_then(model):
     Workflow.model_validate(doc)
 
 
-def test_insert_targeting_else_marker_appends_to_else_branch(model):
-    """选中「否则」行新增 → 追加进 else 分支（容器末尾、结束行之前）。"""
+def test_insert_targeting_else_branch_appends_to_else_branch(model):
+    """选中「否则」指令行新增 → 追加进 else 分支（容器末尾、结束行之前）。"""
     if_item = model.find_by_id("check")
-    marker = _else_marker(if_item)
+    marker = _else_branch(if_item)
     before = [c.get("id") for c in _doc(model)["root"]["children"]]
     new_item = model.insert_command("data.setVar", marker)
     assert new_item.parent() is if_item
@@ -181,17 +183,17 @@ def test_insert_targeting_leaf_inside_container_stops_before_end_bracket(model):
     assert new_item.row() == loop.rowCount() - 2
 
 
-def test_insert_into_if_stops_before_else_marker(model):
+def test_insert_into_if_stops_before_else_branch(model):
     """if 里选中 then 分支的节点后新增：落点是 then 分支末尾（「否则」行之前）。
 
-    if 改用扁平结构后，then 分支的边界不再是虚拟组，而是「否则」标记行。
+    if 改用扁平结构后，then 分支的边界不再是虚拟组，而是「否则」指令行。
     """
     if_item = model.find_by_id("check")
-    marker_row = _else_marker(if_item).row()
+    marker_row = _else_branch(if_item).row()
     new_item = model.insert_command("data.setVar", model.find_by_id("read"))
     assert new_item.parent() is if_item
     assert new_item.row() == marker_row  # 紧贴「否则」行原位置（顶在它之前）
-    assert _else_marker(if_item).row() == marker_row + 1  # 标记行被顶下去，仍在
+    assert _else_branch(if_item).row() == marker_row + 1  # 否则行被顶下去，仍在
     doc = _doc(model)
     check = next(c for c in doc["root"]["children"] if c["id"] == "check")
     assert [c["id"] for c in check["then"]] == ["read", new_item.data(ROLE_NODE_ID)]
@@ -206,15 +208,25 @@ def test_remove_leaf(model):
     Workflow.model_validate(_doc(model))
 
 
-def test_root_and_marker_row_protected(model):
+def test_root_and_end_bracket_protected(model):
     assert model.remove_item(model.item(0)) is False
-    marker = _else_marker(model.find_by_id("check"))
-    assert marker.data(ROLE_IS_VIRTUAL) is True
-    assert model.remove_item(marker) is False  # 「否则」标记行不可删
-    end_bracket = model.find_by_id("loop").child(
-        model.find_by_id("loop").rowCount() - 1
-    )
+    loop = model.find_by_id("loop")
+    end_bracket = loop.child(loop.rowCount() - 1)
+    assert end_bracket.data(ROLE_NODE_TYPE) == "end-bracket"
     assert model.remove_item(end_bracket) is False  # 结束行不可删
+
+
+def test_remove_else_branch_merges_into_then(model):
+    """删除「否则」指令行 = 取消 else 分支：其下节点顺序不变，并入 then 末尾。"""
+    if_item = model.find_by_id("check")
+    marker = _else_branch(if_item)
+    assert marker is not None
+    assert model.remove_item(marker) is True  # 「否则」是可删的指令行
+    assert _else_branch(if_item) is None
+    check = next(c for c in _doc(model)["root"]["children"] if c["id"] == "check")
+    assert [c["id"] for c in check["then"]] == ["read", "wait"]  # wait 并入 then
+    assert "else" not in check
+    Workflow.model_validate(_doc(model))
 
 
 def test_remove_container_takes_subtree(model):
@@ -264,6 +276,73 @@ def test_double_click_command_tree_leaf_inserts(catalog):
     group = window.command_tree.topLevelItem(0)
     window._on_command_double_clicked(group, 0)
     assert window.flow_model.item(0).rowCount() == before + 1
+
+
+def test_command_tree_exposes_else_control_entry(catalog):
+    """指令树最前面的「流程控制」组里有「否则」控制指令（catalog 之外的可选项）。"""
+    from rpa_core.gui.app import ROLE_COMMAND_ID as TREE_ROLE
+
+    window = MainWindow(catalog, SAMPLE_WORKFLOW)
+    group = window.command_tree.topLevelItem(0)
+    assert group.text(0).startswith("流程控制")
+    labels = {
+        group.child(i).data(0, TREE_ROLE): group.child(i).text(0)
+        for i in range(group.childCount())
+    }
+    assert labels.get(ELSE_COMMAND_ID) == "否则"
+
+
+def test_add_else_branch_via_else_command(catalog):
+    """「否则」默认不加：先删掉示例里已有的分支，再从指令树添加回来。"""
+    window = MainWindow(catalog, SAMPLE_WORKFLOW)
+    if_item = window.flow_model.find_by_id("check")
+    assert _else_branch(if_item) is not None  # 示例 if 带 else 段 → 有否则行
+    assert window.flow_model.remove_item(_else_branch(if_item)) is True
+    assert _else_branch(if_item) is None  # 回到「默认不加」的形态
+
+    window.canvas_view.setCurrentIndex(window.flow_model.indexFromItem(if_item))
+    marker = window.add_command(ELSE_COMMAND_ID)
+    assert marker is not None
+    assert _else_branch(if_item) is marker
+    assert window._dirty is True
+    # 该 if 已有否则分支：再添加不会插出第二行
+    assert window.add_command(ELSE_COMMAND_ID) is None
+    assert _else_branch(if_item) is marker
+
+
+def test_add_else_branch_needs_if_context(catalog):
+    """没有 if 上下文时只给状态栏提示：不插节点、不抛异常。"""
+    window = MainWindow(catalog, SAMPLE_WORKFLOW)
+    root_item = window.flow_model.item(0)
+    window.canvas_view.setCurrentIndex(window.flow_model.indexFromItem(root_item))
+    assert window.add_command(ELSE_COMMAND_ID) is None
+
+
+def test_else_branch_roundtrip_through_save(catalog, tmp_path):
+    """选中「否则」行后新增 → 落进 else 段；保存后 then/else 结构正确。"""
+    window = MainWindow(catalog, SAMPLE_WORKFLOW)
+    if_item = window.flow_model.find_by_id("check")
+    marker = _else_branch(if_item)
+    assert marker is not None
+
+    # 选中否则行后新增 → 落到 else 段（容器末尾、结束行之前）
+    window.canvas_view.setCurrentIndex(window.flow_model.indexFromItem(marker))
+    new_item = window.add_command("workflow.sleep")
+    assert new_item.parent() is if_item
+    assert new_item.row() > marker.row()
+    assert if_item.child(if_item.rowCount() - 1).data(
+        ROLE_NODE_TYPE
+    ) == "end-bracket"  # 仍在结束行之前
+
+    target = tmp_path / "workflow.json"
+    assert window.save_workflow(target) == target
+    document = json.loads(target.read_text(encoding="utf-8"))
+    check = next(c for c in document["root"]["children"] if c["id"] == "check")
+    assert [c["id"] for c in check["then"]] == ["read"]  # then 未被串扰
+    assert [c["id"] for c in check["else"]] == [
+        "wait", new_item.data(ROLE_NODE_ID)
+    ]
+    Workflow.model_validate(document)
 
 
 def test_delete_handler_removes_selected_and_clears_form(catalog):
