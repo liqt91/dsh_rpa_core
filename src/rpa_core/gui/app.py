@@ -205,9 +205,22 @@ class MainWindow(QMainWindow):
         )
 
     def _build_toolbar(self) -> None:
-        """顶部工具栏：保存（Ctrl+S）、删除节点（Delete）。"""
+        """顶部工具栏：新建 / 打开 / 保存 / 删除节点。"""
         toolbar = self.addToolBar("文件")
         toolbar.setMovable(False)
+
+        new_action = QAction("新建", self)
+        new_action.setShortcut("Ctrl+N")
+        new_action.setToolTip("新建空白流程（Ctrl+N）")
+        new_action.triggered.connect(self._new_action)
+        toolbar.addAction(new_action)
+
+        open_action = QAction("打开", self)
+        open_action.setShortcut("Ctrl+O")
+        open_action.setToolTip("打开 workflow.json（Ctrl+O）")
+        open_action.triggered.connect(self._open_action)
+        toolbar.addAction(open_action)
+
         save_action = QAction("保存", self)
         save_action.setShortcut("Ctrl+S")
         save_action.setToolTip("保存到 workflow.json（Ctrl+S）")
@@ -224,6 +237,59 @@ class MainWindow(QMainWindow):
         toolbar.addAction(self.delete_action)
         app = QApplication.instance()
         app.focusChanged.connect(self._on_focus_changed)
+
+    def _prompt_discard_changes(self) -> bool:
+        """有未保存修改时弹确认。返回 True 表示用户接受丢弃（可以继续操作）。"""
+        if not self._dirty:
+            return True
+        answer = QMessageBox.question(
+            self,
+            "未保存的修改",
+            "当前流程有未保存的修改，是否放弃？",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        return answer == QMessageBox.StandardButton.Yes
+
+    def _new_action(self) -> None:
+        """新建空白流程：清除画布、重置路径与元数据。"""
+        if not self._prompt_discard_changes():
+            return
+        empty = {
+            "schema_version": "1.0",
+            "id": f"wf_{self.flow_path.stem if self.flow_path else 'new'}",
+            "name": "未命名流程",
+            "root": {
+                "type": "sequence",
+                "id": "root",
+                "children": [],
+            },
+        }
+        self.flow_path = None
+        self.set_workflow(empty)
+
+    def _open_action(self) -> None:
+        """打开已保存的 workflow.json 文件。"""
+        from rpa_core.model.workflow import Workflow  # 延迟导入，避免顶部 import
+
+        if not self._prompt_discard_changes():
+            return
+        path, _ = QFileDialog.getOpenFileName(
+            self, "打开流程", "", "工作流文件 (*.json)"
+        )
+        if not path:
+            return
+        try:
+            document = json.loads(Path(path).read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            QMessageBox.warning(self, "打开失败", f"无法读取文件：{exc}")
+            return
+        try:
+            Workflow.model_validate(document)  # 校验合法性
+        except Exception as exc:  # noqa: BLE001 - 给用户可读反馈
+            QMessageBox.warning(self, "打开失败", f"文件不符合 workflow schema：{exc}")
+            return
+        self.flow_path = Path(path)
+        self.set_workflow(document)
 
     def _on_focus_changed(self, old, now) -> None:
         """焦点进入文本编辑控件时暂停 Delete 删除动作，避免吞掉编辑键。"""

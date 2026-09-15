@@ -9,6 +9,17 @@
     "children": [
       {
         "type": "action",
+        "id": "setVar",
+        "command": "data.setVar",
+        "with": {
+          "varType": "string",
+          "varName": "url",
+          "value": "baidu.com"
+        },
+        "_exprModes": {}
+      },
+      {
+        "type": "action",
         "id": "navigate",
         "command": "browser.navigate",
         "with": {

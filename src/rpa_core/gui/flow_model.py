@@ -18,7 +18,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
-from PySide6.QtCore import QMimeData, Qt
+from PySide6.QtCore import QMimeData, QModelIndex, Qt
 from PySide6.QtGui import QStandardItem, QStandardItemModel
 
 from rpa_core.model.workflow import Workflow
@@ -34,6 +34,11 @@ ROLE_ARGS_RAW = Qt.ItemDataRole.UserRole + 15  # action 的原始 with 参数 di
 # 容器节点类型（可放置子节点）；action/return 为叶子
 _CONTAINER_TYPES = {"sequence", "if", "forEach", "try"}
 _VIRTUAL_GROUP_TYPES = {"branch-then", "branch-else", "branch-catch"}
+# 每个容器末尾自动追加的虚拟结束行，用于：
+#   1. 视觉边界：明确标出容器 children 的结束位置；
+#   2. 拖拽安全网：命中结束行的下半可精确落到容器同级下方（命中区比容器卡片本身更大）；
+#   3. 折叠联动：结束行的 parent 是容器，所以容器折叠时自动收起。
+_END_BRACKET_TYPE = "end-bracket"
 
 # 控制节点中文徽标（action 的徽标直接用命令命名空间，如 browser/data）
 _TYPE_BADGE = {
@@ -123,6 +128,10 @@ class FlowTreeModel(QStandardItemModel):
             return False
         if not parent.isValid():
             return True  # dragEnter 能力探测：格式可接受即可
+        # 如果 parent 恰好落在 end-bracket 虚拟行上，路由到其真实容器
+        parent = self._resolve_drop_parent(parent)
+        if not parent.isValid():
+            return False
         target = self.itemFromIndex(parent)
         return bool(target and target.data(ROLE_NODE_TYPE) in (
             _CONTAINER_TYPES | _VIRTUAL_GROUP_TYPES
@@ -136,10 +145,15 @@ class FlowTreeModel(QStandardItemModel):
 
         注意：配合 canvas.FlowTreeView.startDrag（重写）跳过 Qt 的
         clearOrRemove，避免 InternalMove 下 Qt 用旧索引删错节点。
+        此外 FlowTreeView.dragMoveEvent 已接管 hit-test，将 end-bracket
+        虚拟行上的 drop 翻译成对其真实容器的操作；这里再做一次 fallback
+        路由，防止 Qt 自身的 drop 路径绕过。
         """
-        # 真实放置必须有有效落点：canDrop 对 dragEnter 探测放行过无效 parent，
-        # 这里独立做完整防护，不能直接复用 canDropMimeData 的结论。
         if not data.hasFormat(_MIME_TYPE) or not parent.isValid():
+            return False
+        # end-bracket 虚拟行上的 drop 路由到其真实容器
+        parent = self._resolve_drop_parent(parent)
+        if not parent.isValid():
             return False
         target = self.itemFromIndex(parent)
         if target is None or target.data(ROLE_NODE_TYPE) not in (
@@ -272,6 +286,13 @@ class FlowTreeModel(QStandardItemModel):
         if not index.parent().isValid():
             return (base | Qt.ItemFlag.ItemIsDropEnabled) & ~Qt.ItemFlag.ItemIsDragEnabled
         node_type = index.data(ROLE_NODE_TYPE)
+        if node_type == _END_BRACKET_TYPE:
+            # 结束标记行：不可拖不可选，但接受 drop（dragMoveEvent 会把它
+            # 翻译成对其 parent 容器的 above/on/below 操作）
+            return (
+                Qt.ItemFlag.ItemIsEnabled
+                | Qt.ItemFlag.ItemIsDropEnabled
+            )
         if node_type in _VIRTUAL_GROUP_TYPES:
             # 虚拟分组：可放置/可选，但自身不可拖
             return (
@@ -286,6 +307,16 @@ class FlowTreeModel(QStandardItemModel):
             # 叶子（action/return）不可作为放置目标
             flags &= ~Qt.ItemFlag.ItemIsDropEnabled
         return flags
+
+    @staticmethod
+    def _resolve_drop_parent(parent_index: QModelIndex) -> QModelIndex:
+        """如果 parent 是 end-bracket 虚拟行，路由到其 parent（真实容器）。"""
+        if (
+            parent_index.isValid()
+            and parent_index.data(ROLE_NODE_TYPE) == _END_BRACKET_TYPE
+        ):
+            return parent_index.parent()
+        return parent_index
 
 
 def _make_item(
@@ -357,34 +388,57 @@ def build_item(node: Any, *, label: Callable[[str], str] | None = None) -> QStan
         args_holder=ArgsHolder(raw=raw),
     )
 
-    def attach_children(children: list[Any], parent: QStandardItem) -> None:
-        for child in children:
-            parent.appendRow(build_item(child, label=label))
+    # 为容器追加虚拟结束行（parent=容器，折叠时自动收起）。
+    # 规则：
+    #   - sequence / forEach（只有一个 children 分支）：在 children 末尾
+    #     加 end-bracket，标记整个容器结束；
+    #   - try（children + catch 虚拟组）：只给 catch 虚拟组加 end-bracket，
+    #     children 分支不加（否则 catch 会"跑到边界外面"）；
+    #   - if（then + else 虚拟组）：只给每个虚拟组加 end-bracket，容器本身
+    #     不加（虚拟组之间的视觉边界已经足够清晰）；
+    #   - 根容器（node_id=="root"）：一律不加结束行，避免画布底部无意义占位。
+    def _add_end(parent: QStandardItem, container_title: str) -> None:
+        if parent.data(ROLE_NODE_ID) == "root":
+            return
+        parent.appendRow(_make_item(
+            title=f"结束 {container_title}",
+            node_type=_END_BRACKET_TYPE,
+            node_id=None, virtual=True,
+        ))
 
     if node_type in ("sequence", "forEach"):
-        attach_children(raw.get("children", []), item)
+        for child in raw.get("children", []):
+            item.appendRow(build_item(child, label=label))
+        _add_end(item, item.data(Qt.ItemDataRole.DisplayRole))
     elif node_type == "try":
-        attach_children(raw.get("children", []), item)
+        for child in raw.get("children", []):
+            item.appendRow(build_item(child, label=label))
         catch = raw.get("catch", [])
         if catch:
             catch_group = _make_item(
                 title="异常处理", node_type="branch-catch", node_id=None, virtual=True
             )
             item.appendRow(catch_group)
-            attach_children(catch, catch_group)
+            for child in catch:
+                catch_group.appendRow(build_item(child, label=label))
+            _add_end(catch_group, "异常处理")
     elif node_type == "if":
         then_group = _make_item(
             title="则执行", node_type="branch-then", node_id=None, virtual=True
         )
         item.appendRow(then_group)
-        attach_children(raw.get("then", []), then_group)
+        for child in raw.get("then", []):
+            then_group.appendRow(build_item(child, label=label))
+        _add_end(then_group, "则执行")
         otherwise = raw.get("else", [])
         if otherwise:
             else_group = _make_item(
                 title="否则执行", node_type="branch-else", node_id=None, virtual=True
             )
             item.appendRow(else_group)
-            attach_children(otherwise, else_group)
+            for child in otherwise:
+                else_group.appendRow(build_item(child, label=label))
+            _add_end(else_group, "否则执行")
     return item
 
 
@@ -417,7 +471,14 @@ def iter_real_nodes(model: FlowTreeModel):
 # ---- 模型 → Workflow dict 回写（切片 4：保存闭环） ------------------------
 def _rebuild_group(group: QStandardItem) -> list[dict[str, Any]]:
     """虚拟分组（then/else/catch）→ 节点 dict 列表。"""
-    return [_rebuild_node(group.child(row)) for row in range(group.rowCount())]
+    result: list[dict[str, Any]] = []
+    for row in range(group.rowCount()):
+        child = group.child(row)
+        # 跳过 end-bracket 虚拟结束行（它也是 group 的 child，但不对应 AST 节点）
+        if child.data(ROLE_NODE_TYPE) == _END_BRACKET_TYPE:
+            continue
+        result.append(_rebuild_node(child))
+    return result
 
 
 def _virtual_groups(item: QStandardItem) -> dict[str, QStandardItem]:
@@ -437,6 +498,9 @@ def _rebuild_node(item: QStandardItem) -> dict[str, Any]:
     （with/children/then/else/catch），GUI 不编辑的字段
     （condition/items/item_var/error_var/output_aliases/_exprModes 等）原样保留。
     """
+    # end-bracket 虚拟行不对应任何 AST 节点：调用方应先过滤，这里做安全网
+    if item.data(ROLE_NODE_TYPE) == _END_BRACKET_TYPE:
+        return {}
     holder: ArgsHolder = item.data(ROLE_ARGS_RAW)
     node = dict(holder.raw)
     node_type = item.data(ROLE_NODE_TYPE)

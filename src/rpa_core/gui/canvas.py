@@ -19,6 +19,7 @@ from PySide6.QtGui import QColor, QDrag, QFont, QPainter, QPen
 from PySide6.QtWidgets import QStyle, QStyledItemDelegate, QTreeView, QWidget
 
 from rpa_core.gui.flow_model import (
+    _END_BRACKET_TYPE,
     _TYPE_BADGE,
     ROLE_ARGS_SUMMARY,
     ROLE_COMMAND_ID,
@@ -65,15 +66,35 @@ def _index_depth(index: QModelIndex) -> int:
 
 
 class FlowTreeView(QTreeView):
-    """卡片画布专用 QTreeView：重写 startDrag 跳过 Qt 的二次源行删除。
+    """卡片画布专用 QTreeView：重写拖拽三件套，自管 hit-test + 视觉反馈。
 
-    Qt 的 InternalMove 模式下，QAbstractItemView.startDrag() 在 QDrag.exec()
-    返回 MoveAction 后会调 clearOrRemove() 再删一遍源行。但我们的
-    FlowTreeModel.dropMimeData 已经用 takeRow + insertRow 完成了原子移动，
-    此时 Qt 再用旧索引删行必然删错节点。解决方式是重写 startDrag：
-    复制基类的 QDrag 创建和 exec 逻辑，但结果返回 MoveAction 时不做任何删除。
+    Qt 默认的 QTreeView 在 InternalMove 下的落点判定有两个问题：
+    1. startDrag() 在 MoveAction 返回后会调 clearOrRemove() 二次删源行，
+       但我们的 dropMimeData 已经原子地 takeRow+insertRow，导致卡片消失；
+    2. 对自绘无边框卡片行，Qt 的 OnItem 命中区域（拖进容器内部）过宽，
+       Above/Below（拖成同级）的命中区域过窄，用户想把 forEach 内的节点
+       拖出到 forEach 同级时很难精准命中。
+
+    解决方案：
+    - 重写 startDrag：只创建 QDrag + exec，跳过基类的 clearOrRemove；
+    - 重写 dragMoveEvent：按行高 40/20/40 的比例自判 Above/OnItem/Below，
+      让「拖成同级」的命中区足够大，且完全接管落点指示条；
+    - 重写 dropEvent：用 dragMoveEvent 判定的结果直接调 dropMimeData，
+      不再依赖 Qt 传入的 row/parent。
     """
 
+    # 命中比例：上 40%=AboveItem、中 20%=OnItem、下 40%=BelowItem
+    # 这样 Above/Below 各有 18px 命中区（_ROW_HEIGHT=46），远大于默认的 23px/极小 OnItem。
+    _ABOVE_THRESHOLD = 0.40
+    _BELOW_THRESHOLD = 0.60
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        # 当前拖拽落点状态，由 dragMoveEvent 写入、paintEvent/dropEvent 读取
+        # None 表示没有正在进行的拖拽（dragEnter 未到达或已 leave）
+        self._drag_target: dict | None = None
+
+    # ---- Qt 拖拽三件套 ----------------------------------------------------
     def startDrag(self, supportedActions: Qt.DropAction) -> None:
         indices = self.selectionModel().selectedIndexes()
         if not indices:
@@ -87,6 +108,122 @@ class FlowTreeView(QTreeView):
         # MoveAction 后调 clearOrRemove 二次删源行）。
         drag.exec(supportedActions)
 
+    def dragMoveEvent(self, event) -> None:
+        """自判落点区域并驱动视觉指示条刷新。"""
+        mime = event.mimeData()
+        if not mime.hasFormat("application/x-rpa-flow-node"):
+            event.ignore()
+            return
+
+        pos = event.position().toPoint() if hasattr(event, "position") else event.pos()
+        index = self.indexAt(pos)
+        if not index.isValid():
+            self._drag_target = None
+            self.viewport().update()
+            event.ignore()
+            return
+
+        rect = self.visualRect(index)
+        y_ratio = (pos.y() - rect.top()) / rect.height() if rect.height() > 0 else 0.5
+
+        # end-bracket 虚拟行的命中路由：
+        #   上半 → 插到其 parent 容器的 children 末尾（row=-1, parent=容器）
+        #   下半 → 插到其 parent 容器的同级下方（row=容器.row()+1, parent=容器.parent()）
+        # 用 50/50 划分，因为 end-bracket 是明确的两段语义边界。
+        target_type = index.data(ROLE_NODE_TYPE)
+        if target_type == _END_BRACKET_TYPE:
+            container_index = index.parent()  # end-bracket 的 parent 是真实容器
+            if not container_index.isValid():
+                self._drag_target = None
+                self.viewport().update()
+                event.ignore()
+                return
+            if y_ratio < 0.5:
+                mode = "end_above"
+                row = -1
+                parent = container_index
+                indicator_y = rect.top()
+            else:
+                mode = "end_below"
+                row = container_index.row() + 1
+                parent = container_index.parent()
+                indicator_y = rect.bottom()
+        elif y_ratio < self._ABOVE_THRESHOLD:
+            mode = "above"
+            # 插到 index 的同级上方 → row=index.row(), parent=index.parent()
+            row = index.row()
+            parent = index.parent()
+            indicator_y = rect.top()
+        elif y_ratio > self._BELOW_THRESHOLD:
+            mode = "below"
+            # 插到 index 的同级下方 → row=index.row()+1, parent=index.parent()
+            row = index.row() + 1
+            parent = index.parent()
+            indicator_y = rect.bottom()
+        else:
+            mode = "on"
+            # 插入到 index 容器内部末尾 → row=-1, parent=index
+            row = -1
+            parent = index
+            indicator_y = rect.bottom()  # 容器内部指示条画在底行下方
+
+        # 传给 model.canDropMimeData 做合法性校验（成环 / 容器类型）
+        action = Qt.DropAction.MoveAction
+        if not self.model().canDropMimeData(mime, action, row, 0, parent):
+            self._drag_target = None
+            self.viewport().update()
+            event.ignore()
+            return
+
+        self._drag_target = {
+            "mode": mode,
+            "row": row,
+            "parent": parent,
+            "indicator_y": indicator_y,
+        }
+        event.acceptProposedAction()
+        self.viewport().update()  # 触发 paintEvent 重绘落点指示条
+
+    def dragLeaveEvent(self, event) -> None:
+        self._drag_target = None
+        self.viewport().update()
+        super().dragLeaveEvent(event)
+
+    def dropEvent(self, event) -> None:
+        """用 dragMoveEvent 判定的落点直接调 dropMimeData。"""
+        mime = event.mimeData()
+        if not mime.hasFormat("application/x-rpa-flow-node") or self._drag_target is None:
+            event.ignore()
+            return
+        target = self._drag_target
+        self._drag_target = None
+
+        action = Qt.DropAction.MoveAction
+        if self.model().dropMimeData(mime, action, target["row"], 0, target["parent"]):
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+        self.viewport().update()
+
+    # ---- 落点指示条自绘 --------------------------------------------------
+    def paintEvent(self, event) -> None:
+        super().paintEvent(event)
+        target = self._drag_target
+        if target is None:
+            return
+        painter = QPainter(self.viewport())
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
+        rect = self.viewport().rect()
+        y = target["indicator_y"]
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor("#0969da"))
+        painter.drawRect(rect.left() + 8, y - 2, rect.width() - 16, 4)
+        # 指示条两侧加小圆点，让 Above/Below/OnItem 更易辨认
+        painter.setBrush(QColor("#0969da"))
+        painter.drawEllipse(rect.left() + 8 - 3, y - 3, 6, 6)
+        painter.drawEllipse(rect.right() - 8 - 3, y - 3, 6, 6)
+        painter.end()
+
 
 class CardDelegate(QStyledItemDelegate):
     """自绘流程节点卡片。"""
@@ -98,11 +235,60 @@ class CardDelegate(QStyledItemDelegate):
         painter.save()
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
 
-        if index.data(ROLE_IS_VIRTUAL):
+        node_type = index.data(ROLE_NODE_TYPE)
+        if node_type == _END_BRACKET_TYPE:
+            self._paint_end_bracket(painter, option, index)
+        elif index.data(ROLE_IS_VIRTUAL):
             self._paint_group(painter, option, index)
         else:
             self._paint_card(painter, option, index)
         painter.restore()
+
+    # ---- 结束标记行：虚线连接 + 灰色文字 + 缩进减 1 ----------------------
+    def _paint_end_bracket(self, painter: QPainter, option, index: QModelIndex) -> None:
+        """结束标记行渲染：与父容器对齐的灰色边界。
+
+        end-bracket 是容器的虚拟最后一个 child，视觉上需要和父容器对齐
+        （缩进减 1），左侧色线用父容器的深度色，整体用虚线 + 浅灰色文字。
+        这样用户一眼能看出"到这里容器就结束了"。
+        """
+        # 视觉缩进 = depth(parent)，不是 depth(self)
+        parent_depth = _index_depth(index.parent()) if index.parent().isValid() else 0
+        indent_offset = _index_depth(index) - parent_depth  # 应该等于 1
+        rect = option.rect
+        # 手动补偿缩进让它和父容器对齐
+        adjusted_rect = rect.adjusted(-indent_offset * 22, 0, 0, 0)
+
+        # 左侧深度色线（用父容器的颜色）
+        line_rect = QRect(adjusted_rect.left() + 4, adjusted_rect.top() + 6,
+                          _BAR_WIDTH, adjusted_rect.height() - 12)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(_DEPTH_COLORS[parent_depth % len(_DEPTH_COLORS)]))
+        painter.drawRoundedRect(line_rect, 2, 2)
+
+        # 虚线连接：从左侧色线右边延伸到文字前
+        dash_pen = QPen(QColor("#d0d7de"))
+        dash_pen.setStyle(Qt.PenStyle.DashLine)
+        dash_pen.setWidth(1)
+        painter.setPen(dash_pen)
+        painter.drawLine(
+            adjusted_rect.left() + 8, adjusted_rect.center().y(),
+            adjusted_rect.left() + 30, adjusted_rect.center().y(),
+        )
+
+        # 灰色文字
+        painter.setPen(QPen(QColor("#8c959f")))
+        font = QFont(option.font)
+        font.setPointSizeF(max(7.0, option.font.pointSizeF() - 0.5))
+        font.setItalic(True)
+        painter.setFont(font)
+        text_rect = QRect(adjusted_rect.left() + 34, adjusted_rect.top(),
+                          adjusted_rect.width() - 34, adjusted_rect.height())
+        painter.drawText(
+            text_rect,
+            Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
+            f"└─ {index.data(Qt.ItemDataRole.DisplayRole)}",
+        )
 
     # ---- 虚拟分组条：浅底 + 左侧小色条 + 灰色标签 ------------------------
     def _paint_group(self, painter: QPainter, option, index: QModelIndex) -> None:
