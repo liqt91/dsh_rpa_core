@@ -134,8 +134,10 @@ def test_param_edit_serialized_to_with():
 def test_sibling_reorder_and_preserved_fields():
     doc = json.loads(json.dumps(SAMPLE_WORKFLOW))  # 深拷贝
     model = build_model_from_workflow(doc)
-    root = model.item(0)
-    # 把第 0 行（open）移到 if（第 1 行，移动后索引）之后
+    # 根容器已扁平化：model 顶层直接是原 sequence root 的 children
+    # invisibleRootItem 是 dropMimeData 的逻辑根
+    root = model.invisibleRootItem()
+    # 把第 0 行（open）移到 if（第 2 行，因为 open=0, loop=1, check=2）之后
     assert _drop(model, "open", root, row=2)
     meta = {key: doc[key] for key in doc if key != "root"}
     result = model_to_workflow(model, meta)
@@ -214,7 +216,7 @@ def test_save_workflow_writes_valid_file_and_clears_dirty(catalog, tmp_path):
 
 def test_drag_drop_marks_window_dirty(catalog):
     window = MainWindow(catalog, SAMPLE_WORKFLOW)
-    root = window.flow_model.item(0)
+    root = window.flow_model.invisibleRootItem()
     assert _drop(window.flow_model, "open", root, row=2)
     assert window._dirty is True
 

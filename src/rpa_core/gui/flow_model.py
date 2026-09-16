@@ -225,8 +225,37 @@ class FlowTreeModel(QStandardItemModel):
         「否则」行上的 drop 翻译成对其真实容器的操作；这里再做一次 fallback
         路由，防止 Qt 自身的 drop 路径绕过。
         """
-        if not data.hasFormat(_MIME_TYPE) or not parent.isValid():
+        if not data.hasFormat(_MIME_TYPE):
             return False
+        # parent.isValid() == False 时对应两种情况：
+        # 1) invisibleRootItem 上 drop（根容器扁平化后，顶层容器就是 invisibleRootItem）
+        # 2) Qt 探测 invalid parent（canDropMimeData 里已放行，这里兜底）
+        # 统一翻译为 invisibleRootItem，让顶层 drop 正常工作
+        if not parent.isValid():
+            target = self.invisibleRootItem()
+            # 直接跳到移动逻辑（不需要再 _resolve_drop_parent）
+            node_id = self._dragged_id(data)
+            source = self.find_by_id(node_id)
+            if source is None:
+                return False
+            if source is target:
+                return False
+            source_parent = source.parent() or self.invisibleRootItem()
+            source_row = source.row()
+            # takeRow 前算好目标位置：如果 source 在 target_row 之前，
+            # takeRow 会让所有后续行前移 1，所以要减 1 修正
+            # （这里 target_row 用 target.rowCount() 作为边界，不提前减）
+            if source_parent is target:
+                # 同在顶层：row 参数就是用户期望的目标位置
+                # 但 takeRow(source_row) 后，如果 source_row < row，
+                # 原 row 位置上的元素会前移到 row-1
+                target_row = row - 1 if source_row < row else row
+            else:
+                target_row = row
+            item = source_parent.takeRow(source_row)
+            target_row = max(0, min(target_row, target.rowCount()))
+            target.insertRow(target_row, item)
+            return True
         # 结束行 / 否则行上的 drop 路由到其真实容器
         parent = self._resolve_drop_parent(parent)
         if not parent.isValid():
@@ -282,7 +311,7 @@ class FlowTreeModel(QStandardItemModel):
                     return found
             return None
 
-        root = self.item(0)
+        root = self.invisibleRootItem()
         return walk(root) if root is not None else None
 
     # ---- 节点增删（切片 5） ----------------------------------------------
@@ -313,6 +342,28 @@ class FlowTreeModel(QStandardItemModel):
         }
         return build_item(raw)
 
+    def create_node_item(self, node_type: str) -> QStandardItem:
+        """创建控制流节点（sequence/if/forEach/try/return）的空模板 item。
+
+        所有节点分配唯一 node_id，以 ``build_item`` 统一走 AST 树→QStandardItem
+        转换，保证虚拟分组/结束标记自动挂载。
+        """
+        node_id = self.allocate_node_id()
+        TEMPLATES: dict[str, dict] = {
+            "sequence": {"type": "sequence", "id": node_id, "children": []},
+            "forEach": {"type": "forEach", "id": node_id,
+                        "items": [], "item_var": "item", "children": []},
+            "if": {"type": "if", "id": node_id,
+                   "condition": {"op": "truthy", "left": "", "right": None},
+                   "then": []},
+            "try": {"type": "try", "id": node_id,
+                    "children": [], "catch": [], "error_var": "error"},
+            "return": {"type": "return", "id": node_id, "value": None},
+        }
+        if node_type not in TEMPLATES:
+            raise ValueError(f"未知节点类型：{node_type}")
+        return build_item(TEMPLATES[node_type])
+
     def insert_command(
         self, command_id: str, target: QStandardItem | None = None
     ) -> QStandardItem:
@@ -326,7 +377,8 @@ class FlowTreeModel(QStandardItemModel):
         - 叶子（action/return）：作为其所在**分支**的末位同级节点。
         """
         new_item = self.create_action_item(command_id)
-        root = self.item(0)
+        # 根容器已扁平化：invisibleRootItem 是模型"逻辑根"，anchor 默认落在这里
+        root = self.invisibleRootItem()
         anchor = target if target is not None else root
         if anchor is None:
             raise ValueError("空流程模型，无法插入节点")
@@ -348,6 +400,31 @@ class FlowTreeModel(QStandardItemModel):
         parent.insertRow(_branch_insert_row(parent, anchor), [new_item])
         return new_item
 
+    def insert_node(
+        self, node_type: str, target: QStandardItem | None = None
+    ) -> QStandardItem:
+        """插入控制流节点（if/forEach/try/sequence/return）。
+
+        落点规则与 insert_command 一致：追加到当前选中位置所属分支末尾。
+        与 insert_command 的区别仅在于：control 是容器（会先建 then/else/
+        catch 虚拟分组 + 结束标记），而 return 是叶子。
+        """
+        new_item = self.create_node_item(node_type)
+        root = self.invisibleRootItem()
+        anchor = target if target is not None else root
+        if anchor is None:
+            raise ValueError("空流程模型，无法插入节点")
+
+        node_type_of_anchor = anchor.data(ROLE_NODE_TYPE)
+        if node_type_of_anchor in _VIRTUAL_GROUP_TYPES or node_type_of_anchor in (
+            "sequence", "forEach", "try", "if"
+        ):
+            parent = anchor
+        else:
+            parent = anchor.parent() or root
+        parent.insertRow(_branch_insert_row(parent, anchor), [new_item])
+        return new_item
+
     def remove_item(self, item: QStandardItem) -> bool:
         """删除一个真实节点或「否则」指令行（整棵子树随父行移除）。
 
@@ -361,7 +438,10 @@ class FlowTreeModel(QStandardItemModel):
         node_type = item.data(ROLE_NODE_TYPE)
         if item.data(ROLE_IS_VIRTUAL) and node_type != _ELSE_BRANCH_TYPE:
             return False
-        if not item.parent():  # 顶层根节点
+        # invisibleRootItem 自身不可删（正常情况下不会被传入）
+        if item.parent() is None and not item.row():  # invisibleRootItem 有 parent==None
+            # 跳过：现在所有真实节点都挂在 invisibleRootItem 下，它们的
+            # parent 是 invisibleRootItem（非 None），所以不会到这里。
             return False
         item.parent().takeRow(item.row())
         return True
@@ -385,9 +465,9 @@ class FlowTreeModel(QStandardItemModel):
         base = super().flags(index)
         if not index.isValid():
             return base
-        # 顶层根节点是整棵树的容器：可放置不可拖走
-        if not index.parent().isValid():
-            return (base | Qt.ItemFlag.ItemIsDropEnabled) & ~Qt.ItemFlag.ItemIsDragEnabled
+        # 根容器已扁平化：invisibleRootItem 的直接 child 就是画布顶层节点
+        # （原来的 root sequence children），它们都是正常可拖可放的节点，
+        # 不再有"顶层根容器不可拖"的特殊保护。
         node_type = index.data(ROLE_NODE_TYPE)
         if node_type == _END_BRACKET_TYPE:
             # 结束标记行：不对应 AST 节点，不可拖不可选，但接受 drop
@@ -575,11 +655,50 @@ def build_model_from_workflow(
     *,
     label: Callable[[str], str] | None = None,
 ) -> FlowTreeModel:
-    """把完整 Workflow（pydantic 或 dict）构造成 FlowTreeModel。"""
+    """把完整 Workflow（pydantic 或 dict）构造成 FlowTreeModel。
+
+    **根容器扁平化**：AST 的 root 一定是 sequence，在 GUI 中没有必要单独占
+    一行"顺序执行"卡片——它的 children 直接作为模型顶层项展示。所有业务逻辑
+    （insert_command / dropMimeData / remove_item）原本以 model.item(0)
+    为根，现在统一改为以 model.invisibleRootItem() 为根。
+
+    注意：sequence root 的 children 里还可能混着 end-bracket（forEach 容器
+    的 build_item 自带），要过滤掉 ROLE_IS_VIRTUAL 的虚拟项。
+    """
     model = FlowTreeModel()
     root_node = workflow["root"] if isinstance(workflow, dict) else workflow.root
     root_item = build_item(root_node, label=label)
-    model.appendRow(root_item)
+
+    # 根容器扁平化：仅当 root 是 sequence 时生效（GUI 中不必单独占一行）。
+    # 其他 root 类型（if/try/forEach/action）保留原样作为模型 item(0) 显示。
+    root_type = (
+        root_node.get("type")
+        if isinstance(root_node, dict)
+        else getattr(root_node, "type", "")
+    )
+    if root_type == "sequence":
+        # 把 root 的原始 id 挂到 invisibleRootItem 上，model_to_workflow 回写时复用
+        if isinstance(root_node, dict):
+            _root_id = root_node.get("id", "root")
+        else:
+            _root_id = getattr(root_node, "id", "root")
+        model.invisibleRootItem().setData(_root_id, ROLE_NODE_ID)
+        # 把 root 的直接 children 提升为模型顶层项
+        # （跳过 end-bracket 等虚拟项，它们属于各自容器的内部结构）
+        # 倒序 take + 正序 append，保持原顺序不变
+        taken_rows = []
+        for row in range(root_item.rowCount()):
+            child = root_item.child(row)
+            if not child.data(ROLE_IS_VIRTUAL):
+                taken_rows.append(row)
+        taken_rows.reverse()  # 倒序 take，避免索引偏移
+        taken_items = [root_item.takeRow(row) for row in taken_rows]
+        for item in reversed(taken_items):  # 正序 append 回模型
+            model.appendRow(item)
+        # root_item 自身被丢弃——它的 end-bracket 也随它一起释放，根容器不需要
+    else:
+        # 非 sequence root：保留原样作为模型顶层唯一 item
+        model.appendRow(root_item)
     return model
 
 
@@ -591,9 +710,10 @@ def iter_real_nodes(model: FlowTreeModel):
         for row in range(item.rowCount()):
             yield from walk(item.child(row))
 
-    root = model.item(0)
-    if root is not None:
-        yield from walk(root)
+    root = model.invisibleRootItem()
+    # invisibleRootItem 自身没有 ROLE_IS_VIRTUAL 属性，但我们不 yield 它
+    for row in range(root.rowCount()):
+        yield from walk(root.child(row))
 
 
 # ---- 模型 → Workflow dict 回写（切片 4：保存闭环） ------------------------
@@ -690,10 +810,29 @@ def model_to_workflow(
 
     meta 提供工作流级字段（schema_version/id/name/inputs/timeout_seconds）；
     返回结果应再经 ``Workflow.model_validate`` 校验后落盘。
+
+    根容器在 GUI 中已扁平化（model 顶层是原 sequence root 的 children），
+    回写时把所有顶层 item 包装成一个 sequence root——type=sequence、
+    children=顶层 item 的 _rebuild_node 列表，保持 AST 契约不变。
     """
-    root = model.item(0)
-    if root is None:
-        raise ValueError("空流程模型，无法回写")
+    top_root = model.invisibleRootItem()
+    # 判断是否扁平化：invisibleRootItem 上挂了 ROLE_NODE_ID = root 的原始 id
+    # （build_model_from_workflow 里 sequence root 扁平化时会 setData 上去）
+    root_id_was_set = bool(top_root.data(ROLE_NODE_ID))
+    if not root_id_was_set and top_root.rowCount() == 1:
+        # 非 sequence root 没被扁平化——item(0) 就是 root 节点
+        doc_root = _rebuild_node(top_root.child(0))
+        document = dict(meta)
+        document["root"] = doc_root
+        return document
+    # sequence root 已扁平化——顶层都是原 sequence 的 children
+    root_id = top_root.data(ROLE_NODE_ID) or "root"
+    children: list[dict[str, Any]] = []
+    for row in range(top_root.rowCount()):
+        child = top_root.child(row)
+        if child.data(ROLE_NODE_TYPE) == _END_BRACKET_TYPE:
+            continue
+        children.append(_rebuild_node(child))
     document = dict(meta)
-    document["root"] = _rebuild_node(root)
+    document["root"] = {"type": "sequence", "id": root_id, "children": children}
     return document

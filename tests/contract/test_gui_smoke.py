@@ -75,8 +75,10 @@ def test_every_catalog_command_appears_once_as_leaf(window, catalog):
     assert tree.topLevelItemCount() == len(NAMESPACE_ORDER) + 1
     assert _leaf_count(tree) == len(catalog) + len(_CONTROL_COMMANDS)
     leaf_ids = {leaf.data(0, ROLE_COMMAND_ID) for leaf in _all_leaves(tree)}
-    # 除「否则」这类控制指令外，叶子与 catalog 一一对应
-    assert leaf_ids - {ELSE_COMMAND_ID} == set(catalog)
+    # 控制指令组里的所有条目（sequence/if/forEach/try/return/@else）都是流程控制，
+    # 不属于 catalog；排除它们后叶子与 catalog 一一对应
+    control_ids = {cid for cid, _, _ in _CONTROL_COMMANDS}
+    assert leaf_ids - control_ids == set(catalog)
 
 
 def test_group_label_carries_command_count(window, catalog):
@@ -147,11 +149,15 @@ def test_command_tree_selection_does_not_raise(window):
 
 
 def test_window_has_canvas_with_sample_flow(window):
-    """中栏画布默认加载内置示例流程，根节点为 sequence。"""
+    """中栏画布默认加载内置示例流程；sequence root 已扁平化，
+    顶层直接是原 sequence 的 children（至少 action / if / forEach / return）。"""
     from rpa_core.gui.flow_model import ROLE_NODE_TYPE
 
     model = window.flow_model
     assert model is not None
-    root = model.item(0)
-    assert root.data(ROLE_NODE_TYPE) == "sequence"
-    assert root.rowCount() >= 3  # action / if / forEach / return
+    root = model.invisibleRootItem()
+    # 根容器扁平化后顶层直接是 action/forEach/if/return 等真实节点
+    assert root.rowCount() >= 4  # open / loop / check / done
+    first_child = root.child(0)
+    assert first_child is not None
+    assert first_child.data(ROLE_NODE_TYPE) in ("action", "forEach", "if", "try", "return")

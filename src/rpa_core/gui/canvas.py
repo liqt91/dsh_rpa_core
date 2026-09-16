@@ -263,9 +263,15 @@ class CardDelegate(QStyledItemDelegate):
         if node_type == _END_BRACKET_TYPE:
             self._paint_end_bracket(painter, option, index)
         elif node_type == _ELSE_BRANCH_TYPE:
-            self._paint_else_branch(painter, option, index)
+            # else 分支 marker 视觉上要与其父 if 容器对齐（缩进减 1），
+            # 用 _marker_rect 补偿后按白色卡片渲染（可拖可删）。
+            aligned_rect, _ = self._marker_rect(option, index)
+            self._paint_card(painter, option, index, rect_override=aligned_rect,
+                             is_virtual_group=False, suppress_summary=True)
         elif index.data(ROLE_IS_VIRTUAL):
-            self._paint_group(painter, option, index)
+            # 虚拟分组（则执行/否则执行/异常处理）也渲染为白色卡片，
+            # 与普通指令卡片完全一致，只是不加拖柄和序号（分组是结构行不可拖）。
+            self._paint_card(painter, option, index, is_virtual_group=True)
         else:
             self._paint_card(painter, option, index)
         painter.restore()
@@ -286,30 +292,21 @@ class CardDelegate(QStyledItemDelegate):
         """结束标记行渲染：与父容器对齐的灰色边界。
 
         end-bracket 是容器的虚拟最后一个 child，视觉上需要和父容器对齐
-        （缩进减 1），左侧色线用父容器的深度色，整体用虚线 + 浅灰色文字。
-        这样用户一眼能看出"到这里容器就结束了"。
+        （缩进减 1），只保留虚线连接 + 浅灰色斜体文字，不加左侧色条。
         """
-        # 视觉缩进 = depth(parent)，不是 depth(self)
-        adjusted_rect, parent_depth = self._marker_rect(option, index)
+        adjusted_rect, _ = self._marker_rect(option, index)
 
-        # 左侧深度色线（用父容器的颜色）
-        line_rect = QRect(adjusted_rect.left() + 4, adjusted_rect.top() + 6,
-                          _BAR_WIDTH, adjusted_rect.height() - 12)
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor(_DEPTH_COLORS[parent_depth % len(_DEPTH_COLORS)]))
-        painter.drawRoundedRect(line_rect, 2, 2)
-
-        # 虚线连接：从左侧色线右边延伸到文字前
+        # 虚线连接：从行左侧延伸到文字前
         dash_pen = QPen(QColor("#d0d7de"))
         dash_pen.setStyle(Qt.PenStyle.DashLine)
         dash_pen.setWidth(1)
         painter.setPen(dash_pen)
         painter.drawLine(
-            adjusted_rect.left() + 8, adjusted_rect.center().y(),
+            adjusted_rect.left() + 4, adjusted_rect.center().y(),
             adjusted_rect.left() + 30, adjusted_rect.center().y(),
         )
 
-        # 灰色文字
+        # 灰色斜体文字
         painter.setPen(QPen(QColor("#8c959f")))
         font = QFont(option.font)
         font.setPointSizeF(max(7.0, option.font.pointSizeF() - 0.5))
@@ -377,8 +374,20 @@ class CardDelegate(QStyledItemDelegate):
                          index.data(Qt.ItemDataRole.DisplayRole))
 
     # ---- 节点卡片 --------------------------------------------------------
-    def _paint_card(self, painter: QPainter, option, index: QModelIndex) -> None:
-        rect = option.rect.adjusted(8, 3, -8, -3)
+    def _paint_card(self, painter: QPainter, option, index: QModelIndex,
+                    is_virtual_group: bool = False,
+                    suppress_summary: bool = False,
+                    rect_override: QRect | None = None) -> None:
+        """绘制指令卡片。
+
+        is_virtual_group=True 时为虚拟分组（则执行/否则执行/异常处理）渲染：
+        白底圆角卡片完全一致，**省略拖柄**（不可拖）、**省略序号**（非指令行）、
+        **标题加粗并改用类型徽标**。视觉上与普通卡片保持完全统一。
+        suppress_summary=True 时不渲染参数摘要（else 分支 marker 只有标题）。
+        rect_override 可替换 option.rect（用于 else-branch 的"与父容器对齐"补偿）。
+        """
+        effective_rect = rect_override if rect_override is not None else option.rect
+        rect = effective_rect.adjusted(8, 3, -8, -3)
         selected = bool(option.state & QStyle.StateFlag.State_Selected)
         hovered = bool(option.state & QStyle.StateFlag.State_MouseOver)
 
@@ -403,21 +412,24 @@ class CardDelegate(QStyledItemDelegate):
         content = rect.adjusted(14, 0, -10, 0)
         x = content.left()
 
-        # 拖柄（根节点 depth==0 时不画，根不可拖）
-        if depth > 0:
+        # 拖柄（虚拟分组不画；叶子 return 不画——它的语义不是"可拖拽的容器"）
+        node_type = index.data(ROLE_NODE_TYPE)
+        is_return = node_type == "return"
+        if not is_virtual_group and not is_return:
             painter.setPen(QPen(QColor(_GRIP)))
             grip_font = QFont(option.font)
             painter.setFont(grip_font)
             painter.drawText(QRect(x, content.top(), 16, content.height()),
                              Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, "≡")
-        x += 18
+            x += 18
 
-        # 同级序号
-        painter.setPen(QPen(QColor(_ARGS_TEXT)))
-        painter.drawText(QRect(x, content.top(), 24, content.height()),
-                         Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
-                         f"{index.row() + 1}.")
-        x += 26
+        # 同级序号（虚拟分组不画）
+        if not is_virtual_group:
+            painter.setPen(QPen(QColor(_ARGS_TEXT)))
+            painter.drawText(QRect(x, content.top(), 24, content.height()),
+                             Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
+                             f"{index.row() + 1}.")
+            x += 26
 
         command_id = index.data(ROLE_COMMAND_ID)
         node_type = index.data(ROLE_NODE_TYPE)
@@ -449,19 +461,20 @@ class CardDelegate(QStyledItemDelegate):
         name_w = min(name_w + 4, title_rect.width())
 
         # 参数摘要（等宽、灰色，跟在命令名后，剩余空间省略）
-        summary = index.data(ROLE_ARGS_SUMMARY) or ""
-        if summary:
-            mono = QFont("Consolas")
-            mono.setPointSizeF(max(7.5, option.font.pointSizeF() - 1.5))
-            painter.setFont(mono)
-            painter.setPen(QPen(QColor(_ARGS_TEXT)))
-            summary_x = x + min(name_w, title_rect.width() - 60)
-            summary_rect = QRect(summary_x, content.top(),
-                                 content.right() - badge_w - 8 - summary_x, content.height())
-            painter.drawText(summary_rect,
-                             Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
-                             painter.fontMetrics().elidedText(
-                                 summary, Qt.TextElideMode.ElideRight, summary_rect.width()))
+        if not suppress_summary:
+            summary = index.data(ROLE_ARGS_SUMMARY) or ""
+            if summary:
+                mono = QFont("Consolas")
+                mono.setPointSizeF(max(7.5, option.font.pointSizeF() - 1.5))
+                painter.setFont(mono)
+                painter.setPen(QPen(QColor(_ARGS_TEXT)))
+                summary_x = x + min(name_w, title_rect.width() - 60)
+                summary_rect = QRect(summary_x, content.top(),
+                                     content.right() - badge_w - 8 - summary_x, content.height())
+                painter.drawText(summary_rect,
+                                 Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
+                                 painter.fontMetrics().elidedText(
+                                     summary, Qt.TextElideMode.ElideRight, summary_rect.width()))
 
         # 徽标
         painter.setPen(Qt.PenStyle.NoPen)

@@ -187,8 +187,10 @@ def test_selecting_action_card_shows_form_and_apply_updates_item(window):
 def test_selecting_container_and_return_show_hints(window):
     model = window.flow_model
 
-    # 根 sequence 是容器
-    root_index = model.indexFromItem(model.find_by_id("root"))
+    # 顶层 if 容器（sequence root 已扁平化，直接选顶层容器节点）
+    check_item = model.find_by_id("check")  # SAMPLE_WORKFLOW 的 if 节点
+    assert check_item is not None, "SAMPLE_WORKFLOW 应包含 if 节点 'check'"
+    root_index = model.indexFromItem(check_item)
     window.canvas_view.setCurrentIndex(root_index)
     labels = window.param_holder.findChildren(QLabel)
     assert any("不接受参数" in label.text() for label in labels)

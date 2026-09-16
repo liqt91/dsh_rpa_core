@@ -40,9 +40,10 @@ def real_workflow():
 
 def test_real_workflow_maps_to_sequence_with_actions(real_workflow):
     model = build_model_from_workflow(real_workflow)
-    root = model.item(0)
-    assert root.data(ROLE_NODE_TYPE) == "sequence"
-    assert root.data(ROLE_NODE_ID) == "root"
+    # sequence root 已扁平化：invisibleRootItem 上挂着 root 的原始 id，
+    # children 直接是原 sequence 的顶层指令（没有"顺序执行"卡片行）
+    root = model.invisibleRootItem()
+    assert root.data(ROLE_NODE_ID) == "root"  # root 的 id 被保留
     commands = [
         _child(root, row).data(ROLE_COMMAND_ID) for row in range(root.rowCount())
     ]
@@ -86,7 +87,7 @@ def test_if_then_else_and_foreach_map_to_flat_structure():
         },
     }
     model = build_model_from_workflow(workflow)
-    root = model.item(0)
+    root = model.invisibleRootItem()
 
     # if：扁平结构（影刀式）——then 子节点 → 「否则」指令行 → else 子节点 → 结束 如果
     if_item = _child(root, 0)
@@ -127,7 +128,7 @@ def test_if_without_else_has_no_else_row():
         ]},
     }
     model = build_model_from_workflow(workflow)
-    if_item = _child(model.item(0), 0)
+    if_item = _child(model.invisibleRootItem(), 0)
     types = [if_item.child(r).data(ROLE_NODE_TYPE) for r in range(if_item.rowCount())]
     assert types == ["action", "end-bracket"]  # 没有 else-branch
     # else 段为空时不落盘 else 键（默认形态不制造空 else）
@@ -153,7 +154,7 @@ def _drop(model, source_id: str, target_item, row: int = -1) -> bool:
 
 def test_same_level_reorder_via_drop(real_workflow):
     model = build_model_from_workflow(real_workflow)
-    root = model.item(0)
+    root = model.invisibleRootItem()
     before = [_child(root, r).data(ROLE_NODE_ID) for r in range(root.rowCount())]
     assert _drop(model, before[0], root, row=root.rowCount())  # 首项移到末尾
     after = [_child(root, r).data(ROLE_NODE_ID) for r in range(root.rowCount())]
@@ -172,7 +173,7 @@ def test_cross_container_move_into_if_then_branch():
         ]},
     }
     model = build_model_from_workflow(workflow)
-    root = model.item(0)
+    root = model.invisibleRootItem()
     if_item = _child(root, 1)
     then_tail = 1  # then 子节点 after 之后、结束行之前
     assert _drop(model, "free", if_item, row=then_tail)
@@ -193,7 +194,7 @@ def test_drop_into_own_descendant_is_rejected():
         ]},
     }
     model = build_model_from_workflow(workflow)
-    root = model.item(0)
+    root = model.invisibleRootItem()
     if_item = _child(root, 0)
     # 把 if 自身拖进它自己 → 成环，必须拒绝
     assert not _drop(model, "c", if_item)
@@ -228,7 +229,7 @@ def test_add_else_branch_creates_optional_row():
     ]
     assert model.add_else_branch(if_item) is None  # 已有则不重复添加
     # 非 if 容器不允许添加否则
-    assert model.add_else_branch(model.item(0)) is None
+    assert model.add_else_branch(model.invisibleRootItem()) is None
 
 
 def test_else_branch_can_be_dragged_inside_if_but_not_out():
@@ -261,7 +262,7 @@ def test_else_branch_can_be_dragged_inside_if_but_not_out():
     )
     # 拖到根 sequence：非 if 容器，拒绝
     assert not model.canDropMimeData(
-        mime, Qt.DropAction.MoveAction, -1, 0, model.indexFromItem(model.item(0))
+        mime, Qt.DropAction.MoveAction, -1, 0, model.indexFromItem(model.invisibleRootItem())
     )
     # 在自己 if 内移动则合法：拖到最前面 → then 段清空，原 then 子节点改归 else
     assert model.dropMimeData(
@@ -275,15 +276,23 @@ def test_else_branch_can_be_dragged_inside_if_but_not_out():
 
 def test_flags_enforce_drag_drop_rules(real_workflow):
     model = build_model_from_workflow(real_workflow)
-    root_index = model.index(0, 0)
-    root_flags = model.flags(root_index)
-    assert not (root_flags & Qt.ItemFlag.ItemIsDragEnabled)  # 根不可拖
-    assert root_flags & Qt.ItemFlag.ItemIsDropEnabled
+    # sequence root 已扁平化，顶层直接是真实节点（action/forEach/if/return）
+    # 顶层节点都应该可拖（它们都是原 sequence 的 children，不是 root 容器本身）
+    top0 = model.index(0, 0)  # 顶层第一个真实节点
+    flags0 = model.flags(top0)
+    assert flags0 & Qt.ItemFlag.ItemIsDragEnabled  # 顶层 action 可拖
+    # 顶层 action 叶子不可放置（drop 到它上面等于 drop 到其父容器）
+    assert not (flags0 & Qt.ItemFlag.ItemIsDropEnabled)
 
-    leaf_index = model.index(0, 0, root_index)
-    leaf_flags = model.flags(leaf_index)
-    assert leaf_flags & Qt.ItemFlag.ItemIsDragEnabled
-    assert not (leaf_flags & Qt.ItemFlag.ItemIsDropEnabled)  # action 叶子不可放置
+    # 顶层 forEach 容器：可拖可放
+    for_each_row = next(
+        row for row in range(model.invisibleRootItem().rowCount())
+        if model.invisibleRootItem().child(row).data(ROLE_NODE_TYPE) == "forEach"
+    )
+    container_index = model.index(for_each_row, 0)
+    container_flags = model.flags(container_index)
+    assert container_flags & Qt.ItemFlag.ItemIsDragEnabled
+    assert container_flags & Qt.ItemFlag.ItemIsDropEnabled
 
 
 def test_canvas_builds_and_delegate_gives_fixed_row_height(qapp, real_workflow):
@@ -303,12 +312,17 @@ def test_canvas_builds_and_delegate_gives_fixed_row_height(qapp, real_workflow):
 
 
 def test_invalid_parent_index_dropped(real_workflow):
+    """invalid parent（invisibleRootItem）在扁平化后是合法 drop 目标——
+    item 应该被移动到顶层指定位置。
+    """
     model = build_model_from_workflow(real_workflow)
-    source = model.item(0).child(0)
+    source = model.invisibleRootItem().child(0)
     mime = model.mimeData([model.indexFromItem(source)])
-    assert not model.dropMimeData(
-        mime, Qt.DropAction.MoveAction, 0, 0, QModelIndex()
-    )
+    # row=-1 表示 append 到末尾；row=0 表示插到最前
+    initial_count = model.invisibleRootItem().rowCount()
+    ok = model.dropMimeData(mime, Qt.DropAction.MoveAction, -1, 0, QModelIndex())
+    assert ok is True
+    assert model.invisibleRootItem().rowCount() == initial_count  # 同一批元素总数不变
 
 
 def test_drag_enter_probe_with_invalid_parent_accepted(real_workflow):
@@ -318,7 +332,7 @@ def test_drag_enter_probe_with_invalid_parent_accepted(real_workflow):
     真实窗口将表现为「完全无法拖拽」；格式可接受时必须放行。
     """
     model = build_model_from_workflow(real_workflow)
-    source = model.item(0).child(0)
+    source = model.invisibleRootItem().child(0)
     mime = model.mimeData([model.indexFromItem(source)])
     assert model.canDropMimeData(
         mime, Qt.DropAction.MoveAction, -1, -1, QModelIndex()
@@ -350,7 +364,7 @@ _BRACKET_WORKFLOW = {
 def test_drop_at_container_tail_lands_before_end_bracket():
     """row=-1（拖到容器内部 / 结束行上半）必须插在「结束 X」之上。"""
     model = build_model_from_workflow(_BRACKET_WORKFLOW)
-    loop = _child(model.item(0), 1)
+    loop = _child(model.invisibleRootItem(), 1)
     assert loop.rowCount() == 2  # inner + 结束行
     assert _drop(model, "free", loop, row=-1)
     rows = [_child(loop, r).data(ROLE_NODE_ID) for r in range(loop.rowCount())]

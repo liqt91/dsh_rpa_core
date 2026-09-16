@@ -23,7 +23,7 @@ from pathlib import Path
 
 # Qt 绑定在模块顶层导入：本模块本身已被 CLI 延迟导入，未装 extra 时不会触达。
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QAction
+from PySide6.QtGui import QAction, QStandardItem
 from PySide6.QtWidgets import (
     QAbstractSpinBox,
     QApplication,
@@ -64,14 +64,43 @@ NAMESPACE_ORDER = ["browser", "data", "workflow", "desktop"]
 # 「否则」是 if 的**可选**分支指令（影刀同款）：默认不加，需要时从这里双击添加。
 CONTROL_GROUP_LABEL = "流程控制"
 ELSE_COMMAND_ID = "@else"
-# （command id, 显示名, tooltip）
+# 控制流节点用 node_type（而非 command_id）作为左树叶子的标识，
+# add_command 里据此分支调 insert_node。_CONTROL_COMMANDS 里 command_id 字段
+# 存两种标识：以 @ 开头表示"这是控制指令"（@else / @return），
+# 普通字符串表示"这是控制流节点类型"（sequence/forEach/if/try/return）。
+# （其实 control 节点和 return 可以直接调 insert_node。为减少用户心智负担
+# 统一在左树展示为可双击添加的"指令"。）
+# （command id / node_type, 显示名, tooltip）
 _CONTROL_COMMANDS = [
     (
-        ELSE_COMMAND_ID,
-        "否则",
+        "sequence", "顺序执行",
+        "顺序容器：依次执行子节点。根容器天然就是 sequence，\n"
+        "手动添加可用于嵌套组织子流程。",
+    ),
+    (
+        "if", "如果",
+        "条件分支：condition=true 执行则执行分支，否则跳过。\n"
+        "双击后默认条件留空，选「否则执行」行添加否则分支。",
+    ),
+    (
+        "forEach", "循环（for each）",
+        "遍历容器：依次对 items 中的每个元素执行 children。\n"
+        "双击后需在右侧填 items 数组和可选 item_var。",
+    ),
+    (
+        "try", "异常捕获",
+        "异常保护：children 抛出异常时转进 catch 分支。\n"
+        "双击后右侧可配置 error_var（默认 error）。",
+    ),
+    (
+        "return", "返回",
+        "流程返回：立即结束当前 run 并把 value 作为输出。\n"
+        "双击后右侧可配置返回值（可留空表示成功）。",
+    ),
+    (
+        ELSE_COMMAND_ID, "否则",
         "否则分支：先选中画布的「如果」节点（或其内部指令）再双击添加。\n"
-        "添加后位于它下面的指令属于否则分支；Delete 删除它即取消分支，"
-        "其下指令并入如果分支。",
+        "添加后位于它下面的指令属于否则分支；Delete 删除它即取消分支。",
     ),
 ]
 
@@ -378,24 +407,48 @@ class MainWindow(QMainWindow):
     def add_command(self, command_id: str):
         """在画布当前选中位置插入新指令；返回新 item（添加失败时返回 None）。
 
-        来自 catalog 的命令插入 action；``@else`` 是控制指令「否则」——给画布
-        选中的 if（或其内部节点所属的 if）添加一条否则分支指令行。
+        三种分支：
+        - ``@else``（控制指令）：给画布选中的 if 添加否则分支指令行；
+        - control node_type（sequence/if/forEach/try/return）：调 insert_node
+          插入空模板容器；
+        - catalog 命令（如 browser.open）：调 insert_command 插入 action。
         """
         if command_id == ELSE_COMMAND_ID:
             return self._add_else_branch()
+        # 控制流节点（sequence/if/forEach/try/return）：走 insert_node
+        if command_id in ("sequence", "if", "forEach", "try", "return"):
+            return self._add_control_node(command_id)
         current = self.canvas_view.currentIndex()
         target = (
             self.flow_model.itemFromIndex(current) if current.isValid() else None
         )
         new_item = self.flow_model.insert_command(command_id, target)
-        # 展开落点父级并选中新节点，方便立刻在右栏填参数
+        self._select_new_item(new_item)
+        self.statusBar().showMessage(
+            f"已添加 {command_id}（Delete 删除选中节点，Ctrl+S 保存）", 4000
+        )
+        return new_item
+
+    def _select_new_item(self, new_item: QStandardItem) -> None:
+        """展开落点父级 + 选中新节点（添加完之后统一用）。"""
         self.canvas_view.setExpanded(
             self.flow_model.indexFromItem(new_item.parent()), True
         )
         new_index = self.flow_model.indexFromItem(new_item)
         self.canvas_view.setCurrentIndex(new_index)
+
+    def _add_control_node(self, node_type: str):
+        """插入控制流节点（if/forEach/try/sequence/return）。"""
+        current = self.canvas_view.currentIndex()
+        target = (
+            self.flow_model.itemFromIndex(current) if current.isValid() else None
+        )
+        new_item = self.flow_model.insert_node(node_type, target)
+        self._select_new_item(new_item)
+        label = {"sequence": "顺序执行", "if": "如果", "forEach": "循环",
+                 "try": "异常捕获", "return": "返回"}.get(node_type, node_type)
         self.statusBar().showMessage(
-            f"已添加 {command_id}（Delete 删除选中节点，Ctrl+S 保存）", 4000
+            f"已添加「{label}」（可在右侧面板配置参数）", 4000
         )
         return new_item
 

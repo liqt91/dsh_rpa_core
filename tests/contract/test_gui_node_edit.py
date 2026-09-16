@@ -90,7 +90,7 @@ def test_allocate_skips_occupied_id(model):
     occupied = build_item(
         {"type": "action", "id": "n1", "command": "workflow.sleep", "with": {}}
     )
-    model.item(0).appendRow(occupied)
+    model.invisibleRootItem().appendRow(occupied)
     assert model.allocate_node_id() == "n2"
 
 
@@ -110,7 +110,7 @@ def test_create_action_item_shape(model):
 # ---- 插入落点 -------------------------------------------------------------
 def test_insert_without_target_appends_to_root(model):
     new_item = model.insert_command("workflow.sleep")
-    root = model.item(0)
+    root = model.invisibleRootItem()
     assert root.child(root.rowCount() - 1) is new_item
     doc = _doc(model)
     assert doc["root"]["children"][-1]["command"] == "workflow.sleep"
@@ -152,8 +152,8 @@ def test_insert_targeting_leaf_becomes_sibling(model):
     leaf = model.find_by_id("open")
     new_item = model.insert_command("workflow.sleep", leaf)
     # open 在根 sequence 下：新节点是根的末位子节点（open 的同级）
-    assert new_item.parent() is model.item(0)
-    assert model.item(0).child(model.item(0).rowCount() - 1) is new_item
+    assert new_item.parent() is model.invisibleRootItem()
+    assert model.invisibleRootItem().child(model.invisibleRootItem().rowCount() - 1) is new_item
 
 
 # ---- 回归：新增节点不得落到「结束 X」行下方 -------------------------------
@@ -209,7 +209,7 @@ def test_remove_leaf(model):
 
 
 def test_root_and_end_bracket_protected(model):
-    assert model.remove_item(model.item(0)) is False
+    assert model.remove_item(model.invisibleRootItem()) is False
     loop = model.find_by_id("loop")
     end_bracket = loop.child(loop.rowCount() - 1)
     assert end_bracket.data(ROLE_NODE_TYPE) == "end-bracket"
@@ -269,13 +269,13 @@ def test_double_click_command_tree_leaf_inserts(catalog):
                 break
     assert leaf is not None
 
-    before = window.flow_model.item(0).rowCount()
+    before = window.flow_model.invisibleRootItem().rowCount()
     window._on_command_double_clicked(leaf, 0)
-    assert window.flow_model.item(0).rowCount() == before + 1
+    assert window.flow_model.invisibleRootItem().rowCount() == before + 1
     # 双击分组节点（command id 为 None）不应插入
     group = window.command_tree.topLevelItem(0)
     window._on_command_double_clicked(group, 0)
-    assert window.flow_model.item(0).rowCount() == before + 1
+    assert window.flow_model.invisibleRootItem().rowCount() == before + 1
 
 
 def test_command_tree_exposes_else_control_entry(catalog):
@@ -313,7 +313,7 @@ def test_add_else_branch_via_else_command(catalog):
 def test_add_else_branch_needs_if_context(catalog):
     """没有 if 上下文时只给状态栏提示：不插节点、不抛异常。"""
     window = MainWindow(catalog, SAMPLE_WORKFLOW)
-    root_item = window.flow_model.item(0)
+    root_item = window.flow_model.invisibleRootItem()
     window.canvas_view.setCurrentIndex(window.flow_model.indexFromItem(root_item))
     assert window.add_command(ELSE_COMMAND_ID) is None
 
