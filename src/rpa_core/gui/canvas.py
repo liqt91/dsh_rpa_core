@@ -22,9 +22,9 @@ from PySide6.QtWidgets import QStyle, QStyledItemDelegate, QTreeView, QWidget
 from rpa_core.gui.flow_model import (
     _ELSE_BRANCH_TYPE,
     _END_BRACKET_TYPE,
-    _TYPE_BADGE,
+    _MIME_COMMAND,
+    _MIME_TYPE,
     ROLE_ARGS_SUMMARY,
-    ROLE_COMMAND_ID,
     ROLE_IS_VIRTUAL,
     ROLE_NODE_TYPE,
     FlowTreeModel,
@@ -32,15 +32,6 @@ from rpa_core.gui.flow_model import (
 
 # 深度色线（Web 端 depth-0..5 同谱系的饱和色）
 _DEPTH_COLORS = ["#0969da", "#1a7f37", "#9a6700", "#8250df", "#bc4c00", "#0598bc"]
-
-# action 命令命名空间 → 徽标底色
-_BADGE_COLORS = {
-    "browser": ("#ddf4ff", "#0969da"),
-    "data": ("#dafbe1", "#1a7f37"),
-    "workflow": ("#fff8c5", "#9a6700"),
-    "desktop": ("#fbefff", "#8250df"),
-}
-_CONTAINER_BADGE = ("#ffebe9", "#cf222e")
 
 # 浅色卡片调色板（与 QDarkStyle LightPalette 协调：底 #FAFAFA / 边 #C0C4C8）
 _CARD = "#ffffff"
@@ -214,20 +205,53 @@ class FlowTreeView(QTreeView):
         super().dragLeaveEvent(event)
 
     def dropEvent(self, event) -> None:
-        """用 dragMoveEvent 判定的落点直接调 dropMimeData。"""
+        """用 dragMoveEvent 判定的落点直接调 dropMimeData。
+
+        同时接受两种 MIME：
+        - application/x-rpa-flow-node（画布内部移动，row 来自 dragMoveEvent 计算）
+        - application/x-rpa-flow-command（指令树拖入新建，row=-1 / row=Qt 探测值）
+        """
         mime = event.mimeData()
-        if not mime.hasFormat("application/x-rpa-flow-node") or self._drag_target is None:
+        model = self.model()
+        if mime.hasFormat(_MIME_COMMAND):
+            # 指令树拖入：直接用 row=-1 表示追加到目标容器末尾
+            parent = self._drag_target["parent"] if self._drag_target else QModelIndex()
+            self._drag_target = None
+            if model.dropMimeData(mime, event.proposedAction(), -1, 0, parent):
+                event.acceptProposedAction()
+            else:
+                event.ignore()
+            self.viewport().update()
+            return
+        # 画布内部移动（需 dragMoveEvent 先算好 row）
+        if not mime.hasFormat(_MIME_TYPE) or self._drag_target is None:
             event.ignore()
             return
         target = self._drag_target
         self._drag_target = None
-
         action = Qt.DropAction.MoveAction
-        if self.model().dropMimeData(mime, action, target["row"], 0, target["parent"]):
+        if model.dropMimeData(mime, action, target["row"], 0, target["parent"]):
             event.acceptProposedAction()
         else:
             event.ignore()
         self.viewport().update()
+
+    def mouseReleaseEvent(self, event) -> None:
+        """点击卡片右尾 × → 删除该节点。"""
+        if event.button() == Qt.MouseButton.LeftButton:
+            index = self.indexAt(event.position().toPoint())
+            if index.isValid():
+                rect = self.visualRect(index)
+                # delete 热区：按钮在卡片右尾 22-6px 区域（16×16 按钮）
+                x = event.position().x()
+                if x >= rect.right() - 22 and x <= rect.right() - 6:
+                    if not index.data(ROLE_IS_VIRTUAL):
+                        model = self.model()
+                        model.remove_row(index)
+                        event.accept()
+                        self.viewport().update()
+                        return
+        super().mouseReleaseEvent(event)
 
     # ---- 落点指示条自绘 --------------------------------------------------
     def paintEvent(self, event) -> None:
@@ -431,26 +455,15 @@ class CardDelegate(QStyledItemDelegate):
                              f"{index.row() + 1}.")
             x += 26
 
-        command_id = index.data(ROLE_COMMAND_ID)
-        node_type = index.data(ROLE_NODE_TYPE)
-        badge_text, badge_bg, badge_fg = self._badge(node_type, command_id)
-
-        # 右侧徽标（先测量，预留右侧空间）
-        badge_font = QFont(option.font)
-        badge_font.setPointSizeF(max(7.0, option.font.pointSizeF() - 1.5))
-        painter.setFont(badge_font)
-        badge_w = painter.fontMetrics().horizontalAdvance(badge_text) + 14
-        badge_rect = QRect(content.right() - badge_w,
-                           content.top() + (content.height() - 20) // 2,
-                           badge_w, 20)
+        # 内容右边界预留 32px 给删除按钮热区（22px + 10px 间距）
+        content_right = content.right() - 32
 
         # 命令名（粗体）
         title_font = QFont(option.font)
         title_font.setBold(True)
         painter.setFont(title_font)
         painter.setPen(QPen(QColor(_CMD_TEXT)))
-        title_rect = QRect(x, content.top(),
-                           content.right() - badge_w - 8 - x, content.height())
+        title_rect = QRect(x, content.top(), content_right - x, content.height())
         painter.drawText(title_rect,
                          Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
                          option.fontMetrics.elidedText(
@@ -470,30 +483,49 @@ class CardDelegate(QStyledItemDelegate):
                 painter.setPen(QPen(QColor(_ARGS_TEXT)))
                 summary_x = x + min(name_w, title_rect.width() - 60)
                 summary_rect = QRect(summary_x, content.top(),
-                                     content.right() - badge_w - 8 - summary_x, content.height())
+                                     content_right - summary_x, content.height())
                 painter.drawText(summary_rect,
                                  Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
                                  painter.fontMetrics().elidedText(
                                      summary, Qt.TextElideMode.ElideRight, summary_rect.width()))
 
-        # 徽标
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor(badge_bg))
-        painter.drawRoundedRect(badge_rect, 4, 4)
-        painter.setPen(QPen(QColor(badge_fg)))
-        painter.setFont(badge_font)
-        painter.drawText(badge_rect,
-                         Qt.AlignmentFlag.AlignCenter, badge_text)
+        # 卡片尾删除按钮：hover/selected 时显示垃圾桶图标；16×16 固定尺寸，
+        # 垂直居中、水平右对齐卡片尾部；只有真实节点可删
+        if (hovered or selected) and not is_virtual_group:
+            btn = QRect(rect.right() - 22, rect.center().y() - 8, 16, 16)
+            self._paint_trash(painter, btn)
 
-    def _badge(self, node_type: str | None, command_id: str | None) -> tuple[str, str, str]:
-        """返回（徽标文本, 背景色, 文字色）。"""
-        if node_type == "action" and command_id:
-            namespace = command_id.split(".", 1)[0]
-            bg, fg = _BADGE_COLORS.get(namespace, ("#eaeef2", "#57606a"))
-            return namespace, bg, fg
-        if node_type in _TYPE_BADGE:
-            return _TYPE_BADGE[node_type], _CONTAINER_BADGE[0], _CONTAINER_BADGE[1]
-        return "node", "#eaeef2", "#57606a"
+    @staticmethod
+    def _paint_trash(painter: QPainter, btn: QRect) -> None:
+        """在 16×16 按钮区域内绘制简洁垃圾桶图标。
+
+        线条风格：深灰色 RoundCap 1.3px，视觉上与删除按钮的浅灰底圆角协调。
+        构图：桶盖横线 + 梯形桶身（上宽下窄）+ 桶内两条短竖线。
+        """
+        # 按钮背景（浅灰圆角矩形）
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor("#eaeef2"))
+        painter.drawRoundedRect(btn, 4, 4)
+
+        # 垃圾桶图标线条
+        pen = QPen(QColor("#8c959f"), 1.3)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        painter.setPen(pen)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+
+        cx = btn.center().x()
+        # 桶盖横线（顶部偏上）
+        painter.drawLine(cx - 4, btn.top() + 4, cx + 4, btn.top() + 4)
+        # 桶身：梯形轮廓
+        top_y = btn.top() + 5       # 桶口 y
+        bot_y = btn.bottom() - 2    # 桶底 y
+        painter.drawLine(cx - 5, top_y, cx + 5, top_y)         # 桶口
+        painter.drawLine(cx - 5, top_y, cx - 3.5, bot_y)       # 左斜边
+        painter.drawLine(cx + 5, top_y, cx + 3.5, bot_y)       # 右斜边
+        painter.drawLine(cx - 3.5, bot_y, cx + 3.5, bot_y)     # 桶底
+        # 桶内两条竖线（视觉"空桶"感）
+        painter.drawLine(cx - 1.5, top_y + 1, cx - 1.5, bot_y - 1)
+        painter.drawLine(cx + 1.5, top_y + 1, cx + 1.5, bot_y - 1)
 
 
 def build_canvas(model: FlowTreeModel, parent: QWidget | None = None) -> FlowTreeView:
@@ -506,7 +538,7 @@ def build_canvas(model: FlowTreeModel, parent: QWidget | None = None) -> FlowTre
     tree.setIndentation(_INDENT)
     tree.setExpandsOnDoubleClick(False)
     tree.setAnimated(False)  # widgets 无内建过渡，避免半开动画卡顿
-    tree.setDragDropMode(QTreeView.DragDropMode.InternalMove)
+    tree.setDragDropMode(QTreeView.DragDropMode.DragDrop)  # 同时接受外部拖入 + 内部移动
     tree.setDefaultDropAction(Qt.DropAction.MoveAction)
     tree.setSelectionBehavior(QTreeView.SelectionBehavior.SelectRows)
     tree.setMouseTracking(True)

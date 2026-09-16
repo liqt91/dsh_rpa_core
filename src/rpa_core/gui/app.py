@@ -22,8 +22,8 @@ import sys
 from pathlib import Path
 
 # Qt 绑定在模块顶层导入：本模块本身已被 CLI 延迟导入，未装 extra 时不会触达。
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QAction, QStandardItem
+from PySide6.QtCore import QMimeData, Qt
+from PySide6.QtGui import QAction, QDrag, QStandardItem
 from PySide6.QtWidgets import (
     QAbstractSpinBox,
     QApplication,
@@ -45,6 +45,31 @@ from PySide6.QtWidgets import (
 )
 
 from rpa_core.catalog import CommandCatalog, load_catalog
+
+from .flow_model import _MIME_COMMAND
+
+
+class _CommandTree(QTreeWidget):
+    """指令树：支持拖到画布，重写 startDrag 发自定义 MIME。"""
+
+    def startDrag(self, supportedActions) -> None:  # noqa: N802 (Qt naming)
+        item = self.currentItem()
+        if item is None or item.parent() is None:
+            # 只有叶子（有 parent）才可拖；根是分组不可拖
+            return
+        mime = QMimeData()
+        # 读叶子上的 ROLE_COMMAND_ID：catalog 命令是完整 id（browser.navigate），
+        # 控制流节点是 node_type（sequence/if/forEach/try/return/@else）。
+        # 控制流节点走 node_type:xxx 格式以便画布识别。
+        raw = item.data(0, ROLE_COMMAND_ID) or ""
+        if raw in ("sequence", "if", "forEach", "try", "return"):
+            raw = f"node_type:{raw}"
+        elif raw == ELSE_COMMAND_ID:
+            return  # @else 拖到画布无上下文，不处理
+        mime.setData(_MIME_COMMAND, raw.encode("utf-8"))
+        drag = QDrag(self)
+        drag.setMimeData(mime)
+        drag.exec(Qt.DropAction.CopyAction)
 
 # 在树 item 上携带完整命令 id 的自定义数据角色（组节点不携带）。
 ROLE_COMMAND_ID = Qt.ItemDataRole.UserRole + 1
@@ -227,8 +252,9 @@ class MainWindow(QMainWindow):
         left_layout.setContentsMargins(8, 8, 8, 8)
         search = QLineEdit()
         search.setPlaceholderText("搜索指令…")
-        tree = QTreeWidget()
+        tree = _CommandTree()
         tree.setHeaderHidden(True)
+        tree.setDragEnabled(True)  # 允许叶子指令拖出到画布
         populate_command_tree(tree, catalog)
         search.textChanged.connect(lambda text: _apply_filter(tree, text))
         # 双击指令叶子 → 在画布当前选中位置插入新 action（组节点忽略）

@@ -64,7 +64,8 @@ _TYPE_BADGE = {
     "else-branch": "否则",
 }
 
-_MIME_TYPE = "application/x-rpa-flow-node"
+_MIME_TYPE = "application/x-rpa-flow-node"   # 画布内部节点拖放（move）
+_MIME_COMMAND = "application/x-rpa-flow-command"  # 指令树 → 画布（new）
 
 
 class ArgsHolder:
@@ -180,15 +181,39 @@ class FlowTreeModel(QStandardItemModel):
         return raw.split(";", 1)[0]
 
     def canDropMimeData(self, data, action, row, column, parent) -> bool:
-        """放置可行性判定。
+        """放置可行性判定（同时接受画布内部 node + 指令树 command 两种 MIME）。
 
         QTreeView 在拖拽进入（dragEnterEvent）时会先用「无效 parent +
         row=-1」探测模型是否接受该 MIME；此处必须放行，否则拖拽从进入
         控件起就被整体拒绝，后续带落点的 dragMove/drop 回调都不会发生。
         具体落点是否合法在带有效 parent 的调用中再按容器类型判定。
         """
-        if not data.hasFormat(_MIME_TYPE):
+        if not (data.hasFormat(_MIME_TYPE) or data.hasFormat(_MIME_COMMAND)):
             return False
+        # 指令树拖来的 command 直接放行——落点合法性在 dropMimeData 里处理
+        if data.hasFormat(_MIME_COMMAND):
+            return True
+        # 以下是画布内部 node 拖放（else-branch 守卫等）
+        # 先对被拖物做 else-branch 守卫（无论 parent 是否有效都适用）：
+        # 否则行只能留在它所属的 if 内，不能拖到顶层或其他容器。
+        dragged = self._dragged_id(data)
+        if _is_else_branch_id(dragged):
+            source = self.find_by_id(dragged)
+            # 拖到顶层（invalid parent）= 要把否则拉出 if → 拒绝
+            if not parent.isValid():
+                return False
+            # 有效 parent：路由到真实容器后必须是同一个 if
+            parent = self._resolve_drop_parent(parent)
+            if not parent.isValid():
+                return False
+            target = self.itemFromIndex(parent)
+            if target is None:
+                return False
+            return (
+                target.data(ROLE_NODE_TYPE) == "if"
+                and source is not None
+                and source.parent() is target
+            )
         if not parent.isValid():
             return True  # dragEnter 能力探测：格式可接受即可
         # 如果 parent 恰好落在 end-bracket / 「否则」行上，路由到其真实容器
@@ -213,11 +238,38 @@ class FlowTreeModel(QStandardItemModel):
             )
         return True
 
-    def dropMimeData(self, data, action, row, column, parent) -> bool:
-        """执行移动：按节点 id 定位源 item，takeRow 后插入目标容器。
+    def _insert_item_at_drop(
+        self, new_item: QStandardItem, row: int, parent: QModelIndex
+    ) -> bool:
+        """把新建 item 插到 drop 指定的位置（供指令树 → 画布拖放用）。
 
-        QStandardItemModel 默认 dropMimeData 只认内部 mime；本模型用自定义
-        只携 id 的格式，因此自行实现移动。单选（QTreeView 默认单选）。
+        row=-1 / parent invalid → 追加到 invisibleRootItem 末尾（顶层）。
+        row>=0 且 parent 有效 → 插到 parent 容器的 row 位置；row 超过末尾时
+        追加。end-bracket / 否则行上的 drop 自动路由到其真实容器。
+        """
+        if not parent.isValid():
+            target = self.invisibleRootItem()
+            target_row = target.rowCount() if row < 0 else min(row, target.rowCount())
+            target.insertRow(target_row, new_item)
+            return True
+        # 路由 end-bracket / 否则行
+        parent = self._resolve_drop_parent(parent)
+        if not parent.isValid():
+            target = self.invisibleRootItem()
+        else:
+            target = self.itemFromIndex(parent)
+        if target is None:
+            target = self.invisibleRootItem()
+        # 控制流容器里的有效落点必须跳过 end-bracket / 否则行
+        target_row = _real_child_insert_row(target) if row < 0 else min(row, target.rowCount())
+        target.insertRow(target_row, new_item)
+        return True
+
+    def dropMimeData(self, data, action, row, column, parent) -> bool:
+        """执行移动/新建：区分两种 MIME。
+
+        - _MIME_TYPE（画布内部拖放）：takeRow + insertRow 移动已有节点
+        - _MIME_COMMAND（指令树 → 画布）：insert_command / insert_node 新建
 
         注意：配合 canvas.FlowTreeView.startDrag（重写）跳过 Qt 的
         clearOrRemove，避免 InternalMove 下 Qt 用旧索引删错节点。
@@ -225,6 +277,23 @@ class FlowTreeModel(QStandardItemModel):
         「否则」行上的 drop 翻译成对其真实容器的操作；这里再做一次 fallback
         路由，防止 Qt 自身的 drop 路径绕过。
         """
+        # === 分支 1：指令树 → 画布（新建节点）===
+        if data.hasFormat(_MIME_COMMAND):
+            raw = bytes(data.data(_MIME_COMMAND)).decode("utf-8")
+            # 格式："command_id" 或 "node_type:xxx"（控制流节点）
+            if raw.startswith("node_type:"):
+                node_type = raw.split(":", 1)[1]
+                new_item = self.create_node_item(node_type)
+            else:
+                command_id = raw
+                if _is_else_branch_id(command_id):
+                    # @else 需要给某个 if 添加否则分支——但拖入时无上下文，
+                    # 此处不处理，由双击/右键菜单添加
+                    return False
+                new_item = self.create_action_item(command_id)
+            return self._insert_item_at_drop(new_item, row, parent)
+
+        # === 分支 2：画布内部拖放（移动节点）===
         if not data.hasFormat(_MIME_TYPE):
             return False
         # parent.isValid() == False 时对应两种情况：
@@ -232,9 +301,12 @@ class FlowTreeModel(QStandardItemModel):
         # 2) Qt 探测 invalid parent（canDropMimeData 里已放行，这里兜底）
         # 统一翻译为 invisibleRootItem，让顶层 drop 正常工作
         if not parent.isValid():
+            # 否则分支 marker 绝不允许拖出它所属的 if → 顶层 drop 直接拒绝
+            node_id = self._dragged_id(data)
+            if _is_else_branch_id(node_id):
+                return False
             target = self.invisibleRootItem()
             # 直接跳到移动逻辑（不需要再 _resolve_drop_parent）
-            node_id = self._dragged_id(data)
             source = self.find_by_id(node_id)
             if source is None:
                 return False
@@ -424,6 +496,13 @@ class FlowTreeModel(QStandardItemModel):
             parent = anchor.parent() or root
         parent.insertRow(_branch_insert_row(parent, anchor), [new_item])
         return new_item
+
+    def remove_row(self, index: QModelIndex) -> bool:
+        """按 QModelIndex 删除——内部转 remove_item(itemFromIndex)。"""
+        item = self.itemFromIndex(index)
+        if item is None:
+            return False
+        return self.remove_item(item)
 
     def remove_item(self, item: QStandardItem) -> bool:
         """删除一个真实节点或「否则」指令行（整棵子树随父行移除）。
