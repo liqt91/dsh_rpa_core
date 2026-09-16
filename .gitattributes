@@ -1,0 +1,22 @@
+# 统一换行符：仓库内全部文本文件用 LF 存储，PowerShell 脚本例外
+* text=auto eol=lf
+
+# Windows 必须 CRLF 的脚本
+*.ps1 text eol=crlf
+*.psm1 text eol=crlf
+*.bat  text eol=crlf
+*.cmd  text eol=crlf
+
+# 二进制（明确标记，防止 auto 误判）
+*.zip   binary
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.gif   binary
+*.ico   binary
+*.exe   binary
+*.dll   binary
+*.pyc   binary
+*.pyo   binary
+*.pyd   binary
+__pycache__ binary
