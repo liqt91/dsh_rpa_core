@@ -274,8 +274,210 @@ def test_else_branch_can_be_dragged_inside_if_but_not_out():
     assert [c["id"] for c in check["else"]] == ["t1"]
 
 
-def test_flags_enforce_drag_drop_rules(real_workflow):
-    model = build_model_from_workflow(real_workflow)
+def test_gutter_numbering_is_logical_and_stable_on_collapse(qapp):
+    """编号栏行号是逻辑行号（全树前序位置）：序号跟随指令本身，
+    折叠容器只是隐藏子行，下方指令的行号不因此改变（影刀同款）。"""
+    from rpa_core.gui.canvas import CardDelegate
+
+    model = build_model_from_workflow({
+        "schema_version": "1.0", "id": "s", "name": "s",
+        "root": {
+            "type": "sequence", "id": "root",
+            "children": [
+                {"type": "action", "id": "a1", "command": "data.setVar", "with": {}},
+                {"type": "if", "id": "c",
+                 "condition": {"op": "truthy", "left": "${x}"},
+                 "then": [{"type": "action", "id": "t1", "command": "data.setVar",
+                           "with": {}}]},
+                {"type": "action", "id": "a2", "command": "workflow.sleep",
+                 "with": {}},
+            ],
+        },
+    })
+    view = build_canvas(model)
+    view.resize(640, 480)
+    view.show()
+    view.expandAll()
+    qapp.processEvents()
+    delegate = view.itemDelegate()
+    assert isinstance(delegate, CardDelegate)
+
+    # 展开时全树前序：a1=1，if=2，then 内 t1=3，结束行=4，a2=5
+    a2 = model.index(2, 0)
+    assert delegate._row_number(a2) == 5
+    # 折叠 if：t1/结束行被隐藏，但 a2 的逻辑行号仍是 5（不随可见性改变）
+    view.setExpanded(model.index(1, 0), False)
+    qapp.processEvents()
+    assert delegate._row_number(a2) == 5
+    view.deleteLater()
+
+
+def test_gutter_error_badge_on_missing_required_args(qapp):
+    """错误徽标判定：action 必填参数缺失为错误，补齐后消除；非 action 行不判。"""
+    from rpa_core.catalog import load_catalog
+    from rpa_core.cli import _commands_root
+
+    catalog = load_catalog(_commands_root())
+    model = build_model_from_workflow({
+        "schema_version": "1.0", "id": "s", "name": "s",
+        "root": {
+            "type": "sequence", "id": "root",
+            "children": [
+                {"type": "action", "id": "nav", "command": "browser.navigate",
+                 "with": {"url": "https://example.com"}},  # 缺必填 browserType
+                {"type": "action", "id": "ok", "command": "workflow.sleep",
+                 "with": {"seconds": 1}},
+            ],
+        },
+    })
+    view = build_canvas(model, catalog=catalog)
+    delegate = view.itemDelegate()
+
+    assert delegate._has_config_error(model.index(0, 0)) is True   # 缺 browserType
+    assert delegate._has_config_error(model.index(1, 0)) is False  # 必填已填
+    view.deleteLater()
+
+
+def test_gutter_collapse_button_toggles_expansion(qapp):
+    """编号栏收起/展开按钮：合成点击热区 → 容器折叠，再点 → 展开。"""
+    from PySide6.QtCore import QEvent, QPointF
+    from PySide6.QtGui import QMouseEvent, QPointingDevice
+    from PySide6.QtWidgets import QApplication
+
+    from rpa_core.gui.canvas import collapse_button_rect
+
+    model = build_model_from_workflow({
+        "schema_version": "1.0", "id": "s", "name": "s",
+        "root": {
+            "type": "sequence", "id": "root",
+            "children": [
+                {"type": "forEach", "id": "f", "items": "${rows}",
+                 "children": [{"type": "action", "id": "a", "command": "data.limit",
+                               "with": {}}]},
+            ],
+        },
+    })
+    view = build_canvas(model)
+    view.resize(640, 480)
+    view.show()
+    view.expandAll()
+    qapp.processEvents()
+
+    container = model.index(0, 0)
+    assert view.isExpanded(container)
+
+    def _click(pos):
+        event = QMouseEvent(
+            QEvent.Type.MouseButtonRelease, QPointF(pos),
+            QPointF(view.viewport().mapToGlobal(pos)),
+            Qt.MouseButton.LeftButton, Qt.MouseButton.LeftButton,
+            Qt.KeyboardModifier.NoModifier,
+            QPointingDevice.primaryPointingDevice(),
+        )
+        QApplication.sendEvent(view.viewport(), event)
+
+    btn = collapse_button_rect(view.visualRect(container))
+    _click(btn.center())
+    assert not view.isExpanded(container)   # 折叠
+    _click(btn.center())
+    assert view.isExpanded(container)       # 再点展开
+    view.deleteLater()
+
+
+def test_delete_button_rect_inside_card_right_tail():
+    """删除按钮矩形：卡片右尾内部（右边距 6px）、垂直居中、固定尺寸——
+    paint 与 mouseReleaseEvent 热区共用同一函数，保证所见即所点。"""
+    from PySide6.QtCore import QRect
+
+    from rpa_core.gui.canvas import delete_button_rect
+
+    card = QRect(10, 10, 400, 40)
+    btn = delete_button_rect(card)
+    assert card.contains(btn)
+    assert card.right() - btn.right() == 6
+    assert btn.height() == 18 and btn.width() == 36
+    assert btn.center().y() == card.center().y()
+
+
+def test_else_branch_delete_button_click_removes_marker(qapp):
+    """回归：点击「否则」指令行的删除按钮可删除该行（取消 else 分支）。
+
+    旧实现在 mouseReleaseEvent 里用 ROLE_IS_VIRTUAL 一刀切拦截，
+    而 else-branch 行 virtual=True（模型层 remove_item 对其例外放行），
+    导致点删除按钮无效；修复后可删性判定委托模型单源。
+    """
+    from PySide6.QtCore import QEvent, QPointF
+    from PySide6.QtGui import QMouseEvent, QPointingDevice
+    from PySide6.QtWidgets import QApplication
+
+    from rpa_core.gui.canvas import delete_button_rect
+
+    model = build_model_from_workflow({
+        "schema_version": "1.0", "id": "s", "name": "s",
+        "root": {
+            "type": "sequence", "id": "root",
+            "children": [
+                {"type": "if", "id": "c",
+                 "condition": {"op": "truthy", "left": "${x}"},
+                 "then": [{"type": "action", "id": "t1", "command": "data.setVar",
+                           "with": {}}],
+                 "else": [{"type": "action", "id": "e1", "command": "workflow.sleep",
+                           "with": {}}]},
+            ],
+        },
+    })
+    view = build_canvas(model)
+    view.resize(640, 480)
+    view.show()
+    view.expandAll()
+    qapp.processEvents()
+
+    else_index = None
+    if_index = model.index(0, 0)
+    for row in range(model.rowCount(if_index)):
+        candidate = model.index(row, 0, if_index)
+        if candidate.data(ROLE_NODE_TYPE) == "else-branch":
+            else_index = candidate
+            break
+    assert else_index is not None, "夹具应含 else-branch 行"
+
+    # 合成点击：删除按钮热区中心（热区与绘制矩形同源）
+    btn = delete_button_rect(view.visualRect(else_index))
+    pos = QPointF(btn.center())
+    event = QMouseEvent(
+        QEvent.Type.MouseButtonRelease, pos,
+        QPointF(view.viewport().mapToGlobal(btn.center())),
+        Qt.MouseButton.LeftButton, Qt.MouseButton.LeftButton,
+        Qt.KeyboardModifier.NoModifier,
+        QPointingDevice.primaryPointingDevice(),
+    )
+    QApplication.sendEvent(view.viewport(), event)
+
+    for row in range(model.rowCount(if_index)):
+        assert model.index(row, 0, if_index).data(ROLE_NODE_TYPE) != "else-branch"
+    # AST 回写：else 段取消，e1 并入 then 末尾
+    doc = model_to_workflow(model, {"schema_version": "1.0", "id": "s", "name": "s"})
+    check = doc["root"]["children"][0]
+    assert [c["id"] for c in check["then"]] == ["t1", "e1"]
+    assert "else" not in check
+    view.deleteLater()
+
+
+def test_flags_enforce_drag_drop_rules():
+    # 自带夹具（顶层 action + forEach），不依赖 workflows/test 手测草稿的内容——
+    # 该文件随时被手动编辑，历史上因其缺少顶层 forEach 导致本测试 StopIteration。
+    model = build_model_from_workflow({
+        "schema_version": "1.0", "id": "s", "name": "s",
+        "root": {
+            "type": "sequence", "id": "root",
+            "children": [
+                {"type": "action", "id": "a1", "command": "data.setVar", "with": {}},
+                {"type": "forEach", "id": "f", "items": "${rows}",
+                 "children": [{"type": "action", "id": "a2", "command": "data.limit",
+                               "with": {}}]},
+            ],
+        },
+    })
     # sequence root 已扁平化，顶层直接是真实节点（action/forEach/if/return）
     # 顶层节点都应该可拖（它们都是原 sequence 的 children，不是 root 容器本身）
     top0 = model.index(0, 0)  # 顶层第一个真实节点

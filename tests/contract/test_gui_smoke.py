@@ -148,6 +148,80 @@ def test_command_tree_selection_does_not_raise(window):
     assert tree.currentItem().data(0, ROLE_COMMAND_ID) == "browser.navigate"
 
 
+# ---- 影刀式卡片指令树 -----------------------------------------------------
+def test_command_leaves_show_chinese_display_name(window):
+    """叶子显示中文名（i18n.js 单一事实来源），命令 id 仍存 ROLE_COMMAND_ID。"""
+    tree = window.command_tree
+    leaf = next(
+        item for item in _all_leaves(tree)
+        if item.data(0, ROLE_COMMAND_ID) == "browser.navigate"
+    )
+    assert leaf.text(0) == "打开网页"
+    # 缺失映射时回退命令 id 原文（i18n.js 与 catalog 有门禁锁同步，仅兜底语义）
+    from rpa_core.gui.app import populate_command_tree
+
+    bare = window.command_tree.__class__()
+    populate_command_tree(bare, window.catalog, names={})
+    bare_leaf = next(
+        item for item in _all_leaves(bare)
+        if item.data(0, ROLE_COMMAND_ID) == "browser.navigate"
+    )
+    assert bare_leaf.text(0) == "browser.navigate"
+
+
+def test_load_command_display_names_from_i18n(window, catalog):
+    """i18n.js 解析层：全量 catalog 命令都有中文名（与 test_editor_i18n 同口径）。"""
+    from rpa_core.gui.command_palette import load_command_display_names
+
+    names = load_command_display_names()
+    assert names["browser.navigate"] == "打开网页"
+    assert set(catalog) <= set(names)  # 门禁锁同步：缺键上游先红
+
+
+def test_command_tree_uses_card_delegate(window):
+    """指令树挂卡片 delegate：叶子行高大于分组行高（卡片 vs 轻文本）。"""
+    from rpa_core.gui.command_palette import CommandCardDelegate
+
+    tree = window.command_tree
+    delegate = tree.itemDelegate()
+    assert isinstance(delegate, CommandCardDelegate)
+
+    from PySide6.QtWidgets import QStyleOptionViewItem
+
+    leaf = next(item for item in _all_leaves(tree)
+                if item.data(0, ROLE_COMMAND_ID) is not None)
+    group = tree.topLevelItem(0)
+    option = QStyleOptionViewItem()  # viewOptions() 是 protected，sizeHint 用空 option 足够
+    leaf_hint = delegate.sizeHint(option, tree.indexFromItem(leaf))
+    group_hint = delegate.sizeHint(option, tree.indexFromItem(group))
+    assert leaf_hint.height() == CommandCardDelegate.LEAF_HEIGHT
+    assert group_hint.height() == CommandCardDelegate.GROUP_HEIGHT
+    assert leaf_hint.height() > group_hint.height()
+
+
+def test_filter_matches_chinese_display_name(window):
+    """中文名参与搜索：搜「打开网页」命中 browser.navigate。"""
+    tree = window.command_tree
+    _apply_filter(tree, "打开网页")
+    visible = {
+        leaf.data(0, ROLE_COMMAND_ID)
+        for leaf in _all_leaves(tree) if not leaf.isHidden()
+    }
+    assert "browser.navigate" in visible
+    _apply_filter(tree, "")
+
+
+def test_browser_leaves_follow_palette_order(window):
+    """browser 组内按 manifest x-palette-order（影刀对标顺序）排列。"""
+    tree = window.command_tree
+    browser_group = next(
+        tree.topLevelItem(i) for i in range(tree.topLevelItemCount())
+        if tree.topLevelItem(i).text(0).startswith(NAMESPACE_LABELS["browser"])
+    )
+    first = browser_group.child(0).data(0, ROLE_COMMAND_ID)
+    assert first == "browser.navigate"  # x-palette-order=1（影刀「打开网页」首位）
+
+
 def test_window_has_canvas_with_sample_flow(window):
     """中栏画布默认加载内置示例流程；sequence root 已扁平化，
     顶层直接是原 sequence 的 children（至少 action / if / forEach / return）。"""

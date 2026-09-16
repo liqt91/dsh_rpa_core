@@ -17,14 +17,22 @@ from __future__ import annotations
 
 from PySide6.QtCore import QModelIndex, QRect, QSize, Qt
 from PySide6.QtGui import QColor, QDrag, QFont, QPainter, QPen
-from PySide6.QtWidgets import QStyle, QStyledItemDelegate, QTreeView, QWidget
+from PySide6.QtWidgets import (
+    QStyle,
+    QStyledItemDelegate,
+    QStyleOptionViewItem,
+    QTreeView,
+    QWidget,
+)
 
 from rpa_core.gui.flow_model import (
     _ELSE_BRANCH_TYPE,
     _END_BRACKET_TYPE,
     _MIME_COMMAND,
     _MIME_TYPE,
+    ROLE_ARGS_RAW,
     ROLE_ARGS_SUMMARY,
+    ROLE_COMMAND_ID,
     ROLE_IS_VIRTUAL,
     ROLE_NODE_TYPE,
     FlowTreeModel,
@@ -49,6 +57,46 @@ _BAR_WIDTH = 4
 # 树缩进步长：结束行 / 否则行按"减一级缩进"与父容器卡片对齐
 _INDENT = 22
 _GROUP_BG = "#eef1f4"
+
+# 卡片尾删除按钮（文字胶囊）：固定尺寸，paint 与 mouseReleaseEvent 热区共用
+_DELETE_BTN_W = 36
+_DELETE_BTN_H = 18
+_DELETE_BTN_MARGIN_RIGHT = 6
+
+# 左侧编号栏（影刀式）：全局行号 + 错误徽标 + 容器收起/展开按钮。
+# 所有行内容统一右移该宽度，编号栏本身不随缩进移动。
+_GUTTER_WIDTH = 46
+_GUTTER_NUMBER_W = 20          # 行号区（右对齐）
+_GUTTER_ERROR_X = 28           # 错误徽标圆心 x
+_COLLAPSE_BTN = 14             # 收起/展开按钮边长
+
+
+def delete_button_rect(card_rect: QRect) -> QRect:
+    """卡片尾删除按钮的矩形：右对齐卡片尾（留 6px 边距）、垂直居中。
+
+    注意 QRect 闭区间语义（right() = left+width-1）：左边距需 +1 才能
+    让按钮右缘与卡片右缘精确相距 6px。
+    """
+    return QRect(
+        card_rect.right() - _DELETE_BTN_MARGIN_RIGHT - _DELETE_BTN_W + 1,
+        card_rect.top() + (card_rect.height() - _DELETE_BTN_H) // 2,
+        _DELETE_BTN_W,
+        _DELETE_BTN_H,
+    )
+
+
+def collapse_button_rect(row_rect: QRect) -> QRect:
+    """编号栏内收起/展开按钮的矩形：固定在栏右侧、垂直居中。
+
+    与 CardDelegate 绘制、FlowTreeView 点击热区共用同一矩形（所见即所点）。
+    """
+    size = _COLLAPSE_BTN
+    return QRect(
+        _GUTTER_WIDTH - size - 4,
+        row_rect.top() + (row_rect.height() - size) // 2,
+        size,
+        size,
+    )
 
 
 def _index_depth(index: QModelIndex) -> int:
@@ -237,17 +285,34 @@ class FlowTreeView(QTreeView):
         self.viewport().update()
 
     def mouseReleaseEvent(self, event) -> None:
-        """点击卡片右尾 × → 删除该节点。"""
+        """编号栏与卡片尾按钮的点击分发。
+
+        - 编号栏（左 _GUTTER_WIDTH px）：容器行的收起/展开按钮 → 切换展开态；
+          栏内其余位置不冒泡（避免误触行选择/行点击折叠）；
+        - 卡片尾「删除」文字按钮 → 删除该节点（热区与绘制矩形同源）。
+
+        可删性判定委托模型（remove_row/remove_item 单源）：真实节点可删，
+        虚拟分组/结束行被拒；「否则」指令行虽 virtual=True 但模型对其
+        例外放行（删除=取消 else 分支），视图不再重复一份更严的策略。
+        """
         if event.button() == Qt.MouseButton.LeftButton:
-            index = self.indexAt(event.position().toPoint())
+            pos = event.position().toPoint()
+            # 视图缩进为 0（缩进由 delegate 自绘），行视觉矩形从 x=0 起满宽，
+            # 编号栏内 indexAt 可直接命中所在行。
+            index = self.indexAt(pos)
+            if pos.x() <= _GUTTER_WIDTH:
+                if (
+                    index.isValid()
+                    and self.model().hasChildren(index)
+                    and collapse_button_rect(self.visualRect(index)).contains(pos)
+                ):
+                    self.setExpanded(index, not self.isExpanded(index))
+                event.accept()
+                return
             if index.isValid():
                 rect = self.visualRect(index)
-                # delete 热区：按钮在卡片右尾 22-6px 区域（16×16 按钮）
-                x = event.position().x()
-                if x >= rect.right() - 22 and x <= rect.right() - 6:
-                    if not index.data(ROLE_IS_VIRTUAL):
-                        model = self.model()
-                        model.remove_row(index)
+                if delete_button_rect(rect).contains(pos):
+                    if self.model().remove_row(index):
                         event.accept()
                         self.viewport().update()
                         return
@@ -274,7 +339,15 @@ class FlowTreeView(QTreeView):
 
 
 class CardDelegate(QStyledItemDelegate):
-    """自绘流程节点卡片。"""
+    """自绘流程节点卡片 + 左侧编号栏（行号/错误徽标/收起展开按钮）。
+
+    catalog 可选：提供后 action 行按 manifest input_schema.required 检查
+    必填参数缺失，缺失即在编号栏画红色错误徽标（影刀同款）。
+    """
+
+    def __init__(self, parent: QWidget | None = None, catalog=None) -> None:
+        super().__init__(parent)
+        self._catalog = catalog
 
     def sizeHint(self, option, index) -> QSize:
         return QSize(option.rect.width(), _ROW_HEIGHT)
@@ -283,22 +356,117 @@ class CardDelegate(QStyledItemDelegate):
         painter.save()
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
 
+        # 视图缩进设为 0（setIndentation(0)），Qt 的 branch 引导线整个不再绘制——
+        # 否则引导线落在编号栏区域与行号重叠。缩进由 delegate 自己算：
+        # 内容区 = 编号栏宽 + 深度×缩进，整体右移；编号栏固定在视口左缘。
+        content = QStyleOptionViewItem(option)
+        depth = _index_depth(index)
+        content.rect.adjust(_GUTTER_WIDTH + depth * _INDENT, 0, 0, 0)
+
         node_type = index.data(ROLE_NODE_TYPE)
         if node_type == _END_BRACKET_TYPE:
-            self._paint_end_bracket(painter, option, index)
+            self._paint_end_bracket(painter, content, index)
         elif node_type == _ELSE_BRANCH_TYPE:
             # else 分支 marker 视觉上要与其父 if 容器对齐（缩进减 1），
             # 用 _marker_rect 补偿后按白色卡片渲染（可拖可删）。
-            aligned_rect, _ = self._marker_rect(option, index)
-            self._paint_card(painter, option, index, rect_override=aligned_rect,
+            aligned_rect, _ = self._marker_rect(content, index)
+            self._paint_card(painter, content, index, rect_override=aligned_rect,
                              is_virtual_group=False, suppress_summary=True)
         elif index.data(ROLE_IS_VIRTUAL):
             # 虚拟分组（则执行/否则执行/异常处理）也渲染为白色卡片，
             # 与普通指令卡片完全一致，只是不加拖柄和序号（分组是结构行不可拖）。
-            self._paint_card(painter, option, index, is_virtual_group=True)
+            self._paint_card(painter, content, index, is_virtual_group=True)
         else:
-            self._paint_card(painter, option, index)
+            self._paint_card(painter, content, index)
+
+        self._paint_gutter(painter, option, index)
         painter.restore()
+
+    # ---- 编号栏：全局行号 + 错误徽标 + 收起/展开按钮 ----------------------
+    def _paint_gutter(self, painter: QPainter, option, index: QModelIndex) -> None:
+        rect = option.rect
+
+        # 全局行号（逻辑行号：全树前序位置，折叠只是隐藏行、序号不因此改变，
+        # 与影刀左侧编号栏一致；结束行/否则行同样编号）
+        painter.setPen(QPen(QColor("#8c959f")))
+        painter.setFont(option.font)
+        number_rect = QRect(0, rect.top(), _GUTTER_NUMBER_W, rect.height())
+        painter.drawText(
+            number_rect,
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
+            str(self._row_number(index)),
+        )
+
+        # 错误徽标：红底白 !（action 必填参数缺失时）
+        if self._has_config_error(index):
+            radius = 5
+            center_y = rect.center().y()
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor("#cf222e"))
+            painter.drawEllipse(
+                _GUTTER_ERROR_X - radius, center_y - radius, radius * 2, radius * 2
+            )
+            font = QFont(option.font)
+            font.setBold(True)
+            painter.setFont(font)
+            painter.setPen(QPen(QColor("#ffffff")))
+            painter.drawText(
+                QRect(_GUTTER_ERROR_X - radius, center_y - radius,
+                      radius * 2, radius * 2),
+                Qt.AlignmentFlag.AlignCenter,
+                "!",
+            )
+
+        # 容器行：收起/展开按钮（− 已展开 / + 已折叠）
+        if index.model().hasChildren(index):
+            btn = collapse_button_rect(rect)
+            painter.setPen(QPen(_BORDER, 1))
+            painter.setBrush(QColor("#ffffff"))
+            painter.drawRoundedRect(btn, 3, 3)
+            painter.setPen(QPen(QColor("#57606a")))
+            painter.setFont(option.font)
+            view = option.widget
+            expanded = bool(view and view.isExpanded(index))
+            painter.drawText(
+                btn, Qt.AlignmentFlag.AlignCenter, "−" if expanded else "+"
+            )
+
+    @staticmethod
+    def _row_number(index: QModelIndex) -> int:
+        """逻辑行号（1 起）：全树前序遍历中的位置。
+
+        折叠只影响可见性、不影响编号——序号跟随指令本身（影刀同款：
+        收起 if/循环后，下方指令的行号不变）。画布规模下 O(n) 遍历足够。
+        """
+        model = index.model()
+        # 栈式前序遍历：(父 index, 该父内的行号) 逐层展开，命中目标即停
+        count = 0
+        stack: list[tuple[QModelIndex, int]] = [(QModelIndex(), 0)]
+        while stack:
+            parent, row = stack.pop()
+            if row >= model.rowCount(parent):
+                continue
+            stack.append((parent, row + 1))  # 兄弟续位
+            current = model.index(row, 0, parent)
+            count += 1
+            if current == index:
+                return count
+            stack.append((current, 0))  # 先序：子行先于兄弟
+        return count or 1
+
+    def _has_config_error(self, index: QModelIndex) -> bool:
+        """action 行的必填参数缺失（未填或空值）即为配置错误。"""
+        if self._catalog is None or index.data(ROLE_NODE_TYPE) != "action":
+            return False
+        command_id = index.data(ROLE_COMMAND_ID)
+        if not command_id or command_id not in self._catalog:
+            return False
+        required = self._catalog[command_id].input_schema.get("required", [])
+        if not required:
+            return False
+        holder = index.data(ROLE_ARGS_RAW)
+        args = holder.args if holder is not None else {}
+        return any(args.get(key) in (None, "", [], {}) for key in required)
 
     # ---- 结束行 / 否则行通用的"与父容器对齐"缩进补偿 ----------------------
     @staticmethod
@@ -447,16 +615,10 @@ class CardDelegate(QStyledItemDelegate):
                              Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, "≡")
             x += 18
 
-        # 同级序号（虚拟分组不画）
-        if not is_virtual_group:
-            painter.setPen(QPen(QColor(_ARGS_TEXT)))
-            painter.drawText(QRect(x, content.top(), 24, content.height()),
-                             Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
-                             f"{index.row() + 1}.")
-            x += 26
+        # 同级序号已上移到左侧编号栏（全局行号），卡片内不再逐层编号
 
-        # 内容右边界预留 32px 给删除按钮热区（22px + 10px 间距）
-        content_right = content.right() - 32
+        # 内容右边界给删除按钮热区预留（按钮宽 + 右边距 + 与正文的间距）
+        content_right = content.right() - (_DELETE_BTN_W + _DELETE_BTN_MARGIN_RIGHT + 4)
 
         # 命令名（粗体）
         title_font = QFont(option.font)
@@ -489,53 +651,38 @@ class CardDelegate(QStyledItemDelegate):
                                  painter.fontMetrics().elidedText(
                                      summary, Qt.TextElideMode.ElideRight, summary_rect.width()))
 
-        # 卡片尾删除按钮：hover/selected 时显示垃圾桶图标；16×16 固定尺寸，
-        # 垂直居中、水平右对齐卡片尾部；只有真实节点可删
+        # 卡片尾删除按钮：hover/selected 时显示文字按钮（「删除」红字浅底胶囊），
+        # 只有真实节点可删；按钮矩形与 FlowTreeView.mouseReleaseEvent 热区同源
         if (hovered or selected) and not is_virtual_group:
-            btn = QRect(rect.right() - 22, rect.center().y() - 8, 16, 16)
-            self._paint_trash(painter, btn)
+            self._paint_delete_button(painter, delete_button_rect(rect), option)
 
     @staticmethod
-    def _paint_trash(painter: QPainter, btn: QRect) -> None:
-        """在 16×16 按钮区域内绘制简洁垃圾桶图标。
-
-        线条风格：深灰色 RoundCap 1.3px，视觉上与删除按钮的浅灰底圆角协调。
-        构图：桶盖横线 + 梯形桶身（上宽下窄）+ 桶内两条短竖线。
-        """
-        # 按钮背景（浅灰圆角矩形）
+    def _paint_delete_button(painter: QPainter, btn: QRect, option) -> None:
+        """在按钮区域内绘制文字删除按钮：浅灰圆角胶囊 + 红色「删除」文字。"""
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(QColor("#eaeef2"))
-        painter.drawRoundedRect(btn, 4, 4)
-
-        # 垃圾桶图标线条
-        pen = QPen(QColor("#8c959f"), 1.3)
-        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
-        painter.setPen(pen)
-        painter.setBrush(Qt.BrushStyle.NoBrush)
-
-        cx = btn.center().x()
-        # 桶盖横线（顶部偏上）
-        painter.drawLine(cx - 4, btn.top() + 4, cx + 4, btn.top() + 4)
-        # 桶身：梯形轮廓
-        top_y = btn.top() + 5       # 桶口 y
-        bot_y = btn.bottom() - 2    # 桶底 y
-        painter.drawLine(cx - 5, top_y, cx + 5, top_y)         # 桶口
-        painter.drawLine(cx - 5, top_y, cx - 3.5, bot_y)       # 左斜边
-        painter.drawLine(cx + 5, top_y, cx + 3.5, bot_y)       # 右斜边
-        painter.drawLine(cx - 3.5, bot_y, cx + 3.5, bot_y)     # 桶底
-        # 桶内两条竖线（视觉"空桶"感）
-        painter.drawLine(cx - 1.5, top_y + 1, cx - 1.5, bot_y - 1)
-        painter.drawLine(cx + 1.5, top_y + 1, cx + 1.5, bot_y - 1)
+        painter.drawRoundedRect(btn, btn.height() // 2, btn.height() // 2)
+        font = QFont(option.font)
+        painter.setFont(font)
+        painter.setPen(QPen(QColor("#cf222e")))
+        painter.drawText(btn, Qt.AlignmentFlag.AlignCenter, "删除")
 
 
-def build_canvas(model: FlowTreeModel, parent: QWidget | None = None) -> FlowTreeView:
-    """组装卡片画布：FlowTreeView（跳过 Qt 二次 clearOrRemove）+ CardDelegate。"""
+def build_canvas(
+    model: FlowTreeModel, parent: QWidget | None = None, catalog=None
+) -> FlowTreeView:
+    """组装卡片画布：FlowTreeView（跳过 Qt 二次 clearOrRemove）+ CardDelegate。
+
+    catalog 可选：传入后编号栏按 manifest 必填参数画错误徽标。
+    """
     tree = FlowTreeView(parent)
     tree.setModel(model)
-    tree.setItemDelegate(CardDelegate(tree))
+    tree.setItemDelegate(CardDelegate(tree, catalog))
     tree.setHeaderHidden(True)
-    tree.setRootIsDecorated(False)  # 展开箭头自绘/点击行处理，保持卡片整洁
-    tree.setIndentation(_INDENT)
+    tree.setRootIsDecorated(False)  # 展开箭头自绘/编号栏按钮处理，保持卡片整洁
+    # 缩进归 0：Qt 的 branch 引导线会画进左侧编号栏与行号重叠，
+    # 改由 CardDelegate 自算缩进（编号栏宽 + 深度×_INDENT），branch 区整体消失。
+    tree.setIndentation(0)
     tree.setExpandsOnDoubleClick(False)
     tree.setAnimated(False)  # widgets 无内建过渡，避免半开动画卡顿
     tree.setDragDropMode(QTreeView.DragDropMode.DragDrop)  # 同时接受外部拖入 + 内部移动

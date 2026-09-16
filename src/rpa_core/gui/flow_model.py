@@ -518,11 +518,13 @@ class FlowTreeModel(QStandardItemModel):
         if item.data(ROLE_IS_VIRTUAL) and node_type != _ELSE_BRANCH_TYPE:
             return False
         # invisibleRootItem 自身不可删（正常情况下不会被传入）
-        if item.parent() is None and not item.row():  # invisibleRootItem 有 parent==None
-            # 跳过：现在所有真实节点都挂在 invisibleRootItem 下，它们的
-            # parent 是 invisibleRootItem（非 None），所以不会到这里。
+        if item is self.invisibleRootItem():
             return False
-        item.parent().takeRow(item.row())
+        # 注意 Qt 语义：顶层 item（直接挂在 invisibleRootItem 下）的 parent()
+        # 返回 None 而非 invisibleRootItem——必须显式回退，否则顶层非首行
+        # 节点删除时 AttributeError: 'NoneType' has no attribute 'takeRow'。
+        parent = item.parent() or self.invisibleRootItem()
+        parent.takeRow(item.row())
         return True
 
     def add_else_branch(self, if_item: QStandardItem) -> QStandardItem | None:

@@ -7,6 +7,12 @@
   - **修复**：`version` 改 `">=3.12"`（与 wheel metadata 同口径）；`connector-meta.json` 版本 0.1.0 → 0.1.1（配置修复按市场约定递增）；契约 **+2 防回归**——`runtime.version` 必须是范围语法（拒绝裸版本号），且必须与 `pyproject.toml` 的 `requires-python` **逐字一致**（宿主按 cli.json 备解释器、pip 按 wheel metadata 决定能否安装，口径不一致就会出现「能装但不给装」）。
   - **顺带**：`workbuddy-connector.zip` 重新打包——原包是 09-04 快照，仍带 `.cmd` 入口、`win32` 的 init 缺 `install-extension`，**滞后于源文件两个修复**（若此前拿该 zip 提交/安装，那两个修复均未生效）。
   - 排查方法留档：先看**官方市场缓存里同类连接器怎么写**（`~/.workbuddy/connectors-marketplace/connectors/<source>/cli.json`）比逆向宿主可靠得多——宿主 `app.asar`（298MB）用 ripgrep 搜不出任何文案（连 `minWorkbuddyVersion` 这种必然存在的字段名都搜不到）。
+- **同步远端 26 提交并合并本地 WIP**（扩展版本可见性）：`extension/background.js` 上报插件自身版本 `extVersion`（心跳即携带，不多一次往返），hub 侧 `ExtensionExecHub` 记录并暴露；**hosts 虚增修复**——MV3 首启 alarm 可能早于 instanceId 落位触发心跳，先按浏览器名归档、随后按 instanceId 再归档 → `_hosts` 双记录并存致在线数虚报，现 `instances()` 对「同浏览器已有带 instanceId 记录」的浏览器名占位记录做丢弃。与远端新增的宿主焦点上报（`foc`/`focat`）冲突手工合并并存；前端「⇲ 插件」面板合并安装态 + 在线态 + 插件版本新旧（取该浏览器在线实例中最旧版本与 devserver 基准比对）三维度徽标。
+- **GUI 修复：顶层节点删除崩溃**（维护者报障：点卡片尾删除按钮 AttributeError）——根因是 Qt 语义：**顶层 item 的 `parent()` 返回 `None`**（而非 invisibleRootItem），旧 guard「parent() is None and not item.row()」误护顶层首行、放行非首行后 `None.takeRow` 崩溃；改为 `parent or invisibleRootItem` 显式回退 + invisibleRootItem 身份比较。顺带修复远端带入的两处存量测试失败：`test_insert_targeting_leaf_becomes_sibling` 断言同样违背该 Qt 语义；`test_flags_enforce_drag_drop_rules` 依赖 `workflows/test` 草稿恰好有顶层 forEach（被手测改没后 StopIteration），改自带夹具。
+- **指令树影刀式卡片化**：新增 `gui/command_palette.py`——`CommandCardDelegate`（叶子=圆角卡片：命名空间彩色图标块取显示名首字符 + 中文名粗体 + 小字命令 id；分组保持轻文本）+ `load_command_display_names`（正则解析 `i18n.js` commands 块，**单一事实来源**不建第二份映射，与 `test_editor_i18n` 门禁锁同口径）；组内排序按 manifest `x-palette-order` 影刀对标序。
+- **删除按钮文字化**：手绘垃圾桶图标改为浅灰胶囊 + 红色「删除」文字；`delete_button_rect` 让 paint 与点击热区共用同一矩形（所见即所点），顺带修正 `QRect` 闭区间语义（`right()=left+width-1`）的 1px 偏差。
+- **「否则」点删除无效修复**：else-branch 行 `virtual=True`，视图层 `mouseReleaseEvent` 用 `ROLE_IS_VIRTUAL` 一刀切拦截，而模型层 `remove_item` 本就对其例外放行——改为可删性判定**委托模型单源**（`remove_row` 返回 bool），视图不再重复更严的策略。
+- **画布左侧编号栏对标影刀**：46px 固定栏（不随缩进移动）承载三件套——①**逻辑行号**（全树前序位置，序号跟随指令本身，收起 if/循环下方行号不变）；②**错误徽标**（红底白 `!`，action 必填参数缺失即标记，数据源自 manifest `input_schema.required`）；③**收起/展开按钮**（`collapse_button_rect` 与热区同源）。**引导线让位**：Qt 按缩进自绘的 branch 引导线会画进编号栏，`setIndentation(0)` 让 branch 区整体消失、缩进改由 delegate 自算。内置示例流程补齐必填参数（默认视图不应自带错误标记）。
 
 ## 2026-09-15
 

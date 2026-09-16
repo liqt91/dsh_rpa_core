@@ -46,6 +46,11 @@ from PySide6.QtWidgets import (
 
 from rpa_core.catalog import CommandCatalog, load_catalog
 
+from .command_palette import (
+    ROLE_COMMAND_ID,  # noqa: F401  # re-export：既有测试从 app 导入
+    CommandCardDelegate,
+    load_command_display_names,
+)
 from .flow_model import _MIME_COMMAND
 
 
@@ -72,7 +77,7 @@ class _CommandTree(QTreeWidget):
         drag.exec(Qt.DropAction.CopyAction)
 
 # 在树 item 上携带完整命令 id 的自定义数据角色（组节点不携带）。
-ROLE_COMMAND_ID = Qt.ItemDataRole.UserRole + 1
+# 定义已迁至 command_palette.py（delegate 与树共用），此处仅为兼容 re-export。
 
 # 命名空间 → 左侧分组中文名；未列入的前缀回退为前缀原文，避免新增命名空间时漏配。
 NAMESPACE_LABELS = {
@@ -161,14 +166,19 @@ def _ordered_namespaces(catalog: CommandCatalog) -> list[str]:
 
 
 def populate_command_tree(
-    tree: QTreeWidget, catalog: CommandCatalog
+    tree: QTreeWidget,
+    catalog: CommandCatalog,
+    names: dict[str, str] | None = None,
 ) -> dict[str, QTreeWidgetItem]:
     """把控制指令与真实 catalog 填充进指令树，返回「命名空间 → 分组节点」映射。
 
-    树为两级：分组节点（不可执行）→ 命令叶子（``ROLE_COMMAND_ID`` 存完整 id）。
-    最前面固定一组「流程控制」，承载 catalog 里没有的控制指令（目前是 if 的
-    「否则」分支）——它们与普通命令一样双击即可添加到画布。
+    树为两级：分组节点（不可执行）→ 命令叶子（``ROLE_COMMAND_ID`` 存完整 id，
+    显示文本为中文显示名，缺失时回退命令 id）。最前面固定一组「流程控制」，
+    承载 catalog 里没有的控制指令（目前是 if 的「否则」分支）——它们与普通
+    命令一样双击即可添加到画布。组内排序与 Web 面板同口径：manifest 的
+    ``x-palette-order``（影刀对标顺序）优先，缺省按 id 字典序。
     """
+    names = names or {}
     tree.clear()
     groups: dict[str, QTreeWidgetItem] = {}
 
@@ -185,15 +195,16 @@ def populate_command_tree(
     for namespace in _ordered_namespaces(catalog):
         label = NAMESPACE_LABELS.get(namespace, namespace)
         command_ids = sorted(
-            cid for cid in catalog if cid.split(".", 1)[0] == namespace
+            (cid for cid in catalog if cid.split(".", 1)[0] == namespace),
+            key=lambda cid: (catalog[cid].x_palette_order or 1 << 30, cid),
         )
         group_item = QTreeWidgetItem(tree, [f"{label}（{len(command_ids)}）"])
         group_item.setData(0, ROLE_COMMAND_ID, None)
         for command_id in command_ids:
             manifest = catalog[command_id]
-            leaf = QTreeWidgetItem(group_item, [command_id])
+            leaf = QTreeWidgetItem(group_item, [names.get(command_id, command_id)])
             leaf.setData(0, ROLE_COMMAND_ID, command_id)
-            # tooltip 给出执行器与命令种类，便于无中文名时辨识。
+            # tooltip 给出完整命令 id 与执行器/种类，中文名下仍可辨识身份。
             leaf.setToolTip(
                 0,
                 f"{command_id}\n执行器：{manifest.executor}\n"
@@ -255,7 +266,9 @@ class MainWindow(QMainWindow):
         tree = _CommandTree()
         tree.setHeaderHidden(True)
         tree.setDragEnabled(True)  # 允许叶子指令拖出到画布
-        populate_command_tree(tree, catalog)
+        # 影刀式卡片渲染：叶子=圆角卡片（图标+中文名+id），分组=轻文本
+        tree.setItemDelegate(CommandCardDelegate(tree))
+        populate_command_tree(tree, catalog, load_command_display_names())
         search.textChanged.connect(lambda text: _apply_filter(tree, text))
         # 双击指令叶子 → 在画布当前选中位置插入新 action（组节点忽略）
         tree.itemDoubleClicked.connect(self._on_command_double_clicked)
@@ -412,7 +425,9 @@ class MainWindow(QMainWindow):
             self.flow_model = build_model_from_workflow(document)
         finally:
             self._loading = False
-        self.canvas_view = build_canvas(self.flow_model, self.canvas_holder)
+        self.canvas_view = build_canvas(
+            self.flow_model, self.canvas_holder, self.catalog
+        )
         self.canvas_layout.addWidget(self.canvas_view)
         # 拖拽重排（takeRow/insertRow）会触发增删行信号 → 置脏
         self.flow_model.rowsInserted.connect(self._on_structure_changed)
@@ -714,7 +729,8 @@ SAMPLE_WORKFLOW = {
         "id": "root",
         "children": [
             {"type": "action", "id": "open", "command": "browser.navigate",
-             "with": {"url": "https://example.com", "timeoutMs": 30000}},
+             "with": {"url": "https://example.com", "browserType": "msedge",
+                      "timeoutMs": 30000}},
             {
                 "type": "if",
                 "id": "check",
@@ -735,7 +751,7 @@ SAMPLE_WORKFLOW = {
                 "item_var": "row",
                 "children": [
                     {"type": "action", "id": "append", "command": "data.appendText",
-                     "with": {"path": "out.txt", "text": "${row}"}},
+                     "with": {"workspace": ".", "path": "out.txt", "text": "${row}"}},
                 ],
             },
             {"type": "return", "id": "done", "value": "ok"},

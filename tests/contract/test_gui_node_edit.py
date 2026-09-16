@@ -151,8 +151,10 @@ def test_insert_targeting_else_branch_appends_to_else_branch(model):
 def test_insert_targeting_leaf_becomes_sibling(model):
     leaf = model.find_by_id("open")
     new_item = model.insert_command("workflow.sleep", leaf)
-    # open 在根 sequence 下：新节点是根的末位子节点（open 的同级）
-    assert new_item.parent() is model.invisibleRootItem()
+    # open 在根 sequence 下：新节点是根的末位子节点（open 的同级）。
+    # 注意 Qt 语义：顶层 item 的 parent() 返回 None（而非 invisibleRootItem），
+    # 挂载关系由下一条断言（root 的末位 child 就是它）验证。
+    assert new_item.parent() is None
     assert model.invisibleRootItem().child(model.invisibleRootItem().rowCount() - 1) is new_item
 
 
@@ -226,6 +228,18 @@ def test_remove_else_branch_merges_into_then(model):
     check = next(c for c in _doc(model)["root"]["children"] if c["id"] == "check")
     assert [c["id"] for c in check["then"]] == ["read", "wait"]  # wait 并入 then
     assert "else" not in check
+    Workflow.model_validate(_doc(model))
+
+
+def test_remove_top_level_nonfirst_row_via_index(model):
+    """回归：顶层非首行节点 parent()==None（Qt 语义），画布 × 按钮走 remove_row 不得崩溃。
+
+    旧实现 item.parent().takeRow(...) 对顶层节点 AttributeError；
+    旧 guard「parent() is None and not item.row()」还会误保护顶层首行节点使其不可删。
+    """
+    index = model.indexFromItem(model.find_by_id("check"))  # 顶层 row=1
+    assert model.remove_row(index) is True
+    assert model.find_by_id("check") is None
     Workflow.model_validate(_doc(model))
 
 
