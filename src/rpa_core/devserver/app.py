@@ -436,7 +436,15 @@ class DevServerApp:
         self._runs.hub_url = base_url.rstrip("/")
 
     def extension_hub_status(self) -> dict:
-        return self._extension_hub.status()
+        payload = self._extension_hub.status()
+        # 最新插件版本基准：从扩展源码目录 manifest 读（前端据此判断各浏览器插件是否最新）。
+        # hub 保持纯状态（不碰文件系统），基准在 app 层注入。
+        try:
+            manifest = json.loads((extension_root() / "manifest.json").read_text(encoding="utf-8"))
+            payload["latestVersion"] = str(manifest.get("version") or "")
+        except OSError:
+            payload["latestVersion"] = ""
+        return payload
 
     def extension_hub_permissions(self, body: Any) -> dict:
         """权限查询/收窄：默认 `{"mode": "browser"}`（整个浏览器）；预留 tabs/origins。"""

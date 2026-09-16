@@ -345,6 +345,7 @@ class _RequestHandler(BaseHTTPRequestHandler):
             "browser": browser,
             "instanceId": first("iid"),
             "version": first("ver"),
+            "extVersion": first("extVer"),
             "platform": first("platform"),
             "userAgent": user_agent,
             "focused": True if focus_raw == "1" else False,

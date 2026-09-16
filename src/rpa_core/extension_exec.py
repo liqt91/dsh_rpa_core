@@ -109,18 +109,28 @@ class ExtensionExecHub:
     @property
     def hosts(self) -> list[str]:
         """在线扩展宿主浏览器名列表（去重，用于 targetHost=浏览器名路由与前端可选项）。"""
-        return [r.get("browser") for r in self.instances() if r.get("browser")]
+        return list(dict.fromkeys(
+            r.get("browser") for r in self.instances() if r.get("browser")
+        ))
 
     def instances(self) -> list[dict[str, Any]]:
         """在线扩展宿主实例详情（按实例 id 归档；新版扩展带 instanceId，旧版按浏览器名退化）。"""
         window = self._online_window
         with self._cond:
             now = time.monotonic()
-            return [
+            alive = [
                 dict(rec["record"])
                 for rec in self._hosts.values()
                 if now - rec["at"] < window
             ]
+        # 去重：同一浏览器下若存在带 instanceId 的现代记录，则丢弃仅按浏览器名归档的
+        # 占位记录（instanceId 暂缺时 key 退化到浏览器名，会与真实实例并存虚增连接数）。
+        # 同一浏览器多个 profile 各自有 instanceId，不受影响（本判据只看无 instanceId 的记录）。
+        modern_browsers = {r.get("browser") for r in alive if r.get("instanceId")}
+        return [
+            r for r in alive
+            if r.get("instanceId") or r.get("browser") not in modern_browsers
+        ]
 
     def record_host(self, report: dict[str, Any] | None) -> dict[str, Any] | None:
         """记录扩展宿主（按实例唯一 id 归档；浏览器名作 label）。
@@ -139,6 +149,7 @@ class ExtensionExecHub:
             "browser": browser or None,
             "instanceId": instance_id or None,
             "version": str(report.get("version") or "") or None,
+            "extVersion": str(report.get("extVersion") or "") or None,
             "userAgent": user_agent or None,
             "platform": str(report.get("platform") or "") or None,
             # 焦点路由字段（影刀语义：同浏览器多实例按「聚焦→最后失去焦点」发放）

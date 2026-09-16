@@ -50,12 +50,19 @@ function detectHostBrowser() {
 }
 
 function hostInfo() {
+  let extVersion = "";
+  try {
+    extVersion = (chrome.runtime.getManifest && chrome.runtime.getManifest().version) || "";
+  } catch { /* 极端情况拿不到 manifest，置空 */ }
   return {
     browser: detectHostBrowser(),
     instanceId: cachedInstanceId || "",
+    // 浏览器内核版本（如 Chromium/xxx），仅诊断用
     version: navigator.userAgentData && navigator.userAgentData.brands
       ? (navigator.userAgentData.brands.find((b) => /Chromium/.test(b.brand)) || {}).version || ""
       : "",
+    // 插件自身版本（manifest.json 的 version），用于判断是否最新
+    extVersion,
     platform: navigator.platform || "",
     userAgent: navigator.userAgent || "",
   };
@@ -80,6 +87,7 @@ async function hostQuery() {
   const foc = await focusedState();
   return `&host=${encodeURIComponent(info.browser)}&iid=${encodeURIComponent(info.instanceId)}`
     + `&ver=${encodeURIComponent(info.version)}`
+    + `&extVer=${encodeURIComponent(info.extVersion)}`
     + `&platform=${encodeURIComponent(info.platform)}&ua=${encodeURIComponent(info.userAgent)}`
     + `&foc=${foc.focused ? 1 : 0}&focat=${foc.focusedAt}`;
 }

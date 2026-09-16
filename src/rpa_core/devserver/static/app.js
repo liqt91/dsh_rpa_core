@@ -1534,11 +1534,39 @@ async function refreshExtChannel() {
   state.extHosts = Array.isArray(status.hosts) ? status.hosts.map(String) : [];
   const badge = $("ext-channel-badge");
   if (badge) {
-    const hostName = hostBrowserLabel(channelHostBrowser(status));
-    if (status.online) {
-      badge.textContent = `扩展通道：在线${hostName ? `（${hostName}）` : ""}`;
+    // 按浏览器分组展示在线实例：连接数 + 每个浏览器的插件版本与新旧状态。
+    // latestVersion 由 devserver 从扩展目录 manifest 读出（后端最新基准）。
+    const instances = Array.isArray(status.instances) ? status.instances : [];
+    const latest = status.latestVersion ? String(status.latestVersion) : "";
+    const groups = new Map(); // 浏览器名 -> {count, oldest, instances}
+    for (const inst of instances) {
+      const name = hostBrowserLabel(inst && inst.browser) || "未知";
+      if (!groups.has(name)) groups.set(name, { count: 0, oldest: "", list: [] });
+      const g = groups.get(name);
+      g.count += 1;
+      const ver = inst && inst.extVersion ? String(inst.extVersion) : "";
+      if (ver && (!g.oldest || ver < g.oldest)) g.oldest = ver;
+      g.list.push(inst);
+    }
+    if (instances.length > 0) {
+      // 每个浏览器一段：最新显示 ✓，旧版显示 ⚠需更新（版本取该浏览器内最旧的，避免误报最新）
+      const parts = [];
+      for (const [name, g] of groups) {
+        const stale = latest && g.oldest && g.oldest !== latest;
+        parts.push(stale ? `${name} v${g.oldest}⚠` : `${name} v${g.oldest || "?"}✓`);
+      }
+      badge.textContent = `扩展通道：在线（${instances.length}）· ${parts.join("、")}`;
       badge.className = "ext-badge ext-channel-badge ok";
-      badge.title = `自研插件在线；宿主浏览器：${hostName || "未上报（请在扩展页重载插件）"}`;
+      const detail = instances
+        .map((inst) => `${hostBrowserLabel(inst && inst.browser) || "未知"}(instance ${inst.instanceId || "?"})`
+          + (inst.extVersion ? ` 插件 v${inst.extVersion}` : " 未上报插件版本"))
+        .join("；");
+      badge.title = `${instances.length} 个插件实例在线，最新插件版本 v${latest || "?"}：\n${detail}`
+        + (latest ? "" : "\n（devserver 无法读取扩展目录 manifest，版本基准缺失）");
+    } else if (status.online) {
+      badge.textContent = "扩展通道：在线（未上报浏览器，请在扩展页重载插件）";
+      badge.className = "ext-badge ext-channel-badge ok";
+      badge.title = "有插件在轮询但尚未上报宿主浏览器信息，请在扩展管理页重载插件";
     } else {
       badge.textContent = "扩展通道：离线";
       badge.className = "ext-badge ext-channel-badge off";
@@ -3270,25 +3298,26 @@ function toggleRunEvents() {
 // ---------------------------------------------------------------------------
 
 const EXTENSION_NAMES = { chrome: "Chrome", edge: "Edge" };
+// 面板浏览器 key（chrome/edge）→ 在线实例上报的宿主浏览器名（chrome/msedge）
+const HOST_KEY_BY_PANEL = { chrome: "chrome", edge: "msedge" };
 
 async function loadExtensionStatus() {
-  const data = await api("GET", "/api/extension/status");
+  // 安装状态（/api/extension/status）+ 在线运行状态（/api/ext/status）合并展示：
+  // 浏览器装没装 / 插件装没装 / 插件什么版本，集中在一个矩阵里。
   // 插件「在线」心跳与「安装/启用」态解耦：在线名单来自 hub（长轮询心跳），
   // 分开判断才能讲清「浏览器装了没开 / 开了但插件没上线」两类独立故障。
+  const [data, live] = await Promise.all([
+    api("GET", "/api/extension/status"),
+    api("GET", "/api/ext/status").catch(() => null),   // 心跳接口不可用不影响安装状态展示
+  ]);
   const online = new Set();
-  try {
-    const ext = await api("GET", "/api/ext/status");
-    for (const inst of ext.instances || []) {
-      if (inst.browser) online.add(String(inst.browser));
-    }
-  } catch { /* 心跳接口不可用不影响安装状态展示 */ }
+  for (const inst of (live && live.instances) || []) {
+    if (inst.browser) online.add(String(inst.browser));
+  }
   $("extension-dir-path").value = data.extensionDir || "";
   renderBrowserButtons("extension-open-browsers", data);
-  renderStatusRows("extension-browsers", data, online);
+  renderStatusRows("extension-browsers", data, live, online);
 }
-
-// hub 用 msedge，引导面板用 edge —— 在线名单比对时纠偏
-const HUB_BROWSER = { chrome: "chrome", edge: "msedge" };
 
 // 第 2 步：每浏览器一个「打开浏览器」按钮；浏览器未安装则禁用并提示
 function renderBrowserButtons(containerId, data) {
@@ -3325,13 +3354,15 @@ function renderBrowserButtons(containerId, data) {
   }
 }
 
-// 第 3 步：扩展页不能从外部打开，只展示状态。三维度并列：已安装 / 已启用 / 在线
-function renderStatusRows(containerId, data, online = new Set()) {
+// 第 3 步：扩展页不能从外部打开，只展示状态。维度并列：浏览器已安装 / 插件已启用 / 在线 / 版本
+function renderStatusRows(containerId, data, live, online = new Set()) {
   const box = $(containerId);
   box.textContent = "";
+  const instances = Array.isArray(live && live.instances) ? live.instances : [];
+  const latest = live && live.latestVersion ? String(live.latestVersion) : "";
   for (const browser of ["chrome", "edge"]) {
     const info = data.browsers?.[browser] || {};
-    const hubName = HUB_BROWSER[browser] || browser;
+    const hubName = HOST_KEY_BY_PANEL[browser] || browser;
     const row = document.createElement("div");
     row.className = "ext-row";
     row.innerHTML = `
@@ -3339,6 +3370,7 @@ function renderStatusRows(containerId, data, online = new Set()) {
       ${binaryBadge(info)}
       ${statusBadge(info)}
       ${runningBadge(info, online.has(hubName))}
+      ${versionBadge(browser, instances, latest)}
     `;
     box.appendChild(row);
   }
@@ -3361,6 +3393,24 @@ function runningBadge(info, isOnline) {
     return '<span class="ext-badge ok" title="浏览器运行中，插件心跳正常">在线</span>';
   }
   return '<span class="ext-badge warn" title="浏览器已在运行但插件未上线：请在扩展管理页确认已启用并重载插件">运行中·插件未上线</span>';
+}
+
+// 插件版本判定：用面板浏览器 key 反查宿主浏览器名，取该浏览器在线实例中「最旧」的
+// extVersion 与后端最新基准比对
+function versionBadge(browser, instances, latest) {
+  const hostKey = HOST_KEY_BY_PANEL[browser];
+  const mine = instances.filter((inst) => inst && inst.browser === hostKey);
+  if (mine.length === 0) return '<span class="ext-badge dim" title="插件未上线，版本未知">版本未知</span>';
+  let oldest = "";
+  for (const inst of mine) {
+    const ver = inst.extVersion ? String(inst.extVersion) : "";
+    if (ver && (!oldest || ver < oldest)) oldest = ver;
+  }
+  if (!oldest) return '<span class="ext-badge warn">插件版本未上报</span>';
+  const stale = latest && oldest !== latest;
+  return stale
+    ? `<span class="ext-badge warn">插件 v${oldest}⚠需更新</span>`
+    : `<span class="ext-badge ok">插件 v${oldest}✓</span>`;
 }
 
 function statusBadge(info) {

@@ -63,12 +63,13 @@ class FakeExtension:
     """
 
     def __init__(self, base: str, handlers: dict | None = None, host: str | None = "msedge",
-                 instance_id: str | None = None, *, focused: bool = False,
-                 focused_at: int = 0):
+                 instance_id: str | None = None, ext_version: str = "0.2.0", *,
+                 focused: bool = False, focused_at: int = 0):
         self.base = base
         self.handlers: dict = handlers or {}
         self.host = host
         self.instance_id = instance_id
+        self.ext_version = ext_version
         self.focused = focused
         self.focused_at = focused_at
         self.seen: list[tuple[str, dict]] = []
@@ -87,6 +88,7 @@ class FakeExtension:
         query = "/api/ext/command/next?wait=1"
         if self.host:
             query += f"&host={self.host}&ua={urllib.parse.quote('Mozilla/5.0 ' + self.host)}"
+            query += f"&extVer={self.ext_version}"
         if self.instance_id:
             query += f"&iid={self.instance_id}"
         query += f"&foc={1 if self.focused else 0}&focat={self.focused_at}"
@@ -130,6 +132,62 @@ def test_command_polling_without_token(server):
     assert payload == {"command": None}
 
 
+def test_instances_dedup_browser_name_placeholder():
+    """同一扩展被浏览器名与 instanceId 双 key 归档后，instances 不虚增。
+
+    根因回归：MV3 首启时 rpa-exec alarm 可能早于 instanceId 落位触发心跳，hub 先按
+    浏览器名（msedge）归档，随后带 instanceId 再次归档 → `_hosts` 同时存活两个记录，
+    instances() 对单个 Edge 误报 2 个连接；约 60s 后浏览器名记录过期才回落到 1。
+    修复：同一浏览器已有带 instanceId 的现代记录时，丢弃浏览器名占位记录。
+    """
+    hub = ExtensionExecHub()
+    # 首轮心跳 instanceId 暂缺 → 退化为按浏览器名归档
+    hub.record_host({"browser": "msedge", "userAgent": "Mozilla/5.0 msedge", "instanceId": ""})
+    # instanceId 就绪后按真实实例 id 归档
+    hub.record_host(
+        {"browser": "msedge", "userAgent": "Mozilla/5.0 msedge", "instanceId": "edge-1"}
+    )
+    instances = hub.instances()
+    assert len(instances) == 1
+    assert instances[0]["instanceId"] == "edge-1"
+
+    # 同浏览器两个真实 profile（各自 instanceId）仍应计为 2，不被误合并
+    hub.record_host(
+        {"browser": "msedge", "userAgent": "Mozilla/5.0 msedge", "instanceId": "edge-2"}
+    )
+    assert {r["instanceId"] for r in hub.instances()} == {"edge-1", "edge-2"}
+
+    # 纯旧版扩展（无 instanceId，仅浏览器名）仍被保留显示
+    hub2 = ExtensionExecHub()
+    hub2.record_host({"browser": "chrome", "userAgent": "Chrome/…", "instanceId": ""})
+    assert len(hub2.instances()) == 1
+    assert hub2.instances()[0]["browser"] == "chrome"
+
+
+def test_instances_across_different_browsers_not_deduped():
+    """不同浏览器（edge + chrome）各计一个实例，跨浏览器不误合并。
+
+    去重仅针对「同一浏览器内无 instanceId 的占位记录」；混合场景下：
+    - Edge 带 instanceId、Chrome 旧版仅浏览器名 → 两者都应显示；
+    - hosts() 应给出去重后的浏览器名列表（不含重复项）。
+    """
+    hub = ExtensionExecHub()
+    hub.record_host(
+        {"browser": "msedge", "userAgent": "Mozilla/5.0 msedge", "instanceId": "edge-1"}
+    )
+    hub.record_host({"browser": "chrome", "userAgent": "Chrome/…", "instanceId": ""})
+    instances = hub.instances()
+    assert len(instances) == 2
+    assert {r["browser"] for r in instances} == {"msedge", "chrome"}
+
+    # 同浏览器双 profile（edge-a / edge-b）+ chrome：hosts 去重后不出现重复 msedge
+    hub.record_host(
+        {"browser": "msedge", "userAgent": "Mozilla/5.0 msedge", "instanceId": "edge-2"}
+    )
+    assert len(hub.instances()) == 3
+    assert hub.hosts == ["msedge", "chrome"]
+
+
 def test_submit_roundtrip_with_fake_extension(server):
     base = f"http://127.0.0.1:{server.port}"
     fake = FakeExtension(base, {"ping": lambda args: {"version": "0.2.0"}}).start()
@@ -171,6 +229,40 @@ def test_status_reports_online_after_poll(server):
     status, payload = _request("GET", "/api/ext/status", base=base)
     assert payload["online"] is True
     assert payload["lastPollSecondsAgo"] is not None
+
+
+def test_status_reports_ext_version_and_latest(server):
+    """status 上报每个实例的插件版本（extVersion）与后端最新基准（latestVersion）。
+
+    extVersion 来自扩展心跳（插件自身 manifest 版本），区别于浏览器内核 version。
+    前端据此显示「Edge v0.2.0 ✓ / ⚠需更新」。
+    """
+    import json as _json
+
+    from rpa_core.extension_installer import extension_root
+
+    expected_latest = str(
+        _json.loads((extension_root() / "manifest.json").read_text(encoding="utf-8"))["version"]
+    )
+    base = f"http://127.0.0.1:{server.port}"
+    fake = FakeExtension(base, {}, host="msedge", instance_id="edge-1", ext_version="0.1.0").start()
+    try:
+        deadline = time.monotonic() + 5
+        payload = {}
+        while time.monotonic() < deadline:
+            _, payload = _request("GET", "/api/ext/status", base=base)
+            if payload.get("instances"):
+                break
+            time.sleep(0.05)
+        inst = payload["instances"][0]
+        assert inst["extVersion"] == "0.1.0"
+        # 浏览器内核版本（ver）与插件版本（extVer）是两个字段，勿混用
+        assert inst["version"] != "0.1.0"
+        # 后端最新基准来自扩展源码 manifest；旧版插件与之不等 → 前端可标 ⚠
+        assert payload["latestVersion"] == expected_latest
+        assert inst["extVersion"] != payload["latestVersion"]
+    finally:
+        fake.stop()
 
 
 def test_permissions_default_browser_then_tabs_scope(server):
