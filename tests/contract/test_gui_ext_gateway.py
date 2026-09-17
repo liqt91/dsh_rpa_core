@@ -208,8 +208,15 @@ def test_gui_reuses_running_devserver(window, monkeypatch):
 
 
 def test_gui_embeds_gateway_when_no_devserver(window, monkeypatch):
+    from rpa_core.devserver.server import ExtLoopbackGateway as RealGateway
+
     monkeypatch.setattr(
         "rpa_core.devserver.server.probe_ext_hub", lambda url: False
+    )
+    # 绑随机端口：不依赖本机 8765 是否已被真实 GUI/devserver 占用
+    monkeypatch.setattr(
+        "rpa_core.devserver.server.ExtLoopbackGateway",
+        lambda **kwargs: RealGateway(**{**kwargs, "port": 0}),
     )
     url = window._ensure_ext_hub()
     assert window._ext_gateway is not None

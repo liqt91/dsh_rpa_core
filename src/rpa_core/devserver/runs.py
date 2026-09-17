@@ -70,14 +70,17 @@ class RunManager:
         assert proc.stdout is not None
         for line in proc.stdout:
             entry["stdout_lines"].append(line.rstrip("\n"))
-            # 子进程末尾打印 RunResult JSON（含真实 run_id）
-            if '"run_id"' in line or '"runId"' in line:
+            # CLI 在启动 run 后立即打印单行 {"run_id": ...} 标记（RunResult 之前），
+            # 提前解析出真实 run_id，运行中即可读 events.jsonl（悬浮窗/事件流实时显示）
+            if entry.get("real_run_id") is None and '"run_id"' in line:
                 try:
-                    # RunResult 是多行 JSON，单独解析单行不可靠；攒起来最后解析
-                    pass
-                except Exception:
-                    pass
-        entry["real_run_id"] = self._parse_real_run_id(entry["stdout_lines"])
+                    payload = json.loads(line.strip())
+                except json.JSONDecodeError:
+                    payload = None
+                if isinstance(payload, dict) and isinstance(payload.get("run_id"), str):
+                    entry["real_run_id"] = payload["run_id"]
+        if entry.get("real_run_id") is None:
+            entry["real_run_id"] = self._parse_real_run_id(entry["stdout_lines"])
 
     def _parse_real_run_id(self, lines: list[str]) -> str | None:
         """从子进程 stdout 末尾的多行 RunResult JSON 提取 run_id。"""

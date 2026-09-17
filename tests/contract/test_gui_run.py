@@ -38,11 +38,19 @@ def catalog(qapp):
     return load_catalog(_commands_root())
 
 
+_ALIVE_WINDOWS = []  # 会话期保活：offscreen 下让旧窗口整体存活，避免悬挂删除竞态
+
+
 @pytest.fixture()
 def window(catalog, tmp_path):
     from rpa_core.gui.app import MainWindow
 
-    return MainWindow(catalog, workflows_root=tmp_path / "workflows")
+    win = MainWindow(catalog, workflows_root=tmp_path / "workflows")
+    _ALIVE_WINDOWS.append(win)  # 防 GC：旧窗口留待会话结束统一释放
+    yield win
+    # 只停计时器/子进程/网关，不做 deleteLater/processEvents（offscreen 下
+    # 事件泵时机不可控，悬挂 DeferredDelete 命中已回收父窗口会段错误）
+    win._shutdown_run_manager()
 
 
 def _write_flow(window, name: str, command: str, with_args: dict) -> None:
@@ -137,3 +145,60 @@ def test_clear_run_states(window):
     assert all(
         node.data(ROLE_RUN_STATE) is None for node in iter_real_nodes(window.flow_model)
     )
+
+
+# ---- 运行时悬浮窗 -------------------------------------------------------------
+def test_float_window_states(qapp):
+    from rpa_core.gui.run_float import RunFloatWindow
+
+    win = RunFloatWindow()
+    win.show_running("正在执行：打开网页", 2)
+    assert win.state == "running"
+    assert win.progress_label.text() == "2 步"
+    assert win.cancel_button.isEnabled()
+
+    win.show_result("succeeded")
+    assert win.state == "succeeded"
+    assert not win.cancel_button.isEnabled()
+
+    win.show_result("failed", "TIMEOUT · 节点 navigate")
+    assert win.state == "failed"
+    assert "TIMEOUT" in win.step_label.text()
+
+
+def test_run_shows_float_and_minimizes(window):
+    _write_flow(window, "flo", "workflow.sleep", {"seconds": 3})
+    window._start_run("flo")
+    assert window._run_float is not None
+    assert window._run_float.state == "running"
+    assert window.isMinimized()
+    # 运行中即可读到事件（早期 run_id 标记行生效）
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        window._poll_run()
+        if window._events_seen > 0:
+            break
+        time.sleep(0.2)
+    assert window._events_seen > 0, "运行中未读到任何事件"
+    window._cancel_run()
+    _wait_run_finished(window)
+    # 取消后浮窗停留（不自动还原）
+    assert window._run_float is not None
+    assert window._run_float.state == "cancelled"
+    window._restore_from_float()
+    assert not window.isMinimized()
+
+
+def test_run_success_auto_restores(window):
+    _write_flow(window, "fast", "data.datetimeNow", {})
+    window._start_run("fast")
+    _wait_run_finished(window)
+    assert window._run_float.state == "succeeded"
+    # 成功后按 2 秒排程自动还原。这里不断言真实等待：qWait 会一次性泵出
+    # 整个测试会话累积的 DeferredDelete（offscreen 无事件循环，积压含已回收
+    # 窗口的悬空目标）→ 原生崩溃。改为断言排程参数 + 手动触发还原动作。
+    assert window._restore_timer is not None
+    assert window._restore_timer.isActive()
+    assert window._restore_timer.interval() == 2000
+    window._restore_from_float()
+    assert not window.isMinimized()

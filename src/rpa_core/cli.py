@@ -667,13 +667,20 @@ def main() -> int:
             if getattr(args, "inputs", None):
                 inputs = json.loads(args.inputs)
             if args.action == "resume":
+                # 与 run 同款早期 run_id 标记行（resume 的 run_id 来自参数）
+                print(json.dumps({"run_id": args.run_id}), flush=True)
                 result = await orchestrator.resume(
                     plan,
                     args.run_id,
                     allow_indeterminate=args.allow_indeterminate,
                 ).wait()
             else:
-                result = await orchestrator.run(plan, inputs=inputs)
+                # start() 同步返回 RunHandle：先打早期 run_id 标记行，宿主
+                # （devserver RunManager / GUI）据此在运行中即可读 events.jsonl，
+                # 支撑运行中悬浮窗/事件流实时显示。最终 RunResult JSON 仍在末尾。
+                handle = orchestrator.start(plan, inputs=inputs)
+                print(json.dumps({"run_id": handle.run_id}), flush=True)
+                result = await handle.wait()
             print(result.model_dump_json(indent=2))
             return 0 if result.status.value == "succeeded" else 1
         except CheckpointError as exc:

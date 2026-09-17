@@ -145,7 +145,13 @@ def apply_theme(app: QApplication) -> None:
 
     QDarkStyle 缺失时退回 Qt 自带 Fusion 风格，保证在最小依赖下仍可启动；
     字体按平台候选选第一个实际存在的族，避免中文在某些环境渲染成方框。
+
+    同一 QApplication 只应用一次：测试里每个模块的 qapp fixture 都会调
+    build_application()，重复 setStyleSheet 到已存在大量窗口的应用上会在
+    offscreen 平台触发原生崩溃（且生产路径本就只需一次）。
     """
+    if getattr(app, "_rpa_theme_applied", False):
+        return
     from PySide6.QtGui import QFont, QFontDatabase
 
     for family in ("Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC",
@@ -154,6 +160,7 @@ def apply_theme(app: QApplication) -> None:
             font = QFont(family, 9)
             app.setFont(font)
             break
+    app._rpa_theme_applied = True  # type: ignore[attr-defined]
     try:
         from qdarkstyle import LightPalette, load_stylesheet
     except ImportError:  # pragma: no cover - 仅在缺 extra 的异常安装态触发
@@ -331,6 +338,15 @@ class MainWindow(QMainWindow):
         # 扩展通道宿主（ADR 0014 §10）：内嵌 loopback 网关或复用 devserver
         self._ext_gateway = None
         self._ext_hub_url: str | None = None
+        self._ext_badge_timer = None
+        self._ext_badge_result_timer = None
+        self._ext_badge_result: tuple[bool, list] | None = None
+        self._ext_badge_probe_running = False
+        # 运行时悬浮窗（影刀式）：运行期间右下置顶，成功自动还原/失败停留
+        self._run_float = None
+        self._events_seen = 0
+        self._cancel_requested = False
+        self._restore_timer = None
         self.setWindowTitle("RPA Core 编辑器")
         self.resize(1280, 800)
 
@@ -384,6 +400,90 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(
             f"已加载 {len(catalog)} 条指令 · catalog {catalog.digest[:10]}"
         )
+
+        # 扩展通道状态徽标（状态栏常驻）：在线=有插件在轮询 hub；离线时给出
+        # 可操作提示。网关保持懒启动（首次运行时内嵌），徽标探测的是
+        # 「当前生效的 hub 地址」（未内嵌时探测默认 8765，可能是在跑的 devserver）。
+        if self._store is not None:
+            from PySide6.QtCore import QTimer
+
+            self._ext_badge = QLabel("")
+            self.statusBar().addPermanentWidget(self._ext_badge)
+            self._ext_badge_timer = QTimer(self)
+            self._ext_badge_timer.setInterval(5000)
+            self._ext_badge_timer.timeout.connect(self._refresh_ext_badge)
+            self._ext_badge_timer.start()
+            self._refresh_ext_badge()
+
+    def _refresh_ext_badge(self) -> None:
+        """后台线程探测 hub 在线状态；线程只写纯 Python 结果，绝不触碰 Qt 对象。
+
+        结果由窗口自有的 QTimer（_drain_ext_badge）取回：计时器随窗口销毁而
+        销毁，天然不存在「线程向已释放 QObject emit」的野指针竞态（此前用信号
+        桥时，测试里窗口被回收后探测线程回传会直接段错误）。
+        """
+        if self._ext_badge_probe_running:
+            return
+        # 只在窗口可见时探测：隐藏窗口没有展示需求，同时避免测试（offscreen
+        # 下窗口普遍不 show）里启动后台探测线程引发的生命周期竞态。
+        if not self.isVisible():
+            return
+        from rpa_core.extension_exec import DEFAULT_HUB_URL
+
+        hub = self._ext_hub_url or DEFAULT_HUB_URL
+        self._ext_badge_probe_running = True
+
+        def work() -> None:
+            online, hosts = False, []
+            try:
+                import urllib.request
+
+                with urllib.request.urlopen(
+                    f"{hub}/api/ext/status", timeout=1.5
+                ) as resp:
+                    payload = json.loads(resp.read().decode("utf-8"))
+                online = bool(payload.get("online"))
+                hosts = payload.get("hosts") or []
+            except Exception:  # noqa: BLE001 - 探测失败即离线
+                online, hosts = False, []
+            self._ext_badge_result = (online, hosts)  # 纯数据，无 Qt 调用
+
+        threading.Thread(target=work, daemon=True).start()
+        if self._ext_badge_result_timer is None:
+            from PySide6.QtCore import QTimer
+
+            timer = QTimer(self)
+            timer.setInterval(200)
+            timer.timeout.connect(self._drain_ext_badge)
+            self._ext_badge_result_timer = timer
+        self._ext_badge_result_timer.start()
+
+    def _drain_ext_badge(self) -> None:
+        """UI 线程取回探测结果（由窗口自有计时器驱动）。"""
+        result = self._ext_badge_result
+        if result is None:
+            return
+        self._ext_badge_result = None
+        self._ext_badge_probe_running = False
+        if self._ext_badge_result_timer is not None:
+            self._ext_badge_result_timer.stop()
+        # 兜底存活校验：窗口/徽标若已释放，直接丢弃结果（绝不触碰悬空对象）
+        import shiboken6
+
+        if not shiboken6.isValid(self) or not shiboken6.isValid(self._ext_badge):
+            return
+        self._on_ext_badge(*result)
+
+    def _on_ext_badge(self, online: bool, hosts: list) -> None:
+        if online:
+            joined = ", ".join(sorted({str(h) for h in hosts}))
+            self._ext_badge.setText(f"插件通道：在线（{joined}）")
+            self._ext_badge.setStyleSheet("color: #1a7f37;")
+        else:
+            self._ext_badge.setText(
+                "插件通道：离线（浏览器指令不可用，详见「插件」）"
+            )
+            self._ext_badge.setStyleSheet("color: #cf222e;")
 
     def _build_toolbar(self) -> None:
         """顶部工具栏：新建 / 打开 / 保存 / 删除节点。"""
@@ -998,12 +1098,15 @@ class MainWindow(QMainWindow):
             return None
         self._active_run_id = handle["runId"]
         self._clear_run_states()
+        self._events_seen = 0
+        self._cancel_requested = False
         self.run_action.setEnabled(False)
         self.cancel_run_action.setEnabled(True)
         dock = self._run_dock()
         dock.show()
         self._run_status_label.setText(f"运行中…（{name}）")
         self._run_events_view.clear()
+        self._show_run_float()
         if self._run_timer is None:
             from PySide6.QtCore import QTimer
 
@@ -1013,12 +1116,80 @@ class MainWindow(QMainWindow):
         self._run_timer.start()
         return self._active_run_id
 
+    def _schedule_restore(self) -> None:
+        """成功后 2 秒自动还原主窗口。
+
+        用挂在 self 上的 QTimer 而非静态 QTimer.singleShot：静态计时器没有
+        属主，窗口销毁后仍可能触发，回调打到已释放对象上会直接段错误。
+        """
+        from PySide6.QtCore import QTimer
+
+        if self._restore_timer is None:
+            self._restore_timer = QTimer(self)
+            self._restore_timer.setSingleShot(True)
+            self._restore_timer.setInterval(2000)
+            self._restore_timer.timeout.connect(self._restore_from_float)
+        self._restore_timer.start()
+
+    # ---- 运行时悬浮窗（影刀式） ----------------------------------------------
+    def _show_run_float(self) -> None:
+        """主窗口最小化 + 右下置顶浮窗（运行期间持续在场）。"""
+        from rpa_core.gui.run_float import RunFloatWindow
+
+        if self._run_float is None:
+            self._run_float = RunFloatWindow()
+            self._run_float.cancel_button.clicked.connect(self._cancel_run)
+            self._run_float.restore_button.clicked.connect(self._restore_from_float)
+        self._run_float.show_running("准备中…", 0)
+        self._run_float.place_bottom_right()
+        self._run_float.show()
+        self.showMinimized()
+
+    def _restore_from_float(self) -> None:
+        """还原主窗口并隐藏浮窗（成功自动还原与手动还原共用，幂等）。"""
+        if self._run_float is not None:
+            self._run_float.hide()
+        self.showNormal()
+        self.raise_()
+        self.activateWindow()
+
+    def _float_step_text(self, node_id: str) -> str:
+        """节点 id → 画布卡片标题（悬浮窗「正在执行」行）。"""
+        item = self.flow_model.find_by_id(node_id)
+        title = item.text() if item is not None else ""
+        return f"正在执行：{title or node_id}"
+
+    def _poll_run_events_live(self) -> None:
+        """运行中增量读事件：喂悬浮窗 + 运行面板实时滚动 + 节点着色。"""
+        events = self._run_manager.events(self._active_run_id)["events"]
+        if not events:
+            return
+        new_events = events[self._events_seen:]
+        self._events_seen = len(events)
+        done = 0
+        current_step: str | None = None
+        for event in events:
+            if event.get("type") == "stepCompleted":
+                done += 1
+            elif event.get("type") == "stepStarted":
+                current_step = event.get("node_id")
+        for event in new_events:
+            self._run_events_view.appendPlainText(
+                json.dumps(event, ensure_ascii=False)
+            )
+        if self._run_float is not None and current_step is not None:
+            self._run_float.show_running(self._float_step_text(current_step), done)
+        self._apply_run_states(events)
+
     def _cancel_run(self) -> None:
         if not self._active_run_id or self._run_manager is None:
             return
         try:
             self._run_manager.cancel(self._active_run_id)
+            self._cancel_requested = True
             self._run_status_label.setText("已请求取消…")
+            if self._run_float is not None:
+                self._run_float.show_running("正在取消…", 0)
         except KeyError:
             pass
 
@@ -1028,33 +1199,52 @@ class MainWindow(QMainWindow):
             return
         status = self._run_manager.status(self._active_run_id)
         if status["running"]:
+            self._poll_run_events_live()
             return
         self._run_timer.stop()
         self.run_action.setEnabled(True)
         self.cancel_run_action.setEnabled(False)
         result = status.get("result")
+        run_status = ""
+        detail = ""
         if result is not None:
             run_status = result.get("status", "unknown")
             self._run_status_label.setText(f"完成：{run_status}")
             error = result.get("error")
             if error:
-                self._run_events_view.appendPlainText(
-                    f"失败：{error.get('code')} · 节点 {error.get('nodeId')}\n"
+                detail = (
+                    f"{error.get('code')} · 节点 {error.get('nodeId')}\n"
                     f"{error.get('message')}"
                 )
+                self._run_events_view.appendPlainText(f"失败：{detail}")
         elif status.get("startupError"):
             startup = status["startupError"]
+            run_status = "failed"
             self._run_status_label.setText(
                 f"运行未能启动（退出码 {status.get('exitCode')}）"
             )
             if startup.get("message"):
+                detail = startup["message"]
                 self._run_events_view.appendPlainText(startup["message"])
         else:
+            run_status = "unknown"
             self._run_status_label.setText("完成（无结果文件）")
+        # 用户主动取消时子进程被终止（无结果文件/非零退出），终态如实显示「已取消」
+        if self._cancel_requested and run_status != "succeeded":
+            run_status = "cancelled"
+            self._run_status_label.setText("已取消")
         events = self._run_manager.events(self._active_run_id)["events"]
-        for event in events[-50:]:
+        for event in events[self._events_seen:]:
             self._run_events_view.appendPlainText(json.dumps(event, ensure_ascii=False))
+        self._events_seen = len(events)
         self._apply_run_states(events)
+        # 悬浮窗终态：成功 2s 后自动还原主窗口；失败/取消停留等手动还原
+        if self._run_float is not None:
+            if run_status == "succeeded":
+                self._run_float.show_result("succeeded")
+                self._schedule_restore()
+            elif run_status:
+                self._run_float.show_result(run_status, detail)
 
     def _apply_run_states(self, events: list[dict]) -> None:
         """按事件流给画布节点着色（行号：蓝=运行中 绿=成功 红=失败）。"""
@@ -1267,7 +1457,11 @@ class MainWindow(QMainWindow):
                 result = session.pick(timeout_seconds=90)
             finally:
                 session.close()
-            self._capture_bridge.finished.emit(result)
+            # 捕获期间窗口可能已被关闭：先验桥对象存活再 emit，避免野指针
+            import shiboken6
+
+            if shiboken6.isValid(self._capture_bridge):
+                self._capture_bridge.finished.emit(result)
 
         threading.Thread(target=work, daemon=True).start()
 
@@ -1450,6 +1644,29 @@ class MainWindow(QMainWindow):
             lines.append(f"{browser}：浏览器{binary} · {plugin}")
         return "\n".join(lines)
 
+    def _ext_hub_text(self) -> str:
+        """扩展通道宿主的当前状态文本（供插件对话框展示）。"""
+        from rpa_core.devserver.server import probe_ext_hub
+        from rpa_core.extension_exec import DEFAULT_HUB_URL
+
+        hub = self._ext_hub_url or DEFAULT_HUB_URL
+        if not probe_ext_hub(hub):
+            return f"扩展通道宿主：未运行（{hub}）——浏览器指令不可用"
+        import urllib.request
+
+        try:
+            with urllib.request.urlopen(f"{hub}/api/ext/status", timeout=1.5) as resp:
+                payload = json.loads(resp.read().decode("utf-8"))
+        except Exception:  # noqa: BLE001
+            return f"扩展通道宿主：状态读取失败（{hub}）"
+        if payload.get("online"):
+            hosts = ", ".join(sorted({str(h) for h in payload.get("hosts") or []}))
+            return f"扩展通道宿主：运行中（{hub}），插件在线（{hosts}）"
+        return (
+            f"扩展通道宿主：运行中（{hub}），但插件离线——"
+            "请到 edge://extensions 重新加载扩展，或整体重启浏览器"
+        )
+
     def _show_extension_dialog(self) -> None:
         """插件状态 + Load unpacked 安装引导（对齐 Web 的 4 步引导）。"""
         from rpa_core.extension_installer import extension_root, open_browser, open_path_in_explorer
@@ -1459,12 +1676,19 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout(dialog)
         status_label = QLabel(self._extension_status_text())
         layout.addWidget(status_label)
+        hub_label = QLabel(self._ext_hub_text())
+        hub_label.setWordWrap(True)
+        hub_label.setStyleSheet("color: #9a6700;")
+        layout.addWidget(hub_label)
         guide = QLabel(
             "安装步骤（Load unpacked）：\n"
             "1. 打开扩展源码目录（下面按钮）\n"
             "2. 打开浏览器，地址栏输入 chrome://extensions 或 edge://extensions\n"
             "3. 开启「开发人员模式」→「加载已解压的扩展程序」→ 选择该目录\n"
-            "4. 回到本页刷新状态"
+            "4. 回到本页刷新状态\n\n"
+            "已启用但通道离线（状态栏徽标红色）时：到扩展管理页点「重新加载」，"
+            "或整体退出浏览器（含托盘后台驻留）后重开——扩展后台 service worker "
+            "卡死/休眠过久只能这样唤醒。"
         )
         guide.setWordWrap(True)
         layout.addWidget(guide)
@@ -1479,7 +1703,10 @@ class MainWindow(QMainWindow):
         open_chrome.clicked.connect(lambda: open_browser("chrome"))
         refresh = QPushButton("刷新状态")
         refresh.clicked.connect(
-            lambda: status_label.setText(self._extension_status_text())
+            lambda: (
+                status_label.setText(self._extension_status_text()),
+                hub_label.setText(self._ext_hub_text()),
+            )
         )
         for button in (open_dir, open_edge, open_chrome, refresh):
             buttons.addWidget(button)
@@ -1581,6 +1808,14 @@ class MainWindow(QMainWindow):
 
     def _shutdown_run_manager(self) -> None:
         """窗口关闭时终止仍在运行的子进程与内嵌扩展网关（规则 11）。"""
+        if self._run_timer is not None:
+            self._run_timer.stop()
+        if self._ext_badge_timer is not None:
+            self._ext_badge_timer.stop()
+        if self._ext_badge_result_timer is not None:
+            self._ext_badge_result_timer.stop()
+        if self._restore_timer is not None:
+            self._restore_timer.stop()
         if self._run_manager is not None:
             self._run_manager.close()
             self._run_manager = None
@@ -1588,6 +1823,10 @@ class MainWindow(QMainWindow):
             self._ext_gateway.stop()
             self._ext_gateway = None
             self._ext_hub_url = None
+        # 悬浮窗是无父顶层窗口（最小化主窗时不随隐），关闭主窗需显式带走
+        if self._run_float is not None:
+            self._run_float.close()
+            self._run_float = None
 
     # ---- 右栏参数表单 -----------------------------------------------------
     def _clear_param_panel(self) -> None:

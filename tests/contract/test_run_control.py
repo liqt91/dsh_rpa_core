@@ -115,6 +115,50 @@ def test_run_unknown_id_404(server):
     assert status == 404
 
 
+SLOW_WORKFLOW = {
+    "schema_version": "1.0",
+    "id": "rc-slow",
+    "name": "slow run",
+    "inputs": {},
+    "root": {
+        "type": "sequence",
+        "id": "root",
+        "children": [
+            {"type": "action", "id": "nap", "command": "workflow.sleep",
+             "with": {"seconds": 5}},
+        ],
+    },
+}
+
+
+def test_run_events_visible_while_running(server):
+    """运行中即可读事件：CLI 早期 run_id 标记行 → RunManager 提前解析。
+
+    回归点：real_run_id 此前要等子进程 stdout EOF 才解析，运行中 events
+    恒为空，悬浮窗/事件流只能结束后补显示。
+    """
+    base = f"http://127.0.0.1:{server.port}"
+    _save_workflow(base, "rc-slow", SLOW_WORKFLOW)
+    status, payload = _request("POST", "/api/runs", {"workflow": "rc-slow"}, base=base)
+    assert status == 200
+    run_id = payload["runId"]
+
+    seen_types: set[str] = set()
+    deadline = time.time() + 15
+    while time.time() < deadline:
+        status, s = _request("GET", f"/api/runs/{run_id}", base=base)
+        assert status == 200
+        if not s["running"]:
+            break
+        _, ev = _request("GET", f"/api/runs/{run_id}/events", base=base)
+        seen_types.update(e["type"] for e in ev["events"])
+        if "runStarted" in seen_types:
+            break  # 运行中已经能读到事件——目标达成
+        time.sleep(0.3)
+    _request("POST", f"/api/runs/{run_id}/cancel", base=base)
+    assert "runStarted" in seen_types, "运行中未能读到 runStarted（run_id 未提前解析）"
+
+
 UNSAFE_RETRY_WORKFLOW = {
     "schema_version": "1.0",
     "id": "rc-unsafe",

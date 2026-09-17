@@ -258,19 +258,22 @@ class PlaywrightExecutor(CommandExecutor):
                 f"目标浏览器 {browser} 离线且自动拉起失败：{exc}",
                 details={"reason": "browser_launch_failed", "browser": browser},
             )
-        # 拉起后轮询目标浏览器上线（自启 + 插件注册通常 < 15s）
-        if await self._wait_target_online(browser, 15.0):
+        # 拉起后轮询目标浏览器上线。窗口必须覆盖 MV3 最慢唤醒路径：浏览器
+        # 已在运行时，扩展 service worker 处于休眠，靠 chrome.alarms 兜底
+        # 重拉（平台最小间隔 30s）——15s 的窗口会系统性错过这种场景。
+        if await self._wait_target_online(browser, _EXT_SW_WAKE_SECONDS):
             return None
         if isolated_dir:
             msg = (
                 f"已用独立目录临时拉起 {browser}，但在限时内仍未检测到其自研插件上线。"
                 "请确认 ①--user-data-dir=<目录> 可写；②自研扩展已被注入（--load-extension 生效）；"
-                "③devserver 端口与插件一致（默认 127.0.0.1:8765）。"
+                "③扩展通道宿主端口与插件一致（默认 127.0.0.1:8765）。"
             )
         else:
             msg = (
                 f"已尝试自动拉起 {browser}（默认配置），但在限时内未检测到其自研插件在线。"
-                "默认配置下命令行注入会被忽略，需在目标浏览器默认配置里预装并启用自研插件："
+                "若该浏览器已装自研插件，多为扩展后台休眠唤醒慢——直接重试一次通常即可；"
+                "否则需在目标浏览器默认配置里预装并启用自研插件："
                 f"打开 edge://extensions 或 chrome://extensions，开启「开发者模式」加载扩展目录；"
                 "或在本指令「命令行参数」里传 --user-data-dir=<独立目录> 以独立目录临时加载插件。"
             )
