@@ -8,7 +8,7 @@
   "active_feature": null,
   "next_milestone": null,
   "later_milestones": [],
-  "notes": "M20 收口：扩展通道由 HTTP 长轮询（8765 常驻 hub）迁移到 Native Messaging（浏览器按需拉起 bridge host + 本地 IPC），S0 真机门槛与 S1-S8 全部完成，feature native-messaging-bridge 通过。M19 后的其它推进：影刀命令对标、用户变量体系可写化 + fx/py 表达式、session 默认会话、GUI 编辑器（ADR 0014）。",
+  "notes": "技术路线（ADR 0016）：GUI 为唯一主力形态，Web 编辑器（devserver）退为可选、冻结演进不删除；GUI 独立运行不需要任何 web 服务器（编辑器进程内复用 DevServerApp，运行走子进程，扩展走 Native Messaging）。M20 收口：扩展通道由 HTTP 长轮询（8765 常驻 hub）迁移到 Native Messaging（浏览器按需拉起 bridge host + 本地 IPC），S0 真机门槛与 S1-S8 全部完成，feature native-messaging-bridge 通过。",
   "task_index": ".harness/tasks/BACKLOG.md",
   "scope": {
     "in": [

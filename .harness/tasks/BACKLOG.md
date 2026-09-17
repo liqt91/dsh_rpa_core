@@ -8,6 +8,8 @@
 
 ## 后续任务
 
+- [ ] 技术路线（ADR 0016）：GUI 为唯一主力形态——新增能力优先落 GUI；Web 编辑器（devserver）
+  `devserver/static/` 冻结演进（不删除、不再补齐 GUI 已有能力）
 - [ ] 运行控制进阶（pause/resume、indeterminate 人工确认对话前端化）——M18 后置项，需 orchestrator 句柄跨进程模型或新机制
 - [ ] UI、DSH、MCP、调度器和安装器集成（`planned`）——见远期任务
 

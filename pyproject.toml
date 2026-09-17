@@ -10,8 +10,10 @@ dependencies = [
   "pywinauto>=0.6.9,<0.7; sys_platform == 'win32'",
 ]
 
-# 原生桌面 GUI（ADR 0014 方案 E）为可选能力：默认 `uv sync --all-groups` 不安装
-# Qt 重依赖，需要时用 `uv sync --extra gui` 启用；rpa-core gui 在缺依赖时友好报错。
+# 原生桌面 GUI（ADR 0014 方案 E）为可选能力，GUI 是主力形态：
+# `uv sync --all-groups` 只覆盖 dependency-groups（dev），**不含** extras；
+# 正确命令是 `uv sync --all-groups --extra gui`（不带 --extra gui 会把已装的
+# Qt 依赖清掉，rpa-core gui 随后报 GUI_EXTRA_MISSING）。
 [project.optional-dependencies]
 gui = [
   "PySide6-Essentials>=6.7,<7",

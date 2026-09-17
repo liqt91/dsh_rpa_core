@@ -4,16 +4,31 @@
 
 This repository is a clean-room RPA core experiment. Do not import runtime code from the sibling `rpa_script` project. Legacy files may only be copied into `tests/fixtures/` as inert test data.
 
+## Product direction（未来技术路线，ADR 0016）
+
+- **GUI（`rpa-core gui`）是唯一主力形态**：新增能力优先且默认落 GUI。
+- **Web 编辑器（`rpa-core devserver`）退为可选形态**：不为它补齐 GUI 已有能力；仅在后端
+  能力层复用或成本极低时顺带维护（`devserver/static/` 冻结演进，不删除）。
+- GUI 独立运行**不需要任何 web 服务器**：编辑器能力进程内复用 `DevServerApp` 等库，运行走
+  `rpa-core run` 子进程，扩展通道走 Native Messaging（ADR 0015）。
+- 后端能力层（model/catalog/compiler/runtime/executors/workers/extension_exec/
+  local_transport）与宿主形态无关，是唯一事实来源。
+
 ## Commands
 
 ```text
-Sync:        uv sync --all-groups
+Sync:        uv sync --all-groups --extra gui
 Test:        uv run pytest
 Lint:        uv run ruff check .
 Architecture:uv run python .harness/scripts/check_architecture.py
 Full gate:   uv run python .harness/scripts/check_all.py
 CLI:         uv run python -m rpa_core.cli
 ```
+
+> `--all-groups` 只覆盖 dependency-groups（dev），**不含** optional-dependencies；
+> GUI 是主力形态，`gui` extra（PySide6/QDarkStyle）必须显式带上，否则 `rpa-core gui`
+> 会报 `GUI_EXTRA_MISSING`。用 `uv sync --all-groups`（不带 `--extra gui`）会把已装的
+> gui extra **清掉**。
 
 ## Non-negotiable rules
 
