@@ -328,6 +328,9 @@ class MainWindow(QMainWindow):
         self._active_run_id: str | None = None
         self._run_timer = None
         self._run_dock_widget = None
+        # 扩展通道宿主（ADR 0014 §10）：内嵌 loopback 网关或复用 devserver
+        self._ext_gateway = None
+        self._ext_hub_url: str | None = None
         self.setWindowTitle("RPA Core 编辑器")
         self.resize(1280, 800)
 
@@ -904,7 +907,45 @@ class MainWindow(QMainWindow):
             from rpa_core.devserver.runs import RunManager
 
             self._run_manager = RunManager(self._store.root)
+            # 扩展通道宿主：浏览器指令需要 hub 承接扩展轮询，否则「打开网页」
+            # 只能拉起浏览器进程却等不到插件上线（browser_launch_no_host）
+            self._run_manager.hub_url = self._ensure_ext_hub()
         return self._run_manager
+
+    def _ensure_ext_hub(self) -> str:
+        """确保扩展通道宿主在线，返回其 URL（ADR 0014 §10 loopback 网关）。
+
+        优先级：复用已在运行的 devserver（避免重复绑定 8765）→ GUI 内嵌
+        ExtLoopbackGateway。端口被非 RPA 进程占用时回退默认地址（运行会
+        得到明确的离线报错，不静默假成功）。
+        """
+        if getattr(self, "_ext_hub_url", None):
+            return self._ext_hub_url
+        from rpa_core.devserver.server import ExtLoopbackGateway, probe_ext_hub
+        from rpa_core.extension_exec import DEFAULT_HUB_URL
+
+        if probe_ext_hub(DEFAULT_HUB_URL):
+            self._ext_hub_url = DEFAULT_HUB_URL
+            self.statusBar().showMessage("复用已运行的 devserver 扩展通道", 4000)
+            return self._ext_hub_url
+        try:
+            gateway = ExtLoopbackGateway(
+                catalog=self.catalog, workflows_root=self._store.root
+            )
+            gateway.start()
+        except OSError:
+            # 8765 被非 RPA 进程占用：回退默认地址，浏览器指令会报明确的离线错误
+            self._ext_hub_url = DEFAULT_HUB_URL
+            self.statusBar().showMessage(
+                "端口 8765 被占用且不是扩展通道宿主，浏览器指令将不可用", 6000
+            )
+            return self._ext_hub_url
+        self._ext_gateway = gateway
+        self._ext_hub_url = gateway.base_url
+        self.statusBar().showMessage(
+            f"已内嵌扩展通道宿主（{gateway.base_url}）", 4000
+        )
+        return self._ext_hub_url
 
     def _run_dock(self):
         """懒创建底部运行面板（状态行 + 事件流）。"""
@@ -1539,10 +1580,14 @@ class MainWindow(QMainWindow):
                 event.ignore()
 
     def _shutdown_run_manager(self) -> None:
-        """窗口关闭时终止仍在运行的子进程（规则 11：释放拥有的资源）。"""
+        """窗口关闭时终止仍在运行的子进程与内嵌扩展网关（规则 11）。"""
         if self._run_manager is not None:
             self._run_manager.close()
             self._run_manager = None
+        if getattr(self, "_ext_gateway", None) is not None:
+            self._ext_gateway.stop()
+            self._ext_gateway = None
+            self._ext_hub_url = None
 
     # ---- 右栏参数表单 -----------------------------------------------------
     def _clear_param_panel(self) -> None:

@@ -496,3 +496,89 @@ class DevServer:
 
     def __exit__(self, *exc_info) -> None:
         self.stop()
+
+
+# ---------------------------------------------------------------------------
+# loopback 扩展网关（ADR 0014 §10）：只挂 /api/ext/* 与 /api/capture/*
+# ---------------------------------------------------------------------------
+
+
+class _GatewayHTTPServer(ThreadingHTTPServer):
+    # 明确关掉地址复用：Windows 上 SO_REUSEADDR 允许双进程同端口绑定
+    # （devserver 重复绑定陷阱的实证教训），网关必须先探测再绑定，撞车即失败回退。
+    allow_reuse_address = False
+
+
+class _GatewayRequestHandler(_RequestHandler):
+    """只放行扩展通道（/api/ext/*）与捕获通道（/api/capture/*）的处理器。"""
+
+    def _handle(self, method: str) -> None:
+        path = unquote(urlparse(self.path).path)
+        if path.startswith(_EXT_PREFIX) or path.startswith(_CAPTURE_PREFIX):
+            super()._handle(method)
+            return
+        self._send_json(404, {"error": "NOT_FOUND", "message": f"no route for {path}"})
+
+
+class ExtLoopbackGateway:
+    """GUI 内嵌的扩展通道宿主（loopback，仅 /api/ext/* + /api/capture/*）。
+
+    背景：扩展 background 的轮询地址硬编码 127.0.0.1:8765。原生 GUI 独立运行
+    （无 devserver）时，浏览器指令的扩展通道无人承接——run 子进程经
+    ``RPA_EXT_HUB_URL`` 回连的命令队列不存在，「打开网页」只能拉起浏览器
+    进程却等不到插件上线（browser_launch_no_host）。本网关补齐这一环：
+    GUI 进程内直接宿主 ExtensionExecHub 与捕获会话，端口与扩展硬编码一致。
+    """
+
+    def __init__(
+        self,
+        *,
+        catalog: CommandCatalog,
+        workflows_root: Path,
+        port: int = _DEFAULT_PORT,
+        capabilities: set[str] | None = None,
+    ):
+        self.app = DevServerApp(
+            catalog, WorkflowDirStore(workflows_root), capabilities
+        )
+        self._httpd = _GatewayHTTPServer(("127.0.0.1", port), _GatewayRequestHandler)
+        self._httpd.app = self.app  # type: ignore[attr-defined]
+        self._httpd.editor_html = b""  # type: ignore[attr-defined]
+        self._httpd._static_files = {}  # type: ignore[attr-defined]
+        self._thread: threading.Thread | None = None
+
+    @property
+    def port(self) -> int:
+        return self._httpd.server_address[1]
+
+    @property
+    def base_url(self) -> str:
+        host, port = self._httpd.server_address[:2]
+        return f"http://{host}:{port}"
+
+    def start(self) -> None:
+        # run 子进程回连地址：与 DevServer.start 同款接线
+        self.app.set_extension_hub_url(self.base_url)
+        self._thread = threading.Thread(target=self._httpd.serve_forever, daemon=True)
+        self._thread.start()
+
+    def stop(self) -> None:
+        self.app.close()
+        self._httpd.shutdown()
+        self._httpd.server_close()
+        if self._thread is not None:
+            self._thread.join(timeout=5)
+            self._thread = None
+
+
+def probe_ext_hub(base_url: str, timeout: float = 0.8) -> bool:
+    """探测既有扩展通道宿主：GET /api/ext/status 返回 200 即可复用。"""
+    import urllib.request
+
+    try:
+        with urllib.request.urlopen(
+            f"{base_url}/api/ext/status", timeout=timeout
+        ) as response:
+            return response.status == 200
+    except Exception:  # noqa: BLE001 - 任何连接/解析异常都视为不在线
+        return False
