@@ -226,6 +226,11 @@
       "id": "gui-web-parity",
       "title": "GUI/Web parity: control-node param forms, undo/redo + copy/paste, fx variable tags, compile validation, run control (RunManager), flow library, element library + desktop capture, data table, catalog/extension dialogs",
       "passes": true
+    },
+    {
+      "id": "native-messaging-bridge",
+      "title": "Native Messaging extension bridge: browser-spawned host over local IPC (named pipe / unix socket), retiring the resident 8765 hub and long-poll channel",
+      "passes": true
     }
   ]
 }

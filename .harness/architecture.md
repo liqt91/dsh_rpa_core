@@ -28,6 +28,16 @@ Allowed package dependencies:
 | `workers` | `model` |
 | `cli` | all public packages |
 
+共享低层模块（不属于任何层，仅 stdlib + 平台 API）：
+
+| Module | 职责 | 使用者 |
+|---|---|---|
+| `local_transport` | 本地端点（Windows 命名管道 / POSIX Unix 域套接字）与长度前缀 JSON 帧 | `workers.ext_bridge`、`extension_exec`、`capture.extension` |
+| `extension_exec` | 扩展执行通道协议与执行器侧客户端（ADR 0015：Native Messaging） | `executors`、`devserver`（状态/诊断） |
+
+`workers.ext_bridge` 是浏览器按需拉起的 host 子进程（Native Messaging stdio ↔ 本地端点），
+只依赖 stdlib + `local_transport`，不触达 catalog/runtime。
+
 ## Runtime flow
 
 ```text

@@ -2,13 +2,13 @@
   "project": "rpa_core",
   "phase": "command-parity-extension-editor",
   "status": "active",
-  "completed_milestone": "M19-editor-interactions",
+  "completed_milestone": "M20-native-messaging",
   "active_milestone": null,
   "active_plan": null,
   "active_feature": null,
   "next_milestone": null,
   "later_milestones": [],
-  "notes": "M19 收口后已持续推进：影刀命令对标（catalog 55→65+，navigate 逐参数对齐）、自研扩展执行通道（extension_exec + channel 校验 + 配对诊断）、用户变量体系可写化 + fx/py 表达式、session 默认会话、编辑器属性面板参数分区与 fx 浮层。无 active 里程碑，全部进入 feature 迭代。",
+  "notes": "M20 收口：扩展通道由 HTTP 长轮询（8765 常驻 hub）迁移到 Native Messaging（浏览器按需拉起 bridge host + 本地 IPC），S0 真机门槛与 S1-S8 全部完成，feature native-messaging-bridge 通过。M19 后的其它推进：影刀命令对标、用户变量体系可写化 + fx/py 表达式、session 默认会话、GUI 编辑器（ADR 0014）。",
   "task_index": ".harness/tasks/BACKLOG.md",
   "scope": {
     "in": [

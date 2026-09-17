@@ -1,8 +1,21 @@
 # 自研扩展执行通道计划（M15 提案）
 
-状态：`Phase 1 已落地`（2026-09-10）
+状态：`Phase 1 已落地`（2026-09-10）；**传输层已于 2026-09-17 被 ADR 0015 取代（Native Messaging）**
 日期：2026-09-10
 前置：`yingdao-command-model.md` §〇（维护者决策 2026-09-08：自研扩展一等公民，playwright/bsk 二等）、`yingdao-web-cmds-benchmark.md`（44 条对标，✅22/🟡8/❌14）
+
+> **2026-09-17 传输层取代（现行，ADR 0015 / M20）**：扩展通道已从 **HTTP 长轮询 + 8765 常驻 hub**
+> 迁移到 **Native Messaging**——扩展经 `chrome.runtime.connectNative("com.rpa_core.ext_bridge")`
+> 连**浏览器按需拉起**的 bridge host（`rpa_core.workers.ext_bridge`），host 与执行器侧经
+> **本地端点**（Windows 命名管道 / POSIX Unix 域套接字，`rpa_core.local_transport`）通信。
+> 因此本文中所有「`/api/ext/*` 路由 / `RPA_EXT_HUB_URL` / 长轮询 / `ExtensionExecHub` /
+> 心跳窗口 `ONLINE_WINDOW_SECONDS` / `ExtLoopbackGateway`」的描述**均已退役**：
+> - 在线 = **存在 `rpa_core_ext_<browser>_<instanceId>` 端点**（无心跳窗口）；
+> - 命令由 host 经 port 推送（扩展侧无轮询），结果按 id 回路由；host 侧强制超时；
+> - 安装需注册 native host manifest（`rpa-core install-extension` 默认引导已含；
+>   见 `docs/extension-install.md`）；
+> - 代码现状以 `src/rpa_core/extension_exec.py`（执行器客户端）与
+>   `src/rpa_core/workers/ext_bridge.py`（host）为准。
 
 > **2026-09-11 更新（现状覆盖）**：playwright 已**彻底移除**（执行 + 捕获 + 依赖），浏览器执行/捕获统一收敛到**自研扩展单通道**。旧的「扩展在线优先 / 离线静默回退 playwright / transport+channel 双轴」均不再成立：`browser.navigate` 已无 `transport`/`channel` 参数；扩展离线时命令**立即失败**（不白等、不回退）。本计划文档保留为历史提案记录，现行行为以 `ADR 0009` 为准。下文中凡把 playwright 作为可用通道讲述的段落均属历史描述，不再适用。
 

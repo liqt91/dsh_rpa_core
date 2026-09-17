@@ -60,7 +60,7 @@ CRX → devserver 托管（官方策略文档允许 http scheme）
 
 - Firefox/Safari 不支持：扩展是 MV3 Chromium（service_worker），Firefox 移植与 Safari/MDM 路线均超出本切片。
 - **静默安装**（外部扩展注册表 / forcelist 策略）仅 Windows，macOS/Linux 需 root/MDM，暂缓——非 win32 调用显式抛 `PLATFORM_UNSUPPORTED`，不静默假装成功。
-- **执行通道**（`/api/ext/*` + MV3 扩展 + `extension_exec`）与平台无关，macOS 亲测可用：Edge 里 Load unpacked 加载本目录后，`browser.navigate` / `input` / `click` / `waitFor` / `screenshot` 全链路通过。
+- **执行通道**（MV3 扩展 + `extension_exec` + bridge host）与平台无关，macOS 亲测可用：Edge 里 Load unpacked 加载本目录后，`browser.navigate` / `input` / `click` / `waitFor` / `screenshot` 全链路通过。自 2026-09-17（ADR 0015）起传输为 **Native Messaging**：除加载扩展外还需**注册 native host manifest**（`rpa-core install-extension` 默认引导已含，免管理员；Windows 写 HKCU，macOS/Linux 写浏览器 `NativeMessagingHosts/` 目录），扩展经 `chrome.runtime.connectNative` 连由浏览器按需拉起的 host。
 - 本机检测（`extension_launch` / `extension_installer`）按平台取路径表，macOS 使用
   `/Applications/<Name>.app/Contents/MacOS/<Name>` 与 `~/Library/Application Support/{Google/Chrome,Microsoft Edge}`；
   `browser_running()` 在 POSIX 上走 `pgrep -f` 命令行匹配（macOS 主进程路径，不误判 Helper 子进程）。

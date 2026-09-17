@@ -1,0 +1,12 @@
+{
+  "manifest_version": 3,
+  "name": "rpa_core native-messaging spike",
+  "version": "0.0.3",
+  "description": "S0 spike: 验证 MV3 service worker 在长连 native messaging port 下是否保活。",
+  "permissions": ["nativeMessaging", "alarms", "storage"],
+  "host_permissions": ["http://127.0.0.1:8799/*"],
+  "background": { "service_worker": "background.js" },
+  "action": {
+    "default_title": "rpa_core NM spike（徽标 on=host 已连）"
+  }
+}

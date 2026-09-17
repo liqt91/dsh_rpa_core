@@ -1,0 +1,4 @@
+# 运行产物（实证工具的运行期输出，不入版本库）
+*.log
+host/generated/
+__pycache__/

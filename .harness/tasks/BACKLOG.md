@@ -4,7 +4,7 @@
 
 ## 当前任务
 
-（无进行中任务——M19 已收口；下一里程碑待立项）
+（无进行中任务——M20 已收口）
 
 ## 后续任务
 
@@ -21,6 +21,15 @@
   - 重估条件：裸屏幕桌面捕获高频化 / 需全局热键唤起捕获 / M15 后确认非开发者用户为主力。
 
 ## 已完成
+
+- [x] M20 扩展通道迁移 Native Messaging（`done`）
+  - 计划：`M20-native-messaging.md`；决策：ADR 0015
+  - 证据：S0 真机四项（Edge+Chrome：SW 保活 15s 心跳零空洞 / reload 与完全退出回收 /
+    重连 ≤0.4s / unpacked ID 推导与预注册）+ S1 传输层（命名管道 overlapped + Unix socket，
+    15 单测）+ S2 host（stdio↔端点中继，9 合同）+ S3 安装注册（三平台 + ID 双路 + CLI，13 单测）
+    + S4 扩展改造（native port + 串行化，真机捕获回传）+ S5/S6/S7（执行器/捕获/接线全量切换，
+    客户端 7 合同 + 捕获 8 合同）+ S8 文档/前端路由收尾；真机 `browser.navigate` 端到端 succeeded；
+    FULL GATE PASSED；feature `native-messaging-bridge` 通过
 
 - [x] M19 编辑器交互补强（`done`）
   - 计划：`M19-editor-interactions.md`
