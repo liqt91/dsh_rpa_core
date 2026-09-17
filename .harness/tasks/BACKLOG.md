@@ -10,7 +10,14 @@
 
 - [ ] 技术路线（ADR 0016）：GUI 为唯一主力形态——新增能力优先落 GUI；Web 编辑器（devserver）
   `devserver/static/` 冻结演进（不删除、不再补齐 GUI 已有能力）
-- [ ] 运行控制进阶（pause/resume、indeterminate 人工确认对话前端化）——M18 后置项，需 orchestrator 句柄跨进程模型或新机制
+- [ ] **M21 GUI 运行控制进阶：暂停/继续 + 恢复人工确认**（`planned`）
+  - 计划：`M21-run-control-advanced.md`
+  - 缺口：`RunManager` 无 pause/resume；暂停信号是进程内 `asyncio.Event`，GUI 走子进程需
+    **跨进程控制通道**；`recovery_required`/`indeterminate` 的人工确认门未前端化
+- [ ] **M22 macOS/Linux 传输层真机验证**（`planned`）
+  - 计划：`M22-crossplatform-transport.md`
+  - 缺口：`local_transport` 的 Unix socket 分支与三平台 host manifest 注册只做了设计与单测，
+    仅 Windows 真机验证过（ADR 0015 / M20）
 - [ ] UI、DSH、MCP、调度器和安装器集成（`planned`）——见远期任务
 
 ## 远期任务
@@ -19,8 +26,9 @@
 - [ ] 编辑器多 tab 属性表单（`planned`——单命令 schema 字段显著增多（>~8）时按「常规/参数/…」划分；M19 切 E 留接口）
 - [ ] UI、DSH、MCP、调度器和安装器集成（`planned`）
   - 逐项放行与否以 ADR 0006 结论为准；操控型 HTTP 推迟不变。
-- [ ] 桌面客户端编辑器薄壳（`planned`，ADR 0010 重估条件触发时立项）
-  - 重估条件：裸屏幕桌面捕获高频化 / 需全局热键唤起捕获 / M15 后确认非开发者用户为主力。
+
+> 已删除条目：原「桌面客户端编辑器薄壳（ADR 0010 重估条件）」——ADR 0016 已定 GUI 为唯一
+> 主力形态，该条目（「确认非开发者用户为主力后再立项薄壳」）不再适用。
 
 ## 已完成
 

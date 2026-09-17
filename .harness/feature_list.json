@@ -231,6 +231,16 @@
       "id": "native-messaging-bridge",
       "title": "Native Messaging extension bridge: browser-spawned host over local IPC (named pipe / unix socket), retiring the resident 8765 hub and long-poll channel",
       "passes": true
+    },
+    {
+      "id": "run-control-advanced",
+      "title": "GUI run control advanced: cross-process pause/continue control channel and human-confirmed recovery for indeterminate/recovery_required runs",
+      "passes": false
+    },
+    {
+      "id": "crossplatform-transport-verify",
+      "title": "macOS/Linux native messaging transport verified on real machines (unix socket endpoint + host manifest registration + end-to-end)",
+      "passes": false
     }
   ]
 }
