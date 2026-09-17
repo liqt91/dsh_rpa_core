@@ -20,6 +20,9 @@ gui = [
 
 [project.scripts]
 rpa-core = "rpa_core.cli:main"
+# 扩展 bridge host 入口：native messaging host manifest 的 path 指向该控制台脚本
+# （Windows 下 .exe 无参数，避免依赖 manifest path 的参数解析；ADR 0015 / M20）
+rpa-core-ext-host = "rpa_core.workers.ext_bridge:main"
 
 [dependency-groups]
 dev = [
@@ -51,7 +54,8 @@ target-version = "py312"
 line-length = 100
 # scripts/ 是一次性调研抓取脚本（非产品代码），不入 lint 门禁
 # .harness/demo/ 是 ADR 0014 的 GUI 技术选型实证脚手架，同样不入门禁
-exclude = ["scripts/", ".harness/demo/"]
+# .harness/spike/ 是 ADR 0015 的 native messaging 真机实证脚手架，同样不入门禁
+exclude = ["scripts/", ".harness/demo/", ".harness/spike/"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "ASYNC"]
