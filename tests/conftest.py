@@ -13,17 +13,16 @@
 
 ## 1. 默认执行通道必须是离线的
 
-扩展执行通道的默认地址是 `RPA_EXT_HUB_URL`（缺省 `http://127.0.0.1:8765`）。
-开发者本机常驻 devserver + 浏览器扩展时，那些没有显式注入 client 的用例
-（如 `tests/contract/test_browser_contract.py` 里直接 `PlaywrightExecutor()`）
-会真的经扩展通道读/操作**开发者本人浏览器**——门禁结论随本机环境漂移，
-同一份代码在不同机器上跑出不同结果，甚至产生真实副作用。
+扩展执行通道经**本地端点**（`rpa_core_ext_<browser>_<instanceId>`，见 ADR 0015）发现
+bridge host。开发者本机常驻浏览器扩展时，那些没有显式注入 client 的用例
+（如 `tests/contract/test_browser_contract.py` 里直接构造的执行器）会真的连上
+**开发者本人浏览器**——门禁结论随本机环境漂移，同一份代码在不同机器上跑出不同结果，
+甚至产生真实副作用。
 
-这里在收集测试前把缺省地址指向一个必然拒绝连接的端口，让「默认通道」成为
-确定性的离线状态。需要真实通道的用例一律显式构造
-`ExtensionExecClient(base_url=...)`（见 `test_extension_exec_channel.py`），
-`RunManager` 也会为 `rpa-core run` 子进程显式覆写该变量（见 devserver/runs.py），
-因此本改动不影响这两条路径。
+这里在收集测试前把端点前缀改成一个测试专用值（`RPA_EXT_ENDPOINT_PREFIX`），
+本机真实端点（`rpa_core_ext_…`）因此不可见，「默认通道」成为确定性的离线状态。
+需要真实通道的用例一律显式构造 client 并指向测试端点
+（见 `test_ext_bridge.py` 的 host 子进程夹具）。
 
 ## 2. 受限执行环境下临时根要能真正建出来
 
@@ -66,8 +65,9 @@ if not os.environ.get("QT_QPA_PLATFORM"):
 DESKTOP_E2E_ENABLED = os.environ.get("RPA_DESKTOP_E2E") == "1"
 DESKTOP_E2E_SKIP_MARKER = "RPA_DESKTOP_E2E=1"
 
-# 9/tcp 是 discard 端口，本机不监听 → 连接被立即拒绝，用例走「扩展离线」分支。
-os.environ["RPA_EXT_HUB_URL"] = "http://127.0.0.1:9"
+# 测试专用端点前缀：本机真实端点（rpa_core_ext_…）因此对默认 client 不可见，
+# 用例走「扩展离线」分支（需要真实通道的用例显式指向测试端点）。
+os.environ["RPA_EXT_ENDPOINT_PREFIX"] = "rpa_core_ext_test_isolated_"
 
 # 默认临时根不可用时的候选 basetemp 父目录：先系统临时区（不污染工作区），
 # 最后一个兜底放工作区内（工作区几乎总是可写的），已被 .gitignore 排除。

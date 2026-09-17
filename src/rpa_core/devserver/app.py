@@ -7,10 +7,7 @@ from pydantic import ValidationError
 
 from rpa_core.catalog import CommandCatalog
 from rpa_core.compiler.compiler import WorkflowCompileError, WorkflowCompiler
-from rpa_core.extension_exec import (
-    DEFAULT_COMMAND_TIMEOUT_SECONDS,
-    ExtensionExecHub,
-)
+from rpa_core.extension_exec import ExtensionExecClient
 from rpa_core.extension_installer import (
     ExtensionInstallError,
     _derive_install_mode,
@@ -87,8 +84,6 @@ class DevServerApp:
         self._capture_lock = threading.RLock()
         self._capture_seq = 0
         self._runs = RunManager(store.root)
-        # 自研扩展执行通道（M15）：命令队列 + 长轮询下发（默认整个浏览器权限）
-        self._extension_hub = ExtensionExecHub()
 
     def close(self) -> None:
         self._runs.close()
@@ -337,7 +332,12 @@ class DevServerApp:
                     kwargs["hybrid"] = True
             with self._capture_lock:
                 session_id = self._next_capture_id("desktop")
-                self._desktop_sessions[session_id] = factory(**kwargs)
+                session = factory(**kwargs)
+                self._desktop_sessions[session_id] = session
+            # 混合会话的扩展腿需显式 arm（ADR 0015：会话自己连 bridge 端点，
+            # 不再依赖扩展轮询 devserver 的 pending 标记）
+            if getattr(session, "is_extension_capture", False):
+                session.start()
             return {
                 "sessionId": session_id,
                 "mode": "hybrid" if kwargs.get("hybrid")
@@ -400,93 +400,6 @@ class DevServerApp:
         session.close()
         return {"cancelled": True, "sessionId": session_id}
 
-    # -- content-script 扩展捕获（M14 无缝路线）：无鉴权 + pending/result --
-    # 移除 token 配对机制：devserver 仅绑定 127.0.0.1（loopback），本机任意进程
-    # 本就能触达，token 只增加"重装/升级后 token 不匹配"的维护负担，故移除。
-
-    def _pending_extension_session(self) -> str | None:
-        for registry in (self._browser_sessions, self._desktop_sessions):
-            for session_id, session in registry.items():
-                if getattr(session, "is_extension_capture", False) and session.pending:
-                    return session_id
-        return None
-
-    def extension_pending(self) -> dict:
-        """扩展 background 轮询：是否有激活的扩展捕获会话。"""
-        session_id = self._pending_extension_session()
-        return {"pending": session_id is not None, "sessionId": session_id}
-
-    def extension_result(self, body: Any) -> dict:
-        """扩展 content script 捕获结果回传。"""
-        if not isinstance(body, dict):
-            raise ApiError(400, "BAD_REQUEST", "result body must be a JSON object")
-        session_id = str(body.get("sessionId") or self._pending_extension_session() or "")
-        session = self._browser_sessions.get(session_id) or self._desktop_sessions.get(
-            session_id
-        )
-        if session is None or not getattr(session, "is_extension_capture", False):
-            raise ApiError(404, "NOT_FOUND", f"no pending extension session: {session_id}")
-        session.submit(body.get("descriptor", body))
-        return {"received": True, "sessionId": session_id}
-
-    # -- 自研扩展执行通道（M15）：命令队列 + 长轮询 + 权限（默认整个浏览器）--
-
-    def set_extension_hub_url(self, base_url: str) -> None:
-        """run 子进程经该地址回连命令队列（扩展执行通道的宿主端点）。"""
-        self._runs.hub_url = base_url.rstrip("/")
-
-    def extension_hub_status(self) -> dict:
-        payload = self._extension_hub.status()
-        # 最新插件版本基准：从扩展源码目录 manifest 读（前端据此判断各浏览器插件是否最新）。
-        # hub 保持纯状态（不碰文件系统），基准在 app 层注入。
-        try:
-            manifest = json.loads((extension_root() / "manifest.json").read_text(encoding="utf-8"))
-            payload["latestVersion"] = str(manifest.get("version") or "")
-        except OSError:
-            payload["latestVersion"] = ""
-        return payload
-
-    def extension_hub_permissions(self, body: Any) -> dict:
-        """权限查询/收窄：默认 `{"mode": "browser"}`（整个浏览器）；预留 tabs/origins。"""
-        if not body:
-            return self._extension_hub.permissions
-        if not isinstance(body, dict):
-            raise ApiError(400, "BAD_REQUEST", "permissions body must be a JSON object")
-        try:
-            return self._extension_hub.set_permissions(body)
-        except ValueError as exc:
-            raise ApiError(400, "BAD_REQUEST", str(exc)) from exc
-
-    def extension_command_next(
-        self, wait_seconds: float, host_report: dict | None = None
-    ) -> dict:
-        """扩展 background 长轮询领命令（同时作为在线心跳 + 宿主身份上报）。"""
-        return {"command": self._extension_hub.next_command(wait_seconds, host_report)}
-
-    def extension_command_result(self, body: Any) -> dict:
-        """扩展回传命令结果。未知/已超时 id 返回 received=false（不报错）。"""
-        if not isinstance(body, dict):
-            raise ApiError(400, "BAD_REQUEST", "result body must be a JSON object")
-        matched = self._extension_hub.deliver_result(body)
-        return {"received": matched, "id": body.get("id")}
-
-    def extension_command_submit(self, body: Any) -> dict:
-        """执行器侧提交命令并阻塞等结果（run 子进程 → devserver）。"""
-        if not isinstance(body, dict):
-            raise ApiError(400, "BAD_REQUEST", "request body must be a JSON object")
-        op = str(body.get("op") or "")
-        if not op:
-            raise ApiError(400, "BAD_REQUEST", "missing 'op'")
-        try:
-            timeout_seconds = float(body.get("timeoutSeconds") or DEFAULT_COMMAND_TIMEOUT_SECONDS)
-        except (TypeError, ValueError):
-            raise ApiError(400, "BAD_REQUEST", "'timeoutSeconds' must be a number") from None
-        command: dict[str, Any] = {"op": op, "args": body.get("args") or {}}
-        target_host = (body.get("targetHost") or "").strip()
-        if target_host:
-            command["targetHost"] = target_host
-        return self._extension_hub.submit(command, max(0.1, timeout_seconds) + 1.0)
-
     # -- 扩展静默安装托管（update manifest XML + CRX，见 docs/extension-install.md）--
 
     def _packed_extension(self):
@@ -526,17 +439,33 @@ class DevServerApp:
         status["installMode"] = _derive_install_mode(status)
         return status
 
+    def extension_bridge_status(self) -> dict:
+        """扩展执行通道在线状态（ADR 0015：本地端点存在即在线，无心跳窗口）。
+
+        `latestVersion` 由 app 层从扩展源码目录 manifest 注入（前端据此判断插件新旧）。
+        """
+        payload = ExtensionExecClient().status()
+        try:
+            manifest = json.loads(
+                (extension_root() / "manifest.json").read_text(encoding="utf-8")
+            )
+            payload["latestVersion"] = str(manifest.get("version") or "")
+        except OSError:
+            payload["latestVersion"] = ""
+        return payload
+
     def env_status_view(self) -> dict:
         """/api/env/status 聚合诊断：浏览器安装×运行×插件安装×插件在线×安装途径×引擎版本。
 
-        纯静态部分复用 env_status_base（与 CLI `env-status` 同源），再并上本进程
-        hub 的实时在线心跳，一次看清浏览器/插件全链路。
+        纯静态部分复用 env_status_base（与 CLI `env-status` 同源），再并上本机
+        bridge 端点的实时在线状态，一次看清浏览器/插件全链路。
         """
         base = env_status_base(self._extension_build_dir)
-        # 在线心跳：hub 按浏览器名上报（msedge），映射到安装器命名（edge）
+        # 在线 = 存在该浏览器的 bridge 端点（ADR 0015；无心跳窗口）
+        status = ExtensionExecClient().status()
         online = {
             str(inst.get("browser"))
-            for inst in self._extension_hub.status().get("instances", [])
+            for inst in status.get("instances", [])
             if inst.get("browser")
         }
         hub_to_installer = {"msedge": "edge", "chrome": "chrome"}

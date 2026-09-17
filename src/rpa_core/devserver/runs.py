@@ -16,8 +16,6 @@ import sys
 import threading
 from pathlib import Path
 
-from rpa_core.extension_exec import DEFAULT_HUB_URL, HUB_URL_ENV
-
 
 class RunManager:
     """托管 `rpa-core run` 子进程；句柄用于 cancel，状态从 stdout/run_artifacts 读。"""
@@ -28,9 +26,6 @@ class RunManager:
         self._procs: dict[str, dict] = {}
         self._lock = threading.Lock()
         self._seq = 0
-        # 自研扩展执行通道宿主地址（DevServer.start 后写入真实端口）；
-        # 子进程据此回连命令队列，扩展收到命令后在用户真实浏览器里执行。
-        self.hub_url = DEFAULT_HUB_URL
 
     def start(self, workflow_name: str, inputs: dict | None = None) -> dict:
         workflow_path = self._workflows_root / workflow_name / "workflow.json"
@@ -43,7 +38,6 @@ class RunManager:
         if inputs:
             args += ["--inputs", json.dumps(inputs, ensure_ascii=False)]
         env = os.environ.copy()
-        env[HUB_URL_ENV] = self.hub_url
         proc = subprocess.Popen(
             args,
             env=env,

@@ -335,9 +335,7 @@ class MainWindow(QMainWindow):
         self._active_run_id: str | None = None
         self._run_timer = None
         self._run_dock_widget = None
-        # 扩展通道宿主（ADR 0014 §10）：内嵌 loopback 网关或复用 devserver
-        self._ext_gateway = None
-        self._ext_hub_url: str | None = None
+        # 扩展通道状态徽标（ADR 0015）：端点存在即在线，无内嵌网关/端口
         self._ext_badge_timer = None
         self._ext_badge_result_timer = None
         self._ext_badge_result: tuple[bool, list] | None = None
@@ -403,9 +401,8 @@ class MainWindow(QMainWindow):
             f"已加载 {len(catalog)} 条指令 · catalog {catalog.digest[:10]}"
         )
 
-        # 扩展通道状态徽标（状态栏常驻）：在线=有插件在轮询 hub；离线时给出
-        # 可操作提示。网关保持懒启动（首次运行时内嵌），徽标探测的是
-        # 「当前生效的 hub 地址」（未内嵌时探测默认 8765，可能是在跑的 devserver）。
+        # 扩展通道状态徽标（状态栏常驻）：在线 = 存在扩展 bridge 端点（ADR 0015，
+        # 浏览器按需拉起 host，无 8765 常驻服务、无心跳窗口）。
         if self._store is not None:
             from PySide6.QtCore import QTimer
 
@@ -418,7 +415,7 @@ class MainWindow(QMainWindow):
             self._refresh_ext_badge()
 
     def _refresh_ext_badge(self) -> None:
-        """后台线程探测 hub 在线状态；线程只写纯 Python 结果，绝不触碰 Qt 对象。
+        """后台线程探测 bridge 端点在线状态；线程只写纯 Python 结果，绝不触碰 Qt 对象。
 
         结果由窗口自有的 QTimer（_drain_ext_badge）取回：计时器随窗口销毁而
         销毁，天然不存在「线程向已释放 QObject emit」的野指针竞态（此前用信号
@@ -430,22 +427,16 @@ class MainWindow(QMainWindow):
         # 下窗口普遍不 show）里启动后台探测线程引发的生命周期竞态。
         if not self.isVisible():
             return
-        from rpa_core.extension_exec import DEFAULT_HUB_URL
-
-        hub = self._ext_hub_url or DEFAULT_HUB_URL
         self._ext_badge_probe_running = True
 
         def work() -> None:
             online, hosts = False, []
             try:
-                import urllib.request
+                from rpa_core.extension_exec import ExtensionExecClient
 
-                with urllib.request.urlopen(
-                    f"{hub}/api/ext/status", timeout=1.5
-                ) as resp:
-                    payload = json.loads(resp.read().decode("utf-8"))
-                online = bool(payload.get("online"))
-                hosts = payload.get("hosts") or []
+                status = ExtensionExecClient().status()
+                online = bool(status.get("online"))
+                hosts = status.get("hosts") or []
             except Exception:  # noqa: BLE001 - 探测失败即离线
                 online, hosts = False, []
             self._ext_badge_result = (online, hosts)  # 纯数据，无 Qt 调用
@@ -1009,45 +1000,7 @@ class MainWindow(QMainWindow):
             from rpa_core.devserver.runs import RunManager
 
             self._run_manager = RunManager(self._store.root)
-            # 扩展通道宿主：浏览器指令需要 hub 承接扩展轮询，否则「打开网页」
-            # 只能拉起浏览器进程却等不到插件上线（browser_launch_no_host）
-            self._run_manager.hub_url = self._ensure_ext_hub()
         return self._run_manager
-
-    def _ensure_ext_hub(self) -> str:
-        """确保扩展通道宿主在线，返回其 URL（ADR 0014 §10 loopback 网关）。
-
-        优先级：复用已在运行的 devserver（避免重复绑定 8765）→ GUI 内嵌
-        ExtLoopbackGateway。端口被非 RPA 进程占用时回退默认地址（运行会
-        得到明确的离线报错，不静默假成功）。
-        """
-        if getattr(self, "_ext_hub_url", None):
-            return self._ext_hub_url
-        from rpa_core.devserver.server import ExtLoopbackGateway, probe_ext_hub
-        from rpa_core.extension_exec import DEFAULT_HUB_URL
-
-        if probe_ext_hub(DEFAULT_HUB_URL):
-            self._ext_hub_url = DEFAULT_HUB_URL
-            self.statusBar().showMessage("复用已运行的 devserver 扩展通道", 4000)
-            return self._ext_hub_url
-        try:
-            gateway = ExtLoopbackGateway(
-                catalog=self.catalog, workflows_root=self._store.root
-            )
-            gateway.start()
-        except OSError:
-            # 8765 被非 RPA 进程占用：回退默认地址，浏览器指令会报明确的离线错误
-            self._ext_hub_url = DEFAULT_HUB_URL
-            self.statusBar().showMessage(
-                "端口 8765 被占用且不是扩展通道宿主，浏览器指令将不可用", 6000
-            )
-            return self._ext_hub_url
-        self._ext_gateway = gateway
-        self._ext_hub_url = gateway.base_url
-        self.statusBar().showMessage(
-            f"已内嵌扩展通道宿主（{gateway.base_url}）", 4000
-        )
-        return self._ext_hub_url
 
     def _run_dock(self):
         """懒创建底部运行面板（状态行 + 事件流）。"""
@@ -1649,26 +1602,16 @@ class MainWindow(QMainWindow):
         return "\n".join(lines)
 
     def _ext_hub_text(self) -> str:
-        """扩展通道宿主的当前状态文本（供插件对话框展示）。"""
-        from rpa_core.devserver.server import probe_ext_hub
-        from rpa_core.extension_exec import DEFAULT_HUB_URL
+        """bridge 通道当前状态文本（供插件对话框展示）。"""
+        from rpa_core.extension_exec import ExtensionExecClient
 
-        hub = self._ext_hub_url or DEFAULT_HUB_URL
-        if not probe_ext_hub(hub):
-            return f"扩展通道宿主：未运行（{hub}）——浏览器指令不可用"
-        import urllib.request
-
-        try:
-            with urllib.request.urlopen(f"{hub}/api/ext/status", timeout=1.5) as resp:
-                payload = json.loads(resp.read().decode("utf-8"))
-        except Exception:  # noqa: BLE001
-            return f"扩展通道宿主：状态读取失败（{hub}）"
-        if payload.get("online"):
-            hosts = ", ".join(sorted({str(h) for h in payload.get("hosts") or []}))
-            return f"扩展通道宿主：运行中（{hub}），插件在线（{hosts}）"
+        status = ExtensionExecClient().status()
+        if status.get("online"):
+            hosts = ", ".join(sorted({str(h) for h in status.get("hosts") or []}))
+            return f"扩展通道：在线（{hosts}）——浏览器指令可用"
         return (
-            f"扩展通道宿主：运行中（{hub}），但插件离线——"
-            "请到 edge://extensions 重新加载扩展，或整体重启浏览器"
+            "扩展通道：离线——请确认已注册 host（rpa-core install-extension）"
+            "并已加载扩展；离线时浏览器指令不可用"
         )
 
     def _show_extension_dialog(self) -> None:
@@ -1813,7 +1756,7 @@ class MainWindow(QMainWindow):
                 event.ignore()
 
     def _shutdown_run_manager(self) -> None:
-        """窗口关闭时终止仍在运行的子进程与内嵌扩展网关（规则 11）。"""
+        """窗口关闭时终止仍在运行的子进程（规则 11）。"""
         if self._run_timer is not None:
             self._run_timer.stop()
         if self._ext_badge_timer is not None:
@@ -1825,10 +1768,6 @@ class MainWindow(QMainWindow):
         if self._run_manager is not None:
             self._run_manager.close()
             self._run_manager = None
-        if getattr(self, "_ext_gateway", None) is not None:
-            self._ext_gateway.stop()
-            self._ext_gateway = None
-            self._ext_hub_url = None
         # 悬浮窗是无父顶层窗口（最小化主窗时不随隐），关闭主窗需显式带走
         if self._run_float is not None:
             self._run_float.close()

@@ -13,7 +13,7 @@ const state = {
   elementsSeen: null, // 最近一次渲染的元素名集合（捕获自动刷新差集用）
   collapsedGroups: new Set(), // 指令面板已收起的分组名（首次渲染默认全收起，单击分组展开；展开/收起状态记忆）
   paletteCollapseApplied: false, // 首次渲染时把语义分组全预置为收起（默认折叠，指令多便于查找）
-  extChannel: null, // 最近一次 /api/ext/status 结果 {online, host}
+  extChannel: null, // 最近一次 /api/extension/bridge-status 结果 {online, host}
   extHosts: [], // 在线扩展宿主浏览器名列表（用于 browserType 下拉置灰）
   paramGroupsOpen: new Map(), // 属性面板参数分组的展开状态（key: `${nodeId}|${分组名}`；未记录时按分组缺省/是否已填值判定）
 };
@@ -1527,7 +1527,7 @@ async function refreshExtChannel() {
   const previous = state.extChannel;
   let status = { online: false, host: null };
   try {
-    status = await api("GET", "/api/ext/status");
+    status = await api("GET", "/api/extension/bridge-status");
   } catch { /* devserver 未运行或通道异常：按离线展示 */ }
   state.extChannel = status;
   const prevHosts = state.extHosts;
@@ -3302,13 +3302,13 @@ const EXTENSION_NAMES = { chrome: "Chrome", edge: "Edge" };
 const HOST_KEY_BY_PANEL = { chrome: "chrome", edge: "msedge" };
 
 async function loadExtensionStatus() {
-  // 安装状态（/api/extension/status）+ 在线运行状态（/api/ext/status）合并展示：
+  // 安装状态（/api/extension/status）+ 在线运行状态（/api/extension/bridge-status）合并展示：
   // 浏览器装没装 / 插件装没装 / 插件什么版本，集中在一个矩阵里。
   // 插件「在线」心跳与「安装/启用」态解耦：在线名单来自 hub（长轮询心跳），
   // 分开判断才能讲清「浏览器装了没开 / 开了但插件没上线」两类独立故障。
   const [data, live] = await Promise.all([
     api("GET", "/api/extension/status"),
-    api("GET", "/api/ext/status").catch(() => null),   // 心跳接口不可用不影响安装状态展示
+    api("GET", "/api/extension/bridge-status").catch(() => null),   // 心跳接口不可用不影响安装状态展示
   ]);
   const online = new Set();
   for (const inst of (live && live.instances) || []) {

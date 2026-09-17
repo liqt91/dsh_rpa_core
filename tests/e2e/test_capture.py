@@ -2,6 +2,7 @@ import ctypes
 import json
 import os
 import sys
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -9,8 +10,10 @@ from pathlib import Path
 
 import pytest
 
+from rpa_core import local_transport as lt
 from rpa_core.capture import DesktopCaptureSession, ExtensionCaptureSession
 from rpa_core.devserver import DevServer
+from rpa_core.extension_exec import endpoint_name
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -55,8 +58,55 @@ def _request(method: str, path: str, payload=None, base: str = ""):
         return exc.code, json.loads(exc.read().decode("utf-8"))
 
 
+class _FakeBridge:
+    """扮演 bridge host 的扩展腿：收 capture_arm → 回 capture_result（ADR 0015）。"""
+
+    def __init__(self, descriptor: dict):
+        self.name = endpoint_name("msedge", "e2e-cap")
+        self.descriptor = descriptor
+        self.server = lt.LocalEndpointServer(self.name)
+        self.armed = 0
+        self._stop = threading.Event()
+        threading.Thread(target=self._loop, daemon=True).start()
+
+    def _loop(self) -> None:
+        while not self._stop.is_set():
+            try:
+                channel = self.server.accept(timeout=0.3)
+            except lt.LocalTransportError:
+                return
+            if channel is None:
+                continue
+            threading.Thread(target=self._serve, args=(channel,), daemon=True).start()
+
+    def _serve(self, channel) -> None:
+        try:
+            while True:
+                try:
+                    message = channel.recv()
+                except lt.LocalTransportError:
+                    return
+                if message is None:
+                    return
+                if message.get("type") == "capture_arm":
+                    self.armed += 1
+                    channel.send(
+                        {
+                            "type": "capture_result",
+                            "sessionId": message.get("sessionId"),
+                            "descriptor": self.descriptor,
+                        }
+                    )
+        finally:
+            channel.close()
+
+    def close(self) -> None:
+        self._stop.set()
+        self.server.close()
+
+
 def test_browser_capture_extension_only_end_to_end(server):
-    """浏览器捕获已收敛为自研扩展单通道：persistent 拒绝，extension 经 result 回传播补流程。"""
+    """浏览器捕获已收敛为自研扩展单通道：persistent 拒绝，extension 经 bridge 端点回传。"""
     base = f"http://127.0.0.1:{server.port}"
 
     # persistent/user-browser 通道已随 playwright 移除 → 必须拒绝
@@ -69,47 +119,44 @@ def test_browser_capture_extension_only_end_to_end(server):
     assert status == 400
     assert payload["error"] == "BAD_REQUEST"
 
-    # 仅自研扩展单通道
-    status, payload = _request(
-        "POST",
-        "/api/capture/browser/start",
-        {"transport": "extension"},
-        base=base,
-    )
-    assert status == 200
-    session_id = payload["sessionId"]
-
-    # content-script 回传描述符 → pick 被唤醒
     descriptor = {
         "kind": "browser",
         "selector": {"css": "#go"},
         "verifyCount": 1,
         "metadata": {"tag": "button"},
     }
-    status, payload = _request(
-        "POST",
-        "/api/capture/extension/result",
-        {"sessionId": session_id, **descriptor},
-        base=base,
-    )
-    assert status == 200
-    status, payload = _request(
-        "POST",
-        "/api/capture/browser/pick",
-        {"sessionId": session_id, "timeoutSeconds": 15},
-        base=base,
-    )
-    assert status == 200
-    assert payload["kind"] == "browser"
-    assert payload["selector"]["css"] == "#go"
-    assert payload["verifyCount"] == 1
-    assert payload["metadata"]["tag"] == "button"
+    bridge = _FakeBridge(descriptor)
+    try:
+        # 仅自研扩展单通道：会话经 bridge 端点 arm 扩展
+        status, payload = _request(
+            "POST",
+            "/api/capture/browser/start",
+            {"transport": "extension"},
+            base=base,
+        )
+        assert status == 200
+        session_id = payload["sessionId"]
 
-    status, payload = _request(
-        "POST", "/api/capture/browser/cancel", {"sessionId": session_id}, base=base
-    )
-    assert status == 200
-    assert payload["cancelled"] is True
+        status, payload = _request(
+            "POST",
+            "/api/capture/browser/pick",
+            {"sessionId": session_id, "timeoutSeconds": 15},
+            base=base,
+        )
+        assert status == 200
+        assert payload["kind"] == "browser"
+        assert payload["selector"]["css"] == "#go"
+        assert payload["verifyCount"] == 1
+        assert payload["metadata"]["tag"] == "button"
+        assert bridge.armed >= 1
+
+        status, payload = _request(
+            "POST", "/api/capture/browser/cancel", {"sessionId": session_id}, base=base
+        )
+        assert status == 200
+        assert payload["cancelled"] is True
+    finally:
+        bridge.close()
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="desktop capture requires Windows")

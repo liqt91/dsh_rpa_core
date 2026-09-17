@@ -230,17 +230,20 @@ def _cmd_install_extension(args) -> int:
         clear_uninstall_block,
         default_build_dir,
         detect_browsers,
+        ensure_native_host,
         extension_root,
         extension_status,
         install_elevated,
         install_external_guided,
         install_policy_entry,
         load_packed_extension,
+        native_host_status,
         open_browser,
         open_path_in_explorer,
         pack_extension,
         remove_external_registry_entries,
         remove_policy_entries,
+        unregister_native_host,
     )
 
     build_dir = args.build_dir or default_build_dir()
@@ -265,7 +268,13 @@ def _cmd_install_extension(args) -> int:
                 update_url=update_url,
             ).items():
                 removed[browser] += count
-            print(json.dumps({"removed": removed}, ensure_ascii=False, indent=2))
+            native_hosts = {
+                browser: unregister_native_host(browser) for browser in browsers
+            }
+            print(json.dumps(
+                {"removed": removed, "nativeHost": native_hosts},
+                ensure_ascii=False, indent=2,
+            ))
             return 0
         if args.status:
             status = extension_status("", build_dir, extension_dir=source_dir)
@@ -277,6 +286,9 @@ def _cmd_install_extension(args) -> int:
             status["_note"] = (
                 "安装方式：开发者模式 → Load unpacked 选择源码目录（本地目录，持久可用）"
             )
+            status["nativeHost"] = {
+                browser: native_host_status(browser) for browser in browsers
+            }
             print(json.dumps(status, ensure_ascii=False, indent=2))
             return 0
         if args.unblock:
@@ -319,6 +331,17 @@ def _cmd_install_extension(args) -> int:
                         "旧注册表路线在商店上架前不可靠（启用后约 30s 被判损坏），"
                         "保留 --registry 供上架后使用。",
             }
+            # Native Messaging host 注册（ADR 0015）：扩展按需拉起 bridge host 的
+            # 前置条件；与 Load unpacked 是配套两步，这里一并注册（幂等）。
+            native_hosts: dict[str, dict] = {}
+            for browser in browsers:
+                try:
+                    native_hosts[browser] = ensure_native_host(
+                        browser, source_dir
+                    )
+                except ExtensionInstallError as exc:
+                    native_hosts[browser] = {"error": exc.code, "message": str(exc)}
+            guide["nativeHost"] = native_hosts
             print(json.dumps(guide, ensure_ascii=False, indent=2))
             return 0
         packed = pack_extension(extension_root(), build_dir)
@@ -390,29 +413,27 @@ def _cmd_env_status() -> int:
     """`env-status`：环境诊断，输出与 devserver `/api/env/status` 同一份结构。
 
     纯静态部分（浏览器安装×运行×插件安装×安装途径×引擎版本）由
-    extension_installer.env_status_base 计算；在线心跳属 devserver 进程内 hub 状态，
-    CLI 尽力探测正在运行的 devserver（127.0.0.1:8765）并上实时在线名单，
-    探测不到则 online 标 null，不硬失败。
+    extension_installer.env_status_base 计算；在线状态由本机 bridge 端点探测
+    （ADR 0015：端点存在即在线），无需 devserver 在跑。
     """
-    import urllib.request  # noqa: PLC0415 仅在 env-status 使用
-
-    from rpa_core.extension_exec import DEFAULT_HUB_URL
+    from rpa_core.extension_exec import ExtensionExecClient
     from rpa_core.extension_installer import env_status_base
 
     result = env_status_base()
     try:
-        with urllib.request.urlopen(
-            f"{DEFAULT_HUB_URL}/api/env/status", timeout=2
-        ) as resp:
-            live = json.loads(resp.read().decode("utf-8"))
-        for name, info in (live.get("browsers") or {}).items():
-            if name in result["browsers"] and "online" in info:
-                result["browsers"][name]["online"] = info["online"]
-        result["_online"] = "live"
-    except Exception:  # 无 devserver 或不可达：心跳无法观测，标 null
-        result["_online"] = "unavailable"
-        for info in result["browsers"].values():
-            info["online"] = None
+        status = ExtensionExecClient().status()
+    except Exception:  # noqa: BLE001 - 探测失败按离线处理
+        status = {"online": False, "instances": []}
+    online = {
+        str(inst.get("browser"))
+        for inst in status.get("instances", [])
+        if inst.get("browser")
+    }
+    hub_to_installer = {"msedge": "edge", "chrome": "chrome"}
+    for name, info in (result.get("browsers") or {}).items():
+        hub_name = {v: k for k, v in hub_to_installer.items()}.get(name)
+        info["online"] = bool(hub_name and hub_name in online)
+    result["_online"] = "live" if status.get("online") else "offline"
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0
 

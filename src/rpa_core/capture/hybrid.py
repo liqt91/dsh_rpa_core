@@ -1,16 +1,17 @@
 """混合捕获会话（M16）：桌面 hover + 浏览器扩展双通道，先回传者胜。
 
 - 桌面通道：DesktopCaptureSession --hover --hybrid（浏览器内容区让位给扩展）
-- 浏览器通道：以 is_extension_capture 鸭子类型挂进 devserver 会话表，
-  扩展 background 轮询 pending 时可见 → 页内 Ctrl+Click 捕获经
-  /api/capture/extension/result 回传
-- pick 双等：扩展事件 或 桌面 agent stdout，先到先返回，取消另一侧
-- 没装扩展时退化为纯桌面 hover（桌面通道照常工作，扩展端永不触发）
+- 浏览器通道：``ExtensionCaptureSession``（自己经 bridge 端点 arm/disarm 并读回结果，
+  见 ADR 0015）——本会话持有它并在 pick 里与桌面腿双等
+- pick 双等：扩展结果事件 或 桌面 agent stdout，先到先返回，取消另一侧
+- 没装扩展时退化为纯桌面 hover（扩展腿 start 即离线，永不触发）
 """
 
 import threading
 import time
 from typing import Any
+
+from .extension import ExtensionCaptureSession
 
 
 class HybridCaptureSession:
@@ -19,26 +20,29 @@ class HybridCaptureSession:
     # devserver 用鸭子类型识别扩展会话（不 import capture 包，维持隔离边界）
     is_extension_capture = True
 
-    def __init__(self, *, desktop_factory, **desktop_kwargs: Any):
+    def __init__(
+        self,
+        *,
+        desktop_factory,
+        extension_session: ExtensionCaptureSession | None = None,
+        **desktop_kwargs: Any,
+    ):
         self._desktop = desktop_factory(**desktop_kwargs)
-        self._event = threading.Event()
-        self._result: dict | None = None
+        self._extension = extension_session or ExtensionCaptureSession()
         self._pending = True
         self._closed = False
 
     def start(self) -> list[str]:
+        self._extension.start()
         return ["hybrid"]
 
     @property
     def pending(self) -> bool:
-        return self._pending and not self._event.is_set()
+        return self._pending and not self._extension.result_event.is_set()
 
     def submit(self, payload: dict) -> None:
-        """扩展 content script 捕获结果回传。"""
-        if self._event.is_set():
-            return
-        self._result = payload
-        self._event.set()
+        """扩展 content script 捕获结果回传（兼容旧调用点）。"""
+        self._extension.submit(payload)
 
     def pick(self, timeout_seconds: float = 90.0) -> dict:
         box: dict[str, Any] = {}
@@ -50,20 +54,24 @@ class HybridCaptureSession:
         thread.start()
         deadline = time.monotonic() + timeout_seconds
         while time.monotonic() < deadline:
-            if self._event.is_set():
-                # 扩展先回传：回收桌面 agent
+            if self._extension.result_event.is_set():
+                # 扩展先回传：撤防扩展 + 回收桌面 agent
                 self._pending = False
+                self._extension.close()
                 try:
                     self._desktop.cancel()
                 except Exception:
                     pass
                 thread.join(timeout=3)
-                return self._result if self._result is not None else {"cancelled": True}
+                result = self._extension.result
+                return result if result is not None else {"cancelled": True}
             if "desktop" in box:
                 self._pending = False
+                self._extension.close()  # 桌面先赢：撤防扩展
                 return box["desktop"]
             time.sleep(0.05)
         self._pending = False
+        self._extension.close()
         try:
             self._desktop.cancel()
         except Exception:
@@ -73,9 +81,7 @@ class HybridCaptureSession:
 
     def cancel(self) -> None:
         self._pending = False
-        if self._result is None:
-            self._result = {"cancelled": True}
-        self._event.set()
+        self._extension.cancel()
         try:
             self._desktop.cancel()
         except Exception:
@@ -90,3 +96,4 @@ class HybridCaptureSession:
             self._desktop.close()
         except Exception:
             pass
+
