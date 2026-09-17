@@ -174,3 +174,54 @@ def test_extension_status_text_covers_both_browsers(window):
     text = window._extension_status_text()
     assert "chrome" in text and "edge" in text
     assert "浏览器" in text
+
+
+# ---- bridge host 注册（M23 补强：GUI 对话框补齐 host 注册入口） ---------------
+def test_native_host_status_text_per_browser(window, monkeypatch):
+    import rpa_core.extension_installer as installer
+
+    states = {
+        "edge": {
+            "registered": True,
+            "extensionId": "edklhodhmpncghhhlpabpppimjakipdi",
+            "hostExecutableExists": True,
+        },
+        "chrome": {"registered": False, "hostExecutableExists": True},
+    }
+    monkeypatch.setattr(
+        installer, "native_host_status", lambda browser: states[browser]
+    )
+    text = window._native_host_status_text()
+    assert "edge：bridge 已注册" in text
+    assert "edklhodh" in text
+    assert "chrome：bridge 未注册" in text
+
+
+def test_native_host_status_text_missing_host_entry(window, monkeypatch):
+    import rpa_core.extension_installer as installer
+
+    missing = {"registered": False, "hostExecutableExists": False}
+    monkeypatch.setattr(installer, "native_host_status", lambda browser: missing)
+    text = window._native_host_status_text()
+    assert "缺 host 入口" in text
+
+
+def test_register_bridge_hosts_per_browser_tolerance(window, monkeypatch):
+    import rpa_core.extension_installer as installer
+
+    calls = []
+
+    def fake_ensure(browser):
+        calls.append(browser)
+        if browser == "chrome":
+            raise installer.ExtensionInstallError(
+                "NATIVE_HOST_MISSING", "未找到 host 入口"
+            )
+        return {"extensionId": "abcdefghijklmnop"}
+
+    monkeypatch.setattr(installer, "ensure_native_host", fake_ensure)
+    text = window._register_bridge_hosts()
+    assert calls == ["edge", "chrome"]
+    assert "edge：已注册" in text
+    assert "chrome：注册失败" in text
+    assert "未找到 host 入口" in text

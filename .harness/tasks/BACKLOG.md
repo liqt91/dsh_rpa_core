@@ -10,6 +10,23 @@
 
 - [ ] 技术路线（ADR 0016）：GUI 为唯一主力形态——新增能力优先落 GUI；Web 编辑器（devserver）
   `devserver/static/` 冻结演进（不删除、不再补齐 GUI 已有能力）
+- [ ] **M23 GUI 体验对齐（用户体验 × 对标影刀）**（`planned`）
+  - 计划：`M23-gui-ux-parity.md`；分析依据：2026-09-17 GUI 代码审计（`src/rpa_core/gui/`）+
+    `docs/yingdao-web-cmds-benchmark.md` + `.harness/yingdao-gap-matrix.md`
+  - 切 G1 捕获链路（`done` 主体，2026-09-17）：**单入口混合捕获**已落地——唯一「捕获元素」
+    按钮接 `HybridCaptureSession`（扩展腿网页/桌面 hover 腿先回传者胜）；捕获时主窗最小化/还原；
+    插件离线显式提示；连带修复让位标志断链、离线扩展腿误杀桌面腿、CLI 未 arm 三处存量缺陷。
+    **剩余**：捕获后确认对话框对齐 Web（改名/selector 编辑/命中数/同名覆盖保护，当前仅
+    QInputDialog 命名）
+  - 切 G2 画布交互：多选 + 批量移动/删除（当前单选，Web M11 已有）+ 右键菜单
+    （复制/粘贴/删除等，当前无 contextMenu）+ 画布内搜索定位（Ctrl+F）
+  - 切 G3 属性面板追平 Web：消费 `x-param-groups` 分组折叠（GUI param_form 仍平铺）+
+    输出别名（`output_aliases`/`x-outputs`）编辑 UI + 重试/超时字段（含 unsafe 禁用防呆，
+    对齐 Web `retryCountField`）
+  - 切 G4 失败定位闭环：运行失败点击错误 → 跳转失败节点 + 结构化错误详情
+    （借鉴 Web `startupError` 透出经验）；运行日志加耗时/输出值预览
+  - 切片内次级项：变量面板（设计期静态收集 output_aliases/inputs 列表）、菜单栏
+    （QMenuBar + 快捷键一览）、卡片摘要按关键字段（url/selector/text）优化
 - [ ] **M21 GUI 运行控制进阶：暂停/继续 + 恢复人工确认**（`planned`）
   - 计划：`M21-run-control-advanced.md`
   - 缺口：`RunManager` 无 pause/resume；暂停信号是进程内 `asyncio.Event`，GUI 走子进程需
@@ -22,6 +39,14 @@
 
 ## 远期任务
 
+- [ ] 画布缩放 / 缩略导航（`planned`——树形画布长流程纵深远超影刀自由画布；M23 切片外）
+- [ ] 节点禁用/启用（`blocked`——需 AST 增加 `disabled` 字段，属后端契约扩展，不单是 GUI）
+- [ ] 断点 / 单步调试（`planned`——影刀核心调试能力；ADR 0005 pause 语义已铺路，需运行协议扩展）
+- [ ] 运行历史浏览 / 回放（`planned`——run_artifacts 列表入口；影刀有运行记录）
+- [ ] 主题切换入口（`planned`——QDarkStyle 深浅 palette 已在依赖，`apply_theme` 固定浅色）
+- [ ] 窗口布局记忆（`planned`——dock 开合/宽度 QSettings 持久化）
+- [ ] 流程 inputs 声明编辑 UI（`planned`——当前只能手写 JSON；运行对话框只读消费）
+- [ ] 元素捕获后截图缩略图（`blocked`——待捕获链路具自动截屏能力；M19 切 C 同源）
 - [ ] 编辑器元素截图灯箱 + 上传 + 缩略图（`blocked`——待捕获链路具自动截屏能力；M19 切 C 后置项）
 - [ ] 编辑器多 tab 属性表单（`planned`——单命令 schema 字段显著增多（>~8）时按「常规/参数/…」划分；M19 切 E 留接口）
 - [ ] UI、DSH、MCP、调度器和安装器集成（`planned`）

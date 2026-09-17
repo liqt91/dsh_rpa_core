@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 import sys
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 import pytest
 
@@ -101,13 +101,14 @@ def test_extension_id_from_path_shape(tmp_path):
 
 @pytest.mark.skipif(sys.platform != "win32", reason="UTF-16LE 路径编码仅 Windows")
 def test_extension_id_from_path_matches_real_edge_value():
-    """S0 真机锚点：该路径在 Edge 的 profile 里就是此 ID（防算法漂移）。"""
-    spike = (
-        Path(__file__).resolve().parents[2]
-        / ".harness"
-        / "spike"
-        / "native_messaging"
-        / "extension"
+    """S0 真机锚点：该字面路径在 Edge 的 profile 里就是此 ID（防算法漂移）。
+
+    锚点用字面量路径而非本机 resolve 结果——spike 扩展当初在旧开发机
+    ``D:\\...\\代码\\rpa_core`` 下被 Edge 加载，锚定本机位置会在仓库迁移后误报。
+    """
+    spike = PureWindowsPath(
+        r"D:\Users\Administrator\Documents\代码\rpa_core"
+        r"\.harness\spike\native_messaging\extension"
     )
     assert ext.extension_id_from_path(spike) == "dfbjkpbeppapijmjcpppconbchmeinek"
 

@@ -234,3 +234,41 @@ def test_hybrid_save_extension_result_to_flow(server, bridge):
     )
     assert status == 200
     assert element["kind"] == "browser"
+
+
+# ---- 单元级（不经 devserver） -------------------------------------------------
+def test_hybrid_offline_extension_degrades_to_desktop():
+    """扩展腿离线（无 bridge 端点）→ 退化为纯桌面 hover，桌面结果正常返回。
+
+    回归：离线腿的 result_event 在 start 时已置位，旧实现会被误判为
+    「扩展先回传」而秒回 cancelled，桌面腿永远等不到。
+    """
+    from rpa_core.capture.extension import ExtensionCaptureSession
+
+    ext = ExtensionCaptureSession(endpoint="rpa_core_ext_test_no_such_endpoint")
+    session = HybridCaptureSession(
+        desktop_factory=FakeDesktopSession, extension_session=ext
+    )
+    try:
+        session.start()
+        assert session.extension_offline
+        result = session.pick(timeout_seconds=5)
+        assert result["kind"] == "desktop"
+        assert result["selector"]["locator"]["automationId"] == "submitButton"
+    finally:
+        session.close()
+
+
+def test_hybrid_forwards_hybrid_flag_to_desktop_factory():
+    """hybrid=True 必须随桌面腿下发：agent 靠它在浏览器内容区让位给扩展。"""
+    from rpa_core.capture.extension import ExtensionCaptureSession
+
+    FakeDesktopSession.instances = []
+    session = HybridCaptureSession(
+        desktop_factory=FakeDesktopSession,
+        extension_session=ExtensionCaptureSession(endpoint="x"),
+        hover=True,
+    )
+    assert FakeDesktopSession.instances[-1].kwargs["hybrid"] is True
+    assert FakeDesktopSession.instances[-1].kwargs["hover"] is True
+    session.close()

@@ -176,8 +176,14 @@ def _cmd_capture(args) -> int:
             point=_parse_point(args.point),
             window_handle=args.window_handle,
             hover=args.hover,
+            # hover 默认混合捕获（网页走扩展、桌面走 UIA），与 devserver 同口径
+            hybrid=args.hover,
         )
-        start = lambda: None  # noqa: E731
+        # 混合会话的扩展腿需显式 arm（与 devserver 同口径；纯桌面会话无 start）
+        if getattr(session, "is_extension_capture", False):
+            start = session.start
+        else:
+            start = lambda: None  # noqa: E731
         pick = lambda timeout: session.pick(timeout_seconds=timeout)  # noqa: E731
     try:
         start()

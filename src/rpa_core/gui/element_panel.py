@@ -30,9 +30,10 @@ class ElementPanel(QWidget):
 
         toolbar = QHBoxLayout()
         self.refresh_button = QPushButton("刷新")
-        self.capture_button = QPushButton("捕获桌面元素")
+        self.capture_button = QPushButton("捕获元素")
         self.capture_button.setToolTip(
-            "hover 捕获：移动鼠标框选桌面元素，F9 或 Ctrl+Click 捕获，Esc 取消"
+            "混合捕获：移动鼠标框选（网页走浏览器插件、桌面走 UIA），"
+            "Ctrl+Click 捕获（桌面也可用 F9），Esc 取消"
         )
         self.verify_button = QPushButton("校验")
         self.insert_button = QPushButton("插入参数")

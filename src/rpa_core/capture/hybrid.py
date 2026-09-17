@@ -27,14 +27,25 @@ class HybridCaptureSession:
         extension_session: ExtensionCaptureSession | None = None,
         **desktop_kwargs: Any,
     ):
+        # 让位标志必须随桌面腿下发：agent 在浏览器内容区抑制高亮/忽略手势，
+        # 把网页正文让给扩展的页内捕获（M14 实机验收的让位语义）
+        desktop_kwargs.setdefault("hybrid", True)
         self._desktop = desktop_factory(**desktop_kwargs)
         self._extension = extension_session or ExtensionCaptureSession()
+        self._ext_offline = False
         self._pending = True
         self._closed = False
 
     def start(self) -> list[str]:
         self._extension.start()
+        # 扩展腿离线（无 bridge 端点）时退化为纯桌面 hover：pick 不再等扩展腿
+        self._ext_offline = bool(getattr(self._extension, "offline", False))
         return ["hybrid"]
+
+    @property
+    def extension_offline(self) -> bool:
+        """扩展腿是否离线（start 后有效；宿主据此提示网页区域不可捕获）。"""
+        return self._ext_offline
 
     @property
     def pending(self) -> bool:
@@ -54,7 +65,8 @@ class HybridCaptureSession:
         thread.start()
         deadline = time.monotonic() + timeout_seconds
         while time.monotonic() < deadline:
-            if self._extension.result_event.is_set():
+            # 离线扩展腿不参选（其 result_event 在 start 时已置位，不判会秒回 cancelled）
+            if not self._ext_offline and self._extension.result_event.is_set():
                 # 扩展先回传：撤防扩展 + 回收桌面 agent
                 self._pending = False
                 self._extension.close()

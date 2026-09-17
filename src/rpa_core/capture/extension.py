@@ -67,6 +67,11 @@ class ExtensionCaptureSession:
         return ["*"]
 
     @property
+    def offline(self) -> bool:
+        """扩展腿是否离线（未连上任何 bridge 端点：扩展未装/浏览器未起）。"""
+        return self._offline
+
+    @property
     def pending(self) -> bool:
         return not self._event.is_set()
 

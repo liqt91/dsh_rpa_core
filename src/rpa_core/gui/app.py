@@ -347,6 +347,8 @@ class MainWindow(QMainWindow):
         self._restore_timer = None
         # 参数面板未应用的编辑（保存/运行/切换节点前自动提交）
         self._pending_apply = None
+        # 进行中的元素捕获会话（混合捕获，窗口关闭时取消）
+        self._capture_session = None
         self.setWindowTitle("RPA Core 编辑器")
         self.resize(1280, 800)
 
@@ -1275,7 +1277,7 @@ class MainWindow(QMainWindow):
             wire_element_panel(
                 panel,
                 on_refresh=self._refresh_elements,
-                on_capture=self._capture_desktop_element,
+                on_capture=self._capture_element,
                 on_verify=self._verify_element,
                 on_insert=self._insert_element,
                 on_delete=self._delete_element,
@@ -1394,22 +1396,39 @@ class MainWindow(QMainWindow):
         self._on_canvas_selection(current, current)
         self.statusBar().showMessage(f"已把元素 {name} 填入参数 {key}", 4000)
 
-    # ---- 桌面捕获（切 G） ---------------------------------------------------
-    def _capture_desktop_element(self) -> None:
-        """桌面 hover 捕获（子进程 desktop_agent，后台线程等待手势）。"""
+    # ---- 元素捕获（切 G1：单入口混合捕获） ---------------------------------
+    def _capture_element(self) -> None:
+        """混合捕获：网页正文走扩展、桌面走 UIA hover，先回传者胜。
+
+        影刀式单入口——用户无需先判断目标是网页还是桌面。捕获期间主窗
+        最小化（不遮挡目标），结束还原；插件离线时显式提示网页区域不可
+        捕获（UIA 兜底已证伪，不静默捕获渲染层）。
+        """
         if self._element_store() is None:
             self.statusBar().showMessage("先把流程保存到流程库，再捕获元素", 5000)
             return
-        self._capture_bridge = _CaptureBridge(self)
-        self._capture_bridge.finished.connect(self._on_desktop_captured)
-        self.statusBar().showMessage(
-            "桌面捕获中：移动鼠标框选，F9 或 Ctrl+Click 捕获，Esc 取消", 9000
+        if self._capture_session is not None:
+            self.statusBar().showMessage("已有捕获会话进行中（Esc 取消）", 4000)
+            return
+        # 延迟导入对齐 CLI（capture 包洁净无 pywinauto，但保持单一惯例）
+        from rpa_core.capture import DesktopCaptureSession, HybridCaptureSession
+
+        session = HybridCaptureSession(
+            desktop_factory=DesktopCaptureSession,
+            hover=True,
+            timeout_seconds=90,
         )
+        session.start()  # arm 扩展腿；桌面腿（agent 子进程）构造时已起
+        self._capture_session = session
+        hint = "捕获中：移动鼠标框选，Ctrl+Click 捕获（桌面也可用 F9），Esc 取消"
+        if session.extension_offline:
+            hint = "浏览器插件离线：网页区域无法捕获（桌面不受影响）。" + hint
+        self.statusBar().showMessage(hint, 9000)
+        self._capture_bridge = _CaptureBridge(self)
+        self._capture_bridge.finished.connect(self._on_element_captured)
+        self.showMinimized()  # 不遮挡捕获目标（ADR 0010 的原始动机）
 
         def work() -> None:
-            from rpa_core.capture import DesktopCaptureSession  # 延迟导入对齐 CLI
-
-            session = DesktopCaptureSession(hover=True, timeout_seconds=90)
             try:
                 result = session.pick(timeout_seconds=90)
             finally:
@@ -1422,17 +1441,25 @@ class MainWindow(QMainWindow):
 
         threading.Thread(target=work, daemon=True).start()
 
-    def _on_desktop_captured(self, result: dict) -> None:
-        """捕获结果 → 命名 → 入库（ElementDescriptor 契约校验）。"""
+    def _on_element_captured(self, result: dict) -> None:
+        """捕获结束：还原主窗口 → 命名 → 入库（ElementDescriptor 契约校验）。"""
+        self._capture_session = None
+        self.showNormal()
+        self.raise_()
+        self.activateWindow()
         if result.get("timeout"):
             self.statusBar().showMessage("捕获超时（90 秒无手势）", 5000)
             return
         if result.get("cancelled") or not result.get("kind"):
             self.statusBar().showMessage("已取消捕获", 4000)
             return
+        metadata = result.get("metadata") or {}
+        if result.get("kind") == "browser":
+            suffix = metadata.get("tag") or "web"
+        else:
+            suffix = metadata.get("controlType") or "x"
         name, ok = QInputDialog.getText(
-            self, "保存元素", "元素名：",
-            text=f"el_{result.get('metadata', {}).get('controlType', 'x')}",
+            self, "保存元素", "元素名：", text=f"el_{suffix}"
         )
         if not ok or not name.strip():
             return
@@ -1610,9 +1637,46 @@ class MainWindow(QMainWindow):
             hosts = ", ".join(sorted({str(h) for h in status.get("hosts") or []}))
             return f"扩展通道：在线（{hosts}）——浏览器指令可用"
         return (
-            "扩展通道：离线——请确认已注册 host（rpa-core install-extension）"
-            "并已加载扩展；离线时浏览器指令不可用"
+            "扩展通道：离线——请确认 bridge 已注册（下方「注册 bridge」按钮）"
+            "且扩展已加载；离线时浏览器指令不可用"
         )
+
+    def _native_host_status_text(self) -> str:
+        """bridge host 注册状态（每浏览器一行，只读探测）。"""
+        from rpa_core.extension_installer import native_host_status
+
+        lines = []
+        for browser in ("edge", "chrome"):
+            info = native_host_status(browser)
+            if info.get("registered"):
+                ext_id = info.get("extensionId") or "?"
+                lines.append(f"{browser}：bridge 已注册（扩展 ID {ext_id[:8]}…）")
+            elif not info.get("hostExecutableExists"):
+                lines.append(f"{browser}：bridge 未注册（缺 host 入口，先 uv sync）")
+            else:
+                lines.append(f"{browser}：bridge 未注册")
+        return "\n".join(lines)
+
+    def _register_bridge_hosts(self) -> str:
+        """幂等注册双浏览器 bridge host（ensure_native_host 自愈）；返回逐浏览器结果。"""
+        from rpa_core.extension_installer import (
+            ExtensionInstallError,
+            ensure_native_host,
+        )
+
+        lines = []
+        for browser in ("edge", "chrome"):
+            try:
+                result = ensure_native_host(browser)
+            except ExtensionInstallError as exc:
+                lines.append(f"{browser}：注册失败（{exc}）")
+            except Exception as exc:  # noqa: BLE001 - 对话框内尽力而为，不炸 GUI
+                lines.append(f"{browser}：注册失败（{exc}）")
+            else:
+                lines.append(
+                    f"{browser}：已注册（扩展 ID {result['extensionId'][:8]}…）"
+                )
+        return "\n".join(lines)
 
     def _show_extension_dialog(self) -> None:
         """插件状态 + Load unpacked 安装引导（对齐 Web 的 4 步引导）。"""
@@ -1623,12 +1687,16 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout(dialog)
         status_label = QLabel(self._extension_status_text())
         layout.addWidget(status_label)
+        host_label = QLabel(self._native_host_status_text())
+        host_label.setWordWrap(True)
+        layout.addWidget(host_label)
         hub_label = QLabel(self._ext_hub_text())
         hub_label.setWordWrap(True)
         hub_label.setStyleSheet("color: #9a6700;")
         layout.addWidget(hub_label)
         guide = QLabel(
-            "安装步骤（Load unpacked）：\n"
+            "安装步骤：\n"
+            "0. 若上方显示 bridge 未注册：先点「注册 bridge」（通道注册，一次即可）\n"
             "1. 打开扩展源码目录（下面按钮）\n"
             "2. 打开浏览器，地址栏输入 chrome://extensions 或 edge://extensions\n"
             "3. 开启「开发人员模式」→「加载已解压的扩展程序」→ 选择该目录\n"
@@ -1640,6 +1708,25 @@ class MainWindow(QMainWindow):
         guide.setWordWrap(True)
         layout.addWidget(guide)
         buttons = QHBoxLayout()
+        register = QPushButton("注册 bridge")
+        register.setToolTip(
+            "向双浏览器注册 Native Messaging bridge host（幂等，可反复点）"
+        )
+
+        def refresh_dialog() -> None:
+            status_label.setText(self._extension_status_text())
+            host_label.setText(self._native_host_status_text())
+            hub_label.setText(self._ext_hub_text())
+
+        def register_and_refresh() -> None:
+            result = self._register_bridge_hosts()
+            self.statusBar().showMessage("bridge 注册完成", 4000)
+            host_label.setText(
+                f"{result}\n———\n{self._native_host_status_text()}"
+            )
+            hub_label.setText(self._ext_hub_text())
+
+        register.clicked.connect(register_and_refresh)
         open_dir = QPushButton("打开扩展目录")
         open_dir.clicked.connect(
             lambda: open_path_in_explorer(extension_root())
@@ -1649,13 +1736,8 @@ class MainWindow(QMainWindow):
         open_chrome = QPushButton("打开 Chrome")
         open_chrome.clicked.connect(lambda: open_browser("chrome"))
         refresh = QPushButton("刷新状态")
-        refresh.clicked.connect(
-            lambda: (
-                status_label.setText(self._extension_status_text()),
-                hub_label.setText(self._ext_hub_text()),
-            )
-        )
-        for button in (open_dir, open_edge, open_chrome, refresh):
+        refresh.clicked.connect(refresh_dialog)
+        for button in (register, open_dir, open_edge, open_chrome, refresh):
             buttons.addWidget(button)
         layout.addLayout(buttons)
         dialog.exec()
@@ -1768,6 +1850,13 @@ class MainWindow(QMainWindow):
         if self._run_manager is not None:
             self._run_manager.close()
             self._run_manager = None
+        # 进行中的捕获会话一并取消（桌面 agent 子进程回收，规则 11）
+        if self._capture_session is not None:
+            try:
+                self._capture_session.cancel()
+            except Exception:  # noqa: BLE001 - 关闭路径尽力而为
+                pass
+            self._capture_session = None
         # 悬浮窗是无父顶层窗口（最小化主窗时不随隐），关闭主窗需显式带走
         if self._run_float is not None:
             self._run_float.close()
