@@ -629,6 +629,260 @@ def read_unpacked_extension_state(
     return states
 
 
+# -- Native Messaging host 注册（ADR 0015 / M20 S3） --------------------------
+#
+# 扩展经 chrome.runtime.connectNative 连本机 bridge host；host 由浏览器按需拉起
+# （无 8765 常驻 hub）。注册 = 写 host manifest（allowed_origins 白名单扩展 ID）+
+# Windows HKCU 键 / macOS/Linux NativeMessagingHosts 目录。
+#
+# 两条 ID 来源（S0 真机验证）：
+# - **路径推导**：unpacked 扩展 ID 由源码目录绝对路径派生，与浏览器无关，可在扩展
+#   加载前预注册；
+# - **Secure Preferences 发现**：浏览器落盘后的权威值（二者实测逐字一致）。
+
+NATIVE_HOST_NAME = "com.rpa_core.ext_bridge"
+NATIVE_HOST_ENTRY = "rpa-core-ext-host"
+
+WINDOWS_NATIVE_HOST_ROOTS = {
+    "chrome": r"Software\Google\Chrome\NativeMessagingHosts",
+    "edge": r"Software\Microsoft\Edge\NativeMessagingHosts",
+}
+
+
+def native_host_store_dir() -> Path:
+    """host manifest 的存放目录（Windows 由注册表指向此处）。"""
+    return Path.home() / ".rpa-core" / "native-host"
+
+
+def _posix_native_host_dirs(browser: str) -> list[Path]:
+    """macOS/Linux 的 NativeMessagingHosts 目录（manifest 直接放这里）。"""
+    home = Path.home()
+    if sys.platform == "darwin":
+        base = {
+            "chrome": Path("Library") / "Application Support" / "Google" / "Chrome",
+            "edge": Path("Library") / "Application Support" / "Microsoft Edge",
+        }.get(browser)
+    else:
+        base = {
+            "chrome": Path(".config/google-chrome"),
+            "edge": Path(".config/microsoft-edge"),
+        }.get(browser)
+    return [home / base / "NativeMessagingHosts"] if base else []
+
+
+def native_host_manifest_path(browser: str) -> Path:
+    """host manifest 的规范路径（Windows 用户目录 / POSIX 浏览器目录）。"""
+    if sys.platform == "win32":
+        return native_host_store_dir() / f"{NATIVE_HOST_NAME}.{browser}.json"
+    dirs = _posix_native_host_dirs(browser)
+    if not dirs:
+        return native_host_store_dir() / f"{NATIVE_HOST_NAME}.{browser}.json"
+    return dirs[0] / f"{NATIVE_HOST_NAME}.json"
+
+
+def native_host_executable() -> Path | None:
+    """host 可执行入口（console script ``rpa-core-ext-host``），不存在返回 None。
+
+    manifest 的 ``path`` 必须是**无参数可执行文件**——S0 实测：写成
+    ``"pythonw.exe" "script.py"`` 这类命令行时 Chromium 不解析参数，会把解释器
+    无参拉起（退化成读 stdin 的 REPL），表现为「扩展连上却无 host 逻辑、无日志」。
+    """
+    suffix = ".exe" if os.name == "nt" else ""
+    sibling = Path(sys.executable).parent / f"{NATIVE_HOST_ENTRY}{suffix}"
+    if sibling.is_file():
+        return sibling
+    found = shutil.which(NATIVE_HOST_ENTRY)
+    return Path(found) if found else None
+
+
+def extension_id_from_path(extension_dir: Path) -> str:
+    """unpacked 扩展 ID：源码目录绝对路径的 SHA-256 前 128 位映射到 a-p。
+
+    Chromium 对 ``FilePath::value()`` 取字节：Windows 为 UTF-16LE、POSIX 为 UTF-8。
+    S0 实测（Windows）与 Edge profile 发现值逐字一致，Chrome 亦接受。
+    """
+    resolved = str(Path(extension_dir).resolve())
+    raw = resolved.encode("utf-16-le" if sys.platform == "win32" else "utf-8")
+    digest = hashlib.sha256(raw).hexdigest()[:32]
+    alphabet: list[str] = []
+    for char in digest:
+        if char.isdigit():
+            alphabet.append(chr(ord("a") + int(char)))
+        else:
+            alphabet.append(chr(ord("a") + 10 + (ord(char) - ord("a"))))
+    return "".join(alphabet)
+
+
+def discover_unpacked_extension_id(
+    browser: str, extension_dir: Path
+) -> str | None:
+    """从浏览器 profile 发现 Load unpacked 扩展 ID（location==4 且 path 匹配）。"""
+    target = str(Path(extension_dir).resolve()).lower()
+    for user_data in browser_user_data_dirs(browser):
+        if not user_data.is_dir():
+            continue
+        for child in sorted(user_data.iterdir()):
+            if not child.is_dir() or not (child / "Secure Preferences").is_file():
+                continue
+            secure = _profile_prefs_json(child, "Secure Preferences")
+            settings = (secure.get("extensions") or {}).get("settings") or {}
+            for extension_id, record in settings.items():
+                if not isinstance(record, dict) or record.get("location") != 4:
+                    continue
+                if str(record.get("path") or "").lower() == target:
+                    return extension_id
+    return None
+
+
+def resolve_native_host_extension_id(
+    browser: str, extension_dir: Path, extension_id: str | None = None
+) -> str:
+    """ID 解析：显式参数 > profile 发现（权威）> 路径推导（可预注册）。"""
+    if extension_id:
+        return extension_id
+    found = discover_unpacked_extension_id(browser, extension_dir)
+    if found:
+        return found
+    return extension_id_from_path(extension_dir)
+
+
+def register_native_host(
+    browser: str,
+    extension_dir: Path | None = None,
+    extension_id: str | None = None,
+) -> dict:
+    """写 host manifest + 注册（Windows HKCU / POSIX 目录）；幂等，可反复调用。"""
+    source = Path(extension_dir) if extension_dir is not None else extension_root()
+    resolved_id = resolve_native_host_extension_id(browser, source, extension_id)
+    executable = native_host_executable()
+    if executable is None:
+        raise ExtensionInstallError(
+            "NATIVE_HOST_MISSING",
+            f"未找到 host 入口 {NATIVE_HOST_ENTRY}；先执行 uv sync（生成 console script）",
+        )
+    manifest = {
+        "name": NATIVE_HOST_NAME,
+        "description": "rpa_core extension bridge host",
+        "path": str(executable),
+        "type": "stdio",
+        "allowed_origins": [f"chrome-extension://{resolved_id}/"],
+    }
+    manifest_path = native_host_manifest_path(browser)
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+    )
+    registry: str | None = None
+    if sys.platform == "win32":
+        winreg = _winreg_module()
+        key_path = f"{WINDOWS_NATIVE_HOST_ROOTS[browser]}\\{NATIVE_HOST_NAME}"
+        key = winreg.CreateKeyEx(
+            winreg.HKEY_CURRENT_USER, key_path, 0, winreg.KEY_WRITE
+        )
+        try:
+            winreg.SetValueEx(key, "", 0, winreg.REG_SZ, str(manifest_path))
+        finally:
+            key.Close()
+        registry = f"HKCU\\{key_path}"
+    return {
+        "browser": browser,
+        "extensionId": resolved_id,
+        "manifest": str(manifest_path),
+        "hostExecutable": str(executable),
+        "registry": registry,
+    }
+
+
+def unregister_native_host(browser: str) -> dict:
+    """删除 host manifest 与注册键（幂等）。"""
+    manifest_path = native_host_manifest_path(browser)
+    manifest_removed = False
+    if manifest_path.is_file():
+        manifest_path.unlink()
+        manifest_removed = True
+    registry_removed = False
+    if sys.platform == "win32":
+        winreg = _winreg_module()
+        key_path = f"{WINDOWS_NATIVE_HOST_ROOTS[browser]}\\{NATIVE_HOST_NAME}"
+        try:
+            winreg.DeleteKey(winreg.HKEY_CURRENT_USER, key_path)
+            registry_removed = True
+        except OSError:  # FileNotFoundError（键不存在）等一律视为未删除
+            registry_removed = False
+    return {
+        "browser": browser,
+        "manifestRemoved": manifest_removed,
+        "registryRemoved": registry_removed,
+    }
+
+
+def _native_host_registry_value(browser: str) -> str | None:
+    if sys.platform != "win32":
+        return None
+    winreg = _winreg_module()
+    key_path = f"{WINDOWS_NATIVE_HOST_ROOTS[browser]}\\{NATIVE_HOST_NAME}"
+    try:
+        key = winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER, key_path, 0, winreg.KEY_READ
+        )
+    except (FileNotFoundError, OSError):
+        return None
+    try:
+        return str(winreg.QueryValueEx(key, "")[0])
+    except OSError:
+        return None
+    finally:
+        key.Close()
+
+
+def native_host_status(browser: str) -> dict:
+    """只读状态：是否已注册、manifest 内容、host 入口是否存在。"""
+    registry_value = _native_host_registry_value(browser)
+    manifest_path = native_host_manifest_path(browser)
+    if sys.platform == "win32":
+        registered = registry_value is not None
+        readable = Path(registry_value) if registry_value else manifest_path
+    else:
+        registered = manifest_path.is_file()
+        readable = manifest_path
+    manifest: dict | None = None
+    if registered:
+        try:
+            loaded = json.loads(readable.read_text(encoding="utf-8"))
+            manifest = loaded if isinstance(loaded, dict) else None
+        except (OSError, ValueError):
+            manifest = None
+    executable = native_host_executable()
+    origin = ""
+    if manifest:
+        origins = manifest.get("allowed_origins") or []
+        if origins:
+            origin = str(origins[0])
+    extension_id = origin.removeprefix("chrome-extension://").rstrip("/") or None
+    return {
+        "browser": browser,
+        "registered": registered,
+        "registry": registry_value,
+        "manifest": str(manifest_path),
+        "hostExecutable": str(executable) if executable else None,
+        "hostExecutableExists": executable is not None,
+        "extensionId": extension_id,
+    }
+
+
+def ensure_native_host(
+    browser: str,
+    extension_dir: Path | None = None,
+    extension_id: str | None = None,
+) -> dict:
+    """幂等自愈：重算 ID 与 host 路径并重写注册（venv/源码目录变动后修复）。
+
+    调用点：`install-extension` 引导、GUI 启动、插件对话框刷新——保证「扩展已加载
+    但 host 注册漂移」能自愈。
+    """
+    return register_native_host(browser, extension_dir, extension_id)
+
+
 def open_path_in_explorer(path: Path) -> bool:
     """在系统文件管理器中打开指定目录（定位/选中）。跨平台 best-effort。"""
     import webbrowser

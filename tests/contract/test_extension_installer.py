@@ -267,6 +267,17 @@ def _fake_registry(monkeypatch):
     return fake
 
 
+@pytest.fixture(autouse=True)
+def _isolate_native_host_files(monkeypatch, tmp_path):
+    """native messaging host 的 manifest 落到临时目录，测试不写用户主目录。"""
+    monkeypatch.setattr(
+        ext,
+        "native_host_manifest_path",
+        lambda browser: tmp_path / f"{browser}.nativehost.json",
+    )
+    monkeypatch.setattr(ext, "native_host_store_dir", lambda: tmp_path)
+
+
 def _cli(*argv: str, monkeypatch) -> tuple[int, str]:
     import contextlib
     import io
@@ -279,7 +290,11 @@ def _cli(*argv: str, monkeypatch) -> tuple[int, str]:
 
 
 def test_cli_install_defaults_to_guide_not_registry(_fake_registry, monkeypatch, tmp_path):
-    """无旗标默认 = 开发者模式 Load unpacked 引导，不写注册表、不打包。"""
+    """无旗标默认 = 开发者模式 Load unpacked 引导，不写外部注册表、不打包。
+
+    注意：引导现在**会**注册 native messaging host（ADR 0015 的配套步骤），
+    故断言收敛为「不写外部扩展注册表条目」而非「完全不碰注册表」。
+    """
     empty = tmp_path / "empty"
     empty.mkdir()
     monkeypatch.setattr(ext, "open_path_in_explorer", lambda path: True)
@@ -290,7 +305,9 @@ def test_cli_install_defaults_to_guide_not_registry(_fake_registry, monkeypatch,
     assert payload["mode"] == "load-unpacked"
     assert payload["extensionDir"]
     assert len(payload["steps"]) >= 4
-    assert not _fake_registry.stores  # 引导不写注册表
+    assert not [key for key in _fake_registry.stores if "\\Extensions\\" in key]
+    assert set(payload["nativeHost"]) == {"chrome", "edge"}
+    assert any("NativeMessagingHosts" in key for key in _fake_registry.stores)
 
 
 def test_cli_registry_flag_writes_external_registry(_fake_registry, monkeypatch, tmp_path):
@@ -314,7 +331,7 @@ def test_cli_registry_flag_writes_external_registry(_fake_registry, monkeypatch,
     for root in BROWSER_EXTERNAL_ROOTS.values():
         entry = _fake_registry.stores[f"{root}\\{EXPECTED_ID}"]
         assert entry["path"][0].endswith("extension.crx")
-        assert entry["version"] == ("0.2.0", 1)
+        assert entry["version"] == ("0.3.0", 1)
     assert all(FORCELIST_KEY not in path for path in _fake_registry.stores)
 
 
@@ -355,7 +372,9 @@ def test_cli_remove_extension_clears_both_mechanisms(_fake_registry, monkeypatch
     code, out = _cli("install-extension", "--remove", "--build-dir", str(build_dir),
                      monkeypatch=monkeypatch)
     assert code == 0
-    assert json.loads(out) == {"removed": {"chrome": 2, "edge": 2}}
+    payload = json.loads(out)
+    assert payload["removed"] == {"chrome": 2, "edge": 2}
+    assert set(payload["nativeHost"]) == {"chrome", "edge"}
     assert all(not store for store in _fake_registry.stores.values())
 
 
@@ -481,7 +500,7 @@ def test_update_manifest_served_with_crx_codebase(packed_server):
     text = body.decode("utf-8")
     assert f'appid="{EXPECTED_ID}"' in text
     assert f'codebase="{base}/api/extension/crx"' in text
-    assert 'version="0.2.0"' in text
+    assert 'version="0.3.0"' in text
 
 
 def test_crx_served_with_chrome_extension_content_type(packed_server):
