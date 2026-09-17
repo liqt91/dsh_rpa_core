@@ -29,6 +29,13 @@ requires_uia_fixture = pytest.mark.skipif(
     reason="UIA fixture requires Windows with the .NET Framework compiler",
 )
 
+# 本文件会启动 WinForms 演示程序并抢前台——弹窗且抢焦点，缺省跳过
+# （见 tests/conftest.py）
+pytestmark = pytest.mark.skipif(
+    os.environ.get("RPA_DESKTOP_E2E") != "1",
+    reason="真实桌面 E2E 会弹窗抢焦点，缺省跳过；设 RPA_DESKTOP_E2E=1 启用",
+)
+
 
 def _compile_demo_app(tmp_path: Path) -> Path:
     exe = tmp_path / "RpaCoreDesktopDemo.exe"

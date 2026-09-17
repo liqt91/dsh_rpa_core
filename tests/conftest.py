@@ -1,5 +1,16 @@
 """pytest 全局约定（跨平台门禁自足性的前提）。
 
+## 0. GUI 用例一律离屏，绝不在开发者桌面弹窗
+
+所有 GUI 用例走 `QT_QPA_PLATFORM=offscreen`（各模块在导入 Qt 前 setdefault），
+这里再做一次全局兜底，避免将来新增用例漏设而真的弹出窗口。平台插件在
+`QApplication` 创建时定型，因此必须在**任何 Qt 导入之前**设置。
+
+真实桌面 E2E（启动记事本 / WinForms 演示程序 / 捕获悬浮框，会弹窗并抢前台）
+改为显式开关：缺省跳过，设 `RPA_DESKTOP_E2E=1` 启用——门禁脚本
+`.harness/scripts/check_all.py` 会设置它，所以完整覆盖不丢，而日常
+`uv run pytest` 不再打断开发者手头的事。
+
 ## 1. 默认执行通道必须是离线的
 
 扩展执行通道的默认地址是 `RPA_EXT_HUB_URL`（缺省 `http://127.0.0.1:8765`）。
@@ -43,6 +54,17 @@ import tempfile
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+
+# 0. GUI 离屏兜底（必须在任何 Qt 导入前生效）。用「空值也视为未设置」的写法：
+# 环境变量若存在但为空串，setdefault 不会覆盖，Qt 会退回真实平台而弹窗。
+if not os.environ.get("QT_QPA_PLATFORM"):
+    os.environ["QT_QPA_PLATFORM"] = "offscreen"
+
+# 真实桌面 E2E 的显式开关（会弹窗抢前台，缺省跳过；门禁脚本启用）。
+# 各 e2e 用例文件直接读该环境变量做 skipif，reason 里必须含下面的关键子串，
+# 供 pytest_terminal_summary 识别并提示启用方式。
+DESKTOP_E2E_ENABLED = os.environ.get("RPA_DESKTOP_E2E") == "1"
+DESKTOP_E2E_SKIP_MARKER = "RPA_DESKTOP_E2E=1"
 
 # 9/tcp 是 discard 端口，本机不监听 → 连接被立即拒绝，用例走「扩展离线」分支。
 os.environ["RPA_EXT_HUB_URL"] = "http://127.0.0.1:9"
@@ -127,3 +149,29 @@ def pytest_unconfigure(config):
     # 回收本次运行专用的 basetemp；受限环境可能拒绝这次删除，失败不影响任何结论。
     if _provisioned is not None:
         shutil.rmtree(_provisioned, ignore_errors=True)
+
+
+def pytest_terminal_summary(terminalreporter) -> None:
+    """桌面 E2E 被跳过时明确告知启用方式，避免误以为覆盖丢了。"""
+    if DESKTOP_E2E_ENABLED:
+        return
+    skipped = terminalreporter.stats.get("skipped") or []
+    # 跳过原因在 report.longrepr 的 (path, lineno, reason) 三元组里（无 .reason 属性）
+    texts = []
+    for item in skipped:
+        longrepr = getattr(item, "longrepr", None)
+        if isinstance(longrepr, tuple) and len(longrepr) == 3:
+            texts.append(str(longrepr[2]))
+        else:
+            texts.append(str(longrepr))
+    if not any(DESKTOP_E2E_SKIP_MARKER in text for text in texts):
+        return
+    terminalreporter.write_sep("-", "desktop e2e skipped")
+    terminalreporter.write_line(
+        "真实桌面 E2E（记事本 / WinForms 演示程序 / 捕获悬浮框）已跳过，"
+        "以免弹窗抢焦点。"
+    )
+    terminalreporter.write_line(
+        "需要时：RPA_DESKTOP_E2E=1 uv run pytest（PowerShell: "
+        "$env:RPA_DESKTOP_E2E=1; uv run pytest）"
+    )

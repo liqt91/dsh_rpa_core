@@ -1,4 +1,5 @@
 import asyncio
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -12,6 +13,12 @@ from rpa_core.model.workflow import Workflow
 from rpa_core.runtime import Orchestrator
 
 ROOT = Path(__file__).resolve().parents[2]
+
+# 本文件会真的启动记事本并输入——弹窗且抢焦点，缺省跳过（见 tests/conftest.py）
+pytestmark = pytest.mark.skipif(
+    os.environ.get("RPA_DESKTOP_E2E") != "1",
+    reason="真实桌面 E2E 会弹窗抢焦点，缺省跳过；设 RPA_DESKTOP_E2E=1 启用",
+)
 
 
 def _run_desktop_workflow(tmp_path: Path):

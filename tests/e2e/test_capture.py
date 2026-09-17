@@ -1,5 +1,6 @@
 import ctypes
 import json
+import os
 import sys
 import time
 import urllib.error
@@ -112,6 +113,10 @@ def test_browser_capture_extension_only_end_to_end(server):
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="desktop capture requires Windows")
+@pytest.mark.skipif(
+    os.environ.get("RPA_DESKTOP_E2E") != "1",
+    reason="真实桌面 E2E 会弹窗抢焦点，缺省跳过；设 RPA_DESKTOP_E2E=1 启用",
+)
 def test_desktop_capture_end_to_end_verifies_hit(server, tmp_path):
     import subprocess as sp
 
