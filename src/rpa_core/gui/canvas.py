@@ -35,6 +35,7 @@ from rpa_core.gui.flow_model import (
     ROLE_COMMAND_ID,
     ROLE_IS_VIRTUAL,
     ROLE_NODE_TYPE,
+    ROLE_RUN_STATE,
     FlowTreeModel,
 )
 
@@ -387,8 +388,15 @@ class CardDelegate(QStyledItemDelegate):
         rect = option.rect
 
         # 全局行号（逻辑行号：全树前序位置，折叠只是隐藏行、序号不因此改变，
-        # 与影刀左侧编号栏一致；结束行/否则行同样编号）
-        painter.setPen(QPen(QColor("#8c959f")))
+        # 与影刀左侧编号栏一致；结束行/否则行同样编号）。
+        # 最近一次的运行状态直接给行号着色：running 蓝 / succeeded 绿 / failed 红。
+        run_state = index.data(ROLE_RUN_STATE)
+        number_color = {
+            "running": "#0969da",
+            "succeeded": "#1a7f37",
+            "failed": "#cf222e",
+        }.get(run_state, "#8c959f")
+        painter.setPen(QPen(QColor(number_color)))
         painter.setFont(option.font)
         number_rect = QRect(0, rect.top(), _GUTTER_NUMBER_W, rect.height())
         painter.drawText(

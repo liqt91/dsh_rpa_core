@@ -19,16 +19,20 @@ from __future__ import annotations
 import copy
 import json
 import sys
+import threading
 from pathlib import Path
 
 # Qt 绑定在模块顶层导入：本模块本身已被 CLI 延迟导入，未装 extra 时不会触达。
-from PySide6.QtCore import QMimeData, Qt
-from PySide6.QtGui import QAction, QDrag, QStandardItem
+from PySide6.QtCore import QMimeData, QObject, Qt, Signal
+from PySide6.QtGui import QAction, QDrag, QKeySequence, QStandardItem
 from PySide6.QtWidgets import (
     QAbstractSpinBox,
     QApplication,
     QComboBox,
+    QDialog,
     QFileDialog,
+    QHBoxLayout,
+    QInputDialog,
     QLabel,
     QLineEdit,
     QMainWindow,
@@ -45,6 +49,7 @@ from PySide6.QtWidgets import (
 )
 
 from rpa_core.catalog import CommandCatalog, load_catalog
+from rpa_core.devserver.store import WorkflowDirStore
 
 from .command_palette import (
     ROLE_COMMAND_ID,  # noqa: F401  # re-export：既有测试从 app 导入
@@ -165,6 +170,55 @@ def _ordered_namespaces(catalog: CommandCatalog) -> list[str]:
     return known + extra
 
 
+def collect_validation_issues(
+    document: dict, catalog: CommandCatalog
+) -> list[tuple[str, str | None]]:
+    """编译校验当前流程文档，返回 (问题描述, 相关节点 id 或 None) 列表。
+
+    三层检查（任一 schema 失败即短路）：
+    1. Workflow schema 校验（pydantic）；
+    2. 必填参数缺口：action 节点对照 manifest input_schema.required；
+    3. 编译器静态检查（未知指令/引用/别名/能力集，与 devserver 同口径）。
+    """
+    from rpa_core.compiler.compiler import WorkflowCompileError, WorkflowCompiler
+    from rpa_core.devserver.app import DEFAULT_CAPABILITIES
+    from rpa_core.model.workflow import Workflow
+
+    issues: list[tuple[str, str | None]] = []
+    try:
+        workflow = Workflow.model_validate(document)
+    except Exception as exc:  # noqa: BLE001 - pydantic 错误直接透传给用户
+        return [(f"schema 校验失败：{exc}", None)]
+
+    def walk(node: dict) -> None:
+        if node.get("type") == "action":
+            command_id = node.get("command")
+            if command_id not in catalog:
+                issues.append((f"未知指令：{command_id}", node.get("id")))
+            else:
+                manifest = catalog[command_id]
+                with_args = node.get("with") or {}
+                missing = [
+                    key
+                    for key in manifest.input_schema.get("required", [])
+                    if key not in with_args
+                ]
+                if missing:
+                    issues.append(
+                        (f"缺少必填参数：{'、'.join(missing)}", node.get("id"))
+                    )
+        for key in ("children", "then", "else", "catch"):
+            for child in node.get(key) or []:
+                walk(child)
+
+    walk(document["root"])
+    try:
+        WorkflowCompiler(catalog).compile(workflow, set(DEFAULT_CAPABILITIES))
+    except WorkflowCompileError as exc:
+        issues.append((f"编译失败：{exc}", None))
+    return issues
+
+
 def populate_command_tree(
     tree: QTreeWidget,
     catalog: CommandCatalog,
@@ -239,17 +293,41 @@ def _apply_filter(tree: QTreeWidget, keyword: str) -> None:
         group.setExpanded(visible > 0)
 
 
+class _CaptureBridge(QObject):
+    """桌面捕获子进程 → GUI 线程的结果桥（worker 线程 emit，Qt 排队投递）。"""
+
+    finished = Signal(dict)
+
+
 class MainWindow(QMainWindow):
     """编辑器主窗口：左指令树（真实 catalog）+ 中流程卡片画布 + 右参数表单。"""
 
-    def __init__(self, catalog: CommandCatalog, workflow=None, flow_path=None) -> None:
+    def __init__(self, catalog: CommandCatalog, workflow=None, flow_path=None,
+                 workflows_root=None) -> None:
         super().__init__()
         self.catalog = catalog
         # flow_path 为 None 时编辑的是内置示例：首次保存走「另存为」
         self.flow_path: Path | None = Path(flow_path) if flow_path else None
+        # 流程库（workflows 目录）：与 Web 编辑器同一存储（WorkflowDirStore），
+        # 命名流程可保存进库、供运行控制使用；为 None 时退化为纯文件编辑。
+        self._store = (
+            WorkflowDirStore(Path(workflows_root)) if workflows_root else None
+        )
         self._workflow_meta: dict = {}
         self._dirty = False
         self._loading = False  # 构建模型期间抑制结构变化信号，避免误置脏标记
+        # 撤销/重做：快照式（整份 workflow 文档深拷贝），上限 50 步（对齐 Web）。
+        # _last_doc 始终是「当前模型对应的文档」——结构变更经 model.mutated
+        # 信号到达时变更已发生，入栈的正是它（变更前状态）。
+        self._undo_stack: list[dict] = []
+        self._redo_stack: list[dict] = []
+        self._clipboard: dict | None = None
+        self._last_doc: dict | None = None
+        # 运行控制（切 E）：RunManager 子进程宿主，懒创建（需要流程库根目录）
+        self._run_manager = None
+        self._active_run_id: str | None = None
+        self._run_timer = None
+        self._run_dock_widget = None
         self.setWindowTitle("RPA Core 编辑器")
         self.resize(1280, 800)
 
@@ -321,11 +399,87 @@ class MainWindow(QMainWindow):
         open_action.triggered.connect(self._open_action)
         toolbar.addAction(open_action)
 
+        # 流程库下拉：列出 workflows/ 下的命名流程，选中即打开（仅配置 store 时）
+        if self._store is not None:
+            self.flow_combo = QComboBox()
+            self.flow_combo.setMinimumWidth(160)
+            self.flow_combo.setToolTip("从流程库打开（workflows 目录下的命名流程）")
+            self.flow_combo.activated.connect(self._on_flow_combo_activated)
+            toolbar.addWidget(self.flow_combo)
+            self._refresh_flow_combo()
+        else:
+            self.flow_combo = None
+
         save_action = QAction("保存", self)
         save_action.setShortcut("Ctrl+S")
         save_action.setToolTip("保存到 workflow.json（Ctrl+S）")
         save_action.triggered.connect(self._save_action)
         toolbar.addAction(save_action)
+
+        # 撤销/重做/复制/粘贴：窗口级快捷键，焦点在文本控件时暂停（不吞编辑键）
+        self.undo_action = QAction("撤销", self)
+        self.undo_action.setShortcut(QKeySequence.StandardKey.Undo)
+        self.undo_action.setShortcutContext(Qt.ShortcutContext.WindowShortcut)
+        self.undo_action.triggered.connect(self._undo)
+        toolbar.addAction(self.undo_action)
+
+        self.redo_action = QAction("重做", self)
+        self.redo_action.setShortcut(QKeySequence.StandardKey.Redo)
+        self.redo_action.setShortcutContext(Qt.ShortcutContext.WindowShortcut)
+        self.redo_action.triggered.connect(self._redo)
+        toolbar.addAction(self.redo_action)
+
+        self.copy_action = QAction("复制", self)
+        self.copy_action.setShortcut(QKeySequence.StandardKey.Copy)
+        self.copy_action.setShortcutContext(Qt.ShortcutContext.WindowShortcut)
+        self.copy_action.setToolTip("复制画布选中节点子树（Ctrl+C）")
+        self.copy_action.triggered.connect(self._copy_selected)
+        toolbar.addAction(self.copy_action)
+
+        self.paste_action = QAction("粘贴", self)
+        self.paste_action.setShortcut(QKeySequence.StandardKey.Paste)
+        self.paste_action.setShortcutContext(Qt.ShortcutContext.WindowShortcut)
+        self.paste_action.setToolTip("粘贴到当前选中位置所属分支末尾（Ctrl+V）")
+        self.paste_action.triggered.connect(self._paste_clipboard)
+        toolbar.addAction(self.paste_action)
+
+        validate_action = QAction("校验", self)
+        validate_action.setToolTip(
+            "编译校验当前流程：schema、必填参数缺口、编译器静态检查"
+        )
+        validate_action.triggered.connect(self._validate_workflow)
+        toolbar.addAction(validate_action)
+
+        # 运行控制（ADR 0011 同款：子进程 run host，GUI 进程不含 runtime）
+        self.run_action = QAction("运行", self)
+        self.run_action.setToolTip("运行当前流程（须先保存到流程库）")
+        self.run_action.triggered.connect(self._run_workflow)
+        toolbar.addAction(self.run_action)
+
+        self.cancel_run_action = QAction("取消运行", self)
+        self.cancel_run_action.setEnabled(False)
+        self.cancel_run_action.triggered.connect(self._cancel_run)
+        toolbar.addAction(self.cancel_run_action)
+
+        # 元素库 / 数据表格 / 指令清单 / 插件（dock 与对话框入口）
+        elements_action = QAction("元素库", self)
+        elements_action.setToolTip("当前流程的捕获元素资产（<流程>/elements/）")
+        elements_action.triggered.connect(self._toggle_elements_dock)
+        toolbar.addAction(elements_action)
+
+        table_action = QAction("数据表格", self)
+        table_action.setToolTip("当前流程的数据表格（<流程>/data/table.json）")
+        table_action.triggered.connect(self._toggle_table_dock)
+        toolbar.addAction(table_action)
+
+        catalog_action = QAction("指令清单", self)
+        catalog_action.triggered.connect(self._show_catalog_dialog)
+        toolbar.addAction(catalog_action)
+
+        extension_action = QAction("插件", self)
+        extension_action.setToolTip("浏览器扩展状态与安装引导")
+        extension_action.triggered.connect(self._show_extension_dialog)
+        toolbar.addAction(extension_action)
 
         # 删除节点用窗口级快捷键：焦点在左树（双击添加后的自然状态）或画布
         # 时都能直接删；焦点在参数表单输入控件中时禁用，让 Delete 正常编辑文本。
@@ -335,6 +489,14 @@ class MainWindow(QMainWindow):
         self.delete_action.setToolTip("删除画布选中节点（Delete）")
         self.delete_action.triggered.connect(self._delete_selected_node)
         toolbar.addAction(self.delete_action)
+        # 焦点进入文本编辑控件时需要让路的动作（删除/撤销/重做/复制/粘贴）
+        self._edit_sensitive_actions = [
+            self.delete_action,
+            self.undo_action,
+            self.redo_action,
+            self.copy_action,
+            self.paste_action,
+        ]
         app = QApplication.instance()
         app.focusChanged.connect(self._on_focus_changed)
 
@@ -391,15 +553,174 @@ class MainWindow(QMainWindow):
         self.flow_path = Path(path)
         self.set_workflow(document)
 
+    # ---- 流程库（切 F：命名流程管理） ---------------------------------------
+    def _refresh_flow_combo(self, select: str | None = None) -> None:
+        """刷新流程库下拉；select 指定后选中该流程。"""
+        if self.flow_combo is None:
+            return
+        self.flow_combo.blockSignals(True)
+        self.flow_combo.clear()
+        self.flow_combo.addItem("流程库…", None)
+        for name in self._store.list():
+            self.flow_combo.addItem(name, name)
+        if select is not None:
+            index = self.flow_combo.findData(select)
+            if index >= 0:
+                self.flow_combo.setCurrentIndex(index)
+        self.flow_combo.blockSignals(False)
+
+    def _on_flow_combo_activated(self, index: int) -> None:
+        name = self.flow_combo.itemData(index)
+        if name:
+            self._open_named_flow(name)
+
+    def _open_named_flow(self, name: str) -> None:
+        """从流程库打开命名流程。"""
+        from rpa_core.model.workflow import Workflow
+
+        if not self._prompt_discard_changes():
+            self._refresh_flow_combo(select=self._current_flow_name())
+            return
+        try:
+            document = self._store.read(name)
+            Workflow.model_validate(document)
+        except Exception as exc:  # noqa: BLE001 - 给用户可读反馈
+            QMessageBox.warning(self, "打开失败", f"无法打开流程 {name}：{exc}")
+            self._refresh_flow_combo(select=self._current_flow_name())
+            return
+        self.flow_path = self._store.directory(name) / "workflow.json"
+        self.set_workflow(document)
+        self._refresh_flow_combo(select=name)
+        self.statusBar().showMessage(f"已打开流程 {name}", 4000)
+
+    def _current_flow_name(self) -> str | None:
+        """当前流程在流程库中的名字（不在库中则 None）。"""
+        if self._store is None or self.flow_path is None:
+            return None
+        try:
+            if self.flow_path.parent.parent.resolve() != self._store.root.resolve():
+                return None
+            if self.flow_path.name != "workflow.json":
+                return None
+        except OSError:
+            return None
+        return self.flow_path.parent.name
+
+    def _save_named_flow(self, name: str) -> Path | None:
+        """保存为流程库中的命名流程；非法名/校验失败返回 None。"""
+        from rpa_core.devserver.store import WorkflowStoreError
+
+        document = self._build_document()
+        if document is None:
+            return None
+        try:
+            self._store.write(name, document)
+        except WorkflowStoreError as exc:
+            self.statusBar().showMessage(f"保存失败：{exc}", 6000)
+            return None
+        self.flow_path = self._store.directory(name) / "workflow.json"
+        self._workflow_meta = {
+            key: copy.deepcopy(value)
+            for key, value in document.items()
+            if key != "root"
+        }
+        self._set_dirty(False)
+        self._refresh_flow_combo(select=name)
+        return self.flow_path
+
     def _on_focus_changed(self, old, now) -> None:
-        """焦点进入文本编辑控件时暂停 Delete 删除动作，避免吞掉编辑键。"""
+        """焦点进入文本编辑控件时暂停 Delete 等动作，避免吞掉编辑键。"""
         editing = isinstance(
             now, (QLineEdit, QTextEdit, QPlainTextEdit, QAbstractSpinBox)
         ) or (isinstance(now, QComboBox) and now.isEditable())
-        self.delete_action.setEnabled(not editing)
+        for action in self._edit_sensitive_actions:
+            action.setEnabled(not editing)
 
-    def set_workflow(self, workflow) -> None:
-        """加载 Workflow（pydantic 或 dict）并重建画布；拖拽重排发生在该模型上。"""
+    # ---- 撤销 / 重做 / 复制粘贴（切 B） -------------------------------------
+    def _current_document(self) -> dict:
+        """当前模型的完整 workflow 文档深拷贝（历史快照）。"""
+        from rpa_core.gui.flow_model import model_to_workflow
+
+        return copy.deepcopy(model_to_workflow(self.flow_model, self._workflow_meta))
+
+    def _begin_edit(self) -> None:
+        """变更前记账：把变更前文档（_last_doc）压入撤销栈。"""
+        if self._last_doc is not None:
+            self._undo_stack.append(self._last_doc)
+            if len(self._undo_stack) > 50:
+                self._undo_stack.pop(0)
+            self._redo_stack.clear()
+
+    def _end_edit(self) -> None:
+        """变更后记账：刷新 _last_doc 为变更后文档。"""
+        self._last_doc = self._current_document()
+
+    def _on_model_mutated(self) -> None:
+        """结构变更（插入/删除/拖拽）经 model.mutated 到达时变更已完成。"""
+        if self._loading:
+            return
+        self._begin_edit()
+        self._end_edit()
+
+    def _undo(self) -> None:
+        if not self._undo_stack:
+            self.statusBar().showMessage("没有可撤销的操作", 3000)
+            return
+        self._redo_stack.append(self._current_document())
+        doc = self._undo_stack.pop()
+        self.set_workflow(doc, reset_history=False)
+        self._set_dirty(True)
+        self.statusBar().showMessage(
+            f"已撤销（还可撤销 {len(self._undo_stack)} 步）", 3000
+        )
+
+    def _redo(self) -> None:
+        if not self._redo_stack:
+            self.statusBar().showMessage("没有可重做的操作", 3000)
+            return
+        self._undo_stack.append(self._current_document())
+        doc = self._redo_stack.pop()
+        self.set_workflow(doc, reset_history=False)
+        self._set_dirty(True)
+        self.statusBar().showMessage("已重做", 3000)
+
+    def _copy_selected(self) -> None:
+        """复制画布选中节点子树到内部剪贴板（虚拟行不可复制）。"""
+        from rpa_core.gui.flow_model import ROLE_IS_VIRTUAL, subtree_to_ast
+
+        current = self.canvas_view.currentIndex()
+        if not current.isValid():
+            return
+        item = self.flow_model.itemFromIndex(current)
+        if item.data(ROLE_IS_VIRTUAL):
+            self.statusBar().showMessage("该行是结构标记，不能复制", 3000)
+            return
+        self._clipboard = subtree_to_ast(item)
+        self.statusBar().showMessage(
+            f"已复制节点 {self._clipboard.get('id')}（Ctrl+V 粘贴）", 3000
+        )
+
+    def _paste_clipboard(self) -> None:
+        """粘贴剪贴板子树：全树 id 重映射，别名撞车自动改名。"""
+        from rpa_core.gui.flow_model import clone_for_paste
+
+        if not self._clipboard:
+            self.statusBar().showMessage("剪贴板为空：先 Ctrl+C 复制一个节点", 3000)
+            return
+        node = clone_for_paste(self.flow_model, self._clipboard)
+        current = self.canvas_view.currentIndex()
+        target = (
+            self.flow_model.itemFromIndex(current) if current.isValid() else None
+        )
+        new_item = self.flow_model.insert_subtree(node, target)
+        self._select_new_item(new_item)
+        self.statusBar().showMessage("已粘贴（未保存）", 3000)
+
+    def set_workflow(self, workflow, *, reset_history: bool = True) -> None:
+        """加载 Workflow（pydantic 或 dict）并重建画布；拖拽重排发生在该模型上。
+
+        reset_history=False 供撤销/重做内部使用：重建画布但保留历史栈。
+        """
         # 延迟导入：flow_model/canvas 依赖 Qt，但与 catalog 同源，无额外成本
         from rpa_core.gui.canvas import build_canvas
         from rpa_core.gui.flow_model import build_model_from_workflow
@@ -432,10 +753,16 @@ class MainWindow(QMainWindow):
         # 拖拽重排（takeRow/insertRow）会触发增删行信号 → 置脏
         self.flow_model.rowsInserted.connect(self._on_structure_changed)
         self.flow_model.rowsRemoved.connect(self._on_structure_changed)
+        # 结构变更完成信号 → 撤销历史记账
+        self.flow_model.mutated.connect(self._on_model_mutated)
         # 画布选中节点变化 → 右栏切换参数表单（每次重建 view 都需重新连接）
         self.canvas_view.selectionModel().currentChanged.connect(
             self._on_canvas_selection
         )
+        if reset_history:
+            self._undo_stack.clear()
+            self._redo_stack.clear()
+        self._last_doc = self._current_document()
         self._set_dirty(False)
 
     # ---- 节点增删（切片 5） -----------------------------------------------
@@ -570,10 +897,570 @@ class MainWindow(QMainWindow):
         marker = "• " if dirty else ""
         self.setWindowTitle(f"{marker}RPA Core 编辑器 — {name}")
 
+    # ---- 运行控制（切 E） ---------------------------------------------------
+    def _get_run_manager(self):
+        """懒创建 RunManager（子进程 run host；GUI 进程内不跑 runtime）。"""
+        if self._run_manager is None:
+            from rpa_core.devserver.runs import RunManager
+
+            self._run_manager = RunManager(self._store.root)
+        return self._run_manager
+
+    def _run_dock(self):
+        """懒创建底部运行面板（状态行 + 事件流）。"""
+        if self._run_dock_widget is None:
+            from PySide6.QtWidgets import QDockWidget
+
+            dock = QDockWidget("运行", self)
+            dock.setObjectName("run-dock")
+            body = QWidget()
+            layout = QVBoxLayout(body)
+            layout.setContentsMargins(8, 4, 8, 8)
+            self._run_status_label = QLabel("（尚未运行）")
+            self._run_events_view = QPlainTextEdit()
+            self._run_events_view.setReadOnly(True)
+            self._run_events_view.setMaximumBlockCount(500)
+            layout.addWidget(self._run_status_label)
+            layout.addWidget(self._run_events_view, 1)
+            dock.setWidget(body)
+            self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, dock)
+            dock.hide()
+            self._run_dock_widget = dock
+        return self._run_dock_widget
+
+    def _run_workflow(self) -> None:
+        """工具栏「运行」：要求流程已入流程库；脏改动先落盘（运行基于磁盘文件）。"""
+        if self._store is None:
+            self.statusBar().showMessage("运行需要流程库（--workflows 参数）", 5000)
+            return
+        name = self._current_flow_name()
+        if name is None:
+            self.statusBar().showMessage("先用 Ctrl+S 把流程保存到流程库再运行", 5000)
+            return
+        if self._dirty and self._save_named_flow(name) is None:
+            return  # 校验失败等原因未保存，不运行旧版本
+        inputs: dict = {}
+        declared = self._workflow_meta.get("inputs") or {}
+        if declared:
+            dialog = RunInputsDialog(declared, self)
+            if dialog.exec() != RunInputsDialog.DialogCode.Accepted:
+                return
+            inputs = dialog.values()
+        self._start_run(name, inputs)
+
+    def _start_run(self, name: str, inputs: dict | None = None) -> str | None:
+        """启动运行子进程并开始轮询；返回对外 run_id（启动失败返回 None）。"""
+        try:
+            handle = self._get_run_manager().start(name, inputs or None)
+        except FileNotFoundError as exc:
+            self.statusBar().showMessage(str(exc), 5000)
+            return None
+        self._active_run_id = handle["runId"]
+        self._clear_run_states()
+        self.run_action.setEnabled(False)
+        self.cancel_run_action.setEnabled(True)
+        dock = self._run_dock()
+        dock.show()
+        self._run_status_label.setText(f"运行中…（{name}）")
+        self._run_events_view.clear()
+        if self._run_timer is None:
+            from PySide6.QtCore import QTimer
+
+            self._run_timer = QTimer(self)
+            self._run_timer.setInterval(800)
+            self._run_timer.timeout.connect(self._poll_run)
+        self._run_timer.start()
+        return self._active_run_id
+
+    def _cancel_run(self) -> None:
+        if not self._active_run_id or self._run_manager is None:
+            return
+        try:
+            self._run_manager.cancel(self._active_run_id)
+            self._run_status_label.setText("已请求取消…")
+        except KeyError:
+            pass
+
+    def _poll_run(self) -> None:
+        """轮询运行状态（QTimer 驱动；测试可直接调用）；结束时落事件与状态着色。"""
+        if not self._active_run_id or self._run_manager is None:
+            return
+        status = self._run_manager.status(self._active_run_id)
+        if status["running"]:
+            return
+        self._run_timer.stop()
+        self.run_action.setEnabled(True)
+        self.cancel_run_action.setEnabled(False)
+        result = status.get("result")
+        if result is not None:
+            run_status = result.get("status", "unknown")
+            self._run_status_label.setText(f"完成：{run_status}")
+            error = result.get("error")
+            if error:
+                self._run_events_view.appendPlainText(
+                    f"失败：{error.get('code')} · 节点 {error.get('nodeId')}\n"
+                    f"{error.get('message')}"
+                )
+        elif status.get("startupError"):
+            startup = status["startupError"]
+            self._run_status_label.setText(
+                f"运行未能启动（退出码 {status.get('exitCode')}）"
+            )
+            if startup.get("message"):
+                self._run_events_view.appendPlainText(startup["message"])
+        else:
+            self._run_status_label.setText("完成（无结果文件）")
+        events = self._run_manager.events(self._active_run_id)["events"]
+        for event in events[-50:]:
+            self._run_events_view.appendPlainText(json.dumps(event, ensure_ascii=False))
+        self._apply_run_states(events)
+
+    def _apply_run_states(self, events: list[dict]) -> None:
+        """按事件流给画布节点着色（行号：蓝=运行中 绿=成功 红=失败）。"""
+        from rpa_core.gui.flow_model import (
+            ROLE_NODE_ID,
+            ROLE_RUN_STATE,
+            iter_real_nodes,
+        )
+
+        states: dict[str, str] = {}
+        for event in events:
+            node_id = event.get("node_id")
+            if not node_id:
+                continue
+            if event.get("type") == "stepStarted":
+                states[node_id] = "running"
+            elif event.get("type") == "stepCompleted":
+                states[node_id] = "succeeded"
+            elif event.get("type") == "stepFailed":
+                states[node_id] = "failed"
+        for item in iter_real_nodes(self.flow_model):
+            node_id = item.data(ROLE_NODE_ID)
+            item.setData(states.get(node_id), ROLE_RUN_STATE)
+        self.canvas_view.viewport().update()
+
+    def _clear_run_states(self) -> None:
+        from rpa_core.gui.flow_model import ROLE_RUN_STATE, iter_real_nodes
+
+        for item in iter_real_nodes(self.flow_model):
+            item.setData(None, ROLE_RUN_STATE)
+        self.canvas_view.viewport().update()
+
+    # ---- 编译校验（切 D） ---------------------------------------------------
+    def _validate_workflow(self, *, show_dialog: bool = True) -> bool:
+        """编译校验当前流程；有问题时列出并定位到第一个问题节点。"""
+        issues = collect_validation_issues(self._current_document(), self.catalog)
+        if not issues:
+            self.statusBar().showMessage("✓ 校验通过", 5000)
+            return True
+        lines = []
+        for message, node_id in issues:
+            lines.append(f"节点 {node_id}：{message}" if node_id else message)
+        self.statusBar().showMessage(f"校验发现 {len(issues)} 个问题", 5000)
+        # 定位到第一个有节点归属的问题
+        first_node = next((node_id for _msg, node_id in issues if node_id), None)
+        if first_node:
+            item = self.flow_model.find_by_id(first_node)
+            if item is not None:
+                self.canvas_view.setCurrentIndex(
+                    self.flow_model.indexFromItem(item)
+                )
+        if show_dialog:
+            QMessageBox.warning(
+                self, "校验未通过", "发现以下问题：\n\n" + "\n".join(lines)
+            )
+        return False
+
+    # ---- 元素库（切 G） -----------------------------------------------------
+    def _toggle_elements_dock(self) -> None:
+        dock = self._elements_dock()
+        dock.show()  # 幂等；offscreen 下 isVisible 不可靠，不做取反切换
+        self._refresh_elements()
+
+    def _elements_dock(self):
+        if getattr(self, "_elements_dock_widget", None) is None:
+            from PySide6.QtWidgets import QDockWidget
+
+            from rpa_core.gui.element_panel import ElementPanel, wire_element_panel
+
+            panel = ElementPanel()
+            wire_element_panel(
+                panel,
+                on_refresh=self._refresh_elements,
+                on_capture=self._capture_desktop_element,
+                on_verify=self._verify_element,
+                on_insert=self._insert_element,
+                on_delete=self._delete_element,
+            )
+            dock = QDockWidget("元素库", self)
+            dock.setObjectName("elements-dock")
+            dock.setWidget(panel)
+            self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, dock)
+            dock.hide()
+            self._elements_dock_widget = dock
+            self._element_panel = panel
+        return self._elements_dock_widget
+
+    def _element_store(self):
+        """当前流程的元素资产存储；流程未入库时返回 None。"""
+        name = self._current_flow_name()
+        if self._store is None or name is None:
+            return None
+        from rpa_core.devserver.store import WorkflowStore
+
+        return WorkflowStore(self._store.directory(name) / "elements", create=False)
+
+    def _refresh_elements(self) -> None:
+        self._elements_dock()  # 保证面板存在（直接调用路径可能先于 dock 创建）
+        store = self._element_store()
+        if store is None:
+            self._element_panel.set_elements([])
+            self._element_panel.hint_label.setText("先把流程保存到流程库，再管理元素")
+            return
+        entries = []
+        for name in store.list():
+            try:
+                document = store.read(name)
+            except Exception:  # noqa: BLE001 - 单个坏文件不拖垮列表
+                document = {}
+            from rpa_core.gui.element_panel import summarize_element
+
+            entries.append({"name": name, "summary": summarize_element(document)})
+        self._element_panel.set_elements(entries)
+        self._element_panel.hint_label.setText(f"{len(entries)} 个元素")
+
+    def _verify_element(self, name: str) -> None:
+        from rpa_core.model.capture import (
+            ElementDocumentError,
+            selector_errors,
+            validate_element_document,
+        )
+
+        store = self._element_store()
+        if store is None:
+            return
+        try:
+            element = validate_element_document(store.read(name))
+            errors = selector_errors(element)
+        except ElementDocumentError as exc:
+            errors = [{"path": exc.path, "message": exc.message}]
+        if errors:
+            detail = "；".join(f"{e['path']}: {e['message']}" for e in errors[:3])
+            self.statusBar().showMessage(f"元素 {name} 校验未通过：{detail}", 6000)
+        else:
+            self.statusBar().showMessage(f"元素 {name} 校验通过", 4000)
+
+    def _delete_element(self, name: str) -> None:
+        store = self._element_store()
+        if store is None:
+            return
+        try:
+            store.delete(name)
+        except Exception as exc:  # noqa: BLE001
+            self.statusBar().showMessage(f"删除失败：{exc}", 5000)
+            return
+        self._refresh_elements()
+        self.statusBar().showMessage(f"已删除元素 {name}", 4000)
+
+    def _insert_element(self, name: str) -> None:
+        """把元素填入画布当前 action 节点的 selector/locator 参数。"""
+        from rpa_core.gui.flow_model import (
+            ROLE_ARGS_RAW,
+            ROLE_ARGS_SUMMARY,
+            ROLE_COMMAND_ID,
+            ROLE_NODE_TYPE,
+            summarize_args,
+        )
+
+        store = self._element_store()
+        if store is None:
+            return
+        document = store.read(name)
+        current = self.canvas_view.currentIndex()
+        if not current.isValid() or current.data(ROLE_NODE_TYPE) != "action":
+            self.statusBar().showMessage("先在画布选中一个指令节点", 4000)
+            return
+        manifest = self.catalog[current.data(ROLE_COMMAND_ID)]
+        properties = manifest.input_schema.get("properties", {})
+        kind = document.get("kind")
+        selector = document.get("selector") or {}
+        if kind == "browser" and "selector" in properties:
+            key, value = "selector", selector.get("css", "")
+        elif kind == "desktop" and "locator" in properties:
+            key, value = "locator", selector.get("locator")
+        else:
+            self.statusBar().showMessage(
+                f"该指令没有匹配 {kind} 元素的参数字段", 5000
+            )
+            return
+        self._begin_edit()
+        item = self.flow_model.itemFromIndex(current)
+        holder = item.data(ROLE_ARGS_RAW)
+        holder.args[key] = value
+        if holder.raw is not None:
+            holder.raw.setdefault("with", {})[key] = value
+        item.setData(summarize_args(holder.args), ROLE_ARGS_SUMMARY)
+        self._end_edit()
+        self._set_dirty(True)
+        # 重渲染表单让新值可见
+        self._on_canvas_selection(current, current)
+        self.statusBar().showMessage(f"已把元素 {name} 填入参数 {key}", 4000)
+
+    # ---- 桌面捕获（切 G） ---------------------------------------------------
+    def _capture_desktop_element(self) -> None:
+        """桌面 hover 捕获（子进程 desktop_agent，后台线程等待手势）。"""
+        if self._element_store() is None:
+            self.statusBar().showMessage("先把流程保存到流程库，再捕获元素", 5000)
+            return
+        self._capture_bridge = _CaptureBridge(self)
+        self._capture_bridge.finished.connect(self._on_desktop_captured)
+        self.statusBar().showMessage(
+            "桌面捕获中：移动鼠标框选，F9 或 Ctrl+Click 捕获，Esc 取消", 9000
+        )
+
+        def work() -> None:
+            from rpa_core.capture import DesktopCaptureSession  # 延迟导入对齐 CLI
+
+            session = DesktopCaptureSession(hover=True, timeout_seconds=90)
+            try:
+                result = session.pick(timeout_seconds=90)
+            finally:
+                session.close()
+            self._capture_bridge.finished.emit(result)
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _on_desktop_captured(self, result: dict) -> None:
+        """捕获结果 → 命名 → 入库（ElementDescriptor 契约校验）。"""
+        if result.get("timeout"):
+            self.statusBar().showMessage("捕获超时（90 秒无手势）", 5000)
+            return
+        if result.get("cancelled") or not result.get("kind"):
+            self.statusBar().showMessage("已取消捕获", 4000)
+            return
+        name, ok = QInputDialog.getText(
+            self, "保存元素", "元素名：",
+            text=f"el_{result.get('metadata', {}).get('controlType', 'x')}",
+        )
+        if not ok or not name.strip():
+            return
+        saved = self.save_element_descriptor(name.strip(), result)
+        if saved:
+            self._refresh_elements()
+            self.statusBar().showMessage(f"已保存元素 {name}", 4000)
+
+    def save_element_descriptor(self, name: str, descriptor: dict) -> bool:
+        """元素入库（校验 ElementDescriptor 契约）；失败状态栏提示并返回 False。"""
+        from rpa_core.model.capture import ElementDocumentError, validate_element_document
+
+        try:
+            document = validate_element_document(descriptor).document()
+        except ElementDocumentError as exc:
+            self.statusBar().showMessage(f"捕获结果不合法：{exc}", 6000)
+            return False
+        store = self._element_store()
+        if store is None:
+            return False
+        try:
+            store.write(name, document)
+        except Exception as exc:  # noqa: BLE001
+            self.statusBar().showMessage(f"保存失败：{exc}", 5000)
+            return False
+        return True
+
+    # ---- 数据表格（切 H） ----------------------------------------------------
+    def _toggle_table_dock(self) -> None:
+        dock = self._table_dock()
+        dock.show()
+        self._refresh_table()
+
+    def _table_dock(self):
+        if getattr(self, "_table_dock_widget", None) is None:
+            from PySide6.QtWidgets import QDockWidget
+
+            from rpa_core.gui.table_panel import TablePanel
+
+            panel = TablePanel()
+            dock = QDockWidget("数据表格", self)
+            dock.setObjectName("table-dock")
+            body = QWidget()
+            layout = QVBoxLayout(body)
+            layout.setContentsMargins(0, 0, 0, 0)
+            layout.addWidget(panel, 1)
+            buttons = QHBoxLayout()
+            save_button = QPushButton("保存表格")
+            save_button.clicked.connect(self._save_table)
+            export_button = QPushButton("导出 CSV")
+            export_button.clicked.connect(self._export_table_csv)
+            buttons.addWidget(save_button)
+            buttons.addWidget(export_button)
+            buttons.addStretch(1)
+            layout.addLayout(buttons)
+            dock.setWidget(body)
+            self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, dock)
+            dock.hide()
+            self._table_dock_widget = dock
+            self._table_panel = panel
+        return self._table_dock_widget
+
+    def _table_store(self):
+        if self._store is None:
+            return None
+        from rpa_core.devserver.store import TableStore
+
+        return TableStore(self._store)
+
+    def _refresh_table(self) -> None:
+        self._table_dock()  # 保证面板存在
+        store = self._table_store()
+        name = self._current_flow_name()
+        if store is None or name is None:
+            self._table_panel.load({"columns": [], "rows": []})
+            self._table_panel.hint_label.setText("先把流程保存到流程库，再编辑数据表格")
+            return
+        self._table_panel.load(store.read(name))
+
+    def _save_table(self) -> None:
+        store = self._table_store()
+        name = self._current_flow_name()
+        if store is None or name is None:
+            self.statusBar().showMessage("先把流程保存到流程库，再保存数据表格", 5000)
+            return
+        store.write(name, self._table_panel.collect())
+        self.statusBar().showMessage("数据表格已保存", 4000)
+
+    def _export_table_csv(self) -> None:
+        from rpa_core.workers.data_table import rows_to_csv
+
+        document = self._table_panel.collect()
+        chosen, _ = QFileDialog.getSaveFileName(
+            self, "导出 CSV", "table.csv", "CSV 文件 (*.csv)"
+        )
+        if not chosen:
+            return
+        Path(chosen).write_bytes(
+            rows_to_csv(document["columns"], document["rows"])
+        )
+        self.statusBar().showMessage(f"已导出 {chosen}", 4000)
+
+    # ---- 指令清单 / 插件（切 I） ---------------------------------------------
+    def _show_catalog_dialog(self) -> None:
+        """只读指令清单对话框：分组树 + 选中命令的 manifest 摘要。"""
+        dialog = QDialog(self)
+        dialog.setWindowTitle(f"指令清单（{len(self.catalog)} 条）")
+        dialog.resize(640, 520)
+        layout = QVBoxLayout(dialog)
+        tree = QTreeWidget()
+        tree.setHeaderHidden(True)
+        populate_command_tree(tree, self.catalog, load_command_display_names())
+        detail = QPlainTextEdit()
+        detail.setReadOnly(True)
+
+        def show_detail(item, _column) -> None:
+            command_id = item.data(0, ROLE_COMMAND_ID)
+            if not command_id or command_id not in self.catalog:
+                detail.clear()
+                return
+            manifest = self.catalog[command_id]
+            detail.setPlainText(
+                json.dumps(
+                    {
+                        "id": manifest.id,
+                        "kind": manifest.kind.value,
+                        "executor": manifest.executor,
+                        "effect": manifest.effect.model_dump(mode="json"),
+                        "input_schema": manifest.input_schema,
+                        "output_schema": manifest.output_schema,
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+            )
+
+        tree.currentItemChanged.connect(show_detail)
+        layout.addWidget(tree, 1)
+        layout.addWidget(detail, 1)
+        dialog.exec()
+
+    def _extension_status_text(self) -> str:
+        """各浏览器的扩展安装/启用状态文本（能力层本地探测，无需 devserver）。"""
+        from rpa_core.extension_installer import (
+            default_build_dir,
+            extension_root,
+            extension_status,
+        )
+
+        status = extension_status(
+            "",
+            default_build_dir(),
+            extension_dir=extension_root(),
+        )
+        lines = []
+        for browser, info in status["browsers"].items():
+            binary = "已安装" if info.get("binary") else "未安装"
+            if info.get("enabled"):
+                plugin = "插件已启用"
+            elif info.get("installed"):
+                plugin = "插件已加载未启用"
+            else:
+                plugin = "插件未加载"
+            if info.get("uninstallBlocked"):
+                plugin += "（有卸载屏蔽记录）"
+            lines.append(f"{browser}：浏览器{binary} · {plugin}")
+        return "\n".join(lines)
+
+    def _show_extension_dialog(self) -> None:
+        """插件状态 + Load unpacked 安装引导（对齐 Web 的 4 步引导）。"""
+        from rpa_core.extension_installer import extension_root, open_browser, open_path_in_explorer
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("浏览器插件")
+        layout = QVBoxLayout(dialog)
+        status_label = QLabel(self._extension_status_text())
+        layout.addWidget(status_label)
+        guide = QLabel(
+            "安装步骤（Load unpacked）：\n"
+            "1. 打开扩展源码目录（下面按钮）\n"
+            "2. 打开浏览器，地址栏输入 chrome://extensions 或 edge://extensions\n"
+            "3. 开启「开发人员模式」→「加载已解压的扩展程序」→ 选择该目录\n"
+            "4. 回到本页刷新状态"
+        )
+        guide.setWordWrap(True)
+        layout.addWidget(guide)
+        buttons = QHBoxLayout()
+        open_dir = QPushButton("打开扩展目录")
+        open_dir.clicked.connect(
+            lambda: open_path_in_explorer(extension_root())
+        )
+        open_edge = QPushButton("打开 Edge")
+        open_edge.clicked.connect(lambda: open_browser("edge"))
+        open_chrome = QPushButton("打开 Chrome")
+        open_chrome.clicked.connect(lambda: open_browser("chrome"))
+        refresh = QPushButton("刷新状态")
+        refresh.clicked.connect(
+            lambda: status_label.setText(self._extension_status_text())
+        )
+        for button in (open_dir, open_edge, open_chrome, refresh):
+            buttons.addWidget(button)
+        layout.addLayout(buttons)
+        dialog.exec()
+
     # ---- 保存 -------------------------------------------------------------
     def _save_action(self) -> None:
-        """工具栏保存：无源路径时先弹「另存为」。"""
+        """工具栏保存：优先原位保存；无路径时走流程库命名保存 / 另存为。"""
         target = self.flow_path
+        if target is None and self._store is not None:
+            suggested = self._current_flow_name() or ""
+            name, ok = QInputDialog.getText(
+                self, "保存到流程库", "流程名（字母开头，可含数字 . _ -）：",
+                text=suggested,
+            )
+            if not ok or not name.strip():
+                return
+            saved = self._save_named_flow(name.strip())
+            if saved is not None:
+                self.statusBar().showMessage(f"已保存 {saved}", 4000)
+            return
         if target is None:
             suggested = "workflow.json"
             chosen, _ = QFileDialog.getSaveFileName(
@@ -586,11 +1473,8 @@ class MainWindow(QMainWindow):
         if saved is not None:
             self.statusBar().showMessage(f"已保存 {saved}", 4000)
 
-    def save_workflow(self, path: Path) -> Path | None:
-        """把当前模型回写为 workflow dict，校验通过后落盘；失败返回 None。
-
-        落盘格式与 devserver WorkflowDirStore 一致：UTF-8、indent=2、末尾换行。
-        """
+    def _build_document(self) -> dict | None:
+        """模型回写为 workflow dict 并校验；校验失败进状态栏，返回 None。"""
         from rpa_core.gui.flow_model import model_to_workflow
         from rpa_core.model.workflow import Workflow
 
@@ -599,6 +1483,16 @@ class MainWindow(QMainWindow):
             Workflow.model_validate(document)  # 结构非法则拒绝落盘
         except Exception as exc:  # noqa: BLE001 - 校验错误统一进状态栏，不崩溃
             self.statusBar().showMessage(f"校验失败，未保存：{exc}", 6000)
+            return None
+        return document
+
+    def save_workflow(self, path: Path) -> Path | None:
+        """把当前模型回写为 workflow dict，校验通过后落盘；失败返回 None。
+
+        落盘格式与 devserver WorkflowDirStore 一致：UTF-8、indent=2、末尾换行。
+        """
+        document = self._build_document()
+        if document is None:
             return None
 
         encoded = (json.dumps(document, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
@@ -619,6 +1513,7 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event) -> None:  # noqa: N802
         """有未保存修改时询问：保存 / 不保存 / 取消。"""
         if not self._dirty:
+            self._shutdown_run_manager()
             event.accept()
             return
         answer = QMessageBox.question(
@@ -632,11 +1527,22 @@ class MainWindow(QMainWindow):
         if answer == QMessageBox.StandardButton.Cancel:
             event.ignore()
         elif answer == QMessageBox.StandardButton.Discard:
+            self._shutdown_run_manager()
             event.accept()
         else:
             self._save_action()
             # 另存为被取消或保存失败时不关闭，避免丢失修改
-            event.accept() if not self._dirty else event.ignore()
+            if not self._dirty:
+                self._shutdown_run_manager()
+                event.accept()
+            else:
+                event.ignore()
+
+    def _shutdown_run_manager(self) -> None:
+        """窗口关闭时终止仍在运行的子进程（规则 11：释放拥有的资源）。"""
+        if self._run_manager is not None:
+            self._run_manager.close()
+            self._run_manager = None
 
     # ---- 右栏参数表单 -----------------------------------------------------
     def _clear_param_panel(self) -> None:
@@ -668,9 +1574,12 @@ class MainWindow(QMainWindow):
             self._show_param_placeholder("从画布选择指令节点以编辑参数")
             return
         node_type = current.data(ROLE_NODE_TYPE)
+        if node_type in ("sequence", "if", "forEach", "try", "return"):
+            holder = current.data(ROLE_ARGS_RAW)
+            self._show_control_form(node_type, holder.raw if holder else {}, current)
+            return
         if node_type != "action":
             hint = {
-                "return": "返回节点的编辑将在后续切片支持",
                 _ELSE_BRANCH_TYPE: "否则分支指令：位于它下面的指令属于否则分支"
                 "（Delete 取消分支）",
             }.get(node_type, "该节点不接受参数")
@@ -689,7 +1598,15 @@ class MainWindow(QMainWindow):
         from rpa_core.gui.param_form import ParamForm
 
         self._clear_param_panel()
-        form = ParamForm(manifest.input_schema, args)
+        item = self.flow_model.itemFromIndex(index)
+        holder = item.data(role_args_raw)
+        raw = holder.raw if holder is not None else None
+        form = ParamForm(
+            manifest.input_schema,
+            args,
+            expr_modes=(raw or {}).get("_exprModes"),
+            variable_provider=self._collect_reference_paths,
+        )
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
@@ -704,18 +1621,161 @@ class MainWindow(QMainWindow):
             except ValueError as exc:
                 self.statusBar().showMessage(str(exc), 4000)
                 return
+            self._begin_edit()
             item = self.flow_model.itemFromIndex(index)
             # 原地更新同一 holder（保留 raw 模板），并同步 raw["with"] 供回写
             holder = item.data(role_args_raw)
             holder.args = dict(values)
             if holder.raw is not None:
                 holder.raw["with"] = dict(values)
+                modes = form.expr_modes()
+                if modes:
+                    holder.raw["_exprModes"] = modes
+                else:
+                    holder.raw.pop("_exprModes", None)
             item.setData(summarize_args(values), ROLE_ARGS_SUMMARY)
+            self._end_edit()
             self._set_dirty(True)
             self.statusBar().showMessage("参数已更新（未保存）", 4000)
 
         apply_button.clicked.connect(apply)
         self.param_layout.addWidget(apply_button)
+
+    def _collect_reference_paths(self) -> list[str]:
+        """收集可引用的变量/路径（fx「＋变量」下拉内容）。
+
+        口径对齐 Web computeReferencePaths 的常用子集：
+        - 用户变量：output_aliases 值 + data.setVar 的字面量 varName；
+        - inputs.<声明的入参名>；
+        - steps.<节点id>.outputs.<输出字段>（按 manifest output_schema 展开）；
+        - 内置作用域：loop.item / error.code / error.message。
+        """
+        from rpa_core.gui.flow_model import (
+            ROLE_ARGS_RAW,
+            ROLE_COMMAND_ID,
+            iter_real_nodes,
+        )
+
+        paths: list[str] = []
+        for name in (self._workflow_meta.get("inputs") or {}):
+            paths.append(f"inputs.{name}")
+        for item in iter_real_nodes(self.flow_model):
+            holder = item.data(ROLE_ARGS_RAW)
+            raw = holder.raw if holder is not None else None
+            if not raw:
+                continue
+            for alias in (raw.get("output_aliases") or {}).values():
+                paths.append(alias)
+            if raw.get("command") == "data.setVar":
+                var_name = (raw.get("with") or {}).get("varName")
+                if isinstance(var_name, str) and var_name:
+                    paths.append(var_name)
+            command_id = item.data(ROLE_COMMAND_ID)
+            node_id = raw.get("id")
+            if command_id in self.catalog and node_id:
+                outputs = (
+                    self.catalog[command_id].output_schema.get("properties") or {}
+                )
+                for field in outputs:
+                    paths.append(f"steps.{node_id}.outputs.{field}")
+        paths.extend(["loop.item", "error.code", "error.message"])
+        # 去重保序
+        return list(dict.fromkeys(paths))
+
+    def _show_control_form(self, node_type: str, raw: dict, index) -> None:
+        """控制流节点（sequence/if/forEach/try/return）的结构参数表单。
+
+        直接编辑 AST 结构字段（condition/items/item_var/error_var/value），
+        应用后同步 raw 与画布卡片标题。sequence 无可编辑字段，只显示说明。
+        """
+        from rpa_core.gui.flow_model import (
+            ROLE_ARGS_RAW,
+            ROLE_ARGS_SUMMARY,
+            control_node_title,
+            repr_json,
+        )
+        from rpa_core.gui.param_form import ControlNodeForm
+
+        self._clear_param_panel()
+        form = ControlNodeForm(node_type, raw)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setWidget(form)
+        self.param_layout.addWidget(scroll, 1)
+
+        if node_type == "sequence":
+            return  # 顺序容器无参数
+
+        apply_button = QPushButton("应用参数")
+
+        def apply() -> None:
+            try:
+                updates = form.apply_values()
+            except ValueError as exc:
+                self.statusBar().showMessage(str(exc), 4000)
+                return
+            self._begin_edit()
+            item = self.flow_model.itemFromIndex(index)
+            holder = item.data(ROLE_ARGS_RAW)
+            if holder is None or holder.raw is None:
+                self._undo_stack.pop()  # 无变更可回收刚才的历史记账
+                return
+            holder.raw.update(updates)
+            if node_type == "return":
+                value = holder.raw.get("value")
+                item.setData("" if value is None else repr_json(value),
+                             ROLE_ARGS_SUMMARY)
+            else:
+                item.setText(control_node_title(node_type, holder.raw))
+            self._end_edit()
+            self._set_dirty(True)
+            self.statusBar().showMessage("参数已更新（未保存）", 4000)
+
+        apply_button.clicked.connect(apply)
+        self.param_layout.addWidget(apply_button)
+
+
+class RunInputsDialog(QDialog):
+    """运行参数对话框：流程声明 inputs 时逐参数覆盖（值为 JSON 文本）。
+
+    空文本 = 保持流程里声明的默认值；非法 JSON 在 values() 抛 ValueError。
+    """
+
+    def __init__(self, inputs: dict, parent: QWidget | None = None) -> None:
+        from PySide6.QtWidgets import QDialogButtonBox, QFormLayout
+
+        super().__init__(parent)
+        self.setWindowTitle("运行参数")
+        self._edits: dict[str, QLineEdit] = {}
+        layout = QVBoxLayout(self)
+        form = QFormLayout()
+        for name, default in inputs.items():
+            edit = QLineEdit()
+            if default is not None:
+                edit.setPlaceholderText(f"默认：{json.dumps(default, ensure_ascii=False)}")
+            self._edits[name] = edit
+            form.addRow(QLabel(name), edit)
+        layout.addLayout(form)
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def values(self) -> dict:
+        """收集覆盖值：只含用户实际填写的参数（空 = 沿用默认）。"""
+        result: dict = {}
+        for name, edit in self._edits.items():
+            text = edit.text().strip()
+            if not text:
+                continue
+            try:
+                result[name] = json.loads(text)
+            except json.JSONDecodeError as exc:
+                raise ValueError(f"参数 {name} 不是合法 JSON：{exc}") from exc
+        return result
 
 
 # 内置示例流程：覆盖全部容器结构（sequence/if/forEach/try/action/return），
@@ -734,24 +1794,26 @@ SAMPLE_WORKFLOW = {
             {
                 "type": "if",
                 "id": "check",
-                "condition": {"op": "truthy", "left": "${data}"},
+                "condition": {"op": "truthy",
+                              "left": "${steps.open.outputs.sessionId}"},
                 "then": [
                     {"type": "action", "id": "read", "command": "browser.getText",
                      "with": {"selector": "h1", "timeoutMs": 5000}},
                 ],
                 "else": [
                     {"type": "action", "id": "wait", "command": "workflow.sleep",
-                             "with": {"seconds": 1}},
+                              "with": {"seconds": 1}},
                 ],
             },
             {
                 "type": "forEach",
                 "id": "loop",
-                "items": "${rows}",
+                "items": ["第一行", "第二行"],
                 "item_var": "row",
                 "children": [
                     {"type": "action", "id": "append", "command": "data.appendText",
-                     "with": {"workspace": ".", "path": "out.txt", "text": "${row}"}},
+                     "with": {"workspace": ".", "path": "out.txt",
+                              "text": "${loop.row}"}},
                 ],
             },
             {"type": "return", "id": "done", "value": "ok"},
@@ -768,13 +1830,20 @@ def build_application(argv: list[str] | None = None) -> QApplication:
 
 
 def build_main_window(
-    catalog: CommandCatalog, workflow=None, flow_path=None
+    catalog: CommandCatalog, workflow=None, flow_path=None, workflows_root=None
 ) -> MainWindow:
     """构建主窗口但不进入事件循环（供 headless 冒烟测试调用）。"""
-    return MainWindow(catalog, workflow=workflow, flow_path=flow_path)
+    return MainWindow(
+        catalog, workflow=workflow, flow_path=flow_path,
+        workflows_root=workflows_root,
+    )
 
 
-def run_gui(commands_root: Path, flow_path: Path | None = None) -> int:
+def run_gui(
+    commands_root: Path,
+    flow_path: Path | None = None,
+    workflows_root: Path | None = None,
+) -> int:
     """GUI 启动入口：加载真实 catalog（可选 workflow）→ 构建窗口 → 进入事件循环。"""
     from rpa_core.model.workflow import Workflow
 
@@ -784,6 +1853,9 @@ def run_gui(commands_root: Path, flow_path: Path | None = None) -> int:
         Workflow.model_validate_json(Path(flow_path).read_text(encoding="utf-8"))
         if flow_path else None
     )
-    window = build_main_window(catalog, workflow=workflow, flow_path=flow_path)
+    window = MainWindow(
+        catalog, workflow=workflow, flow_path=flow_path,
+        workflows_root=workflows_root,
+    )
     window.show()
     return app.exec()

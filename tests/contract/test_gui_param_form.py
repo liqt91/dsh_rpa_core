@@ -32,8 +32,14 @@ from PySide6.QtWidgets import (  # noqa: E402
 from rpa_core.gui.flow_model import (  # noqa: E402
     ROLE_ARGS_RAW,
     ROLE_ARGS_SUMMARY,
+    control_node_title,
 )
-from rpa_core.gui.param_form import ParamForm  # noqa: E402
+from rpa_core.gui.param_form import (  # noqa: E402
+    ControlNodeForm,
+    ParamForm,
+    format_literal,
+    parse_literal,
+)
 
 
 @pytest.fixture(scope="module")
@@ -184,22 +190,27 @@ def test_selecting_action_card_shows_form_and_apply_updates_item(window):
     assert "browserType=msedge" in summary
 
 
-def test_selecting_container_and_return_show_hints(window):
+def test_selecting_control_nodes_show_control_forms(window):
     model = window.flow_model
 
-    # 顶层 if 容器（sequence root 已扁平化，直接选顶层容器节点）
+    def current_form() -> ControlNodeForm:
+        # 旧表单 deleteLater 在 offscreen 下未必即时销毁，取最后一个（最新）表单
+        forms = window.param_holder.findChildren(ControlNodeForm)
+        assert forms
+        return forms[-1]
+
+    # 顶层 if 容器（sequence root 已扁平化，直接选顶层容器节点）：
+    # 现在显示条件表单（条件操作符/左值/右值）
     check_item = model.find_by_id("check")  # SAMPLE_WORKFLOW 的 if 节点
     assert check_item is not None, "SAMPLE_WORKFLOW 应包含 if 节点 'check'"
-    root_index = model.indexFromItem(check_item)
-    window.canvas_view.setCurrentIndex(root_index)
-    labels = window.param_holder.findChildren(QLabel)
-    assert any("不接受参数" in label.text() for label in labels)
+    window.canvas_view.setCurrentIndex(model.indexFromItem(check_item))
+    assert current_form().node_type == "if"
 
-    # return 节点
-    return_index = model.indexFromItem(model.find_by_id("done"))
-    window.canvas_view.setCurrentIndex(return_index)
-    labels = window.param_holder.findChildren(QLabel)
-    assert any("后续切片" in label.text() for label in labels)
+    # return 节点：显示返回值字段
+    window.canvas_view.setCurrentIndex(model.indexFromItem(model.find_by_id("done")))
+    form = current_form()
+    assert form.node_type == "return"
+    assert "value" in form._widgets
 
 
 def test_bad_json_apply_reports_statusbar_without_raising(window):
@@ -210,3 +221,181 @@ def test_bad_json_apply_reports_statusbar_without_raising(window):
     _field(form, "commandLineArgs").setText("{bad")
     window.param_holder.findChild(QPushButton).click()
     assert "commandLineArgs" in window.statusBar().currentMessage()
+
+
+# ---- 控制流节点表单（切 A） -------------------------------------------------
+def test_parse_literal_matches_web_semantics():
+    assert parse_literal("") == ""
+    assert parse_literal("${x}") == "${x}"  # 引用保留字符串
+    assert parse_literal("42") == 42
+    assert parse_literal("[1, 2]") == [1, 2]
+    assert parse_literal("true") is True
+    assert parse_literal('"quoted"') == "quoted"
+    assert parse_literal("{bad") == "{bad"  # JSON 失败回退原始字符串
+    assert parse_literal("hello") == "hello"
+
+
+def test_format_literal_roundtrip():
+    assert format_literal("${x}") == "${x}"
+    assert format_literal(None) == ""
+    assert format_literal(42) == "42"
+    assert format_literal(["a"]) == '["a"]'
+
+
+def test_control_form_if_collects_condition(qapp):
+    form = ControlNodeForm("if", {"condition": {"op": "eq", "left": "${n}", "right": 3}})
+    assert form._widgets["op"].currentData() == "eq"
+    assert form._widgets["left"].text() == "${n}"
+    assert form._widgets["right"].text() == "3"
+    updates = form.apply_values()
+    assert updates == {"condition": {"op": "eq", "left": "${n}", "right": 3}}
+
+
+def test_control_form_if_empty_right_omits_key(qapp):
+    form = ControlNodeForm("if", {"condition": {"op": "truthy", "left": "${x}", "right": 1}})
+    form._widgets["right"].setText("")
+    updates = form.apply_values()
+    assert updates == {"condition": {"op": "truthy", "left": "${x}"}}
+
+
+def test_control_form_for_each_validates_inputs(qapp):
+    form = ControlNodeForm("forEach", {"items": ["a"], "item_var": "row"})
+    assert form.apply_values() == {"items": ["a"], "item_var": "row"}
+
+    form._widgets["items"].setText("")  # 空 = []
+    assert form.apply_values()["items"] == []
+
+    form._widgets["items"].setText("{bad")
+    with pytest.raises(ValueError, match="items"):
+        form.apply_values()
+
+    form._widgets["items"].setText("[]")
+    form._widgets["item_var"].setText("9bad")
+    with pytest.raises(ValueError, match="item_var"):
+        form.apply_values()
+
+
+def test_control_form_try_and_return(qapp):
+    try_form = ControlNodeForm("try", {"error_var": "err"})
+    assert try_form.apply_values() == {"error_var": "err"}
+
+    return_form = ControlNodeForm("return", {"value": "ok"})
+    assert return_form.apply_values() == {"value": "ok"}
+    return_form._widgets["value"].setText("")
+    assert return_form.apply_values() == {"value": None}
+
+
+def test_control_node_title_omits_none_right(qapp):
+    title = control_node_title("if", {"condition": {"op": "truthy", "left": "${x}"}})
+    assert title == "如果（${x} truthy）"
+    title = control_node_title(
+        "if", {"condition": {"op": "eq", "left": "${n}", "right": 3}}
+    )
+    assert title == "如果（${n} eq 3）"
+
+
+def test_applying_if_condition_updates_raw_and_title(window):
+    from rpa_core.gui.flow_model import model_to_workflow
+
+    model = window.flow_model
+    item = model.find_by_id("check")
+    window.canvas_view.setCurrentIndex(model.indexFromItem(item))
+    form = window.param_holder.findChild(ControlNodeForm)
+    form._widgets["op"].setCurrentIndex(form._widgets["op"].findData("gte"))
+    form._widgets["left"].setText("${changed}")
+    form._widgets["right"].setText("60")
+    window.param_holder.findChild(QPushButton).click()
+
+    holder = item.data(ROLE_ARGS_RAW)
+    assert holder.raw["condition"] == {"op": "gte", "left": "${changed}", "right": 60}
+    assert item.text() == "如果（${changed} gte 60）"
+    assert window._dirty
+
+    document = model_to_workflow(model, window._workflow_meta)
+    if_node = next(
+        n for n in document["root"]["children"] if n["id"] == "check"
+    )
+    assert if_node["condition"]["op"] == "gte"
+    assert if_node["condition"]["right"] == 60
+
+
+# ---- fx 变量引用模式（切 C） --------------------------------------------------
+def test_fx_toggle_records_expr_mode(qapp):
+    form = ParamForm(
+        catalog_schema_for_fx(),
+        {"text": "hello"},
+        variable_provider=lambda: [],
+    )
+    fx_button, var_button = form._fx_buttons["text"]
+    assert not fx_button.isChecked()
+    assert not var_button.isVisible()
+
+    fx_button.setChecked(True)
+    assert form.expr_modes() == {"text": "fx"}
+    fx_button.setChecked(False)
+    assert form.expr_modes() == {}
+
+
+def test_fx_initial_mode_from_expr_modes(qapp):
+    form = ParamForm(
+        catalog_schema_for_fx(),
+        {"text": "[web]"},
+        expr_modes={"text": "fx"},
+        variable_provider=lambda: [],
+    )
+    fx_button, _ = form._fx_buttons["text"]
+    assert fx_button.isChecked()
+    assert form.expr_modes() == {"text": "fx"}
+
+
+def test_fx_var_button_inserts_tag_at_cursor(qapp):
+    form = ParamForm(
+        catalog_schema_for_fx(),
+        {"text": "前置"},
+        expr_modes={"text": "fx"},
+        variable_provider=lambda: ["webpage1", "inputs.count"],
+    )
+    editor: QLineEdit = _field(form, "text")
+    _, var_button = form._fx_buttons["text"]
+    menu = var_button.menu()
+    menu.aboutToShow.emit()  # 触发菜单重建（真实场景由弹出动作触发）
+    texts = [action.text() for action in menu.actions()]
+    assert "webpage1" in texts and "inputs.count" in texts
+    menu.actions()[0].trigger()
+    assert editor.text() == "前置[webpage1]"
+
+
+def catalog_schema_for_fx() -> dict:
+    return {
+        "type": "object",
+        "properties": {"text": {"type": "string"}},
+    }
+
+
+def test_apply_persists_expr_modes_to_raw(window):
+    from rpa_core.gui.flow_model import model_to_workflow
+
+    model = window.flow_model
+    item = model.find_by_id("read")  # browser.getText，含 string 字段 selector
+    window.canvas_view.setCurrentIndex(model.indexFromItem(item))
+    form = window.param_holder.findChild(ParamForm)
+    fx_button, _ = form._fx_buttons["selector"]
+    fx_button.setChecked(True)
+    window.param_holder.findChild(QPushButton).click()
+
+    holder = item.data(ROLE_ARGS_RAW)
+    assert holder.raw["_exprModes"] == {"selector": "fx"}
+    document = model_to_workflow(model, window._workflow_meta)
+    if_node = next(n for n in document["root"]["children"] if n["id"] == "check")
+    read_node = if_node["then"][0]
+    assert read_node["_exprModes"] == {"selector": "fx"}
+
+
+def test_collect_reference_paths_includes_aliases_inputs_steps(window):
+    window._workflow_meta["inputs"] = {"count": 3}
+    paths = window._collect_reference_paths()
+    assert "inputs.count" in paths
+    assert "steps.read.outputs.text" in paths or any(
+        p.startswith("steps.read.outputs.") for p in paths
+    )
+    assert "loop.item" in paths and "error.code" in paths

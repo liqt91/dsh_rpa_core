@@ -221,6 +221,11 @@
       "id": "desktop-gui-slice5",
       "title": "Native desktop client slice5: node add/delete - double-click command tree appends new action at selection-aware target (container/then/sibling), Delete removes selected node with root/virtual-group protection, unique node ids",
       "passes": true
+    },
+    {
+      "id": "gui-web-parity",
+      "title": "GUI/Web parity: control-node param forms, undo/redo + copy/paste, fx variable tags, compile validation, run control (RunManager), flow library, element library + desktop capture, data table, catalog/extension dialogs",
+      "passes": true
     }
   ]
 }

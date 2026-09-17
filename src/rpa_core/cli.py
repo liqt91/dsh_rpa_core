@@ -480,7 +480,9 @@ def _cmd_gui(args) -> int:
             "（或 pip install -e '.[gui]'）后再运行 rpa-core gui。",
         )
         return 2
-    return run_gui(_commands_root(), flow_path=args.workflow)
+    return run_gui(
+        _commands_root(), flow_path=args.workflow, workflows_root=args.workflows
+    )
 
 
 def _serve(args) -> int:
@@ -526,6 +528,8 @@ def main() -> int:
         if action == "gui":
             sub.add_argument("--workflow", type=Path, default=None,
                              help="启动时打开指定的 workflow.json 文件")
+            sub.add_argument("--workflows", type=Path, default=Path("workflows"),
+                             help="流程库目录（命名流程的保存/打开/运行根目录）")
             continue
         if action in ("catalog", "auth", "status", "unauth", "env-status"):
             continue

@@ -146,10 +146,10 @@ def test_sibling_reorder_and_preserved_fields():
     assert ids == ["check", "open", "loop", "done"]
     # GUI 不编辑的结构字段原样保留
     assert result["root"]["children"][0]["condition"] == {
-        "op": "truthy", "left": "${data}"
+        "op": "truthy", "left": "${steps.open.outputs.sessionId}"
     }
     loop = next(child for child in result["root"]["children"] if child["id"] == "loop")
-    assert loop["items"] == "${rows}"
+    assert loop["items"] == ["第一行", "第二行"]
     assert loop["item_var"] == "row"
 
 

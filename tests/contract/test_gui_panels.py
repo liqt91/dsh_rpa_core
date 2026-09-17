@@ -1,0 +1,176 @@
+"""元素库 / 数据表格 / 插件与指令清单一览（GUI 功能补齐 切 G/H/I）。
+
+- 数据表格面板：载入/收集往返、加列去重、类型化解析、保存到 TableStore；
+- 元素库：摘要、校验、入库、插入到指令参数（browser→selector / desktop→locator）；
+- 插件状态文本：能力层探测结果结构化呈现（双浏览器行）。
+
+测试在 offscreen Qt 平台运行；缺 PySide6 时整组跳过。
+"""
+
+from __future__ import annotations
+
+import os
+
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+import pytest
+
+pytest.importorskip("PySide6")
+
+
+@pytest.fixture(scope="module")
+def qapp():
+    from rpa_core.gui.app import build_application
+
+    return build_application()
+
+
+@pytest.fixture(scope="module")
+def catalog(qapp):
+    from rpa_core.catalog import load_catalog
+    from rpa_core.cli import _commands_root
+
+    return load_catalog(_commands_root())
+
+
+@pytest.fixture()
+def window(catalog, tmp_path):
+    from rpa_core.gui.app import MainWindow
+
+    return MainWindow(catalog, workflows_root=tmp_path / "workflows")
+
+
+# ---- 数据表格 -----------------------------------------------------------------
+def test_table_panel_roundtrip(qapp):
+    from rpa_core.gui.table_panel import TablePanel
+
+    panel = TablePanel()
+    panel.load(
+        {
+            "columns": [
+                {"key": "name", "label": "名称", "type": "text"},
+                {"key": "count", "label": "数量", "type": "number"},
+            ],
+            "rows": [{"name": "苹果", "count": 3}],
+        }
+    )
+    assert panel.grid.columnCount() == 2
+    assert panel.grid.rowCount() == 1
+    panel.add_row()
+    panel.grid.item(1, 0).setText("香蕉")
+    panel.grid.item(1, 1).setText("2.5")
+    document = panel.collect()
+    assert document["rows"] == [
+        {"name": "苹果", "count": 3},
+        {"name": "香蕉", "count": 2.5},
+    ]
+
+
+def test_table_panel_add_column_dedupes_key(qapp):
+    from rpa_core.gui.table_panel import TablePanel
+
+    panel = TablePanel()
+    panel.load({"columns": [], "rows": []})
+    panel.add_column("名称")
+    panel.add_column("名称")
+    keys = [c["key"] for c in panel.collect()["columns"]]
+    assert keys == ["名称", "名称_2"]
+
+
+def test_table_save_and_reload_via_store(window):
+    window._save_named_flow("t1")
+    window._table_dock()  # 建面板
+    window._refresh_table()
+    window._table_panel.add_column("标题")
+    window._table_panel.add_row()
+    window._table_panel.grid.item(0, 0).setText(" hello ")
+    window._save_table()
+
+    stored = window._table_store().read("t1")
+    assert stored["columns"][0]["label"] == "标题"
+    assert stored["rows"] == [{"标题": " hello "}]
+
+    # 文件位置与运行期 data.table.* 命令同契约
+    table_file = window._store.directory("t1") / "data" / "table.json"
+    assert table_file.is_file()
+
+
+# ---- 元素库 ------------------------------------------------------------------
+def _browser_element() -> dict:
+    return {
+        "kind": "browser",
+        "selector": {"css": "#kw"},
+        "verifyCount": 1,
+        "metadata": {"url": "https://example.com"},
+    }
+
+
+def test_save_and_verify_element(window):
+    window._save_named_flow("e1")
+    assert window.save_element_descriptor("searchBox", _browser_element())
+    store = window._element_store()
+    assert "searchBox" in store.list()
+
+    window._refresh_elements()
+    assert window._element_panel.list.count() == 1
+    assert "browser" in window._element_panel.list.item(0).text()
+
+    window._verify_element("searchBox")
+    assert "校验通过" in window.statusBar().currentMessage()
+
+
+def test_save_element_rejects_invalid_document(window):
+    window._save_named_flow("e2")
+    assert not window.save_element_descriptor("bad", {"kind": "browser"})
+    assert "不合法" in window.statusBar().currentMessage()
+
+
+def test_insert_element_into_selector(window):
+    window._save_named_flow("e3")
+    window.save_element_descriptor("searchBox", _browser_element())
+    # 选中 browser.getText 节点（有 selector 参数）
+    item = window.flow_model.find_by_id("read")
+    window.canvas_view.setCurrentIndex(window.flow_model.indexFromItem(item))
+    window._insert_element("searchBox")
+
+    from rpa_core.gui.flow_model import ROLE_ARGS_RAW
+
+    holder = item.data(ROLE_ARGS_RAW)
+    assert holder.raw["with"]["selector"] == "#kw"
+
+
+def test_insert_element_kind_mismatch_hint(window):
+    window._save_named_flow("e4")
+    window.save_element_descriptor(
+        "btn",
+        {
+            "kind": "desktop",
+            "selector": {"locator": {"controlType": "Button"}},
+            "verifyCount": 1,
+        },
+    )
+    item = window.flow_model.find_by_id("read")  # browser.getText 无 locator 字段
+    window.canvas_view.setCurrentIndex(window.flow_model.indexFromItem(item))
+    window._insert_element("btn")
+    assert "没有匹配" in window.statusBar().currentMessage()
+
+
+def test_elements_require_named_flow(window):
+    window._toggle_elements_dock()  # 示例流程未入库
+    assert "流程库" in window._element_panel.hint_label.text()
+
+
+def test_summarize_element(qapp):
+    from rpa_core.gui.element_panel import summarize_element
+
+    assert summarize_element(_browser_element()) == "browser · #kw"
+    assert "desktop" in summarize_element(
+        {"kind": "desktop", "selector": {"locator": {"name": "确定"}}}
+    )
+
+
+# ---- 插件状态（切 I） ---------------------------------------------------------
+def test_extension_status_text_covers_both_browsers(window):
+    text = window._extension_status_text()
+    assert "chrome" in text and "edge" in text
+    assert "浏览器" in text

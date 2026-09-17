@@ -17,10 +17,12 @@
 
 from __future__ import annotations
 
+import copy
+import re
 from collections.abc import Callable
 from typing import Any
 
-from PySide6.QtCore import QMimeData, QModelIndex, Qt
+from PySide6.QtCore import QMimeData, QModelIndex, Qt, Signal
 from PySide6.QtGui import QStandardItem, QStandardItemModel
 
 from rpa_core.model.workflow import Workflow
@@ -32,6 +34,7 @@ ROLE_COMMAND_ID = Qt.ItemDataRole.UserRole + 12
 ROLE_ARGS_SUMMARY = Qt.ItemDataRole.UserRole + 13
 ROLE_IS_VIRTUAL = Qt.ItemDataRole.UserRole + 14  # 虚拟分组（then/else/catch/循环体）
 ROLE_ARGS_RAW = Qt.ItemDataRole.UserRole + 15  # action 的原始 with 参数 dict（供表单编辑）
+ROLE_RUN_STATE = Qt.ItemDataRole.UserRole + 16  # 最近运行状态：running/succeeded/failed
 
 # 容器节点类型（可放置子节点）；action/return 为叶子
 _CONTAINER_TYPES = {"sequence", "if", "forEach", "try"}
@@ -110,6 +113,24 @@ def repr_json(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
 
 
+def control_node_title(node_type: str, raw: dict[str, Any]) -> str:
+    """容器节点的卡片标题（建树与参数应用后刷新共用，保证口径一致）。
+
+    if 的右值为 None（truthy 等单参操作符）时不显示，避免标题出现 "None"。
+    """
+    if node_type == "forEach":
+        return f"循环（{repr_json(raw.get('items'))[:24]}）"
+    if node_type == "if":
+        cond = raw.get("condition") or {}
+        parts = [str(cond.get("left", "")), str(cond.get("op", ""))]
+        if cond.get("right") is not None:
+            parts.append(str(cond["right"]))
+        return f"如果（{' '.join(parts)}）"
+    if node_type == "try":
+        return "异常捕获"
+    return "顺序执行"
+
+
 def _real_child_insert_row(parent: QStandardItem) -> int:
     """容器内「追加真实子节点」的插入行：必须停在末尾 end-bracket 之前。
 
@@ -155,6 +176,10 @@ def _branch_insert_row(parent: QStandardItem, anchor: QStandardItem) -> int:
 
 class FlowTreeModel(QStandardItemModel):
     """流程 AST 树模型：支持容器内同级/跨容器拖拽重排。"""
+
+    # 结构突变信号：插入/删除/移动成功后发出（参数编辑不经过模型，由 app 自行记账）。
+    # 撤销栈据此以「变更前文档」入栈——监听方需在变更发生后重新取快照。
+    mutated = Signal()
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -291,7 +316,10 @@ class FlowTreeModel(QStandardItemModel):
                     # 此处不处理，由双击/右键菜单添加
                     return False
                 new_item = self.create_action_item(command_id)
-            return self._insert_item_at_drop(new_item, row, parent)
+            inserted = self._insert_item_at_drop(new_item, row, parent)
+            if inserted:
+                self.mutated.emit()
+            return inserted
 
         # === 分支 2：画布内部拖放（移动节点）===
         if not data.hasFormat(_MIME_TYPE):
@@ -327,6 +355,7 @@ class FlowTreeModel(QStandardItemModel):
             item = source_parent.takeRow(source_row)
             target_row = max(0, min(target_row, target.rowCount()))
             target.insertRow(target_row, item)
+            self.mutated.emit()
             return True
         # 结束行 / 否则行上的 drop 路由到其真实容器
         parent = self._resolve_drop_parent(parent)
@@ -360,6 +389,7 @@ class FlowTreeModel(QStandardItemModel):
         # 落点不得越过末尾的 end-bracket：它是容器的 child，但不属于 children
         dest_row = max(0, min(dest_row, _real_child_insert_row(target_parent)))
         target_parent.insertRow(dest_row, taken)
+        self.mutated.emit()
         return True
 
     @staticmethod
@@ -470,6 +500,7 @@ class FlowTreeModel(QStandardItemModel):
         # item 会被销毁——该行变成 None（严重时直接段错误）；list/tuple 形式
         # 才转移所有权（appendRow(单个 item) 也会转移，故其余调用点安全）。
         parent.insertRow(_branch_insert_row(parent, anchor), [new_item])
+        self.mutated.emit()
         return new_item
 
     def insert_node(
@@ -495,6 +526,7 @@ class FlowTreeModel(QStandardItemModel):
         else:
             parent = anchor.parent() or root
         parent.insertRow(_branch_insert_row(parent, anchor), [new_item])
+        self.mutated.emit()
         return new_item
 
     def remove_row(self, index: QModelIndex) -> bool:
@@ -525,6 +557,7 @@ class FlowTreeModel(QStandardItemModel):
         # 节点删除时 AttributeError: 'NoneType' has no attribute 'takeRow'。
         parent = item.parent() or self.invisibleRootItem()
         parent.takeRow(item.row())
+        self.mutated.emit()
         return True
 
     def add_else_branch(self, if_item: QStandardItem) -> QStandardItem | None:
@@ -540,7 +573,27 @@ class FlowTreeModel(QStandardItemModel):
             return None
         marker = _make_else_branch_item(if_item.data(ROLE_NODE_ID))
         if_item.insertRow(_real_child_insert_row(if_item), [marker])
+        self.mutated.emit()
         return marker
+
+    # ---- 复制 / 粘贴（切 B） ----------------------------------------------
+    def insert_subtree(
+        self, node: dict[str, Any], target: QStandardItem | None = None
+    ) -> QStandardItem:
+        """把一段 AST 子树（已克隆并重映射 id）插入到 target 所属分支末尾。"""
+        new_item = build_item(node)
+        root = self.invisibleRootItem()
+        anchor = target if target is not None else root
+        node_type = anchor.data(ROLE_NODE_TYPE)
+        if node_type in _VIRTUAL_GROUP_TYPES or node_type in (
+            "sequence", "forEach", "try", "if"
+        ):
+            parent = anchor
+        else:
+            parent = anchor.parent() or root
+        parent.insertRow(_branch_insert_row(parent, anchor), [new_item])
+        self.mutated.emit()
+        return new_item
 
     def flags(self, index):
         base = super().flags(index)
@@ -663,16 +716,7 @@ def build_item(node: Any, *, label: Callable[[str], str] | None = None) -> QStan
         )
 
     # 容器节点
-    if node_type == "forEach":
-        items_ref = raw.get("items")
-        title = f"循环（{repr_json(items_ref)[:24]}）"
-    elif node_type == "if":
-        cond = raw.get("condition", {})
-        title = f"如果（{cond.get('left', '')} {cond.get('op', '')} {cond.get('right', '')}）"
-    elif node_type == "try":
-        title = "异常捕获"
-    else:
-        title = "顺序执行"
+    title = control_node_title(node_type, raw)
     item = _make_item(
         title=title, node_type=node_type, node_id=node_id,
         args_holder=ArgsHolder(raw=raw),
@@ -795,6 +839,102 @@ def iter_real_nodes(model: FlowTreeModel):
     # invisibleRootItem 自身没有 ROLE_IS_VIRTUAL 属性，但我们不 yield 它
     for row in range(root.rowCount()):
         yield from walk(root.child(row))
+
+
+# ---- 复制 / 粘贴（切 B） ---------------------------------------------------
+def subtree_to_ast(item: QStandardItem) -> dict[str, Any]:
+    """把树 item（含子树）还原为深拷贝的 AST dict（剪贴板载荷）。"""
+    return copy.deepcopy(_rebuild_node(item))
+
+
+def _walk_ast(node: dict[str, Any]):
+    """先序遍历 AST dict 的所有节点。"""
+    yield node
+    for key in ("children", "then", "else", "catch"):
+        for child in node.get(key) or []:
+            yield from _walk_ast(child)
+
+
+def clone_for_paste(model: FlowTreeModel, node: dict[str, Any]) -> dict[str, Any]:
+    """克隆 AST 子树供粘贴：全树 id 重映射 + 输出别名撞车自动改名。
+
+    - 节点 id 全部换成新的 nN（与模型现有 id 不冲突）；
+    - 与模型现有别名冲突的 output_aliases 改名 ``name_copy``（仍撞再 +N），
+      并把子树内部对该别名的 ``${alias}`` / ``[alias]`` 引用同步改写；
+      引用若指向子树外部的同名别名则保持不动（它本来就该解析到外部）。
+    """
+    node = copy.deepcopy(node)
+    used_ids = model.existing_ids()
+
+    # 1. 全树 id 重映射
+    counter = 1
+    for sub in _walk_ast(node):
+        while f"n{counter}" in used_ids:
+            counter += 1
+        sub["id"] = f"n{counter}"
+        used_ids.add(sub["id"])
+        counter += 1
+
+    # 2. 别名撞车改名 + 子树内引用改写
+    existing_aliases: set[str] = set()
+    for real in iter_real_nodes(model):
+        holder = real.data(ROLE_ARGS_RAW)
+        raw = holder.raw if holder is not None else None
+        if raw:
+            existing_aliases.update((raw.get("output_aliases") or {}).values())
+
+    renames: dict[str, str] = {}
+    for sub in _walk_ast(node):
+        aliases = sub.get("output_aliases") or {}
+        for alias in list(aliases.values()):
+            if alias in existing_aliases and alias not in renames:
+                candidate = f"{alias}_copy"
+                suffix = 2
+                while candidate in existing_aliases or candidate in renames.values():
+                    candidate = f"{alias}_copy{suffix}"
+                    suffix += 1
+                renames[alias] = candidate
+                existing_aliases.add(candidate)
+    if renames:
+        patterns = [
+            (re.compile(rf"\$\{{{re.escape(old)}(?=[\}}.])"), f"${{{new}")
+            for old, new in renames.items()
+        ] + [
+            (re.compile(rf"\[{re.escape(old)}(?=[\].])"), f"[{new}")
+            for old, new in renames.items()
+        ]
+
+        # 别名映射逐节点改名；引用字符串由递归改写一次完成（含全部子节点）
+        for sub in _walk_ast(node):
+            aliases = sub.get("output_aliases") or {}
+            for field, alias in list(aliases.items()):
+                if alias in renames:
+                    aliases[field] = renames[alias]
+        _rewrite_strings_in_place(node, patterns)
+    return node
+
+
+def _rewrite_strings_in_place(node: dict[str, Any], patterns) -> None:
+    """把节点 dict 里所有字符串值按 (pattern, prefix) 规则递归改写。
+
+    pattern 命中 ``${old`` 或 ``[old`` 的前缀，替换为 ``${new`` / ``[new``。
+    output_aliases 的别名映射由调用方单独处理，这里跳过该键。
+    """
+    def rewrite(value: Any) -> Any:
+        if isinstance(value, str):
+            for pattern, prefix in patterns:
+                value = pattern.sub(prefix, value)
+            return value
+        if isinstance(value, dict):
+            return {key: rewrite(inner) for key, inner in value.items()}
+        if isinstance(value, list):
+            return [rewrite(item) for item in value]
+        return value
+
+    for key, value in list(node.items()):
+        if key == "output_aliases":
+            continue
+        node[key] = rewrite(value)
 
 
 # ---- 模型 → Workflow dict 回写（切片 4：保存闭环） ------------------------
