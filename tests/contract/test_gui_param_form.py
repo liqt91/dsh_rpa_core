@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 
 # 必须在导入 Qt / 创建 QApplication 之前指定离屏平台
@@ -399,3 +400,67 @@ def test_collect_reference_paths_includes_aliases_inputs_steps(window):
         p.startswith("steps.read.outputs.") for p in paths
     )
     assert "loop.item" in paths and "error.code" in paths
+
+
+# ---- 未应用编辑的自动提交（维护者报障：改完参数点保存无效） --------------------
+def test_save_commits_pending_form_edits(window, tmp_path):
+    """改了参数不点「应用参数」直接保存，也必须落盘（Web 即改即生效对齐）。"""
+    from rpa_core.gui.param_form import ParamForm
+
+    model = window.flow_model
+    item = model.find_by_id("open")
+    window.canvas_view.setCurrentIndex(model.indexFromItem(item))
+    form = window.param_holder.findChild(ParamForm)
+    combo = _field(form, "browserType")
+    combo.setCurrentIndex(combo.findData("chrome"))
+
+    target = tmp_path / "saved.json"
+    assert window.save_workflow(target) == target
+    document = json.loads(target.read_text(encoding="utf-8"))
+    assert document["root"]["children"][0]["with"]["browserType"] == "chrome"
+    # 提交过一次即产生一条撤销历史
+    assert len(window._undo_stack) == 1
+
+
+def test_save_without_form_changes_keeps_history_clean(window, tmp_path):
+    """没有未应用编辑时保存不产生撤销历史（避免每次保存都塞垃圾快照）。"""
+    target = tmp_path / "nochange.json"
+    window.save_workflow(target)
+    window.save_workflow(target)
+    assert window._undo_stack == []
+
+
+def test_switching_node_commits_pending_edits(window):
+    """切换选中节点时，上一个面板的未应用编辑自动提交到模型。"""
+    from rpa_core.gui.param_form import ParamForm
+
+    model = window.flow_model
+    open_item = model.find_by_id("open")
+    window.canvas_view.setCurrentIndex(model.indexFromItem(open_item))
+    form = window.param_holder.findChild(ParamForm)
+    _field(form, "url").setText("https://committed.example/")
+
+    # 切到另一个节点（触发 currentChanged → 自动提交）
+    read_item = model.find_by_id("read")
+    window.canvas_view.setCurrentIndex(model.indexFromItem(read_item))
+
+    assert (
+        open_item.data(ROLE_ARGS_RAW).raw["with"]["url"]
+        == "https://committed.example/"
+    )
+
+
+def test_validate_commits_pending_edits(window):
+    """校验前自动提交：面板里刚清掉的必填参数应被校验看见。"""
+    from rpa_core.gui.param_form import ParamForm
+
+    model = window.flow_model
+    item = model.find_by_id("open")
+    window.canvas_view.setCurrentIndex(model.indexFromItem(item))
+    form = window.param_holder.findChild(ParamForm)
+    combo = _field(form, "browserType")
+    combo.setCurrentIndex(0)  # 「未设置」= 清空必填参数（未点应用）
+
+    assert window._validate_workflow(show_dialog=False) is False
+    open_node = window._current_document()["root"]["children"][0]
+    assert "browserType" not in open_node["with"]

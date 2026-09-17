@@ -347,6 +347,8 @@ class MainWindow(QMainWindow):
         self._events_seen = 0
         self._cancel_requested = False
         self._restore_timer = None
+        # 参数面板未应用的编辑（保存/运行/切换节点前自动提交）
+        self._pending_apply = None
         self.setWindowTitle("RPA Core 编辑器")
         self.resize(1280, 800)
 
@@ -1071,6 +1073,7 @@ class MainWindow(QMainWindow):
 
     def _run_workflow(self) -> None:
         """工具栏「运行」：要求流程已入流程库；脏改动先落盘（运行基于磁盘文件）。"""
+        self._commit_pending_edits()  # 面板里未应用的编辑要随运行一起落盘
         if self._store is None:
             self.statusBar().showMessage("运行需要流程库（--workflows 参数）", 5000)
             return
@@ -1280,6 +1283,7 @@ class MainWindow(QMainWindow):
     # ---- 编译校验（切 D） ---------------------------------------------------
     def _validate_workflow(self, *, show_dialog: bool = True) -> bool:
         """编译校验当前流程；有问题时列出并定位到第一个问题节点。"""
+        self._commit_pending_edits()  # 校验对象应包含面板里未应用的编辑
         issues = collect_validation_issues(self._current_document(), self.catalog)
         if not issues:
             self.statusBar().showMessage("✓ 校验通过", 5000)
@@ -1746,6 +1750,8 @@ class MainWindow(QMainWindow):
         from rpa_core.gui.flow_model import model_to_workflow
         from rpa_core.model.workflow import Workflow
 
+        # 保存前自动提交参数面板未应用的编辑（否则用户改了参数点保存会静默丢失）
+        self._commit_pending_edits()
         document = model_to_workflow(self.flow_model, self._workflow_meta)
         try:
             Workflow.model_validate(document)  # 结构非法则拒绝落盘
@@ -1830,7 +1836,8 @@ class MainWindow(QMainWindow):
 
     # ---- 右栏参数表单 -----------------------------------------------------
     def _clear_param_panel(self) -> None:
-        """清空右栏内容（旧控件延迟销毁）。"""
+        """清空右栏内容（旧控件延迟销毁）并作废待提交的编辑登记。"""
+        self._pending_apply = None
         while self.param_layout.count():
             old = self.param_layout.takeAt(0).widget()
             if old is not None:
@@ -1853,6 +1860,12 @@ class MainWindow(QMainWindow):
             ROLE_COMMAND_ID,
             ROLE_NODE_TYPE,
         )
+
+        # 切换节点前先提交上一个面板未应用的编辑（Web 即改即生效，GUI 靠此对齐）。
+        # 同一节点重渲染（如插入元素后刷新表单）不提交：表单持有的是变更前状态，
+        # 提交会把程序性修改回灌覆盖。
+        if current != previous:
+            self._commit_pending_edits()
 
         if not current.isValid():
             self._show_param_placeholder("从画布选择指令节点以编辑参数")
@@ -1924,6 +1937,48 @@ class MainWindow(QMainWindow):
 
         apply_button.clicked.connect(apply)
         self.param_layout.addWidget(apply_button)
+        self._mount_pending_apply(
+            apply,
+            lambda: self._action_form_dirty(form, holder, raw),
+            index,
+        )
+
+    @staticmethod
+    def _action_form_dirty(form, holder, raw) -> bool:
+        """参数表单相对模型是否有未应用的编辑（含 fx 模式变化）。"""
+        try:
+            values = form.values()
+        except ValueError:
+            return True  # 非法输入也算待处理，交给 apply 报错
+        if values != dict(holder.args):
+            return True
+        return form.expr_modes() != ((raw or {}).get("_exprModes") or {})
+
+    def _mount_pending_apply(self, apply_fn, dirty_fn, index) -> None:
+        """登记当前参数面板的「应用」入口，供保存/运行/切换节点时自动提交。
+
+        GUI 与 Web 的差异：Web 改字段即生效，GUI 需要点「应用参数」。不点就
+        保存会静默丢掉修改（维护者实测报障）——因此在保存/运行/校验/切换
+        节点前自动提交未应用的编辑（无改动则跳过，不产生撤销历史）。
+        """
+        self._pending_apply = (apply_fn, dirty_fn, index)
+
+    def _commit_pending_edits(self) -> None:
+        """把参数面板未应用的编辑落到模型；模型已重建/无改动则跳过。"""
+        pending = self._pending_apply
+        if pending is None:
+            return
+        self._pending_apply = None
+        apply_fn, dirty_fn, index = pending
+        # 画布可能已被撤销/重做重建：索引不属于当前模型时丢弃陈旧面板
+        try:
+            if index.model() is not self.flow_model:
+                return
+        except RuntimeError:
+            return
+        if not dirty_fn():
+            return
+        apply_fn()
 
     def _collect_reference_paths(self) -> list[str]:
         """收集可引用的变量/路径（fx「＋变量」下拉内容）。
@@ -2018,6 +2073,21 @@ class MainWindow(QMainWindow):
 
         apply_button.clicked.connect(apply)
         self.param_layout.addWidget(apply_button)
+
+        def control_dirty() -> bool:
+            try:
+                updates = form.apply_values()
+            except ValueError:
+                return True  # 非法输入也算待处理，交给 apply 报错
+            current_item = self.flow_model.itemFromIndex(index)
+            holder = (
+                current_item.data(ROLE_ARGS_RAW) if current_item is not None else None
+            )
+            if holder is None or holder.raw is None:
+                return False
+            return any(holder.raw.get(key) != value for key, value in updates.items())
+
+        self._mount_pending_apply(apply, control_dirty, index)
 
 
 class RunInputsDialog(QDialog):
