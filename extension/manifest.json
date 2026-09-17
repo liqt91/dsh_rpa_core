@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "rpa_core element capture",
-  "version": "0.2.0",
-  "description": "rpa_core 扩展：元素捕获 + 浏览器执行通道（默认权限：整个浏览器）。",
+  "version": "0.3.0",
+  "description": "rpa_core 扩展：元素捕获 + 浏览器执行通道（Native Messaging 长连接，默认权限：整个浏览器）。",
   "update_url": "https://clients2.google.com/service/update2/crx",
   "permissions": [
     "storage",
@@ -11,11 +11,10 @@
     "tabs",
     "cookies",
     "downloads",
-    "webNavigation"
+    "webNavigation",
+    "nativeMessaging"
   ],
   "host_permissions": [
-    "http://127.0.0.1:8765/*",
-    "http://localhost:8765/*",
     "<all_urls>"
   ],
   "background": { "service_worker": "background.js" },

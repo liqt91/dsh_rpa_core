@@ -104,4 +104,12 @@
   document.addEventListener("mousemove", onMove, true);
   document.addEventListener("click", onClick, true);
   document.addEventListener("keydown", onKey, true);
+
+  // 启动即同步当前捕获态：推送模型下新页面/新标签页不会自动收到此前的 arm 广播
+  // （旧 HTTP 模型每 5s 重复广播，天然覆盖新页面）。
+  try {
+    chrome.runtime.sendMessage({ type: "rpa-capture-state" })
+      .then((reply) => { if (reply && reply.armed) armed = true; })
+      .catch(() => { /* SW 重启中：等后续 arm 广播 */ });
+  } catch { /* 极端：runtime 不可用 */ }
 })();

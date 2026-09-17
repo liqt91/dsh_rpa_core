@@ -1,41 +1,48 @@
-// rpa_core 扩展 background service worker
-// ① 捕获通道：短轮询 devserver pending 状态（捕获期间激活），把 content script 的
-//    捕获结果 POST 回 devserver。无鉴权：devserver 仅绑定 127.0.0.1。
-// ② 执行通道（M15，一等公民）：长轮询 /api/ext/command/next 领命令 → 本地执行
-//    （tabs/scripting/cookies）→ /api/ext/command/result 回结果。
+// rpa_core 扩展 background service worker（MV3，零构建）
+//
+// 两条通道，均经 **Native Messaging 长连接**（ADR 0015）：
+//   ① 捕获通道：host 推送 capture_arm/capture_disarm → 广播到全部标签页；
+//      content script 的捕获结果经 port 回传 host。
+//   ② 执行通道（一等公民）：host 推送 command → 本地执行（tabs/scripting/cookies）
+//      → result 经 port 回传。
+//
+// host 名 `com.rpa_core.ext_bridge`，由浏览器按需拉起（无 8765 常驻服务、无 HTTP 轮询）。
 // 权限：默认「整个浏览器」（全部窗口/标签页/Cookie）；可用 chrome.storage.local 的
-//    rpaExecPermission 收窄为 {mode:"tabs",tabIds:[...]} 或 {mode:"origins",allow:[...]}。
-const DEVSERVER = "http://127.0.0.1:8765";
-const POLL_ACTIVE_MS = 1200;   // 有待捕获会话时
-const POLL_IDLE_MS = 5000;     // 空闲时
-const EXEC_HOLD_S = 20;        // 命令长轮询保持（秒）
+//      rpaExecPermission 收窄为 {mode:"tabs",tabIds:[...]} 或 {mode:"origins",allow:[...]}。
+const HOST_NAME = "com.rpa_core.ext_bridge";
+const RECONNECT_MS = 3000;      // 断开后的重连退避
+const ALARM_NAME = "rpa-bridge-reconnect";  // SW 被回收时的兜底拉起（MV3 alarm 最小 30s）
 const PERMISSION_KEY = "rpaExecPermission";
 const INSTANCE_KEY = "rpaInstanceId";
-let pollMs = POLL_IDLE_MS;
-let execRunning = false;
+
+let port = null;
+let connecting = false;
 let cachedInstanceId = "";
-// 持久 per-profile 实例 id：同一 profile 的多个窗口/页签（同一 storage）共用同一 id，
-// 不同用户数据目录各自生成 —— 正好区分"同浏览器不同实例"（多 profile）。
-async function ensureInstanceId() {
-  if (cachedInstanceId) return cachedInstanceId;
+let cachedFocusedAt = 0;
+let lastBridgeError = "";
+let captureSessionId = null;
+// 捕获激活态：旧 HTTP 模型每 5s 重复广播，新页面/新标签页自然被 arm；改为推送后
+// 必须自己维持该语义（content script 启动时查询 + 页面加载完成时补发）。
+const CAPTURE_ARMED_KEY = "rpaCaptureArmed";
+
+async function setCaptureArmed(armed) {
   try {
-    const { [INSTANCE_KEY]: stored } = await chrome.storage.local.get(INSTANCE_KEY);
-    if (typeof stored === "string" && stored) {
-      cachedInstanceId = stored;
-    } else {
-      cachedInstanceId = (crypto.randomUUID && crypto.randomUUID()) || String(Date.now());
-      await chrome.storage.local.set({ [INSTANCE_KEY]: cachedInstanceId });
-    }
+    await chrome.storage.session.set({ [CAPTURE_ARMED_KEY]: !!armed });
+  } catch { /* session storage 不可用：退化为仅内存 */ }
+}
+
+async function isCaptureArmed() {
+  try {
+    const data = await chrome.storage.session.get(CAPTURE_ARMED_KEY);
+    return !!data[CAPTURE_ARMED_KEY];
   } catch {
-    // storage 不可用（极端）：退回运行时随机 id，实例区分退化为"当轮运行时"
-    cachedInstanceId = (crypto.randomUUID && crypto.randomUUID()) || String(Date.now());
+    return false;
   }
-  return cachedInstanceId;
 }
 
 // ---------------------------------------------------------------- 宿主身份
 // 扩展装在哪个浏览器里，执行通道就用哪个浏览器（扩展通道没有"启动浏览器"概念）。
-// 宿主身份经长轮询 query 上报 devserver，供「打开网页」校验执行宿主。
+// 宿主身份随 hello 上报 host，供「打开网页」校验执行宿主。
 function detectHostBrowser() {
   const ua = navigator.userAgent || "";
   // 顺序敏感：Edge/Opera/Brave 的 UA 里都含 "Chrome/"，必须先判壳
@@ -68,10 +75,27 @@ function hostInfo() {
   };
 }
 
+// 持久 per-profile 实例 id：同一 profile 的多个窗口/页签（同一 storage）共用同一 id，
+// 不同用户数据目录各自生成 —— 正好区分"同浏览器不同实例"（多 profile）。
+async function ensureInstanceId() {
+  if (cachedInstanceId) return cachedInstanceId;
+  try {
+    const stored = (await chrome.storage.local.get(INSTANCE_KEY)).rpaInstanceId;
+    if (typeof stored === "string" && stored) {
+      cachedInstanceId = stored;
+    } else {
+      cachedInstanceId = (crypto.randomUUID && crypto.randomUUID()) || String(Date.now());
+      await chrome.storage.local.set({ [INSTANCE_KEY]: cachedInstanceId });
+    }
+  } catch {
+    // storage 不可用（极端）：退回运行时随机 id，实例区分退化为"当轮运行时"
+    cachedInstanceId = (crypto.randomUUID && crypto.randomUUID()) || String(Date.now());
+  }
+  return cachedInstanceId;
+}
+
 // 最近一次检测到宿主浏览器窗口处于前台聚焦的时刻（wall clock ms）。
 // 仅内存缓存（SW 回收会丢，属可接受近似）；`focused` 与影刀「焦点优先→最后失去焦点」路由对应。
-let cachedFocusedAt = 0;
-
 async function focusedState() {
   let focused = false;
   try {
@@ -82,33 +106,96 @@ async function focusedState() {
   return { focused, focusedAt: cachedFocusedAt };
 }
 
-async function hostQuery() {
-  const info = hostInfo();
-  const foc = await focusedState();
-  return `&host=${encodeURIComponent(info.browser)}&iid=${encodeURIComponent(info.instanceId)}`
-    + `&ver=${encodeURIComponent(info.version)}`
-    + `&extVer=${encodeURIComponent(info.extVersion)}`
-    + `&platform=${encodeURIComponent(info.platform)}&ua=${encodeURIComponent(info.userAgent)}`
-    + `&foc=${foc.focused ? 1 : 0}&focat=${foc.focusedAt}`;
+// ---------------------------------------------------------------- 连接（串行化）
+// S0 实测：并发调用 connectNative 会拉起多个 host 进程，必须用 connecting 标志串行化。
+async function connect() {
+  if (port || connecting) return;
+  connecting = true;
+  try {
+    const instanceId = await ensureInstanceId();
+    if (port) return;
+    try {
+      port = chrome.runtime.connectNative(HOST_NAME);
+    } catch (err) {
+      port = null;
+      lastBridgeError = String(err);
+      scheduleReconnect();
+      return;
+    }
+    port.onMessage.addListener(onHostMessage);
+    port.onDisconnect.addListener(() => {
+      lastBridgeError = chrome.runtime.lastError ? chrome.runtime.lastError.message : "";
+      port = null;
+      scheduleReconnect();
+    });
+    lastBridgeError = "";
+    const focus = await focusedState();
+    post({
+      type: "hello",
+      browser: detectHostBrowser(),
+      instanceId,
+      extVersion: hostInfo().extVersion,
+      version: hostInfo().version,
+      platform: navigator.platform || "",
+      userAgent: navigator.userAgent || "",
+      focused: focus.focused,
+      focusedAt: focus.focusedAt,
+    });
+  } finally {
+    connecting = false;
+  }
+}
+
+function scheduleReconnect() {
+  setTimeout(connect, RECONNECT_MS);
+}
+
+function post(payload) {
+  if (!port) return false;
+  try {
+    port.postMessage(payload);
+    return true;
+  } catch (err) {
+    lastBridgeError = String(err);
+    return false;
+  }
+}
+
+// ---------------------------------------------------------------- host → 扩展
+function onHostMessage(msg) {
+  if (!msg || typeof msg.type !== "string") return;
+  switch (msg.type) {
+    case "ready":
+      // host 已绑定本地端点（诊断用；身份由 hello 上报）
+      break;
+    case "command":
+      runCommand(msg);
+      break;
+    case "capture_arm":
+      captureSessionId = msg.sessionId || null;
+      setCaptureArmed(true);
+      broadcast(true);
+      // ack：让发起方确认 arm 已到达扩展（诊断用，host 会广播给客户端）
+      post({ type: "capture_armed", sessionId: captureSessionId });
+      break;
+    case "capture_disarm":
+      captureSessionId = null;
+      setCaptureArmed(false);
+      broadcast(false);
+      post({ type: "capture_disarmed", sessionId: null });
+      break;
+    case "cancel":
+      // 宿主已按超时返回调用方；迟到结果会被 host 丢弃，这里无需额外处理
+      break;
+    case "ping":
+      post({ type: "pong", seq: msg.seq });
+      break;
+    default:
+      break;
+  }
 }
 
 // ---------------------------------------------------------------- 捕获通道
-
-async function poll() {
-  try {
-    const resp = await fetch(`${DEVSERVER}/api/capture/extension/pending`);
-    if (!resp.ok) { schedule(); return; }
-    const data = await resp.json();
-    const pending = data.pending === true;
-    await broadcast(pending);
-    pollMs = pending ? POLL_ACTIVE_MS : POLL_IDLE_MS;
-  } catch {
-    // devserver 不在线：空闲节奏重试
-    pollMs = POLL_IDLE_MS;
-  }
-  schedule();
-}
-
 async function broadcast(armed) {
   const tabs = await chrome.tabs.query({});
   for (const tab of tabs) {
@@ -118,37 +205,47 @@ async function broadcast(armed) {
   }
 }
 
-function schedule() {
-  chrome.alarms.create("rpa-poll", { delayInMinutes: pollMs / 60000 });
+function sendCapture(descriptor) {
+  post({
+    type: "capture_result",
+    sessionId: captureSessionId,
+    ...descriptor,
+  });
+  captureSessionId = null;
+  setCaptureArmed(false);
+  broadcast(false);
 }
 
-chrome.alarms.onAlarm.addListener((alarm) => {
-  if (alarm.name === "rpa-poll") poll();
-  if (alarm.name === "rpa-exec") startExecLoop();   // SW 被回收后的兜底拉起
+// content script 启动时查询当前捕获态（新页面/新标签页无需等下一轮广播）
+async function armTab(tabId, armed) {
+  try {
+    await chrome.tabs.sendMessage(tabId, { type: "rpa-capture-arm", armed });
+  } catch { /* 页面无 content script（chrome:// 等），忽略 */ }
+}
+
+// 页面加载完成时补发 arm：推送模型下新页面不会自动收到此前的广播
+chrome.tabs.onUpdated.addListener(async (tabId, info) => {
+  if (info.status !== "complete") return;
+  if (await isCaptureArmed()) armTab(tabId, true);
 });
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+  if (msg && msg.type === "rpa-capture-state") {
+    isCaptureArmed().then((armed) => sendResponse({ armed }));
+    return true;   // 异步应答
+  }
   if (msg && msg.type === "rpa-capture-result") {
-    postResult(msg.descriptor).then(() => sendResponse({ ok: true }));
+    sendCapture({ descriptor: msg.descriptor });
+    sendResponse({ ok: true });
     return true;
   }
   if (msg && msg.type === "rpa-capture-cancelled") {
-    postResult({ cancelled: true }).then(() => sendResponse({ ok: true }));
+    sendCapture({ cancelled: true });
+    sendResponse({ ok: true });
     return true;
   }
+  return false;
 });
-
-async function postResult(descriptor) {
-  try {
-    await fetch(`${DEVSERVER}/api/capture/extension/result`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(descriptor),
-    });
-    pollMs = POLL_IDLE_MS;
-    await broadcast(false);
-  } catch { /* devserver 不在线，丢弃 */ }
-}
 
 // ---------------------------------------------------------------- 执行通道
 
@@ -177,53 +274,21 @@ async function assertAllowed(cmd) {
   throw new Error(`unknown permission mode ${perm.mode}`);
 }
 
-function startExecLoop() {
-  if (execRunning) return;
-  execRunning = true;
-  execLoop().catch(() => { /* 出错由下一轮重启 */ }).finally(() => { execRunning = false; });
-  // 兜底：SW 回收后由 alarm 重新拉起（MV3 alarm 最小间隔 30s）
-  chrome.alarms.create("rpa-exec", { delayInMinutes: 0.5 });
-}
-
-async function execLoop() {
-  for (;;) {
-    let resp;
-    try {
-      resp = await fetch(
-        `${DEVSERVER}/api/ext/command/next?wait=${EXEC_HOLD_S}${await hostQuery()}`,
-      );
-    } catch {
-      await sleep(3000);   // devserver 不在线：退避重试
-      continue;
-    }
-    if (!resp.ok) { await sleep(3000); continue; }
-    const data = await resp.json();
-    const cmd = data.command;
-    if (!cmd) continue;    // 长轮询空转，直接续下一轮（同时充当心跳）
-    await runCommand(cmd);
-  }
-}
-
 async function runCommand(cmd) {
   let payload;
   try {
     await assertAllowed(cmd);
     const value = await executeCommand(cmd);
-    payload = { id: cmd.id, ok: true, value: value || {} };
+    payload = { type: "result", id: cmd.id, ok: true, value: value || {} };
   } catch (err) {
     payload = {
+      type: "result",
       id: cmd.id,
       ok: false,
       error: { code: errorCode(err), message: String(err && err.message || err) },
     };
   }
-  try {
-    await fetch(`${DEVSERVER}/api/ext/command/result`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-  } catch { /* devserver 掉线：结果丢弃，宿主侧按超时处理 */ }
+  post(payload);
 }
 
 function errorCode(err) {
@@ -591,10 +656,6 @@ function waitComplete(tabId, timeoutMs) {
   });
 }
 
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
 // 取 tab 当前 URL：cookie 等浏览器级操作需要 url 做作用域，但会话只存 tabId
 async function tabUrl(tabId) {
   if (tabId == null) return "";
@@ -606,14 +667,31 @@ async function tabUrl(tabId) {
   }
 }
 
-// popup 查询宿主身份（状态展示「扩展装在哪」）
+// ---------------------------------------------------------------- 焦点上报
+chrome.windows.onFocusChanged.addListener(async () => {
+  const focus = await focusedState();
+  post({ type: "focus", focused: focus.focused, focusedAt: focus.focusedAt });
+});
+
+// popup 查询宿主身份与桥接状态（状态展示「扩展装在哪 / bridge 是否连上」）
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg && msg.type === "rpa-ext-host-info") {
-    sendResponse({ host: hostInfo(), devserver: DEVSERVER });
+    sendResponse({
+      host: hostInfo(),
+      hostName: HOST_NAME,
+      connected: port !== null,
+      lastError: lastBridgeError,
+    });
   }
   return false;
 });
 
-// 启动即开始：捕获轮询 + 执行长轮询（先确保实例 id 落位，随首个心跳/targetHost 一起上报）
-poll();
-ensureInstanceId().then(startExecLoop);
+// ---------------------------------------------------------------- 启动
+chrome.alarms.create(ALARM_NAME, { periodInMinutes: 0.5 });
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name === ALARM_NAME) connect();   // SW 被回收后的兜底拉起
+});
+chrome.runtime.onStartup.addListener(connect);
+chrome.runtime.onInstalled.addListener(connect);
+
+connect();

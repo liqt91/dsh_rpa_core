@@ -1,4 +1,4 @@
-// popup：宿主身份 + 执行权限（配对机制已移除，见 background.js 顶部注释）
+// popup：宿主身份 + bridge 连接状态 + 执行权限
 // 执行权限（默认整个浏览器；tabs/origins 为预留收窄模式，需配合写入范围字段）
 const permSelect = document.getElementById("perm");
 const permStatus = document.getElementById("perm-status");
@@ -14,14 +14,14 @@ async function loadPermission() {
 
 permSelect.addEventListener("change", async () => {
   const mode = permSelect.value;
-  // 收窄模式的 tabIds/allow 列表由宿主（devserver /api/ext/permissions）或人工写入
+  // 收窄模式的 tabIds/allow 列表由宿主（bridge host 命令通道）或人工写入
   await chrome.storage.local.set({ rpaExecPermission: { mode } });
   loadPermission();
 });
 
 loadPermission();
 
-// 执行通道：宿主浏览器（= 执行通道实际使用的浏览器）+ devserver 识别状态
+// 执行通道：宿主浏览器（= 执行通道实际使用的浏览器）+ Native Messaging bridge 连接状态
 const HOST_LABELS = {
   msedge: "Edge", chrome: "Chrome", chromium: "Chromium", brave: "Brave",
   opera: "Opera", vivaldi: "Vivaldi", firefox: "Firefox", safari: "Safari",
@@ -30,26 +30,20 @@ const HOST_LABELS = {
 async function loadHost() {
   const infoEl = document.getElementById("host-info");
   const hubEl = document.getElementById("hub-status");
-  let host = null;
-  let devserverUrl = "http://127.0.0.1:8765";
+  let reply = null;
   try {
-    const reply = await chrome.runtime.sendMessage({ type: "rpa-ext-host-info" });
-    if (reply) {
-      host = reply.host || null;
-      devserverUrl = reply.devserver || devserverUrl;
-    }
+    reply = await chrome.runtime.sendMessage({ type: "rpa-ext-host-info" });
   } catch { /* SW 重启中：忽略 */ }
+  const host = reply && reply.host ? reply.host : null;
   const name = host ? (HOST_LABELS[host.browser] || host.browser || "未知") : "未知";
   infoEl.textContent = `宿主浏览器：${name}（执行宿主）`;
-  try {
-    const resp = await fetch(`${devserverUrl}/api/ext/status`);
-    const data = await resp.json();
-    hubEl.textContent = data.online
-      ? `devserver 已识别：在线（浏览器指令将走本扩展）`
-      : `devserver 已连上，但尚未识别本扩展：保持本页/devserver 存活几秒后重开`;
-    hubEl.className = data.online ? "ok" : "bad";
-  } catch {
-    hubEl.textContent = "devserver 未运行：需先启动 devserver 并保持本扩展在线，浏览器指令才能执行";
+  if (reply && reply.connected) {
+    hubEl.textContent = "bridge 已连接：浏览器指令将走本扩展";
+    hubEl.className = "ok";
+  } else {
+    const detail = reply && reply.lastError ? `（${reply.lastError}）` : "";
+    hubEl.textContent = "bridge 未连接：请确认已注册 host（rpa-core install-extension）"
+      + `并重载本扩展${detail}`;
     hubEl.className = "bad";
   }
 }
