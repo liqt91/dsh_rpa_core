@@ -406,3 +406,70 @@ def test_move_invisible_root_is_rejected():
         _mime(["root"]), Qt.DropAction.MoveAction, 0, 0, root.index()
     ) is False
     assert _top_ids(model) == ["a1", "a2", "a3", "a4"]
+
+
+# -- 拖放后的视图状态（回归：移动过的卡片点不中/看不到） ------------------------
+
+
+class _MockDrop:
+    """最小 drop 事件替身（只暴露 FlowTreeView.dropEvent 用到的接口）。"""
+
+    def __init__(self, mime_data):
+        self._mime = mime_data
+        self._accepted = False
+
+    def mimeData(self):
+        return self._mime
+
+    def proposedAction(self):
+        return Qt.DropAction.MoveAction
+
+    def acceptProposedAction(self):
+        self._accepted = True
+
+    def accept(self):
+        self._accepted = True
+
+    def ignore(self):
+        self._accepted = False
+
+    def isAccepted(self):
+        return self._accepted
+
+
+def test_drop_reselects_moved_nodes(window):
+    """拖放成功后按新索引重选被移动节点（否则旧选中索引失效 → 卡片点不中）。"""
+    window.show()
+    try:
+        model = window.flow_model
+        view = window.canvas_view
+        selection = view.selectionModel()
+        _select(window, ["open", "check"])
+        view._drag_target = {"row": -1, "parent": model.find_by_id("loop").index()}
+        event = _MockDrop(_mime(["open", "check"]))
+        view.dropEvent(event)
+        assert event.isAccepted() is True
+        moved = [i.data(ROLE_NODE_ID) for i in selection.selectedIndexes()]
+        assert set(moved) == {"open", "check"}
+        assert selection.currentIndex().data(ROLE_NODE_ID) == "open"
+    finally:
+        window._dirty = False
+        window.hide()
+
+
+def test_click_card_does_not_toggle_expansion(window):
+    """展开/收起只由编号栏 −/+ 承担：点击卡片本体不再折叠。"""
+    from PySide6.QtTest import QTest
+
+    window.show()
+    try:
+        model = window.flow_model
+        view = window.canvas_view
+        check_index = model.find_by_id("check").index()
+        view.setExpanded(check_index, True)
+        rect = view.visualRect(check_index)
+        QTest.mouseClick(view.viewport(), Qt.MouseButton.LeftButton, pos=rect.center())
+        assert view.isExpanded(check_index) is True
+    finally:
+        window._dirty = False
+        window.hide()

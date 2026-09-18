@@ -18,6 +18,7 @@ from __future__ import annotations
 from PySide6.QtCore import QModelIndex, QRect, QSize, Qt
 from PySide6.QtGui import QColor, QDrag, QFont, QPainter, QPen
 from PySide6.QtWidgets import (
+    QAbstractItemView,
     QStyle,
     QStyledItemDelegate,
     QStyleOptionViewItem,
@@ -266,6 +267,7 @@ class FlowTreeView(QTreeView):
         """
         selection = self.selectionModel()
         blocked = selection is not None and selection.blockSignals(True)
+        moved_ids: list[str] = []
         try:
             mime = event.mimeData()
             model = self.model()
@@ -289,12 +291,49 @@ class FlowTreeView(QTreeView):
             action = Qt.DropAction.MoveAction
             if model.dropMimeData(mime, action, target["row"], 0, target["parent"]):
                 event.acceptProposedAction()
+                moved_ids = [
+                    node_id
+                    for node_id in bytes(mime.data(_MIME_TYPE))
+                    .decode("utf-8")
+                    .split(";")
+                    if node_id
+                ]
             else:
                 event.ignore()
         finally:
             if blocked:
                 selection.blockSignals(False)
             self.viewport().update()
+        # 移动成功后按新索引重新选中被移动节点并滚动到可见：拖放会摘除/插入行，
+        # 旧选中索引随之失效，不重选会出现「移动过的卡片点不中/看不到」的观感。
+        if moved_ids:
+            self._reselect_nodes(moved_ids)
+
+    def _reselect_nodes(self, node_ids: list[str]) -> None:
+        """按节点 id 在新树上重新选中（首个作为当前项并滚动居中）。"""
+        from PySide6.QtCore import QItemSelectionModel
+
+        model = self.model()
+        selection = self.selectionModel()
+        if model is None or selection is None:
+            return
+        items = [
+            item
+            for item in (model.find_by_id(node_id) for node_id in node_ids)
+            if item is not None
+        ]
+        if not items:
+            return
+        selection.clearSelection()
+        for item in items:
+            selection.select(
+                item.index(),
+                QItemSelectionModel.SelectionFlag.Select
+                | QItemSelectionModel.SelectionFlag.Rows,
+            )
+        first = items[0].index()
+        selection.setCurrentIndex(first, QItemSelectionModel.SelectionFlag.NoUpdate)
+        self.scrollTo(first, QAbstractItemView.ScrollHint.PositionAtCenter)
 
     def mouseReleaseEvent(self, event) -> None:
         """编号栏与卡片尾按钮的点击分发。
@@ -717,18 +756,6 @@ def build_canvas(
     )
     tree.expandAll()
 
-    def _toggle_on_click(index: QModelIndex) -> None:
-        # 隐藏了默认展开箭头后，单击容器/虚拟组行即切换展开（叶子点击不折叠）。
-        # 多选时按住 Ctrl/Shift 的点击是在扩选，不应顺带折叠——交给选中逻辑处理。
-        from PySide6.QtWidgets import QApplication
-
-        if QApplication.keyboardModifiers() & (
-            Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier
-        ):
-            return
-        node_type = index.data(ROLE_NODE_TYPE)
-        if node_type in ("sequence", "if", "forEach", "try", "branch-catch"):
-            tree.setExpanded(index, not tree.isExpanded(index))
-
-    tree.clicked.connect(_toggle_on_click)
+    # 展开/收起只由编号栏的 −/+ 小方钮承担（mouseReleaseEvent 的 collapse_button_rect
+    # 热区）；点击卡片本体不再切换折叠——避免「点一下卡片想选中，结果被折叠」的干扰。
     return tree
