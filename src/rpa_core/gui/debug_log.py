@@ -20,6 +20,9 @@ from pathlib import Path
 
 _VALUE = os.environ.get("RPA_GUI_DEBUG", "")
 ENABLED = _VALUE not in ("", "0", "false", "False")
+# 也允许把日志路径直接写进 RPA_GUI_DEBUG（等价于设 RPA_GUI_DEBUG_FILE）
+if ENABLED and _VALUE not in ("1", "true", "True"):
+    os.environ.setdefault("RPA_GUI_DEBUG_FILE", _VALUE)
 
 
 def _log_path() -> Path:
@@ -62,3 +65,9 @@ def log(event: str, **fields: object) -> None:
 def log_path() -> str:
     """日志文件路径（供界面/终端提示）。"""
     return str(_log_path())
+
+
+def init() -> None:
+    """启用时立刻建文件并写头行，便于确认日志确实开着。"""
+    if ENABLED:
+        log("init", file=str(_log_path()))

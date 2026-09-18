@@ -507,7 +507,15 @@ def _cmd_gui(args) -> int:
 
     Qt 绑定采用延迟导入：未安装 extra 时其它子命令与 --help 完全不受影响，
     这里给出可操作的安装提示而不是裸 ImportError。
+    `--debug-log [路径]`：开启选中/拖放诊断日志（等价于设 RPA_GUI_DEBUG=1），
+    启动时会把日志路径打到 stdout，方便复现「拖放后选中异常」时取证。
     """
+    import os  # 仅 GUI 诊断开关用，避免影响顶层导入链
+
+    if getattr(args, "debug_log", None):
+        os.environ["RPA_GUI_DEBUG"] = "1"
+        if str(args.debug_log) not in ("1", "true", "True"):
+            os.environ["RPA_GUI_DEBUG_FILE"] = str(args.debug_log)
     try:
         from rpa_core.gui.app import run_gui
     except ModuleNotFoundError as exc:
@@ -518,6 +526,12 @@ def _cmd_gui(args) -> int:
             "（或 pip install -e '.[gui]'）后再运行 rpa-core gui。",
         )
         return 2
+    if os.environ.get("RPA_GUI_DEBUG"):
+        from rpa_core.gui.debug_log import init as _debug_init
+        from rpa_core.gui.debug_log import log_path
+
+        _debug_init()
+        print(f"[gui] 诊断日志：{log_path()}", flush=True)
     return run_gui(
         _commands_root(), flow_path=args.workflow, workflows_root=args.workflows
     )
@@ -568,6 +582,10 @@ def main() -> int:
                              help="启动时打开指定的 workflow.json 文件")
             sub.add_argument("--workflows", type=Path, default=Path("workflows"),
                              help="流程库目录（命名流程的保存/打开/运行根目录）")
+            sub.add_argument("--debug-log", nargs="?", const="1", default=None,
+                             metavar="PATH",
+                             help="开启选中/拖放诊断日志（可给路径；"
+                                  "默认 %%TEMP%% 下 rpa_gui_debug.log）")
             continue
         if action in ("catalog", "auth", "status", "unauth", "env-status"):
             continue
