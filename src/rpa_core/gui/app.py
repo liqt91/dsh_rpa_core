@@ -2170,7 +2170,20 @@ class MainWindow(QMainWindow):
         # 结构变更进行中（拖拽/批量删除/插入）：选中变化是变更过程的一部分，
         # 此时提交表单或重建右栏会重入改模型，破坏 Qt 内部状态（实测致裸空行/崩溃）。
         if self.flow_model is not None and self.flow_model.mutating:
+            from rpa_core.gui import debug_log
+
+            if debug_log.ENABLED:
+                debug_log.log("selection-skip(mutating)")
             return
+        from rpa_core.gui import debug_log
+        from rpa_core.gui.flow_model import ROLE_NODE_ID
+
+        if debug_log.ENABLED:
+            debug_log.log(
+                "selection",
+                current=current.data(ROLE_NODE_ID) if current.isValid() else None,
+                previous=previous.data(ROLE_NODE_ID) if previous.isValid() else None,
+            )
         # 切换节点前先提交上一个面板未应用的编辑（Web 即改即生效，GUI 靠此对齐）。
         # 同一节点重渲染（如插入元素后刷新表单）不提交：表单持有的是变更前状态，
         # 提交会把程序性修改回灌覆盖。

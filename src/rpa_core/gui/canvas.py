@@ -35,6 +35,7 @@ from rpa_core.gui.flow_model import (
     ROLE_ARGS_SUMMARY,
     ROLE_COMMAND_ID,
     ROLE_IS_VIRTUAL,
+    ROLE_NODE_ID,
     ROLE_NODE_TYPE,
     ROLE_RUN_STATE,
     FlowTreeModel,
@@ -150,6 +151,14 @@ class FlowTreeView(QTreeView):
             return
         drag = QDrag(self)
         drag.setMimeData(mime_data)
+        from rpa_core.gui import debug_log
+
+        if debug_log.ENABLED:
+            debug_log.log(
+                "startDrag",
+                ids=[index.data(ROLE_NODE_ID) for index in indices],
+                state=str(self.state()),
+            )
         # 仅 setMimeData + exec，不调基类 startDrag（它会在 exec 返回
         # MoveAction 后调 clearOrRemove 二次删源行）。
         drag.exec(supportedActions)
@@ -164,6 +173,10 @@ class FlowTreeView(QTreeView):
         except (AttributeError, TypeError):  # pragma: no cover - 绑定差异
             pass
         self.viewport().update()
+        from rpa_core.gui import debug_log
+
+        if debug_log.ENABLED:
+            debug_log.log("drag-reset", state=str(self.state()))
 
     def dragMoveEvent(self, event) -> None:
         """自判落点区域并驱动视觉指示条刷新。"""
@@ -324,6 +337,16 @@ class FlowTreeView(QTreeView):
             self.viewport().update()
         # 移动成功后按新索引重新选中被移动节点并滚动到可见：拖放会摘除/插入行，
         # 旧选中索引随之失效，不重选会出现「移动过的卡片点不中/看不到」的观感。
+        from rpa_core.gui import debug_log
+
+        if debug_log.ENABLED:
+            debug_log.log(
+                "drop",
+                accepted=event.isAccepted(),
+                moved=moved_ids,
+                expanded=expanded_ids,
+                state=str(self.state()),
+            )
         if moved_ids:
             self._reselect_nodes(moved_ids, expanded_ids)
 
@@ -332,6 +355,8 @@ class FlowTreeView(QTreeView):
     ) -> None:
         """按节点 id 在新树上重新选中（首个作为当前项并滚动居中），并恢复展开态。"""
         from PySide6.QtCore import QItemSelectionModel
+
+        from rpa_core.gui import debug_log
 
         model = self.model()
         selection = self.selectionModel()
@@ -364,6 +389,47 @@ class FlowTreeView(QTreeView):
             parent = parent.parent()
         selection.setCurrentIndex(first, QItemSelectionModel.SelectionFlag.NoUpdate)
         self.scrollTo(first, QAbstractItemView.ScrollHint.PositionAtCenter)
+        if debug_log.ENABLED:
+            debug_log.log(
+                "reselect",
+                ids=node_ids,
+                selected=[i.data(ROLE_NODE_ID) for i in selection.selectedIndexes()],
+                current=selection.currentIndex().data(ROLE_NODE_ID),
+            )
+
+    def mousePressEvent(self, event) -> None:
+        """（诊断）记录按下时的命中/状态，再走基类选中逻辑。"""
+        from rpa_core.gui import debug_log
+
+        if debug_log.ENABLED and event.button() == Qt.MouseButton.LeftButton:
+            pos = event.position().toPoint()
+            index = self.indexAt(pos)
+            selection = self.selectionModel()
+            debug_log.log(
+                "press",
+                pos=(pos.x(), pos.y()),
+                node=index.data(ROLE_NODE_ID) if index.isValid() else None,
+                valid=index.isValid(),
+                state=str(self.state()),
+                current=self.currentIndex().data(ROLE_NODE_ID),
+                selected=len(selection.selectedIndexes()) if selection else -1,
+            )
+        super().mousePressEvent(event)
+        if debug_log.ENABLED and event.button() == Qt.MouseButton.LeftButton:
+            pos = event.position().toPoint()
+            index = self.indexAt(pos)
+            selection = self.selectionModel()
+            debug_log.log(
+                "press-after",
+                node=index.data(ROLE_NODE_ID) if index.isValid() else None,
+                current=self.currentIndex().data(ROLE_NODE_ID),
+                selected=len(selection.selectedIndexes()) if selection else -1,
+                is_selected=(
+                    selection.isSelected(index)
+                    if (selection and index.isValid())
+                    else None
+                ),
+            )
 
     def mouseReleaseEvent(self, event) -> None:
         """编号栏与卡片尾按钮的点击分发。
@@ -376,11 +442,28 @@ class FlowTreeView(QTreeView):
         虚拟分组/结束行被拒；「否则」指令行虽 virtual=True 但模型对其
         例外放行（删除=取消 else 分支），视图不再重复一份更严的策略。
         """
+        from rpa_core.gui import debug_log
+
         if event.button() == Qt.MouseButton.LeftButton:
             pos = event.position().toPoint()
             # 视图缩进为 0（缩进由 delegate 自绘），行视觉矩形从 x=0 起满宽，
             # 编号栏内 indexAt 可直接命中所在行。
             index = self.indexAt(pos)
+            if debug_log.ENABLED:
+                selection = self.selectionModel()
+                debug_log.log(
+                    "release",
+                    pos=(pos.x(), pos.y()),
+                    node=index.data(ROLE_NODE_ID) if index.isValid() else None,
+                    gutter=pos.x() <= _GUTTER_WIDTH,
+                    current=self.currentIndex().data(ROLE_NODE_ID),
+                    selected=len(selection.selectedIndexes()) if selection else -1,
+                    is_selected=(
+                        selection.isSelected(index)
+                        if (selection and index.isValid())
+                        else None
+                    ),
+                )
             if pos.x() <= _GUTTER_WIDTH:
                 if (
                     index.isValid()
