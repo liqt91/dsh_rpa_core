@@ -704,13 +704,23 @@ class MainWindow(QMainWindow):
         return result
 
     def _find_next_in_canvas(self) -> None:
-        """跳到下一个匹配：选中 + 展开祖先 + 滚动居中。"""
-        if not self._canvas_search_matches:
+        """跳到下一个匹配：选中 + 展开祖先 + 滚动居中（先剔除已失效的 item）。"""
+        import shiboken6
+
+        matches = [
+            item
+            for item in self._canvas_search_matches
+            if item is not None and shiboken6.isValid(item)
+        ]
+        if not matches:
+            # 匹配项全被结构变更摘除：按当前查询重算，避免对死 item 操作
+            self._invalidate_canvas_search()
             return
-        self._canvas_search_pos = (self._canvas_search_pos + 1) % len(
-            self._canvas_search_matches
-        )
-        item = self._canvas_search_matches[self._canvas_search_pos]
+        self._canvas_search_matches = matches
+        if not matches:
+            return
+        self._canvas_search_pos = (self._canvas_search_pos + 1) % len(matches)
+        item = matches[self._canvas_search_pos]
         index = item.index()
         view = self.canvas_view
         parent = index.parent()
@@ -719,7 +729,7 @@ class MainWindow(QMainWindow):
             parent = parent.parent()
         view.setCurrentIndex(index)
         view.scrollTo(index, view.ScrollHint.PositionAtCenter)
-        total = len(self._canvas_search_matches)
+        total = len(matches)
         self.statusBar().showMessage(
             f"匹配 {self._canvas_search_pos + 1}/{total}（Enter 下一个，Esc 关闭）", 4000
         )
@@ -946,8 +956,20 @@ class MainWindow(QMainWindow):
         """结构变更（插入/删除/拖拽）经 model.mutated 到达时变更已完成。"""
         if self._loading:
             return
+        # 结构变更后，画布查找的匹配项可能已被摘除（Python 包装失效）——必须重算，
+        # 否则 _find_next_in_canvas 会对死 item 调 index()/scrollTo，抛
+        # "Internal C++ object already deleted" 或让视图卡住。
+        self._invalidate_canvas_search()
         self._begin_edit()
         self._end_edit()
+
+    def _invalidate_canvas_search(self) -> None:
+        """清空并（若查找条有内容）重算画布查找匹配集。"""
+        self._canvas_search_matches = []
+        self._canvas_search_pos = -1
+        search = getattr(self, "canvas_search", None)
+        if search is not None and search.text():
+            self._on_canvas_search_changed(search.text())
 
     def _undo(self) -> None:
         if not self._undo_stack:
@@ -999,7 +1021,14 @@ class MainWindow(QMainWindow):
         target = (
             self.flow_model.itemFromIndex(current) if current.isValid() else None
         )
-        new_item = self.flow_model.insert_subtree(node, target)
+        # 插入期间屏蔽选中信号：插入会触发 currentChanged → 表单提交/重建重入改模型
+        selection = self.canvas_view.selectionModel()
+        blocked = selection is not None and selection.blockSignals(True)
+        try:
+            new_item = self.flow_model.insert_subtree(node, target)
+        finally:
+            if blocked:
+                selection.blockSignals(False)
         self._select_new_item(new_item)
         self.statusBar().showMessage("已粘贴（未保存）", 3000)
 
@@ -1202,15 +1231,23 @@ class MainWindow(QMainWindow):
         ]
         removed_ids: list[str] = []
         else_count = 0
-        for item in roots:
-            node_type = item.data(ROLE_NODE_TYPE)
-            node_id = item.data(ROLE_NODE_ID)
-            if not self.flow_model.remove_item(item):
-                continue
-            if node_type == _ELSE_BRANCH_TYPE:
-                else_count += 1
-            elif node_id:
-                removed_ids.append(str(node_id))
+        # 删除期间屏蔽选中信号：remove_item 的 takeRow 会在信号发射中途触发
+        # currentChanged → 参数面板提交/重建 → 回头改模型，破坏 Qt 内部状态。
+        selection = self.canvas_view.selectionModel()
+        blocked = selection is not None and selection.blockSignals(True)
+        try:
+            for item in roots:
+                node_type = item.data(ROLE_NODE_TYPE)
+                node_id = item.data(ROLE_NODE_ID)
+                if not self.flow_model.remove_item(item):
+                    continue
+                if node_type == _ELSE_BRANCH_TYPE:
+                    else_count += 1
+                elif node_id:
+                    removed_ids.append(str(node_id))
+        finally:
+            if blocked:
+                selection.blockSignals(False)
         if not removed_ids and not else_count:
             return
         if len(roots) == 1 and else_count:
@@ -2130,6 +2167,10 @@ class MainWindow(QMainWindow):
             ROLE_NODE_TYPE,
         )
 
+        # 结构变更进行中（拖拽/批量删除/插入）：选中变化是变更过程的一部分，
+        # 此时提交表单或重建右栏会重入改模型，破坏 Qt 内部状态（实测致裸空行/崩溃）。
+        if self.flow_model is not None and self.flow_model.mutating:
+            return
         # 切换节点前先提交上一个面板未应用的编辑（Web 即改即生效，GUI 靠此对齐）。
         # 同一节点重渲染（如插入元素后刷新表单）不提交：表单持有的是变更前状态，
         # 提交会把程序性修改回灌覆盖。
@@ -2233,7 +2274,9 @@ class MainWindow(QMainWindow):
         self._pending_apply = (apply_fn, dirty_fn, index)
 
     def _commit_pending_edits(self) -> None:
-        """把参数面板未应用的编辑落到模型；模型已重建/无改动则跳过。"""
+        """把参数面板未应用的编辑落到模型；模型已重建/无改动/变更中则跳过。"""
+        if self.flow_model is not None and self.flow_model.mutating:
+            return
         pending = self._pending_apply
         if pending is None:
             return

@@ -259,31 +259,42 @@ class FlowTreeView(QTreeView):
         同时接受两种 MIME：
         - application/x-rpa-flow-node（画布内部移动，row 来自 dragMoveEvent 计算）
         - application/x-rpa-flow-command（指令树拖入新建，row=-1 / row=Qt 探测值）
+
+        结构变更期间屏蔽选中模型信号：Qt 的 takeRow/insertRow 会在信号发射中途触发
+        currentChanged，若此时监听方（参数面板提交/重建）回头改模型，会破坏 Qt 内部
+        状态（实测出现裸空行/None 子项直至崩溃）。变更完成后再恢复并刷新一次选中态。
         """
-        mime = event.mimeData()
-        model = self.model()
-        if mime.hasFormat(_MIME_COMMAND):
-            # 指令树拖入：直接用 row=-1 表示追加到目标容器末尾
-            parent = self._drag_target["parent"] if self._drag_target else QModelIndex()
+        selection = self.selectionModel()
+        blocked = selection is not None and selection.blockSignals(True)
+        try:
+            mime = event.mimeData()
+            model = self.model()
+            if mime.hasFormat(_MIME_COMMAND):
+                # 指令树拖入：直接用 row=-1 表示追加到目标容器末尾
+                parent = (
+                    self._drag_target["parent"] if self._drag_target else QModelIndex()
+                )
+                self._drag_target = None
+                if model.dropMimeData(mime, event.proposedAction(), -1, 0, parent):
+                    event.acceptProposedAction()
+                else:
+                    event.ignore()
+                return
+            # 画布内部移动（需 dragMoveEvent 先算好 row）
+            if not mime.hasFormat(_MIME_TYPE) or self._drag_target is None:
+                event.ignore()
+                return
+            target = self._drag_target
             self._drag_target = None
-            if model.dropMimeData(mime, event.proposedAction(), -1, 0, parent):
+            action = Qt.DropAction.MoveAction
+            if model.dropMimeData(mime, action, target["row"], 0, target["parent"]):
                 event.acceptProposedAction()
             else:
                 event.ignore()
+        finally:
+            if blocked:
+                selection.blockSignals(False)
             self.viewport().update()
-            return
-        # 画布内部移动（需 dragMoveEvent 先算好 row）
-        if not mime.hasFormat(_MIME_TYPE) or self._drag_target is None:
-            event.ignore()
-            return
-        target = self._drag_target
-        self._drag_target = None
-        action = Qt.DropAction.MoveAction
-        if model.dropMimeData(mime, action, target["row"], 0, target["parent"]):
-            event.acceptProposedAction()
-        else:
-            event.ignore()
-        self.viewport().update()
 
     def mouseReleaseEvent(self, event) -> None:
         """编号栏与卡片尾按钮的点击分发。

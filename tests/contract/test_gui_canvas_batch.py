@@ -357,3 +357,52 @@ def test_canvas_search_text_includes_command_and_args(window):
 def test_search_widget_is_line_edit(window):
     assert isinstance(window.canvas_search, QLineEdit)
     assert isinstance(window.canvas_view, QTreeView)
+
+
+# -- 回归：结构变更后不得对已失效 item 操作（曾致 GUI 卡死/崩溃） -----------------
+
+
+def test_canvas_search_matches_are_recomputed_after_structural_change(window):
+    """查找匹配项在删除/移动后会失效（PySide6 C++ 对象已删）。
+
+    回归用户报障「连续操作后卡死」：_find_next_in_canvas 对死 item 调 index()/scrollTo。
+    结构变更后必须重算匹配集，且再查找不得抛异常。
+    """
+    import shiboken6
+
+    window._show_canvas_search()
+    window._on_canvas_search_changed("data.")
+    assert window._canvas_search_matches, "示例流程应含 data.* 指令"
+    victim = window._canvas_search_matches[0]
+    assert window.flow_model.remove_item(victim) is True
+    # 变更后匹配集已重算且全部有效
+    assert all(
+        item is not None and shiboken6.isValid(item)
+        for item in window._canvas_search_matches
+    )
+    window._find_next_in_canvas()  # 不得抛 Internal C++ object already deleted
+
+
+def test_find_next_tolerates_stale_matches(window):
+    """即使匹配集里混入已失效 item，_find_next_in_canvas 也必须安全跳过。"""
+    import shiboken6
+
+    window._on_canvas_search_changed("read")
+    stale = window.flow_model.find_by_id("read")
+    window.flow_model.remove_item(stale)
+    # 人为把死 item 塞回匹配集（模拟结构变更未触发重算的极端情形）
+    window._canvas_search_matches = [stale]
+    window._find_next_in_canvas()  # 不抛异常即可
+    assert all(
+        item is None or shiboken6.isValid(item) for item in window._canvas_search_matches
+    )
+
+
+def test_move_invisible_root_is_rejected():
+    """invisibleRootItem（扁平化根的 id 挂在它上面）不可移动：不得插入空行。"""
+    model = _flat_model()
+    root = model.invisibleRootItem()
+    assert model.dropMimeData(
+        _mime(["root"]), Qt.DropAction.MoveAction, 0, 0, root.index()
+    ) is False
+    assert _top_ids(model) == ["a1", "a2", "a3", "a4"]

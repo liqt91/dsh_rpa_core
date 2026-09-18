@@ -18,6 +18,7 @@
 from __future__ import annotations
 
 import copy
+import functools
 import re
 from collections.abc import Callable
 from typing import Any
@@ -69,6 +70,20 @@ _TYPE_BADGE = {
 
 _MIME_TYPE = "application/x-rpa-flow-node"   # 画布内部节点拖放（move）
 _MIME_COMMAND = "application/x-rpa-flow-command"  # 指令树 → 画布（new）
+
+
+def _mutating(method):
+    """标记结构变更区间：期间的重入副作用（选中驱动的表单提交/重建）应被跳过。"""
+
+    @functools.wraps(method)
+    def wrapper(self, *args, **kwargs):
+        self._begin_mutation()
+        try:
+            return method(self, *args, **kwargs)
+        finally:
+            self._end_mutation()
+
+    return wrapper
 
 
 class ArgsHolder:
@@ -144,15 +159,20 @@ def _real_child_insert_row(parent: QStandardItem) -> int:
     以及双击指令树新增。
     """
     row = parent.rowCount()
-    if row > 0 and parent.child(row - 1).data(ROLE_NODE_TYPE) == _END_BRACKET_TYPE:
-        row -= 1
+    if row > 0:
+        tail = parent.child(row - 1)
+        if tail is not None and tail.data(ROLE_NODE_TYPE) == _END_BRACKET_TYPE:
+            row -= 1
     return row
 
 
 def _else_branch_row(parent: QStandardItem) -> int | None:
     """返回 parent 下「否则」指令行的行号（只有 if 会持有；没有则 None）。"""
     for row in range(parent.rowCount()):
-        if parent.child(row).data(ROLE_NODE_TYPE) == _ELSE_BRANCH_TYPE:
+        child = parent.child(row)
+        if child is None:  # 死行（模型异常）：跳过
+            continue
+        if child.data(ROLE_NODE_TYPE) == _ELSE_BRANCH_TYPE:
             return row
     return None
 
@@ -175,15 +195,60 @@ def _branch_insert_row(parent: QStandardItem, anchor: QStandardItem) -> int:
 
 
 class FlowTreeModel(QStandardItemModel):
-    """流程 AST 树模型：支持容器内同级/跨容器拖拽重排。"""
+    """流程 AST 树模型：支持容器内同层/跨容器拖拽重排。"""
 
-    # 结构突变信号：插入/删除/移动成功后发出（参数编辑不经过模型，由 app 自行记账）。
-    # 撤销栈据此以「变更前文档」入栈——监听方需在变更发生后重新取快照。
+    # 结构突变信号：插入/删除/移动成功后发出（参数编辑不经过模型，由 app 自行记账）
+    # 撤销栈据此以「变更前文档」入栈——监听方需在变更发生后重新取快照
     mutated = Signal()
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self.setColumnCount(1)
+        # 结构变更进行中标志：变更期间的选中变化会重入（currentChanged → 参数表单
+        # 提交/重建），而 Qt 的 takeRow/insertRow 在信号发射期间重入改模型会破坏
+        # 内部状态（实测：拖拽+批量删除混合操作后出现裸空行/None 子项，进而崩）。
+        # 监听方（app）据此在变更期间跳过选中驱动的副作用。
+        self._mutating_depth = 0
+
+    @property
+    def mutating(self) -> bool:
+        """是否有结构变更正在进行（重入保护用）。"""
+        return self._mutating_depth > 0
+
+    def _begin_mutation(self) -> None:
+        self._mutating_depth += 1
+
+    def _end_mutation(self) -> None:
+        self._mutating_depth = max(0, self._mutating_depth - 1)
+        if self._mutating_depth == 0:
+            # 变更收尾自愈：PySide6 在 takeRow/insertRow 的所有权边界上偶发把已插入
+            # 的 item 提前回收（行变成 None / 裸空行）。留着会污染后续遍历与回写，
+            # 这里在结构稳定后清掉，把「偶发 glitch」变成无副作用。
+            self._prune_dead_rows()
+
+    def _prune_dead_rows(self) -> int:
+        """清理死行（item 为 None）与裸空行（无 id 且无 type）；返回清理数。"""
+        removed = 0
+
+        def walk(item: QStandardItem) -> None:
+            nonlocal removed
+            for row in range(item.rowCount() - 1, -1, -1):
+                child = item.child(row)
+                if child is None:
+                    item.removeRow(row)
+                    removed += 1
+                    continue
+                if (
+                    child.data(ROLE_NODE_TYPE) is None
+                    and child.data(ROLE_NODE_ID) is None
+                ):
+                    item.removeRow(row)
+                    removed += 1
+                    continue
+                walk(child)
+
+        walk(self.invisibleRootItem())
+        return removed
 
     # ---- 拖拽 MIME：只携带节点 id（移动语义，禁止跨模型复制） ------------
     def mimeTypes(self) -> list[str]:
@@ -292,6 +357,7 @@ class FlowTreeModel(QStandardItemModel):
         target.insertRow(target_row, new_item)
         return True
 
+    @_mutating
     def dropMimeData(self, data, action, row, column, parent) -> bool:
         """执行移动/新建：区分两种 MIME。
 
@@ -347,8 +413,13 @@ class FlowTreeModel(QStandardItemModel):
             ):
                 return False
 
-        # 收集被拖 item；去掉「祖先也在被拖集合里」的项（移动祖先已连带移动它）
-        items = [item for item in (self.find_by_id(i) for i in dragged_ids) if item]
+        # 收集被拖 item；invisibleRootItem（扁平化根的 id 挂在它上面）不可移动，
+        # 去掉「祖先也在被拖集合里」的项（移动祖先已连带移动它）
+        items = [
+            item
+            for item in (self.find_by_id(i) for i in dragged_ids)
+            if item and item is not self.invisibleRootItem()
+        ]
         items = [
             item
             for item in items
@@ -377,6 +448,10 @@ class FlowTreeModel(QStandardItemModel):
             source_parent = item.parent() or self.invisibleRootItem()
             source_row = item.row()
             taken = source_parent.takeRow(source_row)
+            # takeRow 返回空列表（行号失效 / 被拖物是 invisibleRootItem）时绝不能
+            # insertRow(row, [])——那会插出一个空行（None child），后续遍历直接崩。
+            if not taken:
+                return False
             insert_at = dest_row
             # 同一父级内向下移动时，源行已先被移除，落点索引需左移 1
             if source_parent is target and source_row < insert_at:
@@ -387,29 +462,49 @@ class FlowTreeModel(QStandardItemModel):
         self.mutated.emit()
         return True
 
-    @staticmethod
-    def _is_descendant(maybe_ancestor: QStandardItem, node: QStandardItem) -> bool:
-        """node 是否为 maybe_ancestor 的后代（含自身由调用方先排除）。"""
-        current = node
-        while current is not None:
+    def _is_descendant(self, maybe_ancestor: QStandardItem, node: QStandardItem) -> bool:
+        """node 是否为 maybe_ancestor 的后代（含自身由调用方先排除）。
+
+        注意 Qt 语义：顶层 item 的 ``parent()`` 返回 None，其真实父是
+        ``invisibleRootItem``——不显式补这一步就检测不到「根」这个祖先，
+        会让「把根拖进自己的后代」这类操作漏过成环守卫。
+
+        另外用 visited 集兜底：万一模型已被外部改坏成环，这里返回 False 而不是
+        无限沿 parent 链打转（GUI 卡死的典型成因）。
+        """
+        root = self.invisibleRootItem()
+        visited: set[int] = set()
+        current: QStandardItem | None = node
+        while current is not None and id(current) not in visited:
+            visited.add(id(current))
             if current is maybe_ancestor:
                 return True
-            current = current.parent()
+            parent = current.parent()
+            if parent is None:
+                if current is root:
+                    break
+                current = root
+                continue
+            current = parent
         return False
 
     def find_by_id(self, node_id: str) -> QStandardItem | None:
-        """按 AST 节点 id 查找树 item（单流程模型遍历整棵树）。"""
-        def walk(item: QStandardItem) -> QStandardItem | None:
+        """按 AST 节点 id 查找树 item（迭代 + visited 兜底，模型异常也不卡死）。"""
+        root = self.invisibleRootItem()
+        if root is None:
+            return None
+        stack: list[QStandardItem] = [root]
+        visited: set[int] = set()
+        while stack:
+            item = stack.pop()
+            if item is None or id(item) in visited:
+                continue
+            visited.add(id(item))
             if item.data(ROLE_NODE_ID) == node_id:
                 return item
-            for row_index in range(item.rowCount()):
-                found = walk(item.child(row_index))
-                if found is not None:
-                    return found
-            return None
-
-        root = self.invisibleRootItem()
-        return walk(root) if root is not None else None
+            for row in range(item.rowCount()):
+                stack.append(item.child(row))
+        return None
 
     # ---- 节点增删（切片 5） ----------------------------------------------
     def existing_ids(self) -> set[str]:
@@ -461,6 +556,7 @@ class FlowTreeModel(QStandardItemModel):
             raise ValueError(f"未知节点类型：{node_type}")
         return build_item(TEMPLATES[node_type])
 
+    @_mutating
     def insert_command(
         self, command_id: str, target: QStandardItem | None = None
     ) -> QStandardItem:
@@ -498,6 +594,7 @@ class FlowTreeModel(QStandardItemModel):
         self.mutated.emit()
         return new_item
 
+    @_mutating
     def insert_node(
         self, node_type: str, target: QStandardItem | None = None
     ) -> QStandardItem:
@@ -531,6 +628,7 @@ class FlowTreeModel(QStandardItemModel):
             return False
         return self.remove_item(item)
 
+    @_mutating
     def remove_item(self, item: QStandardItem) -> bool:
         """删除一个真实节点或「否则」指令行（整棵子树随父行移除）。
 
@@ -555,6 +653,7 @@ class FlowTreeModel(QStandardItemModel):
         self.mutated.emit()
         return True
 
+    @_mutating
     def add_else_branch(self, if_item: QStandardItem) -> QStandardItem | None:
         """给 if 添加一条「否则」指令行；已有则返回 None。
 
@@ -572,6 +671,7 @@ class FlowTreeModel(QStandardItemModel):
         return marker
 
     # ---- 复制 / 粘贴（切 B） ----------------------------------------------
+    @_mutating
     def insert_subtree(
         self, node: dict[str, Any], target: QStandardItem | None = None
     ) -> QStandardItem:
@@ -823,17 +923,24 @@ def build_model_from_workflow(
 
 
 def iter_real_nodes(model: FlowTreeModel):
-    """深度优先遍历所有对应真实 AST 节点的 item（跳过虚拟分组）。"""
-    def walk(item: QStandardItem):
+    """遍历所有对应真实 AST 节点的 item（跳过虚拟分组；迭代 + visited 兜底）。"""
+    root = model.invisibleRootItem()
+    if root is None:
+        return
+    stack: list[QStandardItem] = [
+        root.child(row) for row in range(root.rowCount())
+    ]
+    stack.reverse()
+    visited: set[int] = set()
+    while stack:
+        item = stack.pop()
+        if item is None or id(item) in visited:
+            continue
+        visited.add(id(item))
         if not item.data(ROLE_IS_VIRTUAL):
             yield item
-        for row in range(item.rowCount()):
-            yield from walk(item.child(row))
-
-    root = model.invisibleRootItem()
-    # invisibleRootItem 自身没有 ROLE_IS_VIRTUAL 属性，但我们不 yield 它
-    for row in range(root.rowCount()):
-        yield from walk(root.child(row))
+        children = [item.child(row) for row in range(item.rowCount())]
+        stack.extend(reversed(children))
 
 
 # ---- 复制 / 粘贴（切 B） ---------------------------------------------------
@@ -954,6 +1061,8 @@ def _virtual_groups(item: QStandardItem) -> dict[str, QStandardItem]:
     groups: dict[str, QStandardItem] = {}
     for row in range(item.rowCount()):
         child = item.child(row)
+        if child is None:  # 模型异常兜底：绝不让 None 子项打断快照
+            continue
         if child.data(ROLE_NODE_TYPE) in _VIRTUAL_GROUP_TYPES:
             groups[child.data(ROLE_NODE_TYPE)] = child
     return groups
@@ -981,6 +1090,10 @@ def _rebuild_node(item: QStandardItem) -> dict[str, Any]:
         direct: list[dict[str, Any]] = []
         for row in range(item.rowCount()):
             child = item.child(row)
+            if child is None:  # 模型异常兜底
+                continue
+            if child.data(ROLE_NODE_TYPE) is None:
+                continue  # 裸空行（模型异常）：跳过
             if not child.data(ROLE_IS_VIRTUAL):
                 direct.append(_rebuild_node(child))
         node["children"] = direct
@@ -999,7 +1112,11 @@ def _rebuild_node(item: QStandardItem) -> dict[str, Any]:
         in_else = False
         for row in range(item.rowCount()):
             child = item.child(row)
+            if child is None:  # 模型异常兜底：绝不让 None 子项打断快照
+                continue
             child_type = child.data(ROLE_NODE_TYPE)
+            if child_type is None:
+                continue  # 裸空行（模型异常）：跳过
             if child_type == _ELSE_BRANCH_TYPE:
                 in_else = True
                 continue
@@ -1046,8 +1163,10 @@ def model_to_workflow(
     children: list[dict[str, Any]] = []
     for row in range(top_root.rowCount()):
         child = top_root.child(row)
-        if child.data(ROLE_NODE_TYPE) == _END_BRACKET_TYPE:
+        if child is None:  # 死行兜底：绝不让 None 打断快照
             continue
+        if child.data(ROLE_NODE_TYPE) in (None, _END_BRACKET_TYPE):
+            continue  # 结构行/裸空行不对应 AST 节点
         children.append(_rebuild_node(child))
     document = dict(meta)
     document["root"] = {"type": "sequence", "id": root_id, "children": children}
