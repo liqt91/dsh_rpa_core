@@ -1,7 +1,10 @@
 # M22 macOS/Linux 传输层真机验证（Native Messaging 跨平台）
 
 状态：`planned`
-关联：ADR 0015（Native Messaging 扩展通道）、M20（Windows 真机已验）、`docs/extension-install.md` §1.2（平台范围）
+
+（进展：S4 部分完成 —— POSIX 端点路径长度缺陷已修复并回归覆盖，2026-09-18；
+S1–S3 的真机逐步验收仍待补。当前 active_plan 为 M23，故此处保持 `planned`。）
+关联：ADR 0015（Native Messaging 扩展通道，含 §6 平台差异补充）、M20（Windows 真机已验）、`docs/extension-install.md` §1.2（平台范围）
 前置：M20（`local_transport` + `workers/ext_bridge` + 三平台 host manifest 注册均已实现）
 
 ## 背景与缺口（现状核实 2026-09-17）
@@ -32,9 +35,19 @@ M20 的传输层与安装注册**按三平台实现**，但**只在 Windows 真�
 - [ ] **S3 端到端**
   - `browser.navigate` 经扩展通道 succeeded（真实浏览器）；捕获 arm → Ctrl+Click → 描述符回传。
 - [ ] **S4 差异修正与文档**
-  - 修正 POSIX 分支实测暴露的差异（socket 路径/权限/清理、launcher 形式、`pgrep` 相关路径表）。
-  - `docs/extension-install.md` §1.2 与 `extension/README.md` 更新为「已真机验证的平台」表述；
-    `.harness/architecture.md`/ADR 0015 增补平台验证状态。
+  - [x] **POSIX 端点路径长度缺陷（macOS 真机暴露，2026-09-18）**：`sun_path` 103 字节上限被
+    `61 字节 per-user TMPDIR + 56 字节端点名` 顶穿（123 字节）→ host 被浏览器正常拉起但
+    `bind()` 抛裸 `OSError` 静默死亡 → 扩展**永远离线**。已修：定长实例 token
+    （`sha256(instanceId)[:16]`）+ macOS 短端点目录（`/tmp/rpa_core-<uid>/rpa_core_ext`）
+    + 长度守卫（`endpoint_path` 抛领域异常、`bind` 的 `OSError` 转领域异常）
+    + host 诊断日志落盘与启动自检 + 残留端点回收。细节见 ADR 0015 §6。
+  - [x] 回归覆盖：`tests/unit/test_local_transport.py`（定长 token / 路径长度 / 目录私有性 /
+    守卫 / 残留回收）、`tests/contract/test_ext_bridge.py`（stderr 不再丢弃、结果信封带真实
+    instanceId、按原始 id 与 token 双向路由、bind 失败以退出码 3 + 日志收场）。
+  - [ ] `docs/extension-install.md` §1.2 与 `extension/README.md` 更新为「已真机验证的平台」表述；
+    `.harness/architecture.md`/ADR 0015 增补平台验证状态（ADR 0015 §6 已补平台差异；安装文档
+    待 S1–S3 真机跑通后再改口径）。
+  - [ ] launcher 形式、`pgrep` 相关路径表的真机核对（S1–S2 一并做）。
 
 ## 验收
 
@@ -45,5 +58,13 @@ M20 的传输层与安装注册**按三平台实现**，但**只在 Windows 真�
 ## 风险 / 开放问题
 
 - 需要 macOS/Linux 真机与图形浏览器环境（本机为 Windows，无法代跑）。
-- Linux 无 `$XDG_RUNTIME_DIR`（如纯 SSH 会话）时的端点目录回退行为需实测确认。
+- ~~Linux 无 `$XDG_RUNTIME_DIR`（如纯 SSH 会话）时的端点目录回退行为需实测确认。~~
+  → 已定：缺省回退 `/tmp/rpa_core-<uid>/rpa_core_ext`（Linux 侧真机仍待跑）。
 - macOS 的 Gatekeeper/签名对 host 可执行文件的影响（开发态 console script 通常无碍）。
+- **端点在线窗口由 MV3 SW 存活决定**：SW 休眠时 port 关闭、host 退出（端点消失），
+  浏览器唤醒后重连。实测 macOS 上 host 被浏览器拉起、绑定端点成功，但进程可能在 SW
+  休眠时被终结 —— 残留 socket 由「同名重绑回收 + 超期残留回收」两道兜住。S2 的
+  「SW 保活 / 心跳间隔」验收仍需在 macOS 上复测（Windows 上实测 15s 心跳零空洞）。
+- macOS App Sandbox 版浏览器（App Store 分发）会把 host 的写入重定向到 app 容器，
+  此时 host 与 CLI 可能算出不同端点目录 —— 本机 `/Applications/Microsoft Edge.app`
+  非沙箱，**该推断未真机验证**（改用 `/tmp` 后此风险已大幅降低，但未消除）。

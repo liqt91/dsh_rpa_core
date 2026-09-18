@@ -3,16 +3,24 @@
 真实 spawn ``python -m rpa_core.workers.ext_bridge`` 子进程，测试进程扮演两个角色：
 ① 扩展（驱动 host 的 stdin/stdout Native Messaging 帧）；
 ② 执行器客户端（经本地端点连接 host）。
+
+诊断：host 的 stderr **不再丢弃**（旧实现给了 ``subprocess.DEVNULL``，于是 macOS 上
+``bind`` 失败只表现为「端点从未出现」，现场为零）。子进程 stderr 落临时文件，断言失败
+时附在消息里；同时用 ``RPA_EXT_BRIDGE_LOG`` 把落盘日志也导向临时文件，不碰本机
+``~/.rpa-core``。
 """
 
 from __future__ import annotations
 
 import os
 import queue
+import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 import time
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -27,13 +35,22 @@ class _HostProc:
 
     def __init__(self, browser: str = "msedge", instance_id: str = ""):
         self.browser = browser
-        self.instance_id = instance_id or f"contract-{os.getpid()}-{int(time.time() * 1000)}"
+        self.instance_id = instance_id or uuid.uuid4().hex
+        self._tmpdir = Path(tempfile.mkdtemp(prefix="rpa-ext-bridge-"))
+        self._stderr_path = self._tmpdir / "stderr.log"
+        self._log_path = self._tmpdir / "ext-host.log"
+        self._stderr = self._stderr_path.open("w+", encoding="utf-8")
         self.proc = subprocess.Popen(
             [sys.executable, "-m", "rpa_core.workers.ext_bridge"],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
+            stderr=self._stderr,
             cwd=str(_repo_root()),
+            env={
+                **os.environ,
+                "RPA_EXT_BRIDGE_DEBUG": "1",
+                "RPA_EXT_BRIDGE_LOG": str(self._log_path),
+            },
         )
         assert self.proc.stdin is not None and self.proc.stdout is not None
         self.endpoint = lt.endpoint_name(self.browser, self.instance_id)
@@ -49,7 +66,10 @@ class _HostProc:
                 **extra,
             }
         )
-        self.ready = self.from_extension(timeout=15.0)
+        try:
+            self.ready = self.from_extension(timeout=15.0)
+        except AssertionError as exc:
+            raise AssertionError(f"{exc}\n{self.diagnostics()}") from None
         return self.ready
 
     def to_extension(self, payload: dict[str, Any]) -> None:
@@ -67,7 +87,30 @@ class _HostProc:
             except lt.LocalTransportError as exc:
                 last = exc
                 time.sleep(0.05)
-        raise AssertionError(f"endpoint never became available: {last}")
+        raise AssertionError(
+            f"endpoint never became available: {last}\n{self.diagnostics()}"
+        )
+
+    def stderr_text(self) -> str:
+        try:
+            return self._stderr_path.read_text(errors="replace")
+        except OSError:  # pragma: no cover - 极端
+            return ""
+
+    def log_text(self) -> str:
+        try:
+            return self._log_path.read_text(errors="replace")
+        except OSError:
+            return ""
+
+    def diagnostics(self, limit: int = 3000) -> str:
+        """失败现场：host 的 stderr + 落盘日志尾部。"""
+        return (
+            "--- host stderr ---\n"
+            + (self.stderr_text()[-limit:] or "(empty)")
+            + "\n--- host log ---\n"
+            + (self.log_text()[-limit:] or "(empty)")
+        )
 
     def close(self) -> None:
         try:
@@ -80,6 +123,11 @@ class _HostProc:
         except subprocess.TimeoutExpired:  # pragma: no cover - 兜底
             self.proc.kill()
             self.proc.wait(timeout=5)
+        try:
+            self._stderr.close()
+        except OSError:  # pragma: no cover
+            pass
+        shutil.rmtree(self._tmpdir, ignore_errors=True)
 
 
 def _repo_root() -> Path:
@@ -139,6 +187,28 @@ def test_handshake_binds_endpoint_and_reports_identity(host):
     assert host.endpoint in lt.list_endpoints()
 
 
+@pytest.mark.skipif(lt._IS_WINDOWS, reason="POSIX sun_path 长度上限；管道名上限 256")
+def test_host_reports_bind_failure_instead_of_dying_silently(monkeypatch):
+    """路径超限时 host 必须以退出码 3 + 明确日志收场，而不是带裸 traceback 静默死亡。
+
+    回归对象：``LocalEndpointServer`` 此前只被 ``except LocalTransportError`` 包着，而
+    ``bind()`` 抛的是 ``OSError``——except 是死代码，host 带 traceback 退出、stderr 又由
+    浏览器接管，用户侧只剩「插件离线」（M22 macOS 真机现象）。
+    """
+    monkeypatch.setenv("RPA_EXT_ENDPOINT_PREFIX", "rpa_core_ext_" + "x" * 80)
+    node = _HostProc()
+    try:
+        node.to_extension(
+            {"type": "hello", "browser": "msedge", "instanceId": node.instance_id}
+        )
+        assert node.proc.wait(timeout=15) == 3
+        log = node.log_text()
+        assert "endpoint rejected before bind" in log
+        assert str(lt._POSIX_PATH_MAX) in log  # 日志里带上平台上限
+    finally:
+        node.close()
+
+
 def test_client_status_reports_online(host):
     host.handshake()
     with host.connect() as client:
@@ -170,7 +240,35 @@ def test_submit_is_relayed_and_result_routed_back(host):
             {"type": "result", "id": "cmd-1", "ok": True, "value": {"tabs": []}}
         )
         result = _recv(client)
-    assert result == {"type": "result", "id": "cmd-1", "ok": True, "value": {"tabs": []}}
+    # host 补带本实例的真实 instanceId（执行器会话绑定 / browserInstance 输出的来源）
+    assert result == {
+        "type": "result",
+        "id": "cmd-1",
+        "ok": True,
+        "value": {"tabs": []},
+        "instanceId": host.instance_id,
+    }
+
+
+def test_result_envelope_carries_real_instance_id(host):
+    """结果信封必须带真实 instanceId：扩展的 tabs.create 结果里没有实例标识。"""
+    host.handshake()
+    with host.connect() as client:
+        client.send({"type": "submit", "id": "cmd-id", "op": "tabs.create", "args": {}})
+        assert host.from_extension(timeout=15.0)["type"] == "command"
+        host.to_extension({"type": "result", "id": "cmd-id", "ok": True, "value": {"tabId": 3}})
+        result = _recv(client)
+    assert result["instanceId"] == host.instance_id
+    assert result["value"] == {"tabId": 3}  # value 原样，不注入
+
+
+def test_host_logs_endpoint_self_check(host):
+    """启动自检：端点路径/字节数/平台上限必须落盘（现场可查，不再只有「离线」）。"""
+    host.handshake()
+    log = host.log_text()
+    assert "endpoint self-check" in log
+    assert '"transport"' in log and '"limit"' in log
+    assert host.endpoint in log
 
 
 def test_submit_timeout_is_enforced_by_host(host):
@@ -390,7 +488,37 @@ def test_client_tabs_create_carries_instance_id(host):
         }
     )
     thread.join(timeout=10)
+    # 端点名里是定长 token，但会话绑定要的是**真实** instanceId（host 信封补带）
     assert box["value"]["instanceId"] == host.instance_id
+
+
+def test_client_routes_by_raw_instance_id_and_by_endpoint_token(host):
+    """``target_host`` 给原始 instanceId 或端点名里的 token，都要命中同一端点。
+
+    端点名现在装的是 ``sha256(instanceId)[:16]``：会话绑定回填的是真实 id，而
+    ``list_extension_endpoints`` 里看到的是 token——两种形态都必须能路由。
+    """
+    from rpa_core.extension_exec import ExtensionExecClient
+
+    host.handshake()
+    for target in (host.instance_id, lt.instance_token(host.instance_id)):
+        client = ExtensionExecClient()
+        box: dict = {}
+
+        def do_submit(client=client, target=target, box=box):
+            box["value"] = client.submit(
+                "tabs.list", {}, timeout_seconds=10, target_host=target
+            )
+
+        thread = threading.Thread(target=do_submit, daemon=True)
+        thread.start()
+        command = host.from_extension()
+        assert command["op"] == "tabs.list"
+        host.to_extension(
+            {"type": "result", "id": command["id"], "ok": True, "value": {"hit": target}}
+        )
+        thread.join(timeout=10)
+        assert box["value"] == {"hit": target}
 
 
 def test_client_offline_without_endpoint():

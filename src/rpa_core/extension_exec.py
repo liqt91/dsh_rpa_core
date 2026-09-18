@@ -24,8 +24,8 @@ from typing import Any
 
 from rpa_core import local_transport
 
-# 端点命名：<prefix><browser>_<instanceId>（见 local_transport.endpoint_name；
-# 前缀由 RPA_EXT_ENDPOINT_PREFIX 覆盖，测试据此隔离本机真实端点）
+# 端点命名：<prefix><browser>_<instanceToken>（见 local_transport.endpoint_name；
+# 实例段是 sha256(instanceId)[:16] 的定长 token，前缀由 RPA_EXT_ENDPOINT_PREFIX 覆盖）
 _DEFAULT_ENDPOINT_PREFIX = local_transport._ENDPOINT_PREFIX
 
 # 权限：默认「整个浏览器」（全部窗口/标签页/Cookie），与一等公民定位一致
@@ -93,8 +93,24 @@ def _endpoint_browser(name: str) -> str:
 
 
 def _endpoint_instance(name: str) -> str:
+    """端点名的实例段（定长 token，**不是**原始 instanceId）。
+
+    原始 id 由 host 在 ``status`` 握手 / ``result`` 信封里给出；端点名不可反解。
+    """
     remainder = name[len(endpoint_prefix()):]
     return remainder.partition("_")[2]
+
+
+def _target_matches_instance(name: str, target: str) -> bool:
+    """``target_host`` 是否指向该端点所属实例。
+
+    ``target_host`` 可能来自两处：扩展回传的**原始** instanceId，或端点名的定长 token
+    （如会话绑定回填的 ``browserInstance``）。两种形态都要命中，故都过一遍同一哈希。
+    """
+    token = _endpoint_instance(name)
+    if not token:
+        return False
+    return token == target or token == local_transport.instance_token(target)
 
 
 class ExtensionExecClient:
@@ -129,7 +145,7 @@ class ExtensionExecClient:
         return [
             name
             for name in names
-            if _endpoint_browser(name) == target or _endpoint_instance(name) == target
+            if _endpoint_browser(name) == target or _target_matches_instance(name, target)
         ]
 
     # -- 传输 ----------------------------------------------------------------
@@ -203,6 +219,7 @@ class ExtensionExecClient:
         extension = reply.get("extension") or {}
         record = {
             "browser": reply.get("browser") or _endpoint_browser(endpoint),
+            # instanceId 以 host 身份为准（真实 id）；端点名里的只是定长 token
             "instanceId": reply.get("instanceId") or _endpoint_instance(endpoint),
             "endpoint": endpoint,
             "pid": reply.get("pid"),
@@ -308,9 +325,11 @@ class ExtensionExecClient:
                 )
             value = result.get("value")
             payload_value = value if isinstance(value, dict) else result
-            # 会话绑定：tabs.create 需带回实例 id（与端点命名同源）
+            # 会话绑定：tabs.create 需带回实例 id（browser.navigate 的 browserInstance 输出，
+            # 也是后续 target_host 回调路由的依据）。优先级：
+            # 扩展自报 > host 信封补带的真实 id > 端点名里的定长 token（旧 host 兜底）
             if op == "tabs.create" and isinstance(payload_value, dict):
-                instance = _endpoint_instance(endpoint)
+                instance = str(result.get("instanceId") or "") or _endpoint_instance(endpoint)
                 if instance and not payload_value.get("instanceId"):
                     payload_value = {**payload_value, "instanceId": instance}
             return payload_value

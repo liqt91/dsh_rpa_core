@@ -86,6 +86,8 @@ ExtensionExecClient ──本地 IPC──▶ ext_bridge(host) ──stdio──
   进程（S0 实测一次 reload 起 2 个）。
 - host 分发形态：开发期用 venv 内的 console script exe（注册表路径含 venv 绝对路径，
   变动需重注册）；生产分发（独立打包 exe）属后续议题。
+- **POSIX 端点路径长度**：macOS 曾因 `sun_path` 的 103 字节上限令扩展**永远离线**
+  （host 被正常拉起但 bind 静默失败）——定长 token + 短端点目录 + 长度守卫，见 §6。
 
 ## 5. 被否备选
 
@@ -93,3 +95,47 @@ ExtensionExecClient ──本地 IPC──▶ ext_bridge(host) ──stdio──
 - **双栈（native 为主 + HTTP 兜底）**：长期维护两套协议与测试，收益不明。
 - **Windows 命名管道 + POSIX 各自实现**：即本方案实现层选择，非替代。
 - **TCP loopback + 端口文件**：仍开放端口，收益回退。
+
+## 6. 补充：POSIX 端点路径长度（M22 真机修正，2026-09-18）
+
+**现象**：macOS 上扩展长期显示「离线」。浏览器**确实在拉 host**（65 秒内命中 46 次进程
+拉起），但端点目录全程为空 —— host 起了、死在绑定之前，且用户侧没有任何诊断信息。
+
+**真因**：POSIX 端点名落进 `sockaddr_un.sun_path`，**104 字节含结尾 NUL（有效 103）**，
+这是 BSD 时代遗留尺寸；而实际路径由三个各自合理的数字叠加而成：
+
+| 组成 | 字节 |
+|---|---|
+| macOS per-user 临时区 `/var/folders/<2>/<22 位>/T/rpa_core_ext/` | 61 |
+| 端点名 `rpa_core_ext_msedge_<uuid36>` | 56 |
+| `.sock` | 5 |
+| **合计** | **123 > 103** |
+
+`AF_UNIX` 不解析符号链接，`tempfile.gettempdir()` 在 macOS 上就是那条 61 字节私有路径；
+`XDG_RUNTIME_DIR` 在 macOS 不存在（launchd GUI 会话实测只注入 `SSH_AUTH_SOCK`）。
+Windows 走内核命名空间（`\\.\pipe\`，上限 256 字符，不经路径解析），Linux 有 systemd 注入
+`/run/user/<uid>`（14 字节且两端同源）—— **只有 macOS 同时满足「目录长 + 走路径 + 名字含变长 UUID」**。
+
+**修正（四条，均为平台无关的契约收紧）**
+
+1. **端点名实例段改定长 token**：`sha256(instanceId)[:16]`。哈希作用于**原始** id
+   （先于任何截断），否则两个超长 id 截断后撞名。原始 instanceId 仍可通过 host 的
+   `status` 握手与 `result` 信封补带获得（宿主是唯一知道自身真实 id 的角色），
+   会话绑定与 `target_host` 路由两种形态都命中。
+2. **macOS 端点目录改 `/tmp/rpa_core-<uid>/rpa_core_ext`**：短、且与用户名无关
+   （`$HOME` 推导会让长用户名复现同一 bug）。Linux 保留 `$XDG_RUNTIME_DIR` 优先，
+   未设时同 macOS。目录 0700 并在复用前复核「非符号链接 + 目录 + 属主为本进程 euid」。
+3. **长度守卫**：`endpoint_path()` 在 bind/connect 前计算字节数，超限抛
+   `LocalTransportError`（带路径、实际字节数与上限）；`_UnixServer.bind()` 的裸
+   `OSError` 一并转领域异常。此前 `except LocalTransportError` 对 bind 失败**是死代码**，
+   于是 host 带 traceback 静默退出（退出码 1），浏览器侧只剩「离线」。
+4. **诊断落盘 + 残留回收**：host 启动自检把端点路径/字节数/平台上限写日志
+   （默认 `~/.rpa-core/logs/ext-host.log`，`RPA_EXT_BRIDGE_LOG` 可覆盖）；`/tmp` 在 macOS
+   不会被系统清理，故 host 启动时回收「超期且连不上」的同前缀残留端点。
+
+**代价**
+
+- 端点名不再可读、不可反解（需要可读性时看日志 / `status`）。
+- 升级窗口内，升级前已拉起的旧 host 仍用旧命名：显式 `target_host` 可能短暂匹配不到，
+  无 `target_host` 的自动路由不受影响（它按前缀枚举，不依赖命名格式）。
+- 企业环境 home 不可写时日志落盘会静默降级（best-effort，不影响通道）。

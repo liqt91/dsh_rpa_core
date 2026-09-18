@@ -51,8 +51,11 @@ Native Messaging 帧：4 字节小端长度前缀 + UTF-8 JSON（与 host 的 st
 扩展 → host：
 
 - `hello` `{browser, instanceId, extVersion, version, platform, userAgent, focused, focusedAt}`
-  （连接后首帧；host 据此命名本地端点 `rpa_core_ext_<browser>_<instanceId>`）
+  （连接后首帧；host 据此命名本地端点
+  `rpa_core_ext_<browser>_<sha256(instanceId)[:16]>` —— 实例段是**定长 token**，
+  `instanceId` 长度不可控，直接拼名会顶穿 POSIX `sun_path` 的 103 字节上限）
 - `result` `{id, ok, value}` 或 `{id, ok:false, error:{code,message}}`
+  （host 转发给执行器时会补带 `instanceId`，供会话绑定与实例级路由）
 - `capture_result` `{sessionId, descriptor}` 或 `{sessionId, cancelled:true}`
 - `focus` `{focused, focusedAt}`（窗口焦点变化时上报）
 - `pong`（应答 host 的 `ping`）

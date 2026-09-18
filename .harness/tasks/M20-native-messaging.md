@@ -23,6 +23,9 @@
 - **发现/路由**：host 在收到扩展 `hello` 后以其 browser+instanceId 命名端点；执行器按
   browserType 枚举端点连接（Windows 列 `\\.\pipe\` 前缀 / POSIX 列运行时目录），连接后
   读 `hello` 校验实例身份。多 profile 多实例天然并存。
+  （**M22 修正 2026-09-18**：POSIX 上实例段改为定长 token `sha256(instanceId)[:16]`，
+  端点目录 macOS 走 `/tmp/rpa_core-<uid>` —— 原「browser+instanceId 直接拼名」顶穿
+  `sun_path` 103 字节上限，见 ADR 0015 §6。）
 - **生命周期**：host 由浏览器 spawn，stdin EOF（扩展 port 断/浏览器退出）即清理端点退出。
 
 ## 切片

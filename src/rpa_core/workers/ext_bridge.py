@@ -11,8 +11,8 @@ Messaging 帧（4 字节小端长度前缀 + JSON，与 ``local_transport`` 同�
 消息面
 ------
 扩展 → host（stdin）：
-- ``hello``：首帧，携带 ``browser`` / ``instanceId``（端点据此命名）
-- ``result``：命令结果，按 ``id`` 路由回发起客户端
+- ``hello``：首帧，携带 ``browser`` / ``instanceId``（端点名据此生成**定长 token**）
+- ``result``：命令结果，按 ``id`` 路由回发起客户端（host 会补带本实例 ``instanceId``）
 - 其它（``capture_result`` 等）：广播给全部客户端
 
 客户端 → host（端点）：
@@ -25,16 +25,20 @@ host → 扩展：``ready`` / ``command`` / ``cancel`` / ``capture_*``
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 import threading
 import time
+import traceback
+from pathlib import Path
 from typing import Any
 
 from rpa_core.local_transport import (
     Channel,
     LocalEndpointServer,
     LocalTransportError,
+    endpoint_diagnostics,
     endpoint_name,
     read_message,
     write_message,
@@ -43,10 +47,50 @@ from rpa_core.local_transport import (
 _DEBUG = bool(os.environ.get("RPA_EXT_BRIDGE_DEBUG"))
 _PASSTHROUGH_TO_EXTENSION = {"capture_arm", "capture_disarm", "capture_result", "cancel"}
 
+# 诊断日志文件：显式路径可覆盖（测试隔离本机 ~/.rpa-core）
+_LOG_ENV = "RPA_EXT_BRIDGE_LOG"
+_LOG_MAX_BYTES = 256 * 1024
+
+
+def _log_path() -> Path:
+    override = os.environ.get(_LOG_ENV)
+    if override:
+        return Path(override)
+    return Path.home() / ".rpa-core" / "logs" / "ext-host.log"
+
+
+def _trim_log(path: Path) -> None:
+    """超过上限时保留尾部一半（长期运行不无限增长）。"""
+    try:
+        size = path.stat().st_size
+        if size <= _LOG_MAX_BYTES:
+            return
+        with path.open("rb") as handle:
+            handle.seek(size - _LOG_MAX_BYTES // 2)
+            tail = handle.read()
+        path.write_bytes(b"[log trimmed]\n" + tail)
+    except OSError:  # pragma: no cover - 日志失败不影响主流程
+        pass
+
 
 def _log(message: str) -> None:
+    """诊断输出：**必须落盘**。
+
+    旧实现只在 ``RPA_EXT_BRIDGE_DEBUG=1`` 时写 stderr，而 host 的 stderr 由浏览器接管
+    （无人读取）——于是「起不来」在用户侧只剩一句「插件离线」，没有任何可查的现场。
+    因此默认追加写日志文件；``RPA_EXT_BRIDGE_DEBUG=1`` 时同时打 stderr（开发用）。
+    """
+    stamp = f"{time.strftime('%Y-%m-%dT%H:%M:%S')} [{os.getpid()}] {message}"
     if _DEBUG:
         print(f"[ext_bridge] {message}", file=sys.stderr, flush=True)
+    try:
+        path = _log_path()
+        path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        _trim_log(path)
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(stamp + "\n")
+    except OSError:  # pragma: no cover - 磁盘/权限异常不得影响通道
+        pass
 
 
 def _set_binary_stdio() -> None:
@@ -106,6 +150,18 @@ class ExtBridgeHost:
             self._route_from_extension(message)
         self.shutdown()
 
+    def _with_instance_id(self, message: dict[str, Any]) -> dict[str, Any]:
+        """给扩展结果补带本实例的真实 ``instanceId``（缺则补，已有不覆盖）。
+
+        扩展的 ``tabs.create`` 等结果里没有实例标识，而执行器要把会话绑到具体实例
+        （``browserExt.browserInstance`` → 后续 ``target_host`` 精确路由）。宿主是唯一
+        知道自身真实 instanceId 的角色（它来自 hello），故由宿主补带。
+        """
+        instance_id = str(self.identity.get("instanceId") or "")
+        if not instance_id or message.get("instanceId"):
+            return message
+        return {**message, "instanceId": instance_id}
+
     def _route_from_extension(self, message: dict[str, Any]) -> None:
         kind = str(message.get("type") or "")
         if kind == "result":
@@ -116,7 +172,7 @@ class ExtBridgeHost:
             if timer is not None:
                 timer.cancel()
             if client_id is not None:
-                self._send_to_client(client_id, message)
+                self._send_to_client(client_id, self._with_instance_id(message))
                 return
             _log(f"dropping result for unknown command {command_id}")
             return
@@ -246,16 +302,18 @@ class ExtBridgeHost:
             return
         self._send_to_client(
             client_id,
-            {
-                "type": "result",
-                "id": command_id,
-                "ok": False,
-                "timedOut": True,
-                "error": {
-                    "code": "TIMEOUT",
-                    "message": f"{command_id}: extension did not return a result",
-                },
-            },
+            self._with_instance_id(
+                {
+                    "type": "result",
+                    "id": command_id,
+                    "ok": False,
+                    "timedOut": True,
+                    "error": {
+                        "code": "TIMEOUT",
+                        "message": f"{command_id}: extension did not return a result",
+                    },
+                }
+            ),
         )
         # best-effort：让扩展放弃仍在执行的那条命令
         self._send_to_extension({"type": "cancel", "id": command_id})
@@ -271,10 +329,19 @@ class ExtBridgeHost:
         browser = str(hello.get("browser") or "unknown")
         instance_id = str(hello.get("instanceId") or "")
         name = endpoint_name(browser, instance_id)
+        # 启动自检：先算最终端点路径与字节数（对照平台上限）再 bind。
+        # 长度类问题由此在日志里一眼可见，不再依赖 bind 的裸 traceback。
+        diagnostics = endpoint_diagnostics(name)
+        _log(f"endpoint self-check: {json.dumps(diagnostics, ensure_ascii=False)}")
+        if not diagnostics.get("ok"):
+            _log(f"endpoint rejected before bind: {json.dumps(diagnostics, ensure_ascii=False)}")
+            return 3
         try:
             self._server = LocalEndpointServer(name)
-        except LocalTransportError as exc:
-            _log(f"endpoint bind failed: {exc}")
+        except (LocalTransportError, OSError) as exc:
+            # OSError 是兜底：`bind()` 抛的是裸 OSError，只捕领域异常会让 host
+            # 带 traceback 静默退出（浏览器侧只看到「离线」）
+            _log(f"endpoint bind failed: {type(exc).__name__}: {exc}")
             return 3
         self.identity = {
             "browser": browser,
@@ -315,8 +382,17 @@ class ExtBridgeHost:
 
 def main() -> int:
     _set_binary_stdio()
-    host = ExtBridgeHost(sys.stdin.buffer, sys.stdout.buffer)
-    return host.run()
+    _log(
+        f"host starting: pid={os.getpid()} platform={sys.platform} "
+        f"python={sys.version.split()[0]}"
+    )
+    try:
+        host = ExtBridgeHost(sys.stdin.buffer, sys.stdout.buffer)
+        return host.run()
+    except Exception:  # noqa: BLE001 - 顶层兜底：任何逃逸异常都必须留痕
+        # host 由浏览器拉起，stderr 无人接收 —— 不落盘就等于没有现场
+        _log("host crashed:\n" + traceback.format_exc())
+        return 1
 
 
 if __name__ == "__main__":

@@ -1,16 +1,24 @@
 """本地 IPC 传输层单测（M20 / ADR 0015 S1）。
 
 覆盖：长度前缀帧边界、stdio 流通道、端点服务端/客户端往返、多端点枚举、
-连接超时、不存在端点、端点名归一、同进程多实例并存。
+连接超时、不存在端点、端点名归一、同进程多实例并存、实例段定长 token 与
+路径长度守卫（M22 macOS 真机修复）、残留端点回收。
 """
 
 from __future__ import annotations
 
 import io
 import json
+import os
+import socket
+import stat
 import struct
+import sys
+import tempfile
 import threading
 import time
+import uuid
+from pathlib import Path
 
 import pytest
 
@@ -75,16 +83,110 @@ def test_stream_read_rejects_non_object_payload():
 # -- 端点命名 ------------------------------------------------------------------
 
 
-def test_endpoint_name_normalizes_illegal_chars():
-    assert (
-        lt.endpoint_name("msedge", "abc-123", prefix="rpa_core_ext_")
-        == "rpa_core_ext_msedge_abc-123"
+def test_endpoint_name_uses_fixed_length_instance_token():
+    """实例段必须是定长 token（M22：原始 UUID 直接拼名字会顶穿 sun_path 上限）。"""
+    instance_id = "a6ce2631-f8db-4c1c-93a8-3f53f8fe2058"  # 浏览器生成的 UUID（36 字符）
+    token = lt.instance_token(instance_id)
+    assert lt.endpoint_name("msedge", instance_id, prefix="rpa_core_ext_") == (
+        f"rpa_core_ext_msedge_{token}"
     )
+    assert len(token) == 16
+    assert instance_id not in lt.endpoint_name("msedge", instance_id)
+
+
+def test_instance_token_is_stable_and_content_independent():
+    long_id = "x" * 300
+    tokens = [
+        lt.instance_token(value)
+        for value in ("a", "abc-123", long_id, "a6ce2631-f8db-4c1c-93a8-3f53f8fe2058")
+    ]
+    assert all(len(token) == lt._INSTANCE_TOKEN_CHARS for token in tokens)
+    assert len(set(tokens)) == len(tokens)  # 不同 instanceId 不同 token
+    assert lt.instance_token(long_id) == lt.instance_token(long_id)  # 稳定
+    assert lt.instance_token("") == "default"
+
+
+def test_endpoint_name_normalizes_illegal_chars():
     assert lt.endpoint_name("", "", prefix="rpa_core_ext_") == (
         "rpa_core_ext_unknown_default"
     )
     assert " " not in lt.endpoint_name("my browser", "id with spaces")
     assert "/" not in lt.endpoint_name("a/b", "c\\d")
+
+
+# -- 路径长度（M22 真机修复回归）------------------------------------------------
+
+
+@pytest.mark.skipif(lt._IS_WINDOWS, reason="AF_UNIX 路径上限仅 POSIX")
+def test_endpoint_path_fits_sun_path_limit_for_browser_uuid():
+    path = lt.endpoint_path(lt.endpoint_name("msedge", str(uuid.uuid4())))
+    assert path is not None
+    assert len(os.fsencode(path)) <= lt._POSIX_PATH_MAX
+    if sys.platform == "darwin":
+        # 回归对照：老实现（61 字节 per-user TMPDIR + 36 字符 UUID）在 macOS 上是
+        # 123 字节 —— 必然 bind 失败，真机表现为「插件永远离线」
+        legacy = len(
+            os.fsencode(
+                Path(tempfile.gettempdir())
+                / "rpa_core_ext"
+                / f"rpa_core_ext_msedge_{uuid.uuid4()}.sock"
+            )
+        )
+        assert legacy > lt._POSIX_PATH_MAX
+
+
+@pytest.mark.skipif(lt._IS_WINDOWS, reason="POSIX 端点目录")
+def test_endpoint_dir_is_short_and_private():
+    directory = lt.endpoint_dir()
+    # macOS 下必须是短目录（/tmp），不能是 61 字节的 /var/folders/… per-user 临时区
+    assert len(os.fsencode(directory)) <= 40
+    assert b"/var/folders" not in os.fsencode(directory)
+    info = directory.lstat()
+    assert stat.S_ISDIR(info.st_mode)
+    assert not directory.is_symlink()
+    assert info.st_uid == os.getuid()
+    assert info.st_mode & 0o077 == 0
+
+
+@pytest.mark.skipif(lt._IS_WINDOWS, reason="POSIX 长度守卫")
+def test_endpoint_path_guard_reports_clear_error(monkeypatch):
+    monkeypatch.setenv("RPA_EXT_ENDPOINT_PREFIX", "rpa_core_ext_" + "x" * 80)
+    name = lt.endpoint_name("msedge", "guard-probe")
+    with pytest.raises(lt.LocalTransportError) as excinfo:
+        lt.endpoint_path(name)
+    message = str(excinfo.value)
+    assert "too long" in message
+    assert str(lt._POSIX_PATH_MAX) in message
+    # bind 侧同样必须抛领域异常：此前抛的是裸 OSError，调用方的 except 是死代码
+    with pytest.raises(lt.LocalTransportError):
+        lt.LocalEndpointServer(name)
+
+
+@pytest.mark.skipif(lt._IS_WINDOWS, reason="残留 socket 回收仅 POSIX")
+def test_prune_stale_endpoints_removes_dead_and_keeps_live():
+    live_name = lt.endpoint_name("msedge", "prune-live")
+    live_path = lt.endpoint_path(live_name)
+    assert live_path is not None
+    dead_name = lt.endpoint_name("msedge", "prune-dead")
+    dead_path = lt.endpoint_path(dead_name)
+    assert dead_path is not None
+    server = _server(live_name)
+    try:
+        stale = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        stale.bind(str(dead_path))  # 只 bind 不 listen：文件残留且连不上
+        stale.close()
+        old = time.time() - lt._STALE_ENDPOINT_AGE_SECONDS - 60
+        os.utime(dead_path, (old, old))
+        os.utime(live_path, (old, old))  # 活端点即使 mtime 很老也必须保留
+        removed = lt.prune_stale_endpoints()
+        assert dead_name in removed
+        assert not dead_path.exists()
+        assert live_name not in removed
+        assert live_path.exists()
+        assert live_name in lt.list_endpoints()
+    finally:
+        server.close()
+    _wait_until(lambda: live_name not in lt.list_endpoints())
 
 
 # -- 端点往返 ------------------------------------------------------------------

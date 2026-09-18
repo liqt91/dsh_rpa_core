@@ -14,7 +14,7 @@
 
 ## 1. 默认执行通道必须是离线的
 
-扩展执行通道经**本地端点**（`rpa_core_ext_<browser>_<instanceId>`，见 ADR 0015）发现
+扩展执行通道经**本地端点**（`rpa_core_ext_<browser>_<实例 token>`，见 ADR 0015）发现
 bridge host。开发者本机常驻浏览器扩展时，那些没有显式注入 client 的用例
 （如 `tests/contract/test_browser_contract.py` 里直接构造的执行器）会真的连上
 **开发者本人浏览器**——门禁结论随本机环境漂移，同一份代码在不同机器上跑出不同结果，

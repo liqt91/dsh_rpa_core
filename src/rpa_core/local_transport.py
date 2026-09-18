@@ -15,6 +15,24 @@
 **端点即可见性**：host 随扩展 port 存活，扩展断开即 host 退出、端点消失——「在线」
 = 端点可连接，不再需要心跳窗口（对比旧 ``ONLINE_WINDOW_SECONDS``）。
 
+端点路径长度（M22 真机修复）
+--------------------------
+
+POSIX 端点的名字最终落进 ``struct sockaddr_un.sun_path``——**104 字节含结尾 NUL，
+即有效上限 103 字节**（1980 年代 BSD 遗留尺寸，Linux 的抽象命名空间在 macOS 不生效）。
+超额时 ``bind()`` 抛 ``OSError: AF_UNIX path too long``。
+
+两个刻意的设计（缺一就是「插件永远离线」）：
+
+1. **端点名里的实例段是定长 token**（``instance_token``：``sha256(instanceId)[:16]``）。
+   instanceId 是浏览器生成的 UUID（36 字符），长度与内容都不由我们控制，直接拼进名字
+   会随浏览器实现漂移。
+2. **macOS 的端点目录不再用 ``tempfile.gettempdir()``**。那是 per-user 私有临时区
+   （``/var/folders/<2>/<22 位>/T``，实测 61 字节），叠加端点名会顶穿上限。改用
+   ``/tmp`` 下的短目录——AF_UNIX **不解析符号链接**，``/tmp`` 只花 4 字节。
+
+Windows 走内核命名空间（``\\\\.\\pipe\\``，上限 256 字符），不经路径解析，故不受此约束。
+
 Windows 实现要点：管道句柄一律以 ``FILE_FLAG_OVERLAPPED`` 打开。同步（非 overlapped）
 句柄上，一端挂起的阻塞 ``ReadFile`` 会阻塞另一线程的 ``WriteFile``（同一文件对象串行化），
 而中继模型天然是「客户端线程阻塞读 + 扩展线程写回」并发，故必须 overlapped。
@@ -22,12 +40,13 @@ Windows 实现要点：管道句柄一律以 ``FILE_FLAG_OVERLAPPED`` 打开。�
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import socket
+import stat
 import struct
 import sys
-import tempfile
 import threading
 import time
 from pathlib import Path
@@ -39,6 +58,21 @@ _ENDPOINT_PREFIX = "rpa_core_ext_"
 _ENDPOINT_PREFIX_ENV = "RPA_EXT_ENDPOINT_PREFIX"
 _PIPE_BUF = 64 * 1024
 _IS_WINDOWS = sys.platform == "win32"
+
+_SOCKET_SUFFIX = ".sock"
+_ENDPOINT_DIR_NAME = "rpa_core_ext"
+# 实例段定长（sha256 十六进制前缀字符数）：端点名长度必须与 instanceId 无关
+_INSTANCE_TOKEN_CHARS = 16
+# 浏览器段上限：真实浏览器名（chrome/msedge/vivaldi…）远小于此，留足余量的同时
+# 让端点名最大长度完全可预测
+_BROWSER_SEGMENT_MAX = 32
+# POSIX sun_path 上限：104 字节含结尾 NUL（macOS 实测 104 字节即 bind 失败）
+_POSIX_PATH_MAX = 103
+# \\.\pipe\ 名字上限（Windows 走内核命名空间，不经路径解析）
+_PIPE_NAME_MAX = 256
+_ENDPOINT_DIR_MODE = 0o700
+# 残留端点回收：只清「超期且连不上」的（活端点一定连得上）
+_STALE_ENDPOINT_AGE_SECONDS = 300.0
 
 # win32 错误码
 _ERROR_FILE_NOT_FOUND = 2
@@ -121,15 +155,28 @@ def endpoint_prefix() -> str:
     return os.environ.get(_ENDPOINT_PREFIX_ENV) or _ENDPOINT_PREFIX
 
 
+def instance_token(instance_id: str) -> str:
+    """实例段 token：``sha256(instanceId)[:16]``（空 id 退化为 ``default``）。
+
+    长度与内容都与 instanceId 无关，这是端点名长度可控的前提。哈希作用于**原始** id
+    （先于任何截断/归一）——先 sanitize 再哈希会让两个超长 id 截断后撞名。
+
+    代价是**不可逆**：端点名不再能反解出原始 instanceId。需要原始 id 时走 host 的
+    ``status`` 握手（``identity.instanceId``），不要从端点名反解。
+    """
+    raw = str(instance_id or "")
+    if not raw:
+        return "default"
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:_INSTANCE_TOKEN_CHARS]
+
+
 def endpoint_name(
     browser: str, instance_id: str, prefix: str | None = None
 ) -> str:
-    """端点名：``<prefix><browser>_<instanceId>``（非法字符归一为下划线）。"""
+    """端点名：``<prefix><browser>_<instanceToken>``（浏览器段非法字符归一为下划线）。"""
     effective = prefix if prefix is not None else endpoint_prefix()
-    return (
-        f"{effective}{_sanitize(browser or 'unknown')}"
-        f"_{_sanitize(instance_id or 'default')}"
-    )
+    browser_segment = _sanitize(browser or "unknown")[:_BROWSER_SEGMENT_MAX] or "unknown"
+    return f"{effective}{browser_segment}_{instance_token(instance_id)}"
 
 
 def _sanitize(value: str) -> str:
@@ -142,13 +189,117 @@ def _dbg(message: str) -> None:
         print(f"[lt] {message}", file=sys.stderr, flush=True)
 
 
-def endpoint_dir() -> Path:
-    """POSIX 端点目录（``$XDG_RUNTIME_DIR`` 优先，否则系统临时区）。"""
+def _posix_uid() -> int:
+    getuid = getattr(os, "getuid", None)
+    return int(getuid()) if getuid is not None else 0
+
+
+def _runtime_root() -> Path:
+    """端点目录的父目录。
+
+    - ``$XDG_RUNTIME_DIR`` 优先（Linux/systemd：``/run/user/<uid>``，短，且浏览器与
+      CLI 由同一套 systemd 用户会话注入，**两端天然同源**）；
+    - 缺省 ``/tmp/rpa_core-<uid>``：macOS 没有 ``XDG_RUNTIME_DIR``（launchd GUI 会话
+      只注入 ``SSH_AUTH_SOCK``，实测），而 ``tempfile.gettempdir()`` 在 macOS 上是
+      61 字节的 per-user 私有临时区，会顶穿 ``sun_path`` 上限（M22 真机复现）。
+      带 uid 是为了避免多用户共享 ``/tmp`` 时同名冲突。
+    """
     base = os.environ.get("XDG_RUNTIME_DIR")
-    root = Path(base) if base else Path(tempfile.gettempdir())
-    path = root / "rpa_core_ext"
-    path.mkdir(mode=0o700, parents=True, exist_ok=True)
+    if base:
+        return Path(base)
+    return Path("/tmp") / f"rpa_core-{_posix_uid()}"
+
+
+def endpoint_dir() -> Path:
+    """POSIX 端点目录（私有 0700；已存在时复核属主与类型）。
+
+    ``/tmp`` 是 1777 全局可写：别的进程可以抢先在目标位置放符号链接或他人属主的目录。
+    因此建完/复用前必须复核「非符号链接 + 目录 + 属主为本进程 euid」——不满足就报明确
+    错误，而不是带着坏前提去 bind。
+
+    注意：**不要对本函数结果调用 ``Path.resolve()``**——``/tmp`` 会被展开成
+    ``/private/tmp``，白丢 8 字节预算，而 AF_UNIX 本来就不解析符号链接。
+    """
+    path = _runtime_root() / _ENDPOINT_DIR_NAME
+    try:
+        path.mkdir(mode=_ENDPOINT_DIR_MODE, parents=True, exist_ok=True)
+    except OSError as exc:
+        raise LocalTransportError(
+            f"endpoint dir unavailable: {path} ({exc})"
+        ) from None
+    try:
+        info = path.lstat()
+    except OSError as exc:  # pragma: no cover - 建完即消失（极端竞态）
+        raise LocalTransportError(
+            f"endpoint dir unreadable: {path} ({exc})"
+        ) from None
+    if not stat.S_ISDIR(info.st_mode):
+        raise LocalTransportError(f"endpoint dir is not a directory: {path}")
+    if info.st_uid != _posix_uid():
+        raise LocalTransportError(
+            f"endpoint dir owned by uid {info.st_uid}, not {_posix_uid()}: {path}"
+        )
+    if info.st_mode & 0o077:
+        # 自家目录权限偏松（正常路径不会发生：mkdir(0o700) 之后 umask 只能更严）。
+        # 收紧失败不阻断（可用性优先），只留调试痕迹。
+        try:
+            path.chmod(_ENDPOINT_DIR_MODE)
+        except OSError as exc:  # pragma: no cover
+            _dbg(f"endpoint dir chmod failed: {path} ({exc})")
     return path
+
+
+def endpoint_path(name: str) -> Path | None:
+    """端点的落地路径；Windows 命名管道不落文件系统，返回 ``None``。
+
+    POSIX 上同时做**长度守卫**：超限时抛 ``LocalTransportError``（带路径、实际字节数与
+    上限），而不是让 ``bind()`` 抛一个语焉不详的 ``OSError``。
+    """
+    if _IS_WINDOWS:
+        return None
+    directory = endpoint_dir()
+    path = directory / f"{name}{_SOCKET_SUFFIX}"
+    size = len(os.fsencode(path))
+    if size > _POSIX_PATH_MAX:
+        raise LocalTransportError(
+            f"endpoint path too long: {size} bytes > {_POSIX_PATH_MAX} "
+            f"(POSIX sun_path 上限；AF_UNIX 不解析符号链接，路径不会自动变短) "
+            f"dir={directory} endpoint={name!r}"
+        )
+    return path
+
+
+def endpoint_diagnostics(name: str) -> dict[str, Any]:
+    """端点的落地参数快照（host 启动自检 / 排障用，**不抛异常**）。
+
+    长度类问题此前只有 ``bind()`` 的裸 traceback，而 host 的 stderr 由浏览器接管、
+    用户侧只剩「插件离线」。启动时把这份快照写进日志，一眼可见实际字节数与上限。
+    """
+    if _IS_WINDOWS:
+        size = len(name.encode("utf-8"))
+        return {
+            "transport": "pipe",
+            "name": name,
+            "address": "\\\\.\\pipe\\" + name,
+            "nameChars": size,
+            "limit": _PIPE_NAME_MAX,
+            "ok": size <= _PIPE_NAME_MAX,
+        }
+    payload: dict[str, Any] = {"transport": "unix", "name": name}
+    try:
+        directory = endpoint_dir()
+    except LocalTransportError as exc:
+        return {**payload, "ok": False, "error": str(exc)}
+    path = directory / f"{name}{_SOCKET_SUFFIX}"
+    size = len(os.fsencode(path))
+    return {
+        **payload,
+        "dir": str(directory),
+        "path": str(path),
+        "pathBytes": size,
+        "limit": _POSIX_PATH_MAX,
+        "ok": size <= _POSIX_PATH_MAX,
+    }
 
 
 def list_endpoints(prefix: str | None = None) -> list[str]:
@@ -162,10 +313,55 @@ def list_endpoints(prefix: str | None = None) -> list[str]:
         return sorted(name for name in names if name.startswith(effective))
     directory = endpoint_dir()
     return sorted(
-        path.name[: -len(".sock")]
-        for path in directory.glob("*.sock")
+        path.name[: -len(_SOCKET_SUFFIX)]
+        for path in directory.glob(f"*{_SOCKET_SUFFIX}")
         if path.name.startswith(effective)
     )
+
+
+def prune_stale_endpoints(
+    prefix: str | None = None, *, max_age: float = _STALE_ENDPOINT_AGE_SECONDS
+) -> list[str]:
+    """回收同前缀下「超期且连不上」的残留端点，返回被删端点名。
+
+    为什么需要：端点目录落在 ``/tmp``，而 macOS **不清理 /tmp**（无 systemd-tmpfiles，
+    ``/etc/periodic/daily`` 在本机已不存在）。host 被浏览器终结时不会执行 unlink，
+    而实例 id 持久在扩展的 ``chrome.storage.local`` —— 同一 profile 复用同名（走
+    ``_UnixServer`` 的「同名重绑回收」即可），但换 profile / 重装 / 清 storage 后换成
+    新名字，旧 socket 文件就再也没人复用，只能靠这里回收。
+
+    判据两条同时满足才删：``mtime`` 早于 ``max_age`` **且** connect 失败。
+    活端点被连上即保留（哪怕 mtime 很老——mtime 只在 bind 时更新一次）。
+    """
+    if _IS_WINDOWS:
+        return []  # 命名管道随句柄关闭即消失，无残留
+    effective = prefix if prefix is not None else endpoint_prefix()
+    try:
+        directory = endpoint_dir()
+    except LocalTransportError:
+        return []
+    removed: list[str] = []
+    now = time.time()
+    # 不做 `<prefix>*.sock` 的 glob：前缀来自环境变量，可能含 glob 元字符
+    candidates = [p for p in directory.glob(f"*{_SOCKET_SUFFIX}") if p.name.startswith(effective)]
+    for path in sorted(candidates):
+        try:
+            if now - path.lstat().st_mtime < max_age:
+                continue
+            probe = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            probe.settimeout(0.2)
+            try:
+                probe.connect(str(path))
+            except OSError:
+                path.unlink()
+                removed.append(path.name[: -len(_SOCKET_SUFFIX)])
+            finally:
+                probe.close()
+        except OSError:  # pragma: no cover - 竞态：文件已被对端清掉
+            continue
+    if removed:
+        _dbg(f"pruned stale endpoints: {', '.join(removed)}")
+    return removed
 
 
 def connect(name: str, timeout: float = 1.0) -> Channel:
@@ -308,7 +504,9 @@ class _ServerImpl:
 
 class _UnixServer(_ServerImpl):
     def __init__(self, name: str):
-        path = endpoint_dir() / f"{name}.sock"
+        prune_stale_endpoints()  # /tmp 不会被系统清理，host 启动时顺手回收残留
+        path = endpoint_path(name)  # 长度守卫：超限在此抛领域异常，不让裸 OSError 逃逸
+        assert path is not None  # POSIX 分支必然有路径
         if path.exists():
             # 只有连不上的残留端点才可回收；活端点撞名必须显式失败
             probe = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -324,7 +522,17 @@ class _UnixServer(_ServerImpl):
         self._path = path
         self.address = str(path)
         self._sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        self._sock.bind(str(path))
+        try:
+            self._sock.bind(str(path))
+        except OSError as exc:
+            # 兜底：把任何 bind 期 OSError（权限/长度/被占）转成领域异常。
+            # 否则调用方的 `except LocalTransportError` 是死代码，host 带裸 traceback
+            # 静默退出（退出码 1），浏览器侧只剩「插件离线」。
+            self._sock.close()
+            raise LocalTransportError(
+                f"endpoint bind failed: {name} ({exc}); "
+                f"path={path} bytes={len(os.fsencode(path))}"
+            ) from None
         self._sock.listen(8)
         self._closed = False
 
@@ -360,6 +568,11 @@ class _PipeServer(_ServerImpl):
     """Windows 命名管道服务端：overlapped 连接，单线程 accept 循环即可服务多客户端。"""
 
     def __init__(self, name: str):
+        # 阈值按平台取：管道名走内核命名空间，上限 256 字符（不经路径解析）
+        if len(name) > _PIPE_NAME_MAX:
+            raise LocalTransportError(
+                f"endpoint name too long: {len(name)} > {_PIPE_NAME_MAX} chars: {name!r}"
+            )
         self.address = "\\\\.\\pipe\\" + name
         self._closed = False
         self._lock = threading.Lock()
@@ -630,7 +843,8 @@ def _connect_pipe(name: str, timeout: float) -> Channel:
 
 
 def _connect_unix(name: str, timeout: float) -> Channel:
-    path = endpoint_dir() / f"{name}.sock"
+    path = endpoint_path(name)  # 长度守卫：超限时给明确错误，而不是笼统的 CHANNEL_OFFLINE
+    assert path is not None
     sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     sock.settimeout(max(0.001, timeout))
     try:

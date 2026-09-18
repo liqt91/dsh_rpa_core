@@ -10,7 +10,8 @@
 > **本地端点**（Windows 命名管道 / POSIX Unix 域套接字，`rpa_core.local_transport`）通信。
 > 因此本文中所有「`/api/ext/*` 路由 / `RPA_EXT_HUB_URL` / 长轮询 / `ExtensionExecHub` /
 > 心跳窗口 `ONLINE_WINDOW_SECONDS` / `ExtLoopbackGateway`」的描述**均已退役**：
-> - 在线 = **存在 `rpa_core_ext_<browser>_<instanceId>` 端点**（无心跳窗口）；
+> - 在线 = **存在 `rpa_core_ext_<browser>_<sha256(instanceId)[:16]>` 端点**（无心跳窗口；
+>   实例段为定长 token，原因见 `ADR 0015` §6 与 M22）；
 > - 命令由 host 经 port 推送（扩展侧无轮询），结果按 id 回路由；host 侧强制超时；
 > - 安装需注册 native host manifest（`rpa-core install-extension` 默认引导已含；
 >   见 `docs/extension-install.md`）；
