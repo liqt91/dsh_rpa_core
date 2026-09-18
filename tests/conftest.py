@@ -7,9 +7,10 @@
 `QApplication` 创建时定型，因此必须在**任何 Qt 导入之前**设置。
 
 真实桌面 E2E（启动记事本 / WinForms 演示程序 / 捕获悬浮框，会弹窗并抢前台）
-改为显式开关：缺省跳过，设 `RPA_DESKTOP_E2E=1` 启用——门禁脚本
-`.harness/scripts/check_all.py` 会设置它，所以完整覆盖不丢，而日常
-`uv run pytest` 不再打断开发者手头的事。
+为显式开关：缺省跳过，设 `RPA_DESKTOP_E2E=1` 启用——门禁脚本
+`.harness/scripts/check_all.py` 默认**不**启用（弹窗会打断维护者操作），
+需要完整覆盖时跑 `check_all.py --with-desktop-e2e`；日常 `uv run pytest`
+同样不弹窗。
 
 ## 1. 默认执行通道必须是离线的
 
@@ -59,7 +60,8 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if not os.environ.get("QT_QPA_PLATFORM"):
     os.environ["QT_QPA_PLATFORM"] = "offscreen"
 
-# 真实桌面 E2E 的显式开关（会弹窗抢前台，缺省跳过；门禁脚本启用）。
+# 真实桌面 E2E 的显式开关（会弹窗抢前台，缺省跳过；门禁默认不启用，
+# `check_all.py --with-desktop-e2e` 或显式设该环境变量时才跑）。
 # 各 e2e 用例文件直接读该环境变量做 skipif，reason 里必须含下面的关键子串，
 # 供 pytest_terminal_summary 识别并提示启用方式。
 DESKTOP_E2E_ENABLED = os.environ.get("RPA_DESKTOP_E2E") == "1"

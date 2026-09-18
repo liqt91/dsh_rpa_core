@@ -32,6 +32,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMenu,
     QToolButton,
+    QVBoxLayout,
     QWidget,
 )
 
@@ -42,6 +43,69 @@ _KIND_INT = "integer"
 _KIND_NUMBER = "number"
 _KIND_BOOL = "boolean"
 _KIND_JSON = "json"
+
+
+class _CollapsibleSection(QWidget):
+    """可折叠的参数分组区段（对齐 Web ``paramGroupSection``）。"""
+
+    def __init__(
+        self,
+        title: str,
+        *,
+        field_count: int = 0,
+        collapsed: bool = False,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+
+        # ---- header ----
+        self._header = QWidget()
+        header_layout = QHBoxLayout(self._header)
+        header_layout.setContentsMargins(0, 4, 0, 4)
+        header_layout.setSpacing(4)
+
+        self._caret = QToolButton()
+        self._caret.setText("▾" if not collapsed else "▸")
+        self._caret.setFixedSize(16, 16)
+        self._caret.setStyleSheet("border: none; padding: 0;")
+        header_layout.addWidget(self._caret)
+
+        title_label = QLabel(title)
+        title_label.setStyleSheet("font-weight: bold; color: #4d5564;")
+        header_layout.addWidget(title_label, 1)
+
+        count_label = QLabel(str(field_count))
+        count_label.setStyleSheet("color: #8b929e;")
+        header_layout.addWidget(count_label)
+
+        header_layout.addStretch()
+
+        self._header.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._header.mousePressEvent = self._toggle
+        self._caret.clicked.connect(self._toggle)
+        outer.addWidget(self._header)
+
+        # ---- body ----
+        self._body = QWidget()
+        self._body_layout = QFormLayout(self._body)
+        self._body_layout.setContentsMargins(0, 0, 0, 0)
+        self._body_layout.setLabelAlignment(Qt.AlignmentFlag.AlignTop)
+        outer.addWidget(self._body)
+
+        if collapsed:
+            self._body.setVisible(False)
+
+    def _toggle(self, *_args: object) -> None:
+        hidden = self._body.isHidden()
+        self._body.setVisible(hidden)
+        self._caret.setText("▾" if hidden else "▸")
+
+    @property
+    def body_layout(self) -> QFormLayout:
+        return self._body_layout
 
 
 def _effective_type(field_schema: dict[str, Any]) -> str:
@@ -72,29 +136,229 @@ class ParamForm(QWidget):
         *,
         expr_modes: dict[str, str] | None = None,
         variable_provider: Any = None,
+        manifest: Any | None = None,
+        output_aliases: dict[str, str] | None = None,
+        raw: dict[str, Any] | None = None,
     ) -> None:
         super().__init__(parent)
         args = dict(args or {})
         self._required: set[str] = set(schema.get("required", []))
         self._expr_modes: dict[str, str] = dict(expr_modes or {})
-        # 可调用：返回可引用的变量/路径列表（fx 下拉内容）
         self._variable_provider = variable_provider
         # (字段名, 种类, 控件)：顺序即 properties 声明顺序
         self._fields: list[tuple[str, str, QWidget]] = []
-        # fx 行控件（字段名 → (fx 开关, ＋变量按钮)），供测试与外部检查
         self._fx_buttons: dict[str, tuple[QToolButton, QToolButton]] = {}
+        # 分组模式下的区段引用（section_name → _CollapsibleSection）
+        self._sections: dict[str, _CollapsibleSection] = {}
+        # 输出别名字段（outField → QLineEdit）
+        self._alias_fields: dict[str, QLineEdit] = {}
+        self._alias_validator = re.compile(r"^[A-Za-z_]\w*$")
 
         self._form = QFormLayout(self)
         self._form.setContentsMargins(8, 8, 8, 8)
         self._form.setLabelAlignment(Qt.AlignmentFlag.AlignTop)
 
         properties = schema.get("properties", {})
-        for name, field_schema in properties.items():
-            self._build_field(name, field_schema, args)
+        groups = schema.get("x-param-groups")
+        if groups and isinstance(groups, list) and properties:
+            self._build_grouped_form(properties, args, groups)
+        else:
+            for name, field_schema in properties.items():
+                self._build_field(name, field_schema, args)
+
+        # 输出别名区段（对齐 Web x-outputs 渲染）
+        self._build_output_aliases(manifest, output_aliases or {})
+
+        # 运行设置：超时 / 重试（对齐 Web timeout_seconds / retryCountField）
+        self._timeout_field: QLineEdit | None = None
+        self._retry_field: QWidget | None = None
+        self._build_retry_timeout(manifest, raw_dict=(raw or {}))
+
+    def _build_grouped_form(
+        self,
+        properties: dict[str, Any],
+        args: dict[str, Any],
+        groups: list[dict[str, Any]],
+    ) -> None:
+        """按 x-param-groups 分组渲染字段（对齐 Web ``paramGroupPlan`` 逻辑）。"""
+        claimed: set[str] = set()
+        for group in groups:
+            group_fields = [
+                k
+                for k in (group.get("fields") or [])
+                if k in properties and k not in claimed
+            ]
+            if not group_fields:
+                continue
+            claimed.update(group_fields)
+            label = group.get("label") or "参数"
+            # collapsed 组内有值时自动展开（对齐 Web 行为）
+            has_value = any(
+                args.get(k) not in (None, "") for k in group_fields
+            )
+            collapsed = bool(group.get("collapsed")) and not has_value
+            section = _CollapsibleSection(
+                label,
+                field_count=len(group_fields),
+                collapsed=collapsed,
+            )
+            self._sections[label] = section
+            self._form.addRow(section)
+            for k in group_fields:
+                self._build_field(k, properties[k], args, target=section.body_layout)
+
+        # 未被任何 group 声明的字段 →「其他」组
+        rest = [k for k in properties if k not in claimed]
+        if rest:
+            section = _CollapsibleSection(
+                "其他", field_count=len(rest), collapsed=False,
+            )
+            self._sections["其他"] = section
+            self._form.addRow(section)
+            for k in rest:
+                self._build_field(k, properties[k], args, target=section.body_layout)
+
+    # ---- 输出别名（对齐 Web x-outputs） ------------------------------------
+    def _build_output_aliases(
+        self,
+        manifest: Any | None,
+        existing: dict[str, str],
+    ) -> None:
+        """在参数表单末尾追加「输出参数」区段，为每个非 hidden 输出渲染别名输入框。"""
+        x_outputs = getattr(manifest, "x_outputs", None) or {}
+        visible = [
+            (field, meta)
+            for field, meta in x_outputs.items()
+            if not (isinstance(meta, dict) and meta.get("hidden"))
+        ]
+        if not visible:
+            return
+        header = QLabel("输出参数（保存到变量，供后续指令引用）")
+        header.setStyleSheet("font-weight: bold; color: #4d5564; padding-top: 8px;")
+        self._form.addRow(header)
+        for field, meta in visible:
+            label_text = (meta.get("label") if isinstance(meta, dict) else None) or field
+            edit = QLineEdit(existing.get(field, ""))
+            edit.setPlaceholderText("可选，如 webpage1")
+            edit.setToolTip(f"为输出 {field} 命名，后续节点可通过 ${{别名}} 引用")
+            edit.textChanged.connect(lambda text, e=edit: self._style_alias_field(e))
+            self._alias_fields[field] = edit
+            self._form.addRow(QLabel(label_text), edit)
+
+    def _style_alias_field(self, edit: QLineEdit) -> None:
+        """别名内容不合法时红框提示（对齐 Web 别名校验）。"""
+        text = edit.text().strip()
+        if text and not self._alias_validator.match(text):
+            edit.setStyleSheet("QLineEdit { border: 1px solid #cf222e; }")
+        else:
+            edit.setStyleSheet("")
+
+    def output_aliases(self) -> dict[str, str]:
+        """收集输出别名：仅返回非空且合法的条目。"""
+        result: dict[str, str] = {}
+        for field, edit in self._alias_fields.items():
+            alias = edit.text().strip()
+            if alias and self._alias_validator.match(alias):
+                result[field] = alias
+        return result
+
+    # ---- 运行设置：超时 / 重试（对齐 Web timeout_seconds / retryCountField） ---
+    def _build_retry_timeout(
+        self, manifest: Any | None, raw_dict: dict[str, Any]
+    ) -> None:
+        """在表单末尾追加超时和重试字段（对齐 Web 编辑器行为）。"""
+        if manifest is None:
+            return
+        properties = getattr(manifest, "input_schema", {}).get("properties", {})
+        has_own_timeout = "timeoutMs" in properties
+
+        # 超时（秒）：命令自带 timeoutMs 时隐藏引擎级超时，避免两个「超时」
+        if not has_own_timeout:
+            header = QLabel("运行设置")
+            header.setStyleSheet("font-weight: bold; color: #4d5564; padding-top: 8px;")
+            self._form.addRow(header)
+            self._timeout_field = QLineEdit()
+            self._timeout_field.setValidator(QDoubleValidator(0, 86400, 1))
+            current_timeout = raw_dict.get("timeout_seconds")
+            if current_timeout is not None:
+                self._timeout_field.setText(str(current_timeout))
+            self._timeout_field.setPlaceholderText("可选，如 30")
+            self._timeout_field.setToolTip("节点级超时（秒），覆盖工作流级默认值")
+            self._form.addRow(QLabel("超时（秒）"), self._timeout_field)
+
+        # 重试次数：仅 manifest.retryable=true 时渲染
+        replay = getattr(getattr(manifest, "effect", None), "replay", None)
+        retryable = getattr(manifest, "retryable", False)
+        current_retry = raw_dict.get("retry_count")
+
+        if retryable:
+            if not has_own_timeout and self._timeout_field is None:
+                # 如果超时字段还没加 header，这里补一个
+                header = QLabel("运行设置")
+                header.setStyleSheet("font-weight: bold; color: #4d5564; padding-top: 8px;")
+                self._form.addRow(header)
+            self._retry_field = QLineEdit()
+            self._retry_field.setValidator(QIntValidator(0, 100))
+            if current_retry is not None:
+                self._retry_field.setText(str(current_retry))
+            self._retry_field.setPlaceholderText("默认 0（不重试）")
+            self._retry_field.setToolTip("重试次数（仅声明 retryable 的指令生效）")
+            self._form.addRow(QLabel("重试次数"), self._retry_field)
+        elif current_retry:
+            # 不支持重试但 raw 有遗留值 → 警告 + 清除按钮
+            if not has_own_timeout and self._timeout_field is None:
+                header = QLabel("运行设置")
+                header.setStyleSheet("font-weight: bold; color: #4d5564; padding-top: 8px;")
+                self._form.addRow(header)
+            warn = QLabel(
+                "⚠ 该指令不支持重试（"
+                + ("重放不安全" if replay == "unsafe" else "未声明")
+                + f"），当前值 {current_retry} 不会生效"
+            )
+            warn.setWordWrap(True)
+            warn.setStyleSheet("color: #cf222e;")
+            clear_btn = QToolButton()
+            clear_btn.setText("清除重试次数")
+            clear_btn.clicked.connect(lambda: self._clear_retry_count())
+            row = QWidget()
+            row_layout = QHBoxLayout(row)
+            row_layout.setContentsMargins(0, 0, 0, 0)
+            row_layout.addWidget(warn, 1)
+            row_layout.addWidget(clear_btn)
+            self._form.addRow(row)
+            self._retry_field = row
+
+    def _clear_retry_count(self) -> None:
+        """清除遗留的 retry_count 值并更新警告文案。"""
+        if self._retry_field is not None and isinstance(self._retry_field, QWidget):
+            # 找到警告 label 并更新
+            for child in self._retry_field.findChildren(QLabel):
+                if "⚠" in (child.text() or ""):
+                    child.setText("已清除重试次数")
+                    child.setStyleSheet("color: #1a7f37;")
+                    break
+
+    def retry_timeout_values(self) -> dict[str, Any]:
+        """收集超时和重试值，写回 holder.raw 顶层。"""
+        result: dict[str, Any] = {}
+        if self._timeout_field is not None:
+            text = self._timeout_field.text().strip()
+            if text:
+                result["timeout_seconds"] = float(text)
+        if self._retry_field is not None and isinstance(self._retry_field, QLineEdit):
+            text = self._retry_field.text().strip()
+            if text and text != "0":
+                result["retry_count"] = int(text)
+        return result
 
     # ---- 逐类型构建 -------------------------------------------------------
     def _build_field(
-        self, name: str, field_schema: dict[str, Any], args: dict[str, Any]
+        self,
+        name: str,
+        field_schema: dict[str, Any],
+        args: dict[str, Any],
+        *,
+        target: QFormLayout | None = None,
     ) -> None:
         """按字段类型创建控件并登记；description 进 tooltip。"""
         value_type = _effective_type(field_schema)
@@ -107,7 +371,7 @@ class ParamForm(QWidget):
             widget = self._build_text(field_schema, args.get(name), has_value)
             kind = _KIND_TEXT
             row_widget = self._wrap_fx_row(name, widget)
-            self._attach(name, kind, widget, field_schema, row_widget=row_widget)
+            self._attach(name, kind, widget, field_schema, row_widget=row_widget, target=target)
             return
         elif value_type == "integer":
             widget = self._build_number_line(
@@ -130,7 +394,7 @@ class ParamForm(QWidget):
             widget.setPlaceholderText("JSON，如 [\"a\", \"b\"]")
             kind = _KIND_JSON
 
-        self._attach(name, kind, widget, field_schema)
+        self._attach(name, kind, widget, field_schema, target=target)
 
     @staticmethod
     def _build_enum(
@@ -191,11 +455,13 @@ class ParamForm(QWidget):
         field_schema: dict[str, Any],
         *,
         row_widget: QWidget | None = None,
+        target: QFormLayout | None = None,
     ) -> None:
         """登记字段并挂到表单；label 带必填星号，description 进 tooltip。
 
         row_widget 用于 fx 行容器这类「取值控件 ≠ 行展示控件」的场景：
         登记取值的仍是 widget，挂到表单行的是 row_widget。
+        target 为分组区段的 body_layout；None 时回退到主表单 self._form。
         """
         self._fields.append((name, kind, widget))
         label_text = f"{name} *" if name in self._required else name
@@ -205,7 +471,8 @@ class ParamForm(QWidget):
         label = QLabel(label_text)
         if description:
             label.setToolTip(description)
-        self._form.addRow(label, row_widget if row_widget is not None else widget)
+        layout = target if target is not None else self._form
+        layout.addRow(label, row_widget if row_widget is not None else widget)
 
     # ---- fx 变量引用模式 ---------------------------------------------------
     def _wrap_fx_row(self, name: str, editor: QLineEdit) -> QWidget:

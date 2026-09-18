@@ -210,3 +210,36 @@ def test_extension_capture_offline_without_endpoint(server):
     assert status == 200
     assert pick_result.get("offline") is True
     assert time.monotonic() - started < 10
+
+
+def test_extension_capture_arms_all_online_endpoints():
+    """多浏览器并存：start 必须 arm 全部在线端点（先回传者胜）。
+
+    旧实现只连第一个端点、只 arm 一个浏览器——另一个浏览器的网页永远无法
+    框选（桌面腿在浏览器内容区让位给扩展，而扩展从未收到 arm）。
+    """
+    edge = FakeBridge(browser="msedge", instance_id="multi1")
+    chrome = FakeBridge(browser="chrome", instance_id="multi2")
+    try:
+        session = ExtensionCaptureSession()
+        session.start()
+        assert not session.offline
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline and not (edge.armed and chrome.armed):
+            time.sleep(0.02)
+        assert edge.armed and chrome.armed, "两个端点都应收到 capture_arm"
+        # FakeBridge 收到 arm 即回传结果：任一先回传即唤醒 pick
+        result = session.pick(timeout_seconds=5)
+        assert result["selector"]["css"] == "#go"
+        session.close()
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline and not (
+            edge.disarmed >= 1 and chrome.disarmed >= 1
+        ):
+            time.sleep(0.02)
+        assert edge.disarmed >= 1 and chrome.disarmed >= 1, (
+            "close 必须向全部端点下发 capture_disarm"
+        )
+    finally:
+        edge.close()
+        chrome.close()

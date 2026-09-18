@@ -20,7 +20,7 @@ from rpa_core import local_transport
 
 
 class ExtensionCaptureSession:
-    """content-script 扩展捕获会话（无子进程；一条 bridge 端点连接）。"""
+    """content-script 扩展捕获会话（无子进程；arm 全部在线 bridge 端点）。"""
 
     # devserver 用鸭子类型识别扩展会话（不 import capture 包，维持隔离边界）
     is_extension_capture = True
@@ -36,15 +36,22 @@ class ExtensionCaptureSession:
         self._endpoint = endpoint
         self._event = threading.Event()
         self._result: dict | None = None
-        self._channel = None
-        self._reader: threading.Thread | None = None
+        # 多浏览器并存时各有自己的 bridge 端点：全部 arm，先回传者胜
+        self._channels: list[tuple[str, local_transport.Channel]] = []
+        self._live = 0  # 仍在线的通道数（全部断开才结束 pick 等待）
+        self._live_lock = threading.Lock()
         self._session_id = f"cap-{uuid.uuid4().hex[:8]}"
         self._offline = False
 
     # -- 生命周期 ------------------------------------------------------------
 
     def start(self) -> list[str]:
-        """连端点并 arm；无端点（扩展未装/未连）时置离线，pick 会得到明确结果。"""
+        """连接**全部**在线端点并逐一 arm；无端点（扩展未装/未连）时置离线。
+
+        多浏览器并存（如 Edge + Chrome 各装一份扩展）时，只 arm 第一个端点会让
+        另一个浏览器的网页永远无法框选——桌面腿在浏览器内容区让位给扩展，扩展
+        又没收到 arm，表现为「只有一个浏览器能框选」。
+        """
         from rpa_core.extension_exec import list_extension_endpoints
 
         candidates = [self._endpoint] if self._endpoint else list_extension_endpoints()
@@ -52,18 +59,22 @@ class ExtensionCaptureSession:
             if not name:
                 continue
             try:
-                self._channel = local_transport.connect(name, timeout=2.0)
+                channel = local_transport.connect(name, timeout=2.0)
             except local_transport.LocalTransportError:
                 continue
-            self._endpoint = name
-            break
-        if self._channel is None:
+            self._channels.append((name, channel))
+        if not self._channels:
             self._offline = True
             self._event.set()
             return ["*"]
-        self._channel.send({"type": "capture_arm", "sessionId": self._session_id})
-        self._reader = threading.Thread(target=self._read_loop, daemon=True)
-        self._reader.start()
+        self._endpoint = self._channels[0][0]
+        with self._live_lock:
+            self._live = len(self._channels)
+        for _name, channel in self._channels:
+            channel.send({"type": "capture_arm", "sessionId": self._session_id})
+            threading.Thread(
+                target=self._read_loop, args=(channel,), daemon=True
+            ).start()
         return ["*"]
 
     @property
@@ -115,10 +126,8 @@ class ExtensionCaptureSession:
 
     # -- 内部 ----------------------------------------------------------------
 
-    def _read_loop(self) -> None:
-        channel = self._channel
-        if channel is None:
-            return
+    def _read_loop(self, channel) -> None:
+        """单条通道的读循环：任一通道回传 capture_result 即唤醒 pick（先回传者胜）。"""
         try:
             while True:
                 try:
@@ -137,18 +146,23 @@ class ExtensionCaptureSession:
                 else:
                     descriptor = message.get("descriptor")
                     self.submit(descriptor if isinstance(descriptor, dict) else message)
-                break
+                return
         finally:
-            self._event.set()
+            with self._live_lock:
+                self._live -= 1
+                drained = self._live <= 0
+            if drained:
+                # 全部通道断开且无任何结果：结束等待，pick 得到 cancelled
+                # （单通道语义「连接断开 = 取消」的多通道推广）
+                self._event.set()
 
     def _disarm(self) -> None:
-        channel = self._channel
-        self._channel = None
-        if channel is None:
-            return
-        try:
-            channel.send({"type": "capture_disarm", "sessionId": self._session_id})
-        except Exception:  # noqa: BLE001 - 断开/已关闭时撤防失败无害
-            pass
-        finally:
-            channel.close()
+        channels = self._channels
+        self._channels = []
+        for _name, channel in channels:
+            try:
+                channel.send({"type": "capture_disarm", "sessionId": self._session_id})
+            except Exception:  # noqa: BLE001 - 断开/已关闭时撤防失败无害
+                pass
+            finally:
+                channel.close()

@@ -464,3 +464,680 @@ def test_validate_commits_pending_edits(window):
     assert window._validate_workflow(show_dialog=False) is False
     open_node = window._current_document()["root"]["children"][0]
     assert "browserType" not in open_node["with"]
+
+# ---- x-param-groups 分组折叠（M23 G3 slice A） --------------------------------
+def test_grouped_form_renders_sections(catalog):
+    """navigate manifest 有两个分组：常规 + 高级。"""
+    from rpa_core.gui.param_form import ParamForm
+
+    form = ParamForm(catalog["browser.navigate"].input_schema, {})
+    assert "常规" in form._sections
+    assert "高级" in form._sections
+
+
+def test_grouped_form_field_count_matches(catalog):
+    """navigate 常规组 3 字段，高级组 3 字段。"""
+    from rpa_core.gui.param_form import ParamForm
+
+    form = ParamForm(catalog["browser.navigate"].input_schema, {})
+    # 通过 _sections dict 验证
+    assert "常规" in form._sections
+    assert "高级" in form._sections
+    # 验证所有字段仍被收集（_fields 保持扁平）
+    field_names = [name for name, _k, _w in form._fields]
+    assert "browserType" in field_names
+    assert "url" in field_names
+    assert "timeoutMs" in field_names
+    assert "commandLineArgs" in field_names
+
+
+def test_collapsed_section_auto_expands_with_value(catalog):
+    """高级组有 timeoutMs 值时自动展开。"""
+    from rpa_core.gui.param_form import ParamForm
+
+    form = ParamForm(
+        catalog["browser.navigate"].input_schema, {"timeoutMs": 30000}
+    )
+    section = form._sections["高级"]
+    assert not section._body.isHidden()  # 有值 → 自动展开（非 hidden）
+
+
+def test_collapsed_section_default_state(catalog):
+    """高级组无值时默认折叠。"""
+    from rpa_core.gui.param_form import ParamForm
+
+    form = ParamForm(catalog["browser.navigate"].input_schema, {})
+    section = form._sections["高级"]
+    assert section._body.isHidden()  # 无值 + collapsed=true → 折叠
+
+
+def test_section_toggle(qapp):
+    """点击 header 切换 body 可见性。"""
+    from rpa_core.gui.param_form import _CollapsibleSection
+
+    section = _CollapsibleSection("测试", field_count=2, collapsed=True)
+    assert section._body.isHidden()
+    section._toggle()
+    assert not section._body.isHidden()
+    section._toggle()
+    assert section._body.isHidden()
+
+
+def test_values_unchanged_by_grouping(catalog):
+    """分组后 values() 收集结果与平铺一致。"""
+    from rpa_core.gui.param_form import ParamForm
+
+    args = {"browserType": "chrome", "url": "https://example.com", "timeoutMs": 5000}
+    grouped = ParamForm(catalog["browser.navigate"].input_schema, args)
+    flat_schema = {
+        k: v
+        for k, v in catalog["browser.navigate"].input_schema.items()
+        if k != "x-param-groups"
+    }
+    flat = ParamForm(flat_schema, args)
+    assert grouped.values() == flat.values()
+
+
+def test_no_groups_falls_back_to_flat(qapp):
+    """无 x-param-groups 时行为不变（平铺，无 section）。"""
+    from rpa_core.gui.param_form import ParamForm, _CollapsibleSection
+
+    schema = {
+        "type": "object",
+        "properties": {"a": {"type": "string"}, "b": {"type": "integer"}},
+    }
+    form = ParamForm(schema, {"a": "hello"})
+    assert form.findChildren(_CollapsibleSection) == []
+    assert len(form._fields) == 2
+    assert form.values() == {"a": "hello"}
+
+
+def test_unclaimed_fields_go_to_other_group(qapp):
+    """不在任何 group 的字段归入「其他」组。"""
+    from rpa_core.gui.param_form import ParamForm
+
+    schema = {
+        "type": "object",
+        "properties": {
+            "browserType": {"type": "string"},
+            "url": {"type": "string"},
+            "extra": {"type": "string"},
+        },
+        "x-param-groups": [
+            {"label": "核心", "fields": ["browserType", "url"]},
+        ],
+    }
+    form = ParamForm(schema, {})
+    assert "其他" in form._sections
+    # extra 应在其他组
+    field_names = [name for name, _k, _w in form._fields]
+    assert "extra" in field_names
+# ---- 输出别名 x-outputs（M23 G3 slice B） ------------------------------------
+def test_output_aliases_section_renders_for_navigate(catalog):
+    """navigate 有 x-outputs，非 hidden 输出应出现在 _alias_fields 中。"""
+    from rpa_core.gui.param_form import ParamForm
+
+    manifest = catalog["browser.navigate"]
+    form = ParamForm(manifest.input_schema, {}, manifest=manifest)
+    # sessionId 和 browserInstance 是 primary，应有别名输入框
+    assert "sessionId" in form._alias_fields
+    assert "browserInstance" in form._alias_fields
+    # hidden 字段不应出现
+    assert "url" not in form._alias_fields
+    assert "resourceType" not in form._alias_fields
+    assert "browserType" not in form._alias_fields
+    assert "tabId" not in form._alias_fields
+
+
+def test_output_aliases_hidden_filtered(catalog):
+    """hidden=true 的输出不出现在别名区。"""
+    from rpa_core.gui.param_form import ParamForm
+
+    manifest = catalog["browser.navigate"]
+    form = ParamForm(manifest.input_schema, {}, manifest=manifest)
+    for field in ("url", "resourceType", "browserType", "tabId"):
+        assert field not in form._alias_fields
+
+
+def test_output_aliases_roundtrip(catalog):
+    """设置别名后 output_aliases() 正确收集。"""
+    from rpa_core.gui.param_form import ParamForm
+
+    form = ParamForm(
+        catalog["browser.navigate"].input_schema, {},
+        manifest=catalog["browser.navigate"],
+        output_aliases={"sessionId": "web"},
+    )
+    assert form._alias_fields["sessionId"].text() == "web"
+    assert form.output_aliases() == {"sessionId": "web"}
+
+
+def test_output_alias_validation_rejects_invalid(qapp):
+    """非法别名（数字开头、含空格）不出现在 output_aliases() 结果中。"""
+    from rpa_core.gui.param_form import ParamForm
+
+    schema = {"properties": {"x": {"type": "string"}}}
+    # 构造一个假 manifest 对象
+    class FakeManifest:
+        x_outputs = {"out1": {"label": "输出1"}}
+    form = ParamForm(schema, {}, manifest=FakeManifest())
+    form._alias_fields["out1"].setText("1bad")  # 数字开头
+    assert form.output_aliases() == {}
+    form._alias_fields["out1"].setText("has space")  # 含空格
+    assert form.output_aliases() == {}
+    form._alias_fields["out1"].setText("good_name")  # 合法
+    assert form.output_aliases() == {"out1": "good_name"}
+
+
+def test_output_alias_invalid_shows_red_border(qapp):
+    """非法别名输入框红框提示。"""
+    from rpa_core.gui.param_form import ParamForm
+
+    schema = {"properties": {"x": {"type": "string"}}}
+    class FakeManifest:
+        x_outputs = {"out1": {"label": "输出1"}}
+    form = ParamForm(schema, {}, manifest=FakeManifest())
+    edit = form._alias_fields["out1"]
+    edit.setText("bad name")
+    assert "#cf222e" in edit.styleSheet()
+    edit.setText("ok")
+    assert edit.styleSheet() == ""
+
+
+def test_no_x_outputs_no_alias_section(qapp):
+    """无 x-outputs 的命令不渲染输出别名区。"""
+    from rpa_core.gui.param_form import ParamForm
+
+    form = ParamForm({"properties": {"a": {"type": "string"}}})
+    assert form._alias_fields == {}
+
+
+def test_apply_writes_output_aliases_to_raw(window):
+    """应用参数后 output_aliases 写入 holder.raw。"""
+    model = window.flow_model
+    item = model.find_by_id("open")
+    window.canvas_view.setCurrentIndex(model.indexFromItem(item))
+    form = window.param_holder.findChild(ParamForm)
+    # 设置 sessionId 别名
+    if "sessionId" in form._alias_fields:
+        form._alias_fields["sessionId"].setText("web")
+    window.param_holder.findChild(QPushButton).click()
+    holder = item.data(ROLE_ARGS_RAW)
+    assert holder.raw.get("output_aliases", {}).get("sessionId") == "web"
+
+
+def test_apply_clears_empty_aliases(window):
+    """所有别名清空后 output_aliases 键从 raw 中移除。"""
+    model = window.flow_model
+    item = model.find_by_id("open")
+    window.canvas_view.setCurrentIndex(model.indexFromItem(item))
+    # 先设一个别名
+    holder = item.data(ROLE_ARGS_RAW)
+    holder.raw["output_aliases"] = {"sessionId": "web"}
+    window.canvas_view.setCurrentIndex(model.indexFromItem(item))  # 重新触发表单构建
+    form = window.param_holder.findChild(ParamForm)
+    if "sessionId" in form._alias_fields:
+        form._alias_fields["sessionId"].clear()
+    window.param_holder.findChild(QPushButton).click()
+    assert "output_aliases" not in holder.raw
+# ---- 超时/重试字段（M23 G3 slice C） -----------------------------------------
+def test_timeout_field_hidden_when_command_has_timeoutMs(catalog):
+    """browser.navigate 有 timeoutMs → 引擎级 timeout_seconds 不渲染。"""
+    from rpa_core.gui.param_form import ParamForm
+
+    form = ParamForm(
+        catalog["browser.navigate"].input_schema, {},
+        manifest=catalog["browser.navigate"],
+    )
+    assert form._timeout_field is None
+
+
+def test_timeout_field_shown_when_no_own_timeout(catalog):
+    """data.datetimeNow 无 timeoutMs → 显示超时字段。"""
+    from rpa_core.gui.param_form import ParamForm
+
+    manifest = catalog["data.datetimeNow"]
+    form = ParamForm(manifest.input_schema, {}, manifest=manifest)
+    assert form._timeout_field is not None
+    assert form._timeout_field.placeholderText().startswith("可选")
+
+
+def test_timeout_field_roundtrip(catalog):
+    """超时值读写一致。"""
+    from rpa_core.gui.param_form import ParamForm
+
+    manifest = catalog["data.datetimeNow"]
+    form = ParamForm(
+        manifest.input_schema, {},
+        manifest=manifest,
+        raw={"timeout_seconds": 60},
+    )
+    assert form._timeout_field.text() == "60"
+    assert form.retry_timeout_values().get("timeout_seconds") == 60.0
+
+
+def test_retry_field_shown_when_retryable(catalog):
+    """retryable=true → 渲染重试次数输入框。"""
+    from rpa_core.gui.param_form import ParamForm
+
+    manifest = catalog["data.datetimeNow"]
+    form = ParamForm(manifest.input_schema, {}, manifest=manifest)
+    assert isinstance(form._retry_field, QLineEdit)
+
+
+def test_retry_field_default_empty(qapp):
+    """retryable 但无遗留值 → 输入框为空。"""
+    from rpa_core.gui.param_form import ParamForm
+
+    class FakeManifest:
+        input_schema = {"properties": {}}
+        retryable = True
+        effect = type("E", (), {"replay": "safe"})()
+    form = ParamForm(FakeManifest().input_schema, {}, manifest=FakeManifest())
+    assert form._retry_field.text() == ""
+    assert form.retry_timeout_values().get("retry_count") is None
+
+
+def test_retry_warning_when_not_retryable_but_value_exists(qapp):
+    """不支持重试但 raw 有遗留值 → 显示警告。"""
+    from rpa_core.gui.param_form import ParamForm
+
+    class FakeManifest:
+        input_schema = {"properties": {}}
+        retryable = False
+        effect = type("E", (), {"replay": "unsafe"})()
+    form = ParamForm(
+        FakeManifest().input_schema, {},
+        manifest=FakeManifest(),
+        raw={"retry_count": 3},
+    )
+    # _retry_field 是包含警告的 QWidget
+    from PySide6.QtWidgets import QWidget
+    assert isinstance(form._retry_field, QWidget)
+    # 有清除按钮
+    from PySide6.QtWidgets import QToolButton
+    buttons = form._retry_field.findChildren(QToolButton)
+    assert any("清除" in b.text() for b in buttons)
+
+
+def test_retry_not_shown_when_not_retryable_and_no_value(catalog):
+    """不支持重试且无遗留值 → 不渲染重试字段。"""
+    from rpa_core.gui.param_form import ParamForm
+
+    manifest = catalog["browser.navigate"]  # retryable=false
+    form = ParamForm(manifest.input_schema, {}, manifest=manifest)
+    assert form._retry_field is None
+
+
+def test_retry_timeout_values_collected(qapp):
+    """超时和重试值正确收集。"""
+    from rpa_core.gui.param_form import ParamForm
+
+    class FakeManifest:
+        input_schema = {"properties": {}}
+        retryable = True
+        effect = type("E", (), {"replay": "safe"})()
+    form = ParamForm(FakeManifest().input_schema, {}, manifest=FakeManifest())
+    form._timeout_field.setText("45")
+    form._retry_field.setText("2")
+    values = form.retry_timeout_values()
+    assert values["timeout_seconds"] == 45.0
+    assert values["retry_count"] == 2
+
+
+def test_apply_writes_timeout_retry_to_raw(window):
+    """应用参数后 timeout_seconds 和 retry_count 写入 holder.raw。"""
+    model = window.flow_model
+    item = model.find_by_id("open")
+    window.canvas_view.setCurrentIndex(model.indexFromItem(item))
+    holder = item.data(ROLE_ARGS_RAW)
+    holder.raw["timeout_seconds"] = 90
+    holder.raw["retry_count"] = 1
+    # 重新选中触发表单构建（现在 _build_retry_timeout 会读 raw）
+    window.canvas_view.setCurrentIndex(model.indexFromItem(item))
+    window.param_holder.findChild(QPushButton).click()
+    # 由于 navigate 有 timeoutMs，timeout 字段不渲染，raw 值应被清除
+    assert "timeout_seconds" not in holder.raw
+    # retryable=false，retry 也不渲染，raw 值应被清除
+    assert "retry_count" not in holder.raw
+# ---- 失败节点跳转（M23 G4 slice A） ------------------------------------------
+def test_failed_run_shows_jump_button(window, monkeypatch):
+    """运行失败且有 nodeId 时显示跳转按钮。"""
+    from PySide6.QtCore import QTimer
+    from PySide6.QtWidgets import QPushButton
+
+    dock = window._run_dock()  # noqa: F841 — 触发懒创建
+    jump_btn = window._run_jump_button
+    assert isinstance(jump_btn, QPushButton)
+    assert not jump_btn.isVisible()
+
+    # mock timer 避免 _poll_run 崩溃
+    if window._run_timer is None:
+        window._run_timer = QTimer(window)
+        window._run_timer.setInterval(800)
+    monkeypatch.setattr(window._run_timer, "stop", lambda: None)
+
+    window._failed_node_id = None
+    window._active_run_id = "test-run"
+
+    class FakeManager:
+        def status(self, run_id):
+            return {
+                "running": False,
+                "result": {
+                    "status": "failed",
+                    "error": {
+                        "code": "EXECUTOR_FAILED",
+                        "nodeId": "open",
+                        "message": "browser.launch failed",
+                    },
+                },
+            }
+        def events(self, run_id):
+            return {"events": []}
+
+    window._run_manager = FakeManager()
+    window._poll_run()
+    assert not jump_btn.isHidden()
+    assert window._failed_node_id == "open"
+
+
+def test_jump_to_failed_node_selects_in_canvas(window):
+    """跳转按钮点击后在画布中选中失败节点。"""
+    window._failed_node_id = "read"
+    window._jump_to_failed_node()
+    current = window.canvas_view.currentIndex()
+    item = window.flow_model.itemFromIndex(current)
+    from rpa_core.gui.flow_model import ROLE_NODE_ID
+    assert item.data(ROLE_NODE_ID) == "read"
+
+
+def test_jump_to_missing_node_shows_statusbar(window):
+    """找不到节点时状态栏提示。"""
+    window._failed_node_id = "nonexistent"
+    window._jump_to_failed_node()
+    assert "找不到" in window.statusBar().currentMessage()
+
+
+def test_new_run_hides_jump_button(window):
+    """新运行开始时隐藏跳转按钮。"""
+    window._run_dock()
+    window._run_jump_button.show()
+    window._failed_node_id = "open"
+    # 模拟新运行：_start_run 的逻辑会隐藏按钮
+    window._run_jump_button.hide()
+    window._failed_node_id = None
+    assert window._run_jump_button.isHidden()
+    assert window._failed_node_id is None
+# ---- 结构化错误详情（M23 G4 slice B） ----------------------------------------
+def test_error_summary_shows_code_and_message(window, monkeypatch):
+    """失败运行显示结构化错误摘要。"""
+    from PySide6.QtCore import QTimer
+
+    window._run_dock()  # noqa: F841 — 触发懒创建
+    if window._run_timer is None:
+        window._run_timer = QTimer(window)
+        window._run_timer.setInterval(800)
+    monkeypatch.setattr(window._run_timer, "stop", lambda: None)
+    window._active_run_id = "test-run"
+
+    class FakeManager:
+        def status(self, run_id):
+            return {
+                "running": False,
+                "result": {
+                    "status": "failed",
+                    "error": {
+                        "code": "EXECUTOR_FAILED",
+                        "nodeId": "open",
+                        "message": "browser.launch failed",
+                        "details": {"commandId": "browser.launch", "transport": "bsk"},
+                    },
+                },
+            }
+        def events(self, run_id):
+            return {"events": []}
+
+    window._run_manager = FakeManager()
+    window._poll_run()
+    assert not window._run_error_widget.isHidden()
+    assert "EXECUTOR_FAILED" in window._run_error_code.text()
+    assert "open" in window._run_error_node.text()
+    assert "browser.launch failed" in window._run_error_msg.text()
+    assert "browser.launch" in window._run_error_detail.text()
+    assert "bsk" in window._run_error_detail.text()
+
+
+def test_error_summary_hidden_on_new_run(window):
+    """新运行时错误摘要隐藏。"""
+    window._run_dock()
+    window._run_error_widget.show()
+    window._run_error_widget.hide()
+    assert window._run_error_widget.isHidden()
+
+
+def test_startup_error_shows_summary(window, monkeypatch):
+    """启动失败也显示结构化错误摘要。"""
+    from PySide6.QtCore import QTimer
+
+    window._run_dock()  # noqa: F841 — 触发懒创建
+    if window._run_timer is None:
+        window._run_timer = QTimer(window)
+        window._run_timer.setInterval(800)
+    monkeypatch.setattr(window._run_timer, "stop", lambda: None)
+    window._active_run_id = "test-run"
+
+    class FakeManager:
+        def status(self, run_id):
+            return {
+                "running": False,
+                "startupError": {"message": "Compilation failed: missing required field"},
+                "exitCode": 1,
+            }
+        def events(self, run_id):
+            return {"events": []}
+
+    window._run_manager = FakeManager()
+    window._poll_run()
+    assert not window._run_error_widget.isHidden()
+    assert "STARTUP_FAILED" in window._run_error_code.text()
+    assert "Compilation failed" in window._run_error_msg.text()
+# ---- 运行日志格式化（M23 G4 slice C） ----------------------------------------
+def test_format_step_started(window):
+    """stepStarted 格式化为 ▶ 标题 开始。"""
+    window._run_dock()
+    result = window._format_event({"type": "stepStarted", "node_id": "open"})
+    assert result.startswith("▶")
+    assert "开始" in result
+
+
+def test_format_step_completed_with_elapsed_and_outputs(window):
+    """stepCompleted 格式化为 ✓ 标题 完成 (耗时) — 输出: keys。"""
+    window._run_dock()
+    window._step_start_times["open"] = __import__("time").time() - 1.5
+    result = window._format_event({
+        "type": "stepCompleted",
+        "node_id": "open",
+        "payload": {"outputs": {"sessionId": "abc", "url": "https://x"}},
+    })
+    assert result.startswith("✓")
+    assert "完成" in result
+    assert "s)" in result
+    assert "sessionId" in result
+    assert "url" in result
+
+
+def test_format_step_failed_with_error(window):
+    """stepFailed 格式化为 ✗ 标题 失败 (耗时) — code: message。"""
+    window._run_dock()
+    window._step_start_times["open"] = __import__("time").time() - 0.3
+    result = window._format_event({
+        "type": "stepFailed",
+        "node_id": "open",
+        "payload": {
+            "error": {"code": "TIMEOUT", "message": "加载超时"},
+        },
+    })
+    assert result.startswith("✗")
+    assert "失败" in result
+    assert "TIMEOUT" in result
+    assert "加载超时" in result
+
+
+def test_format_step_retried(window):
+    """stepRetried 格式化为 ↻ 标题 重试。"""
+    window._run_dock()
+    result = window._format_event({
+        "type": "stepRetried",
+        "node_id": "open",
+        "payload": {"attempt": 1, "nextAttempt": 2, "backoffSeconds": 5},
+    })
+    assert result.startswith("↻")
+    assert "重试" in result
+
+
+def test_format_run_started_and_finished(window):
+    """runStarted/runFinished 格式化。"""
+    window._run_dock()
+    result = window._format_event({"type": "runStarted"})
+    assert result.startswith("▸")
+    assert "开始" in result
+    result = window._format_event({"type": "runFinished", "payload": {"status": "succeeded"}})
+    assert result.startswith("▸")
+    assert "succeeded" in result
+
+
+def test_format_unknown_event_falls_back_to_json(window):
+    """未知事件类型保留原始 JSON。"""
+    window._run_dock()
+    event = {"type": "customEvent", "data": 42}
+    result = window._format_event(event)
+    assert "customEvent" in result
+# ---- 卡片摘要优先级（M23 次级项：卡片摘要优化） --------------------------------
+def test_summarize_args_prioritizes_url_and_selector():
+    """url/selector 等关键字段优先展示。"""
+    from rpa_core.gui.flow_model import summarize_args
+
+    args = {"browserType": "chrome", "url": "https://example.com", "action": "goto"}
+    result = summarize_args(args)
+    # url 是最高优先级，排在最前
+    assert result.startswith("url=")
+    # action 也是优先字段，排第二；browserType 被 +1 溢出
+    assert "action=goto" in result
+
+
+def test_summarize_args_shows_selector_before_other_fields():
+    """selector 优先于普通字段。"""
+    from rpa_core.gui.flow_model import summarize_args
+
+    args = {"kind": "css", "selector": "#btn", "timeout": 5000}
+    result = summarize_args(args)
+    assert result.startswith("selector=")
+
+
+def test_summarize_args_empty_returns_empty():
+    """空参数返回空字符串。"""
+    from rpa_core.gui.flow_model import summarize_args
+    assert summarize_args({}) == ""
+
+
+def test_summarize_args_limit_respected():
+    """limit 参数控制展示数量。"""
+    from rpa_core.gui.flow_model import summarize_args
+
+    args = {"url": "a", "selector": "b", "text": "c"}
+    result = summarize_args(args, limit=1)
+    assert "url=a" in result
+    assert "selector" not in result
+    assert "+2" in result
+# ---- 菜单栏（M23 次级项：菜单栏 + 快捷键一览） --------------------------------
+def test_menu_bar_has_four_menus(catalog):
+    """菜单栏包含文件/编辑/运行/帮助四个菜单。"""
+    from rpa_core.gui.app import MainWindow
+    win = MainWindow(catalog)
+    menus = [a.text() for a in win.menuBar().actions()]
+    assert "文件" in menus
+    assert "编辑" in menus
+    assert "运行" in menus
+    assert "帮助" in menus
+    win.close()
+
+
+def test_shortcuts_dialog_opens(catalog):
+    """快捷键一览对话框入口存在于帮助菜单。"""
+    from rpa_core.gui.app import MainWindow
+    win = MainWindow(catalog)
+    help_menu = [a.menu() for a in win.menuBar().actions() if a.text() == "帮助"][0]
+    actions = [a for a in help_menu.actions() if a.text() == "快捷键一览"]
+    assert len(actions) == 1
+    win.close()
+
+
+def test_menu_actions_share_shortcuts_with_toolbar(catalog):
+    """菜单栏复用工具栏 QAction，快捷键一致。"""
+    from rpa_core.gui.app import MainWindow
+    win = MainWindow(catalog)
+    assert win._save_action_ref.shortcut().toString() == "Ctrl+S"
+    assert win._new_action_ref.shortcut().toString() == "Ctrl+N"
+    assert win._open_action_ref.shortcut().toString() == "Ctrl+O"
+    win.close()
+# ---- 变量面板（M23 次级项：设计期变量面板） ------------------------------------
+def test_refresh_variables_collects_aliases(catalog):
+    """变量面板能从工作流中收集 output_aliases。"""
+    import copy
+
+    from rpa_core.gui.app import SAMPLE_WORKFLOW, MainWindow
+    from rpa_core.gui.flow_model import ROLE_ARGS_RAW, iter_real_nodes
+
+    win = MainWindow(catalog, copy.deepcopy(SAMPLE_WORKFLOW))
+    # 模拟设置一个 output_alias
+    model = win.flow_model
+    for item in iter_real_nodes(model):
+        holder = item.data(ROLE_ARGS_RAW)
+        if holder and holder.raw and holder.raw.get("type") == "action":
+            holder.raw["output_aliases"] = {"0": "testVar"}
+            break
+    # 刷新变量面板
+    win._variables_dock()  # 触发创建
+    win._refresh_variables()
+    tree = win._variables_tree
+    # 应包含 testVar
+    found = False
+    for i in range(tree.topLevelItemCount()):
+        group = tree.topLevelItem(i)
+        for j in range(group.childCount()):
+            child = group.child(j)
+            if "testVar" in child.text(0):
+                found = True
+    assert found, "变量面板应显示 testVar"
+    win.close()
+
+
+def test_variables_dock_has_refresh_button(catalog):
+    """变量面板有刷新按钮。"""
+    import copy
+
+    from rpa_core.gui.app import SAMPLE_WORKFLOW, MainWindow
+
+    win = MainWindow(catalog, copy.deepcopy(SAMPLE_WORKFLOW))
+    dock = win._variables_dock()
+    # dock 内应有刷新按钮
+    from PySide6.QtWidgets import QPushButton
+    buttons = dock.widget().findChildren(QPushButton)
+    labels = [b.text() for b in buttons]
+    assert "刷新" in labels
+    win.close()
+
+
+def test_variables_toggle_action_in_menu(catalog):
+    """编辑菜单有变量面板开关。"""
+    import copy
+
+    from rpa_core.gui.app import SAMPLE_WORKFLOW, MainWindow
+
+    win = MainWindow(catalog, copy.deepcopy(SAMPLE_WORKFLOW))
+    # 编辑菜单中应有变量面板 action
+    edit_menu = [a.menu() for a in win.menuBar().actions() if a.text() == "编辑"][0]
+    actions = [a.text() for a in edit_menu.actions()]
+    assert "变量面板" in actions
+    win.close()

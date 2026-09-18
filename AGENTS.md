@@ -22,6 +22,7 @@ Test:        uv run pytest
 Lint:        uv run ruff check .
 Architecture:uv run python .harness/scripts/check_architecture.py
 Full gate:   uv run python .harness/scripts/check_all.py
+             （默认不含真实桌面 E2E——弹窗抢前台；需要时加 --with-desktop-e2e）
 CLI:         uv run python -m rpa_core.cli
 ```
 

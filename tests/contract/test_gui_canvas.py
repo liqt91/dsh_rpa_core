@@ -682,3 +682,88 @@ def test_else_branch_hit_test_splits_then_and_else(qapp):
     assert [c["id"] for c in check["then"]] == ["t1", "free"]
     assert [c["id"] for c in check["else"]] == ["e1"]
     view.deleteLater()
+
+
+def test_drop_event_restores_selection_signals(qapp):
+    """回归：dropEvent 的选中信号屏蔽必须成对恢复。
+
+    blockSignals(True) 返回的是**之前**的阻塞状态，旧实现用它的返回值决定
+    是否解除，导致第一次拖放后 selectionChanged 被永久阻塞——之后点击收敛
+    选中集时模型已收敛、视图却收不到重绘通知（观感：点击已选中指令「无效」，
+    鼠标移到另一条上它才「取消选中」）。
+    """
+    from PySide6.QtCore import QEvent, QItemSelectionModel, QPointF
+    from PySide6.QtGui import QDropEvent, QMouseEvent, QPointingDevice
+    from PySide6.QtWidgets import QApplication
+
+    model = build_model_from_workflow({
+        "schema_version": "1.0", "id": "s", "name": "s",
+        "root": {"type": "sequence", "id": "root", "children": [
+            {"type": "action", "id": "nav", "command": "browser.navigate",
+             "with": {}},
+            {"type": "if", "id": "check",
+             "condition": {"op": "truthy", "left": "${x}"},
+             "then": [{"type": "action", "id": "t1", "command": "data.limit",
+                       "with": {}}]},
+            {"type": "forEach", "id": "loop", "items": "${rows}",
+             "children": [{"type": "action", "id": "inner",
+                           "command": "data.limit", "with": {}}]},
+        ]},
+    })
+    view = build_canvas(model)
+    view.resize(640, 900)
+    view.show()
+    view.expandAll()
+    qapp.processEvents()
+
+    nav = model.indexFromItem(model.find_by_id("nav"))
+    check = model.indexFromItem(model.find_by_id("check"))
+    loop = model.indexFromItem(model.find_by_id("loop"))
+
+    # 多选 nav + check，投递到循环同级下方（根末尾）
+    flags = (QItemSelectionModel.SelectionFlag.Select
+             | QItemSelectionModel.SelectionFlag.Rows)
+    selection = view.selectionModel()
+    selection.select(nav, flags)
+    selection.select(check, flags)
+    view._drag_target = {
+        "mode": "below",
+        "row": model.rowCount(QModelIndex()),
+        "parent": QModelIndex(),
+        "indicator_y": 0,
+    }
+    mime = model.mimeData([nav, check])
+    drop = QDropEvent(
+        QPointF(view.visualRect(loop).center()), Qt.DropAction.MoveAction, mime,
+        Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, QEvent.Type.Drop,
+    )
+    view.dropEvent(drop)
+
+    # 关键回归点：拖放结束后选中信号必须已恢复
+    assert view.selectionModel().signalsBlocked() is False
+
+    # 拖放后单击已选中的 nav：选中集收敛为仅 nav，且 selectionChanged 必须送达
+    hits = []
+    view.selectionModel().selectionChanged.connect(lambda *args: hits.append(args))
+    nav_new = model.indexFromItem(model.find_by_id("nav"))
+    center = view.visualRect(nav_new).center()
+    for etype, buttons in (
+        (QEvent.Type.MouseButtonPress, Qt.MouseButton.LeftButton),
+        (QEvent.Type.MouseButtonRelease, Qt.MouseButton.NoButton),
+    ):
+        event = QMouseEvent(
+            etype, QPointF(center),
+            QPointF(view.viewport().mapToGlobal(center)),
+            Qt.MouseButton.LeftButton, buttons, Qt.KeyboardModifier.NoModifier,
+            QPointingDevice.primaryPointingDevice(),
+        )
+        QApplication.sendEvent(view.viewport(), event)
+    qapp.processEvents()
+
+    selected = sorted(
+        i.data(ROLE_NODE_ID)
+        for i in view.selectionModel().selectedIndexes() if i.column() == 0
+    )
+    assert selected == ["nav"]
+    assert hits, "selectionChanged 必须送达视图（否则被取消选中的行不重绘）"
+    view.deleteLater()

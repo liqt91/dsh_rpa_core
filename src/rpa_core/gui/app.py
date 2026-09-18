@@ -353,6 +353,7 @@ class MainWindow(QMainWindow):
         self.resize(1280, 800)
 
         self._build_toolbar()
+        self._build_menu_bar()
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
 
@@ -494,12 +495,14 @@ class MainWindow(QMainWindow):
         new_action.setToolTip("新建空白流程（Ctrl+N）")
         new_action.triggered.connect(self._new_action)
         toolbar.addAction(new_action)
+        self._new_action_ref = new_action
 
         open_action = QAction("打开", self)
         open_action.setShortcut("Ctrl+O")
         open_action.setToolTip("打开 workflow.json（Ctrl+O）")
         open_action.triggered.connect(self._open_action)
         toolbar.addAction(open_action)
+        self._open_action_ref = open_action
 
         # 流程库下拉：列出 workflows/ 下的命名流程，选中即打开（仅配置 store 时）
         if self._store is not None:
@@ -517,6 +520,7 @@ class MainWindow(QMainWindow):
         save_action.setToolTip("保存到 workflow.json（Ctrl+S）")
         save_action.triggered.connect(self._save_action)
         toolbar.addAction(save_action)
+        self._save_action_ref = save_action
 
         # 撤销/重做/复制/粘贴：窗口级快捷键，焦点在文本控件时暂停（不吞编辑键）
         self.undo_action = QAction("撤销", self)
@@ -551,6 +555,7 @@ class MainWindow(QMainWindow):
         )
         validate_action.triggered.connect(self._validate_workflow)
         toolbar.addAction(validate_action)
+        self._validate_action_ref = validate_action
 
         # 运行控制（ADR 0011 同款：子进程 run host，GUI 进程不含 runtime）
         self.run_action = QAction("运行", self)
@@ -609,6 +614,84 @@ class MainWindow(QMainWindow):
         self.find_action.setToolTip("在画布中查找指令（Ctrl+F）")
         self.find_action.triggered.connect(self._show_canvas_search)
         toolbar.addAction(self.find_action)
+
+    def _build_menu_bar(self) -> None:
+        """菜单栏：文件/编辑/运行/帮助，复用工具栏 QAction。"""
+        menu_bar = self.menuBar()
+
+        # 文件
+        file_menu = menu_bar.addMenu("文件")
+        file_menu.addAction(self._new_action_ref)
+        file_menu.addAction(self._open_action_ref)
+        file_menu.addAction(self._save_action_ref)
+
+        # 编辑
+        edit_menu = menu_bar.addMenu("编辑")
+        edit_menu.addAction(self.undo_action)
+        edit_menu.addAction(self.redo_action)
+        edit_menu.addSeparator()
+        edit_menu.addAction(self.copy_action)
+        edit_menu.addAction(self.paste_action)
+        edit_menu.addAction(self.delete_action)
+        edit_menu.addSeparator()
+        edit_menu.addAction(self.find_action)
+        edit_menu.addSeparator()
+        self._toggle_variables_action = QAction("变量面板", self)
+        self._toggle_variables_action.setCheckable(True)
+
+        def _toggle_variables(on: bool) -> None:
+            self._variables_dock().setVisible(on)
+            if on:
+                self._refresh_variables()
+
+        self._toggle_variables_action.toggled.connect(_toggle_variables)
+        edit_menu.addAction(self._toggle_variables_action)
+
+        # 运行
+        run_menu = menu_bar.addMenu("运行")
+        run_menu.addAction(self.run_action)
+        run_menu.addAction(self.cancel_run_action)
+        run_menu.addSeparator()
+        run_menu.addAction(self._validate_action_ref)
+
+        # 帮助
+        help_menu = menu_bar.addMenu("帮助")
+        shortcuts_action = QAction("快捷键一览", self)
+        shortcuts_action.triggered.connect(self._show_shortcuts_dialog)
+        help_menu.addAction(shortcuts_action)
+
+    def _show_shortcuts_dialog(self) -> None:
+        """显示快捷键一览对话框。"""
+        from PySide6.QtWidgets import QDialog, QDialogButtonBox, QFormLayout, QLabel
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("快捷键一览")
+        dialog.setMinimumWidth(360)
+        layout = QFormLayout(dialog)
+        layout.setContentsMargins(16, 12, 16, 12)
+
+        shortcuts = [
+            ("Ctrl+N", "新建"),
+            ("Ctrl+O", "打开"),
+            ("Ctrl+S", "保存"),
+            ("Ctrl+Z", "撤销"),
+            ("Ctrl+Y", "重做"),
+            ("Ctrl+C", "复制"),
+            ("Ctrl+V", "粘贴"),
+            ("Delete", "删除节点"),
+            ("Ctrl+F", "画布查找"),
+            ("F9", "捕获桌面元素"),
+            ("Esc", "关闭搜索 / 取消捕获"),
+        ]
+        for key, desc in shortcuts:
+            key_label = QLabel(key)
+            key_label.setStyleSheet("font-family: Consolas, monospace; font-weight: bold;")
+            layout.addRow(key_label, QLabel(desc))
+
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        buttons.rejected.connect(dialog.close)
+        layout.addRow(buttons)
+        dialog.exec()
 
     # ---- 画布内查找（M23 G2） ---------------------------------------------
 
@@ -1021,13 +1104,15 @@ class MainWindow(QMainWindow):
         target = (
             self.flow_model.itemFromIndex(current) if current.isValid() else None
         )
-        # 插入期间屏蔽选中信号：插入会触发 currentChanged → 表单提交/重建重入改模型
+        # 插入期间屏蔽选中信号：插入会触发 currentChanged → 表单提交/重建重入改模型。
+        # blockSignals 返回的是之前的阻塞状态，不能据此决定是否解除，须无条件成对恢复。
         selection = self.canvas_view.selectionModel()
-        blocked = selection is not None and selection.blockSignals(True)
+        if selection is not None:
+            selection.blockSignals(True)
         try:
             new_item = self.flow_model.insert_subtree(node, target)
         finally:
-            if blocked:
+            if selection is not None:
                 selection.blockSignals(False)
         self._select_new_item(new_item)
         self.statusBar().showMessage("已粘贴（未保存）", 3000)
@@ -1233,8 +1318,10 @@ class MainWindow(QMainWindow):
         else_count = 0
         # 删除期间屏蔽选中信号：remove_item 的 takeRow 会在信号发射中途触发
         # currentChanged → 参数面板提交/重建 → 回头改模型，破坏 Qt 内部状态。
+        # blockSignals 返回的是之前的阻塞状态，不能据此决定是否解除，须无条件成对恢复。
         selection = self.canvas_view.selectionModel()
-        blocked = selection is not None and selection.blockSignals(True)
+        if selection is not None:
+            selection.blockSignals(True)
         try:
             for item in roots:
                 node_type = item.data(ROLE_NODE_TYPE)
@@ -1246,7 +1333,7 @@ class MainWindow(QMainWindow):
                 elif node_id:
                     removed_ids.append(str(node_id))
         finally:
-            if blocked:
+            if selection is not None:
                 selection.blockSignals(False)
         if not removed_ids and not else_count:
             return
@@ -1283,21 +1370,50 @@ class MainWindow(QMainWindow):
         return self._run_manager
 
     def _run_dock(self):
-        """懒创建底部运行面板（状态行 + 事件流）。"""
+        """懒创建底部运行面板（错误摘要 + 状态行 + 事件流 + 跳转按钮）。"""
         if self._run_dock_widget is None:
-            from PySide6.QtWidgets import QDockWidget
+            from PySide6.QtWidgets import QDockWidget, QPushButton
 
             dock = QDockWidget("运行", self)
             dock.setObjectName("run-dock")
             body = QWidget()
             layout = QVBoxLayout(body)
             layout.setContentsMargins(8, 4, 8, 8)
+
+            # 结构化错误摘要（对齐 Web renderRunError）
+            self._run_error_widget = QWidget()
+            err_layout = QVBoxLayout(self._run_error_widget)
+            err_layout.setContentsMargins(8, 6, 8, 6)
+            err_layout.setSpacing(2)
+            self._run_error_code = QLabel()
+            self._run_error_code.setStyleSheet("font-weight: bold; font-size: 13px;")
+            self._run_error_node = QLabel()
+            self._run_error_msg = QLabel()
+            self._run_error_msg.setWordWrap(True)
+            self._run_error_detail = QLabel()
+            self._run_error_detail.setWordWrap(True)
+            self._run_error_detail.setStyleSheet("color: #64707d; font-size: 12px;")
+            err_layout.addWidget(self._run_error_code)
+            err_layout.addWidget(self._run_error_node)
+            err_layout.addWidget(self._run_error_msg)
+            err_layout.addWidget(self._run_error_detail)
+            self._run_error_widget.hide()
+
             self._run_status_label = QLabel("（尚未运行）")
             self._run_events_view = QPlainTextEdit()
             self._run_events_view.setReadOnly(True)
             self._run_events_view.setMaximumBlockCount(500)
+            self._run_jump_button = QPushButton("跳转到失败节点")
+            self._run_jump_button.setToolTip("在画布中定位并选中失败的节点")
+            self._run_jump_button.clicked.connect(self._jump_to_failed_node)
+            self._run_jump_button.hide()
+            self._failed_node_id: str | None = None
+            self._step_start_times: dict[str, float] = {}
+            self._run_started_at: float | None = None
+            layout.addWidget(self._run_error_widget)
             layout.addWidget(self._run_status_label)
             layout.addWidget(self._run_events_view, 1)
+            layout.addWidget(self._run_jump_button)
             dock.setWidget(body)
             self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, dock)
             dock.hide()
@@ -1342,6 +1458,11 @@ class MainWindow(QMainWindow):
         dock.show()
         self._run_status_label.setText(f"运行中…（{name}）")
         self._run_events_view.clear()
+        self._run_jump_button.hide()
+        self._failed_node_id = None
+        self._run_error_widget.hide()
+        self._step_start_times: dict[str, float] = {}
+        self._run_started_at: float | None = None
         self._show_run_float()
         if self._run_timer is None:
             from PySide6.QtCore import QTimer
@@ -1395,6 +1516,59 @@ class MainWindow(QMainWindow):
         title = item.text() if item is not None else ""
         return f"正在执行：{title or node_id}"
 
+    def _node_title(self, node_id: str) -> str:
+        """节点 id → 卡片标题（日志格式化用）。"""
+        item = self.flow_model.find_by_id(node_id)
+        return item.text() if item is not None else node_id
+
+    def _format_event(self, event: dict) -> str:
+        """把运行事件格式化为可读日志行（对齐 Web 事件展示 + 耗时/输出预览）。"""
+        import time
+
+        etype = event.get("type", "")
+        node_id = event.get("node_id", "")
+        payload = event.get("payload") or {}
+        title = self._node_title(node_id) if node_id else node_id
+
+        if etype == "stepStarted":
+            self._step_start_times[node_id] = time.time()
+            return f"▶ {title} 开始"
+
+        if etype == "stepCompleted":
+            start = self._step_start_times.pop(node_id, None)
+            elapsed = time.time() - start if start else 0
+            outputs = payload.get("outputs") or {}
+            keys = ", ".join(outputs.keys()) if outputs else "—"
+            return f"✓ {title} 完成 ({elapsed:.1f}s) — 输出: {keys}"
+
+        if etype == "stepFailed":
+            start = self._step_start_times.pop(node_id, None)
+            elapsed = time.time() - start if start else 0
+            err = payload.get("error") or {}
+            code = err.get("code", "ERROR")
+            msg = err.get("message", "")
+            return f"✗ {title} 失败 ({elapsed:.1f}s) — {code}: {msg}"
+
+        if etype == "stepRetried":
+            attempt = payload.get("attempt", "?")
+            next_attempt = payload.get("nextAttempt", "?")
+            backoff = payload.get("backoffSeconds", "?")
+            return f"↻ {title} 重试 #{attempt}→#{next_attempt}（{backoff}s 后）"
+
+        if etype == "runStarted":
+            self._run_started_at = time.time()
+            return "▸ 运行开始"
+
+        if etype == "runFinished":
+            status_val = payload.get("status", "")
+            if self._run_started_at is not None:
+                total = time.time() - self._run_started_at
+                return f"▸ 运行结束 ({status_val}) — 耗时 {total:.1f}s"
+            return f"▸ 运行结束 ({status_val})"
+
+        # 其他事件：保留原始 JSON
+        return json.dumps(event, ensure_ascii=False)
+
     def _poll_run_events_live(self) -> None:
         """运行中增量读事件：喂悬浮窗 + 运行面板实时滚动 + 节点着色。"""
         events = self._run_manager.events(self._active_run_id)["events"]
@@ -1410,9 +1584,7 @@ class MainWindow(QMainWindow):
             elif event.get("type") == "stepStarted":
                 current_step = event.get("node_id")
         for event in new_events:
-            self._run_events_view.appendPlainText(
-                json.dumps(event, ensure_ascii=False)
-            )
+            self._run_events_view.appendPlainText(self._format_event(event))
         if self._run_float is not None and current_step is not None:
             self._run_float.show_running(self._float_step_text(current_step), done)
         self._apply_run_states(events)
@@ -1453,6 +1625,11 @@ class MainWindow(QMainWindow):
                     f"{error.get('message')}"
                 )
                 self._run_events_view.appendPlainText(f"失败：{detail}")
+                self._show_error_summary(error)
+                failed_id = error.get("nodeId")
+                if failed_id:
+                    self._failed_node_id = failed_id
+                    self._run_jump_button.show()
         elif status.get("startupError"):
             startup = status["startupError"]
             run_status = "failed"
@@ -1462,6 +1639,10 @@ class MainWindow(QMainWindow):
             if startup.get("message"):
                 detail = startup["message"]
                 self._run_events_view.appendPlainText(startup["message"])
+                self._show_error_summary({
+                    "code": "STARTUP_FAILED",
+                    "message": startup["message"],
+                })
         else:
             run_status = "unknown"
             self._run_status_label.setText("完成（无结果文件）")
@@ -1471,7 +1652,7 @@ class MainWindow(QMainWindow):
             self._run_status_label.setText("已取消")
         events = self._run_manager.events(self._active_run_id)["events"]
         for event in events[self._events_seen:]:
-            self._run_events_view.appendPlainText(json.dumps(event, ensure_ascii=False))
+            self._run_events_view.appendPlainText(self._format_event(event))
         self._events_seen = len(events)
         self._apply_run_states(events)
         # 悬浮窗终态：成功 2s 后自动还原主窗口；失败/取消停留等手动还原
@@ -1512,6 +1693,52 @@ class MainWindow(QMainWindow):
         for item in iter_real_nodes(self.flow_model):
             item.setData(None, ROLE_RUN_STATE)
         self.canvas_view.viewport().update()
+
+    def _jump_to_failed_node(self) -> None:
+        """在画布中定位并选中上次运行失败的节点。"""
+        node_id = self._failed_node_id
+        if not node_id:
+            return
+        item = self.flow_model.find_by_id(node_id)
+        if item is None:
+            self.statusBar().showMessage(f"找不到节点 {node_id}", 4000)
+            return
+        index = self.flow_model.indexFromItem(item)
+        self.canvas_view.setCurrentIndex(index)
+        self.canvas_view.scrollTo(index, self.canvas_view.ScrollHint.PositionAtCenter)
+        self.statusBar().showMessage(f"已定位到失败节点 {node_id}", 4000)
+
+    def _show_error_summary(self, error: dict) -> None:
+        """填充结构化错误摘要（对齐 Web renderRunError）。"""
+        code = error.get("code", "ERROR")
+        node_id = error.get("nodeId", "")
+        message = error.get("message", "")
+        details = error.get("details") or {}
+
+        self._run_error_code.setText(f"失败：{code}")
+        color = "#cf222e"
+        self._run_error_code.setStyleSheet(
+            f"font-weight: bold; font-size: 13px; color: {color};"
+        )
+        if node_id:
+            self._run_error_node.setText(f"节点：{node_id}")
+            self._run_error_node.show()
+        else:
+            self._run_node_text = ""
+            self._run_error_node.hide()
+        self._run_error_msg.setText(message)
+
+        # 补充详情（commandId / transport / reason）
+        extra: list[str] = []
+        if details.get("commandId"):
+            extra.append(f"指令：{details['commandId']}")
+        if details.get("transport"):
+            extra.append(f"通道：{details['transport']}")
+        if details.get("reason"):
+            extra.append(f"原因：{details['reason']}")
+        self._run_error_detail.setText("\n".join(extra) if extra else "")
+        self._run_error_detail.setVisible(bool(extra))
+        self._run_error_widget.show()
 
     # ---- 编译校验（切 D） ---------------------------------------------------
     def _validate_workflow(self, *, show_dialog: bool = True) -> bool:
@@ -1697,6 +1924,14 @@ class MainWindow(QMainWindow):
             timeout_seconds=90,
         )
         session.start()  # arm 扩展腿；桌面腿（agent 子进程）构造时已起
+        # 扩展腿离线：网页区域无法捕获（UIA 兜底已证伪），状态栏提示在窗口最小化
+        # 后不可见，必须显式确认——否则用户体验是「网页里怎么点都没反应」。
+        if session.extension_offline and not self._confirm_capture_offline():
+            session.close()
+            self.statusBar().showMessage(
+                "已取消捕获：浏览器插件离线（「插件」按钮可查看安装引导）", 6000
+            )
+            return
         self._capture_session = session
         hint = "捕获中：移动鼠标框选，Ctrl+Click 捕获（桌面也可用 F9），Esc 取消"
         if session.extension_offline:
@@ -1719,6 +1954,23 @@ class MainWindow(QMainWindow):
 
         threading.Thread(target=work, daemon=True).start()
 
+    def _confirm_capture_offline(self) -> bool:
+        """扩展腿离线时的显式确认：继续（仅桌面捕获）还是取消去装插件。
+
+        抽出为独立方法：offscreen 测试不能弹真 QMessageBox，由测试替换本方法。
+        """
+        choice = QMessageBox.warning(
+            self,
+            "浏览器插件离线",
+            "未检测到浏览器插件连接：网页内捕获不可用（桌面捕获不受影响）。\n\n"
+            "若目标是网页，请先用工具栏「插件」按钮把扩展装入目标浏览器"
+            "（Chrome/Edge），或改用已装扩展的浏览器后重试。\n\n"
+            "仍要继续仅桌面捕获吗？",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        return choice == QMessageBox.StandardButton.Yes
+
     def _on_element_captured(self, result: dict) -> None:
         """捕获结束：还原主窗口 → 命名 → 入库（ElementDescriptor 契约校验）。"""
         self._capture_session = None
@@ -1731,20 +1983,44 @@ class MainWindow(QMainWindow):
         if result.get("cancelled") or not result.get("kind"):
             self.statusBar().showMessage("已取消捕获", 4000)
             return
-        metadata = result.get("metadata") or {}
-        if result.get("kind") == "browser":
-            suffix = metadata.get("tag") or "web"
-        else:
-            suffix = metadata.get("controlType") or "x"
-        name, ok = QInputDialog.getText(
-            self, "保存元素", "元素名：", text=f"el_{suffix}"
-        )
-        if not ok or not name.strip():
+        confirmed = self._confirm_element_save(result)
+        if confirmed is None:
             return
-        saved = self.save_element_descriptor(name.strip(), result)
+        name, document = confirmed
+        saved = self.save_element_descriptor(name, document)
         if saved:
             self._refresh_elements()
             self.statusBar().showMessage(f"已保存元素 {name}", 4000)
+
+    def _confirm_element_save(self, descriptor: dict) -> tuple[str, dict] | None:
+        """捕获确认对话框（改名/selector 编辑/命中数）+ 同名覆盖保护。
+
+        对齐 Web ``openElementDialog``（confirm 模式）+ 同名 confirm；返回
+        ``(名称, ElementDescriptor 文档)``，用户取消返回 None。
+        """
+        from rpa_core.gui.element_panel import ElementDialog
+
+        metadata = descriptor.get("metadata") or {}
+        if descriptor.get("kind") == "browser":
+            suffix = metadata.get("tag") or "web"
+        else:
+            suffix = metadata.get("controlType") or "x"
+        dialog = ElementDialog(descriptor, default_name=f"el_{suffix}", parent=self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return None
+        name, document = dialog.result_document()
+        store = self._element_store()
+        if store is not None and name in store.list():
+            answer = QMessageBox.question(
+                self,
+                "同名元素已存在",
+                f"元素「{name}」已存在，覆盖？",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                return None
+        return name, document
 
     def save_element_descriptor(self, name: str, descriptor: dict) -> bool:
         """元素入库（校验 ElementDescriptor 契约）；失败状态栏提示并返回 False。"""
@@ -1799,6 +2075,107 @@ class MainWindow(QMainWindow):
             self._table_dock_widget = dock
             self._table_panel = panel
         return self._table_dock_widget
+
+    def _variables_dock(self):
+        """设计期变量面板：列出 output_aliases + 变量赋值，对齐 Web collectUserVariables。"""
+        if getattr(self, "_variables_dock_widget", None) is None:
+            from PySide6.QtWidgets import (
+                QDockWidget,
+                QHBoxLayout,
+                QLabel,
+                QPushButton,
+                QTreeWidget,
+                QVBoxLayout,
+            )
+
+            body = QWidget()
+            layout = QVBoxLayout(body)
+            layout.setContentsMargins(4, 4, 4, 4)
+
+            header = QHBoxLayout()
+            header.addWidget(QLabel("设计期变量"))
+            header.addStretch(1)
+            refresh_btn = QPushButton("刷新")
+            refresh_btn.setFixedWidth(52)
+            header.addWidget(refresh_btn)
+            layout.addLayout(header)
+
+            tree = QTreeWidget()
+            tree.setHeaderHidden(True)
+            tree.setRootIsDecorated(True)
+            tree.setAlternatingRowColors(True)
+            layout.addWidget(tree, 1)
+
+            dock = QDockWidget("变量面板", self)
+            dock.setObjectName("variables-dock")
+            dock.setWidget(body)
+            self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, dock)
+            dock.hide()
+            self._variables_dock_widget = dock
+            self._variables_tree = tree
+            refresh_btn.clicked.connect(self._refresh_variables)
+
+        return self._variables_dock_widget
+
+    def _refresh_variables(self) -> None:
+        """收集并刷新变量面板内容。"""
+        tree = getattr(self, "_variables_tree", None)
+        if tree is None:
+            return
+        tree.clear()
+
+        from PySide6.QtWidgets import QTreeWidgetItem
+
+        from rpa_core.gui.flow_model import ROLE_ARGS_RAW, iter_real_nodes
+
+        # 收集 output_aliases 和变量赋值
+        aliases: dict[str, str] = {}  # name -> source_node_id
+        var_writes: dict[str, str] = {}  # name -> source_node_id
+
+        for item in iter_real_nodes(self.flow_model):
+            holder = item.data(ROLE_ARGS_RAW)
+            raw = holder.raw if holder is not None else None
+            if not raw:
+                continue
+            node_id = raw.get("id", "?")
+            # output_aliases: {"0": "varName", ...}
+            for alias in (raw.get("output_aliases") or {}).values():
+                if alias and alias not in aliases:
+                    aliases[alias] = node_id
+            # x-var-write: 通过 manifest 查找变量写入字段
+            cmd_id = raw.get("command", "")
+            try:
+                manifest = self.catalog[cmd_id]
+            except KeyError:
+                manifest = None
+            if manifest:
+                var_write = manifest.x_var_write
+                if var_write and var_write.get("field"):
+                    target = (raw.get("with") or {}).get(var_write["field"])
+                    if isinstance(target, str) and target and not target.startswith("${"):
+                        if target not in var_writes:
+                            var_writes[target] = node_id
+
+        # 输出别名组
+        if aliases:
+            group = QTreeWidgetItem(tree, ["输出别名"])
+            group.setExpanded(True)
+            for name, nid in sorted(aliases.items()):
+                child = QTreeWidgetItem(group, [f"{name}  ← {nid}"])
+                child.setData(0, Qt.ItemDataRole.UserRole, name)
+            tree.addTopLevelItem(group)
+
+        # 变量赋值组
+        if var_writes:
+            group = QTreeWidgetItem(tree, ["变量赋值"])
+            group.setExpanded(True)
+            for name, nid in sorted(var_writes.items()):
+                child = QTreeWidgetItem(group, [f"{name}  ← {nid}"])
+                child.setData(0, Qt.ItemDataRole.UserRole, name)
+            tree.addTopLevelItem(group)
+
+        if not aliases and not var_writes:
+            QTreeWidgetItem(tree, ["（暂无变量）"])
 
     def _table_store(self):
         if self._store is None:
@@ -2230,6 +2607,9 @@ class MainWindow(QMainWindow):
             args,
             expr_modes=(raw or {}).get("_exprModes"),
             variable_provider=self._collect_reference_paths,
+            manifest=manifest,
+            output_aliases=(raw or {}).get("output_aliases"),
+            raw=raw,
         )
 
         scroll = QScrollArea()
@@ -2257,9 +2637,25 @@ class MainWindow(QMainWindow):
                     holder.raw["_exprModes"] = modes
                 else:
                     holder.raw.pop("_exprModes", None)
+                aliases = form.output_aliases()
+                if aliases:
+                    holder.raw["output_aliases"] = aliases
+                else:
+                    holder.raw.pop("output_aliases", None)
+                rt = form.retry_timeout_values()
+                if rt.get("timeout_seconds") is not None:
+                    holder.raw["timeout_seconds"] = rt["timeout_seconds"]
+                else:
+                    holder.raw.pop("timeout_seconds", None)
+                if rt.get("retry_count") is not None:
+                    holder.raw["retry_count"] = rt["retry_count"]
+                else:
+                    holder.raw.pop("retry_count", None)
             item.setData(summarize_args(values), ROLE_ARGS_SUMMARY)
             self._end_edit()
             self._set_dirty(True)
+            if getattr(self, "_variables_dock_widget", None) is not None:
+                self._refresh_variables()
             self.statusBar().showMessage("参数已更新（未保存）", 4000)
 
         apply_button.clicked.connect(apply)
@@ -2272,14 +2668,24 @@ class MainWindow(QMainWindow):
 
     @staticmethod
     def _action_form_dirty(form, holder, raw) -> bool:
-        """参数表单相对模型是否有未应用的编辑（含 fx 模式变化）。"""
+        """参数表单相对模型是否有未应用的编辑（含 fx 模式、输出别名、超时/重试）。"""
         try:
             values = form.values()
         except ValueError:
             return True  # 非法输入也算待处理，交给 apply 报错
         if values != dict(holder.args):
             return True
-        return form.expr_modes() != ((raw or {}).get("_exprModes") or {})
+        if form.expr_modes() != ((raw or {}).get("_exprModes") or {}):
+            return True
+        if form.output_aliases() != ((raw or {}).get("output_aliases") or {}):
+            return True
+        rt = form.retry_timeout_values()
+        raw = raw or {}
+        if rt.get("timeout_seconds") != raw.get("timeout_seconds"):
+            return True
+        if rt.get("retry_count") != raw.get("retry_count"):
+            return True
+        return False
 
     def _mount_pending_apply(self, apply_fn, dirty_fn, index) -> None:
         """登记当前参数面板的「应用」入口，供保存/运行/切换节点时自动提交。
@@ -2398,6 +2804,8 @@ class MainWindow(QMainWindow):
                 item.setText(control_node_title(node_type, holder.raw))
             self._end_edit()
             self._set_dirty(True)
+            if getattr(self, "_variables_dock_widget", None) is not None:
+                self._refresh_variables()
             self.statusBar().showMessage("参数已更新（未保存）", 4000)
 
         apply_button.clicked.connect(apply)

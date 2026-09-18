@@ -297,9 +297,15 @@ class FlowTreeView(QTreeView):
         结构变更期间屏蔽选中模型信号：Qt 的 takeRow/insertRow 会在信号发射中途触发
         currentChanged，若此时监听方（参数面板提交/重建）回头改模型，会破坏 Qt 内部
         状态（实测出现裸空行/None 子项直至崩溃）。变更完成后再恢复并刷新一次选中态。
+
+        注意：``blockSignals(True)`` 返回的是**之前**的阻塞状态，不能用它决定是否
+        解除——否则第一次拖放后信号就被永久阻塞（之后点击收敛选中集时模型已收敛、
+        视图却收不到 selectionChanged，被取消选中的行不重绘，观感是「点击无效，
+        鼠标移到该行上才取消选中」）。这里无条件成对恢复。
         """
         selection = self.selectionModel()
-        blocked = selection is not None and selection.blockSignals(True)
+        if selection is not None:
+            selection.blockSignals(True)
         moved_ids: list[str] = []
         expanded_ids: list[str] = []
         try:
@@ -341,7 +347,7 @@ class FlowTreeView(QTreeView):
                 moved_ids = []
                 expanded_ids = []
         finally:
-            if blocked:
+            if selection is not None:
                 selection.blockSignals(False)
             self.viewport().update()
         # 移动成功后按新索引重新选中被移动节点并滚动到可见：拖放会摘除/插入行，

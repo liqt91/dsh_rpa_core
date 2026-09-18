@@ -107,10 +107,27 @@ class ArgsHolder:
         self.raw: dict[str, Any] | None = raw
 
 
+# 摘要优先展示的关键字段（按视觉重要性排序）
+_PRIORITY_KEYS = (
+    "url", "selector", "text", "content", "name", "locator",
+    "filePath", "action", "command", "seconds", "value", "items",
+)
+
+
 def summarize_args(with_args: dict[str, Any], limit: int = 2) -> str:
-    """把 action 的 with 参数压成一行等宽摘要（key=value，最多 limit 对）。"""
+    """把 action 的 with 参数压成一行等宽摘要（key=value，最多 limit 对）。
+
+    关键字段（url/selector/text 等）优先展示，对齐 Web 卡片摘要行为。
+    """
+    if not with_args:
+        return ""
+    # 按优先级重排：priority_keys 在前，其余保持声明顺序
+    priority = [k for k in _PRIORITY_KEYS if k in with_args]
+    rest = [k for k in with_args if k not in _PRIORITY_KEYS]
+    ordered = priority + rest
     pairs: list[str] = []
-    for key, value in list(with_args.items())[:limit]:
+    for key in ordered[:limit]:
+        value = with_args[key]
         text = value if isinstance(value, str) else repr_json(value)
         if len(text) > 18:
             text = text[:17] + "…"
@@ -430,6 +447,10 @@ class FlowTreeModel(QStandardItemModel):
         ]
         if not items:
             return False
+        # 按**树序**而非选择顺序移动：selectedIndexes() 按选择先后返回（先 Ctrl
+        # 选 check 再选 open → MIME 顺序 [check, open]），按 MIME 顺序逐个插入
+        # 会把画布上原有的相对顺序颠倒。排序必须在 takeRow 之前（行号随移动变化）。
+        items.sort(key=self._tree_order_key)
         # 成环守卫：任一被拖节点是落点自身或其后代都拒绝
         for item in items:
             if item is target or self._is_descendant(item, target):
@@ -461,6 +482,21 @@ class FlowTreeModel(QStandardItemModel):
             dest_row = insert_at + 1
         self.mutated.emit()
         return True
+
+    def _tree_order_key(self, item: QStandardItem) -> tuple[int, ...]:
+        """item 在全树前序中的位置键（父链行号元组），用于按树序排序。
+
+        顶层 item 的 ``parent()`` 返回 None，需显式补到 invisibleRootItem
+        （与 ``_is_descendant`` 同一处 Qt 语义坑）。
+        """
+        rows: list[int] = []
+        root = self.invisibleRootItem()
+        current = item
+        while current is not None and current is not root:
+            rows.append(current.row())
+            parent = current.parent()
+            current = parent if parent is not None else root
+        return tuple(reversed(rows))
 
     def _is_descendant(self, maybe_ancestor: QStandardItem, node: QStandardItem) -> bool:
         """node 是否为 maybe_ancestor 的后代（含自身由调用方先排除）。

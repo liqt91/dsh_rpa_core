@@ -107,7 +107,7 @@ def test_run_succeeds_and_marks_node(window):
 
     assert "succeeded" in window._run_status_label.text()
     events_text = window._run_events_view.toPlainText()
-    assert "stepStarted" in events_text and "runFinished" in events_text
+    assert "开始" in events_text and "运行结束" in events_text
     item = window.flow_model.find_by_id("s1")
     assert item.data(ROLE_RUN_STATE) == "succeeded"
 

@@ -12,9 +12,15 @@ commands = [
     [sys.executable, str(ROOT / ".harness" / "scripts" / "check_tasks.py")],
 ]
 
-# 门禁跑完整覆盖：启用真实桌面 E2E（会弹窗抢焦点，故只在门禁里开；
-# 日常 `uv run pytest` 缺省跳过，不打断开发者——见 tests/conftest.py）
-gate_env = {**os.environ, "RPA_DESKTOP_E2E": "1"}
+# 真实桌面 E2E（记事本/WinForms 演示程序/捕获悬浮框，会弹窗抢前台）**默认不进
+# 门禁**——跑门禁不该打断维护者手头操作。需要完整覆盖时显式开：
+#   uv run python .harness/scripts/check_all.py --with-desktop-e2e
+# 或先设环境变量（PowerShell: $env:RPA_DESKTOP_E2E=1）再跑门禁。
+# 日常 `uv run pytest` 缺省同样跳过（见 tests/conftest.py）。
+gate_env = dict(os.environ)
+if "--with-desktop-e2e" in sys.argv:
+    sys.argv.remove("--with-desktop-e2e")
+    gate_env["RPA_DESKTOP_E2E"] = "1"
 
 # 前端纯函数一致性校验（编辑器渲染逻辑与后端语义共用同一份源码）。
 # node 不在时跳过，避免门禁在无 node 的机器上硬失败。

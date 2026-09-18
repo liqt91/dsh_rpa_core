@@ -225,3 +225,82 @@ def test_register_bridge_hosts_per_browser_tolerance(window, monkeypatch):
     assert "edge：已注册" in text
     assert "chrome：注册失败" in text
     assert "未找到 host 入口" in text
+
+# ---- 捕获确认对话框（M23 G1 剩余：对齐 Web openElementDialog） --------------
+def test_element_dialog_browser_defaults_and_result(qapp):
+    from PySide6.QtWidgets import QDialog
+
+    from rpa_core.gui.element_panel import ElementDialog
+
+    dialog = ElementDialog(_browser_element(), default_name="el_input")
+    assert dialog.windowTitle() == "捕获确认"
+    assert dialog.name_edit.text() == "el_input"
+    assert dialog.selector_edit.text() == "#kw"
+    assert "命中 1 个" in dialog.verify_label.text()
+    assert "#1a7f37" in dialog.verify_label.styleSheet()  # 命中 1 = 绿
+
+    dialog.name_edit.setText("searchBox")
+    dialog.selector_edit.setText("#q")
+    dialog.accept()
+    assert dialog.result() == QDialog.DialogCode.Accepted
+    name, document = dialog.result_document()
+    assert name == "searchBox"
+    assert document["selector"] == {"css": "#q"}
+    assert document["verifyCount"] == 1
+    assert document["metadata"]["url"] == "https://example.com"
+
+
+def test_element_dialog_desktop_locator_json_validation(qapp):
+    from PySide6.QtWidgets import QDialog
+
+    from rpa_core.gui.element_panel import ElementDialog
+
+    descriptor = {
+        "kind": "desktop",
+        "selector": {"locator": {"controlType": "Button", "name": "确定"}},
+        "verifyCount": 3,
+        "metadata": {"controlType": "Button", "automationId": "okBtn",
+                     "windowTitle": "记事本"},
+    }
+    dialog = ElementDialog(descriptor, default_name="el_Button")
+    assert "确定" in dialog.selector_edit.text()  # locator JSON 预填
+    assert "命中 3 个" in dialog.verify_label.text()
+    assert "#cf222e" in dialog.verify_label.styleSheet()  # 命中非 1 = 红
+    assert "controlType: Button" in dialog.meta_label.text()
+    assert "window: 记事本" in dialog.meta_label.text()
+
+    # 非法 JSON：拒绝关闭并给出内联错误
+    dialog.selector_edit.setText("{not json")
+    dialog.accept()
+    assert dialog.result() != QDialog.DialogCode.Accepted
+    assert "JSON" in dialog.error_label.text()
+
+    # 非对象 JSON（数组）：同样拒绝
+    dialog.selector_edit.setText("[1, 2]")
+    dialog.accept()
+    assert dialog.result() != QDialog.DialogCode.Accepted
+
+    # 改回合法对象：通过且回写 locator
+    dialog.selector_edit.setText('{"controlType": "Edit"}')
+    dialog.accept()
+    assert dialog.result() == QDialog.DialogCode.Accepted
+    _, document = dialog.result_document()
+    assert document["selector"] == {"locator": {"controlType": "Edit"}}
+
+
+def test_element_dialog_rejects_empty_name_or_selector(qapp):
+    from PySide6.QtWidgets import QDialog
+
+    from rpa_core.gui.element_panel import ElementDialog
+
+    dialog = ElementDialog(_browser_element(), default_name="x")
+    dialog.name_edit.setText("  ")
+    dialog.accept()
+    assert dialog.result() != QDialog.DialogCode.Accepted
+    assert "元素名" in dialog.error_label.text()
+
+    dialog.name_edit.setText("ok")
+    dialog.selector_edit.setText("")
+    dialog.accept()
+    assert dialog.result() != QDialog.DialogCode.Accepted
+    assert "selector" in dialog.error_label.text()

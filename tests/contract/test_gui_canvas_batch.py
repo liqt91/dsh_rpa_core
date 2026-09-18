@@ -121,6 +121,56 @@ def test_multi_drag_preserves_relative_order_across_parents():
     assert child_ids == ["in1", "a1", "in2"]
 
 
+def test_multi_drag_ignores_selection_order_uses_tree_order():
+    """回归：多选批量移动的落点顺序按**树序**，与 Ctrl 点选先后无关。
+
+    selectedIndexes() 按选择先后返回（先选 in2 再选 a1 → MIME [in2, a1]），
+    旧实现按 MIME 顺序逐个插入，把画布上 a1 在前、in2 在后的相对顺序颠倒。
+    """
+    document = {
+        "schema_version": "1.0",
+        "id": "nested",
+        "name": "nested",
+        "root": {
+            "type": "sequence",
+            "id": "root",
+            "children": [
+                {"type": "action", "id": "a1", "command": "data.setVar", "with": {}},
+                {
+                    "type": "forEach",
+                    "id": "loop",
+                    "items": "${rows}",
+                    "children": [
+                        {"type": "action", "id": "in1", "command": "data.limit",
+                         "with": {}},
+                        {"type": "action", "id": "in2", "command": "workflow.sleep",
+                         "with": {}},
+                    ],
+                },
+            ],
+        },
+    }
+    model = build_model_from_workflow(document)
+    loop = model.find_by_id("loop")
+    # MIME 顺序与树序相反（先选 in2 再选 a1）→ 落点仍按树序 a1 在前
+    moved = model.dropMimeData(
+        _mime(["in2", "a1"]), Qt.DropAction.MoveAction, -1, 0, loop.index()
+    )
+    assert moved is True
+    assert _real_child_ids(loop) == ["in1", "a1", "in2"]
+
+
+def test_multi_drag_same_level_reversed_selection_order():
+    """同级批量移动：MIME 顺序与树序相反时，落点仍按树序（a1 在 a2 前）。"""
+    model = _flat_model()
+    target = model.invisibleRootItem()
+    moved = model.dropMimeData(
+        _mime(["a2", "a1"]), Qt.DropAction.MoveAction, 4, 0, target.index()
+    )
+    assert moved is True
+    assert _top_ids(model) == ["a3", "a4", "a1", "a2"]
+
+
 def test_multi_drag_skips_descendants_of_dragged_container():
     # 造一个容器 + 子节点：把「容器」与其「子节点」同时选中拖动
     document = {

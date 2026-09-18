@@ -240,3 +240,21 @@ def test_subtree_to_ast_roundtrip(window):
     # 深拷贝：改动剪贴板不影响模型
     ast["then"][0]["with"]["selector"] = "h2"
     assert check.data(ROLE_ARGS_RAW).raw["then"][0]["with"]["selector"] == "h1"
+
+
+def test_paste_and_delete_restore_selection_signals(window):
+    """回归：粘贴/删除期间的选中信号屏蔽必须成对恢复。
+
+    blockSignals(True) 返回的是**之前**的阻塞状态，旧实现据此决定是否解除，
+    导致操作后选中信号永久阻塞（点击收敛不重绘、参数面板不切换）。
+    """
+    model = window.flow_model
+    check = model.find_by_id("check")
+    window.canvas_view.setCurrentIndex(model.indexFromItem(check))
+
+    window._copy_selected()
+    window._paste_clipboard()
+    assert window.canvas_view.selectionModel().signalsBlocked() is False
+
+    window._delete_selected_node()
+    assert window.canvas_view.selectionModel().signalsBlocked() is False

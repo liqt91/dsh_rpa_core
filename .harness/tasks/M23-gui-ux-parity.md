@@ -23,8 +23,10 @@ M19 交互补强）与影刀基准。本任务按「用户体验 × 对标影刀
     ② 扩展腿离线时其 `result_event` 在 start 已置位 → 旧 pick 误判「扩展先回传」秒回 cancelled
     → 记录 `extension_offline` 并在 pick 跳过离线腿；③ CLI 桌面捕获从未 `start()`（扩展腿从未 arm）
     → hover 默认 hybrid 且 `is_extension_capture` 时显式 start（与 devserver 同口径）
-  - [ ] **G1 剩余**：捕获后**确认对话框对齐 Web**（改名 / selector 编辑 / 捕获时命中数展示 /
-    同名覆盖保护；当前仅 `QInputDialog` 命名）
+  - [x] **G1 剩余**：捕获后**确认对话框对齐 Web**（改名 / selector 编辑 / 捕获时命中数展示 /
+    同名覆盖保护；当前仅 `QInputDialog` 命名）——2026-09-18 落地 `ElementDialog`
+    （`gui/element_panel.py`）：名称/selector 可编辑（browser=css、desktop=locator JSON
+    校验）、metadata 只读、命中数 1 绿/其他红；`_confirm_element_save` 承担同名覆盖确认
 - [x] **G2 画布交互（2026-09-18）**：多选 + 批量移动/删除 + 右键菜单 + 画布内搜索定位（Ctrl+F）
   - 多选：`FlowTreeView` 改 `ExtendedSelection`；Ctrl/Shift 点击不再顺带折叠容器（`_toggle_on_click` 检测修饰键让路）
   - 批量移动：`FlowTreeModel.mimeData` 本就携带多个 id，`dropMimeData` 内部移动改为批处理——
@@ -43,13 +45,17 @@ M19 交互补强）与影刀基准。本任务按「用户体验 × 对标影刀
     C++ 对象已删）→ 变更后重算 + `isValid` 剔除；模型层加 `mutating` 重入护栏与死行/裸空行自愈；
     批量移动空 `takeRow` 不再插空行、invisibleRoot 不可拖、`_is_descendant` 补 invisibleRoot 祖先；
     删除/粘贴期间 `blockSignals` 屏蔽选中信号；压力脚本 2000 步跑满 1944 步零崩溃零卡死
-- [ ] **G3 属性面板追平 Web**：消费 `x-param-groups` 分组折叠（GUI `param_form` 仍平铺）+
-  输出别名（`output_aliases` / `x-outputs`）编辑 UI + 重试/超时字段（含 unsafe 禁用防呆，
-  对齐 Web `retryCountField`）
-- [ ] **G4 失败定位闭环**：运行失败点击错误 → 跳转失败节点 + 结构化错误详情
-  （借鉴 Web `startupError` 透出经验）；运行日志加耗时 / 输出值预览
-- [ ] **切片内次级项**：变量面板（设计期静态收集 `output_aliases` / inputs 列表）、菜单栏
-  （QMenuBar + 快捷键一览）、卡片摘要按关键字段（url/selector/text）优化
+- [x] **G3 属性面板追平 Web**：~~消费 `x-param-groups` 分组折叠~~（2026-09-18 slice A done）+
+  ~~输出别名（`output_aliases` / `x-outputs`）编辑 UI~~（2026-09-18 slice B done）+
+  ~~重试/超时字段（含 unsafe 禁用防呆，对齐 Web `retryCountField`）~~（2026-09-18 slice C done）
+- [x] **G4 失败定位闭环**：~~运行失败点击错误 → 跳转失败节点~~（2026-09-18 slice A done）+
+  ~~结构化错误详情（借鉴 Web `startupError` 透出经验）~~（2026-09-18 slice B done）；
+  ~~运行日志加耗时 / 输出值预览~~（2026-09-18 slice C done）
+- [ ] **切片内次级项**：~~变量面板（设计期静态收集 `output_aliases` / inputs 列表）~~
+  （2026-09-18 variable-panel done）、
+  ~~菜单栏（QMenuBar + 快捷键一览）~~
+  （2026-09-18 menu-bar done）、~~卡片摘要按关键字段（url/selector/text）优化~~
+  （2026-09-18 card-summary-opt done）
 - [x] **关联已交付（同批，2026-09-17）**：GUI 插件对话框补齐 **bridge host 注册入口**
   （`gui-extension-dialog-bridge`）——每浏览器注册状态行 + 「注册 bridge」按钮
   （`ensure_native_host` 幂等自愈、逐浏览器容错）+ 引导第 0 步 + 三行联动刷新；
@@ -78,3 +84,40 @@ M19 交互补强）与影刀基准。本任务按「用户体验 × 对标影刀
 - G2（画布交互）：PROGRESS 2026-09-18 `M23-gui-ux-parity | G2 done`——多选/批量移动/批量删除/
   右键菜单/Ctrl+F 查找；新增 `test_gui_canvas_batch` 14 例；FULL GATE PASSED
 - G3–G4：待补
+- G3 slice A（x-param-groups 分组折叠）：PROGRESS 2026-09-18 `M23-gui-ux-parity | G3 slice A done`——
+  `_CollapsibleSection` + `_build_grouped_form` 对齐 Web `paramGroupPlan`/`paramGroupSection`；
+  `app._show_action_form` 传 manifest；无 x-param-groups 命令向后兼容平铺；
+  `test_gui_param_form` +8（分组渲染/字段数/collapsed 默认折叠+有值展开/toggle/
+  无分组向后兼容/未声明字段归其他/values 收集一致）；FULL GATE PASSED
+- G3 slice B（x-outputs 输出别名编辑）：PROGRESS 2026-09-18 `M23-gui-ux-parity | G3 slice B done`——
+  `_build_output_aliases` + `_alias_fields` + `output_aliases()` 收集；`app.py` apply 写回
+  + `_action_form_dirty` 别名变更检测；`test_gui_param_form` +6；FULL GATE PASSED
+- G3 slice C（重试/超时字段）：PROGRESS 2026-09-18 `M23-gui-ux-parity | G3 slice C done`——
+  `_build_retry_timeout` + `retry_timeout_values()`；超时隐藏（命令有 timeoutMs）+ 重试
+  （retryable 渲染 / 不支持有遗留值警告+清除 / 无值不渲染）；`app.py` apply 写回
+  + `_action_form_dirty` 超时/重试变更检测；`test_gui_param_form` +9；FULL GATE PASSED
+- G4 slice A（失败节点跳转）：PROGRESS 2026-09-18 `M23-gui-ux-parity | G4 slice A done`——
+  运行面板新增「跳转到失败节点」按钮（失败有 nodeId 时显示、新运行隐藏）；
+  `_jump_to_failed_node` + `find_by_id` + `setCurrentIndex` + `scrollTo` 定位画布节点；
+  `test_gui_param_form` +4；FULL GATE PASSED
+- G4 slice B（结构化错误详情）：PROGRESS 2026-09-18 `M23-gui-ux-parity | G4 slice B done`——
+  `_run_error_widget`（code/node/message/detail 四行，对齐 Web `renderRunError`）+ 启动失败
+  也展示；`test_gui_param_form` +3；FULL GATE PASSED
+- G4 slice C（运行日志耗时/输出预览）：PROGRESS 2026-09-18 `M23-gui-ux-parity | G4 slice C done`——
+  `_format_event` 格式化事件流（▶/✓/✗/↻/▸ 图标 + 耗时 + 输出 keys / error code）；
+  `_step_start_times` + `_run_started_at` 追踪；`test_gui_param_form` +7；
+  `test_gui_run` 断言适配；FULL GATE PASSED
+- 卡片摘要优化：PROGRESS 2026-09-18 `card-summary-opt done`——`summarize_args` 新增
+  `_PRIORITY_KEYS`（url/selector/text/content/name/locator 等），关键字段优先展示；
+  `test_gui_param_form` +4；FULL GATE PASSED
+- 菜单栏 + 快捷键一览：PROGRESS 2026-09-18 `menu-bar done`——`_build_menu_bar` 四菜单
+  （文件/编辑/运行/帮助）复用工具栏 QAction；帮助→`_show_shortcuts_dialog` 弹窗
+  （11 条快捷键，QFormLayout）；`test_gui_param_form` +3；FULL GATE PASSED
+- 设计期变量面板：PROGRESS 2026-09-18 `variable-panel done`——`_variables_dock` +
+  `_refresh_variables`（iter_real_nodes 收集 output_aliases + manifest.x_var_write 变量赋值）；
+  编辑菜单→变量面板开关 + 应用参数后自动刷新；`test_gui_param_form` +3；FULL GATE PASSED
+- G1 剩余（捕获确认对话框）：PROGRESS 2026-09-18 `M23-gui-ux-parity | G1 剩余 done`——
+  `ElementDialog`（改名/selector 编辑/命中数/metadata 只读）+ `_confirm_element_save`
+  同名覆盖确认；`test_gui_panels` +3（browser 默认值与回写、desktop locator JSON 校验、
+  空名校验）、`test_gui_capture` +2（取消不落库、同名覆盖确认）；full gate 557 passed
+  （uia 桌面 E2E 门禁内抖一次、单独重跑过——已知环境敏感老毛病）

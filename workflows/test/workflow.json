@@ -23,10 +23,10 @@
         "id": "navigate",
         "command": "browser.navigate",
         "with": {
+          "browserType": "chrome",
           "action": "goto",
-          "onTimeout": "error",
           "url": "${url}",
-          "browserType": "msedge"
+          "onTimeout": "error"
         },
         "_exprModes": {
           "url": "fx"

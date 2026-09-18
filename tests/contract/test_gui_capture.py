@@ -130,11 +130,11 @@ def test_capture_uses_hybrid_session_and_saves_browser_element(
     window, fake_capture, monkeypatch
 ):
     window._save_named_flow("cap1")
-    from PySide6.QtWidgets import QInputDialog
-
+    # 捕获确认对话框由 app._confirm_element_save 承担（ElementDialog 另行单测）
     monkeypatch.setattr(
-        QInputDialog, "getText",
-        staticmethod(lambda *a, **k: ("searchBox", True)),
+        type(window),
+        "_confirm_element_save",
+        lambda self, result: ("searchBox", result),
     )
 
     window._capture_element()
@@ -152,14 +152,102 @@ def test_capture_uses_hybrid_session_and_saves_browser_element(
     assert fake.closed
 
 
-def test_capture_extension_offline_hint(window, fake_capture):
+def test_capture_confirm_dialog_cancel_saves_nothing(
+    window, fake_capture, monkeypatch
+):
+    """确认对话框取消：不入库、不置脏元素列表。"""
+    window._save_named_flow("cap1c")
+    monkeypatch.setattr(
+        type(window), "_confirm_element_save", lambda self, result: None
+    )
+    window._capture_element()
+    fake = fake_capture.instances[-1]
+    _release_and_finish(fake, window)
+    assert window._element_store().list() == []
+
+
+def test_capture_overwrite_same_name_needs_confirm(window, monkeypatch):
+    """同名覆盖保护：确认框选「否」则不落库（对齐 Web 的 confirm 语义）。"""
+    from PySide6.QtWidgets import QMessageBox
+
+    from rpa_core.gui import element_panel
+
+    window._save_named_flow("cap1d")
+    original = {
+        "kind": "browser",
+        "selector": {"css": "#old"},
+        "verifyCount": 1,
+        "metadata": {"tag": "input"},
+    }
+    assert window.save_element_descriptor("dup", original)
+
+    class FakeDialog:
+        def __init__(self, descriptor, *, default_name, parent=None):
+            pass
+
+        def exec(self):
+            from PySide6.QtWidgets import QDialog
+
+            return QDialog.DialogCode.Accepted
+
+        def result_document(self):
+            return "dup", {
+                "kind": "browser",
+                "selector": {"css": "#new"},
+                "verifyCount": 1,
+                "metadata": {"tag": "input"},
+            }
+
+    monkeypatch.setattr(element_panel, "ElementDialog", FakeDialog)
+
+    # 选择「不覆盖」→ 返回 None，原元素不变
+    monkeypatch.setattr(
+        QMessageBox,
+        "question",
+        staticmethod(lambda *a, **k: QMessageBox.StandardButton.No),
+    )
+    assert window._confirm_element_save(original) is None
+    assert window._element_store().read("dup")["selector"]["css"] == "#old"
+
+    # 选择「覆盖」→ 返回新文档
+    monkeypatch.setattr(
+        QMessageBox,
+        "question",
+        staticmethod(lambda *a, **k: QMessageBox.StandardButton.Yes),
+    )
+    confirmed = window._confirm_element_save(original)
+    assert confirmed is not None
+    assert confirmed[0] == "dup" and confirmed[1]["selector"]["css"] == "#new"
+
+
+def test_capture_extension_offline_hint(window, fake_capture, monkeypatch):
     window._save_named_flow("cap2")
     fake_capture.offline = True  # 插件离线：状态栏显式提示网页区域不可捕获
+    # 离线确认框：选择「继续（仅桌面捕获）」——offscreen 不能弹真 QMessageBox
+    monkeypatch.setattr(
+        type(window), "_confirm_capture_offline", lambda self: True
+    )
     window._capture_element()
     assert "插件离线" in window.statusBar().currentMessage()
     fake = fake_capture.instances[-1]
     fake.result = None  # 取消路径：不触发命名对话框
     _release_and_finish(fake, window)
+
+
+def test_capture_extension_offline_cancel(window, fake_capture, monkeypatch):
+    """扩展离线 + 用户选择「取消」：会话立即关闭（回收桌面 agent），不最小化、
+    不进入捕获等待——否则用户会在网页里白点 90 秒直到超时。"""
+    window._save_named_flow("cap2b")
+    fake_capture.offline = True
+    monkeypatch.setattr(
+        type(window), "_confirm_capture_offline", lambda self: False
+    )
+    window._capture_element()
+    fake = fake_capture.instances[-1]
+    assert fake.closed, "取消后必须关闭会话（回收桌面 agent 子进程）"
+    assert window._capture_session is None
+    assert not window.isMinimized()
+    assert "已取消" in window.statusBar().currentMessage()
 
 
 def test_capture_reentrant_guard(window, fake_capture):
