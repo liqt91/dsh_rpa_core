@@ -62,8 +62,14 @@ class FakeWinreg:
 
 @pytest.fixture(autouse=True)
 def _isolate_profile(monkeypatch):
-    """默认不触碰真实浏览器 profile（发现路径显式关闭）。"""
+    """默认不触碰真实浏览器 profile（发现路径显式关闭）。
+
+    同时关掉「打包 ID 合并」：默认 build_dir 是本机真实的 `~/.rpa-core/extension-build`，
+    有 pem 时会给 manifest 多加一个 origin，导致用例随开发机状态漂移；需要该行为的
+    用例自行 monkeypatch `packed_extension_id` 或传 build_dir。
+    """
     monkeypatch.setattr(ext, "browser_user_data_dirs", lambda browser: [])
+    monkeypatch.setattr(ext, "packed_extension_id", lambda build_dir=None: None)
 
 
 @pytest.fixture()
@@ -228,6 +234,51 @@ def test_resolve_falls_back_to_path_derivation(monkeypatch, tmp_path):
     assert ext.resolve_native_host_extension_id("edge", tmp_path) == (
         ext.extension_id_from_path(tmp_path)
     )
+
+
+# -- allowed_origins 多 ID 合并（unpacked 路径派生 + 打包/商店 pem 派生）--------
+
+
+def test_native_host_origins_merges_packed_and_unpacked(monkeypatch, tmp_path):
+    monkeypatch.setattr(ext, "packed_extension_id", lambda build_dir=None: "z" * 32)
+    origins = ext.native_host_origins("edge", tmp_path)
+    assert origins == [
+        f"chrome-extension://{ext.extension_id_from_path(tmp_path)}/",
+        f"chrome-extension://{'z' * 32}/",
+    ]
+
+
+def test_native_host_origins_dedupes_identical_ids(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        ext,
+        "packed_extension_id",
+        lambda build_dir=None: ext.extension_id_from_path(tmp_path),
+    )
+    assert ext.native_host_origins("edge", tmp_path) == [
+        f"chrome-extension://{ext.extension_id_from_path(tmp_path)}/"
+    ]
+
+
+def test_native_host_origins_can_exclude_packed(monkeypatch, tmp_path):
+    monkeypatch.setattr(ext, "packed_extension_id", lambda build_dir=None: "z" * 32)
+    assert ext.native_host_origins("edge", tmp_path, include_packed=False) == [
+        f"chrome-extension://{ext.extension_id_from_path(tmp_path)}/"
+    ]
+
+
+def test_register_native_host_writes_multiple_origins(
+    fake_paths, fake_registry, monkeypatch, tmp_path
+):
+    """CRX/商店安装方式下 ID 不同，host manifest 必须同时放行两个 origin。"""
+    monkeypatch.setattr(ext, "packed_extension_id", lambda build_dir=None: "y" * 32)
+    source = tmp_path / "extension"
+    source.mkdir()
+    ext.register_native_host("edge", source)
+    manifest = _manifest("edge", fake_paths["tmp"])
+    assert manifest["allowed_origins"] == [
+        f"chrome-extension://{ext.extension_id_from_path(source)}/",
+        f"chrome-extension://{'y' * 32}/",
+    ]
 
 
 def test_discover_unpacked_extension_id_from_profile(monkeypatch, tmp_path):

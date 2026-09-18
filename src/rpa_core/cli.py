@@ -236,7 +236,6 @@ def _cmd_install_extension(args) -> int:
         clear_uninstall_block,
         default_build_dir,
         detect_browsers,
-        ensure_native_host,
         extension_root,
         extension_status,
         install_elevated,
@@ -339,15 +338,7 @@ def _cmd_install_extension(args) -> int:
             }
             # Native Messaging host 注册（ADR 0015）：扩展按需拉起 bridge host 的
             # 前置条件；与 Load unpacked 是配套两步，这里一并注册（幂等）。
-            native_hosts: dict[str, dict] = {}
-            for browser in browsers:
-                try:
-                    native_hosts[browser] = ensure_native_host(
-                        browser, source_dir
-                    )
-                except ExtensionInstallError as exc:
-                    native_hosts[browser] = {"error": exc.code, "message": str(exc)}
-            guide["nativeHost"] = native_hosts
+            guide["nativeHost"] = _register_native_hosts(browsers, source_dir, build_dir)
             print(json.dumps(guide, ensure_ascii=False, indent=2))
             return 0
         packed = pack_extension(extension_root(), build_dir)
@@ -393,11 +384,31 @@ def _cmd_install_extension(args) -> int:
                         "未上架本地 CRX 启用后约 30s 会被商店校验判损坏"
                         "（docs/extension-install.md §6.5 修订）",
             }
+        # 三条安装路线都要注册 native host（ADR 0015）：CRX/商店路线用 pem 派生 ID，
+        # Load unpacked 用路径派生 ID，能力层已合并放行（否则换路线即 connectNative forbidden）
+        payload["nativeHost"] = _register_native_hosts(browsers, source_dir, build_dir)
         print(json.dumps(payload, ensure_ascii=False, indent=2))
         return 0
     except ExtensionInstallError as exc:
         print(json.dumps({"error": exc.code, "message": str(exc)}, ensure_ascii=False))
         return 1
+
+
+def _register_native_hosts(browsers, source_dir, build_dir=None) -> dict:
+    """逐浏览器注册 native messaging host（幂等自愈；单浏览器失败不影响其余）。
+
+    `allowed_origins` 由能力层合并「unpacked 路径派生 ID + 打包/商店 pem 派生 ID」，
+    因此 Load unpacked 与 CRX/商店两种安装方式都能连上同一个 host。
+    """
+    from rpa_core.extension_installer import ExtensionInstallError, ensure_native_host
+
+    result: dict[str, dict] = {}
+    for browser in browsers:
+        try:
+            result[browser] = ensure_native_host(browser, source_dir, build_dir=build_dir)
+        except ExtensionInstallError as exc:
+            result[browser] = {"error": exc.code, "message": str(exc)}
+    return result
 
 
 def _install_extension_elevated(args, update_url: str) -> int:

@@ -318,7 +318,7 @@ async function executeCommand(cmd) {
       };
     }
     case "tabs.create": {
-      const tab = await chrome.tabs.create({ url: args.url, active: args.active !== false });
+      const tab = await createTab(args);
       const done = await waitComplete(tab.id, args.timeoutMs || 30000);
       return { tabId: tab.id, url: done.url || args.url, title: done.title || "", completed: done.completed, timedOut: done.timedOut };
     }
@@ -400,6 +400,25 @@ async function executeCommand(cmd) {
     }
     default:
       throw new Error(`unsupported op: ${cmd.op}`);
+  }
+}
+
+// 建标签页：浏览器处于「后台驻留但无窗口」时（Edge/Chrome 的 --no-startup-window，
+// 用户把窗口全关了但进程还在、扩展 SW 仍在线），chrome.tabs.create 会抛 Chromium 的
+// "No current window"。此时退化为新建窗口，保证「打开网页」在无窗口状态下也能用。
+async function createTab(args) {
+  const url = args.url;
+  const active = args.active !== false;
+  try {
+    return await chrome.tabs.create({ url, active });
+  } catch (err) {
+    const message = String((err && err.message) || err);
+    if (!/No current window/i.test(message)) throw err;
+    const win = await chrome.windows.create({ url, focused: active });
+    const tabs = (win && win.tabs) || (await chrome.tabs.query({ windowId: win.id }));
+    const tab = tabs && tabs[0];
+    if (!tab) throw new Error("no tab after creating window");
+    return tab;
   }
 }
 

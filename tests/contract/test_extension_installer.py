@@ -331,8 +331,17 @@ def test_cli_registry_flag_writes_external_registry(_fake_registry, monkeypatch,
     for root in BROWSER_EXTERNAL_ROOTS.values():
         entry = _fake_registry.stores[f"{root}\\{EXPECTED_ID}"]
         assert entry["path"][0].endswith("extension.crx")
-        assert entry["version"] == ("0.3.0", 1)
+        assert entry["version"] == ("0.3.1", 1)
     assert all(FORCELIST_KEY not in path for path in _fake_registry.stores)
+    # 三条安装路线都要注册 native host（ADR 0015）：CRX 用 pem 派生 ID、Load unpacked 用
+    # 路径派生 ID，二者不同 → manifest 必须同时放行，否则换路线即 connectNative forbidden
+    assert set(payload["nativeHost"]) == {"chrome", "edge"}
+    manifest = json.loads(
+        (tmp_path / "edge.nativehost.json").read_text(encoding="utf-8")
+    )
+    origins = manifest["allowed_origins"]
+    assert f"chrome-extension://{EXPECTED_ID}/" in origins
+    assert len(origins) >= 2
 
 
 def test_cli_policy_flag_uses_forcelist_route(_fake_registry, monkeypatch, tmp_path):
@@ -500,7 +509,7 @@ def test_update_manifest_served_with_crx_codebase(packed_server):
     text = body.decode("utf-8")
     assert f'appid="{EXPECTED_ID}"' in text
     assert f'codebase="{base}/api/extension/crx"' in text
-    assert 'version="0.3.0"' in text
+    assert 'version="0.3.1"' in text
 
 
 def test_crx_served_with_chrome_extension_content_type(packed_server):

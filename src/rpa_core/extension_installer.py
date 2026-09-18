@@ -746,14 +746,57 @@ def resolve_native_host_extension_id(
     return extension_id_from_path(extension_dir)
 
 
+def packed_extension_id(build_dir: Path | None = None) -> str | None:
+    """打包产物的扩展 ID（pem 派生，CRX/商店安装用的那个）；无产物返回 None。"""
+    packed = load_packed_extension(build_dir if build_dir is not None else default_build_dir())
+    return packed.extension_id if packed is not None else None
+
+
+def native_host_origins(
+    browser: str,
+    extension_dir: Path,
+    extension_id: str | None = None,
+    build_dir: Path | None = None,
+    include_packed: bool = True,
+) -> list[str]:
+    """host manifest 的 ``allowed_origins``：覆盖扩展可能出现的**多个 ID**。
+
+    同一个扩展在不同安装方式下 ID 不同，host manifest 必须同时放行，否则换一种
+    安装方式就 ``connectNative`` forbidden：
+
+    - **unpacked（Load unpacked）**：ID 由源码目录绝对路径派生（随路径/机器变化）；
+    - **CRX / 商店**：ID 由签名私钥（pem）派生，更新版本与上架都不变。
+
+    主 ID = 显式 > Secure Preferences 发现 > 路径推导；再追加打包/商店 ID（有产物才加）。
+    """
+    ids: list[str] = []
+    primary = resolve_native_host_extension_id(browser, extension_dir, extension_id)
+    if primary:
+        ids.append(primary)
+    if include_packed:
+        packed = packed_extension_id(build_dir)
+        if packed and packed not in ids:
+            ids.append(packed)
+    return [f"chrome-extension://{item}/" for item in ids]
+
+
 def register_native_host(
     browser: str,
     extension_dir: Path | None = None,
     extension_id: str | None = None,
+    build_dir: Path | None = None,
+    include_packed: bool = True,
 ) -> dict:
-    """写 host manifest + 注册（Windows HKCU / POSIX 目录）；幂等，可反复调用。"""
+    """写 host manifest + 注册（Windows HKCU / POSIX 目录）；幂等，可反复调用。
+
+    ``allowed_origins`` 为多 ID 合并（见 ``native_host_origins``）：Load unpacked 的
+    路径派生 ID 与打包/商店的 pem 派生 ID 同时放行。
+    """
     source = Path(extension_dir) if extension_dir is not None else extension_root()
-    resolved_id = resolve_native_host_extension_id(browser, source, extension_id)
+    origins = native_host_origins(
+        browser, source, extension_id, build_dir, include_packed
+    )
+    resolved_id = origins[0].removeprefix("chrome-extension://").rstrip("/")
     executable = native_host_executable()
     if executable is None:
         raise ExtensionInstallError(
@@ -765,7 +808,7 @@ def register_native_host(
         "description": "rpa_core extension bridge host",
         "path": str(executable),
         "type": "stdio",
-        "allowed_origins": [f"chrome-extension://{resolved_id}/"],
+        "allowed_origins": origins,
     }
     manifest_path = native_host_manifest_path(browser)
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
@@ -853,11 +896,10 @@ def native_host_status(browser: str) -> dict:
         except (OSError, ValueError):
             manifest = None
     executable = native_host_executable()
-    origin = ""
+    origins: list[str] = []
     if manifest:
-        origins = manifest.get("allowed_origins") or []
-        if origins:
-            origin = str(origins[0])
+        origins = [str(item) for item in (manifest.get("allowed_origins") or [])]
+    origin = origins[0] if origins else ""
     extension_id = origin.removeprefix("chrome-extension://").rstrip("/") or None
     return {
         "browser": browser,
@@ -865,6 +907,7 @@ def native_host_status(browser: str) -> dict:
         "registry": registry_value,
         "manifest": str(manifest_path),
         "hostExecutable": str(executable) if executable else None,
+        "allowedOrigins": origins,
         "hostExecutableExists": executable is not None,
         "extensionId": extension_id,
     }
@@ -874,13 +917,17 @@ def ensure_native_host(
     browser: str,
     extension_dir: Path | None = None,
     extension_id: str | None = None,
+    build_dir: Path | None = None,
+    include_packed: bool = True,
 ) -> dict:
-    """幂等自愈：重算 ID 与 host 路径并重写注册（venv/源码目录变动后修复）。
+    """幂等自愈：重算 ID 与 host 路径并重写注册（venv/源码目录/pem 变动后修复）。
 
-    调用点：`install-extension` 引导、GUI 启动、插件对话框刷新——保证「扩展已加载
-    但 host 注册漂移」能自愈。
+    调用点：`install-extension` 各安装路线、GUI 启动、插件对话框刷新——保证
+    「扩展已加载但 host 注册漂移」能自愈。
     """
-    return register_native_host(browser, extension_dir, extension_id)
+    return register_native_host(
+        browser, extension_dir, extension_id, build_dir, include_packed
+    )
 
 
 def open_path_in_explorer(path: Path) -> bool:
