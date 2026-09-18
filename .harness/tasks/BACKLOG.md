@@ -13,8 +13,10 @@
     **剩余**：捕获后确认对话框对齐 Web（改名/selector 编辑/命中数/同名覆盖保护，当前仅
     QInputDialog 命名）
   - 关联已交付（2026-09-17）：GUI 插件对话框 bridge host 注册入口（`gui-extension-dialog-bridge`）
-  - 切 G2 画布交互：多选 + 批量移动/删除（当前单选，Web M11 已有）+ 右键菜单
-    （复制/粘贴/删除等，当前无 contextMenu）+ 画布内搜索定位（Ctrl+F）
+  - 切 G2 画布交互（`done`，2026-09-18）：多选（ExtendedSelection）+ 批量移动（多 id 拖放，过滤
+    被拖祖先的后代、成环守卫、保持相对顺序）+ 批量删除（跳过已选中祖先的后代，状态栏报数量）+
+    右键菜单（复制/粘贴/删除/添加否则，可用性 `_canvas_menu_state`）+ Ctrl+F 画布内查找
+    （标题/节点 id/命令 id/参数摘要，Enter 循环定位）；新增 `test_gui_canvas_batch` 14 例；FULL GATE PASSED
   - 切 G3 属性面板追平 Web：消费 `x-param-groups` 分组折叠（GUI param_form 仍平铺）+
     输出别名（`output_aliases`/`x-outputs`）编辑 UI + 重试/超时字段（含 unsafe 禁用防呆，
     对齐 Web `retryCountField`）

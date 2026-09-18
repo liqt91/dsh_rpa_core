@@ -381,6 +381,10 @@ class MainWindow(QMainWindow):
         self.canvas_layout.setContentsMargins(0, 0, 0, 0)
         self.canvas_view = None
         self.flow_model = None
+        # 画布内查找（Ctrl+F）：匹配项与当前位置（M23 G2）
+        self._canvas_search_matches: list = []
+        self._canvas_search_pos = -1
+        self._build_canvas_search_bar()
         self.set_workflow(workflow or SAMPLE_WORKFLOW)
 
         splitter.addWidget(left)
@@ -597,6 +601,191 @@ class MainWindow(QMainWindow):
         ]
         app = QApplication.instance()
         app.focusChanged.connect(self._on_focus_changed)
+
+        # 画布内查找（M23 G2）：Ctrl+F 唤起，Enter 下一个匹配，Esc 关闭
+        self.find_action = QAction("查找", self)
+        self.find_action.setShortcut("Ctrl+F")
+        self.find_action.setShortcutContext(Qt.ShortcutContext.WindowShortcut)
+        self.find_action.setToolTip("在画布中查找指令（Ctrl+F）")
+        self.find_action.triggered.connect(self._show_canvas_search)
+        toolbar.addAction(self.find_action)
+
+    # ---- 画布内查找（M23 G2） ---------------------------------------------
+
+    def _build_canvas_search_bar(self) -> None:
+        """画布顶部查找条：默认隐藏，Ctrl+F 唤起；Enter 循环定位，Esc 关闭。"""
+        bar = QWidget()
+        layout = QHBoxLayout(bar)
+        layout.setContentsMargins(8, 4, 8, 0)
+        self.canvas_search = QLineEdit()
+        self.canvas_search.setPlaceholderText("查找指令（命令 id / 名称 / 参数 / 节点 id）…")
+        self.canvas_search.setClearButtonEnabled(True)
+        self.canvas_search.textChanged.connect(self._on_canvas_search_changed)
+        self.canvas_search.returnPressed.connect(self._find_next_in_canvas)
+        self.canvas_search.installEventFilter(self)
+        layout.addWidget(self.canvas_search)
+        bar.hide()
+        self.canvas_search_bar = bar
+        self.canvas_layout.addWidget(bar)
+
+    def eventFilter(self, obj, event):  # noqa: N802 (Qt naming)
+        """查找条 Esc：清空并隐藏，焦点还给画布。"""
+        from PySide6.QtCore import QEvent
+
+        if obj is getattr(self, "canvas_search", None) and (
+            event.type() == QEvent.Type.KeyPress
+        ):
+            if event.key() == Qt.Key.Key_Escape:
+                self.canvas_search.clear()
+                self.canvas_search_bar.hide()
+                if self.canvas_view is not None:
+                    self.canvas_view.setFocus()
+                return True
+        return super().eventFilter(obj, event)
+
+    def _show_canvas_search(self) -> None:
+        """Ctrl+F：显示查找条并聚焦（已有内容则全选，便于替换）。"""
+        if self.canvas_view is None:
+            return
+        self.canvas_search_bar.show()
+        self.canvas_search.setFocus()
+        self.canvas_search.selectAll()
+        if self.canvas_search.text():
+            self._on_canvas_search_changed(self.canvas_search.text())
+
+    @staticmethod
+    def _canvas_item_search_text(item) -> str:
+        """节点可检索文本：卡片标题 + 节点 id/类型 + 命令 id + 参数摘要。"""
+        from rpa_core.gui.flow_model import (
+            ROLE_ARGS_SUMMARY,
+            ROLE_COMMAND_ID,
+            ROLE_NODE_ID,
+            ROLE_NODE_TYPE,
+        )
+
+        parts = [
+            str(item.text() or ""),
+            str(item.data(ROLE_NODE_ID) or ""),
+            str(item.data(ROLE_NODE_TYPE) or ""),
+            str(item.data(ROLE_COMMAND_ID) or ""),
+            str(item.data(ROLE_ARGS_SUMMARY) or ""),
+        ]
+        return " ".join(parts).lower()
+
+    def _on_canvas_search_changed(self, text: str) -> None:
+        """查询变化：重算匹配集并跳到第一个。"""
+        query = (text or "").strip().lower()
+        self._canvas_search_matches = []
+        self._canvas_search_pos = -1
+        if query and self.flow_model is not None:
+            for item in self._iter_canvas_items():
+                if query in self._canvas_item_search_text(item):
+                    self._canvas_search_matches.append(item)
+        if self._canvas_search_matches:
+            self._find_next_in_canvas()
+        elif query:
+            self.statusBar().showMessage("画布中未找到匹配指令", 3000)
+
+    def _iter_canvas_items(self) -> list:
+        """全树前序遍历的真实节点（跳过结束行等纯结构行）。"""
+        from rpa_core.gui.flow_model import ROLE_NODE_ID
+
+        result: list = []
+        if self.flow_model is None:
+            return result
+
+        def walk(item) -> None:
+            if item.data(ROLE_NODE_ID):
+                result.append(item)
+            for row in range(item.rowCount()):
+                walk(item.child(row))
+
+        walk(self.flow_model.invisibleRootItem())
+        return result
+
+    def _find_next_in_canvas(self) -> None:
+        """跳到下一个匹配：选中 + 展开祖先 + 滚动居中。"""
+        if not self._canvas_search_matches:
+            return
+        self._canvas_search_pos = (self._canvas_search_pos + 1) % len(
+            self._canvas_search_matches
+        )
+        item = self._canvas_search_matches[self._canvas_search_pos]
+        index = item.index()
+        view = self.canvas_view
+        parent = index.parent()
+        while parent.isValid():
+            view.expand(parent)
+            parent = parent.parent()
+        view.setCurrentIndex(index)
+        view.scrollTo(index, view.ScrollHint.PositionAtCenter)
+        total = len(self._canvas_search_matches)
+        self.statusBar().showMessage(
+            f"匹配 {self._canvas_search_pos + 1}/{total}（Enter 下一个，Esc 关闭）", 4000
+        )
+
+    # ---- 右键菜单（M23 G2） -----------------------------------------------
+
+    def _wire_canvas_context_menu(self) -> None:
+        """画布右键菜单：复制/粘贴/删除/添加「否则」（按上下文启用）。"""
+        view = self.canvas_view
+        view.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        view.customContextMenuRequested.connect(self._canvas_context_menu)
+
+    def _canvas_menu_state(self, index) -> dict:
+        """右键菜单各项可用性（抽出以便测试，不弹菜单）。"""
+        from rpa_core.gui.flow_model import (
+            _ELSE_BRANCH_TYPE,
+            ROLE_IS_VIRTUAL,
+            ROLE_NODE_TYPE,
+        )
+
+        item = self.flow_model.itemFromIndex(index) if index.isValid() else None
+        deletable = bool(
+            item is not None
+            and (
+                not item.data(ROLE_IS_VIRTUAL)
+                or item.data(ROLE_NODE_TYPE) == _ELSE_BRANCH_TYPE
+            )
+        )
+        return {
+            "copy": bool(item is not None and not item.data(ROLE_IS_VIRTUAL)),
+            "paste": bool(self._clipboard),
+            "delete": deletable,
+            "add_else": self._nearest_if(item) is not None if item is not None else False,
+        }
+
+    def _canvas_context_menu(self, pos) -> None:
+        from PySide6.QtWidgets import QMenu
+
+        view = self.canvas_view
+        index = view.indexAt(pos)
+        if index.isValid():
+            # 右键落在未选中项上 → 先选中它；落在选中集内 → 保留多选（便于批量操作）
+            if index not in view.selectionModel().selectedIndexes():
+                view.setCurrentIndex(index)
+        state = self._canvas_menu_state(index)
+        menu = QMenu(self)
+        copy = menu.addAction("复制")
+        copy.setEnabled(state["copy"])
+        paste = menu.addAction("粘贴")
+        paste.setEnabled(state["paste"])
+        remove = menu.addAction("删除")
+        remove.setEnabled(state["delete"])
+        menu.addSeparator()
+        add_else = menu.addAction("添加「否则」")
+        add_else.setEnabled(state["add_else"])
+        chosen = menu.exec(view.viewport().mapToGlobal(pos))
+        if chosen is None:
+            return
+        if chosen is copy:
+            self._copy_selected()
+        elif chosen is paste:
+            self._paste_clipboard()
+        elif chosen is remove:
+            self._delete_selected_node()
+        elif chosen is add_else:
+            self._add_else_branch()
 
     def _prompt_discard_changes(self) -> bool:
         """有未保存修改时弹确认。返回 True 表示用户接受丢弃（可以继续操作）。"""
@@ -857,6 +1046,7 @@ class MainWindow(QMainWindow):
         self.canvas_view.selectionModel().currentChanged.connect(
             self._on_canvas_selection
         )
+        self._wire_canvas_context_menu()
         if reset_history:
             self._undo_stack.clear()
             self._redo_stack.clear()
@@ -959,28 +1149,79 @@ class MainWindow(QMainWindow):
             current = current.parent()
         return None
 
+    def _selected_canvas_items(self) -> list:
+        """当前画布选中行对应的 item（按树序、去重）。"""
+        view = self.canvas_view
+        if view is None:
+            return []
+        items: list = []
+        seen: set[int] = set()
+        for index in view.selectionModel().selectedIndexes():
+            if index.column() != 0:
+                continue
+            item = self.flow_model.itemFromIndex(index)
+            if item is None or id(item) in seen:
+                continue
+            seen.add(id(item))
+            items.append(item)
+        return items
+
+    @staticmethod
+    def _is_item_ancestor(ancestor, item) -> bool:
+        """ancestor 是否为 item 的祖先（不含自身）。"""
+        current = item.parent()
+        while current is not None:
+            if current is ancestor:
+                return True
+            current = current.parent()
+        return False
+
     def _delete_selected_node(self) -> None:
-        """删除画布当前选中节点；根节点与虚拟分组受保护。
+        """删除画布选中节点（支持多选批量）；根节点与虚拟分组受保护。
 
         删「否则」行等价于取消 else 分支（其下指令顺序不变，自然并入 then 段）。
+        多选时：被删项的后代若也在选中集内，只删祖先（整棵子树随父行移除），
+        避免对已摘下的 item 重复操作。
         """
-        from rpa_core.gui.flow_model import _ELSE_BRANCH_TYPE, ROLE_NODE_ID, ROLE_NODE_TYPE
-
-        current = self.canvas_view.currentIndex()
-        if not current.isValid():
-            return
-        item = self.flow_model.itemFromIndex(current)
-        # 先取属性：remove_item 会把 item 从树上摘掉
-        node_type = item.data(ROLE_NODE_TYPE)
-        node_id = item.data(ROLE_NODE_ID)
-        if not self.flow_model.remove_item(item):
-            return
-        what = (
-            "否则分支（其下指令已并入如果分支）"
-            if node_type == _ELSE_BRANCH_TYPE
-            else f"节点 {node_id}"
+        from rpa_core.gui.flow_model import (
+            _ELSE_BRANCH_TYPE,
+            ROLE_NODE_ID,
+            ROLE_NODE_TYPE,
         )
-        self.statusBar().showMessage(f"已删除{what}（未保存）", 4000)
+
+        items = self._selected_canvas_items()
+        if not items:
+            return
+        roots = [
+            item
+            for item in items
+            if not any(
+                other is not item and self._is_item_ancestor(other, item)
+                for other in items
+            )
+        ]
+        removed_ids: list[str] = []
+        else_count = 0
+        for item in roots:
+            node_type = item.data(ROLE_NODE_TYPE)
+            node_id = item.data(ROLE_NODE_ID)
+            if not self.flow_model.remove_item(item):
+                continue
+            if node_type == _ELSE_BRANCH_TYPE:
+                else_count += 1
+            elif node_id:
+                removed_ids.append(str(node_id))
+        if not removed_ids and not else_count:
+            return
+        if len(roots) == 1 and else_count:
+            message = "已删除否则分支（其下指令已并入如果分支）"
+        elif len(roots) == 1:
+            message = f"已删除节点 {removed_ids[0]}"
+        else:
+            message = f"已删除 {len(removed_ids)} 个节点"
+            if else_count:
+                message += f" 与 {else_count} 个否则分支"
+        self.statusBar().showMessage(f"{message}（未保存）", 4000)
         self._show_param_placeholder("从画布选择指令节点以编辑参数")
 
     def _on_structure_changed(self, *args) -> None:

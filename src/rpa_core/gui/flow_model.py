@@ -200,10 +200,16 @@ class FlowTreeModel(QStandardItemModel):
         return data
 
     @staticmethod
-    def _dragged_id(data) -> str:
-        """从拖拽 MIME 里取出被拖节点的 id（目前只拖单个节点）。"""
+    def _dragged_ids(data) -> list[str]:
+        """从拖拽 MIME 取出全部被拖节点 id（多选拖拽时可能多个）。"""
         raw = bytes(data.data(_MIME_TYPE)).decode("utf-8")
-        return raw.split(";", 1)[0]
+        return [item for item in raw.split(";") if item]
+
+    @staticmethod
+    def _dragged_id(data) -> str:
+        """被拖节点里的首个 id（else-branch 守卫等单值判定用）。"""
+        ids = FlowTreeModel._dragged_ids(data)
+        return ids[0] if ids else ""
 
     def canDropMimeData(self, data, action, row, column, parent) -> bool:
         """放置可行性判定（同时接受画布内部 node + 指令树 command 两种 MIME）。
@@ -221,9 +227,8 @@ class FlowTreeModel(QStandardItemModel):
         # 以下是画布内部 node 拖放（else-branch 守卫等）
         # 先对被拖物做 else-branch 守卫（无论 parent 是否有效都适用）：
         # 否则行只能留在它所属的 if 内，不能拖到顶层或其他容器。
-        dragged = self._dragged_id(data)
-        if _is_else_branch_id(dragged):
-            source = self.find_by_id(dragged)
+        dragged_ids = self._dragged_ids(data)
+        if any(_is_else_branch_id(item) for item in dragged_ids):
             # 拖到顶层（invalid parent）= 要把否则拉出 if → 拒绝
             if not parent.isValid():
                 return False
@@ -232,13 +237,13 @@ class FlowTreeModel(QStandardItemModel):
             if not parent.isValid():
                 return False
             target = self.itemFromIndex(parent)
-            if target is None:
+            if target is None or target.data(ROLE_NODE_TYPE) != "if":
                 return False
-            return (
-                target.data(ROLE_NODE_TYPE) == "if"
-                and source is not None
-                and source.parent() is target
-            )
+            for node_id in dragged_ids:
+                source = self.find_by_id(node_id)
+                if source is None or source.parent() is not target:
+                    return False
+            return True
         if not parent.isValid():
             return True  # dragEnter 能力探测：格式可接受即可
         # 如果 parent 恰好落在 end-bracket / 「否则」行上，路由到其真实容器
@@ -251,16 +256,13 @@ class FlowTreeModel(QStandardItemModel):
         target_type = target.data(ROLE_NODE_TYPE)
         if target_type not in (_CONTAINER_TYPES | _VIRTUAL_GROUP_TYPES):
             return False
-        # 「否则」行只能在它的 if 内移动：跨 if 迁移会静默改写两个 if 的分支归属，
-        # 几乎不可能是用户意图；拖到别的容器 / 拖出树同样拒绝。
-        dragged = self._dragged_id(data)
-        if _is_else_branch_id(dragged):
-            source = self.find_by_id(dragged)
-            return (
-                target_type == "if"
-                and source is not None
-                and source.parent() is target
-            )
+        # 多选批量移动：任一被拖节点都不能是落点容器自身或其后代（成环）
+        for node_id in dragged_ids:
+            source = self.find_by_id(node_id)
+            if source is None:
+                continue
+            if source is target or self._is_descendant(source, target):
+                return False
         return True
 
     def _insert_item_at_drop(
@@ -321,74 +323,67 @@ class FlowTreeModel(QStandardItemModel):
                 self.mutated.emit()
             return inserted
 
-        # === 分支 2：画布内部拖放（移动节点）===
+        # === 分支 2：画布内部拖放（移动节点，支持多选批量）===
         if not data.hasFormat(_MIME_TYPE):
             return False
-        # parent.isValid() == False 时对应两种情况：
-        # 1) invisibleRootItem 上 drop（根容器扁平化后，顶层容器就是 invisibleRootItem）
-        # 2) Qt 探测 invalid parent（canDropMimeData 里已放行，这里兜底）
-        # 统一翻译为 invisibleRootItem，让顶层 drop 正常工作
-        if not parent.isValid():
-            # 否则分支 marker 绝不允许拖出它所属的 if → 顶层 drop 直接拒绝
-            node_id = self._dragged_id(data)
-            if _is_else_branch_id(node_id):
+        dragged_ids = self._dragged_ids(data)
+        if not dragged_ids:
+            return False
+        # 否则分支 marker 绝不允许拖出它所属的 if
+        if any(_is_else_branch_id(item) for item in dragged_ids):
+            if not parent.isValid():
                 return False
+        # 落点容器：invalid parent（顶层/invisibleRootItem 或 Qt 探测）→ invisibleRootItem；
+        # 否则路由 end-bracket / 否则行到真实容器
+        if not parent.isValid():
             target = self.invisibleRootItem()
-            # 直接跳到移动逻辑（不需要再 _resolve_drop_parent）
-            source = self.find_by_id(node_id)
-            if source is None:
+        else:
+            parent = self._resolve_drop_parent(parent)
+            if not parent.isValid():
                 return False
-            if source is target:
+            target = self.itemFromIndex(parent)
+            if target is None or target.data(ROLE_NODE_TYPE) not in (
+                _CONTAINER_TYPES | _VIRTUAL_GROUP_TYPES
+            ):
                 return False
-            source_parent = source.parent() or self.invisibleRootItem()
-            source_row = source.row()
-            # takeRow 前算好目标位置：如果 source 在 target_row 之前，
-            # takeRow 会让所有后续行前移 1，所以要减 1 修正
-            # （这里 target_row 用 target.rowCount() 作为边界，不提前减）
-            if source_parent is target:
-                # 同在顶层：row 参数就是用户期望的目标位置
-                # 但 takeRow(source_row) 后，如果 source_row < row，
-                # 原 row 位置上的元素会前移到 row-1
-                target_row = row - 1 if source_row < row else row
-            else:
-                target_row = row
-            item = source_parent.takeRow(source_row)
-            target_row = max(0, min(target_row, target.rowCount()))
-            target.insertRow(target_row, item)
-            self.mutated.emit()
-            return True
-        # 结束行 / 否则行上的 drop 路由到其真实容器
-        parent = self._resolve_drop_parent(parent)
-        if not parent.isValid():
-            return False
-        target = self.itemFromIndex(parent)
-        if target is None or target.data(ROLE_NODE_TYPE) not in (
-            _CONTAINER_TYPES | _VIRTUAL_GROUP_TYPES
-        ):
-            return False
-        node_id = self._dragged_id(data)
-        source = self.find_by_id(node_id)
-        if source is None:
-            return False
-        if _is_else_branch_id(node_id):
-            # 与 canDropMimeData 同口径：否则行只能留在同一个 if 内
-            if target.data(ROLE_NODE_TYPE) != "if" or source.parent() is not target:
-                return False
-        if source is target or self._is_descendant(source, target):
-            return False  # 不能移入自身或自己的后代（成环）
 
-        source_parent = source.parent() or self.invisibleRootItem()
-        target_parent = target
-        source_row = source.row()
-        taken = source_parent.takeRow(source_row)
+        # 收集被拖 item；去掉「祖先也在被拖集合里」的项（移动祖先已连带移动它）
+        items = [item for item in (self.find_by_id(i) for i in dragged_ids) if item]
+        items = [
+            item
+            for item in items
+            if not any(
+                other is not item and self._is_descendant(other, item)
+                for other in items
+            )
+        ]
+        if not items:
+            return False
+        # 成环守卫：任一被拖节点是落点自身或其后代都拒绝
+        for item in items:
+            if item is target or self._is_descendant(item, target):
+                return False
+        # 否则行只能留在同一个 if 内（与 canDropMimeData 同口径）
+        for item in items:
+            node_id = item.data(ROLE_NODE_ID)
+            if _is_else_branch_id(node_id):
+                if target.data(ROLE_NODE_TYPE) != "if" or item.parent() is not target:
+                    return False
 
-        dest_row = row if row >= 0 else target_parent.rowCount()
-        # 同一父级内向下移动时，源行已先被移除，Qt 给的落点索引需左移 1
-        if source_parent is target_parent and source_row < dest_row:
-            dest_row -= 1
-        # 落点不得越过末尾的 end-bracket：它是容器的 child，但不属于 children
-        dest_row = max(0, min(dest_row, _real_child_insert_row(target_parent)))
-        target_parent.insertRow(dest_row, taken)
+        # 依次移动到落点，保持多选内的相对顺序
+        dest_row = row if row >= 0 else _real_child_insert_row(target)
+        dest_row = max(0, min(dest_row, _real_child_insert_row(target)))
+        for item in items:
+            source_parent = item.parent() or self.invisibleRootItem()
+            source_row = item.row()
+            taken = source_parent.takeRow(source_row)
+            insert_at = dest_row
+            # 同一父级内向下移动时，源行已先被移除，落点索引需左移 1
+            if source_parent is target and source_row < insert_at:
+                insert_at -= 1
+            insert_at = max(0, min(insert_at, _real_child_insert_row(target)))
+            target.insertRow(insert_at, taken)
+            dest_row = insert_at + 1
         self.mutated.emit()
         return True
 

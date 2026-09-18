@@ -696,6 +696,8 @@ def build_canvas(
     tree.setDragDropMode(QTreeView.DragDropMode.DragDrop)  # 同时接受外部拖入 + 内部移动
     tree.setDefaultDropAction(Qt.DropAction.MoveAction)
     tree.setSelectionBehavior(QTreeView.SelectionBehavior.SelectRows)
+    # 多选（Ctrl/Shift 点选）：批量移动与批量删除的前提
+    tree.setSelectionMode(QTreeView.SelectionMode.ExtendedSelection)
     tree.setMouseTracking(True)
     tree.setStyleSheet(
         "QTreeView { background:#f6f8fa; border:none; }"
@@ -705,7 +707,14 @@ def build_canvas(
     tree.expandAll()
 
     def _toggle_on_click(index: QModelIndex) -> None:
-        # 隐藏了默认展开箭头后，单击容器/虚拟组行即切换展开（叶子点击不折叠）
+        # 隐藏了默认展开箭头后，单击容器/虚拟组行即切换展开（叶子点击不折叠）。
+        # 多选时按住 Ctrl/Shift 的点击是在扩选，不应顺带折叠——交给选中逻辑处理。
+        from PySide6.QtWidgets import QApplication
+
+        if QApplication.keyboardModifiers() & (
+            Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier
+        ):
+            return
         node_type = index.data(ROLE_NODE_TYPE)
         if node_type in ("sequence", "if", "forEach", "try", "branch-catch"):
             tree.setExpanded(index, not tree.isExpanded(index))
