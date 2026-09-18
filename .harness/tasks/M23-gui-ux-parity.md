@@ -39,6 +39,10 @@ M19 交互补强）与影刀基准。本任务按「用户体验 × 对标影刀
   - 测试：新增 `tests/contract/test_gui_canvas_batch.py` 14 例（批量移动顺序/跨父级/跳过后代/成环拒绝、
     批量删除/容器+子只删一次/虚拟行保护、菜单可用性矩阵、多选与菜单接线、查找匹配与循环/Esc 关闭）
   - 顺带修：`_canvas_context_menu` 原先把 QModelIndex 传给 `_nearest_if`（要 item）→ 潜在死循环，已修正
+  - **G2 稳定性修复（2026-09-18，维护者报障「连续操作后卡死」）**：查找匹配集缓存悬空 item（结构变更后
+    C++ 对象已删）→ 变更后重算 + `isValid` 剔除；模型层加 `mutating` 重入护栏与死行/裸空行自愈；
+    批量移动空 `takeRow` 不再插空行、invisibleRoot 不可拖、`_is_descendant` 补 invisibleRoot 祖先；
+    删除/粘贴期间 `blockSignals` 屏蔽选中信号；压力脚本 2000 步跑满 1944 步零崩溃零卡死
 - [ ] **G3 属性面板追平 Web**：消费 `x-param-groups` 分组折叠（GUI `param_form` 仍平铺）+
   输出别名（`output_aliases` / `x-outputs`）编辑 UI + 重试/超时字段（含 unsafe 禁用防呆，
   对齐 Web `retryCountField`）
