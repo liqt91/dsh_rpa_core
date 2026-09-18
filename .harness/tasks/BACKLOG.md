@@ -4,13 +4,7 @@
 
 ## 当前任务
 
-（无进行中任务——M20 已收口）
-
-## 后续任务
-
-- [ ] 技术路线（ADR 0016）：GUI 为唯一主力形态——新增能力优先落 GUI；Web 编辑器（devserver）
-  `devserver/static/` 冻结演进（不删除、不再补齐 GUI 已有能力）
-- [ ] **M23 GUI 体验对齐（用户体验 × 对标影刀）**（`planned`）
+- [ ] **M23 GUI 体验对齐（用户体验 × 对标影刀）**（`active`）
   - 计划：`M23-gui-ux-parity.md`；分析依据：2026-09-17 GUI 代码审计（`src/rpa_core/gui/`）+
     `docs/yingdao-web-cmds-benchmark.md` + `.harness/yingdao-gap-matrix.md`
   - 切 G1 捕获链路（`done` 主体，2026-09-17）：**单入口混合捕获**已落地——唯一「捕获元素」
@@ -18,6 +12,7 @@
     插件离线显式提示；连带修复让位标志断链、离线扩展腿误杀桌面腿、CLI 未 arm 三处存量缺陷。
     **剩余**：捕获后确认对话框对齐 Web（改名/selector 编辑/命中数/同名覆盖保护，当前仅
     QInputDialog 命名）
+  - 关联已交付（2026-09-17）：GUI 插件对话框 bridge host 注册入口（`gui-extension-dialog-bridge`）
   - 切 G2 画布交互：多选 + 批量移动/删除（当前单选，Web M11 已有）+ 右键菜单
     （复制/粘贴/删除等，当前无 contextMenu）+ 画布内搜索定位（Ctrl+F）
   - 切 G3 属性面板追平 Web：消费 `x-param-groups` 分组折叠（GUI param_form 仍平铺）+
@@ -27,6 +22,13 @@
     （借鉴 Web `startupError` 透出经验）；运行日志加耗时/输出值预览
   - 切片内次级项：变量面板（设计期静态收集 output_aliases/inputs 列表）、菜单栏
     （QMenuBar + 快捷键一览）、卡片摘要按关键字段（url/selector/text）优化
+  - 证据：G1 `test_gui_capture` 4 例 + `test_capture_hybrid` +2（full gate 516 passed）；
+    插件对话框 `test_gui_panels` +3（full gate 521 passed）；3 个失败均为已知桌面 E2E 焦点抖动
+
+## 后续任务
+
+- [ ] 技术路线（ADR 0016）：GUI 为唯一主力形态——新增能力优先落 GUI；Web 编辑器（devserver）
+  `devserver/static/` 冻结演进（不删除、不再补齐 GUI 已有能力）
 - [ ] **M21 GUI 运行控制进阶：暂停/继续 + 恢复人工确认**（`planned`）
   - 计划：`M21-run-control-advanced.md`
   - 缺口：`RunManager` 无 pause/resume；暂停信号是进程内 `asyncio.Event`，GUI 走子进程需

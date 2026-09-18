@@ -238,6 +238,11 @@
       "passes": false
     },
     {
+      "id": "gui-ux-parity",
+      "title": "GUI UX parity with Yingdao/Web editor: single-entry hybrid capture (done), canvas multi-select/context-menu/search, param-group + output-alias forms, failure-location loop",
+      "passes": false
+    },
+    {
       "id": "crossplatform-transport-verify",
       "title": "macOS/Linux native messaging transport verified on real machines (unix socket endpoint + host manifest registration + end-to-end)",
       "passes": false
