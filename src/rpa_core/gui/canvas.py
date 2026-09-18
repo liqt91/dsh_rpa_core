@@ -15,7 +15,13 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import QModelIndex, QRect, QSize, Qt
+from PySide6.QtCore import (
+    QItemSelectionModel,
+    QModelIndex,
+    QRect,
+    QSize,
+    Qt,
+)
 from PySide6.QtGui import QColor, QDrag, QFont, QPainter, QPen
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -140,12 +146,15 @@ class FlowTreeView(QTreeView):
         # 当前拖拽落点状态，由 dragMoveEvent 写入、paintEvent/dropEvent 读取
         # None 表示没有正在进行的拖拽（dragEnter 未到达或已 leave）
         self._drag_target: dict | None = None
+        # 本次按下是否已引发拖拽（release 时据此决定是否补收敛选中集）
+        self._press_dragged = False
 
     # ---- Qt 拖拽三件套 ----------------------------------------------------
     def startDrag(self, supportedActions: Qt.DropAction) -> None:
         indices = self.selectionModel().selectedIndexes()
         if not indices:
             return
+        self._press_dragged = True
         mime_data = self.model().mimeData(indices)
         if mime_data is None:
             return
@@ -405,6 +414,8 @@ class FlowTreeView(QTreeView):
         """（诊断）记录按下时的命中/状态，再走基类选中逻辑。"""
         from rpa_core.gui import debug_log
 
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._press_dragged = False
         if debug_log.ENABLED and event.button() == Qt.MouseButton.LeftButton:
             pos = event.position().toPoint()
             index = self.indexAt(pos)
@@ -485,6 +496,44 @@ class FlowTreeView(QTreeView):
                         self.viewport().update()
                         return
         super().mouseReleaseEvent(event)
+        # 兜底：Qt 在拖拽结束后偶发不应用「普通单击已选项 → 收敛选中集」（实测拖完后
+        # 第一次单击停在多选，收敛滞后）。这里在「普通左键单击 + 未拖拽 + 点在已选中的
+        # 可选项上 + 当前为多选」时强制收敛到该行。
+        self._collapse_multi_selection_on_click(event)
+
+    def _collapse_multi_selection_on_click(self, event) -> None:
+        """普通左键单击已选项时的选中集收敛兜底（见 mouseReleaseEvent 注释）。"""
+        from rpa_core.gui import debug_log
+
+        if event.button() != Qt.MouseButton.LeftButton or event.modifiers():
+            return
+        if self._press_dragged:
+            return
+        index = self.indexAt(event.position().toPoint())
+        if not index.isValid():
+            return
+        if not (self.model().flags(index) & Qt.ItemFlag.ItemIsSelectable):
+            return
+        selection = self.selectionModel()
+        if selection is None or not selection.isSelected(index):
+            return
+        row_indexes = [i for i in selection.selectedIndexes() if i.column() == 0]
+        if len(row_indexes) <= 1:
+            return
+        selection.clearSelection()
+        selection.select(
+            index,
+            QItemSelectionModel.SelectionFlag.Select
+            | QItemSelectionModel.SelectionFlag.Rows,
+        )
+        selection.setCurrentIndex(
+            index,
+            QItemSelectionModel.SelectionFlag.ClearAndSelect
+            | QItemSelectionModel.SelectionFlag.Rows,
+        )
+        self.viewport().update()
+        if debug_log.ENABLED:
+            debug_log.log("release-collapse", node=index.data(ROLE_NODE_ID))
 
     # ---- 落点指示条自绘 --------------------------------------------------
     def paintEvent(self, event) -> None:

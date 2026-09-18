@@ -504,3 +504,25 @@ def test_click_card_does_not_toggle_expansion(window):
     finally:
         window._dirty = False
         window.hide()
+
+
+def test_plain_click_on_selected_collapses_multi_selection(window):
+    """普通单击多选中的某项 → 选中集收敛到它（拖放后 Qt 偶发不收敛，靠兜底兜住）。"""
+    from PySide6.QtTest import QTest
+
+    window.show()
+    try:
+        model = window.flow_model
+        view = window.canvas_view
+        _select(window, ["open", "check"])
+        index = model.find_by_id("open").index()
+        rect = view.visualRect(index)
+        QTest.mouseClick(view.viewport(), Qt.MouseButton.LeftButton, pos=rect.center())
+        selection = view.selectionModel()
+        ids = [
+            i.data(ROLE_NODE_ID) for i in selection.selectedIndexes() if i.column() == 0
+        ]
+        assert ids == ["open"]
+    finally:
+        window._dirty = False
+        window.hide()
