@@ -389,6 +389,10 @@ class FlowTreeView(QTreeView):
             parent = parent.parent()
         selection.setCurrentIndex(first, QItemSelectionModel.SelectionFlag.NoUpdate)
         self.scrollTo(first, QAbstractItemView.ScrollHint.PositionAtCenter)
+        # scrollTo 会移动布局；紧接着的点击若按旧视觉位置命中会落空（观感：
+        # 「点了不选中，移开才选中」）。强制布局收敛 + 重绘，让点击命中一致。
+        self.updateGeometry()
+        self.viewport().update()
         if debug_log.ENABLED:
             debug_log.log(
                 "reselect",

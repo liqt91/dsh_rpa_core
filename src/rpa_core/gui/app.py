@@ -2184,6 +2184,10 @@ class MainWindow(QMainWindow):
                 current=current.data(ROLE_NODE_ID) if current.isValid() else None,
                 previous=previous.data(ROLE_NODE_ID) if previous.isValid() else None,
             )
+        # 选中变化后立刻重绘视口：mouseTracking 常开时，自绘卡片的选中高亮若等下一次
+        # 鼠标移动才重绘，会出现「点击不选中、移开才选中」的观感。
+        if self.canvas_view is not None:
+            self.canvas_view.viewport().update()
         # 切换节点前先提交上一个面板未应用的编辑（Web 即改即生效，GUI 靠此对齐）。
         # 同一节点重渲染（如插入元素后刷新表单）不提交：表单持有的是变更前状态，
         # 提交会把程序性修改回灌覆盖。
