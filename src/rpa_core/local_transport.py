@@ -419,18 +419,28 @@ class _SocketChannel(Channel):
         self._sock = sock
 
     def send(self, payload: dict[str, Any]) -> None:
-        self._sock.sendall(encode_message(payload))
+        try:
+            self._sock.sendall(encode_message(payload))
+        except OSError as exc:
+            # 领域边界：send/recv 的裸 OSError 不得逃逸，否则调用方的
+            # `except LocalTransportError` 形同虚设（同 bind 的历史缺陷）
+            raise LocalTransportError(f"channel send failed: {exc}") from None
 
     def recv(self) -> dict[str, Any] | None:
-        header = _socket_read_exact(self._sock, 4)
-        if header is None:
-            return None
-        size = struct.unpack("<I", header)[0]
-        if size > MAX_MESSAGE_BYTES:
-            raise LocalTransportError(f"declared message too large: {size}")
-        body = _socket_read_exact(self._sock, size) if size else b""
-        if body is None:
-            raise LocalTransportError("truncated message body")
+        try:
+            header = _socket_read_exact(self._sock, 4)
+            if header is None:
+                return None
+            size = struct.unpack("<I", header)[0]
+            if size > MAX_MESSAGE_BYTES:
+                raise LocalTransportError(f"declared message too large: {size}")
+            body = _socket_read_exact(self._sock, size) if size else b""
+            if body is None:
+                raise LocalTransportError("truncated message body")
+        except OSError as exc:
+            # 对已关闭通道的读取是 EBADF（Bad file descriptor）——读循环必须只看到
+            # 领域异常，否则线程里会逃逸成未捕获异常（见 capture.extension._read_loop）
+            raise LocalTransportError(f"channel recv failed: {exc}") from None
         return _decode_body(body)
 
     def close(self) -> None:

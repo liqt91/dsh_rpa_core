@@ -326,3 +326,51 @@ def _wait_until(predicate, timeout: float = 3.0) -> None:
             return
         time.sleep(0.05)
     raise AssertionError("condition not met in time")
+
+
+@pytest.mark.skipif(lt._IS_WINDOWS, reason="AF_UNIX socketpair 仅 POSIX")
+def test_closed_socket_channel_raises_domain_error():
+    """通道关闭后 send/recv 必须抛领域异常，不得以裸 OSError 逃逸。
+
+    回归（macOS 真机 2026-09-18）：``capture.extension._read_loop`` 只捕
+    ``LocalTransportError``，而通道在别处被 close 后 ``recv()`` 抛
+    ``OSError: [Errno 9] Bad file descriptor`` → 逃逸成线程未捕获异常。
+    领域边界（``_SocketChannel``）负责收口，调用方的 except 才有意义。
+    """
+    left, right = socket.socketpair()
+    channel = lt._SocketChannel(left)
+    right.close()
+    left.close()  # 模拟「通道已被别处关闭」
+    with pytest.raises(lt.LocalTransportError):
+        channel.recv()
+    with pytest.raises(lt.LocalTransportError):
+        channel.send({"type": "capture_disarm"})
+
+
+def test_transport_error_is_not_an_oserror():
+    """领域异常不得继承 OSError：否则领域边界的 ``except OSError`` 会自吞。"""
+    assert not issubclass(lt.LocalTransportError, OSError)
+
+
+def test_isolated_endpoint_prefix_does_not_overlap_default_namespace():
+    """测试隔离前缀与默认前缀必须互不包含（双向）。
+
+    回归（2026-09-18 跨进程实测取证）：早先的隔离前缀
+    ``rpa_core_ext_test_isolated_`` 以默认前缀 ``rpa_core_ext_`` 开头，而
+    ``list_endpoints`` 用 ``startswith`` 过滤 —— 于是**真实进程能列出测试端点**。
+    后果不止「门禁结论漂移」：开发者跑测试期间用 GUI/CLI 捕获，会 arm 到测试的
+    假 bridge 端点、拿到测试描述符并当作真实元素落库（本机复现：真机捕获验证
+    脚本被测试端点接管，返回了测试夹具里的 ``#go`` 描述符）。
+    """
+    default = lt._ENDPOINT_PREFIX
+    effective = lt.endpoint_prefix()
+    if effective == default:
+        pytest.skip("未设隔离前缀（非测试上下文）")
+    assert not effective.startswith(default), (
+        f"隔离前缀 {effective!r} 以默认前缀 {default!r} 开头："
+        "真实进程的 list_endpoints() 会串到测试端点"
+    )
+    assert not default.startswith(effective), (
+        f"默认前缀 {default!r} 以隔离前缀 {effective!r} 开头："
+        "测试进程会串到本机真实端点"
+    )

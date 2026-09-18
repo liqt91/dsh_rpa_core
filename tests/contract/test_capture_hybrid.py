@@ -41,15 +41,18 @@ class FakeDesktopSession:
     """记录参数的桌面会话假实现（hybrid 包装时由 HybridCaptureSession 持有）。"""
 
     instances = []
+    available = True  # 类属性：子类置 False 模拟非 Windows（agent 为 UIA 实现）
 
     def __init__(self, **kwargs):
         self.kwargs = kwargs
         self.cancelled = False
+        self.pick_calls = 0
         self.result = dict(_DESKTOP_DESCRIPTOR)
         self.pick_delay = 0.0
         FakeDesktopSession.instances.append(self)
 
     def pick(self, timeout_seconds=90):
+        self.pick_calls += 1
         if self.pick_delay:
             time.sleep(self.pick_delay)
         return dict(self.result)
@@ -59,6 +62,12 @@ class FakeDesktopSession:
 
     def close(self):
         pass
+
+
+class UnavailableDesktopSession(FakeDesktopSession):
+    """桌面腿不可用（等价于非 Windows：agent 是 Windows-only UIA 实现）。"""
+
+    available = False
 
 
 class FakeBridge:
@@ -272,3 +281,104 @@ def test_hybrid_forwards_hybrid_flag_to_desktop_factory():
     assert FakeDesktopSession.instances[-1].kwargs["hybrid"] is True
     assert FakeDesktopSession.instances[-1].kwargs["hover"] is True
     session.close()
+
+
+# ---- 桌面腿不可用（对称语义；macOS 真机报障 2026-09-18） ----------------------
+def test_hybrid_unavailable_desktop_degrades_to_extension(bridge):
+    """桌面腿不可用（非 Windows）→ 退化为纯扩展捕获，扩展结果正常返回。
+
+    回归：桌面 agent 是 Windows-only（``desktop_agent`` 的 ``sys.platform != "win32"``
+    守卫），非 Windows 上 ``pick()`` 立即返回 ``{"error": "desktop capture requires
+    Windows"}``。旧实现按「先回传者胜」把这个**失败**当成「用户捕获了桌面元素」，
+    抢在仍可用的扩展腿之前结束会话并 close() 掉它 —— 用户侧表现为「点了捕获元素，
+    窗口闪一下就弹回，网页里 Ctrl+Click 毫无反应」（实测 51ms 返回）。
+    """
+    from rpa_core.capture.extension import ExtensionCaptureSession
+
+    FakeDesktopSession.instances = []
+    session = HybridCaptureSession(
+        desktop_factory=UnavailableDesktopSession,
+        extension_session=ExtensionCaptureSession(),
+    )
+    try:
+        session.start()
+        assert session.desktop_offline is True
+        assert session.extension_offline is False
+        result = session.pick(timeout_seconds=10)
+        assert result["kind"] == "browser"
+        assert result["selector"]["css"] == "#go"
+    finally:
+        session.close()
+
+
+def test_hybrid_failing_desktop_does_not_win(bridge):
+    """桌面腿产出**失败**结果（无 ``kind``）不得抢跑：扩展腿仍有机会胜出。
+
+    这类失败不止「平台不支持」一种——agent 崩溃（``_crash_info`` 带 ``error`` +
+    ``stderrTail``）、非法输出、agent 超时都是同一形态。判据统一为「有没有有效
+    的 ``kind``」，而不是「哪条腿先开口」。
+    """
+    from rpa_core.capture.extension import ExtensionCaptureSession
+
+    FakeDesktopSession.instances = []
+    session = HybridCaptureSession(
+        desktop_factory=FakeDesktopSession,
+        extension_session=ExtensionCaptureSession(),
+    )
+    session._desktop.result = {
+        "error": "desktop capture agent exited with code 1",
+        "stderrTail": "Traceback ...",
+    }
+    session._desktop.pick_delay = 0.0  # 桌面腿秒失败
+    try:
+        session.start()
+        result = session.pick(timeout_seconds=10)
+        assert result["kind"] == "browser"
+    finally:
+        session.close()
+
+
+def test_hybrid_both_legs_unavailable_fails_fast():
+    """两条腿都不可用 → 立即返回真实原因，不干等超时、不伪装成「已取消」。"""
+    from rpa_core.capture.extension import ExtensionCaptureSession
+
+    ext = ExtensionCaptureSession(endpoint="rpa_core_ext_test_no_such_endpoint")
+    session = HybridCaptureSession(
+        desktop_factory=UnavailableDesktopSession, extension_session=ext
+    )
+    try:
+        session.start()
+        assert session.desktop_offline and session.extension_offline
+        started = time.monotonic()
+        result = session.pick(timeout_seconds=30)
+        elapsed = time.monotonic() - started
+        assert elapsed < 2, "两条腿都已出局时应立即收场，而不是等满超时"
+        assert result.get("unavailable") is True
+        assert result.get("kind") is None
+        assert result.get("cancelled") is None, "不得伪装成用户取消"
+        assert "Windows" in result["error"]
+    finally:
+        session.close()
+
+
+def test_hybrid_desktop_offline_skips_spawning_desktop_pick():
+    """桌面腿不可用时不该再跑它的 pick（不持有无意义的等待线程/子进程）。
+
+    与 ``available`` 配合的是这条：不可用的腿不仅不参选，连等都不该等——
+    否则每条腿都留一个挂到超时的线程。
+    """
+    from rpa_core.capture.extension import ExtensionCaptureSession
+
+    FakeDesktopSession.instances = []
+    session = HybridCaptureSession(
+        desktop_factory=UnavailableDesktopSession,
+        extension_session=ExtensionCaptureSession(endpoint="x"),
+    )
+    try:
+        session.start()
+        result = session.pick(timeout_seconds=5)
+        assert result.get("unavailable") is True
+        assert FakeDesktopSession.instances[-1].pick_calls == 0, \
+            "不可用的桌面腿不该被 pick 唤醒"
+    finally:
+        session.close()

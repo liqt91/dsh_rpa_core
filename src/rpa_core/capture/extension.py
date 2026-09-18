@@ -132,10 +132,14 @@ class ExtensionCaptureSession:
             while True:
                 try:
                     message = channel.recv()
-                except local_transport.LocalTransportError:
+                except (local_transport.LocalTransportError, OSError):
+                    # OSError 是兜底：通道在别处被 close 后读取会抛底层错误，
+                    # 逃逸出去就是线程未捕获异常（本会话已 disarm，无需上报）
                     break
                 if message is None:
                     break
+                if not isinstance(message, dict):
+                    continue
                 if message.get("type") != "capture_result":
                     continue  # 忽略 focus 等广播
                 session = message.get("sessionId")

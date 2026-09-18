@@ -1787,6 +1787,15 @@ class MainWindow(QMainWindow):
                 on_insert=self._insert_element,
                 on_delete=self._delete_element,
             )
+            # 提示按真实平台能力改写：面板默认文案承诺「桌面走 UIA / 可用 F9」，
+            # 而桌面捕获 agent 是 Windows-only（非 Windows 上该腿 start 即不可用）
+            from rpa_core.capture import desktop_capture_available
+
+            if not desktop_capture_available():
+                panel.capture_button.setToolTip(
+                    "网页元素捕获：移动鼠标框选，Ctrl+Click 捕获，Esc 取消。"
+                    "（桌面类元素捕获仅支持 Windows，本平台不可用）"
+                )
             dock = QDockWidget("元素库", self)
             dock.setObjectName("elements-dock")
             dock.setWidget(panel)
@@ -1924,16 +1933,31 @@ class MainWindow(QMainWindow):
             timeout_seconds=90,
         )
         session.start()  # arm 扩展腿；桌面腿（agent 子进程）构造时已起
-        # 扩展腿离线：网页区域无法捕获（UIA 兜底已证伪），状态栏提示在窗口最小化
-        # 后不可见，必须显式确认——否则用户体验是「网页里怎么点都没反应」。
+        desktop_offline = session.desktop_offline
+        if session.extension_offline and desktop_offline:
+            # 两条腿都不可用：没有「退化为仅桌面/仅网页」可言，直接收场。
+            # 早期实现会弹「仍要继续仅桌面捕获吗」——在 macOS 上是个假选项
+            # （桌面 agent 是 Windows-only），用户点了「是」也只会等到超时。
+            session.close()
+            self.statusBar().showMessage(
+                "无法捕获：当前平台桌面捕获不可用（仅支持 Windows），"
+                "且浏览器插件离线（工具栏「插件」按钮可查看安装引导）", 9000
+            )
+            return
         if session.extension_offline and not self._confirm_capture_offline():
+            # 扩展腿离线时网页区域无法捕获（UIA 兜底已证伪）；状态栏提示在窗口最小化
+            # 后不可见，必须显式确认——否则用户体验是「网页里怎么点都没反应」。
             session.close()
             self.statusBar().showMessage(
                 "已取消捕获：浏览器插件离线（「插件」按钮可查看安装引导）", 6000
             )
             return
         self._capture_session = session
-        hint = "捕获中：移动鼠标框选，Ctrl+Click 捕获（桌面也可用 F9），Esc 取消"
+        if desktop_offline:
+            hint = "捕获中：移动鼠标框选，Ctrl+Click 捕获，Esc 取消" \
+                   "（桌面捕获仅支持 Windows，本平台只能捕获网页元素）"
+        else:
+            hint = "捕获中：移动鼠标框选，Ctrl+Click 捕获（桌面也可用 F9），Esc 取消"
         if session.extension_offline:
             hint = "浏览器插件离线：网页区域无法捕获（桌面不受影响）。" + hint
         self.statusBar().showMessage(hint, 9000)
@@ -1979,6 +2003,14 @@ class MainWindow(QMainWindow):
         self.activateWindow()
         if result.get("timeout"):
             self.statusBar().showMessage("捕获超时（90 秒无手势）", 5000)
+            return
+        if not result.get("kind") and (result.get("unavailable") or result.get("error")):
+            # 无可用腿：透出真实原因。早期实现落到下面的「已取消捕获」分支，
+            # 于是 macOS 上「桌面腿 49ms 返回不支持」被显示成用户主动取消，
+            # 真相（本平台桌面捕获不可用）被完全掩盖。
+            self.statusBar().showMessage(
+                f"捕获失败：{result.get('error') or '无可用捕获通道'}", 9000
+            )
             return
         if result.get("cancelled") or not result.get("kind"):
             self.statusBar().showMessage("已取消捕获", 4000)

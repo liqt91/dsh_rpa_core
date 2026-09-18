@@ -246,6 +246,9 @@ spike\native_messaging\extension` 算出 `dfbjkpbeppapijmjcpppconbchmeinek`，�
   无端点时 `pick` 明确返回 `offline`（不挂满超时）。
 - `HybridCaptureSession` 内嵌扩展腿（不再依赖 devserver 的 pending/result 路由），
   「先回传者胜」语义不变；devserver 在创建 hybrid 会话后显式 `start()` 扩展腿。
+  > 2026-09-18 修正：胜出判据收紧为「**有效捕获描述符**先回传者胜」（`kind` ∈ {desktop,
+  > browser}）。腿的失败形态一律不抢跑 —— 原判据会把「腿不可用/崩溃」当成用户捕获结果，
+  > 在非 Windows 上直接掐掉仍可用的扩展腿（见 M23 G1「平台退化修正」）。
 
 **S7 接线清理**：
 

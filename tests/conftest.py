@@ -69,7 +69,13 @@ DESKTOP_E2E_SKIP_MARKER = "RPA_DESKTOP_E2E=1"
 
 # 测试专用端点前缀：本机真实端点（rpa_core_ext_…）因此对默认 client 不可见，
 # 用例走「扩展离线」分支（需要真实通道的用例显式指向测试端点）。
-os.environ["RPA_EXT_ENDPOINT_PREFIX"] = "rpa_core_ext_test_isolated_"
+#
+# 前缀**必须与默认前缀 `rpa_core_ext_` 互不包含**：`list_endpoints` 用
+# `startswith` 过滤，若隔离前缀以默认前缀开头（如早先的 `rpa_core_ext_test_isolated_`），
+# 则**真实进程会枚举到测试端点** —— 开发者跑门禁期间用 GUI/CLI 捕获会 arm 到测试的
+# 假 bridge 端点、拿到测试描述符并把它当成真实元素落库（2026-09-18 跨进程实测取证）。
+# 回归守门：tests/unit/test_local_transport.py::test_isolated_endpoint_prefix_...
+os.environ["RPA_EXT_ENDPOINT_PREFIX"] = "rpacore-iso_"
 
 # 默认临时根不可用时的候选 basetemp 父目录：先系统临时区（不污染工作区），
 # 最后一个兜底放工作区内（工作区几乎总是可写的），已被 .gitignore 排除。

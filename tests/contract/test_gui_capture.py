@@ -62,12 +62,17 @@ _BROWSER_DESCRIPTOR = {
 class FakeHybridSession:
     """记录接线的混合会话假实现；pick 阻塞直到测试放行。
 
-    类属性 ``offline`` 控制 extension_offline（默认在线）；``result``
+    类属性 ``offline`` 控制 extension_offline（默认在线）；``desktop_unavailable``
+    控制桌面腿可用性（默认可用，与 Windows 真机一致）；``result``
     为 None 时 pick 返回 {"cancelled": True}（避免触发命名对话框）。
+
+    开关与属性名必须不同：同名类属性会被 property 覆盖，``type(self).x`` 取到的是
+    property 对象而非布尔值（ruff F811）。
     """
 
     instances: list = []
     offline = False
+    desktop_unavailable = False
 
     def __init__(self, *, desktop_factory, **kwargs):
         self.kwargs = kwargs
@@ -84,6 +89,10 @@ class FakeHybridSession:
     @property
     def extension_offline(self) -> bool:
         return self.offline
+
+    @property
+    def desktop_offline(self) -> bool:
+        return type(self).desktop_unavailable
 
     def pick(self, timeout_seconds=90):
         self._gate.wait(timeout=10)
@@ -104,6 +113,7 @@ def fake_capture(monkeypatch):
 
     FakeHybridSession.instances = []
     FakeHybridSession.offline = False
+    FakeHybridSession.desktop_unavailable = False
     monkeypatch.setattr(capture_mod, "HybridCaptureSession", FakeHybridSession)
     return FakeHybridSession
 
@@ -259,6 +269,63 @@ def test_capture_reentrant_guard(window, fake_capture):
     fake = fake_capture.instances[-1]
     fake.result = None
     _release_and_finish(fake, window)
+
+
+def test_capture_desktop_offline_hint(window, fake_capture, monkeypatch):
+    """桌面腿不可用（非 Windows）而扩展在线 → 仍可捕获，提示说明桌面不可用。
+
+    回归（macOS 真机 2026-09-18）：此前的提示承诺「桌面也可用 F9」，
+    而桌面 agent 是 Windows-only —— 提示与能力不符。
+    """
+    window._save_named_flow("cap5")
+    fake_capture.desktop_unavailable = True
+    window._capture_element()
+    fake = fake_capture.instances[-1]
+    assert fake.started
+    message = window.statusBar().currentMessage()
+    assert "仅支持 Windows" in message
+    assert "F9" not in message, "桌面不可用时不应再承诺 F9"
+    fake.result = None
+    _release_and_finish(fake, window)
+
+
+def test_capture_both_legs_unavailable_fails_fast(window, fake_capture, monkeypatch):
+    """两条腿都不可用 → 不弹「仅桌面捕获」的假选项，不最小化，直接给真实原因。
+
+    回归（macOS 真机 2026-09-18）：旧实现只在扩展腿离线时弹确认框，用户选「是」
+    后进入仅桌面捕获——而桌面腿在 macOS 上必然失败，用户白等 90 秒。
+    """
+    window._save_named_flow("cap6")
+    fake_capture.offline = True
+    fake_capture.desktop_unavailable = True
+    called = {"offline_confirm": False}
+
+    def _spy(self):
+        called["offline_confirm"] = True
+        return True
+
+    monkeypatch.setattr(type(window), "_confirm_capture_offline", _spy)
+    window._capture_element()
+    fake = fake_capture.instances[-1]
+    assert not called["offline_confirm"], "两条腿都不可用时不该问「是否仅桌面捕获」"
+    assert fake.closed, "应直接关闭会话（不留下无意义的等待）"
+    assert window._capture_session is None
+    assert not window.isMinimized(), "根本没机会捕获，不该最小化主窗"
+    message = window.statusBar().currentMessage()
+    assert "无法捕获" in message
+    assert "Windows" in message and "插件" in message
+
+
+def test_capture_reports_unavailable_reason(window, fake_capture):
+    """pick 返回 unavailable/error → 状态栏给真实原因，不伪装成「已取消」。"""
+    window._save_named_flow("cap7")
+    window._capture_element()
+    fake = fake_capture.instances[-1]
+    fake.result = {"unavailable": True, "error": "desktop capture requires Windows"}
+    _release_and_finish(fake, window)
+    message = window.statusBar().currentMessage()
+    assert "desktop capture requires Windows" in message
+    assert "已取消" not in message
 
 
 def test_capture_cancelled_on_window_close(window, fake_capture):

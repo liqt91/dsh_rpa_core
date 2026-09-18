@@ -33,7 +33,12 @@ M20 的传输层与安装注册**按三平台实现**，但**只在 Windows 真�
   - SW 长连 native port 保活（心跳间隔稳定）；扩展 reload 与浏览器完全退出 → host 回收
     （Unix socket 文件消失、无残留进程）；重连时延；unpacked ID 推导/发现一致。
 - [ ] **S3 端到端**
-  - `browser.navigate` 经扩展通道 succeeded（真实浏览器）；捕获 arm → Ctrl+Click → 描述符回传。
+  - [x] **捕获 arm → Ctrl+Click → 描述符回传（macOS 真机，2026-09-18）**：`HybridCaptureSession`
+    全路径（GUI「捕获元素」按钮同构造）拿到真实描述符。期间暴露并修掉一处**平台退化缺陷**：
+    非 Windows 上桌面腿 49ms 返回 `{"error": "desktop capture requires Windows"}`，旧「先回传者胜」
+    把它当成捕获成功、掐掉仍在线的扩展腿 → 用户侧「点捕获元素闪一下就弹回、网页里怎么点都没反应」。
+    细节与 4 处修改见 M23 G1「平台退化修正」。
+  - [ ] `browser.navigate` 经扩展通道 succeeded（真实浏览器）
 - [ ] **S4 差异修正与文档**
   - [x] **POSIX 端点路径长度缺陷（macOS 真机暴露，2026-09-18）**：`sun_path` 103 字节上限被
     `61 字节 per-user TMPDIR + 56 字节端点名` 顶穿（123 字节）→ host 被浏览器正常拉起但
@@ -57,6 +62,13 @@ M20 的传输层与安装注册**按三平台实现**，但**只在 Windows 真�
 
 ## 风险 / 开放问题
 
+- **桌面捕获是 Windows-only 能力（平台边界，2026-09-18 真机确认）**：`capture.desktop_agent`
+  依赖 pywinauto/win32gui 做 UIA hit-test，非 Windows 上 `python -m
+  rpa_core.capture.desktop_agent` 直接输出 `{"error": "desktop capture requires Windows"}`
+  并退出码 1。因此 macOS/Linux 上「捕获元素」实际只有**网页腿**（扩展）可用：
+  `HybridCaptureSession.desktop_offline` 报 True 并退化为纯扩展捕获，GUI 提示不再承诺桌面捕获。
+  若后续要补 macOS 桌面捕获，等价物是 Accessibility API（`AXUIElementCopyElementAtPosition`）
+  —— 属新功能（M10 的 macOS 版），需单独立项，不在本任务范围。
 - 需要 macOS/Linux 真机与图形浏览器环境（本机为 Windows，无法代跑）。
 - ~~Linux 无 `$XDG_RUNTIME_DIR`（如纯 SSH 会话）时的端点目录回退行为需实测确认。~~
   → 已定：缺省回退 `/tmp/rpa_core-<uid>/rpa_core_ext`（Linux 侧真机仍待跑）。
