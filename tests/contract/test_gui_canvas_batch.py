@@ -457,6 +457,37 @@ def test_drop_reselects_moved_nodes(window):
         window.hide()
 
 
+def test_drop_preserves_expansion_of_moved_container(window):
+    """拖放后保持被移动容器的展开/收起原样（摘除重插会丢展开态）。"""
+    window.show()
+    try:
+        model = window.flow_model
+        view = window.canvas_view
+        done_index = model.find_by_id("done").index()
+        target = {"row": done_index.row() + 1, "parent": done_index.parent()}
+
+        # 展开的容器移动后仍展开
+        view.setExpanded(model.find_by_id("loop").index(), True)
+        _select(window, ["loop"])
+        view._drag_target = dict(target)
+        event = _MockDrop(_mime(["loop"]))
+        view.dropEvent(event)
+        assert event.isAccepted() is True
+        assert view.isExpanded(model.find_by_id("loop").index()) is True
+
+        # 收起的容器移动后仍收起
+        view.setExpanded(model.find_by_id("check").index(), False)
+        _select(window, ["check"])
+        view._drag_target = dict(target)
+        event = _MockDrop(_mime(["check"]))
+        view.dropEvent(event)
+        assert event.isAccepted() is True
+        assert view.isExpanded(model.find_by_id("check").index()) is False
+    finally:
+        window._dirty = False
+        window.hide()
+
+
 def test_click_card_does_not_toggle_expansion(window):
     """展开/收起只由编号栏 −/+ 承担：点击卡片本体不再折叠。"""
     from PySide6.QtTest import QTest

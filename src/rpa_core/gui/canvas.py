@@ -153,6 +153,17 @@ class FlowTreeView(QTreeView):
         # 仅 setMimeData + exec，不调基类 startDrag（它会在 exec 返回
         # MoveAction 后调 clearOrRemove 二次删源行）。
         drag.exec(supportedActions)
+        # 复位视图状态：跳过基类实现后视图可能停在 DraggingState，导致拖放后
+        # 「点击不选中、鼠标移开才选中」。
+        self._reset_drag_state()
+
+    def _reset_drag_state(self) -> None:
+        self._drag_target = None
+        try:
+            self.setState(QAbstractItemView.State.NoState)
+        except (AttributeError, TypeError):  # pragma: no cover - 绑定差异
+            pass
+        self.viewport().update()
 
     def dragMoveEvent(self, event) -> None:
         """自判落点区域并驱动视觉指示条刷新。"""
@@ -268,6 +279,7 @@ class FlowTreeView(QTreeView):
         selection = self.selectionModel()
         blocked = selection is not None and selection.blockSignals(True)
         moved_ids: list[str] = []
+        expanded_ids: list[str] = []
         try:
             mime = event.mimeData()
             model = self.model()
@@ -289,17 +301,23 @@ class FlowTreeView(QTreeView):
             target = self._drag_target
             self._drag_target = None
             action = Qt.DropAction.MoveAction
+            moved_ids = [
+                node_id
+                for node_id in bytes(mime.data(_MIME_TYPE)).decode("utf-8").split(";")
+                if node_id
+            ]
+            # 记录被拖容器的展开态：摘除/重新插入会丢展开状态（观感上「原来展开的
+            # 变成折叠了」），移动后按 id 恢复。
+            for node_id in moved_ids:
+                item = model.find_by_id(node_id)
+                if item is not None and self.isExpanded(item.index()):
+                    expanded_ids.append(node_id)
             if model.dropMimeData(mime, action, target["row"], 0, target["parent"]):
                 event.acceptProposedAction()
-                moved_ids = [
-                    node_id
-                    for node_id in bytes(mime.data(_MIME_TYPE))
-                    .decode("utf-8")
-                    .split(";")
-                    if node_id
-                ]
             else:
                 event.ignore()
+                moved_ids = []
+                expanded_ids = []
         finally:
             if blocked:
                 selection.blockSignals(False)
@@ -307,10 +325,12 @@ class FlowTreeView(QTreeView):
         # 移动成功后按新索引重新选中被移动节点并滚动到可见：拖放会摘除/插入行，
         # 旧选中索引随之失效，不重选会出现「移动过的卡片点不中/看不到」的观感。
         if moved_ids:
-            self._reselect_nodes(moved_ids)
+            self._reselect_nodes(moved_ids, expanded_ids)
 
-    def _reselect_nodes(self, node_ids: list[str]) -> None:
-        """按节点 id 在新树上重新选中（首个作为当前项并滚动居中）。"""
+    def _reselect_nodes(
+        self, node_ids: list[str], expanded_ids: list[str] | None = None
+    ) -> None:
+        """按节点 id 在新树上重新选中（首个作为当前项并滚动居中），并恢复展开态。"""
         from PySide6.QtCore import QItemSelectionModel
 
         model = self.model()
@@ -324,6 +344,11 @@ class FlowTreeView(QTreeView):
         ]
         if not items:
             return
+        # 恢复被移动容器的展开态（须在有效索引上操作）
+        for node_id in expanded_ids or []:
+            item = model.find_by_id(node_id)
+            if item is not None:
+                self.setExpanded(item.index(), True)
         selection.clearSelection()
         for item in items:
             selection.select(
@@ -332,6 +357,11 @@ class FlowTreeView(QTreeView):
                 | QItemSelectionModel.SelectionFlag.Rows,
             )
         first = items[0].index()
+        # 展开祖先，保证被移动节点可见
+        parent = first.parent()
+        while parent.isValid():
+            self.setExpanded(parent, True)
+            parent = parent.parent()
         selection.setCurrentIndex(first, QItemSelectionModel.SelectionFlag.NoUpdate)
         self.scrollTo(first, QAbstractItemView.ScrollHint.PositionAtCenter)
 
