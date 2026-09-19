@@ -35,6 +35,14 @@ class RunFloatWindow(QWidget):
             | Qt.WindowType.WindowStaysOnTopHint
             | Qt.WindowType.FramelessWindowHint
         )
+        # macOS 专属语义（其它平台该属性为 no-op）：Qt 的 Qt.Tool 在 macOS 上
+        # 对应 NSPanel，**应用一旦不激活，系统会隐藏全部 tool window**
+        # （Qt 文档原话："By default, all tool windows are hidden when the
+        # application is inactive"，源码侧即 hidesOnDeactivate=true）。
+        # 本浮窗存在的意义恰恰是主窗口已最小化、用户正在别的 app 里看执行
+        # 进度，所以必须显式打开这个开关；否则跑起来的瞬间它就跟主窗口一起
+        # 消失，只剩 Dock 里的图标。
+        self.setAttribute(Qt.WidgetAttribute.WA_MacAlwaysShowToolWindow, True)
         self.setFixedSize(_WIDTH, _HEIGHT)
         self._drag_pos: QPoint | None = None
         self.state = "running"

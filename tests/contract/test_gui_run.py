@@ -166,6 +166,23 @@ def test_float_window_states(qapp):
     assert "TIMEOUT" in win.step_label.text()
 
 
+def test_float_window_survives_app_deactivation(qapp):
+    """运行浮窗必须带 WA_MacAlwaysShowToolWindow。
+
+    macOS 上 Qt.Tool 对应 NSPanel，**应用一旦不激活系统就隐藏全部 tool
+    window**（Qt 源码即 `hidesOnDeactivate = (type & Qt::Tool) && !属性`）。
+    浮窗存在的全部意义就是「主窗口已最小化、用户在看别的应用时仍能看到执行
+    进度」；缺这个属性它会跟主窗口一起消失（真机 2026-09-19 实测）。
+    """
+    from PySide6.QtCore import Qt
+
+    from rpa_core.gui.run_float import RunFloatWindow
+
+    win = RunFloatWindow()
+    assert win.windowFlags() & Qt.WindowType.Tool
+    assert win.testAttribute(Qt.WidgetAttribute.WA_MacAlwaysShowToolWindow)
+
+
 def test_run_shows_float_and_minimizes(window):
     _write_flow(window, "flo", "workflow.sleep", {"seconds": 3})
     window._start_run("flo")

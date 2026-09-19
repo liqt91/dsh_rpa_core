@@ -180,7 +180,8 @@ def test_capture_confirm_dialog_cancel_saves_nothing(
 
 def test_capture_overwrite_same_name_needs_confirm(window, monkeypatch):
     """同名覆盖保护：确认框选「否」则不落库（对齐 Web 的 confirm 语义）。"""
-    from PySide6.QtWidgets import QMessageBox
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QDialog, QMessageBox
 
     from rpa_core.gui import element_panel
 
@@ -193,13 +194,17 @@ def test_capture_overwrite_same_name_needs_confirm(window, monkeypatch):
     }
     assert window.save_element_descriptor("dup", original)
 
-    class FakeDialog:
+    created: list[QDialog] = []
+
+    class FakeDialog(QDialog):
+        """真 QDialog 子类：_confirm_element_save 会调 present_window()，
+        它需要 setWindowFlag/show/raise_/activateWindow 全套 QWidget 契约。"""
+
         def __init__(self, descriptor, *, default_name, parent=None):
-            pass
+            super().__init__(parent)
+            created.append(self)
 
         def exec(self):
-            from PySide6.QtWidgets import QDialog
-
             return QDialog.DialogCode.Accepted
 
         def result_document(self):
@@ -220,6 +225,10 @@ def test_capture_overwrite_same_name_needs_confirm(window, monkeypatch):
     )
     assert window._confirm_element_save(original) is None
     assert window._element_store().read("dup")["selector"]["css"] == "#old"
+    # 命名对话框必须被置顶：捕获时用户在浏览器里操作，本进程是后台应用，
+    # macOS 会忽略自激活请求，不置顶的话对话框停在浏览器后面、用户得先点一次
+    # Dock 才看得见（真机 2026-09-19 实测）。
+    assert created[0].windowFlags() & Qt.WindowType.WindowStaysOnTopHint
 
     # 选择「覆盖」→ 返回新文档
     monkeypatch.setattr(
@@ -342,3 +351,30 @@ def test_capture_cancelled_on_window_close(window, fake_capture):
     assert fake.cancelled
     assert window._capture_session is None
     _release_and_finish(fake, window)
+
+
+def test_present_window_only_forces_top_for_short_lived_dialogs(qapp):
+    """present_window 的 macOS 语义：短命对话框置顶，常驻窗口不置顶。
+
+    macOS 会忽略后台应用的自激活请求（防焦点窃取），此时 raise()/
+    activateWindow() 都不足以让新窗口出现在最前，窗口会停在浏览器之后、
+    必须点一次 Dock 才看得见。对必须被看见的模态对话框，临时
+    WindowStaysOnTopHint 是纯 Qt（零依赖）可用的硬保证；反过来常驻窗口若被
+    置顶会一直压住用户其它应用，所以默认不置顶。
+    """
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QDialog, QMainWindow
+
+    from rpa_core.gui.app import present_window
+
+    dialog = QDialog()
+    assert not (dialog.windowFlags() & Qt.WindowType.WindowStaysOnTopHint)
+    present_window(dialog, always_on_top=True)
+    assert dialog.windowFlags() & Qt.WindowType.WindowStaysOnTopHint
+
+    persistent = QMainWindow()
+    present_window(persistent)
+    assert not (persistent.windowFlags() & Qt.WindowType.WindowStaysOnTopHint)
+
+    dialog.close()
+    persistent.close()

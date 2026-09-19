@@ -169,6 +169,27 @@ def apply_theme(app: QApplication) -> None:
     app.setStyleSheet(load_stylesheet(qt_api="pyside6", palette=LightPalette))
 
 
+def present_window(window: QWidget, *, always_on_top: bool = False) -> None:
+    """把窗口送到用户眼前。
+
+    为什么不能只调 ``activateWindow()``：macOS 为防焦点窃取，**忽略后台应用的
+    自激活请求**。捕获/运行期间主窗口被最小化、用户正在浏览器里操作，我们此刻
+    就是后台应用；此时新窗口会正常创建，但停在浏览器之后，用户必须点一次 Dock
+    图标才能看见（真机实测：元素捕获的确认对话框「要点一次 Dock 才显示」）。
+
+    - ``always_on_top=True``：临时打开 ``WindowStaysOnTopHint``，让窗口浮到最前。
+      **只用于模态对话框等短命窗口**；常驻窗口置顶会一直压住其它应用。
+    - ``QApplication.alert``：兜底提醒（macOS 弹跳 Dock 图标 / Windows 闪烁任务栏
+      / Linux 无操作），保证即使用户没注意到窗口也能被提示到。
+    """
+    if always_on_top:
+        window.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
+    window.show()
+    window.raise_()
+    window.activateWindow()
+    QApplication.alert(window, 2000)
+
+
 def _ordered_namespaces(catalog: CommandCatalog) -> list[str]:
     """收集 catalog 实际出现的命名空间，按固定顺序 + 字典序兜底排列。"""
     present = {command_id.split(".", 1)[0] for command_id in catalog}
@@ -1507,8 +1528,9 @@ class MainWindow(QMainWindow):
         if self._run_float is not None:
             self._run_float.hide()
         self.showNormal()
-        self.raise_()
-        self.activateWindow()
+        # 运行期间用户在别的应用里 → 本进程是后台应用，需要显式抢前台
+        # （macOS 会忽略后台应用的自激活请求，见 present_window 文档）。
+        present_window(self)
 
     def _float_step_text(self, node_id: str) -> str:
         """节点 id → 画布卡片标题（悬浮窗「正在执行」行）。"""
@@ -2004,8 +2026,9 @@ class MainWindow(QMainWindow):
         """捕获结束：还原主窗口 → 命名 → 入库（ElementDescriptor 契约校验）。"""
         self._capture_session = None
         self.showNormal()
-        self.raise_()
-        self.activateWindow()
+        # 捕获期间用户在浏览器里操作 → 本进程是后台应用，单纯 raise()/
+        # activateWindow() 会被 macOS 忽略（见 present_window 文档）。
+        present_window(self)
         if result.get("timeout"):
             self.statusBar().showMessage("捕获超时（90 秒无手势）", 5000)
             return
@@ -2043,6 +2066,9 @@ class MainWindow(QMainWindow):
         else:
             suffix = metadata.get("controlType") or "x"
         dialog = ElementDialog(descriptor, default_name=f"el_{suffix}", parent=self)
+        # 此刻用户在浏览器里刚完成捕获，我们是后台应用：不置顶的话对话框会
+        # 停在浏览器后面，用户得先点一次 Dock 才看得见（真机实测）。
+        present_window(dialog, always_on_top=True)
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return None
         name, document = dialog.result_document()
