@@ -1,5 +1,12 @@
 // rpa_core 捕获扩展 content script（零构建 vanilla JS，与 bsk picker 同一协议）
-// hover 高亮（elementsFromPoint 变体）→ Ctrl+Click 捕获 → background 回传；Esc 取消。
+// hover 高亮（elementsFromPoint 变体）→ 捕获手势 → background 回传；Esc 取消。
+//
+// 捕获手势（三者等价，判定见 isCaptureModifier / isSecondaryClick）：
+//   ① ⌘ + 左键单击（macOS）/ Ctrl + 左键单击（Windows/Linux）
+//   ② 右键单击（含 macOS 触控板"双指点按"）
+//   ③ macOS 的 Ctrl+Click —— 系统层已把它改写成次要点击，因此实际走的是 ② 的路径。
+// ③ 是最容易踩的坑：它**不会**派发 ctrlKey===true 的 click，只挂 click 监听必然失灵
+// （现象：红框跟着鼠标走，但怎么点都捕获不到）。
 //
 // 描述符形态（M10 元素库契约）：
 //   selector.css        —— 必填、第一顺位，语义与本文件升级前完全一致（不破坏既有工作流）
@@ -18,7 +25,15 @@
 
   let armed = false;
   let box = null;
+  let hint = null;
   let current = null;
+  let lastCaptureAt = 0;   // 同一次手势的事件去重（见 capture）
+
+  // 平台判定**只影响提示文案**（macOS 上手势是 ⌘ 而不是 Ctrl，理由见 onContextMenu）。
+  // 刻意放在纯函数区之外：该区会被 scripts/check_capture_helpers.mjs 整段求值，不该碰 navigator。
+  const isMac = /Mac|iPhone|iPad/.test(navigator.userAgent || "");
+  const CAPTURE_HINT = (isMac ? "⌘ + 单击" : "Ctrl + 单击") + " 或 右键捕获 · Esc 取消";
+  let hintText = CAPTURE_HINT;
 
   // ---- 纯函数区（scripts/check_capture_helpers.mjs 按首尾锚点切片校验，勿在其中插入副作用） ----
   const ROLE_NAMES = [
@@ -156,7 +171,33 @@
       .replace(/\s+/g, " ").trim();
     return text.slice(0, 200);
   };
+
+  // 捕获手势判定。为什么必须收"次要点击（右键）"：
+  // macOS 在系统层把 Control+Click 改写成次要点击（Apple 的 secondary click 语义），
+  // 浏览器因此只派发 mousedown(button=2) / contextmenu / auxclick，**永远不会**派发
+  // ctrlKey===true 的 click —— 只监听 click 的实现在 Mac 上必然"红框在、点了没反应"。
+  // 注意：contextmenu 的 button 未必是 2（Mac 的 Ctrl+Click 常见 button=0），
+  // 所以判定以事件类型为准，不看 button。
+  const isCaptureModifier = (e) => Boolean(e.ctrlKey || e.metaKey);
+  const isSecondaryClick = (e) => e.type === "contextmenu" || e.button === 2;
   // ---- 纯函数区结束 ----
+
+  const ensureHint = () => {
+    if (!hint) {
+      hint = document.createElement("div");
+      hint.style.cssText = "position:fixed;z-index:2147483647;pointer-events:none;"
+        + "font:12px/1.6 -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;"
+        + "color:#fff;background:#ff3b30;padding:2px 6px;border-radius:3px;white-space:nowrap;"
+        + "box-shadow:0 1px 4px rgba(0,0,0,.35)";
+      document.documentElement.appendChild(hint);
+    }
+    hint.textContent = hintText;
+    return hint;
+  };
+
+  // 提示条文案由 setHint 维护：捕获态下发生"不生效的单击"时，把系统实际派发的事件回显出来，
+  // 用户不必对着"点了没反应"猜系统改写了什么（这正是 Mac 上 Ctrl+Click 的坑）。
+  const setHint = (text) => { hintText = text; if (hint) hint.textContent = text; };
 
   const show = (el) => {
     if (!box) {
@@ -170,14 +211,23 @@
     box.style.top = r.top + "px";
     box.style.width = r.width + "px";
     box.style.height = r.height + "px";
+    const tip = ensureHint();
+    tip.style.left = Math.max(0, Math.min(r.left, window.innerWidth - 260)) + "px";
+    tip.style.top = (r.top >= 26 ? r.top - 24 : r.top + r.height + 4) + "px";
   };
 
-  const hideBox = () => { if (box) { box.remove(); box = null; } };
+  const hideOverlay = () => {
+    if (box) { box.remove(); box = null; }
+    if (hint) { hint.remove(); hint = null; }
+  };
+
+  // 命中元素：跳过我们自己的两个覆盖层（它们已是 pointer-events:none，此处再兜一层）
+  const topElementAt = (x, y) => document.elementsFromPoint(x, y)
+    .find((n) => n !== box && n !== hint) || null;
 
   const onMove = (e) => {
     if (!armed) return;
-    const stack = document.elementsFromPoint(e.clientX, e.clientY);
-    const el = stack.find((n) => n !== box);
+    const el = topElementAt(e.clientX, e.clientY);
     if (el) { current = el; show(el); }
   };
 
@@ -208,26 +258,66 @@
     };
   };
 
-  const onClick = (e) => {
-    if (!armed || !e.ctrlKey) return;
-    const stack = document.elementsFromPoint(e.clientX, e.clientY);
-    const el = stack.find((n) => n !== box) || current;
+  // 真正落地一次捕获：buildDescriptor → 经 background 回传。
+  const capture = (e) => {
+    if (!armed) return;
+    const now = Date.now();
+    // 同一次手势会连发多个事件（macOS 的 mousedown→contextmenu、部分站点的 click→auxclick），
+    // 只认第一个；失败路径不写时间戳，所以"通道断了"仍可再点一次重试。
+    if (now - lastCaptureAt < 300) return;
+    const el = topElementAt(e.clientX, e.clientY) || current;
     if (!el) return;
+    // 捕获态是模态的：左键、右键都表示"捕获这个元素"，先挡掉浏览器默认行为
+    // （系统右键菜单、链接新开页）
     e.preventDefault();
     e.stopPropagation();
-    chrome.runtime.sendMessage({ type: "rpa-capture-result", descriptor: buildDescriptor(el) });
-    hideBox();
+    if (!chrome.runtime || !chrome.runtime.id) {
+      // 扩展重载后，已打开页面里的旧脚本与扩展的通道已断，再点也发不出去。
+      // 明确提示要刷新页面，而不是静默失败。
+      setHint("扩展已重载 · 请刷新本页（⌘/Ctrl+R）后重新捕获");
+      return;
+    }
+    try {
+      chrome.runtime.sendMessage({
+        type: "rpa-capture-result",
+        descriptor: buildDescriptor(el),
+      });
+    } catch (err) {
+      // 通道失效等异常：保留红框与提示，用户可再试；不要静默吞掉
+      setHint("捕获失败：" + ((err && err.message) || err));
+      return;
+    }
+    lastCaptureAt = now;
+    hideOverlay();
+  };
+
+  const onClick = (e) => {
+    if (!armed) return;
+    if (isCaptureModifier(e)) { capture(e); return; }
+    // 诊断回显：捕获态下普通左键单击不生效，把系统实际派发的事件写在提示条上，
+    // 用户不必对着"点了没反应"猜系统改写了什么（Mac 的 Ctrl+Click 正是如此）。
+    setHint(`未捕获：${e.type} ctrl=${e.ctrlKey} meta=${e.metaKey} button=${e.button}`
+      + ` · ${CAPTURE_HINT}`);
+  };
+
+  // 次要点击（右键 / macOS 的 Ctrl+Click / 触控板双指点按）→ 捕获并挡掉系统右键菜单。
+  // 同时挂 mousedown 与 contextmenu：个别站点会在 contextmenu 之前吞事件，两条路互为兜底，
+  // capture 内的去重保证同一次手势只回传一次。
+  const onSecondary = (e) => {
+    if (!armed || !isSecondaryClick(e)) return;
+    e.preventDefault();
+    capture(e);
   };
 
   const onKey = (e) => {
     if (e.key === "Escape" && armed) {
       chrome.runtime.sendMessage({ type: "rpa-capture-cancelled" });
-      hideBox();
+      hideOverlay();
     }
   };
 
   // 鼠标离开网页区域/窗口失焦/滚动时清掉高亮框（否则红框残留在屏幕上）
-  const onLeave = () => { if (armed) hideBox(); };
+  const onLeave = () => { if (armed) hideOverlay(); };
   document.documentElement.addEventListener("mouseleave", onLeave, true);
   window.addEventListener("blur", onLeave);
   window.addEventListener("scroll", onLeave, true);
@@ -235,12 +325,14 @@
   chrome.runtime.onMessage.addListener((msg) => {
     if (msg && msg.type === "rpa-capture-arm") {
       armed = msg.armed === true;
-      if (!armed) hideBox();
+      if (armed) setHint(CAPTURE_HINT); else hideOverlay();
     }
   });
 
   document.addEventListener("mousemove", onMove, true);
   document.addEventListener("click", onClick, true);
+  document.addEventListener("mousedown", onSecondary, true);
+  document.addEventListener("contextmenu", onSecondary, true);
   document.addEventListener("keydown", onKey, true);
 
   // 启动即同步当前捕获态：推送模型下新页面/新标签页不会自动收到此前的 arm 广播

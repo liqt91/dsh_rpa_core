@@ -70,7 +70,8 @@ $s = Invoke-RestMethod -Method Post -Uri "$base/api/capture/desktop/start" `
 # → {"sessionId":"desktop-1","mode":"hover"}（hover 默认即 hybrid：mode 回 "hybrid"）；
 # 移动鼠标（红色高亮框跟随），到目标控件按 F9 或 Ctrl+Click
 # 混合捕获（hybrid）：鼠标进浏览器网页内容区时桌面高亮让位给扩展页内 picker，
-# Ctrl+Click 走扩展捕获；浏览器 UI 骨架与桌面应用仍走 UIA。先回传者胜，另一侧自动回收。
+# 用捕获手势（⌘/Ctrl+Click 或右键）走扩展捕获；浏览器 UI 骨架与桌面应用仍走 UIA。
+# 先回传者胜，另一侧自动回收。
 Invoke-RestMethod -Method Post -Uri "$base/api/capture/desktop/pick" `
   -ContentType "application/json" `
   -Body (@{sessionId=$s.sessionId; saveAs="myControl"; flow="myFlow"; timeoutSeconds=90} | ConvertTo-Json)
@@ -126,7 +127,9 @@ Invoke-RestMethod -Method Post -Uri "$base/api/capture/browser/pick" `
 
 ```powershell
 # 无 token 配对：扩展安装并运行即自动可用（devserver 仅绑定 127.0.0.1）
-# 捕获：捕获期间所有浏览器的所有页面 hover 高亮自动激活，Ctrl+Click 捕获：
+# 捕获：捕获期间所有浏览器的所有页面 hover 高亮自动激活，用捕获手势点选：
+#   ⌘+Click（macOS）/ Ctrl+Click（Windows/Linux），或直接右键
+#   （macOS 的 Ctrl+Click 被系统改写成右键，故等价；三者在扩展侧都被接住）
 Invoke-RestMethod -Method Post -Uri "$base/api/capture/browser/start" `
   -ContentType "application/json" -Body '{"transport":"extension"}'
 Invoke-RestMethod -Method Post -Uri "$base/api/capture/browser/pick" `

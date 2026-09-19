@@ -55,6 +55,27 @@ M19 交互补强）与影刀基准。本任务按「用户体验 × 对标影刀
     GUI/CLI 捕获会 arm 到测试的假 bridge 端点、拿到测试描述符并落库（本机复现：真机捕获验证脚本
     被测试端点接管，返回了 `test_capture_hybrid` 夹具里的 `#go` 描述符）。改为互不包含的
     `rpacore-iso_`，并加守门测试 `test_isolated_endpoint_prefix_does_not_overlap_default_namespace`
+- [x] **G1 后继：真实手势缺陷——macOS 把 Ctrl+Click 改写成"次要点击"（2026-09-19 真机报障）**：
+  用户在 Mac 上报「网页里有红框，但 Ctrl+Click 捕获不到元素」。根因在**平台层**：macOS 把
+  Control+Click 改写成次要点击（Apple secondary click），浏览器因此只派发
+  `mousedown(button=2)` / `contextmenu` / `auxclick`，**永远不派发 `ctrlKey===true` 的 `click`**；
+  而 `content.js` 的捕获只挂在 `click` 上 → 手势进不了处理器。**上一轮的"真机验证"用的是
+  `page.eval` 合成 ctrl+click，走不到这条平台改写路径，所以漏掉了它。** 修（`extension/content.js`）：
+  ①判定抽成纯函数 `isCaptureModifier`（ctrl **或 meta**）+ `isSecondaryClick`（**以事件类型为准**
+  ——`contextmenu` 的 `button` 在 Mac 上常见是 0，不能只看 button）；②新增 `mousedown`/`contextmenu`
+  捕获期监听：次要点击（右键/双指点按/Mac 的 Ctrl+Click）一律捕获并 `preventDefault` 掉系统右键菜单，
+  `capture` 内 300ms 去重保证同一次手势只回传一次；③红框旁新增**平台化提示条**
+  （Mac「⌘ + 单击 或 右键捕获」，Windows/Linux「Ctrl + 单击」），收到不生效的单击时把系统
+  **实际派发的事件回显**出来（`未捕获：click ctrl=false meta=false button=0`）——把"点了没反应"
+  变成可直接读的证据；④`chrome.runtime` 失效（扩展重载后旧脚本孤立）与 `sendMessage` 抛错
+  都改为提示条显式告知，不再静默失败。配套 `capture_click_label()`（`capture/extension.py`，
+  按 `sys.platform`）统一 GUI/Web 用户可见文案，清掉写死的「Ctrl+Click」
+- [x] **G1 后继回归**：`check_capture_helpers.mjs` +8（⌘/Ctrl 修饰键、contextmenu 不看 button、
+  普通 click 不算次要点击）；`test_capture_extension` +4（文案按 darwin/win32/linux 三分支 +
+  content.js 必须挂 contextmenu/mousedown）；`test_gui_capture` 断言状态栏手势文案与
+  `capture_click_label()` 一致。真机取证：**版本探针**（合成 mousemove 后数覆盖层数）证明报障时
+  页面里跑的是**旧版** content.js（1 个覆盖层、无提示条）→ 复验需重载扩展**并刷新页面**
+  （扩展 reload **不会**替换已打开页面里已注入的 content script）
 - [x] **G2 画布交互（2026-09-18）**：多选 + 批量移动/删除 + 右键菜单 + 画布内搜索定位（Ctrl+F）
   - 多选：`FlowTreeView` 改 `ExtendedSelection`；Ctrl/Shift 点击不再顺带折叠容器（`_toggle_on_click` 检测修饰键让路）
   - 批量移动：`FlowTreeModel.mimeData` 本就携带多个 id，`dropMimeData` 内部移动改为批处理——

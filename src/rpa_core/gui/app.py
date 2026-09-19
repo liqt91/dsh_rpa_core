@@ -1789,11 +1789,11 @@ class MainWindow(QMainWindow):
             )
             # 提示按真实平台能力改写：面板默认文案承诺「桌面走 UIA / 可用 F9」，
             # 而桌面捕获 agent 是 Windows-only（非 Windows 上该腿 start 即不可用）
-            from rpa_core.capture import desktop_capture_available
+            from rpa_core.capture import capture_click_label, desktop_capture_available
 
             if not desktop_capture_available():
                 panel.capture_button.setToolTip(
-                    "网页元素捕获：移动鼠标框选，Ctrl+Click 捕获，Esc 取消。"
+                    f"网页元素捕获：移动鼠标框选，{capture_click_label()} 捕获，Esc 取消。"
                     "（桌面类元素捕获仅支持 Windows，本平台不可用）"
                 )
             dock = QDockWidget("元素库", self)
@@ -1925,7 +1925,11 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("已有捕获会话进行中（Esc 取消）", 4000)
             return
         # 延迟导入对齐 CLI（capture 包洁净无 pywinauto，但保持单一惯例）
-        from rpa_core.capture import DesktopCaptureSession, HybridCaptureSession
+        from rpa_core.capture import (
+            DesktopCaptureSession,
+            HybridCaptureSession,
+            capture_click_label,
+        )
 
         session = HybridCaptureSession(
             desktop_factory=DesktopCaptureSession,
@@ -1953,11 +1957,12 @@ class MainWindow(QMainWindow):
             )
             return
         self._capture_session = session
+        click = capture_click_label()
         if desktop_offline:
-            hint = "捕获中：移动鼠标框选，Ctrl+Click 捕获，Esc 取消" \
+            hint = f"捕获中：移动鼠标框选，{click} 或右键捕获，Esc 取消" \
                    "（桌面捕获仅支持 Windows，本平台只能捕获网页元素）"
         else:
-            hint = "捕获中：移动鼠标框选，Ctrl+Click 捕获（桌面也可用 F9），Esc 取消"
+            hint = f"捕获中：移动鼠标框选，{click} 或右键捕获（桌面也可用 F9），Esc 取消"
         if session.extension_offline:
             hint = "浏览器插件离线：网页区域无法捕获（桌面不受影响）。" + hint
         self.statusBar().showMessage(hint, 9000)

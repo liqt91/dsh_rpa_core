@@ -4,7 +4,8 @@
 script 里（用户真实浏览器的所有页面）。会话自己经**本地端点**与 bridge host 通信：
 
 - ``start()`` 连端点并下发 ``capture_arm``（host 转发扩展 → 扩展广播到全部标签页）
-- 扩展 Ctrl+Click 捕获 → 经 host 回传 ``capture_result`` → 本会话的读线程接收并唤醒 pick
+- 扩展侧捕获手势（⌘/Ctrl+Click、右键）→ 经 host 回传 ``capture_result`` →
+  本会话的读线程接收并唤醒 pick
 - ``cancel``/``close`` 下发 ``capture_disarm`` 并关闭连接
 
 无 HTTP 轮询、无 pending 标记、无 token（host 仅本机子进程，扩展 ID 白名单由 host manifest 强制）。
@@ -12,11 +13,23 @@ script 里（用户真实浏览器的所有页面）。会话自己经**本地�
 
 from __future__ import annotations
 
+import sys
 import threading
 import uuid
 from typing import Any
 
 from rpa_core import local_transport
+
+
+def capture_click_label() -> str:
+    """页内捕获手势的修饰键文案（提示用户用哪个手势）。
+
+    macOS 在**系统层**把 Control+Click 改写成"次要点击"（secondary click），浏览器因此
+    只派发 mousedown(button=2)/contextmenu，**永远不派发 ctrlKey 的 click**——所以给 Mac
+    用户的提示必须写 ⌘+Click，否则他照着 Ctrl+Click 做会毫无反应（扩展侧也已同时接受
+    右键，见 ``extension/content.js`` 的 isCaptureModifier/isSecondaryClick）。
+    """
+    return "⌘+Click" if sys.platform == "darwin" else "Ctrl+Click"
 
 
 class ExtensionCaptureSession:

@@ -2,7 +2,7 @@
 
 MV3 零构建扩展（Chrome/Edge），两条通道均经 **Native Messaging 长连接**（ADR 0015）：
 
-1. **捕获通道**：捕获模式下在任意页面 hover 高亮、Ctrl+Click 捕获元素描述符回传 rpa_core。
+1. **捕获通道**：捕获模式下在任意页面 hover 高亮、手势点选捕获元素描述符回传 rpa_core。
 2. **执行通道（一等公民，唯一通道）**：在**用户真实已登录浏览器**里执行浏览器自动化
    （tabs / scripting / cookies / webNavigation）。rpa_core 的 `browser.*` 命令统一走本通道；
    `playwright` / `bsk` 已彻底移除，无回退。
@@ -38,9 +38,16 @@ MV3 零构建扩展（Chrome/Edge），两条通道均经 **Native Messaging 长
 ## 使用
 
 - 编辑器元素库「＋捕获」（或 `rpa-core capture browser --transport extension`）发起捕获 →
-  扩展 content script 在所有页面激活 hover 高亮 → 鼠标移到目标 Ctrl+Click 捕获 →
+  扩展 content script 在所有页面激活 hover 高亮 → 鼠标移到目标后用手势捕获 →
   描述符回传编辑器（可改名/改 selector 后入库）
-- Esc 取消；普通点击不捕获（可正常导航）
+- **捕获手势**（三者等价）：`⌘+单击`（macOS）/ `Ctrl+单击`（Windows/Linux）、**右键单击**
+  （含触控板双指点按）、以及 macOS 的 `Ctrl+Click`。
+  > macOS 在**系统层**把 `Ctrl+Click` 改写成"次要点击（右键）"，浏览器因此只派发
+  > `contextmenu`，**永远不会**派发 `ctrlKey===true` 的 `click` —— 所以 Mac 用户必须用
+  > `⌘`、或直接右键；页内红框旁的提示条会写明当前平台该用哪个手势。
+- 捕获态是模态的：左键/右键都归捕获，系统右键菜单被屏蔽
+  （普通点击不捕获、可正常导航；未按修饰键的单击会在提示条上回显系统实际派发的事件）
+- Esc 取消；若提示条提示"扩展已重载"，说明本页脚本与扩展的通道已断 → 刷新页面即可
 - 网页 DOM 内容归本扩展；浏览器 UI 骨架（标签栏/工具栏）与桌面应用归桌面 hover 捕获
   （`rpa-core capture desktop --hover`）
 

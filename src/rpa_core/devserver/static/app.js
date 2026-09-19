@@ -2781,6 +2781,12 @@ async function captureElement(kind) {
   return captureDesktopElement(flow);
 }
 
+// 捕获手势文案：macOS 在系统层把 Ctrl+Click 改写成"次要点击"，浏览器只派发 contextmenu
+// 而不派发 ctrlKey 的 click —— 所以 Mac 上的等价手势是 ⌘+Click（或直接右键）。
+// 提示必须写对，否则 Mac 用户照着 Ctrl+Click 做会毫无反应。扩展侧两种都收。
+const IS_MAC = /Mac|iPhone|iPad/.test(navigator.userAgent || "");
+const CAPTURE_CLICK = IS_MAC ? "⌘+Click" : "Ctrl+Click";
+
 async function captureBrowserElement(flow) {
   showCompileMessage("正在启动捕获（扩展无缝模式）…", true);
   let sessionId;
@@ -2793,7 +2799,7 @@ async function captureBrowserElement(flow) {
     showCompileMessage(`捕获启动失败：${err.message || err}`, false);
     return null;
   }
-  showCompileMessage("捕获中：鼠标移到网页元素上 Ctrl+Click 捕获（Esc 取消）", true);
+  showCompileMessage(`捕获中：鼠标移到网页元素上 ${CAPTURE_CLICK} 或右键捕获（Esc 取消）`, true);
   try {
     const result = await api("POST", "/api/capture/browser/pick", {
       sessionId,
@@ -2820,7 +2826,7 @@ async function captureDesktopElement(flow) {
     showCompileMessage(`捕获启动失败：${err.message || err}`, false);
     return null;
   }
-  showCompileMessage("捕获中：鼠标移到目标控件按 F9 或 Ctrl+Click（Esc 取消）", true);
+  showCompileMessage(`捕获中：鼠标移到目标控件按 F9 或 ${CAPTURE_CLICK}（Esc 取消）`, true);
   try {
     const result = await api("POST", "/api/capture/desktop/pick", {
       sessionId,

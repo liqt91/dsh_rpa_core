@@ -40,9 +40,12 @@ class ElementPanel(QWidget):
         toolbar = QHBoxLayout()
         self.refresh_button = QPushButton("刷新")
         self.capture_button = QPushButton("捕获元素")
+        # 手势文案按平台取：macOS 上 Ctrl+Click 会被系统改写成右键（见 capture_click_label）
+        from rpa_core.capture import capture_click_label
+
         self.capture_button.setToolTip(
             "混合捕获：移动鼠标框选（网页走浏览器插件、桌面走 UIA），"
-            "Ctrl+Click 捕获（桌面也可用 F9），Esc 取消"
+            f"{capture_click_label()} 或右键捕获（桌面也可用 F9），Esc 取消"
         )
         self.verify_button = QPushButton("校验")
         self.insert_button = QPushButton("插入参数")

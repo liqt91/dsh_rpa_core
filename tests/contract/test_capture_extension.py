@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import json
+import sys
 import threading
 import time
 import urllib.error
@@ -16,7 +17,7 @@ from pathlib import Path
 import pytest
 
 from rpa_core import local_transport as lt
-from rpa_core.capture import ExtensionCaptureSession
+from rpa_core.capture import ExtensionCaptureSession, capture_click_label
 from rpa_core.devserver import DevServer
 from rpa_core.extension_exec import endpoint_name
 
@@ -243,3 +244,35 @@ def test_extension_capture_arms_all_online_endpoints():
     finally:
         edge.close()
         chrome.close()
+
+
+@pytest.mark.parametrize(
+    ("platform", "expected"),
+    [("darwin", "⌘+Click"), ("win32", "Ctrl+Click"), ("linux", "Ctrl+Click")],
+)
+def test_capture_click_label_follows_platform(monkeypatch, platform, expected):
+    """页内捕获手势文案必须按平台给对。
+
+    回归（macOS 真机 2026-09-19）：macOS 在**系统层**把 Control+Click 改写成"次要点击"，
+    浏览器只派发 contextmenu，**永不派发 ctrlKey 的 click** —— 对 Mac 用户提示
+    「Ctrl+Click 捕获」等于提示一个不会生效的手势（现象：红框跟着鼠标走，但怎么点都
+    捕获不到）。扩展侧已同时接受 ⌘+Click 与右键，提示文案必须同步改成 ⌘+Click。
+    """
+    monkeypatch.setattr(sys, "platform", platform)
+    assert capture_click_label() == expected
+
+
+def test_browser_capture_hint_uses_platform_gesture_label():
+    """扩展侧捕获提示不能写死 Ctrl+Click（否则 Mac 用户被指引到无效手势）。
+
+    content.js 的手势判定（isCaptureModifier/isSecondaryClick）由
+    scripts/check_capture_helpers.mjs 覆盖；此处保证**用户可见文案**与之一致。
+    """
+    content = (ROOT / "extension" / "content.js").read_text(encoding="utf-8")
+    assert "isCaptureModifier" in content and "isSecondaryClick" in content, (
+        "content.js 必须同时接受修饰键点击与次要点击"
+    )
+    assert 'addEventListener("contextmenu", onSecondary' in content, (
+        "必须挂 contextmenu：macOS 的 Ctrl+Click 只走这条路径"
+    )
+    assert 'addEventListener("mousedown", onSecondary' in content

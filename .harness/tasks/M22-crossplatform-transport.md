@@ -33,11 +33,15 @@ M20 的传输层与安装注册**按三平台实现**，但**只在 Windows 真�
   - SW 长连 native port 保活（心跳间隔稳定）；扩展 reload 与浏览器完全退出 → host 回收
     （Unix socket 文件消失、无残留进程）；重连时延；unpacked ID 推导/发现一致。
 - [ ] **S3 端到端**
-  - [x] **捕获 arm → Ctrl+Click → 描述符回传（macOS 真机，2026-09-18）**：`HybridCaptureSession`
+  - [x] **捕获 arm → 描述符回传（macOS 真机，2026-09-18）**：`HybridCaptureSession`
     全路径（GUI「捕获元素」按钮同构造）拿到真实描述符。期间暴露并修掉一处**平台退化缺陷**：
     非 Windows 上桌面腿 49ms 返回 `{"error": "desktop capture requires Windows"}`，旧「先回传者胜」
     把它当成捕获成功、掐掉仍在线的扩展腿 → 用户侧「点捕获元素闪一下就弹回、网页里怎么点都没反应」。
     细节与 4 处修改见 M23 G1「平台退化修正」。
+    > **真实手势缺陷**：`Control+Click` 被系统层改写成"次要点击"，浏览器只派发 `contextmenu`，
+    > **永不派发 `ctrlKey` 的 `click`** → 只挂 `click` 监听的 content.js 在 Mac 上必然
+    > 「红框跟随鼠标、但怎么点都捕获不到」。已修（content.js 增补 `metaKey`/次要点击路径），
+    > 见 M23 G1「真实手势缺陷修正（macOS 次要点击）」。教训：**合成事件验证不能替代真实手势验证**。
   - [ ] `browser.navigate` 经扩展通道 succeeded（真实浏览器）
 - [ ] **S4 差异修正与文档**
   - [x] **POSIX 端点路径长度缺陷（macOS 真机暴露，2026-09-18）**：`sun_path` 103 字节上限被

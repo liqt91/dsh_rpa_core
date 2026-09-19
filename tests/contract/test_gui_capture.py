@@ -22,6 +22,8 @@ import pytest
 
 pytest.importorskip("PySide6")
 
+from rpa_core.capture import capture_click_label  # noqa: E402
+
 
 @pytest.fixture(scope="module")
 def qapp():
@@ -285,6 +287,9 @@ def test_capture_desktop_offline_hint(window, fake_capture, monkeypatch):
     message = window.statusBar().currentMessage()
     assert "仅支持 Windows" in message
     assert "F9" not in message, "桌面不可用时不应再承诺 F9"
+    # 回归（macOS 真机 2026-09-19）：状态栏曾写死 Ctrl+Click，而 macOS 上该手势被系统
+    # 改写成右键、不会派发 click —— 提示必须跟随平台（Mac 用 ⌘+Click）。
+    assert capture_click_label() in message, "捕获手势提示必须与平台一致"
     fake.result = None
     _release_and_finish(fake, window)
 

@@ -17,9 +17,9 @@ try {
 }
 
 const start = source.indexOf("const ROLE_NAMES");
-const end = source.indexOf("const show = (");
+const end = source.indexOf("const ensureHint = (");
 if (start < 0 || end < 0 || end <= start) {
-  console.error("FAIL: 未能从 content.js 定位纯函数区（锚点 const ROLE_NAMES / const show =）");
+  console.error("FAIL: 未能从 content.js 定位纯函数区（锚点 const ROLE_NAMES / const ensureHint =）");
   process.exit(1);
 }
 const slice = source.slice(start, end);
@@ -91,8 +91,10 @@ const parentOf = (parent, children) => {
 
 const {
   roleOf, accessibleName, cssSelectorFor, candidatesFor, labelTextOf, containerTextOf,
+  isCaptureModifier, isSecondaryClick,
 } = new Function("document", "CSS", `${slice}
-return { roleOf, accessibleName, cssSelectorFor, candidatesFor, labelTextOf, containerTextOf };`)(
+return { roleOf, accessibleName, cssSelectorFor, candidatesFor, labelTextOf, containerTextOf,
+  isCaptureModifier, isSecondaryClick };`)(
   document, CSS,
 );
 
@@ -190,6 +192,24 @@ check("命中多个也保留，如实记录 matchedCount",
 
 page = [makeEl({ tag: "BUTTON", attrs: { name: "" } })];
 check("空属性值不产生候选", candidatesFor(page[0], "button"), []);
+
+// 捕获手势（回归：macOS 的 Ctrl+Click 只派发 contextmenu，不派发 ctrlKey 的 click）
+check("Ctrl+左键（Windows/Linux）算捕获手势",
+  isCaptureModifier({ ctrlKey: true, metaKey: false }), true);
+check("⌘+左键（macOS 等价手势）算捕获手势",
+  isCaptureModifier({ ctrlKey: false, metaKey: true }), true);
+check("无修饰键不算捕获手势",
+  isCaptureModifier({ ctrlKey: false, metaKey: false }), false);
+check("contextmenu 算次要点击（button 可能是 0，不看 button）",
+  isSecondaryClick({ type: "contextmenu", button: 0 }), true);
+check("contextmenu 带 button=2 也算",
+  isSecondaryClick({ type: "contextmenu", button: 2 }), true);
+check("mousedown button=2 算次要点击",
+  isSecondaryClick({ type: "mousedown", button: 2 }), true);
+check("mousedown button=0 不算次要点击",
+  isSecondaryClick({ type: "mousedown", button: 0 }), false);
+check("普通 click 不算次要点击",
+  isSecondaryClick({ type: "click", button: 0 }), false);
 
 // label / 容器文本
 check("label 文本拼接 + 截断",
