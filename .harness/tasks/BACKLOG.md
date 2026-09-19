@@ -31,17 +31,16 @@
 
 - [ ] 技术路线（ADR 0016）：GUI 为唯一主力形态——新增能力优先落 GUI；Web 编辑器（devserver）
   `devserver/static/` 冻结演进（不删除、不再补齐 GUI 已有能力）
-- [ ] **M21 GUI 运行控制进阶：暂停/继续 + 恢复人工确认**（`planned`）
-  - 计划：`M21-run-control-advanced.md`
-  - 缺口：`RunManager` 无 pause/resume；暂停信号是进程内 `asyncio.Event`，GUI 走子进程需
-    **跨进程控制通道**；`recovery_required`/`indeterminate` 的人工确认门未前端化
 - [ ] UI、DSH、MCP、调度器和安装器集成（`planned`）——见远期任务
 
 ## 远期任务
 
 - [ ] 画布缩放 / 缩略导航（`planned`——树形画布长流程纵深远超影刀自由画布；M23 切片外）
 - [ ] 节点禁用/启用（`blocked`——需 AST 增加 `disabled` 字段，属后端契约扩展，不单是 GUI）
-- [ ] 断点 / 单步调试（`planned`——影刀核心调试能力；ADR 0005 pause 语义已铺路，需运行协议扩展）
+- [ ] 断点 / 单步调试（`planned`——影刀核心调试能力；M21 已铺好跨进程暂停通道与
+  「暂停即收口 + 从检查点续跑」语义，继续往细粒度走需要运行协议按节点粒度下发暂停）
+- [ ] Web 编辑器前端化暂停/继续（`planned`——M21 只做了 PySide6 GUI；ADR 0006 §6 的
+  通道对齐要求未落到 devserver HTTP 端点与 `static/app.js`）
 - [ ] 运行历史浏览 / 回放（`planned`——run_artifacts 列表入口；影刀有运行记录）
 - [ ] 主题切换入口（`planned`——QDarkStyle 深浅 palette 已在依赖，`apply_theme` 固定浅色）
 - [ ] 窗口布局记忆（`planned`——dock 开合/宽度 QSettings 持久化）
@@ -56,6 +55,19 @@
 > 主力形态，该条目（「确认非开发者用户为主力后再立项薄壳」）不再适用。
 
 ## 已完成
+
+- [x] M21 GUI 运行控制进阶：暂停/继续 + 恢复人工确认（`done`，2026-09-19）
+  - 计划：`M21-run-control-advanced.md`（含「实施结果」与计划修正说明）
+  - 决策：ADR 0005 新增「跨进程暂停信号（M21 增补）」；ADR 0004 就地修订浏览器会话
+    跨进程表述；ADR 0011 §4 两条「后置」标记为已补齐；手册 `docs/gui-run-control.md`
+  - 交付：顶层零依赖 `control_channel.py`（控制文件 `control.json` + 轮询镜像到
+    `RunHandle`）、`RunHandle.resume()`（撤销未生效请求）、`rpa-core pause`、
+    `RunManager.pause/continue_run/resume(allow_indeterminate=)`、GUI 工具栏+浮窗
+    「暂停/继续」与两种终态的确认框、**浏览器会话跨进程续接**
+    （`session_bindings_from_scopes` + `restore_from_scopes` 恢复钩子）
+  - 证据：真机（macOS+Edge 153）`navigate → 暂停 → resume → reload + getText` 全部作用在
+    暂停前那个 `tabId` 上、已完成节点零重跑；新增 24 项测试（7 控制通道含真子进程 +
+    9 会话续接 + 8 GUI 暂停链路含「不确认绝不恢复」）
 
 - [x] M22 macOS/Linux 传输层真机验证（`done` —— macOS 侧完成，2026-09-19；Linux 仍未真机）
   - 计划：`M22-crossplatform-transport.md`；决策：ADR 0015（§6 平台差异、§7 平台验证状态）

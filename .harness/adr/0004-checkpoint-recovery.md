@@ -52,7 +52,16 @@ checkpoint 为 `version = 1` 的 JSON 文档，写入 `run_dir/checkpoint.json`�
 - deadline 不持久化（monotonic 时间跨进程无意义）；resume 以全新 `workflow.timeout_seconds` 预算执行。
 - 执行从根节点重新走一遍：路径键在 `completedSteps` 中的 action 直接跳过，不产生命令调用与事件；其余节点正常执行，条件分支依据快照 scopes 重新求值。
 - 失败的 run 可以 resume：未完成的 step（含失败的那个）会重新执行。对 unsafe-write 命令，这是人工决策的一部分。
-- 浏览器与桌面 session 不跨进程存活：checkpoint 中的 `sessionId` 输出在 resume 后指向已死亡的 session，后续使用它的 step 会以 `SESSION_NOT_FOUND` / `SESSION_LOST` 失败。首版不为 session 做重建，workflow 需要重新 launch 或由人工介入。
+- **会话跨进程续接（M21 修订，2026-09-19）**：原表述为「浏览器与桌面 session 不跨进程存活」，
+  那是 playwright 时代的结论。ADR 0013 移除 playwright、浏览器执行统一走自研扩展单通道后，
+  **浏览器会话 = 用户真实浏览器里的一个标签页句柄**（`tabId`），它不随 run 进程退出而消失
+  （`PlaywrightExecutor.close()` 只解绑、不代关用户标签页；真机实测：暂停收口后标签页仍在）。
+  因此 resume 时由 `ExecutorRegistry.restore_from_scopes` 调执行器的恢复钩子，按 checkpoint
+  里已持久化的 `sessionId` / `tabId` / `browserInstance` 重建绑定，续跑接着操作同一批标签页。
+  恢复期不做标签页存活探测：真去用时由扩展侧报 not found，与「跑起来才发现页面被关了」同类。
+  **桌面会话仍不跨进程存活**：`desktop.uia` / `desktop.win32` 的会话绑定进程内的 pywinauto
+  对象，resume 后引用旧 `sessionId` 的 step 会以 `SESSION_NOT_FOUND` 失败，需要重新 launch
+  或人工介入。
 
 ### 人工恢复入口
 

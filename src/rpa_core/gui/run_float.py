@@ -14,7 +14,7 @@ from PySide6.QtGui import QColor, QMouseEvent, QPainter, QPen
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
 _WIDTH = 320
-_HEIGHT = 130
+_HEIGHT = 150
 _MARGIN = 16  # 距屏幕右下角的边距
 
 _STATE_COLORS = {
@@ -22,7 +22,13 @@ _STATE_COLORS = {
     "succeeded": "#1a7f37",
     "failed": "#cf222e",
     "cancelled": "#9a6700",
+    "paused": "#bf8700",
+    "recovery_required": "#8250df",
+    "indeterminate": "#8250df",
 }
+
+# 不是「跑完」而是「等人工接手」的终态：浮窗要给出「继续」入口
+_RESUMABLE_STATES = ("paused", "recovery_required", "indeterminate")
 
 
 class RunFloatWindow(QWidget):
@@ -46,6 +52,9 @@ class RunFloatWindow(QWidget):
         self.setFixedSize(_WIDTH, _HEIGHT)
         self._drag_pos: QPoint | None = None
         self.state = "running"
+        # 已请求暂停但尚未落到边界：轮询会周期性调 show_running，这个标志让
+        # 「已请求暂停…」的提示不被一秒数次的状态刷新冲掉。
+        self._pause_pending = False
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(12, 10, 12, 10)
@@ -67,38 +76,73 @@ class RunFloatWindow(QWidget):
 
         buttons = QHBoxLayout()
         self.cancel_button = QPushButton("取消")
+        self.pause_button = QPushButton("暂停")
+        self.pause_button.setToolTip("当前步骤完成后停在节点边界（不打断已开始的命令）")
+        self.continue_button = QPushButton("继续")
+        self.continue_button.setToolTip("从暂停处继续；需人工确认的终态会先弹确认框")
+        self.continue_button.setEnabled(False)
         self.restore_button = QPushButton("还原")
         buttons.addStretch(1)
         buttons.addWidget(self.cancel_button)
+        buttons.addWidget(self.pause_button)
+        buttons.addWidget(self.continue_button)
         buttons.addWidget(self.restore_button)
         layout.addLayout(buttons)
 
     # ---- 状态驱动 -----------------------------------------------------------
+    def clear_pause_pending(self) -> None:
+        """新的一次运行开始：清掉上一次的「已请求暂停」残留。"""
+        self._pause_pending = False
+
     def show_running(self, step_text: str, done_count: int) -> None:
-        """运行中：当前步骤 + 已完成步数。"""
+        """运行中：当前步骤 + 已完成步数（已请求暂停时标题保持提示）。"""
         self.state = "running"
-        self.dot_label.setStyleSheet(f"color: {_STATE_COLORS['running']};")
-        self.title_label.setText("运行中…")
+        self.dot_label.setStyleSheet(
+            f"color: {_STATE_COLORS['paused' if self._pause_pending else 'running']};"
+        )
+        self.title_label.setText("已请求暂停…" if self._pause_pending else "运行中…")
         self.step_label.setText(step_text)
         self.step_label.setStyleSheet("")
         self.progress_label.setText(f"{done_count} 步")
         self.cancel_button.setEnabled(True)
+        self.pause_button.setEnabled(not self._pause_pending)
+        # 请求尚未落地时，「继续」= 撤销请求（run 还在跑）
+        self.continue_button.setEnabled(self._pause_pending)
+
+    def show_pausing(self) -> None:
+        """已请求暂停、等待落到节点边界。"""
+        self._pause_pending = True
+        self.dot_label.setStyleSheet(f"color: {_STATE_COLORS['paused']};")
+        self.title_label.setText("已请求暂停…")
+        self.step_label.setText("当前步骤完成后停在节点边界")
+        self.step_label.setStyleSheet("")
+        self.pause_button.setEnabled(False)
+        self.continue_button.setEnabled(True)
 
     def show_result(self, status: str, detail: str = "") -> None:
-        """终态：succeeded / failed / cancelled + 详情行。"""
+        """终态：succeeded / failed / cancelled / paused / 需确认恢复的两种 + 详情行。"""
         self.state = status
+        self._pause_pending = False
         color = _STATE_COLORS.get(status, "#57606a")
         self.dot_label.setStyleSheet(f"color: {color};")
         title = {
             "succeeded": "运行成功",
             "failed": "运行失败",
             "cancelled": "已取消",
+            "paused": "已暂停（可继续）",
+            "recovery_required": "待确认后可恢复",
+            "indeterminate": "结果不确定，待确认",
         }.get(status, status)
         self.title_label.setText(title)
         self.step_label.setText(detail)
-        if status in ("failed", "cancelled"):
+        if status in ("failed", "cancelled", "paused", "recovery_required", "indeterminate"):
             self.step_label.setStyleSheet(f"color: {color};")
         self.cancel_button.setEnabled(False)
+        self.pause_button.setEnabled(False)
+        self.set_continue_enabled(status in _RESUMABLE_STATES)
+
+    def set_continue_enabled(self, enabled: bool) -> None:
+        self.continue_button.setEnabled(enabled)
 
     # ---- 定位与拖动 ---------------------------------------------------------
     def place_bottom_right(self) -> None:

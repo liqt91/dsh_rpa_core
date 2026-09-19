@@ -84,6 +84,15 @@ class RunHandle:
     def pause(self) -> None:
         self._pause.set()
 
+    def resume(self) -> None:
+        """撤销尚未生效的暂停请求（ADR 0005「请求不排队、可被覆盖」的另一半）。
+
+        生效点之前撤销才会被看见：run 一旦在节点边界抛出 `PauseSignal` 就进入
+        收口流程，此后再撤销不会把 run 拉回来——那时「继续」是 `resume`（新进程，
+        从检查点起），不是这个开关。取消请求不受影响（取消优先级更高，且独立）。
+        """
+        self._pause.clear()
+
     async def cancel_and_wait(self) -> RunResult:
         self.cancel()
         return await self.wait()
@@ -188,6 +197,10 @@ class Orchestrator:
             )
         except OSError as exc:
             raise RunPersistenceError("Failed to initialize run evidence", cause=exc) from exc
+        # 跨进程资源续接（M21）：让执行器从快照重建「进程内句柄 → 外部资源」的绑定。
+        # 扩展通道的浏览器会话（用户浏览器里的标签页）不随 run 进程退出而消失，
+        # 靠这里接回来，否则暂停后「继续」会因会话失效而失败。
+        self.executors.restore_from_scopes(scopes)
         return await self._run_to_terminal(
             run_id,
             plan,

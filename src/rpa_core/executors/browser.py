@@ -66,6 +66,64 @@ _SCHEME_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9+.-]*:")
 _EXT_SW_WAKE_SECONDS = 45.0
 
 
+_SESSION_RESOURCE_PREFIX = "browser.session:"
+
+
+def session_bindings_from_scopes(
+    scopes: Any,
+) -> tuple[dict[str, str], dict[str, str], str | None]:
+    """从 checkpoint 快照还原浏览器会话绑定（M21 跨进程续接）。
+
+    返回 `(sessionId → tabId, sessionId → 浏览器实例, 最后活跃的 sessionId)`。
+
+    快照里两处信息互补（写入点见 `_open_extension` 与 `browser.attach`）：
+    - `effects`：`resource = "browser.session:<sid>"`；`details.tabId` 非空即绑定；
+      `details.operation = "detach"` 表示会话已解绑（`browser.close`），不再还原；
+    - `outputs.browserInstance`：会话所属浏览器实例，多实例并存时用于路由。
+    """
+    if not isinstance(scopes, dict):
+        return {}, {}, None
+    steps = scopes.get("steps")
+    if not isinstance(steps, dict):
+        return {}, {}, None
+
+    tabs: dict[str, str] = {}
+    hosts: dict[str, str] = {}
+    last_sid: str | None = None
+    for step in steps.values():
+        if not isinstance(step, dict):
+            continue
+        outputs = step.get("outputs")
+        if isinstance(outputs, dict):
+            sid = outputs.get("sessionId")
+            if isinstance(sid, str) and sid:
+                last_sid = sid
+                instance = outputs.get("browserInstance")
+                if isinstance(instance, str) and instance:
+                    hosts[sid] = instance
+        for effect in step.get("effects") or []:
+            if not isinstance(effect, dict):
+                continue
+            resource = effect.get("resource")
+            if not isinstance(resource, str) or not resource.startswith(_SESSION_RESOURCE_PREFIX):
+                continue
+            sid = resource[len(_SESSION_RESOURCE_PREFIX):]
+            if not sid:
+                continue
+            details = effect.get("details")
+            details = details if isinstance(details, dict) else {}
+            if str(details.get("operation") or "") == "detach":
+                tabs.pop(sid, None)
+                hosts.pop(sid, None)
+                continue
+            tab_id = details.get("tabId")
+            if isinstance(tab_id, str) and tab_id:
+                tabs[sid] = tab_id
+    if last_sid is not None and last_sid not in tabs:
+        last_sid = None
+    return tabs, hosts, last_sid
+
+
 def _ensure_scheme(url: str) -> str:
     stripped = url.strip()
     if not stripped:
@@ -881,6 +939,23 @@ class PlaywrightExecutor(CommandExecutor):
             f"extension channel: {exc}",
             details={"channel": "extension", "code": exc.code},
         )
+
+    def restore_from_scopes(self, scopes: Any) -> None:
+        """resume 时按快照重建会话绑定（M21 跨进程续接，由 `ExecutorRegistry` 调用）。
+
+        扩展通道的会话 = 用户浏览器里的标签页句柄，**不随 run 进程退出而消失**
+        （`close()` 只解绑、不代关用户标签页），所以 resume 起来的新进程只要把
+        `sessionId → tabId` 接回来，就能接着操作同一批标签页——不然「暂停后继续」
+        会以「缺少有效会话」失败（暂停 = 干净收口 + 进程退出，见 ADR 0005）。
+
+        不在这里校验标签页是否仍存在：那要一次扩展往返，而「跑起来才发现页面被
+        用户关了」和恢复期判定是同一种错误，交给真去用的那条命令报 not found 更直接。
+        """
+        tabs, hosts, last_sid = session_bindings_from_scopes(scopes)
+        self._ext_sessions.update(tabs)
+        self._ext_session_hosts.update(hosts)
+        if last_sid is not None:
+            self._last_session_id = last_sid
 
     async def close(self) -> None:
         # 扩展单通道（M15）：只解绑，不动用户浏览器里的标签页（默认整浏览器权限≠代管生命周期）

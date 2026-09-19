@@ -39,6 +39,7 @@ def test_api_v1_run_handle_surface_is_frozen():
     for method in (
         RunHandle.cancel,
         RunHandle.pause,
+        RunHandle.resume,
         RunHandle.wait,
         RunHandle.cancel_and_wait,
         RunHandle.pause_and_wait,

@@ -7,6 +7,11 @@ run_id。cancel = 终止子进程（orchestrator 在子进程内落 cancelled �
 run_id 映射：orchestrator 的真实 run_id（UUID）写在子进程 stdout 末尾的
 RunResult JSON 里；我们用 `run-<seq>-<pid>` 做对外句柄，stdout 解析出真实
 run_id 后映射到 `run_artifacts/<uuid>/` 读证据。
+
+暂停/继续（M21）：暂停信号在 runtime 里是进程内 `asyncio.Event`，跨进程够不着。
+run 子进程轮询 `run_artifacts/<uuid>/control.json`（`control_channel`，零依赖、
+三方共用）；本模块只负责**写**那个文件，或在 run 已收口时 spawn 一个新进程
+`rpa-core resume` 从检查点继续。隔离边界不变：写文件与 subprocess 都不是 import。
 """
 
 import json
@@ -16,9 +21,19 @@ import sys
 import threading
 from pathlib import Path
 
+from rpa_core.control_channel import request_continue, request_pause
+
+# 等真实 run_id 被解析出来的上限：CLI 在 start() 之后立即打印标记行，正常远小于此。
+_REAL_RUN_ID_WAIT_SECONDS = 10.0
+
+
+class RunControlError(RuntimeError):
+    """控制请求无法送达（run 未就绪 / 句柄状态不对）。"""
+
 
 class RunManager:
-    """托管 `rpa-core run` 子进程；句柄用于 cancel，状态从 stdout/run_artifacts 读。"""
+    """托管 `rpa-core run` 子进程；句柄用于 cancel/pause/continue，状态从
+    stdout/run_artifacts 读。"""
 
     def __init__(self, workflows_root: Path):
         self._workflows_root = workflows_root.resolve()
@@ -37,6 +52,16 @@ class RunManager:
         ]
         if inputs:
             args += ["--inputs", json.dumps(inputs, ensure_ascii=False)]
+        return self._spawn(args, workflow_name)
+
+    def _spawn(
+        self, args: list[str], workflow_name: str, *, real_run_id: str | None = None
+    ) -> dict:
+        """起一个 run 子进程并登记句柄。
+
+        `real_run_id` 已知时（resume：UUID 来自参数）直接置位就绪事件，调用方
+        立刻就能写控制文件 / 读证据。
+        """
         env = os.environ.copy()
         proc = subprocess.Popen(
             args,
@@ -45,20 +70,82 @@ class RunManager:
             text=True, encoding="utf-8", errors="replace",
             cwd=str(self._workflows_root.parent),
         )
-        entry = {"proc": proc, "stdout_lines": [], "stderr_lines": [], "real_run_id": None}
-        reader = threading.Thread(
-            target=self._read_stdout, args=(proc, entry), daemon=True
-        )
+        entry = {
+            "proc": proc,
+            "stdout_lines": [],
+            "stderr_lines": [],
+            "real_run_id": real_run_id,
+            "workflow": workflow_name,
+            "real_run_id_ready": threading.Event(),
+        }
+        if real_run_id is not None:
+            entry["real_run_id_ready"].set()
+        reader = threading.Thread(target=self._read_stdout, args=(proc, entry), daemon=True)
         reader.start()
-        err_reader = threading.Thread(
-            target=self._read_stderr, args=(proc, entry), daemon=True
-        )
+        err_reader = threading.Thread(target=self._read_stderr, args=(proc, entry), daemon=True)
         err_reader.start()
         with self._lock:
             self._seq += 1
             run_id = f"run-{self._seq}-{proc.pid}"
             self._procs[run_id] = entry
-        return {"runId": run_id, "pid": proc.pid}
+        return {"runId": run_id, "pid": proc.pid, "runIdReal": real_run_id}
+
+    # ---- 跨进程控制（M21） --------------------------------------------------
+
+    def _wait_real_run_id(self, entry: dict, timeout: float = _REAL_RUN_ID_WAIT_SECONDS):
+        entry["real_run_id_ready"].wait(timeout)
+        return entry.get("real_run_id")
+
+    def _entry_and_real(self, run_id: str) -> tuple[dict, str]:
+        entry = self._procs.get(run_id)
+        if entry is None:
+            raise KeyError(run_id)
+        real = self._wait_real_run_id(entry)
+        if not real:
+            raise RunControlError(f"run 尚未就绪（未解析出真实 run_id）：{run_id}")
+        return entry, str(real)
+
+    def pause(self, run_id: str) -> dict:
+        """请求暂停运行中的 run（写控制文件；生效点是下一个节点边界）。"""
+        _entry, real = self._entry_and_real(run_id)
+        request_pause(self._artifacts / real)
+        return {"runId": run_id, "runIdReal": real, "pauseRequested": True}
+
+    def continue_run(self, run_id: str) -> dict:
+        """继续：仍在运行 → 撤销尚未生效的暂停请求；已收口 → 从检查点起新进程。
+
+        同一个按钮覆盖两种处境，界面上不必让用户分辨——差别只是「暂停还没落地」
+        还是「已经落成 paused」。
+        """
+        entry, real = self._entry_and_real(run_id)
+        if entry["proc"].poll() is None:
+            request_continue(self._artifacts / real)
+            return {"runId": run_id, "resumed": "pause-cancelled"}
+        return self.resume(run_id)
+
+    def resume(self, run_id: str, *, allow_indeterminate: bool = False) -> dict:
+        """spawn `rpa-core resume` 从一个已收口 run 的检查点继续。
+
+        `allow_indeterminate` 是 ADR 0004 的第 4 道人工确认门：上次终态为
+        `indeterminate`（外部写入结果未知）时，只有用户显式确认「可能重复执行
+        未确认的副作用」才置位——默认拒绝，由调用方（GUI 对话）决定。
+        """
+        entry, real = self._entry_and_real(run_id)
+        if entry["proc"].poll() is None:
+            raise RunControlError(f"run 仍在运行，不能 resume：{run_id}")
+        workflow_name = entry["workflow"]
+        workflow_path = self._workflows_root / workflow_name / "workflow.json"
+        if not workflow_path.is_file():
+            raise FileNotFoundError(f"workflow not found: {workflow_name}")
+        args = [
+            sys.executable, "-m", "rpa_core.cli", "resume", str(workflow_path),
+            "--run-id", real, "--artifacts", str(self._artifacts),
+        ]
+        if allow_indeterminate:
+            args.append("--allow-indeterminate")
+        return self._spawn(args, workflow_name, real_run_id=real)
+
+    # ---- 子进程输出 ---------------------------------------------------------
 
     def _read_stdout(self, proc: subprocess.Popen, entry: dict) -> None:
         assert proc.stdout is not None
@@ -73,8 +160,11 @@ class RunManager:
                     payload = None
                 if isinstance(payload, dict) and isinstance(payload.get("run_id"), str):
                     entry["real_run_id"] = payload["run_id"]
+                    entry["real_run_id_ready"].set()
         if entry.get("real_run_id") is None:
             entry["real_run_id"] = self._parse_real_run_id(entry["stdout_lines"])
+        # 流结束仍未解析出（启动即失败等）：解除等待，让控制请求尽早报错而不是干等
+        entry["real_run_id_ready"].set()
 
     def _parse_real_run_id(self, lines: list[str]) -> str | None:
         """从子进程 stdout 末尾的多行 RunResult JSON 提取 run_id。"""

@@ -365,6 +365,7 @@ class MainWindow(QMainWindow):
         self._run_float = None
         self._events_seen = 0
         self._cancel_requested = False
+        self._pause_requested = False
         self._restore_timer = None
         # 参数面板未应用的编辑（保存/运行/切换节点前自动提交）
         self._pending_apply = None
@@ -589,6 +590,23 @@ class MainWindow(QMainWindow):
         self.cancel_run_action.triggered.connect(self._cancel_run)
         toolbar.addAction(self.cancel_run_action)
 
+        # 暂停 / 继续（M21）：暂停在当前步骤跑完后停在节点边界，不打断进行中的命令；
+        # 「继续」对仍在跑的 run 是撤销暂停请求，对已暂停（进程已收口）的 run 是
+        # 从检查点起新进程续跑——界面上同一个按钮，不让用户分辨内情。
+        self.pause_run_action = QAction("暂停", self)
+        self.pause_run_action.setToolTip(
+            "在当前步骤完成后停在节点边界（不打断已开始的命令）"
+        )
+        self.pause_run_action.setEnabled(False)
+        self.pause_run_action.triggered.connect(self._pause_run)
+        toolbar.addAction(self.pause_run_action)
+
+        self.continue_run_action = QAction("继续", self)
+        self.continue_run_action.setToolTip("从暂停处继续；需人工确认的终态会先弹确认框")
+        self.continue_run_action.setEnabled(False)
+        self.continue_run_action.triggered.connect(self._continue_run)
+        toolbar.addAction(self.continue_run_action)
+
         # 元素库 / 数据表格 / 指令清单 / 插件（dock 与对话框入口）
         elements_action = QAction("元素库", self)
         elements_action.setToolTip("当前流程的捕获元素资产（<流程>/elements/）")
@@ -671,6 +689,8 @@ class MainWindow(QMainWindow):
         # 运行
         run_menu = menu_bar.addMenu("运行")
         run_menu.addAction(self.run_action)
+        run_menu.addAction(self.pause_run_action)
+        run_menu.addAction(self.continue_run_action)
         run_menu.addAction(self.cancel_run_action)
         run_menu.addSeparator()
         run_menu.addAction(self._validate_action_ref)
@@ -1473,8 +1493,11 @@ class MainWindow(QMainWindow):
         self._clear_run_states()
         self._events_seen = 0
         self._cancel_requested = False
+        self._pause_requested = False
         self.run_action.setEnabled(False)
         self.cancel_run_action.setEnabled(True)
+        self.pause_run_action.setEnabled(True)
+        self.continue_run_action.setEnabled(False)
         dock = self._run_dock()
         dock.show()
         self._run_status_label.setText(f"运行中…（{name}）")
@@ -1518,6 +1541,9 @@ class MainWindow(QMainWindow):
             self._run_float = RunFloatWindow()
             self._run_float.cancel_button.clicked.connect(self._cancel_run)
             self._run_float.restore_button.clicked.connect(self._restore_from_float)
+            self._run_float.pause_button.clicked.connect(self._pause_run)
+            self._run_float.continue_button.clicked.connect(self._continue_run)
+        self._run_float.clear_pause_pending()
         self._run_float.show_running("准备中…", 0)
         self._run_float.place_bottom_right()
         self._run_float.show()
@@ -1588,6 +1614,15 @@ class MainWindow(QMainWindow):
                 return f"▸ 运行结束 ({status_val}) — 耗时 {total:.1f}s"
             return f"▸ 运行结束 ({status_val})"
 
+        if etype == "pauseRequested":
+            return f"⏸ 暂停请求 — 将停在 {title} 之前"
+        if etype == "runPaused":
+            done = len(payload.get("completedSteps") or [])
+            return f"⏸ 已暂停在节点边界 — 已完成 {done} 步（可从检查点继续）"
+        if etype == "runResumed":
+            done = len(payload.get("completedSteps") or [])
+            return f"▸ 从检查点继续 — 已完成 {done} 步"
+
         # 其他事件：保留原始 JSON
         return json.dumps(event, ensure_ascii=False)
 
@@ -1623,6 +1658,148 @@ class MainWindow(QMainWindow):
         except KeyError:
             pass
 
+    # ---- 暂停 / 继续 / 恢复（M21） -------------------------------------------
+    def _set_run_status(self, text: str) -> None:
+        """更新运行状态行（运行面板是懒创建的，先确保它和内部控件已就位）。"""
+        self._run_dock()
+        self._run_status_label.setText(text)
+
+    def _pause_run(self) -> None:
+        """请求暂停：写控制文件，run 子进程在下一个节点边界停下（ADR 0005）。
+
+        请求不是状态——真正停下的标志是 result.json 落成 `paused`（轮询会看到）。
+        """
+        if not self._active_run_id or self._run_manager is None:
+            return
+        try:
+            self._run_manager.pause(self._active_run_id)
+        except KeyError:
+            return
+        except Exception as exc:  # noqa: BLE001 - 控制请求失败不该崩 GUI
+            self.statusBar().showMessage(f"暂停请求失败：{exc}", 5000)
+            return
+        self._pause_requested = True
+        self.pause_run_action.setEnabled(False)
+        # 请求到落地之间还给一次反悔机会：此时「继续」= 撤销请求（run 仍在跑）
+        self.continue_run_action.setEnabled(True)
+        self.continue_run_action.setToolTip("撤销暂停请求，继续跑下去")
+        self._set_run_status("已请求暂停…（当前步骤完成后停下）")
+        if self._run_float is not None:
+            self._run_float.show_pausing()
+
+    def _continue_run(self) -> None:
+        """继续：运行中 → 撤销暂停请求；已收口 → 从检查点起新进程续跑。
+
+        需人工确认的终态（`indeterminate` / `recovery_required`）先弹确认框，
+        默认不恢复（ADR 0004 第 4 道门）。
+        """
+        if not self._active_run_id or self._run_manager is None:
+            return
+        try:
+            status = self._run_manager.status(self._active_run_id)
+        except KeyError:
+            return
+        if status.get("running"):
+            # 暂停还没落地：撤销请求即可，run 照常往下跑
+            try:
+                self._run_manager.continue_run(self._active_run_id)
+            except Exception as exc:  # noqa: BLE001
+                self.statusBar().showMessage(f"继续失败：{exc}", 5000)
+                return
+            self._pause_requested = False
+            self.pause_run_action.setEnabled(True)
+            self.continue_run_action.setEnabled(False)
+            self._set_run_status("运行中…（已撤销暂停请求）")
+            return
+
+        terminal = (status.get("result") or {}).get("status")
+        allow_indeterminate = False
+        if terminal in ("recovery_required", "indeterminate"):
+            if not self._confirm_resume(terminal):
+                return  # 默认不恢复
+            allow_indeterminate = terminal == "indeterminate"
+        try:
+            if allow_indeterminate:
+                handle = self._run_manager.resume(
+                    self._active_run_id, allow_indeterminate=True
+                )
+            else:
+                handle = self._run_manager.continue_run(self._active_run_id)
+        except Exception as exc:  # noqa: BLE001 - 恢复失败要看得见原因
+            self.statusBar().showMessage(f"继续失败：{exc}", 6000)
+            return
+        self._adopt_run_handle(handle["runId"])
+
+    @staticmethod
+    def _resume_confirmation(terminal: str) -> tuple[str, str]:
+        """恢复确认框的文案（标题, 正文）。
+
+        抽成纯函数：模态框在 offscreen 测试环境里无法安全驱动，但「说什么」和
+        「怎么区分两种终态」是必须被测试锁住的契约。
+        """
+        if terminal == "indeterminate":
+            return (
+                "恢复一个结果不确定的运行？",
+                "上次运行结束时，某个步骤的外部写入结果未知。\n\n"
+                "继续会重新执行该步骤——如果它其实已经执行成功，副作用可能重复发生"
+                "（例如重复提交、重复下单、重复点击）。\n\n"
+                "请先核对目标系统的实际状态，再决定是否继续。",
+            )
+        return (
+            "恢复一个进度可能落后的运行？",
+            "上次运行在写入检查点时失败，进度快照可能落后于实际已发生的副作用。\n\n"
+            "继续可能重放最后一个步骤。请确认副作用可以安全重放后再继续。",
+        )
+
+    def _confirm_resume(self, terminal: str) -> bool:
+        """恢复前的人工确认门：把影响说清，默认按钮是「不恢复」（ADR 0004）。"""
+        from PySide6.QtWidgets import QMessageBox
+
+        title, body = self._resume_confirmation(terminal)
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setWindowTitle(title)
+        box.setText(title)
+        box.setInformativeText(body)
+        box.setStandardButtons(
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+        box.setDefaultButton(QMessageBox.StandardButton.No)
+        box.setButtonText(QMessageBox.StandardButton.Yes, "继续执行")
+        box.setButtonText(QMessageBox.StandardButton.No, "不恢复")
+        # 运行期间用户多半在别的应用里 → 本进程是后台应用，需显式抢前台
+        present_window(box, always_on_top=True)
+        return box.exec() == QMessageBox.StandardButton.Yes
+
+    def _adopt_run_handle(self, run_id: str) -> None:
+        """接管一个运行中的句柄（新起 / 继续 / 恢复后），重新开始轮询。
+
+        `_events_seen` 故意不重置：同一 run 的 events.jsonl 是追加写的，
+        接着读正好是增量（继续后不会把历史事件重放一遍）。
+        """
+        self._active_run_id = run_id
+        self._cancel_requested = False
+        self._pause_requested = False
+        self.run_action.setEnabled(False)
+        self.cancel_run_action.setEnabled(True)
+        self.pause_run_action.setEnabled(True)
+        self.continue_run_action.setEnabled(False)
+        self.continue_run_action.setToolTip("从暂停处继续；需人工确认的终态会先弹确认框")
+        self._failed_node_id = None
+        # 先确保运行面板（及其内部控件）已创建，再动里面的部件
+        self._run_dock().show()
+        self._run_error_widget.hide()
+        self._run_jump_button.hide()
+        self._run_status_label.setText("运行中…（已从检查点继续）")
+        self._show_run_float()
+        if self._run_timer is None:
+            from PySide6.QtCore import QTimer
+
+            self._run_timer = QTimer(self)
+            self._run_timer.setInterval(800)
+            self._run_timer.timeout.connect(self._poll_run)
+        self._run_timer.start()
+
     def _poll_run(self) -> None:
         """轮询运行状态（QTimer 驱动；测试可直接调用）；结束时落事件与状态着色。"""
         if not self._active_run_id or self._run_manager is None:
@@ -1634,6 +1811,8 @@ class MainWindow(QMainWindow):
         self._run_timer.stop()
         self.run_action.setEnabled(True)
         self.cancel_run_action.setEnabled(False)
+        self.pause_run_action.setEnabled(False)
+        self.continue_run_action.setEnabled(False)
         result = status.get("result")
         run_status = ""
         detail = ""
@@ -1677,13 +1856,30 @@ class MainWindow(QMainWindow):
             self._run_events_view.appendPlainText(self._format_event(event))
         self._events_seen = len(events)
         self._apply_run_states(events)
-        # 悬浮窗终态：成功 2s 后自动还原主窗口；失败/取消停留等手动还原
+        # 三种终态不是「跑完了」，而是「等人工接手」——给「继续」入口：
+        # paused（暂停收口，无门槛）、recovery_required / indeterminate（需确认）。
+        if run_status == "paused":
+            self._run_status_label.setText("已暂停（等待继续）")
+            self.continue_run_action.setToolTip("从暂停的节点边界继续（新进程从检查点续跑）")
+            self.continue_run_action.setEnabled(True)
+            self._run_events_view.appendPlainText(
+                "⏸ 已暂停在节点边界（进行中的步骤已跑完）；点「继续」从检查点续跑"
+            )
+        elif run_status in ("recovery_required", "indeterminate"):
+            needs_confirm = "结果不确定" if run_status == "indeterminate" else "进度可能落后"
+            self._run_status_label.setText(f"待人工确认后可恢复（{needs_confirm}）")
+            self.continue_run_action.setToolTip("恢复前会说明影响并要求确认（默认不恢复）")
+            self.continue_run_action.setEnabled(True)
+        # 悬浮窗终态：成功 2s 后自动还原主窗口；失败/取消/暂停停留等手动操作
         if self._run_float is not None:
             if run_status == "succeeded":
                 self._run_float.show_result("succeeded")
                 self._schedule_restore()
             elif run_status:
                 self._run_float.show_result(run_status, detail)
+                self._run_float.set_continue_enabled(
+                    run_status in ("paused", "recovery_required", "indeterminate")
+                )
 
     def _apply_run_states(self, events: list[dict]) -> None:
         """按事件流给画布节点着色（行号：蓝=运行中 绿=成功 红=失败）。"""

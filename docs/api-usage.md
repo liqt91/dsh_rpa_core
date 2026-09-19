@@ -95,8 +95,36 @@ resumed = await orchestrator.resume(plan, paused.run_id).wait()
 ```
 
 - `pause()` 不打断进行中的命令；需要立即停止用 `cancel()`（取消 > 暂停）。
+- `handle.resume()` 撤销**尚未生效**的暂停请求（run 已经收口成 `paused` 之后就不管用了，
+  那时要走 `orchestrator.resume`）。
 - resume 复用同一套门槛：checkpoint 结构校验、workflowId、catalogDigest、`indeterminate` 人工确认；deadline 以全新 `workflow.timeout_seconds` 重新计费。
-- 浏览器 / 桌面 session 不跨进程存活：恢复后引用旧 `sessionId` 的步骤会以 `SESSION_NOT_FOUND` / `SESSION_LOST` 失败，需要重新 launch。
+
+### 跨进程暂停（CLI / GUI）
+
+`pause()` 是**进程内**信号，对 `rpa-core run` 子进程不适用。跨进程用控制文件
+（`<artifacts>/<run_id>/control.json`，见 `rpa_core.control_channel`）：
+
+```powershell
+rpa-core run workflows/demo/workflow.json --artifacts run_artifacts   # 前台跑，记下 stdout 的 run_id
+rpa-core pause --run-id <uuid> --artifacts run_artifacts              # 另一个进程里请求暂停
+rpa-core resume workflows/demo/workflow.json --run-id <uuid> --artifacts run_artifacts
+```
+
+- `pause` 写的是**请求**；run 在下一个节点边界停下并把 `status=paused` 落进 `result.json`。
+- 「继续」= `resume`（新进程从检查点续跑）。`resume` 前 CLI 会重置控制文件，
+  否则上一次暂停留下的 `pause: true` 会让新进程一启动就再次暂停。
+- GUI（`rpa-core gui`）已内建同一通道：工具栏「暂停 / 继续」，运行面板与悬浮窗显示
+  「已暂停（等待继续）」；`indeterminate` / `recovery_required` 的恢复会先弹确认框
+  （默认不恢复）。
+
+### 会话续接
+
+- **浏览器会话跨进程续接**：扩展通道的会话是用户浏览器里的标签页句柄，不随 run 进程
+  退出而消失。resume 时执行器按快照重建 `sessionId → tabId`（`restore_from_scopes`），
+  续跑能接着操作暂停前那批标签页——暂停/继续对浏览器流程是完整可用的。
+- **桌面会话不跨进程存活**：`desktop.uia` / `desktop.win32` 的会话绑定进程内的
+  pywinauto 对象，resume 后引用旧 `sessionId` 的步骤会以 `SESSION_NOT_FOUND` 失败，
+  需要重新 launch 或人工介入。
 
 ## 可运行示例
 

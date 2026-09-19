@@ -35,8 +35,13 @@ ADR 0007 的硬约束是 **devserver 进程内不存在 orchestrator / run 状�
 
 ### 4. 范围外（后置）
 
-- pause/resume（需要 orchestrator 句柄跨进程，子进程模型不支持；后置）
-- indeterminate 人工确认对话（CLI resume --allow-indeterminate 已覆盖，前端后置）
+- ~~pause/resume（需要 orchestrator 句柄跨进程，子进程模型不支持；后置）~~ → **M21 已补齐
+  （2026-09-19）**：暂停信号仍不需要跨进程共享 orchestrator 句柄——run 子进程轮询
+  `<artifacts>/<run_id>/control.json`（`rpa_core.control_channel`），devserver/GUI 只写这个
+  文件或 spawn `rpa-core resume`。隔离边界因此不变（写文件与 subprocess 都不是 import），
+  `check_devserver_isolation` 继续覆盖。
+- indeterminate 人工确认对话：CLI `resume --allow-indeterminate` 已覆盖，**M21 已前端化**
+  （GUI 弹确认框，默认不恢复；`recovery_required` 同样先确认）。
 - 多并发 run 调度（一次一个即可）
 
 ## 后果

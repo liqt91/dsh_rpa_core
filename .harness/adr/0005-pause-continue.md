@@ -45,9 +45,21 @@ M3 落地了节点边界检查点与恢复（ADR 0004），恢复的触发只有
 
 `resume()` 对 `paused` run 无特殊门槛——完全复用 ADR 0004 的五道门（结构校验、workflowId、catalogDigest、indeterminate 人工确认、恢复执行）。`indeterminate` 与 `recovery_required` 的门槛对一切 resume 生效，不因来源是 paused 而放宽。
 
+### 跨进程暂停信号（M21 增补，2026-09-19）
+
+本 ADR 首版把暂停限定在进程内，**跨进程暂停信号列为不做**。但 GUI 是主力形态（ADR 0016），而 GUI 经 `RunManager` spawn 子进程执行（ADR 0011）——进程内 `asyncio.Event` 外部够不着，"暂停"这个能力在 GUI 里等于不存在。M21 补齐，语义不变、只补通路：
+
+- **通路**：控制文件 `<artifacts>/<run_id>/control.json`（`rpa_core.control_channel`）。run 子进程起一个轮询任务把文件状态镜像到 `RunHandle.pause()/resume()`；外部进程（GUI / `rpa-core pause`）写文件。选文件而非端点/管道的理由：零新依赖、跨平台、崩溃后仍可从文件查证请求史；且不引入 web 端口（ADR 0016），不让 GUI 进程承载 runtime（ADR 0011）。
+- **仍然是"请求"不是"状态"**：生效点照旧是节点边界。真正停下的标志是 `result.json` 落成 `paused`。
+- **一次性方向由重置保证**：paused 收口后控制文件仍留 `pause: true`，故 `resume` 前必须重置（CLI 的 resume 分支负责），否则新进程一启动就再次暂停。
+- **撤销**：`RunHandle.resume()` 清掉尚未生效的暂停请求（本 ADR「请求不排队、可被后续取消覆盖」的另一半）。run 一旦抛出 `PauseSignal` 进入收口，撤销不再生效——那时"继续"是 `resume`（新进程）。
+- **不改变"暂停即收口"**：进程仍然退出、不做进程内挂起、不引入资源租约或心跳。因此"继续"对**浏览器**流程可用（标签页跨进程存活，见 ADR 0004 修订），对**桌面**流程不可用（pywinauto 会话绑定进程）。
+- 控制通道的任何故障（文件缺失/半写/损坏）一律按「无请求」处理，不影响 run 本身。
+
 ## 后果
 
 - `RunStatus` 消费方必须显式处理 `paused`，不得折叠进 `failed` / `cancelled`；它是唯一"非终态但已落盘证据"的取值。
 - 暂停的实时性以节点为界：长 attempt（如长超时命令）会推迟暂停生效点；需要即时停止应使用取消。
 - pause/resume 之间系统状态可能变化，workflow 作者应把暂停点当作与崩溃点同等对待（副作用契约完全一致）。
-- 不提供调度器自动 resume、跨进程暂停信号或暂停期间资源租约。
+- 不提供调度器自动 resume 或暂停期间资源租约。跨进程暂停信号由 M21 增补（见上一节），
+  但仍然只是"把请求送到边界"——不做进程内挂起、不保活 session。

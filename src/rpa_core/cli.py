@@ -1,5 +1,6 @@
 import argparse
 import asyncio
+import contextlib
 import json
 import sys
 from importlib import metadata as importlib_metadata
@@ -15,9 +16,11 @@ from pydantic import ValidationError
 from rpa_core.catalog import load_catalog
 from rpa_core.compiler import WorkflowCompiler
 from rpa_core.compiler.compiler import WorkflowCompileError
+from rpa_core.control_channel import request_pause, reset_control, watch_control_file
 from rpa_core.devserver import DevServer
+from rpa_core.model.runtime import RunResult
 from rpa_core.model.workflow import Workflow
-from rpa_core.runtime import Orchestrator
+from rpa_core.runtime import Orchestrator, RunHandle
 from rpa_core.runtime.checkpoint import CheckpointError
 
 
@@ -455,6 +458,37 @@ def _cmd_env_status() -> int:
     return 0
 
 
+def _cmd_pause(args) -> int:
+    """`pause`：请求暂停一个正在运行的 run（跨进程，写控制文件）。
+
+    这里是**请求**不是状态：真正生效点由 ADR 0005 定在下一个节点边界，run 是否
+    已经停下要看 result.json 是否落成 `paused`。默认 artifacts 与 `run` 一致。
+    """
+    run_dir = args.artifacts / args.run_id
+    payload = request_pause(run_dir)
+    print(json.dumps(
+        {"runId": args.run_id, "runDir": str(run_dir), "pauseRequested": True,
+         "requestedAt": payload["requestedAt"],
+         "note": "暂停在下一个节点边界生效；状态见该目录的 result.json"},
+        ensure_ascii=False, indent=2,
+    ))
+    return 0
+
+
+async def _await_with_control(run_dir: Path, handle: RunHandle) -> RunResult:
+    """等 run 结束，同时把控制文件的暂停请求镜像到 `handle`（M21 跨进程控制通道）。
+
+    watcher 本身永不结束，因此 run 一收口就取消它——否则 `asyncio.run` 会一直等它。
+    """
+    watcher = asyncio.create_task(watch_control_file(run_dir, handle))
+    try:
+        return await handle.wait()
+    finally:
+        watcher.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await watcher
+
+
 def _cmd_elements(args) -> int:
     from rpa_core.devserver.store import (
         WorkflowDirStore,
@@ -571,7 +605,7 @@ def main() -> int:
     subparsers = parser.add_subparsers(dest="action", required=True)
     for action in ("validate", "run", "resume", "devserver", "catalog", "capture",
                    "elements", "auth", "status", "unauth", "install-extension",
-                   "env-status", "gui"):
+                   "env-status", "gui", "pause"):
         sub = subparsers.add_parser(action)
         if action == "devserver":
             sub.add_argument("--port", type=int, default=8765)
@@ -588,6 +622,11 @@ def main() -> int:
                                   "默认 %%TEMP%% 下 rpa_gui_debug.log）")
             continue
         if action in ("catalog", "auth", "status", "unauth", "env-status"):
+            continue
+        if action == "pause":
+            sub.add_argument("--run-id", required=True,
+                             help="run 的 UUID（即 run_artifacts 下的目录名）")
+            sub.add_argument("--artifacts", type=Path, default=Path("run_artifacts"))
             continue
         if action == "install-extension":
             sub.add_argument("--remove", action="store_true",
@@ -675,6 +714,8 @@ def main() -> int:
         return _cmd_install_extension(args)
     if args.action == "env-status":
         return _cmd_env_status()
+    if args.action == "pause":
+        return _cmd_pause(args)
     if args.action == "gui":
         return _cmd_gui(args)
     try:
@@ -723,20 +764,27 @@ def main() -> int:
             if getattr(args, "inputs", None):
                 inputs = json.loads(args.inputs)
             if args.action == "resume":
+                run_dir = args.artifacts / args.run_id
+                # 跨进程控制通道：先重置控制文件，否则上一次暂停留下的 pause:true
+                # 会让新进程一启动就再次暂停（见 runtime/control.py）。
+                reset_control(run_dir)
                 # 与 run 同款早期 run_id 标记行（resume 的 run_id 来自参数）
                 print(json.dumps({"run_id": args.run_id}), flush=True)
-                result = await orchestrator.resume(
-                    plan,
-                    args.run_id,
-                    allow_indeterminate=args.allow_indeterminate,
-                ).wait()
+                result = await _await_with_control(
+                    run_dir,
+                    orchestrator.resume(
+                        plan,
+                        args.run_id,
+                        allow_indeterminate=args.allow_indeterminate,
+                    ),
+                )
             else:
                 # start() 同步返回 RunHandle：先打早期 run_id 标记行，宿主
                 # （devserver RunManager / GUI）据此在运行中即可读 events.jsonl，
                 # 支撑运行中悬浮窗/事件流实时显示。最终 RunResult JSON 仍在末尾。
                 handle = orchestrator.start(plan, inputs=inputs)
                 print(json.dumps({"run_id": handle.run_id}), flush=True)
-                result = await handle.wait()
+                result = await _await_with_control(args.artifacts / handle.run_id, handle)
             print(result.model_dump_json(indent=2))
             return 0 if result.status.value == "succeeded" else 1
         except CheckpointError as exc:
