@@ -76,6 +76,27 @@ M19 交互补强）与影刀基准。本任务按「用户体验 × 对标影刀
   `capture_click_label()` 一致。真机取证：**版本探针**（合成 mousemove 后数覆盖层数）证明报障时
   页面里跑的是**旧版** content.js（1 个覆盖层、无提示条）→ 复验需重载扩展**并刷新页面**
   （扩展 reload **不会**替换已打开页面里已注入的 content script）
+- [x] **G1 后继：macOS 窗口层级两处平台缺陷——浮窗随主窗口消失、确认框要点 Dock（2026-09-19 真机报障）**：
+  用户报「运行时右下角小窗会跟主窗口一起隐藏；捕获后的确认弹窗需要额外点一次 Dock 图标才显示
+  （该图标叫 python3.12）」。两个都是 **macOS 平台行为**，纯 Qt 可解、不引入新依赖：
+  ① `RunFloatWindow` 用 `Qt.Tool`，而 macOS 上 Qt.Tool 对应 NSPanel——**应用一旦不激活，系统会隐藏
+  全部 tool window**（Qt 文档原话："By default, tool windows will disappear when the application is
+  inactive"；源码侧即 `window.hidesOnDeactivate = ((type & Qt::Tool) == Qt::Tool) && !flag`）。运行期间
+  主窗口被 `showMinimized()`、用户正在别的应用里，浮窗因此跟主窗口一起没掉——而"主窗口最小化后还能
+  看执行进度"恰恰是它存在的全部意义。修：加 `WA_MacAlwaysShowToolWindow`（Qt 文档指定的开关）。
+  **向 AppKit 实测取证**：浮窗原生窗口 `hidesOnDeactivate=False`，对照的普通 Tool 窗口 `=True`。
+  ② macOS 为防焦点窃取会**忽略后台应用的自激活请求**，`raise_()`/`activateWindow()` 不足以让窗口
+  出现在最前；捕获期间我们必然是后台应用（主窗口已最小化、用户在浏览器里点元素），于是确认框被
+  创建了却停在浏览器之后。修：新增 `present_window()`——短命模态对话框临时 `WindowStaysOnTopHint`
+  置顶（唯一纯 Qt 可用的硬保证）+ 统一 show/raise/activate + `QApplication.alert` 兜底提示（macOS 弹跳
+  Dock 图标）；用于捕获确认框、捕获结束还原、运行结束还原。**常驻主窗口不置顶**（会一直压住其它应用）。
+  遗留：Dock 显示 `python3.12` 是**无 bundle 进程**的固有行为（Apple QA1544：
+  `NSRunningApplication.localizedName` 取 CFBundleDisplayName → CFBundleName → 进程名），零依赖改不了，
+  正规解法是打包 `.app`——见"风险 / 注意"。
+- [x] **G1 后继回归**：`test_gui_run` +1（浮窗带 `WA_MacAlwaysShowToolWindow` 且仍是 `Qt.Tool`）；
+  `test_gui_capture` +1（`present_window`：短命对话框置顶、常驻窗口不置顶）+ 断言命名对话框确实被
+  置顶（`FakeDialog` 改为真 `QDialog` 子类——`present_window` 需要 `setWindowFlag/show/raise_` 等
+  QWidget 契约，裸桩会被打到）。FULL GATE PASSED
 - [x] **G2 画布交互（2026-09-18）**：多选 + 批量移动/删除 + 右键菜单 + 画布内搜索定位（Ctrl+F）
   - 多选：`FlowTreeView` 改 `ExtendedSelection`；Ctrl/Shift 点击不再顺带折叠容器（`_toggle_on_click` 检测修饰键让路）
   - 批量移动：`FlowTreeModel.mimeData` 本就携带多个 id，`dropMimeData` 内部移动改为批处理——
@@ -122,6 +143,16 @@ M19 交互补强）与影刀基准。本任务按「用户体验 × 对标影刀
   撤销栈一致性**（参考 Web 的快照式撤销，M11 经验）。
 - PySide6 所有权陷阱：`insertRow(row, item)` 不转移所有权（须用 `[item]` 形式），批量操作时尤其危险。
 - 捕获链路已依赖扩展腿（Native Messaging）：离线时的降级与提示须与 M20/ADR 0015 的在线语义一致。
+- **macOS 平台差异集中区（真机踩坑记录，改窗口/手势前先看这几条）**：
+  ① `Qt.Tool` = NSPanel，**应用失活即隐藏**，跨应用场景必须显式 `WA_MacAlwaysShowToolWindow`
+  （运行浮窗已修）；② 后台应用的 `raise_()`/`activateWindow()` 会被系统忽略，要让窗口"必须被看见"
+  得置顶（`present_window`）——两处都不是 bug 而是系统策略，别按其它平台的直觉写。
+- **待定：Dock 显示名 `python3.12`**。用户是从终端启动（`uv run python -m rpa_core.cli gui`），
+  进程无 bundle，macOS 按 Apple QA1544 的回退链取到**解释器名**并显示在 Dock。
+  `QApplication.setApplicationName()` 改不了它。两条路：**(A) 打包 `.app`**（`CFBundleName`/
+  `CFBundleDisplayName`）——正规且是发行必须做的，推荐；**(B) `CPSSetProcessName`**（ApplicationServices
+  的**私有 SPI**，ctypes 可调）——能改 Dock 长名与活动监视器，但改不了菜单栏 CFBundleName，且私有
+  API 随系统版本失效。**未擅自引入**：A 是交付形态变更、B 是私有 SPI，都需先决策。
 
 ## 完成证据
 
@@ -170,3 +201,9 @@ M19 交互补强）与影刀基准。本任务按「用户体验 × 对标影刀
   同名覆盖确认；`test_gui_panels` +3（browser 默认值与回写、desktop locator JSON 校验、
   空名校验）、`test_gui_capture` +2（取消不落库、同名覆盖确认）；full gate 557 passed
   （uia 桌面 E2E 门禁内抖一次、单独重跑过——已知环境敏感老毛病）
+- G1 后继（macOS 窗口层级：浮窗随主窗口消失 / 确认框要点 Dock）：PROGRESS 2026-09-19
+  `M23-gui-ux-parity | G1 后继 macOS 窗口层级 done`——`run_float.py` 加 `WA_MacAlwaysShowToolWindow`；
+  `app.py` 新增 `present_window()`（短命对话框置顶 + `QApplication.alert` 兜底）用于捕获确认框、
+  捕获结束还原、运行结束还原；`test_gui_run` +1、`test_gui_capture` +1 并把 `FakeDialog` 升级为
+  真 `QDialog` 子类；FULL GATE PASSED。取证：真实 cocoa 平台向 AppKit 查询 `hidesOnDeactivate`
+  （浮窗 `False` / 对照普通 Tool 窗口 `True`）
