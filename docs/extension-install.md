@@ -60,11 +60,45 @@ CRX → devserver 托管（官方策略文档允许 http scheme）
 
 - Firefox/Safari 不支持：扩展是 MV3 Chromium（service_worker），Firefox 移植与 Safari/MDM 路线均超出本切片。
 - **静默安装**（外部扩展注册表 / forcelist 策略）仅 Windows，macOS/Linux 需 root/MDM，暂缓——非 win32 调用显式抛 `PLATFORM_UNSUPPORTED`，不静默假装成功。
-- **执行通道**（MV3 扩展 + `extension_exec` + bridge host）与平台无关，macOS 亲测可用：Edge 里 Load unpacked 加载本目录后，`browser.navigate` / `input` / `click` / `waitFor` / `screenshot` 全链路通过。自 2026-09-17（ADR 0015）起传输为 **Native Messaging**：除加载扩展外还需**注册 native host manifest**（`rpa-core install-extension` 默认引导已含，免管理员；Windows 写 HKCU，macOS/Linux 写浏览器 `NativeMessagingHosts/` 目录），扩展经 `chrome.runtime.connectNative` 连由浏览器按需拉起的 host。
+- **执行通道**（MV3 扩展 + `extension_exec` + bridge host）与平台无关。自 2026-09-17（ADR 0015）起传输为 **Native Messaging**：除加载扩展外还需**注册 native host manifest**（`rpa-core install-extension` 默认引导已含，免管理员；Windows 写 HKCU，macOS/Linux 写浏览器 `NativeMessagingHosts/` 目录），扩展经 `chrome.runtime.connectNative` 连由浏览器按需拉起的 host。
+
+  > **口径更正（2026-09-19）**：本节此前记有「macOS 亲测可用，`browser.navigate` / `input` /
+  > `click` / `waitFor` / `screenshot` 全链路通过」——那是 **bsk 传输时代**的结论，**不适用于
+  > Native Messaging**。切换传输后 macOS 一度恒显示离线（端点路径超 `sun_path` 103 字节上限，
+  > host 起了却死在 bind，见 §6 与 ADR 0015 §6）。该缺陷修复后已于 2026-09-19 按 S1–S3 **重新
+  > 真机验收通过**，结论见下方状态表；引用本节时勿再沿用旧句。
+
+**平台验证状态（Native Messaging 通道）**
+
+| 部件 | Windows | macOS | Linux |
+|---|---|---|---|
+| `local_transport` 命名管道分支 | ✅ 真机（M20 S0–S2） | 不适用 | 不适用 |
+| `local_transport` Unix 域套接字分支 | 不适用 | ✅ 真机（2026-09-19） | ❓ 仅单测/设计 |
+| host manifest 注册路径 | ✅ 真机 | ✅ 真机（2026-09-19） | ❓ 未真机 |
+| `native_host_executable()` POSIX console script 路径 | ✅ 真机 | ✅ 真机（2026-09-19） | ❓ 未真机 |
+| 扩展加载 + host 被浏览器拉起 + 端点命名 | ✅ 真机 | ✅ 真机（2026-09-19） | ❓ 未真机 |
+| 断开回收（reload / 浏览器退出）+ 自动重连 | ✅ 真机 | ✅ 真机（2026-09-19） | ❓ 未真机 |
+| `browser.*` 命令端到端 | ✅ 真机 | ✅ 真机（2026-09-19） | ❓ 未真机 |
+
+macOS 真机证据（2026-09-19，Edge 153 + 扩展 0.3.1；命令与原始输出见
+`.harness/tasks/M22-crossplatform-transport.md` 的「S1–S3 完成证据」）：
+
+- 端点 `/tmp/rpa_core-501/rpa_core_ext/<name>.sock`，`pathBytes=72 ≤ 103`，目录 0700 且属主 = euid；
+- `ExtensionExecClient().status()` 报 `online`（宿主 Edge 153 / 扩展 0.3.1 / MacIntel），
+  `rpa-core env-status` 的 `browsers.edge.online=true`（`_online: "live"`，实时探测）；
+- `rpa-core run` 跑 `browser.navigate` 得 `succeeded`（1760ms，effect `committed`，
+  `details.transport: "extension"`，`browserInstance` 与 status 报告的实例 id 一致）；
+- 断开回收：扩展 reload 与浏览器完全退出两条路径**均立即回收 host，且端点 socket 文件被删除**
+  （不是只死进程）；重连由扩展自动完成，无需人工介入；
+- Load unpacked 扩展 ID 的「profile 发现值 ＝ 路径推导值 ＝ host manifest 放行值」三者一致。
+
 - 本机检测（`extension_launch` / `extension_installer`）按平台取路径表，macOS 使用
   `/Applications/<Name>.app/Contents/MacOS/<Name>` 与 `~/Library/Application Support/{Google/Chrome,Microsoft Edge}`；
   `browser_running()` 在 POSIX 上走 `pgrep -f` 命令行匹配（macOS 主进程路径，不误判 Helper 子进程）。
 - macOS 上的安装方式是开发者模式 Load unpacked（`--load-extension` / 手动加载源码目录）——这也是 §1.0 的引导路线，无需注册表。
+  **2026-09-19 实测**（macOS + Edge 153）：`--load-extension` 仍有效——浏览器主进程命令行携带该参数，
+  且 Secure Preferences 中该扩展 `location=4`、`path` 指向源码目录、无 `disable_reasons`；
+  `pgrep -f` 路径表命中 1 条主进程命令行，同时存在的 16 个 `Microsoft Edge Helper` 子进程**零误判**。
 
 ## 2. 与调研报告（extension-install-research.md）的实测修订
 

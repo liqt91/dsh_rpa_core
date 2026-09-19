@@ -35,10 +35,6 @@
   - 计划：`M21-run-control-advanced.md`
   - 缺口：`RunManager` 无 pause/resume；暂停信号是进程内 `asyncio.Event`，GUI 走子进程需
     **跨进程控制通道**；`recovery_required`/`indeterminate` 的人工确认门未前端化
-- [ ] **M22 macOS/Linux 传输层真机验证**（`planned`）
-  - 计划：`M22-crossplatform-transport.md`
-  - 缺口：`local_transport` 的 Unix socket 分支与三平台 host manifest 注册只做了设计与单测，
-    仅 Windows 真机验证过（ADR 0015 / M20）
 - [ ] UI、DSH、MCP、调度器和安装器集成（`planned`）——见远期任务
 
 ## 远期任务
@@ -60,6 +56,17 @@
 > 主力形态，该条目（「确认非开发者用户为主力后再立项薄壳」）不再适用。
 
 ## 已完成
+
+- [x] M22 macOS/Linux 传输层真机验证（`done` —— macOS 侧完成，2026-09-19；Linux 仍未真机）
+  - 计划：`M22-crossplatform-transport.md`；决策：ADR 0015（§6 平台差异、§7 平台验证状态）
+  - 证据：macOS + Edge 153 + 扩展 0.3.1 完成 S1–S3 真机 —— 端点 `/tmp/rpa_core-501/rpa_core_ext/`
+    （0700、属主=euid、pathBytes=72 ≤ 103）、`status()` 报 online、`env-status` 的 edge 五项全 true、
+    host 单进程保活 **11h23m** 且零断连、扩展 reload 与浏览器退出**均即时回收 host 并删除端点
+    socket 文件**（无残留）、`browser.navigate` `succeeded`（1760ms、`transport: "extension"`）、
+    扩展 ID「发现=推导=manifest 放行」三者一致；S4 文档口径更正（§1.2 加平台验证状态表并显式
+    标注 bsk 时代旧句失效、ADR 0015 加 §7、README 补 macOS manifest 路径与 host 生命周期语义、
+    修「`browser.navigate` 不再暴露」歧义）+ launcher/`pgrep` 路径表核对（16 个 Helper 零误判）
+  - 未完成：Linux 全线未真机（`$XDG_RUNTIME_DIR` 回退、`pgrep` 命中待验）
 
 - [x] M20 扩展通道迁移 Native Messaging（`done`）
   - 计划：`M20-native-messaging.md`；决策：ADR 0015

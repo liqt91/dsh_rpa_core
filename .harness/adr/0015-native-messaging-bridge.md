@@ -139,3 +139,41 @@ Windows 走内核命名空间（`\\.\pipe\`，上限 256 字符，不经路径�
 - 升级窗口内，升级前已拉起的旧 host 仍用旧命名：显式 `target_host` 可能短暂匹配不到，
   无 `target_host` 的自动路由不受影响（它按前缀枚举，不依赖命名格式）。
 - 企业环境 home 不可写时日志落盘会静默降级（best-effort，不影响通道）。
+
+## 7. 平台验证状态（M22 真机验收，2026-09-19）
+
+传输层与安装注册**按三平台实现**，但最初只在 Windows 真机上验过（M20）。macOS 侧 2026-09-18
+暴露端点路径长度缺陷（§6），修复后于 2026-09-19 完成 S1–S3 真机验收：
+
+| 部件 | Windows | macOS | Linux |
+|---|---|---|---|
+| `local_transport` 命名管道分支 | ✅ 真机（M20 S0–S2） | 不适用 | 不适用 |
+| `local_transport` Unix 域套接字分支 | 不适用 | ✅ 真机 | ❓ 仅单测/设计 |
+| host manifest 注册路径 | ✅ 真机 | ✅ 真机 | ❓ 未真机 |
+| POSIX console script 入口（`rpa-core-ext-host`） | ✅ 真机 | ✅ 真机 | ❓ 未真机 |
+| host 被浏览器拉起 + 端点命名 | ✅ 真机 | ✅ 真机 | ❓ 未真机 |
+| 断开回收（扩展 reload / 浏览器退出）+ 自动重连 | ✅ 真机 | ✅ 真机 | ❓ 未真机 |
+| `browser.*` 命令端到端 | ✅ 真机 | ✅ 真机 | ❓ 未真机 |
+
+**macOS 环境**：Edge 153 + 扩展 0.3.1；端点 `/tmp/rpa_core-501/rpa_core_ext/<name>.sock`
+（`pathBytes=72` ≤ 103；目录 0700、属主 = euid）。
+
+**验收事实（含与设计的偏差）**
+
+1. **「端点可连接 ⇔ 扩展在线」不经心跳即可判定**。host 单进程连续服务 **11 小时 23 分**，
+   端点 socket 自 bind 起 inode 未变、日志零断连事件 —— MV3 SW 在长连 native port 下确实
+   不被回收，`workers/ext_bridge.py` docstring 陈述的"无需心跳窗口"在 macOS 同样成立。
+   > spike（`.harness/spike/native_messaging/`）里的 15s `ping` 是 **spike 扩展**的观测手段，
+   > 非产品行为：产品扩展仅被动回 `pong`。复验时不要把"看不到 ping"读成"保活失败"。
+2. **回收即时，且端点文件被删除**（不只是进程退出）：扩展 reload 后旧 host 消失、端点
+   inode 重建（`24654880` → `24708529`）；浏览器完全退出后该实例端点 socket 直接从磁盘
+   移除。两条路径均无残留进程。
+3. **重连时延存在平台/场景差异**：macOS 上扩展 reload 后**首次重连约 13s**（SW 冷启动 +
+   3s 退避），此后 < 1s；浏览器冷启动到扩展上线约 **2s**。M20 在 Windows 记录的"重连
+   ≤0.4s"与本次 13s 差异显著 —— 两处的触发条件（是否含 SW 冷启动）**需在统一条件下复核**，
+   勿直接把两个数字当同一指标对比。
+4. **多实例互不干扰**：`instanceId` 是 profile 级 `crypto.randomUUID()`，独立 profile 的
+   浏览器实例得到不同端点名，两个 host 可并存。
+
+**仍未验证**：Linux 侧 `$XDG_RUNTIME_DIR` 缺省回退与 `pgrep` 路径匹配；macOS App Sandbox 版
+浏览器（App Store 分发）对 host 写入的重定向（改用 `/tmp` 后风险大幅降低但未消除）。

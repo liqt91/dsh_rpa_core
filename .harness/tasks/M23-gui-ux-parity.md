@@ -121,7 +121,7 @@ M19 交互补强）与影刀基准。本任务按「用户体验 × 对标影刀
 - [x] **G4 失败定位闭环**：~~运行失败点击错误 → 跳转失败节点~~（2026-09-18 slice A done）+
   ~~结构化错误详情（借鉴 Web `startupError` 透出经验）~~（2026-09-18 slice B done）；
   ~~运行日志加耗时 / 输出值预览~~（2026-09-18 slice C done）
-- [ ] **切片内次级项**：~~变量面板（设计期静态收集 `output_aliases` / inputs 列表）~~
+- [x] **切片内次级项（三项全部 done，2026-09-18）**：~~变量面板（设计期静态收集 `output_aliases` / inputs 列表）~~
   （2026-09-18 variable-panel done）、
   ~~菜单栏（QMenuBar + 快捷键一览）~~
   （2026-09-18 menu-bar done）、~~卡片摘要按关键字段（url/selector/text）优化~~

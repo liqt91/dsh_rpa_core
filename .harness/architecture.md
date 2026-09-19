@@ -38,6 +38,11 @@ Allowed package dependencies:
 `workers.ext_bridge` 是浏览器按需拉起的 host 子进程（Native Messaging stdio ↔ 本地端点），
 只依赖 stdlib + `local_transport`，不触达 catalog/runtime。
 
+> **平台覆盖**：`local_transport` 的两条分支里，Windows 命名管道与 POSIX Unix 域套接字
+> **均已真机验证**（后者 2026-09-19 于 macOS），**Linux 仍未真机**（仅单测/设计）。
+> 逐部件验证状态见 `docs/extension-install.md` §1.2 与 ADR 0015 §7 —— 改这条通道前先看那两张表，
+> 别把「实现存在」当成「已验证」。
+
 ## Runtime flow
 
 ```text
