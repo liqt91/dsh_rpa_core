@@ -304,3 +304,54 @@ def test_element_dialog_rejects_empty_name_or_selector(qapp):
     dialog.accept()
     assert dialog.result() != QDialog.DialogCode.Accepted
     assert "selector" in dialog.error_label.text()
+
+
+def test_element_dialog_preserves_candidates_on_edit(qapp):
+    """编辑元素不能抹掉捕获时收集的备选定位。
+
+    回归：``result_document`` 曾从头重建 ``selector``，用户在 GUI 里编辑一次就静默
+    丢掉 ``candidates``（以及任何界面上不展示的键）。
+    """
+    from PySide6.QtWidgets import QDialog
+
+    from rpa_core.gui.element_panel import ElementDialog
+
+    candidates = [
+        {"kind": "id", "selector": "#sb_form_q", "matchedCount": 1},
+        {"kind": "attribute", "selector": 'input[name="q"]', "matchedCount": 1},
+    ]
+    descriptor = {
+        "kind": "browser",
+        "selector": {"css": "#sb_form_q", "candidates": candidates},
+        "verifyCount": 1,
+        "metadata": {"role": "searchbox", "url": "https://example.com/"},
+    }
+    dialog = ElementDialog(descriptor, default_name="searchBox")
+    assert dialog.selector_edit.text() == "#sb_form_q"  # 界面只暴露主 css
+
+    dialog.name_edit.setText("searchBox2")
+    dialog.selector_edit.setText("#q")
+    dialog.accept()
+    assert dialog.result() == QDialog.DialogCode.Accepted
+    name, document = dialog.result_document()
+    assert name == "searchBox2"
+    assert document["selector"]["css"] == "#q"  # 用户改的生效
+    assert document["selector"]["candidates"] == candidates  # 未暴露的键原样保留
+    assert document["metadata"]["role"] == "searchbox"
+
+
+def test_element_dialog_tolerates_non_dict_selector(qapp):
+    """selector 形态非法时不应崩在对话框上（合并基底只接受 dict）。"""
+    from PySide6.QtWidgets import QDialog
+
+    from rpa_core.gui.element_panel import ElementDialog
+
+    dialog = ElementDialog(
+        {"kind": "browser", "selector": "oops", "verifyCount": 1, "metadata": {}},
+        default_name="el_x",
+    )
+    dialog.selector_edit.setText("#a")
+    dialog.accept()
+    assert dialog.result() == QDialog.DialogCode.Accepted
+    _, document = dialog.result_document()
+    assert document["selector"] == {"css": "#a"}

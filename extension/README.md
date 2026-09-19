@@ -44,6 +44,46 @@ MV3 零构建扩展（Chrome/Edge），两条通道均经 **Native Messaging 长
 - 网页 DOM 内容归本扩展；浏览器 UI 骨架（标签栏/工具栏）与桌面应用归桌面 hover 捕获
   （`rpa-core capture desktop --hover`）
 
+## 捕获描述符形态
+
+`capture_result.descriptor` 即元素库落盘的 ElementDescriptor 文档：
+
+```json
+{
+  "kind": "browser",
+  "selector": {
+    "css": "#sb_form_q",
+    "candidates": [
+      {"kind": "attribute", "selector": "input[name=\"q\"]", "matchedCount": 1}
+    ]
+  },
+  "verifyCount": 1,
+  "metadata": {
+    "tag": "textarea", "id": "sb_form_q", "classes": ["sb_form_q"],
+    "text": "", "rect": {"x": 215, "y": 183, "width": 843, "height": 22},
+    "role": "searchbox", "accessibleName": "搜索", "placeholder": "输入搜索内容",
+    "label": null, "containerText": "主页 搜索",
+    "url": "https://www.bing.com/", "title": "Bing"
+  }
+}
+```
+
+- **`selector.css`（必填、第一顺位）**：语义与本字段引入前**完全一致**，运行时就只吃这一个
+  字符串（`executors/browser.py` 的 `selector` 输入）。既有工作流与既有元素文档不受影响。
+- **`selector.candidates`（可选，新增）**：捕获时额外收集的 **CSS 可解析**备选定位，按稳定性
+  排序（`data-testid`/`data-test`/`data-qa` → `name` → `aria-label` → `placeholder` → `title`），
+  每条带捕获时**实测** `matchedCount`；与主 css 重复、或捕获时就不命中的不收。
+  形状与影刀导出格式一致（`kind` + `selector`）。**运行时暂不消费**——留给元素改版后的自愈排序；
+  `rpa-core elements verify` 会校验其结构。
+- **`metadata` 语义特征（新增）**：`role`（归一化到 14 个规范角色）、`accessibleName`
+  （ARIA 优先级链：`aria-labelledby` → `aria-label` → `<label>` → value → alt → 文本 →
+  title → placeholder）、`placeholder`、`label`、`containerText`（所属表单/对话框/列表项文本，
+  用于同名元素消歧）、`url`/`title`（页面指纹）。
+
+> 新字段一律放在 `selector` 或 `metadata` **内部**：描述符顶层的未知键会被 pydantic 的
+> `extra="ignore"` 静默丢弃（顶层 `url` 曾长期回传却从未落盘）。
+> 备选定位存的是**页面自身的属性**，不是"第几个节点"——序号只活当次快照，页面一变即失效。
+
 ## 协议（自测用）
 
 Native Messaging 帧：4 字节小端长度前缀 + UTF-8 JSON（与 host 的 stdio 同构）。

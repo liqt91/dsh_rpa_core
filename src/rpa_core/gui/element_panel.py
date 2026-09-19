@@ -81,13 +81,22 @@ class ElementPanel(QWidget):
         return item.text().split(" ", 1)[0].strip()
 
 
+def _as_dict(value: Any) -> dict[str, Any]:
+    """元素文档里的 selector/locator 是自由 JSON；取用前统一收口。
+
+    元素文件可能被手工改成任意形状（``rpa-core elements verify`` 的职责正是报告这类
+    问题），GUI 不应因此崩在取字段这一步。
+    """
+    return value if isinstance(value, dict) else {}
+
+
 def summarize_element(document: dict) -> str:
     """元素摘要：kind · selector 简述（对齐 Web elementSummary）。"""
     kind = document.get("kind", "?")
-    selector = document.get("selector") or {}
+    selector = _as_dict(document.get("selector"))
     if kind == "browser":
         return f"browser · {selector.get('css', '')}"
-    locator = selector.get("locator") or {}
+    locator = _as_dict(selector.get("locator"))
     name = locator.get("name") or locator.get("controlType") or ""
     return f"desktop · {name}"
 
@@ -128,12 +137,12 @@ class ElementDialog(QDialog):
         form = QFormLayout()
         self.name_edit = QLineEdit(default_name)
         form.addRow("元素名", self.name_edit)
-        selector = descriptor.get("selector") or {}
+        selector = _as_dict(descriptor.get("selector"))
         if descriptor.get("kind") == "browser":
             selector_text = str(selector.get("css") or "")
         else:
             selector_text = json.dumps(
-                selector.get("locator") or {}, ensure_ascii=False
+                _as_dict(selector.get("locator")), ensure_ascii=False
             )
         self.selector_edit = QLineEdit(selector_text)
         form.addRow("selector", self.selector_edit)
@@ -204,10 +213,15 @@ class ElementDialog(QDialog):
     def result_document(self) -> tuple[str, dict[str, Any]]:
         """编辑结果：（元素名, ElementDescriptor 形状 dict）。仅在 Accepted 后调用。"""
         name = self.name_edit.text().strip()
+        # 以原 selector 为基底再覆盖界面暴露的那一个键。**不能从头重建**：
+        # selector 里还有界面上不展示的键（捕获时收集的 candidates 备选定位），
+        # 重建会让用户编辑一次就把它们静默抹掉。
+        raw_selector = _as_dict(self._descriptor.get("selector"))
+        selector: dict[str, Any] = dict(raw_selector)
         if self._descriptor.get("kind") == "browser":
-            selector: dict[str, Any] = {"css": self.selector_edit.text().strip()}
+            selector["css"] = self.selector_edit.text().strip()
         else:
-            selector = {"locator": json.loads(self.selector_edit.text().strip())}
+            selector["locator"] = json.loads(self.selector_edit.text().strip())
         return name, {
             "kind": self._descriptor.get("kind"),
             "selector": selector,

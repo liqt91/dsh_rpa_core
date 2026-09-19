@@ -8,8 +8,16 @@ class ElementDescriptor(BaseModel):
     """捕获产物：可回验命中的元素描述符（M10 元素库契约）。
 
     selector 语义按 kind 区分：
-    - browser: {"css": "<css selector>"}
-    - desktop: {"locator": <DesktopLocator 文档>}
+    - browser: ``{"css": "<css selector>", "candidates": [...] | 缺省}``
+      ``css`` 必填且是第一顺位，语义与升级前**完全一致**；``candidates`` 可选，
+      是捕获时额外收集的备选定位 ``[{"kind", "selector", "matchedCount"}]``。
+    - desktop: ``{"locator": <DesktopLocator 文档>}``
+
+    browser 的 ``metadata`` 另可携带语义特征（``role`` / ``accessibleName`` /
+    ``placeholder`` / ``label`` / ``containerText``）与页面指纹（``url`` / ``title``），
+    供将来元素改版后按候选排序。这些键必须放在 ``metadata`` 或 ``selector`` **内部**：
+    描述符顶层与 metadata 一样是自由字典之处才行——顶层未知键会被 pydantic 默认的
+    ``extra="ignore"`` **静默丢弃**（扩展曾长期回传顶层 ``url``，从未落盘即是此因）。
     """
 
     model_config = ConfigDict(populate_by_name=True)
@@ -53,13 +61,51 @@ def validate_element_document(body: dict) -> ElementDescriptor:
         raise ElementDocumentError(detail["path"], detail["message"]) from exc
 
 
+def _candidate_errors(element: ElementDescriptor) -> list[dict]:
+    """``selector.candidates`` 可选；一旦出现就按 ``{kind, selector, matchedCount}`` 校验。
+
+    候选是捕获时额外收集的备选定位（形状与影刀导出格式对齐：``kind`` + ``selector``），
+    将来元素自愈要靠它排序。**缺省完全不校验**——既有元素文档只有 ``css``，
+    必须继续合法；这是「加法兼容」的落点。`matchedCount` 是捕获时实测命中数，允许缺席。
+    """
+    errors: list[dict] = []
+    raw = element.selector.get("candidates")
+    if raw is None:
+        return errors
+    if not isinstance(raw, list):
+        return [{"path": "selector.candidates", "message": "candidates 需要数组"}]
+    for index, item in enumerate(raw):
+        path = f"selector.candidates[{index}]"
+        if not isinstance(item, dict):
+            errors.append({"path": path, "message": "候选需要对象"})
+            continue
+        kind = item.get("kind")
+        if not isinstance(kind, str) or not kind.strip():
+            errors.append({"path": f"{path}.kind", "message": "候选需要非空 kind"})
+        selector = item.get("selector")
+        if not isinstance(selector, str) or not selector.strip():
+            errors.append({"path": f"{path}.selector", "message": "候选需要非空 selector"})
+        matched = item.get("matchedCount")
+        if matched is not None and (
+            isinstance(matched, bool) or not isinstance(matched, int) or matched < 1
+        ):
+            errors.append(
+                {"path": f"{path}.matchedCount", "message": "matchedCount 需要 >=1 的整数"}
+            )
+    return errors
+
+
 def selector_errors(element: ElementDescriptor) -> list[dict]:
-    """selector 语义结构校验：browser 需非空 css；desktop 需合法 DesktopLocator。"""
+    """selector 语义结构校验：browser 需非空 css；desktop 需合法 DesktopLocator。
+
+    browser 另校验可选的 ``candidates``（见 ``_candidate_errors``）。
+    """
     errors: list[dict] = []
     if element.kind == "browser":
         css = element.selector.get("css")
         if not isinstance(css, str) or not css.strip():
             errors.append({"path": "selector.css", "message": "browser 元素需要非空 css selector"})
+        errors.extend(_candidate_errors(element))
     elif element.kind == "desktop":
         locator = element.selector.get("locator")
         if not isinstance(locator, dict):

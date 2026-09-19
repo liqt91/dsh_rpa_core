@@ -328,6 +328,60 @@ def test_element_verify_flags_bad_selector_and_descriptor(capture_server):
     assert payload["valid"] is False
 
 
+def test_element_candidates_and_semantics_survive_roundtrip(capture_server):
+    """候选定位与语义 metadata 经 put→get 完整保留（元素自愈的地基）。"""
+    base = f"http://127.0.0.1:{capture_server.port}"
+    candidates = [
+        {"kind": "id", "selector": "#sb_form_q", "matchedCount": 1},
+        {"kind": "attribute", "selector": 'input[name="q"]', "matchedCount": 1},
+    ]
+    document = {
+        "kind": "browser",
+        "selector": {"css": "#sb_form_q", "candidates": candidates},
+        "verifyCount": 1,
+        "metadata": {
+            "tag": "textarea",
+            "role": "searchbox",
+            "accessibleName": "搜索",
+            "url": "https://www.bing.com/",
+            "title": "Bing",
+        },
+    }
+    status, _ = _request("POST", _elements(element="searchBox2"), document, base=base)
+    assert status == 200
+
+    status, element = _request("GET", _elements(element="searchBox2"), base=base)
+    assert status == 200
+    assert element["selector"]["css"] == "#sb_form_q"
+    assert element["selector"]["candidates"] == candidates
+    assert element["metadata"]["role"] == "searchbox"
+    assert element["metadata"]["url"] == "https://www.bing.com/"
+
+    status, payload = _request(
+        "POST", _elements(element="searchBox2", verify=True), {}, base=base
+    )
+    assert status == 200
+    assert payload["valid"] is True
+
+
+def test_element_verify_flags_malformed_candidates(capture_server):
+    """坏候选要被 verify 报出来（否则将来自愈会拿它去查询而不知道是垃圾）。"""
+    base = f"http://127.0.0.1:{capture_server.port}"
+    bad = {
+        "kind": "browser",
+        "selector": {"css": "#ok", "candidates": [{"kind": "css"}]},
+        "verifyCount": 1,
+        "metadata": {},
+    }
+    _request("POST", _elements(element="badCandidates"), bad, base=base)
+    status, payload = _request(
+        "POST", _elements(element="badCandidates", verify=True), {}, base=base
+    )
+    assert status == 200
+    assert payload["valid"] is False
+    assert any("candidates" in err["path"] for err in payload["errors"])
+
+
 def test_element_put_rejects_invalid_document(capture_server):
     base = f"http://127.0.0.1:{capture_server.port}"
     status, payload = _request("POST", _elements(element="broken"), {"kind": "nope"}, base=base)

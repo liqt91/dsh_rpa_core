@@ -2703,12 +2703,17 @@ function openElementDialog({ mode, flow, descriptor, existingName }) {
         } catch { /* 不存在，正常 */ }
       }
       const isBrowser = descriptor.kind === "browser";
-      let selectorDoc;
+      // 以原 selector 为基底再覆盖界面暴露的那一个键。**不能从头重建**：
+      // selector 里还有界面上不展示的键（捕获时收集的 candidates 备选定位），
+      // 重建会让用户编辑一次就把它们静默抹掉。
+      const baseSelector = descriptor.selector && typeof descriptor.selector === "object"
+        ? descriptor.selector : {};
+      const selectorDoc = { ...baseSelector };
       if (isBrowser) {
-        selectorDoc = { css: selector };
+        selectorDoc.css = selector;
       } else {
         try {
-          selectorDoc = { locator: JSON.parse(selector) };
+          selectorDoc.locator = JSON.parse(selector);
         } catch {
           showCompileMessage("desktop locator 不是合法 JSON", false);
           return;
