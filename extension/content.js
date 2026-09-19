@@ -311,8 +311,12 @@
 
   const onKey = (e) => {
     if (e.key === "Escape" && armed) {
-      chrome.runtime.sendMessage({ type: "rpa-capture-cancelled" });
-      hideOverlay();
+      hideOverlay();   // 先收覆盖层：掉线时 sendMessage 会抛，否则红框会卡在屏幕上
+      try {
+        chrome.runtime.sendMessage({ type: "rpa-capture-cancelled" });
+      } catch {
+        /* 扩展重载后旧脚本孤立：本地已收场，无需上报 */
+      }
     }
   };
 
