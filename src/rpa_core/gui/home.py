@@ -715,12 +715,20 @@ class HomeWindow(QMainWindow):
         super().changeEvent(event)
 
     def _is_editing(self, name: str) -> bool:
-        """该流程是否正被编辑器打开（编辑器单例，按 flow_path 判断）。"""
+        """该流程是否**正在**编辑器里打开（编辑器单例 + 窗口可见性）。
+
+        编辑器是单例且关闭后对象仍在（`flow_path` 不会清空），只比路径会把「已关闭」
+        误判成「正在编辑」——维护者报障：关闭编辑器后重命名仍提示「正在编辑器里打开」。
+        因此以「窗口当前可见」为准（关闭 = 隐藏；最小化在 Qt 里仍是可见）。
+        """
         from rpa_core.gui import app as app_module
 
         window = getattr(app_module, "_EDITOR_WINDOW", None)
         if window is None or window.flow_path is None:
             return False
+        is_visible = getattr(window, "isVisible", None)
+        if callable(is_visible) and not is_visible():
+            return False  # 编辑器已关闭
         try:
             return Path(window.flow_path).parent.name == name
         except Exception:  # noqa: BLE001 - 判断失败按「未在编辑」处理

@@ -2590,8 +2590,10 @@ class MainWindow(QMainWindow):
         item.setData(summarize_args(holder.args), ROLE_ARGS_SUMMARY)
         self._end_edit()
         self._set_dirty(True)
-        # 重渲染表单让新值可见
+        # 重渲染表单让新值可见 + 重绘画布（元素填入可能补上必填项，红色感叹号要消失）
         self._on_canvas_selection(current, current)
+        if self.canvas_view is not None:
+            self.canvas_view.viewport().update()
         self.statusBar().showMessage(f"已把元素 {name} 填入参数 {key}", 4000)
 
     # ---- 元素捕获（切 G1：单入口混合捕获） ---------------------------------
@@ -3415,6 +3417,11 @@ class MainWindow(QMainWindow):
             item.setData(summarize_args(values), ROLE_ARGS_SUMMARY)
             self._end_edit()
             self._set_dirty(True)
+            # 重绘画布：编号栏的「必填参数缺失」红色感叹号由 delegate 现算
+            # （读 holder.args），不重绘就会一直留着旧徽标——维护者报障
+            # 「配置参数后、保存前感叹号一直在」。
+            if self.canvas_view is not None:
+                self.canvas_view.viewport().update()
             if getattr(self, "_variables_dock_widget", None) is not None:
                 self._refresh_variables()
             self.statusBar().showMessage("参数已更新（未保存）", 4000)
@@ -3599,6 +3606,8 @@ class MainWindow(QMainWindow):
                 item.setText(control_node_title(node_type, holder.raw))
             self._end_edit()
             self._set_dirty(True)
+            if self.canvas_view is not None:  # 控制节点标题变化要立刻可见
+                self.canvas_view.viewport().update()
             if getattr(self, "_variables_dock_widget", None) is not None:
                 self._refresh_variables()
             self.statusBar().showMessage("参数已更新（未保存）", 4000)

@@ -1297,3 +1297,34 @@ def test_variables_toggle_action_in_menu(catalog):
     actions = [a.text() for a in edit_menu.actions()]
     assert "变量面板" in actions
     win.close()
+
+def test_apply_repaints_canvas_so_required_badge_clears(window):
+    """回归（维护者报障「配置参数后、保存前红色感叹号一直在」）：apply 必须请求
+    画布重绘——编号栏徽标由 delegate 现算（读 holder.args），不重绘就留旧徽标。"""
+    model = window.flow_model
+    item = model.find_by_id("open")
+    window.canvas_view.setCurrentIndex(model.indexFromItem(item))
+
+    repaints: list[int] = []
+    viewport = window.canvas_view.viewport()
+    original_update = viewport.update
+
+    def _spy(*args, **kwargs):
+        repaints.append(1)
+        return original_update(*args, **kwargs)
+
+    viewport.update = _spy
+    try:
+        form = window.param_holder.findChild(ParamForm)
+        _field(form, "url").setText("https://example.com")
+        browser_combo = _field(form, "browserType")
+        browser_combo.setCurrentIndex(browser_combo.findData("msedge"))
+        apply_button = window.param_holder.findChild(QPushButton)
+        apply_button.click()
+    finally:
+        viewport.update = original_update
+
+    assert repaints, "apply 后应请求画布重绘（清掉必填缺失徽标）"
+    # 徽标判定本身也应转为「无缺失」
+    delegate = window.canvas_view.itemDelegate()
+    assert delegate._has_config_error(model.indexFromItem(item)) is False

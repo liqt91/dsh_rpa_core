@@ -433,3 +433,53 @@ def test_editor_close_returns_to_home(catalog, tmp_path, monkeypatch):
     editor._dirty = False
     editor._shutdown_run_manager()  # closeEvent 的收尾路径
     assert home.isVisible() is True
+
+
+def test_rename_allowed_after_editor_closed(catalog, tmp_path, monkeypatch):
+    """回归（维护者报障）：编辑器**已关闭**后重命名应放行——单例仍持有 flow_path，
+    必须按「窗口是否可见」判断是否正在编辑。"""
+    store = _store(tmp_path)
+    _write_flow(store, "alpha")
+    import rpa_core.gui.home as home_module
+    from rpa_core.gui import app as app_module
+    from rpa_core.gui.home import HomeWindow
+
+    class _ClosedEditor:
+        flow_path = store.root / "alpha" / "workflow.json"
+
+        def isVisible(self):
+            return False
+
+    monkeypatch.setattr(app_module, "_EDITOR_WINDOW", _ClosedEditor(), raising=False)
+    monkeypatch.setattr(
+        home_module.QInputDialog, "getText",
+        staticmethod(lambda *a, **k: ("alpha2", True)),
+    )
+    home = HomeWindow(store, catalog, open_editor=lambda name, run_id=None: None)
+    home.table.setCurrentCell(0, 0)
+    home._rename_flow()
+    assert store.list() == ["alpha2"]  # 已重命名（未被误拒）
+
+
+def test_rename_refused_while_editor_visible(catalog, tmp_path, monkeypatch):
+    """编辑器**可见**（真正打开）时仍拒绝重命名。"""
+    store = _store(tmp_path)
+    _write_flow(store, "alpha")
+    import rpa_core.gui.home as home_module
+    from rpa_core.gui import app as app_module
+    from rpa_core.gui.home import HomeWindow
+
+    class _OpenEditor:
+        flow_path = store.root / "alpha" / "workflow.json"
+
+        def isVisible(self):
+            return True
+
+    monkeypatch.setattr(app_module, "_EDITOR_WINDOW", _OpenEditor(), raising=False)
+    monkeypatch.setattr(
+        home_module.QMessageBox, "warning", staticmethod(lambda *a, **k: None)
+    )
+    home = HomeWindow(store, catalog, open_editor=lambda name, run_id=None: None)
+    home.table.setCurrentCell(0, 0)
+    home._rename_flow()
+    assert store.list() == ["alpha"]  # 未动
