@@ -3746,12 +3746,47 @@ def _install_crash_diagnostics() -> str:
     return str(log_file)
 
 
+# 编辑器窗口单例（ADR 0017 决策 2：编辑器是单窗口；工作台反复打开不叠窗）
+_EDITOR_WINDOW: MainWindow | None = None
+
+
+def open_editor_window(
+    flow_name: str,
+    *,
+    catalog: CommandCatalog | None = None,
+    workflows_root: Path | None = None,
+) -> MainWindow | None:
+    """打开一个流程的编辑器窗口（工作台双击/「打开」的落地实现，ADR 0017）。
+
+    编辑窗口是**单窗口**（ADR 0017 决策 2）：已存在则复用并切换流程，不叠开新窗口。
+    返回值供测试断言；无 catalog（未初始化）时返回 None。
+    """
+    global _EDITOR_WINDOW
+    if catalog is None:
+        from rpa_core.cli import _commands_root
+
+        catalog = load_catalog(_commands_root())
+    if workflows_root is None:
+        workflows_root = Path("workflows")
+    if _EDITOR_WINDOW is None:
+        _EDITOR_WINDOW = MainWindow(catalog, workflows_root=workflows_root)
+    _EDITOR_WINDOW.show()
+    _EDITOR_WINDOW.raise_()
+    _EDITOR_WINDOW._open_named_flow(flow_name)
+    return _EDITOR_WINDOW
+
+
 def run_gui(
     commands_root: Path,
     flow_path: Path | None = None,
     workflows_root: Path | None = None,
 ) -> int:
-    """GUI 启动入口：加载真实 catalog（可选 workflow）→ 构建窗口 → 进入事件循环。"""
+    """GUI 启动入口（ADR 0017 两段式）：
+
+    - 默认打开**工作台（首页）**：流程列表 + 运行入口；
+    - 显式给了 `flow_path`（`rpa-core gui --workflow X`）则直接开编辑器，
+      保持脚本与既有用法不变。
+    """
     from rpa_core.model.workflow import Workflow
 
     crash_log = _install_crash_diagnostics()
@@ -3761,19 +3796,34 @@ def run_gui(
     from rpa_core.gui.debug_log import install_window_show_watch
 
     install_window_show_watch(app)
+    global _EDITOR_WINDOW
     catalog = load_catalog(Path(commands_root))
-    workflow = (
-        Workflow.model_validate_json(Path(flow_path).read_text(encoding="utf-8"))
-        if flow_path else None
+    root = Path(workflows_root) if workflows_root else Path("workflows")
+    # 编辑器窗口单例：工作台反复双击不叠窗（ADR 0017 决策 2）
+    _EDITOR_WINDOW = None
+    open_editor = lambda name: open_editor_window(  # noqa: E731 - 注入用闭包
+        name, catalog=catalog, workflows_root=root
     )
-    window = MainWindow(
-        catalog, workflow=workflow, flow_path=flow_path,
-        workflows_root=workflows_root,
-    )
-    window.show()
-    # 窗口显示后在空闲时机预热参数面板（详见 _prewarm_param_panel 注释）：
-    # 提前消化首次复杂表单布局的一次性开销，避免用户第一次点节点时卡顿。
+
     from PySide6.QtCore import QTimer
 
-    QTimer.singleShot(0, window._prewarm_param_panel)
+    if flow_path:
+        workflow = Workflow.model_validate_json(
+            Path(flow_path).read_text(encoding="utf-8")
+        )
+        window = MainWindow(
+            catalog, workflow=workflow, flow_path=flow_path,
+            workflows_root=root,
+        )
+        _EDITOR_WINDOW = window
+    else:
+        from rpa_core.devserver.store import WorkflowDirStore
+        from rpa_core.gui.home import HomeWindow
+
+        window = HomeWindow(WorkflowDirStore(root), catalog, open_editor=open_editor)
+    window.show()
+    if isinstance(window, MainWindow):
+        # 窗口显示后在空闲时机预热参数面板（详见 _prewarm_param_panel 注释）：
+        # 提前消化首次复杂表单布局的一次性开销，避免用户第一次点节点时卡顿。
+        QTimer.singleShot(0, window._prewarm_param_panel)
     return app.exec()

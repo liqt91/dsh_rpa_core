@@ -3,12 +3,12 @@
   "phase": "command-parity-extension-editor",
   "status": "active",
   "completed_milestone": "M25-run-history",
-  "active_milestone": "M26-flow-inputs-editor",
-  "active_plan": ".harness/tasks/M26-flow-inputs-editor.md",
-  "active_feature": "flow-inputs-editor",
+  "active_milestone": "M27-workbench-home",
+  "active_plan": ".harness/tasks/M27-workbench-home.md",
+  "active_feature": "gui-home-workbench",
   "next_milestone": null,
   "later_milestones": [],
-  "notes": "技术路线（ADR 0016）：GUI 为唯一主力形态，Web 编辑器（devserver）退为可选、冻结演进不删除；GUI 独立运行不需要任何 web 服务器。M23 收口（GUI 体验对齐）。M24 收口（断点与单步：节点断点执行前停 + consumedBreakpoints 防死循环 + resume --step；GUI 编号栏红点/右键菜单/单步按钮）。M25 收口（运行历史：只读读取器 + CLI runs list/show + GUI 历史面板——时间线/跳节点/同样输入再跑/继续单步，含 RunManager.resume_run 支持恢复非本进程托管的历史运行）。M26 起做流程 inputs 声明编辑 UI（当前只能手写 JSON，运行对话框只读消费）。",
+  "notes": "技术路线（ADR 0016）：GUI 为唯一主力形态，Web 编辑器退为可选、冻结演进；GUI 独立运行不需要 web 服务器。M23 收口（GUI 体验对齐）。M24 收口（断点与单步）。M25 收口（运行历史：只读读取器 + CLI + GUI 面板）。M27（当前，ADR 0017）：宿主形态改为两段式——独立「工作台」首页窗口（流程列表 + 全局运行历史 + 流程管理动作，含删除流程连同元素资产/数据表格/运行历史一并删除）+ 现有编辑器单窗口；运行控制（暂停/继续/单步）只在编辑器，工作台只「运行 + 看状态」；多窗口编辑器推迟。M26（流程 inputs 声明编辑 UI）排在 M27 之后。",
   "task_index": ".harness/tasks/BACKLOG.md",
   "scope": {
     "in": [

@@ -261,6 +261,11 @@
       "id": "flow-inputs-editor",
       "title": "Flow inputs declaration editor: create/edit/remove workflow inputs in the GUI (name/type/default/description) with validation, wired to the run-params dialog, variable completion, and compile checks",
       "passes": false
+    },
+    {
+      "id": "gui-home-workbench",
+      "title": "Workbench home window (ADR 0017): flow list with run status, global run history tab with filtering, flow management actions (incl. cascading delete with confirmation), and a run entry that hands control to the editor",
+      "passes": false
     }
   ]
 }
