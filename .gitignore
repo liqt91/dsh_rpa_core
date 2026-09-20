@@ -26,6 +26,9 @@ _tmp_*/
 node_modules/
 .trae/
 
+# IDE 本机代码索引（10MB 级二进制图数据库，仅本地，不入库）
+.codebase-memory/
+
 # 本机扩展配对 token（TOFU 生成/采纳，含本机凭据，不应入库）
 .capture-extension-token
 
