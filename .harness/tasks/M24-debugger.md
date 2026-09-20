@@ -34,7 +34,7 @@ M21 已实现「暂停即收口」的跨进程暂停/继续：控制文件 `cont
 
 ## 任务（切片）
 
-- [ ] **S1 断点契约（runtime + CLI）**
+- [x] **S1 断点契约（runtime + CLI）**（2026-09-20 done）
   - `control_channel.py`：控制文件增 `breakpoints`（节点 id 列表）与 `step` 语义；
     `request_pause` 保持向后兼容。
   - `runtime/orchestrator.py`：节点边界判定「暂停请求 / 命中断点 / 单步」三合一；

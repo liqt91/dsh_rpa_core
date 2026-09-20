@@ -8,6 +8,9 @@ from typing import Any
 CHECKPOINT_VERSION = 1
 _REQUIRED_SCOPES = ("inputs", "steps", "loop")
 
+# 暂停原因（M24 断点/单步）：user=用户暂停，breakpoint=命中断点，step=单步停下
+_PAUSE_REASONS = ("user", "breakpoint", "step")
+
 
 class CheckpointError(RuntimeError):
     pass
@@ -70,6 +73,21 @@ def validate_checkpoint(data: Any) -> dict[str, Any]:
         raise CheckpointError("Checkpoint scopes do not match the recorded catalogDigest")
     if "returnValue" not in data:
         raise CheckpointError("Checkpoint field 'returnValue' is missing")
+    # M24 调试字段（可选，旧检查点缺省为空）：断点集合、已消费断点、暂停原因与停点。
+    for field in ("breakpoints", "consumedBreakpoints"):
+        value = data.get(field, [])
+        if (
+            not isinstance(value, list)
+            or any(not isinstance(item, str) or not item for item in value)
+            or len(set(value)) != len(value)
+        ):
+            raise CheckpointError(f"Checkpoint field {field!r} must be unique string keys")
+    reason = data.get("pauseReason")
+    if reason is not None and reason not in _PAUSE_REASONS:
+        raise CheckpointError(f"Checkpoint field 'pauseReason' is invalid: {reason!r}")
+    paused_at = data.get("pausedAtNode")
+    if paused_at is not None and (not isinstance(paused_at, str) or not paused_at):
+        raise CheckpointError("Checkpoint field 'pausedAtNode' must be a non-empty string")
     return data
 
 
@@ -80,12 +98,25 @@ def checkpoint_payload(
     completed_steps: list[str],
     scopes: dict[str, Any],
     return_value: Any,
+    breakpoints: list[str] | None = None,
+    consumed_breakpoints: list[str] | None = None,
+    pause_reason: str | None = None,
+    paused_at_node: str | None = None,
 ) -> dict[str, Any]:
-    return {
+    payload = {
         "version": CHECKPOINT_VERSION,
         "workflowId": workflow_id,
         "catalogDigest": catalog_digest,
         "completedSteps": completed_steps,
         "scopes": scopes,
         "returnValue": return_value,
+        # 断点集合必须随检查点持久化：resume 起的是新进程，控制文件里的请求
+        # 已被 reset（见 control_channel 模块文档第 3 条），断点不能依赖它。
+        "breakpoints": sorted(breakpoints or []),
+        "consumedBreakpoints": sorted(consumed_breakpoints or []),
     }
+    if pause_reason is not None:
+        payload["pauseReason"] = pause_reason
+    if paused_at_node is not None:
+        payload["pausedAtNode"] = paused_at_node
+    return payload

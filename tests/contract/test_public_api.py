@@ -13,10 +13,13 @@ def _params(func):
 
 
 def test_api_v1_orchestrator_surface_is_frozen():
+    # M24 增量（向后兼容）：start 增 breakpoints、resume 增 step，均为
+    # keyword-only 且带默认值——既有调用方无需改动（ADR 0006 的 v1 面在此登记）。
     assert _params(Orchestrator.start) == [
         ("self", inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.empty),
         ("plan", inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.empty),
         ("inputs", inspect.Parameter.POSITIONAL_OR_KEYWORD, None),
+        ("breakpoints", inspect.Parameter.KEYWORD_ONLY, ()),
     ]
     assert _params(Orchestrator.run) == [
         ("self", inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.empty),
@@ -32,6 +35,7 @@ def test_api_v1_orchestrator_surface_is_frozen():
             inspect.Parameter.KEYWORD_ONLY,
             False,
         ),
+        ("step", inspect.Parameter.KEYWORD_ONLY, False),
     ]
 
 
@@ -40,6 +44,7 @@ def test_api_v1_run_handle_surface_is_frozen():
         RunHandle.cancel,
         RunHandle.pause,
         RunHandle.resume,
+        RunHandle.request_step,  # M24：单步（请求一个节点后停）
         RunHandle.wait,
         RunHandle.cancel_and_wait,
         RunHandle.pause_and_wait,

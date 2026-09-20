@@ -475,6 +475,13 @@ def _cmd_pause(args) -> int:
     return 0
 
 
+def _parse_breakpoints(raw: str | None) -> list[str]:
+    """解析 `--breakpoints a,b,c`；空/缺省返回空列表（容忍空格与空段）。"""
+    if not raw:
+        return []
+    return [item.strip() for item in raw.split(",") if item.strip()]
+
+
 async def _await_with_control(run_dir: Path, handle: RunHandle) -> RunResult:
     """等 run 结束，同时把控制文件的暂停请求镜像到 `handle`（M21 跨进程控制通道）。
 
@@ -692,9 +699,17 @@ def main() -> int:
         if action == "run":
             sub.add_argument("--inputs", type=str, default=None,
                              help="JSON 字符串，覆盖 workflow 默认输入")
+            sub.add_argument(
+                "--breakpoints", type=str, default=None,
+                help="逗号分隔的节点 id：执行到这些节点**之前**暂停（M24 断点）",
+            )
         if action == "resume":
             sub.add_argument("--run-id", required=True)
             sub.add_argument("--allow-indeterminate", action="store_true")
+            sub.add_argument(
+                "--step", action="store_true",
+                help="单步：只执行一个节点，然后在下一个节点边界再次暂停（M24）",
+            )
     args = parser.parse_args()
     if args.action == "devserver":
         return _serve(args)
@@ -776,13 +791,18 @@ def main() -> int:
                         plan,
                         args.run_id,
                         allow_indeterminate=args.allow_indeterminate,
+                        step=bool(getattr(args, "step", False)),
                     ),
                 )
             else:
                 # start() 同步返回 RunHandle：先打早期 run_id 标记行，宿主
                 # （devserver RunManager / GUI）据此在运行中即可读 events.jsonl，
                 # 支撑运行中悬浮窗/事件流实时显示。最终 RunResult JSON 仍在末尾。
-                handle = orchestrator.start(plan, inputs=inputs)
+                handle = orchestrator.start(
+                    plan,
+                    inputs=inputs,
+                    breakpoints=_parse_breakpoints(getattr(args, "breakpoints", None)),
+                )
                 print(json.dumps({"run_id": handle.run_id}), flush=True)
                 result = await _await_with_control(args.artifacts / handle.run_id, handle)
             print(result.model_dump_json(indent=2))
