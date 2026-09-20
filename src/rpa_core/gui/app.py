@@ -507,6 +507,30 @@ class MainWindow(QMainWindow):
             )
             self._ext_badge.setStyleSheet("color: #cf222e;")
 
+    def _prewarm_param_panel(self) -> None:
+        """预热参数面板：把「首次复杂表单塞进 QScrollArea」的一次性开销提前消化。
+
+        Qt 首次对复杂表单（分组区段 + 表单布局 + 各控件）做布局/样式初始化要花
+        ~300-500ms（实测：首次 `QScrollArea.setWidget` 310ms，之后 7ms）；若发生在
+        用户第一次点节点时就是可见卡顿（维护者报障「第一次点 fx 指令小卡一下」）。
+        这里在窗口显示后的空闲时机用真实命令表单预热一次，用完即弃——之后任何
+        节点的表单挂载都是毫秒级。
+        """
+        from PySide6.QtWidgets import QScrollArea
+
+        from rpa_core.gui.param_form import ParamForm
+
+        manifest = self.catalog.get("browser.navigate") or next(
+            iter(self.catalog.values()), None
+        )
+        if manifest is None:
+            return
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setWidget(ParamForm(manifest.input_schema, {}, manifest=manifest))
+        scroll.ensurePolished()
+        scroll.deleteLater()
+
     def _build_toolbar(self) -> None:
         """顶部工具栏：新建 / 打开 / 保存 / 删除节点。"""
         toolbar = self.addToolBar("文件")
@@ -1084,8 +1108,19 @@ class MainWindow(QMainWindow):
         # 否则 _find_next_in_canvas 会对死 item 调 index()/scrollTo，抛
         # "Internal C++ object already deleted" 或让视图卡住。
         self._invalidate_canvas_search()
+        # 待提交登记指向的节点可能已被删除（如卡片上的删除按钮不走
+        # _delete_selected_node，面板不会自动清空）：陈旧登记必须就地作废，
+        # 否则下一次提交会对已删行 itemFromIndex（返回 None）取数据而崩溃。
+        self._invalidate_stale_pending_apply()
         self._begin_edit()
         self._end_edit()
+
+    def _invalidate_stale_pending_apply(self) -> None:
+        """结构变更后，若待提交登记指向的节点已不在模型里 → 作废登记并清空面板。"""
+        if self._pending_apply is None:
+            return
+        if self._pending_target_item() is None:
+            self._show_param_placeholder("从画布选择指令节点以编辑参数")
 
     def _invalidate_canvas_search(self) -> None:
         """清空并（若查找条有内容）重算画布查找匹配集。"""
@@ -1569,6 +1604,26 @@ class MainWindow(QMainWindow):
         item = self.flow_model.find_by_id(node_id)
         return item.text() if item is not None else node_id
 
+    @staticmethod
+    def _format_outputs_preview(
+        outputs: dict, limit: int = 3, max_len: int = 80
+    ) -> str:
+        """把节点输出压成「key=值」预览（截断、单行）——只看字段名无法判断抓到的数据对不对。"""
+        import json
+
+        if not outputs:
+            return "—"
+        parts: list[str] = []
+        for key, value in list(outputs.items())[:limit]:
+            text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
+            text = " ".join(str(text).split())  # 折成单行，避免多行撑爆日志面板
+            if len(text) > max_len:
+                text = text[: max_len - 1] + "…"
+            parts.append(f"{key}={text}")
+        hidden = len(outputs) - len(parts)
+        line = ", ".join(parts)
+        return f"{line} （另有 {hidden} 项）" if hidden > 0 else line
+
     def _format_event(self, event: dict) -> str:
         """把运行事件格式化为可读日志行（对齐 Web 事件展示 + 耗时/输出预览）。"""
         import time
@@ -1586,8 +1641,8 @@ class MainWindow(QMainWindow):
             start = self._step_start_times.pop(node_id, None)
             elapsed = time.time() - start if start else 0
             outputs = payload.get("outputs") or {}
-            keys = ", ".join(outputs.keys()) if outputs else "—"
-            return f"✓ {title} 完成 ({elapsed:.1f}s) — 输出: {keys}"
+            preview = self._format_outputs_preview(outputs)
+            return f"✓ {title} 完成 ({elapsed:.1f}s) — 输出: {preview}"
 
         if etype == "stepFailed":
             start = self._step_start_times.pop(node_id, None)
@@ -2778,11 +2833,18 @@ class MainWindow(QMainWindow):
 
     # ---- 右栏参数表单 -----------------------------------------------------
     def _clear_param_panel(self) -> None:
-        """清空右栏内容（旧控件延迟销毁）并作废待提交的编辑登记。"""
+        """清空右栏内容（旧控件立刻摘除并隐藏，延后销毁）并作废待提交的编辑登记。
+
+        只调 ``deleteLater()`` 不够：控件要等事件循环回收，期间仍挂在右栏可见，
+        且已脱离布局、保留旧几何——切换指令时会看到旧表单残影（小框闪现）。
+        因此先 ``hide()`` 再 ``setParent(None)`` 让它当帧就停止绘制，最后延后销毁。
+        """
         self._pending_apply = None
         while self.param_layout.count():
             old = self.param_layout.takeAt(0).widget()
             if old is not None:
+                old.hide()
+                old.setParent(None)
                 old.deleteLater()
 
     def _show_param_placeholder(self, text: str) -> None:
@@ -2854,11 +2916,19 @@ class MainWindow(QMainWindow):
 
     def _show_action_form(self, manifest, args, index, role_args_raw) -> None:
         """在右栏挂载「滚动表单 + 应用按钮」。"""
-        from rpa_core.gui.flow_model import ROLE_ARGS_SUMMARY, summarize_args
+        from rpa_core.gui.flow_model import (
+            ROLE_ARGS_SUMMARY,
+            ROLE_NODE_ID,
+            summarize_args,
+        )
         from rpa_core.gui.param_form import ParamForm
 
         self._clear_param_panel()
         item = self.flow_model.itemFromIndex(index)
+        if item is None:
+            self._show_param_placeholder("从画布选择指令节点以编辑参数")
+            return
+        own_id = item.data(ROLE_NODE_ID)  # 闭包自校验：节点被删后绝不写错行
         holder = item.data(role_args_raw)
         raw = holder.raw if holder is not None else None
         form = ParamForm(
@@ -2886,8 +2956,21 @@ class MainWindow(QMainWindow):
                 return
             self._begin_edit()
             item = self.flow_model.itemFromIndex(index)
+            # 闭包自校验：节点 id 必须与登记时一致。已删行的 isValid() 可能仍为
+            # True，且行会被后续节点顶上——只按行取 item 会写错节点。
+            if item is None or item.data(ROLE_NODE_ID) != own_id:
+                # 节点已在别处删除（陈旧面板）：回收历史记账，不触碰已删行
+                if self._undo_stack:
+                    self._undo_stack.pop()
+                self.statusBar().showMessage("该节点已被删除，参数未应用", 4000)
+                return
             # 原地更新同一 holder（保留 raw 模板），并同步 raw["with"] 供回写
             holder = item.data(role_args_raw)
+            if holder is None:
+                if self._undo_stack:
+                    self._undo_stack.pop()
+                self.statusBar().showMessage("该节点没有可编辑的参数", 4000)
+                return
             holder.args = dict(values)
             if holder.raw is not None:
                 holder.raw["with"] = dict(values)
@@ -2952,23 +3035,48 @@ class MainWindow(QMainWindow):
         GUI 与 Web 的差异：Web 改字段即生效，GUI 需要点「应用参数」。不点就
         保存会静默丢掉修改（维护者实测报障）——因此在保存/运行/校验/切换
         节点前自动提交未应用的编辑（无改动则跳过，不产生撤销历史）。
+
+        同时记录节点 id：仅凭 QModelIndex 无法判断节点是否已被删除——已删行的
+        ``isValid()`` 仍可能为 True，且行被后续节点顶上来后会指向「别人」。
         """
-        self._pending_apply = (apply_fn, dirty_fn, index)
+        from rpa_core.gui.flow_model import ROLE_NODE_ID
+
+        self._pending_apply = (apply_fn, dirty_fn, index, index.data(ROLE_NODE_ID))
+
+    def _pending_target_item(self):
+        """待提交登记对应的当前节点 item；登记陈旧（节点已删/行已易主）时作废并返回 None。"""
+        from rpa_core.gui.flow_model import ROLE_NODE_ID
+
+        pending = self._pending_apply
+        if pending is None:
+            return None
+        _apply_fn, _dirty_fn, index, node_id = pending
+        try:
+            item = self.flow_model.itemFromIndex(index) if index.isValid() else None
+        except RuntimeError:
+            item = None
+        if item is None or item.data(ROLE_NODE_ID) != node_id:
+            self._pending_apply = None
+            return None
+        return item
 
     def _commit_pending_edits(self) -> None:
-        """把参数面板未应用的编辑落到模型；模型已重建/无改动/变更中则跳过。"""
+        """把参数面板未应用的编辑落到模型；模型已重建/无改动/变更中则跳过。
+
+        登记**不随提交消费**：表单仍挂在右栏时，用户的后续编辑仍需被下一次
+        保存/运行自动提交——此前提交即丢弃登记，第一次保存/运行/校验把登记
+        消费掉之后，对同一表单的再编辑无人接管，下次保存静默丢失（维护者
+        实测「改完保存无效、要保存两次」）。登记随表单生命周期失效：
+        重挂载/占位清空在 `_clear_param_panel` 作废；节点被删除或行已易主
+        （撤销/重建/卡片删除按钮路径）时由 `_pending_target_item` 判定陈旧作废。
+        """
         if self.flow_model is not None and self.flow_model.mutating:
             return
         pending = self._pending_apply
         if pending is None:
             return
-        self._pending_apply = None
-        apply_fn, dirty_fn, index = pending
-        # 画布可能已被撤销/重做重建：索引不属于当前模型时丢弃陈旧面板
-        try:
-            if index.model() is not self.flow_model:
-                return
-        except RuntimeError:
+        apply_fn, dirty_fn, index, _node_id = pending
+        if self._pending_target_item() is None:
             return
         if not dirty_fn():
             return
@@ -3024,6 +3132,7 @@ class MainWindow(QMainWindow):
         from rpa_core.gui.flow_model import (
             ROLE_ARGS_RAW,
             ROLE_ARGS_SUMMARY,
+            ROLE_NODE_ID,
             control_node_title,
             repr_json,
         )
@@ -3031,6 +3140,7 @@ class MainWindow(QMainWindow):
 
         self._clear_param_panel()
         form = ControlNodeForm(node_type, raw)
+        own_id = index.data(ROLE_NODE_ID)  # 闭包自校验：节点被删后绝不写错行
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
@@ -3050,9 +3160,16 @@ class MainWindow(QMainWindow):
                 return
             self._begin_edit()
             item = self.flow_model.itemFromIndex(index)
+            if item is None or item.data(ROLE_NODE_ID) != own_id:
+                # 节点已在别处删除（陈旧面板）：回收历史记账，不触碰已删行
+                if self._undo_stack:
+                    self._undo_stack.pop()
+                self.statusBar().showMessage("该节点已被删除，参数未应用", 4000)
+                return
             holder = item.data(ROLE_ARGS_RAW)
             if holder is None or holder.raw is None:
-                self._undo_stack.pop()  # 无变更可回收刚才的历史记账
+                if self._undo_stack:  # 无变更可回收刚才的历史记账
+                    self._undo_stack.pop()
                 return
             holder.raw.update(updates)
             if node_type == "return":
@@ -3189,6 +3306,40 @@ def build_main_window(
     )
 
 
+def _install_crash_diagnostics() -> str:
+    """把「Python 未捕获异常」与「原生崩溃（段错误等）」都留痕到日志文件。
+
+    GUI 的崩溃报障往往只有「卡死闪退」四个字：Python 异常在 Qt 槽里可能被吞、
+    原生段错误更是直接进程消失。这里双管齐下——
+    - ``faulthandler``：段错误/abort 时把 C 栈写进日志（不依赖 Python 还能运行）；
+    - ``sys.excepthook``：未捕获 Python 异常连同栈写进同一文件。
+    返回日志路径，供启动时向用户显示。
+    """
+    import faulthandler
+    import os
+    import sys
+    import traceback
+    from pathlib import Path
+
+    temp = os.environ.get("TEMP") or os.environ.get("TMP") or "."
+    log_file = Path(temp) / "rpa_gui_crash.log"
+    try:
+        handle = log_file.open("a", encoding="utf-8")
+        faulthandler.enable(file=handle)
+        previous_hook = sys.excepthook
+
+        def _hook(exc_type, exc_value, exc_tb) -> None:
+            with log_file.open("a", encoding="utf-8") as out:
+                out.write("\n=== unhandled exception ===\n")
+                traceback.print_exception(exc_type, exc_value, exc_tb, file=out)
+            previous_hook(exc_type, exc_value, exc_tb)
+
+        sys.excepthook = _hook
+    except OSError:
+        return str(log_file)
+    return str(log_file)
+
+
 def run_gui(
     commands_root: Path,
     flow_path: Path | None = None,
@@ -3197,7 +3348,13 @@ def run_gui(
     """GUI 启动入口：加载真实 catalog（可选 workflow）→ 构建窗口 → 进入事件循环。"""
     from rpa_core.model.workflow import Workflow
 
+    crash_log = _install_crash_diagnostics()
+    print(f"[gui] 崩溃日志：{crash_log}", flush=True)
     app = build_application()
+    # 排障开关：RPA_GUI_DEBUG=1 时记录窗口级控件的显示事件（定位「小框闪现」）
+    from rpa_core.gui.debug_log import install_window_show_watch
+
+    install_window_show_watch(app)
     catalog = load_catalog(Path(commands_root))
     workflow = (
         Workflow.model_validate_json(Path(flow_path).read_text(encoding="utf-8"))
@@ -3208,4 +3365,9 @@ def run_gui(
         workflows_root=workflows_root,
     )
     window.show()
+    # 窗口显示后在空闲时机预热参数面板（详见 _prewarm_param_panel 注释）：
+    # 提前消化首次复杂表单布局的一次性开销，避免用户第一次点节点时卡顿。
+    from PySide6.QtCore import QTimer
+
+    QTimer.singleShot(0, window._prewarm_param_panel)
     return app.exec()

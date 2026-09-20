@@ -483,12 +483,15 @@ class ParamForm(QWidget):
         layout.setSpacing(4)
         layout.addWidget(editor, 1)
 
-        var_button = QToolButton()
+        # 必须带父级创建（row）：无父级的控件一旦 setVisible(True)，Qt 会把它
+        # 当成**顶层窗口**显示——表现为「切换含 fx 的指令时小框闪现」（维护者
+        # 报障，诊断日志实锤：QToolButton 51x23 以 window 身份 Show）。
+        var_button = QToolButton(row)
         var_button.setText("＋变量")
-        var_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         var_button.setToolTip("在光标处插入变量标签 [name]")
+        var_button.setAutoRaise(True)
 
-        fx_button = QToolButton()
+        fx_button = QToolButton(row)
         fx_button.setText("fx")
         fx_button.setCheckable(True)
         fx_button.setChecked(self._expr_modes.get(name) == "fx")
@@ -496,16 +499,18 @@ class ParamForm(QWidget):
             "fx 变量引用模式：用 [变量名] 标签引用变量，可与文本混排"
         )
 
-        def refresh_variable_menu() -> None:
-            menu = var_button.menu()
-            menu.clear()
-            paths = (
-                self._variable_provider() if self._variable_provider else []
+        def show_variable_menu() -> None:
+            """点击时按需构建并就地弹出变量菜单。
+
+            不预挂 QMenu：预挂的菜单在 Windows 上会随控件树重挂/销毁产生原生
+            弹层残影——只有 fx 字段才有这种控件，正是「切换含 fx 的指令时小框
+            闪现」的来源（维护者报障）。按需创建同时保证变量列表每次都是最新。
+            """
+            menu = self._build_variable_menu(editor, var_button)
+            menu.exec(
+                var_button.mapToGlobal(var_button.rect().bottomLeft())
             )
-            if not paths:
-                menu.addAction("（无可引用变量）").setEnabled(False)
-            for path in paths:
-                menu.addAction(path, lambda p=path: editor.insert(f"[{p}]"))
+            menu.deleteLater()
 
         def toggle(checked: bool) -> None:
             if checked:
@@ -522,15 +527,27 @@ class ParamForm(QWidget):
         if fx_button.isChecked():
             editor.setStyleSheet("QLineEdit { background: #eef5ff; }")
         fx_button.toggled.connect(toggle)
-        # 每次弹出前重建菜单，保证新增变量即时可见
-        var_button_menu = QMenu(var_button)
-        var_button.setMenu(var_button_menu)
-        var_button_menu.aboutToShow.connect(refresh_variable_menu)
+        var_button.clicked.connect(show_variable_menu)
 
         layout.addWidget(var_button)
         layout.addWidget(fx_button)
+        # 可见性初始化放在加入布局之后（此时必有父级），杜绝顶层窗口闪现
+        var_button.setVisible(fx_button.isChecked())
+        if fx_button.isChecked():
+            editor.setStyleSheet("QLineEdit { background: #eef5ff; }")
         self._fx_buttons[name] = (fx_button, var_button)
         return row
+
+    def _build_variable_menu(self, editor: QLineEdit, parent: QWidget) -> QMenu:
+        """构建 fx「＋变量」菜单（点击时调用；也供测试直接驱动）。"""
+        menu = QMenu(parent)
+        menu.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        paths = self._variable_provider() if self._variable_provider else []
+        if not paths:
+            menu.addAction("（无可引用变量）").setEnabled(False)
+        for path in paths:
+            menu.addAction(path, lambda p=path: editor.insert(f"[{p}]"))
+        return menu
 
     def expr_modes(self) -> dict[str, str]:
         """返回各字段当前的表达式模式（仅 fx 开启的字段）。"""

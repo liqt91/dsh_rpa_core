@@ -25,6 +25,7 @@ from rpa_core.gui.flow_model import (  # noqa: E402
 )
 
 _MIME = "application/x-rpa-flow-node"
+_MIME_CMD = "application/x-rpa-flow-command"
 
 
 @pytest.fixture(scope="module")
@@ -45,6 +46,12 @@ def catalog(qapp):
 def _mime(ids: list[str]) -> QMimeData:
     data = QMimeData()
     data.setData(_MIME, ";".join(ids).encode("utf-8"))
+    return data
+
+
+def _command_mime(command_id: str) -> QMimeData:
+    data = QMimeData()
+    data.setData(_MIME_CMD, command_id.encode("utf-8"))
     return data
 
 
@@ -574,5 +581,105 @@ def test_plain_click_on_selected_collapses_multi_selection(window):
         ]
         assert ids == ["open"]
     finally:
+        window._dirty = False
+        window.hide()
+
+
+# -- 指令树 → 画布拖入新建（回归：「左侧指令树拖不到画布」） ---------------------
+
+
+class _MockDragMove(_MockDrop):
+    """最小 dragMove 事件替身（dragMoveEvent 用 position() 取落点坐标）。"""
+
+    def __init__(self, mime_data, pos):
+        super().__init__(mime_data)
+        self._pos = pos
+
+    def position(self):
+        return self._pos
+
+
+def test_model_mime_types_register_command_format(catalog):
+    """回归：mimeTypes 必须注册指令树 MIME，否则 dragEnter 阶段就被 Qt 整体拒收。"""
+    model = _flat_model()
+    assert _MIME_CMD in model.mimeTypes()
+    assert _MIME in model.mimeTypes()
+
+
+def test_command_drag_move_accepted_over_action_card(window):
+    """回归：指令树 MIME 在 dragMove 阶段被接受并算好落点（此前直接 ignore）。
+
+    悬停指令卡片中部（on 区）时：指令不能落入另一个指令内部，按「其后插入」。
+    """
+    from PySide6.QtCore import QPointF
+
+    window.show()
+    try:
+        model = window.flow_model
+        view = window.canvas_view
+        index = model.find_by_id("open").index()
+        rect = view.visualRect(index)
+        event = _MockDragMove(_command_mime("workflow.sleep"), QPointF(rect.center()))
+        view.dragMoveEvent(event)
+        assert event.isAccepted() is True
+        target = view._drag_target
+        assert target is not None
+        assert target["mode"] == "below"
+        assert target["row"] == index.row() + 1
+        assert target["parent"] == index.parent()
+    finally:
+        view._drag_target = None
+        window._dirty = False
+        window.hide()
+
+
+def test_command_drop_inserts_at_indicator_position(window):
+    """指令树拖入落点 = 指示条位置：新指令插到悬停卡片之后（而非总是追加末尾）。"""
+    window.show()
+    try:
+        model = window.flow_model
+        view = window.canvas_view
+        before = _top_ids(model)
+        index = model.find_by_id("open").index()
+        view._drag_target = {
+            "row": index.row() + 1,
+            "parent": index.parent(),
+            "mode": "below",
+        }
+        event = _MockDrop(_command_mime("workflow.sleep"))
+        view.dropEvent(event)
+        assert event.isAccepted() is True
+        after = _top_ids(model)
+        assert len(after) == len(before) + 1
+        # 新节点紧跟在 open 之后
+        new_id = after[index.row() + 1]
+        assert new_id not in before
+        new_item = model.find_by_id(new_id)
+        assert new_item is not None
+    finally:
+        window._dirty = False
+        window.hide()
+
+
+def test_command_drag_over_container_keeps_on_mode(window):
+    """悬停容器（if 卡片）中部时保持 on=进入容器末尾（容器可以接收子指令）。"""
+    from PySide6.QtCore import QPointF
+
+    window.show()
+    try:
+        model = window.flow_model
+        view = window.canvas_view
+        view.setExpanded(model.find_by_id("check").index(), True)
+        index = model.find_by_id("check").index()
+        rect = view.visualRect(index)
+        event = _MockDragMove(_command_mime("workflow.sleep"), QPointF(rect.center()))
+        view.dragMoveEvent(event)
+        assert event.isAccepted() is True
+        target = view._drag_target
+        assert target is not None
+        assert target["mode"] == "on"
+        assert target["row"] == -1
+    finally:
+        view._drag_target = None
         window._dirty = False
         window.hide()

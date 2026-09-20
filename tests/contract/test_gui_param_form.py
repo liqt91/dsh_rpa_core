@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (  # noqa: E402
     QLabel,
     QLineEdit,
     QPushButton,
+    QWidget,
 )
 
 from rpa_core.gui.flow_model import (  # noqa: E402
@@ -191,6 +192,116 @@ def test_selecting_action_card_shows_form_and_apply_updates_item(window):
     assert "browserType=msedge" in summary
 
 
+def test_second_edit_after_save_is_committed(window):
+    """回归（维护者报障「改完保存无效、要保存两次」）：待提交登记不随提交消费——
+
+    第一次保存/运行把面板编辑提交到模型后，表单仍挂在右栏；用户对同一表单的
+    再编辑必须同样被下一次保存自动提交。旧实现提交即丢弃登记，第二次编辑
+    无人接管、保存静默丢失。
+    """
+    model = window.flow_model
+    item = model.find_by_id("open")
+    window.canvas_view.setCurrentIndex(model.indexFromItem(item))
+    form = window.param_holder.findChild(ParamForm)
+    combo: QComboBox = _field(form, "browserType")
+
+    def saved_browser_type() -> str | None:
+        document = window._build_document()  # 保存路径：内部先 _commit_pending_edits
+        node = next(
+            child for child in document["root"]["children"] if child["id"] == "open"
+        )
+        return node["with"].get("browserType")
+
+    combo.setCurrentIndex(combo.findData("msedge"))
+    assert saved_browser_type() == "msedge"  # 第一次编辑：提交生效
+    combo.setCurrentIndex(combo.findData("chrome"))
+    assert saved_browser_type() == "chrome"  # 第二次编辑：同样生效（回归点）
+
+
+def test_stale_pending_apply_invalidated_on_delete(window):
+    """回归（维护者报障「删除指令后点其他指令卡死闪退」）：卡片上的删除按钮不走
+    `_delete_selected_node`，参数面板不会自动清空；结构变更后陈旧登记必须就地作废。
+
+    否则下一次提交会对已删行 `itemFromIndex`（返回 None）取数据，在 Qt 槽里抛异常
+    中止进程。
+    """
+    model = window.flow_model
+    item = model.find_by_id("open")
+    window.canvas_view.setCurrentIndex(model.indexFromItem(item))
+    assert window._pending_apply is not None
+
+    # 模拟卡片删除按钮路径：直接走模型删除（不触发 app 的面板清理）
+    model.remove_item(item)
+    assert window._pending_apply is None
+    labels = window.param_holder.findChildren(QLabel)
+    assert any("选择指令节点" in label.text() for label in labels)
+
+
+def test_stale_apply_does_not_touch_deleted_node(window):
+    """已删节点的陈旧 apply：安全返回（不抛异常、不改模型），状态栏给出提示。"""
+    model = window.flow_model
+    item = model.find_by_id("read") or model.find_by_id("open")
+    window.canvas_view.setCurrentIndex(model.indexFromItem(item))
+    apply_fn = window._pending_apply[0]
+
+    model.remove_item(item)
+    apply_fn()  # 不应抛异常
+    assert "已被删除" in window.statusBar().currentMessage()
+
+
+def test_switching_nodes_detaches_old_param_form_immediately(window):
+    """回归（维护者报障「切换指令时小框闪现」）：清空右栏必须当帧把旧控件隐藏并
+    脱离父级——只调 deleteLater 会把旧表单留在屏幕上直到事件循环回收，切换瞬间
+    出现残影。"""
+    model = window.flow_model
+    window.canvas_view.setCurrentIndex(model.indexFromItem(model.find_by_id("open")))
+    # 右栏布局里挂的是外层 QScrollArea（表单在其内）
+    old_widget = window.param_layout.itemAt(0).widget()
+    assert old_widget is not None
+
+    window.canvas_view.setCurrentIndex(model.indexFromItem(model.find_by_id("read")))
+    # 立即（未跑事件循环）检查：旧控件已脱离父级且不可见
+    assert old_widget.parent() is None
+    assert old_widget.isVisible() is False
+
+
+def test_fx_var_button_has_no_pre_attached_menu(window):
+    """回归（维护者报障「切换含 fx 的指令时小框闪现」）：fx 行的「＋变量」按钮
+    不得预挂 QMenu——预挂菜单在 Windows 上会随控件树重挂/销毁产生原生弹层残影。
+    改为点击时按需构建（菜单点击后插入标签、变量列表每次取最新）。"""
+    model = window.flow_model
+    item = model.find_by_id("read") or model.find_by_id("open")
+    window.canvas_view.setCurrentIndex(model.indexFromItem(item))
+    form = window.param_holder.findChildren(ParamForm)[-1]
+
+    var_buttons = [
+        widget
+        for name, (fx_btn, widget) in form._fx_buttons.items()
+    ]
+    assert var_buttons, "样例流程应含 fx 可变字段"
+    for button in var_buttons:
+        assert button.menu() is None  # 不预挂菜单（弹层残影根因）
+
+
+def test_prewarm_param_panel_is_safe_and_keeps_panel_usable(window):
+    """预热参数面板：不抛异常、不往右栏塞残留控件、之后表单仍可正常挂载。
+
+    （Qt 首次复杂表单布局的一次性开销 ~300ms 由预热提前消化，避免首次点节点卡顿。）
+    """
+    window._prewarm_param_panel()
+    from PySide6.QtWidgets import QApplication
+
+    QApplication.processEvents()
+    # 预热用的滚动区不进右栏布局（用完即弃）
+    assert window.param_layout.count() == 0 or all(
+        window.param_layout.itemAt(i).widget() is not None
+        for i in range(window.param_layout.count())
+    )
+    model = window.flow_model
+    window.canvas_view.setCurrentIndex(model.indexFromItem(model.find_by_id("open")))
+    assert window.param_holder.findChildren(ParamForm)
+
+
 def test_selecting_control_nodes_show_control_forms(window):
     model = window.flow_model
 
@@ -349,6 +460,29 @@ def test_fx_initial_mode_from_expr_modes(qapp):
     assert form.expr_modes() == {"text": "fx"}
 
 
+def test_fx_row_widgets_are_never_windows(qapp):
+    """回归（维护者报障「切换含 fx 的指令时小框闪现」）：fx 行的控件必须创建时就
+    带父级——无父级控件被 setVisible(True) 时 Qt 会把它当顶层窗口显示，产生闪现。
+
+    诊断日志实锤：QToolButton 51x23 以 window 身份 Show。
+    """
+    form = ParamForm(
+        catalog_schema_for_fx(),
+        {"text": "[web]"},
+        expr_modes={"text": "fx"},
+        variable_provider=lambda: ["webpage1"],
+    )
+    _, var_button = form._fx_buttons["text"]
+    assert var_button.parent() is not None
+    assert var_button.isWindow() is False
+    # 整棵表单里不允许出现「窗口」控件（fx 开关按钮同理）
+    windows = [
+        w for w in form.findChildren(QWidget)
+        if w.isWindow()
+    ]
+    assert windows == [], f"表单内不应有顶层窗口控件：{windows}"
+
+
 def test_fx_var_button_inserts_tag_at_cursor(qapp):
     form = ParamForm(
         catalog_schema_for_fx(),
@@ -358,8 +492,8 @@ def test_fx_var_button_inserts_tag_at_cursor(qapp):
     )
     editor: QLineEdit = _field(form, "text")
     _, var_button = form._fx_buttons["text"]
-    menu = var_button.menu()
-    menu.aboutToShow.emit()  # 触发菜单重建（真实场景由弹出动作触发）
+    # 菜单按需构建（不预挂，避免弹层残影）：直接驱动构建函数
+    menu = form._build_variable_menu(editor, var_button)
     texts = [action.text() for action in menu.actions()]
     assert "webpage1" in texts and "inputs.count" in texts
     menu.actions()[0].trigger()
@@ -952,7 +1086,7 @@ def test_format_step_started(window):
 
 
 def test_format_step_completed_with_elapsed_and_outputs(window):
-    """stepCompleted 格式化为 ✓ 标题 完成 (耗时) — 输出: keys。"""
+    """stepCompleted 格式化为 ✓ 标题 完成 (耗时) — 输出: key=值（截断单行）。"""
     window._run_dock()
     window._step_start_times["open"] = __import__("time").time() - 1.5
     result = window._format_event({
@@ -965,6 +1099,28 @@ def test_format_step_completed_with_elapsed_and_outputs(window):
     assert "s)" in result
     assert "sessionId" in result
     assert "url" in result
+    # 不只字段名——值也要可见（维护者报障：不知道节点抓到的数据对不对）
+    assert "abc" in result
+    assert "https://x" in result
+
+
+def test_outputs_preview_truncates_and_summarizes(window):
+    """输出预览：超长值折成单行并截断；超出条数显示「另有 N 项」；空输出为 —。"""
+    preview = window._format_outputs_preview({})
+    assert preview == "—"
+
+    long_text = "第一行\n" + "x" * 200
+    preview = window._format_outputs_preview({"text": long_text})
+    assert "\n" not in preview
+    assert "…" in preview
+
+    many = {f"k{i}": i for i in range(6)}
+    preview = window._format_outputs_preview(many)
+    assert "另有 3 项" in preview
+
+    # 非字符串值按 JSON 渲染（列表/字典可读）
+    preview = window._format_outputs_preview({"items": [1, 2, 3]})
+    assert "items=[1, 2, 3]" in preview
 
 
 def test_format_step_failed_with_error(window):

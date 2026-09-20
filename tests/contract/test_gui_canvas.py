@@ -48,13 +48,29 @@ def test_real_workflow_maps_to_sequence_with_actions(real_workflow):
         _child(root, row).data(ROLE_COMMAND_ID) for row in range(root.rowCount())
     ]
     assert "data.setVar" in commands and "browser.navigate" in commands
-    # navigate 带 4 个参数（action/onTimeout/url/browserType），摘要取前 2 个 + 计数
     navigate = next(
         _child(root, row) for row in range(root.rowCount())
         if _child(root, row).data(ROLE_COMMAND_ID) == "browser.navigate"
     )
+    # 摘要必须由该节点**自身参数**派生（不写死具体值）：workflows/test 是维护者
+    # 日常编辑的活文件，断言写死参数会在正常编辑后误报。
+    navigate_node = next(
+        child for child in real_workflow.root.children
+        if getattr(child, "command", None) == "browser.navigate"
+    )
+    args = dict(navigate_node.with_)
+    assert args, "样例流程的打开网页应带参数"
     summary = navigate.data(ROLE_ARGS_SUMMARY) or ""
-    assert "action=goto" in summary and summary.endswith("+2")
+    shown = [
+        part.split("=", 1)[0]
+        for part in summary.split("  ")
+        if "=" in part
+    ]
+    assert shown, summary
+    assert set(shown) <= set(args), f"摘要字段应来自节点参数：{shown} ⊄ {list(args)}"
+    hidden = len(args) - len(shown)
+    if hidden > 0:
+        assert summary.endswith(f"+{hidden}")
 
 
 @pytest.fixture(scope="module")

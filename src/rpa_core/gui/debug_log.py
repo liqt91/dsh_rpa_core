@@ -71,3 +71,46 @@ def init() -> None:
     """启用时立刻建文件并写头行，便于确认日志确实开着。"""
     if ENABLED:
         log("init", file=str(_log_path()))
+
+
+def install_window_show_watch(app) -> None:
+    """调试：记录「窗口级控件被显示」事件（含调用栈）。
+
+    用于定位「切换指令时小框/窗口闪现」这类瞬时原生窗口——菜单、工具提示、
+    弹出视图都是顶层窗口，被显示时必然走 Show 事件；这里把类名、尺寸、位置
+    与调用栈写进诊断日志，复现一次即可确定是谁弹的。仅在 ``RPA_GUI_DEBUG``
+    启用时安装（默认零开销）。
+    """
+    if not ENABLED:
+        return
+    import traceback
+
+    from PySide6.QtCore import QEvent, QObject
+    from PySide6.QtWidgets import QWidget
+
+    class _WindowShowWatcher(QObject):
+        def eventFilter(self, obj, event):  # noqa: N802 (Qt naming)
+            try:
+                if (
+                    event.type() == QEvent.Type.Show
+                    and isinstance(obj, QWidget)
+                    and obj.isWindow()
+                ):
+                    stack = " | ".join(
+                        f"{frame.filename.rsplit('/', 1)[-1]}:{frame.lineno}"
+                        for frame in traceback.extract_stack()[-8:]
+                    )
+                    log(
+                        "window-show",
+                        cls=type(obj).__name__,
+                        size=(obj.width(), obj.height()),
+                        pos=(obj.x(), obj.y()),
+                        stack=stack,
+                    )
+            except Exception:  # noqa: BLE001 - 诊断本身绝不能影响 GUI
+                pass
+            return False
+
+    watcher = _WindowShowWatcher(app)
+    app.installEventFilter(watcher)
+    app._rpa_window_show_watcher = watcher  # 防被 GC

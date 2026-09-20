@@ -269,7 +269,9 @@ class FlowTreeModel(QStandardItemModel):
 
     # ---- 拖拽 MIME：只携带节点 id（移动语义，禁止跨模型复制） ------------
     def mimeTypes(self) -> list[str]:
-        return [_MIME_TYPE]
+        # 必须同时注册指令树 MIME：Qt 的 dragEnter 探测会以 model.mimeTypes()
+        # 比对拖拽格式，缺了 _MIME_COMMAND 会在进入画布那一刻就被整体拒收
+        return [_MIME_TYPE, _MIME_COMMAND]
 
     def mimeData(self, indexes) -> QMimeData:
         data = QMimeData()
@@ -350,16 +352,21 @@ class FlowTreeModel(QStandardItemModel):
     def _insert_item_at_drop(
         self, new_item: QStandardItem, row: int, parent: QModelIndex
     ) -> bool:
-        """把新建 item 插到 drop 指定的位置（供指令树 → 画布拖放用）。
+        """        把新建 item 插到 drop 指定的位置（供指令树 → 画布拖放用）。
 
         row=-1 / parent invalid → 追加到 invisibleRootItem 末尾（顶层）。
         row>=0 且 parent 有效 → 插到 parent 容器的 row 位置；row 超过末尾时
         追加。end-bracket / 否则行上的 drop 自动路由到其真实容器。
+
+        必须用 **list 形式** 的 insertRow：PySide6 的 ``insertRow(row, item)``
+        不接收所有权，调用方（dropMimeData）返回后局部引用释放，C++ 侧把刚插入
+        的 item 提前回收成死行，紧接着被 _prune_dead_rows 清掉——表现就是
+        「指令树拖进画布后节点立刻消失」（本方法此前两处均为裸 item 形式）。
         """
         if not parent.isValid():
             target = self.invisibleRootItem()
             target_row = target.rowCount() if row < 0 else min(row, target.rowCount())
-            target.insertRow(target_row, new_item)
+            target.insertRow(target_row, [new_item])
             return True
         # 路由 end-bracket / 否则行
         parent = self._resolve_drop_parent(parent)
@@ -371,7 +378,7 @@ class FlowTreeModel(QStandardItemModel):
             target = self.invisibleRootItem()
         # 控制流容器里的有效落点必须跳过 end-bracket / 否则行
         target_row = _real_child_insert_row(target) if row < 0 else min(row, target.rowCount())
-        target.insertRow(target_row, new_item)
+        target.insertRow(target_row, [new_item])
         return True
 
     @_mutating

@@ -188,9 +188,18 @@ class FlowTreeView(QTreeView):
             debug_log.log("drag-reset", state=str(self.state()))
 
     def dragMoveEvent(self, event) -> None:
-        """自判落点区域并驱动视觉指示条刷新。"""
+        """自判落点区域并驱动视觉指示条刷新。
+
+        同时接受画布内部移动（x-rpa-flow-node）与指令树拖入新建
+        （x-rpa-flow-command）——hit-test 与落点计算与 MIME 无关；command 的
+        落点合法性由 dropMimeData / _insert_item_at_drop 兜底（此前这里只认
+        node 格式，指令树拖入在 move 阶段被 ignore，表现为「拖不到画布」）。
+        """
         mime = event.mimeData()
-        if not mime.hasFormat("application/x-rpa-flow-node"):
+        if not (
+            mime.hasFormat("application/x-rpa-flow-node")
+            or mime.hasFormat(_MIME_COMMAND)
+        ):
             event.ignore()
             return
 
@@ -265,6 +274,18 @@ class FlowTreeView(QTreeView):
             parent = index
             indicator_y = rect.bottom()  # 容器内部指示条画在底行下方
 
+        # 指令树拖入且悬停在指令卡片中部时：指令不能落入另一个指令内部，
+        # 中部落点按「其后插入」处理（容器保持 on=进入容器末尾）。
+        if (
+            mime.hasFormat(_MIME_COMMAND)
+            and mode == "on"
+            and index.data(ROLE_NODE_TYPE) == "action"
+        ):
+            mode = "below"
+            row = index.row() + 1
+            parent = index.parent()
+            indicator_y = rect.bottom()
+
         # 传给 model.canDropMimeData 做合法性校验（成环 / 容器类型）
         action = Qt.DropAction.MoveAction
         if not self.model().canDropMimeData(mime, action, row, 0, parent):
@@ -312,12 +333,14 @@ class FlowTreeView(QTreeView):
             mime = event.mimeData()
             model = self.model()
             if mime.hasFormat(_MIME_COMMAND):
-                # 指令树拖入：直接用 row=-1 表示追加到目标容器末尾
+                # 指令树拖入：用 dragMoveEvent 算好的落点（指示条位置）；
+                # 无落点（直接 drop 的兜底路径）时 row=-1 追加到目标容器末尾
+                row = self._drag_target["row"] if self._drag_target else -1
                 parent = (
                     self._drag_target["parent"] if self._drag_target else QModelIndex()
                 )
                 self._drag_target = None
-                if model.dropMimeData(mime, event.proposedAction(), -1, 0, parent):
+                if model.dropMimeData(mime, event.proposedAction(), row, 0, parent):
                     event.acceptProposedAction()
                 else:
                     event.ignore()
