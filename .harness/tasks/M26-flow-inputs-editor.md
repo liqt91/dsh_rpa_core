@@ -1,6 +1,6 @@
 # M26 流程 inputs 声明编辑 UI
 
-状态：`planned`
+状态：`active`
 
 关联：M21（运行参数对话框只读消费 `inputs`）、ADR 0016（GUI 为主力形态）、M25（运行历史用历史 inputs 再跑）
 现状：流程级 `inputs`（`workflow.json` 顶层 `inputs` 字段）只能**手写 JSON**；GUI 的「运行参数」

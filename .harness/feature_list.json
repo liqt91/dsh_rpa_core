@@ -265,7 +265,7 @@
     {
       "id": "gui-home-workbench",
       "title": "Workbench home window (ADR 0017): flow list with run status, global run history tab with filtering, flow management actions (incl. cascading delete with confirmation), and a run entry that hands control to the editor",
-      "passes": false
+      "passes": true
     }
   ]
 }

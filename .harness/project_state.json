@@ -2,13 +2,13 @@
   "project": "rpa_core",
   "phase": "command-parity-extension-editor",
   "status": "active",
-  "completed_milestone": "M25-run-history",
-  "active_milestone": "M27-workbench-home",
-  "active_plan": ".harness/tasks/M27-workbench-home.md",
-  "active_feature": "gui-home-workbench",
+  "completed_milestone": "M27-workbench-home",
+  "active_milestone": "M26-flow-inputs-editor",
+  "active_plan": ".harness/tasks/M26-flow-inputs-editor.md",
+  "active_feature": "flow-inputs-editor",
   "next_milestone": null,
   "later_milestones": [],
-  "notes": "技术路线（ADR 0016）：GUI 为唯一主力形态，Web 编辑器退为可选、冻结演进；GUI 独立运行不需要 web 服务器。M23 收口（GUI 体验对齐）。M24 收口（断点与单步）。M25 收口（运行历史：只读读取器 + CLI + GUI 面板）。M27（当前，ADR 0017）：宿主形态改为两段式——独立「工作台」首页窗口（流程列表 + 全局运行历史 + 流程管理动作，含删除流程连同元素资产/数据表格/运行历史一并删除）+ 现有编辑器单窗口；运行控制（暂停/继续/单步）只在编辑器，工作台只「运行 + 看状态」；多窗口编辑器推迟。M26（流程 inputs 声明编辑 UI）排在 M27 之后。",
+  "notes": "技术路线（ADR 0016）：GUI 为唯一主力形态，Web 编辑器退为可选、冻结演进；GUI 独立运行不需要 web 服务器。M23 收口（GUI 体验对齐）。M24 收口（断点与单步）。M25 收口（运行历史只读读取器 + CLI + 编辑器内面板）。M27 收口（ADR 0017 两段式宿主）：独立「工作台」首页窗口（流程库列表 + 新建/打开/复制/重命名/删除连带资产与运行历史/导入导出 + 运行入口与状态轮询；运行历史全局页签可按流程筛选、双击在编辑器打开时间线）；编辑器保持单窗口，运行控制（暂停/继续/单步）只在编辑器；编辑器为单例不叠窗。M26（流程 inputs 声明编辑 UI）恢复为当前任务。",
   "task_index": ".harness/tasks/BACKLOG.md",
   "scope": {
     "in": [

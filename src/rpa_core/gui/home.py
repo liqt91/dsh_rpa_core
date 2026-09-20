@@ -70,6 +70,11 @@ class HomeWindow(QMainWindow):
         self._open_editor_hook = open_editor
         self._flows: list[dict[str, Any]] = []
         self._runs: list[dict[str, Any]] = []
+        # 运行入口（M27 S4）：工作台只发起 + 看状态，控制权在编辑器（ADR 0017 决策 3）
+        self._run_manager: Any | None = None
+        self._run_timer: Any | None = None
+        self._active_run_id: str | None = None
+        self._running_flow: str | None = None
 
         self.setWindowTitle("RPA Core 工作台")
         self.resize(1000, 620)
@@ -109,14 +114,24 @@ class HomeWindow(QMainWindow):
         self.export_button.clicked.connect(self._export_flow)
         self.refresh_button = QPushButton("刷新")
         self.refresh_button.clicked.connect(self.refresh_flows)
+        self.run_button = QPushButton("运行")
+        self.run_button.setToolTip(
+            "对选中流程发起运行并查看状态；暂停/继续/单步请在编辑器中操作（ADR 0017）"
+        )
+        self.run_button.clicked.connect(self._run_selected)
         for widget in (
             self.new_button, self.open_button, self.copy_button, self.rename_button,
             self.delete_button, self.import_button, self.export_button,
-            self.refresh_button,
+            self.run_button, self.refresh_button,
         ):
             buttons.addWidget(widget)
         buttons.addStretch(1)
         layout.addLayout(buttons)
+
+        self.run_status = QLabel("")
+        self.run_status.setWordWrap(True)
+        self.run_status.setStyleSheet("color: #0969da;")
+        layout.addWidget(self.run_status)
 
         self.table = QTableWidget(0, 5)
         self.table.setHorizontalHeaderLabels(
@@ -503,6 +518,94 @@ class HomeWindow(QMainWindow):
             QMessageBox.warning(self, "导出流程", f"导出失败：{exc}")
             return
         self.hint.setText(f"已导出 {flow['name']} 到 {target}。")
+
+    # ---- 运行入口（M27 S4） ------------------------------------------------
+    def _get_run_manager(self):
+        """懒创建 RunManager（与编辑器同一约定：artifacts 在流程库上一级）。"""
+        if self._run_manager is None:
+            from rpa_core.devserver.runs import RunManager
+
+            self._run_manager = RunManager(self._store.root)
+        return self._run_manager
+
+    def _run_selected(self) -> None:
+        """对选中流程发起运行（不提供暂停/继续——控制权在编辑器）。"""
+        if self._running_flow is not None:
+            self.run_status.setText(
+                f"已有运行在进行中（{self._running_flow}）；请在编辑器中控制或等待结束。"
+            )
+            return
+        flow = self._selected_flow()
+        if flow is None:
+            self.hint.setText("先在上表选中一个流程再运行。")
+            return
+        try:
+            handle = self._get_run_manager().start(flow["name"])
+        except Exception as exc:  # noqa: BLE001 - 启动失败要看得见
+            self.run_status.setText(f"运行启动失败：{exc}")
+            return
+        self._active_run_id = handle["runId"]
+        self._running_flow = flow["name"]
+        self.run_button.setEnabled(False)
+        self.run_status.setText(f"运行中：{flow['name']}…（在编辑器中可暂停/单步）")
+        self._start_run_polling()
+
+    def _start_run_polling(self) -> None:
+        from PySide6.QtCore import QTimer
+
+        if self._run_timer is None:
+            self._run_timer = QTimer(self)
+            self._run_timer.setInterval(800)
+            self._run_timer.timeout.connect(self._poll_run)
+        self._run_timer.start()
+
+    def _poll_run(self) -> None:
+        """轮询运行状态：终态后收尾（刷新列表状态列 + 恢复按钮）。"""
+        if self._active_run_id is None or self._run_manager is None:
+            return
+        try:
+            status = self._run_manager.status(self._active_run_id)
+        except Exception:  # noqa: BLE001 - 句柄丢失按结束处理
+            status = {"running": False, "result": None}
+        if status.get("running"):
+            return
+        result = status.get("result") or {}
+        state = result.get("status") or "unknown"
+        flow_name = self._running_flow or ""
+        self._running_flow = None
+        self._active_run_id = None
+        if self._run_timer is not None:
+            self._run_timer.stop()
+        self.run_button.setEnabled(True)
+        self.run_status.setText(
+            f"{flow_name} 运行结束：{_STATUS_LABELS.get(state, state)}"
+            + ("（可在编辑器继续/单步）" if state == "paused" else "")
+        )
+        self.refresh_flows()
+
+    def _shutdown_run_manager(self) -> None:
+        """关闭窗口时停轮询并释放子进程句柄。"""
+        if self._run_timer is not None:
+            self._run_timer.stop()
+        if self._run_manager is not None:
+            try:
+                self._run_manager.close()
+            except Exception:  # noqa: BLE001 - 关闭失败不影响退出
+                pass
+            self._run_manager = None
+
+    def closeEvent(self, event) -> None:  # noqa: N802 (Qt naming)
+        self._shutdown_run_manager()
+        super().closeEvent(event)
+
+    def changeEvent(self, event) -> None:  # noqa: N802 (Qt naming)
+        """窗口重新激活时刷新列表（编辑器里保存/新建后切回来能看到最新状态）。"""
+        from PySide6.QtCore import QEvent
+
+        if event.type() == QEvent.Type.ActivationChange and self.isActiveWindow():
+            if self._running_flow is None:
+                self.refresh_flows()
+        super().changeEvent(event)
 
     def _is_editing(self, name: str) -> bool:
         """该流程是否正被编辑器打开（编辑器单例，按 flow_path 判断）。"""

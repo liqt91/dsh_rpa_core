@@ -252,3 +252,84 @@ def test_home_refuses_management_while_editing(catalog, tmp_path, monkeypatch):
     assert store.list() == ["alpha"]  # 未被动过
     assert len(warnings) == 2
     assert "正在编辑器里打开" in str(warnings[0][2])
+
+
+# ---- S4 运行入口 -----------------------------------------------------------
+
+
+class _FakeRunManager:
+    def __init__(self, states: list[dict]):
+        self._states = list(states)
+        self.calls: list[tuple] = []
+        self.closed = False
+
+    def start(self, workflow_name, inputs=None, breakpoints=None):
+        self.calls.append(("start", workflow_name, inputs, breakpoints))
+        return {"runId": "run-1", "pid": 1}
+
+    def status(self, run_id):
+        if len(self._states) > 1:
+            return self._states.pop(0)
+        return self._states[0]
+
+    def close(self):
+        self.closed = True
+
+
+def test_home_run_entry_starts_and_polls_to_terminal(catalog, tmp_path):
+    """运行入口：发起运行 → 运行中禁用按钮 → 终态后刷新状态列并恢复按钮。"""
+    store = _store(tmp_path)
+    _write_flow(store, "alpha", flow_id="flow-alpha")
+    from rpa_core.gui.home import HomeWindow
+
+    home = HomeWindow(store, catalog, open_editor=lambda name, run_id=None: None)
+    home.table.setCurrentCell(0, 0)
+    fake = _FakeRunManager([
+        {"running": True, "result": None},
+        {"running": False, "result": {"status": "succeeded"}},
+    ])
+    home._run_manager = fake
+
+    home._run_selected()
+    assert fake.calls[0] == ("start", "alpha", None, None)
+    assert home.run_button.isEnabled() is False
+    assert "运行中" in home.run_status.text()
+
+    home._poll_run()  # 仍在运行：按钮保持禁用
+    assert home.run_button.isEnabled() is False
+
+    home._poll_run()  # 终态：恢复并提示结果
+    assert home.run_button.isEnabled() is True
+    assert "succeeded" not in home.run_status.text()  # 用中文状态
+    assert "成功" in home.run_status.text()
+
+
+def test_home_run_entry_rejects_second_run_while_running(catalog, tmp_path):
+    """已有运行在进行中：不再发起第二次（避免工作台叠加多个 run）。"""
+    store = _store(tmp_path)
+    _write_flow(store, "alpha")
+    from rpa_core.gui.home import HomeWindow
+
+    home = HomeWindow(store, catalog, open_editor=lambda name, run_id=None: None)
+    home.table.setCurrentCell(0, 0)
+    fake = _FakeRunManager([{"running": True, "result": None}])
+    home._run_manager = fake
+
+    home._run_selected()
+    home._run_selected()
+    assert len(fake.calls) == 1
+    assert "已有运行" in home.run_status.text()
+
+
+def test_home_shutdown_releases_run_manager(catalog, tmp_path):
+    """关闭工作台：停轮询并 close RunManager（释放子进程句柄）。"""
+    store = _store(tmp_path)
+    from rpa_core.gui.home import HomeWindow
+
+    home = HomeWindow(store, catalog, open_editor=lambda name, run_id=None: None)
+    fake = _FakeRunManager([{"running": False, "result": None}])
+    home._run_manager = fake
+    home._start_run_polling()
+    home._shutdown_run_manager()
+    assert fake.closed is True
+    assert home._run_manager is None
