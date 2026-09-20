@@ -78,7 +78,7 @@ def test_home_lists_flows_with_run_status(catalog, tmp_path):
 
     from rpa_core.gui.home import HomeWindow
 
-    home = HomeWindow(store, catalog, open_editor=lambda name: None)
+    home = HomeWindow(store, catalog, open_editor=lambda name, run_id=None: None)
     names = [flow["name"] for flow in home._flows]
     assert set(names) == {"alpha", "beta"}
     # 有运行记录的排前面
@@ -99,13 +99,16 @@ def test_home_open_and_new_flow(catalog, tmp_path, monkeypatch):
     """打开选中流程 / 新建流程都经注入的 open_editor；新建写库后可被列出。"""
     store = _store(tmp_path)
     _write_flow(store, "alpha")
-    opened: list[str] = []
+    opened: list[tuple[str, str | None]] = []
     from rpa_core.gui.home import HomeWindow
 
-    home = HomeWindow(store, catalog, open_editor=opened.append)
+    home = HomeWindow(
+        store, catalog,
+        open_editor=lambda name, run_id=None: opened.append((name, run_id)),
+    )
     home.table.setCurrentCell(0, 0)
     home._open_selected()
-    assert opened == ["alpha"]
+    assert opened == [("alpha", None)]
 
     # 新建：桩掉命名对话框，确认落库并打开
     import rpa_core.gui.home as home_module
@@ -115,7 +118,7 @@ def test_home_open_and_new_flow(catalog, tmp_path, monkeypatch):
     )
     home._create_flow()
     assert "gamma" in store.list()
-    assert opened[-1] == "gamma"
+    assert opened[-1] == ("gamma", None)
     assert any(flow["name"] == "gamma" for flow in home._flows)
 
 
@@ -131,8 +134,11 @@ def test_home_new_flow_rejects_empty_and_invalid_name(catalog, tmp_path, monkeyp
         "warning",
         staticmethod(lambda *a, **k: warnings.append(a)),
     )
-    opened: list[str] = []
-    home = HomeWindow(store, catalog, open_editor=opened.append)
+    opened: list[tuple[str, str | None]] = []
+    home = HomeWindow(
+        store, catalog,
+        open_editor=lambda name, run_id=None: opened.append((name, run_id)),
+    )
 
     monkeypatch.setattr(
         home_module.QInputDialog, "getText", staticmethod(lambda *a, **k: ("   ", True))
@@ -157,6 +163,69 @@ def test_home_empty_state_guides_user(catalog, tmp_path):
     store = _store(tmp_path)
     from rpa_core.gui.home import HomeWindow
 
-    home = HomeWindow(store, catalog, open_editor=lambda name: None)
+    home = HomeWindow(store, catalog, open_editor=lambda name, run_id=None: None)
     assert home.table.rowCount() == 0
     assert "空的" in home.hint.text() or "新建流程" in home.hint.text()
+
+
+# ---- S2 运行历史页签 --------------------------------------------------------
+
+
+def test_home_history_tab_lists_all_runs_and_filters_by_flow(catalog, tmp_path):
+    """运行历史页签：全局列出所有流程的运行；筛选下拉可按流程收窄。"""
+    store = _store(tmp_path)
+    _write_flow(store, "alpha", flow_id="flow-alpha")
+    _write_flow(store, "beta", flow_id="flow-beta")
+    _write_run(store, "r-alpha", workflow_id="flow-alpha", status="succeeded")
+    _write_run(store, "r-beta", workflow_id="flow-beta", status="failed")
+
+    from rpa_core.gui.home import HomeWindow
+
+    home = HomeWindow(store, catalog, open_editor=lambda name, run_id=None: None)
+    assert home.history_table.rowCount() == 2  # 全部
+    # 筛选到 alpha
+    index = home.history_filter.findData("flow-alpha")
+    home.history_filter.setCurrentIndex(index)
+    assert home.history_table.rowCount() == 1
+    assert home.history_table.item(0, 0).text().startswith("2026-09-20")
+    assert home.history_table.item(0, 1).text() == "alpha"
+    assert home.history_table.item(0, 2).text() == "成功"
+
+
+def test_home_open_selected_run_opens_editor_with_timeline(catalog, tmp_path):
+    """双击一条历史运行：打开对应流程的编辑器并带上该 run（载入时间线）。"""
+    store = _store(tmp_path)
+    _write_flow(store, "alpha", flow_id="flow-alpha")
+    _write_run(store, "r1", workflow_id="flow-alpha")
+    opened: list[tuple[str, str | None]] = []
+
+    from rpa_core.gui.home import HomeWindow
+
+    home = HomeWindow(
+        store, catalog,
+        open_editor=lambda name, run_id=None: opened.append((name, run_id)),
+    )
+    home.history_table.setCurrentCell(0, 0)
+    home._open_selected_run()
+    assert opened == [("alpha", "r1")]
+
+
+def test_home_open_run_without_flow_reports_hint(catalog, tmp_path):
+    """运行记录的流程已不在流程库：不打开编辑器，给出提示。"""
+    store = _store(tmp_path)
+    _write_flow(store, "alpha", flow_id="flow-alpha")
+    _write_run(store, "ghost-run", workflow_id="flow-gone")
+    opened: list[tuple[str, str | None]] = []
+
+    from rpa_core.gui.home import HomeWindow
+
+    home = HomeWindow(
+        store, catalog,
+        open_editor=lambda name, run_id=None: opened.append((name, run_id)),
+    )
+    for row, run in enumerate(home._visible_runs()):
+        if run["runId"] == "ghost-run":
+            home.history_table.setCurrentCell(row, 0)
+    home._open_selected_run()
+    assert opened == []
+    assert "找不到" in home.history_hint.text()

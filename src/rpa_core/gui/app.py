@@ -1110,17 +1110,21 @@ class MainWindow(QMainWindow):
 
     def _open_history_run(self) -> None:
         """把选中历史运行的事件时间线渲染到运行面板（复用同一格式化）。"""
-        from rpa_core.run_history import RunNotFoundError, read_run
-
         run = self._selected_history_run()
         if run is None:
             self.statusBar().showMessage("先在上表选中一条运行记录", 4000)
             return
+        self.show_history_run(run["runId"])
+
+    def show_history_run(self, run_id: str) -> bool:
+        """按 run_id 渲染历史运行的时间线（工作台双击打开编辑器时也走这里）。"""
+        from rpa_core.run_history import RunNotFoundError, read_run
+
         try:
-            detail = read_run(self._artifacts_root(), run["runId"])
+            detail = read_run(self._artifacts_root(), run_id)
         except RunNotFoundError as exc:
             self.statusBar().showMessage(str(exc), 5000)
-            return
+            return False
         self._run_dock().show()
         self._history_events = detail["events"]
         view = self._run_events_view
@@ -1130,7 +1134,7 @@ class MainWindow(QMainWindow):
             view.appendPlainText(self._format_event(event))
             self._history_event_nodes.append(event.get("node_id"))
         self._run_status_label.setText(
-            f"历史运行 {run['runId']}（{detail.get('status')}）"
+            f"历史运行 {run_id}（{detail.get('status')}）"
         )
         self._failed_node_id = detail.get("pausedAtNode")
         if self._failed_node_id:
@@ -1141,6 +1145,7 @@ class MainWindow(QMainWindow):
             f"已载入历史运行（{detail.get('eventCount')} 个事件）；双击事件行可跳转节点",
             6000,
         )
+        return True
 
     def _track_history_cursor(self) -> None:
         """记录事件视图光标所在行对应的节点 id（供「跳到节点」用）。"""
@@ -3755,10 +3760,12 @@ def open_editor_window(
     *,
     catalog: CommandCatalog | None = None,
     workflows_root: Path | None = None,
+    history_run_id: str | None = None,
 ) -> MainWindow | None:
     """打开一个流程的编辑器窗口（工作台双击/「打开」的落地实现，ADR 0017）。
 
     编辑窗口是**单窗口**（ADR 0017 决策 2）：已存在则复用并切换流程，不叠开新窗口。
+    `history_run_id` 非空时（工作台双击一条历史运行）在打开后载入该次运行的时间线。
     返回值供测试断言；无 catalog（未初始化）时返回 None。
     """
     global _EDITOR_WINDOW
@@ -3773,6 +3780,8 @@ def open_editor_window(
     _EDITOR_WINDOW.show()
     _EDITOR_WINDOW.raise_()
     _EDITOR_WINDOW._open_named_flow(flow_name)
+    if history_run_id:
+        _EDITOR_WINDOW.show_history_run(history_run_id)
     return _EDITOR_WINDOW
 
 
@@ -3801,8 +3810,8 @@ def run_gui(
     root = Path(workflows_root) if workflows_root else Path("workflows")
     # 编辑器窗口单例：工作台反复双击不叠窗（ADR 0017 决策 2）
     _EDITOR_WINDOW = None
-    open_editor = lambda name: open_editor_window(  # noqa: E731 - 注入用闭包
-        name, catalog=catalog, workflows_root=root
+    open_editor = lambda name, run_id=None: open_editor_window(  # noqa: E731 - 注入用闭包
+        name, catalog=catalog, workflows_root=root, history_run_id=run_id
     )
 
     from PySide6.QtCore import QTimer

@@ -1,4 +1,4 @@
-"""工作台（首页）：流程列表 + 管理入口 + 运行入口（ADR 0017 / M27）。
+"""工作台（首页）：流程列表 + 运行历史 + 管理入口 + 运行入口（ADR 0017 / M27）。
 
 两段式宿主的第一段：这里只做「管理」——列出流程（最近运行状态/时间、元素数、修改时间）、
 新建/打开/（后续切片：复制/重命名/删除/导入导出）、以及发起运行并看状态。
@@ -17,6 +17,7 @@ from typing import Any
 
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QComboBox,
     QHBoxLayout,
     QHeaderView,
     QInputDialog,
@@ -26,6 +27,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QTableWidget,
     QTableWidgetItem,
+    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -43,9 +45,12 @@ _STATUS_LABELS = {
     "running": "运行中",
 }
 
+# 打开编辑器的注入点：name 为目标流程，run_id 非空时编辑器还要载入该次历史运行的时间线
+OpenEditor = Callable[..., None]
+
 
 class HomeWindow(QMainWindow):
-    """工作台窗口：流程列表 + 打开/新建 + 运行入口。
+    """工作台窗口：流程库 + 运行历史两个页签。
 
     `open_editor` 是打开编辑器的注入点（默认由 `app.open_editor_window` 提供）：
     测试里可替换成记录调用的桩，避免真的再开一个窗口。
@@ -56,7 +61,7 @@ class HomeWindow(QMainWindow):
         store: WorkflowDirStore,
         catalog: Any,
         *,
-        open_editor: Callable[[str], None] | None = None,
+        open_editor: OpenEditor | None = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -64,12 +69,23 @@ class HomeWindow(QMainWindow):
         self._catalog = catalog
         self._open_editor_hook = open_editor
         self._flows: list[dict[str, Any]] = []
+        self._runs: list[dict[str, Any]] = []
 
         self.setWindowTitle("RPA Core 工作台")
         self.resize(1000, 620)
 
-        central = QWidget()
-        layout = QVBoxLayout(central)
+        tabs = QTabWidget()
+        tabs.addTab(self._build_flows_tab(), "流程库")
+        tabs.addTab(self._build_history_tab(), "运行历史")
+        self.tabs = tabs
+        self.setCentralWidget(tabs)
+
+        self.refresh_flows()
+
+    # ---- 流程库页签 -------------------------------------------------------
+    def _build_flows_tab(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
         header = QLabel("流程库")
         header.setStyleSheet("font-weight: bold; font-size: 14px;")
         layout.addWidget(header)
@@ -102,9 +118,54 @@ class HomeWindow(QMainWindow):
         self.hint.setWordWrap(True)
         self.hint.setStyleSheet("color: #57606a;")
         layout.addWidget(self.hint)
+        return page
 
-        self.setCentralWidget(central)
-        self.refresh_flows()
+    # ---- 运行历史页签（M27 S2：全局视图 + 按流程筛选） ---------------------
+    def _build_history_tab(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        header = QLabel("运行历史（全部流程）")
+        header.setStyleSheet("font-weight: bold; font-size: 14px;")
+        layout.addWidget(header)
+
+        controls = QHBoxLayout()
+        controls.addWidget(QLabel("流程："))
+        self.history_filter = QComboBox()
+        self.history_filter.setMinimumWidth(200)
+        self.history_filter.currentIndexChanged.connect(lambda *_: self._render_runs())
+        controls.addWidget(self.history_filter)
+        refresh = QPushButton("刷新")
+        refresh.clicked.connect(self.refresh_history)
+        controls.addWidget(refresh)
+        open_button = QPushButton("打开时间线")
+        open_button.clicked.connect(self._open_selected_run)
+        controls.addWidget(open_button)
+        controls.addStretch(1)
+        layout.addLayout(controls)
+
+        self.history_table = QTableWidget(0, 5)
+        self.history_table.setHorizontalHeaderLabels(
+            ["时间", "流程", "状态", "耗时", "错误"]
+        )
+        self.history_table.setSelectionBehavior(
+            QAbstractItemView.SelectionBehavior.SelectRows
+        )
+        self.history_table.setSelectionMode(
+            QAbstractItemView.SelectionMode.SingleSelection
+        )
+        self.history_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.history_table.verticalHeader().setVisible(False)
+        self.history_table.horizontalHeader().setSectionResizeMode(
+            QHeaderView.ResizeMode.Stretch
+        )
+        self.history_table.itemDoubleClicked.connect(lambda *_: self._open_selected_run())
+        layout.addWidget(self.history_table, 1)
+
+        self.history_hint = QLabel("")
+        self.history_hint.setWordWrap(True)
+        self.history_hint.setStyleSheet("color: #57606a;")
+        layout.addWidget(self.history_hint)
+        return page
 
     # ---- 数据 -------------------------------------------------------------
     def _artifacts_root(self) -> Path:
@@ -140,6 +201,7 @@ class HomeWindow(QMainWindow):
             key=lambda item: (item["lastRunAt"] or "", item["mtime"] or 0), reverse=True
         )
         self._render()
+        self.refresh_history()
 
     def _element_count(self, name: str) -> int:
         elements_dir = self._store.root / name / "elements"
@@ -174,6 +236,54 @@ class HomeWindow(QMainWindow):
                 f"流程库还是空的（{self._store.root}）；点「新建流程」创建第一个流程。"
             )
 
+    def refresh_history(self) -> None:
+        """重扫运行历史（全局）并刷新流程筛选下拉（保留当前选择）。"""
+        self._runs = list_runs(self._artifacts_root(), limit=0)
+        current = self.history_filter.currentData() if self.history_filter.count() else None
+        self.history_filter.blockSignals(True)
+        self.history_filter.clear()
+        self.history_filter.addItem("全部流程", None)
+        for flow in self._flows:
+            self.history_filter.addItem(flow["name"], flow["workflowId"])
+        index = self.history_filter.findData(current)
+        self.history_filter.setCurrentIndex(index if index >= 0 else 0)
+        self.history_filter.blockSignals(False)
+        self._render_runs()
+
+    def _run_flow_name(self, run: dict[str, Any]) -> str:
+        workflow_id = run.get("workflowId")
+        for flow in self._flows:
+            if flow["workflowId"] == workflow_id:
+                return flow["name"]
+        return str(workflow_id or "—")
+
+    def _visible_runs(self) -> list[dict[str, Any]]:
+        selected = self.history_filter.currentData() if self.history_filter.count() else None
+        if not selected:
+            return self._runs
+        return [run for run in self._runs if run.get("workflowId") == selected]
+
+    def _render_runs(self) -> None:
+        runs = self._visible_runs()
+        self.history_table.setRowCount(len(runs))
+        for row, run in enumerate(runs):
+            duration = run.get("durationMs")
+            values = [
+                self._format_time(run.get("endedAt") or run.get("startedAt")),
+                self._run_flow_name(run),
+                _STATUS_LABELS.get(run.get("status"), str(run.get("status") or "unknown")),
+                f"{duration / 1000:.1f}s" if isinstance(duration, int) else "—",
+                str(run.get("errorCode") or ""),
+            ]
+            for column, value in enumerate(values):
+                self.history_table.setItem(row, column, QTableWidgetItem(value))
+        if runs:
+            self.history_hint.setText(
+                f"共 {len(runs)} 条运行记录；双击在编辑器里打开该流程并查看时间线。"
+            )
+        else:
+            self.history_hint.setText("暂无运行记录（运行一次流程后会出现在这里）。")
+
     @staticmethod
     def _format_time(value) -> str:
         if not isinstance(value, str) or not value:
@@ -195,6 +305,13 @@ class HomeWindow(QMainWindow):
             return None
         return self._flows[row]
 
+    def _selected_run(self) -> dict[str, Any] | None:
+        row = self.history_table.currentRow()
+        runs = self._visible_runs()
+        if row < 0 or row >= len(runs):
+            return None
+        return runs[row]
+
     def _open_selected(self) -> None:
         flow = self._selected_flow()
         if flow is None:
@@ -202,13 +319,31 @@ class HomeWindow(QMainWindow):
             return
         self.open_flow(flow["name"])
 
-    def open_flow(self, name: str) -> None:
+    def _open_selected_run(self) -> None:
+        """双击/打开时间线：在编辑器里打开对应流程并载入该次运行的时间线。"""
+        run = self._selected_run()
+        if run is None:
+            self.history_hint.setText("先在上表选中一条运行记录。")
+            return
+        workflow_id = run.get("workflowId")
+        name = next(
+            (flow["name"] for flow in self._flows if flow["workflowId"] == workflow_id),
+            None,
+        )
+        if name is None:
+            self.history_hint.setText(
+                f"流程库里找不到该运行对应的流程（{workflow_id}）"
+            )
+            return
+        self.open_flow(name, run_id=run["runId"])
+
+    def open_flow(self, name: str, *, run_id: str | None = None) -> None:
         """打开编辑器（由注入的 hook 决定实现；缺省走 GUI 的编辑器打开函数）。"""
         if self._open_editor_hook is None:
             from rpa_core.gui.app import open_editor_window
 
             self._open_editor_hook = open_editor_window
-        self._open_editor_hook(name)
+        self._open_editor_hook(name, run_id=run_id)
 
     def _create_flow(self) -> None:
         """新建流程：命名（复用 store 的名称校验）→ 建空流程 → 打开编辑器。"""
