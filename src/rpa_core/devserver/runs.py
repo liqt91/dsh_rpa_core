@@ -162,6 +162,33 @@ class RunManager:
             args.append("--step")
         return self._spawn(args, workflow_name, real_run_id=real)
 
+    def resume_run(
+        self,
+        workflow_name: str,
+        run_id: str,
+        *,
+        step: bool = False,
+        allow_indeterminate: bool = False,
+    ) -> dict:
+        """恢复一个**不由本进程托管**的历史运行（M25 运行历史）。
+
+        与 `resume` 的区别：不需要本进程先 spawn 过该 run（GUI 重启后、或从运行
+        历史面板里挑一个 paused 的旧运行继续/单步）。前置条件由 run 侧检查——
+        检查点缺失/工作流不匹配时 `rpa-core resume` 会以退出码 2 + 结构化错误收场。
+        """
+        workflow_path = self._workflows_root / workflow_name / "workflow.json"
+        if not workflow_path.is_file():
+            raise FileNotFoundError(f"workflow not found: {workflow_name}")
+        args = [
+            sys.executable, "-m", "rpa_core.cli", "resume", str(workflow_path),
+            "--run-id", run_id, "--artifacts", str(self._artifacts),
+        ]
+        if allow_indeterminate:
+            args.append("--allow-indeterminate")
+        if step:
+            args.append("--step")
+        return self._spawn(args, workflow_name, real_run_id=run_id)
+
     # ---- 子进程输出 ---------------------------------------------------------
 
     def _read_stdout(self, proc: subprocess.Popen, entry: dict) -> None:

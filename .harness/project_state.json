@@ -2,13 +2,13 @@
   "project": "rpa_core",
   "phase": "command-parity-extension-editor",
   "status": "active",
-  "completed_milestone": "M24-debugger",
-  "active_milestone": "M25-run-history",
-  "active_plan": ".harness/tasks/M25-run-history.md",
-  "active_feature": "run-history-replay",
+  "completed_milestone": "M25-run-history",
+  "active_milestone": "M26-flow-inputs-editor",
+  "active_plan": ".harness/tasks/M26-flow-inputs-editor.md",
+  "active_feature": "flow-inputs-editor",
   "next_milestone": null,
   "later_milestones": [],
-  "notes": "技术路线（ADR 0016）：GUI 为唯一主力形态，Web 编辑器（devserver）退为可选、冻结演进不删除；GUI 独立运行不需要任何 web 服务器。M23 收口（GUI 体验对齐，含维护者实测反馈批次 9 项修复）。M24 收口（断点与单步）：在 M21 跨进程暂停通道上做最小扩展——节点断点（执行前停、consumedBreakpoints 防死循环、随检查点持久化）+ 单步（resume --step）；CLI 与 GUI 同权（编号栏红点/右键菜单/单步按钮），暂停原因 user|breakpoint|step 在面板区分展示。M25 起做运行历史浏览与回放（只读 run_artifacts，不建库、GUI 不承载 runtime）。",
+  "notes": "技术路线（ADR 0016）：GUI 为唯一主力形态，Web 编辑器（devserver）退为可选、冻结演进不删除；GUI 独立运行不需要任何 web 服务器。M23 收口（GUI 体验对齐）。M24 收口（断点与单步：节点断点执行前停 + consumedBreakpoints 防死循环 + resume --step；GUI 编号栏红点/右键菜单/单步按钮）。M25 收口（运行历史：只读读取器 + CLI runs list/show + GUI 历史面板——时间线/跳节点/同样输入再跑/继续单步，含 RunManager.resume_run 支持恢复非本进程托管的历史运行）。M26 起做流程 inputs 声明编辑 UI（当前只能手写 JSON，运行对话框只读消费）。",
   "task_index": ".harness/tasks/BACKLOG.md",
   "scope": {
     "in": [

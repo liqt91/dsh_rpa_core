@@ -255,6 +255,11 @@
     {
       "id": "run-history-replay",
       "title": "Run history: list past runs from run_artifacts, open an event timeline, jump to nodes, re-run with the same inputs, and resume/step a paused run",
+      "passes": true
+    },
+    {
+      "id": "flow-inputs-editor",
+      "title": "Flow inputs declaration editor: create/edit/remove workflow inputs in the GUI (name/type/default/description) with validation, wired to the run-params dialog, variable completion, and compile checks",
       "passes": false
     }
   ]

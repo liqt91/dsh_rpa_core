@@ -109,3 +109,19 @@ uv run rpa-core resume workflows/demo/workflow.json --run-id <id> --artifacts ru
 - 断点集合随**检查点**持久化（resume 是新进程，控制文件会被清空）；
 - 命中过的断点记入 `consumedBreakpoints`，resume 不会在同一节点反复停下；
 - 条件断点 / 日志断点 / 变量监视 / 运行中热更新断点不在本期范围。
+
+## 运行历史（M25）
+
+工具栏「运行历史」打开底部面板，列出 `run_artifacts/` 下的历史运行（时间倒序，最多 50 条）：
+时间、流程、状态、耗时、错误码。
+
+- **查看时间线**（或双击某行）：把该次运行的 `events.jsonl` 按与运行面板相同的格式渲染
+  （步骤耗时、输出值预览、暂停原因、失败详情）。
+- **跳到节点**：事件视图里把光标放到某一行，点跳转按钮即在画布定位该节点
+  （缺省定位到暂停/失败节点）。
+- **用同样输入再跑**：以该次运行的**历史输入**对流程库里的同一流程发起**新运行**
+  （新 run_id——不是原地重放，避免与副作用契约冲突）。
+- **继续 / 单步**：仅对 `status=paused` 且有检查点的运行可用；走
+  `RunManager.resume_run`（不要求本进程先托管过该 run，GUI 重启后同样可用）。
+
+命令行同权：`rpa-core runs list [--limit N]` / `rpa-core runs show <run_id>`（JSON）。

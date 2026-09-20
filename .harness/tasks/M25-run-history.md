@@ -1,6 +1,6 @@
 # M25 运行历史浏览与回放
 
-状态：`active`
+状态：`done`
 
 关联：ADR 0011（子进程 run host）、M21/M24（暂停/继续、断点与单步）、`docs/gui-run-control.md`
 现状：每次 run 的证据已完整落盘在 `run_artifacts/<run_id>/`（`result.json`、`events.jsonl`、
@@ -38,11 +38,11 @@
   - CLI：`rpa-core runs list [--limit N]` / `rpa-core runs show <run_id>`（JSON 输出，通道对齐
     ADR 0006 §6）。
   - 验收：对既有 `run_artifacts` 目录可列出与查看；损坏文件不影响整体。
-- [ ] **S2 GUI 历史运行面板**
+- [x] **S2 GUI 历史运行面板**（2026-09-20 done）
   - 运行菜单/工具栏加「运行历史」dock：表格列出摘要（时间倒序），双击打开事件时间线
     （复用 `_format_event`），带「跳到节点」「用同样输入再跑一次」「继续/单步（若 paused）」。
   - 验收：GUI 可浏览历史、定位节点、一键再跑；离线（无 artifacts）时给出空态提示。
-- [ ] **S3 测试与文档**
+- [x] **S3 测试与文档**（2026-09-20 done）
   - 单测：扫描/解析/容错/排序/limit；契约：CLI 输出形状、GUI 面板渲染与动作接线。
   - 文档：`docs/gui-run-control.md` 或新 `docs/run-history.md`；PROGRESS 记录。
   - 验收：full gate 通过。

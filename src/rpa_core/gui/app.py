@@ -371,6 +371,14 @@ class MainWindow(QMainWindow):
         self._pending_apply = None
         # 断点集合（M24，节点 id）：编号栏红点 + 运行前下发给 run 子进程
         self._breakpoints: set[str] = set()
+        # 运行历史面板（M25）：dock 懒创建，以下字段在 dock 构建时补齐
+        self._history_dock_widget = None
+        self._history_table = None
+        self._history_buttons = None
+        self._history_runs: list[dict] = []
+        self._history_events: list[dict] = []
+        self._history_event_nodes: list[str | None] = []
+        self._history_cursor_node: str | None = None
         # 进行中的元素捕获会话（混合捕获，窗口关闭时取消）
         self._capture_session = None
         self.setWindowTitle("RPA Core 编辑器")
@@ -639,6 +647,13 @@ class MainWindow(QMainWindow):
         self.step_run_action.setEnabled(False)
         self.step_run_action.triggered.connect(self._step_run)
         toolbar.addAction(self.step_run_action)
+
+        # 运行历史（M25）：列出 run_artifacts 的历史运行
+        history_action = QAction("运行历史", self)
+        history_action.setToolTip("浏览历史运行：事件时间线 / 跳到节点 / 用同样输入再跑 / 继续")
+        history_action.triggered.connect(self._toggle_history_dock)
+        toolbar.addAction(history_action)
+        self._history_action_ref = history_action
 
         # 元素库 / 数据表格 / 指令清单 / 插件（dock 与对话框入口）
         elements_action = QAction("元素库", self)
@@ -966,6 +981,251 @@ class MainWindow(QMainWindow):
             self._toggle_breakpoint(index)
         elif chosen is add_else:
             self._add_else_branch()
+
+    # ---- 运行历史（M25） ---------------------------------------------------
+    def _history_dock(self):
+        """运行历史面板：列出 run_artifacts 的历史运行 + 查看/再跑/继续/单步。"""
+        if getattr(self, "_history_dock_widget", None) is None:
+            from PySide6.QtWidgets import (
+                QDockWidget,
+                QHBoxLayout,
+                QHeaderView,
+                QPushButton,
+                QTableWidget,
+                QVBoxLayout,
+                QWidget,
+            )
+
+            body = QWidget()
+            layout = QVBoxLayout(body)
+            buttons = QHBoxLayout()
+            refresh = QPushButton("刷新")
+            refresh.clicked.connect(self._refresh_history)
+            open_button = QPushButton("查看时间线")
+            open_button.clicked.connect(self._open_history_run)
+            rerun = QPushButton("用同样输入再跑")
+            rerun.setToolTip("以该次运行的历史输入，对当前流程库里的同一流程发起新运行")
+            rerun.clicked.connect(self._rerun_history_run)
+            resume_button = QPushButton("继续")
+            resume_button.setToolTip("从该次运行的检查点继续（新进程）")
+            resume_button.clicked.connect(self._resume_history_run)
+            step_button = QPushButton("单步")
+            step_button.setToolTip("从该次运行的检查点单步一个节点（M24）")
+            step_button.clicked.connect(lambda: self._resume_history_run(step=True))
+            for widget in (refresh, open_button, rerun, resume_button, step_button):
+                buttons.addWidget(widget)
+            buttons.addStretch(1)
+            layout.addLayout(buttons)
+
+            table = QTableWidget(0, 5)
+            table.setHorizontalHeaderLabels(["时间", "流程", "状态", "耗时", "错误"])
+            table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+            table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
+            table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+            table.verticalHeader().setVisible(False)
+            table.horizontalHeader().setSectionResizeMode(
+                QHeaderView.ResizeMode.Stretch
+            )
+            table.itemSelectionChanged.connect(self._on_history_selection)
+            table.itemDoubleClicked.connect(lambda *_: self._open_history_run())
+            layout.addWidget(table, 1)
+
+            self._history_table = table
+            self._history_buttons = {
+                "rerun": rerun, "resume": resume_button, "step": step_button,
+            }
+            self._history_runs: list[dict] = []
+            self._history_events: list[dict] = []
+            self._history_cursor_node: str | None = None
+            dock = QDockWidget("运行历史", self)
+            dock.setObjectName("history-dock")
+            dock.setWidget(body)
+            self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, dock)
+            dock.hide()
+            self._history_dock_widget = dock
+        return self._history_dock_widget
+
+    def _artifacts_root(self) -> Path:
+        """运行证据根：与 RunManager 一致（流程库的上一级 / run_artifacts）。"""
+        if self._store is not None:
+            return self._store.root.parent / "run_artifacts"
+        return Path("run_artifacts")
+
+    def _toggle_history_dock(self) -> None:
+        dock = self._history_dock()
+        dock.show()
+        self._refresh_history()
+
+    def _refresh_history(self) -> None:
+        """重扫 run_artifacts 并填表（按时间倒序，最多 50 条）。"""
+        from PySide6.QtWidgets import QTableWidgetItem
+
+        from rpa_core.run_history import list_runs
+
+        table = self._history_table
+        self._history_runs = list_runs(self._artifacts_root(), limit=50)
+        table.setRowCount(len(self._history_runs))
+        for row, run in enumerate(self._history_runs):
+            duration = run.get("durationMs")
+            values = [
+                self._format_run_time(run.get("endedAt") or run.get("startedAt")),
+                str(run.get("workflowId") or "—"),
+                str(run.get("status") or "unknown"),
+                f"{duration / 1000:.1f}s" if isinstance(duration, int) else "—",
+                str(run.get("errorCode") or ""),
+            ]
+            for column, value in enumerate(values):
+                table.setItem(row, column, QTableWidgetItem(value))
+        self._on_history_selection()
+        if not self._history_runs:
+            self.statusBar().showMessage(
+                f"运行历史为空（{self._artifacts_root()} 下暂无运行记录）", 5000
+            )
+
+    @staticmethod
+    def _format_run_time(value) -> str:
+        if not isinstance(value, str) or not value:
+            return "—"
+        return value.replace("T", " ")[:19]
+
+    def _selected_history_run(self) -> dict | None:
+        table = getattr(self, "_history_table", None)
+        if table is None:
+            return None
+        row = table.currentRow()
+        if row < 0 or row >= len(self._history_runs):
+            return None
+        return self._history_runs[row]
+
+    def _on_history_selection(self) -> None:
+        """选中行变化：按状态启用「继续 / 单步」（仅 paused 可续）。"""
+        buttons = getattr(self, "_history_buttons", None)
+        if buttons is None:
+            return
+        run = self._selected_history_run()
+        resumable = bool(run and run.get("status") == "paused" and run.get("resumable"))
+        buttons["resume"].setEnabled(resumable)
+        buttons["step"].setEnabled(resumable)
+        buttons["rerun"].setEnabled(bool(run))
+
+    def _open_history_run(self) -> None:
+        """把选中历史运行的事件时间线渲染到运行面板（复用同一格式化）。"""
+        from rpa_core.run_history import RunNotFoundError, read_run
+
+        run = self._selected_history_run()
+        if run is None:
+            self.statusBar().showMessage("先在上表选中一条运行记录", 4000)
+            return
+        try:
+            detail = read_run(self._artifacts_root(), run["runId"])
+        except RunNotFoundError as exc:
+            self.statusBar().showMessage(str(exc), 5000)
+            return
+        self._run_dock().show()
+        self._history_events = detail["events"]
+        view = self._run_events_view
+        view.clear()
+        self._history_event_nodes: list[str | None] = []
+        for event in detail["events"]:
+            view.appendPlainText(self._format_event(event))
+            self._history_event_nodes.append(event.get("node_id"))
+        self._run_status_label.setText(
+            f"历史运行 {run['runId']}（{detail.get('status')}）"
+        )
+        self._failed_node_id = detail.get("pausedAtNode")
+        if self._failed_node_id:
+            self._run_jump_button.setText("跳转到命中断点的节点")
+            self._run_jump_button.show()
+        view.cursorPositionChanged.connect(self._track_history_cursor)
+        self.statusBar().showMessage(
+            f"已载入历史运行（{detail.get('eventCount')} 个事件）；双击事件行可跳转节点",
+            6000,
+        )
+
+    def _track_history_cursor(self) -> None:
+        """记录事件视图光标所在行对应的节点 id（供「跳到节点」用）。"""
+        nodes = getattr(self, "_history_event_nodes", None)
+        if not nodes:
+            return
+        block = self._run_events_view.textCursor().blockNumber()
+        if 0 <= block < len(nodes):
+            self._history_cursor_node = nodes[block]
+
+    def _jump_to_history_node(self) -> None:
+        """跳到当前事件行（缺省跳到暂停/失败节点）。"""
+        node_id = self._history_cursor_node or self._failed_node_id
+        if not node_id:
+            self.statusBar().showMessage("当前事件行没有关联节点", 4000)
+            return
+        item = self.flow_model.find_by_id(node_id)
+        if item is None:
+            self.statusBar().showMessage(f"当前流程里找不到节点 {node_id}", 5000)
+            return
+        index = self.flow_model.indexFromItem(item)
+        self.canvas_view.setCurrentIndex(index)
+        self.canvas_view.scrollTo(index, self.canvas_view.ScrollHint.PositionAtCenter)
+
+    def _flow_name_for_run(self, run: dict) -> str | None:
+        """把运行记录映射回流程库里的流程名（按 workflow id 匹配，缺失返回 None）。"""
+        if self._store is None:
+            return None
+        target = run.get("workflowId")
+        if not target:
+            return None
+        for name in self._store.list():
+            try:
+                document = self._store.read(name)
+            except Exception:  # noqa: BLE001 - 单个流程损坏不影响其它匹配
+                continue
+            if document.get("id") == target or name == target:
+                return name
+        return None
+
+    def _rerun_history_run(self) -> None:
+        """用历史输入对同一流程发起新运行（新 run_id，不是原地重放）。"""
+        from rpa_core.run_history import RunNotFoundError, read_run
+
+        run = self._selected_history_run()
+        if run is None:
+            return
+        name = self._flow_name_for_run(run)
+        if name is None:
+            self.statusBar().showMessage(
+                f"流程库里找不到该运行对应的流程（{run.get('workflowId')}）", 6000
+            )
+            return
+        try:
+            detail = read_run(self._artifacts_root(), run["runId"])
+        except RunNotFoundError as exc:
+            self.statusBar().showMessage(str(exc), 5000)
+            return
+        inputs = detail.get("inputs") or {}
+        self._open_named_flow(name)
+        self._start_run(name, inputs)
+        self.statusBar().showMessage(
+            f"已用历史输入再跑一次：{name}（输入 {len(inputs)} 项）", 6000
+        )
+
+    def _resume_history_run(self, *, step: bool = False) -> None:
+        """从历史运行的检查点继续/单步（GUI 重启后也能续）。"""
+        run = self._selected_history_run()
+        if run is None:
+            return
+        name = self._flow_name_for_run(run)
+        if name is None:
+            self.statusBar().showMessage(
+                f"流程库里找不到该运行对应的流程（{run.get('workflowId')}）", 6000
+            )
+            return
+        try:
+            handle = self._get_run_manager().resume_run(
+                name, run["runId"], step=step
+            )
+        except Exception as exc:  # noqa: BLE001 - 失败要看得见原因
+            self.statusBar().showMessage(f"{'单步' if step else '继续'}失败：{exc}", 6000)
+            return
+        self._open_named_flow(name)
+        self._adopt_run_handle(handle["runId"])
 
     # ---- 断点（M24） -------------------------------------------------------
     def _toggle_breakpoint(self, index) -> None:
@@ -1548,7 +1808,7 @@ class MainWindow(QMainWindow):
             self._run_events_view.setMaximumBlockCount(500)
             self._run_jump_button = QPushButton("跳转到失败节点")
             self._run_jump_button.setToolTip("在画布中定位并选中失败的节点")
-            self._run_jump_button.clicked.connect(self._jump_to_failed_node)
+            self._run_jump_button.clicked.connect(self._jump_to_run_node)
             self._run_jump_button.hide()
             self._failed_node_id: str | None = None
             self._step_start_times: dict[str, float] = {}
@@ -2089,6 +2349,13 @@ class MainWindow(QMainWindow):
         for item in iter_real_nodes(self.flow_model):
             item.setData(None, ROLE_RUN_STATE)
         self.canvas_view.viewport().update()
+
+    def _jump_to_run_node(self) -> None:
+        """跳转按钮的统一入口：历史事件行优先，其次失败/命中断点的节点。"""
+        if self._history_cursor_node:
+            self._jump_to_history_node()
+            return
+        self._jump_to_failed_node()
 
     def _jump_to_failed_node(self) -> None:
         """在画布中定位并选中上次运行失败的节点。"""

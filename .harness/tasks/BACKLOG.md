@@ -4,12 +4,13 @@
 
 ## 当前任务
 
-- [ ] **M25 运行历史浏览与回放**（`active`）
-  - 计划：`M25-run-history.md`；关联 ADR 0011（子进程 run host）、M21/M24（暂停/继续/断点）
-  - 目标：给 `run_artifacts/<run_id>/` 一个一等入口——列出历史运行（状态/耗时/错误码）→
-    打开事件时间线（复用运行面板格式化）→ 跳到节点 → 用同样输入再跑 → 对 paused 的 run 继续/单步
-  - 切片：S1 只读读取器 + CLI（`runs list` / `runs show`）→ S2 GUI 历史运行面板 → S3 测试/文档
-  - 约束：不新增持久化格式、不建数据库（AGENTS 规则 10）、GUI 不承载 runtime（ADR 0011）
+- [ ] **M26 流程 inputs 声明编辑 UI**（`active`）
+  - 计划：`M26-flow-inputs-editor.md`；关联 M21（运行参数对话框只读消费 inputs）、ADR 0016（GUI 主力形态）
+  - 目标：流程级 `inputs`（名称/类型/默认值/描述）在 GUI 里可视化增删改，不再手写 JSON；
+    与「运行参数」对话框、编译器输入校验、`${inputs.x}` 引用保持一致
+  - 切片：S1 模型与校验（声明结构 + 编译期一致性）→ S2 GUI 编辑器（表单 + 保存回写）→
+    S3 与运行/引用联动（对话框默认值、变量面板列出 inputs）→ S4 测试/文档
+  - 约束：不改动既有 `inputs` JSON 形状（向后兼容）；不引入数据库/新持久化格式
 
 ## 后续任务
 
@@ -25,7 +26,6 @@
   通道对齐要求未落到 devserver HTTP 端点与 `static/app.js`）
 - [ ] 主题切换入口（`planned`——QDarkStyle 深浅 palette 已在依赖，`apply_theme` 固定浅色）
 - [ ] 窗口布局记忆（`planned`——dock 开合/宽度 QSettings 持久化）
-- [ ] 流程 inputs 声明编辑 UI（`planned`——当前只能手写 JSON；运行对话框只读消费）
 - [ ] 元素捕获后截图缩略图（`blocked`——待捕获链路具自动截屏能力；M19 切 C 同源）
 - [ ] 编辑器元素截图灯箱 + 上传 + 缩略图（`blocked`——待捕获链路具自动截屏能力；M19 切 C 后置项）
 - [ ] 编辑器多 tab 属性表单（`planned`——单命令 schema 字段显著增多（>~8）时按「常规/参数/…」划分；M19 切 E 留接口）
@@ -36,6 +36,17 @@
 > 主力形态，该条目（「确认非开发者用户为主力后再立项薄壳」）不再适用。
 
 ## 已完成
+
+- [x] M25 运行历史浏览与回放（`done`，2026-09-20）
+  - 计划：`M25-run-history.md`
+  - 交付：顶层零依赖 `run_history.py`（`list_runs` 摘要按时间倒序 + limit、`read_run` 详情带
+    inputs/断点调试字段/事件时间线，全程容错——损坏 result 记 unknown、坏事件行跳过）；
+    CLI `runs list [--limit]` / `runs show <run_id>`；GUI 底部「运行历史」面板（列表 +
+    查看时间线复用运行面板格式化 + 跳到节点 + 用同样输入再跑 + 继续/单步）；
+    `RunManager.resume_run` 支持恢复**不由本进程托管**的历史运行（GUI 重启后也能续）
+  - 约束遵守：不新增持久化格式、不建数据库（AGENTS 规则 10）、GUI 不承载 runtime（ADR 0011）
+  - 证据：`tests/unit/test_run_history.py`（8）+ `tests/contract/test_gui_run_history.py`（5）；
+    实机 `rpa-core runs list` 对真实 run_artifacts 输出正常；FULL GATE PASSED
 
 - [x] M24 断点与单步调试（`done`，2026-09-20）
   - 计划：`M24-debugger.md`；决策：ADR 0005 增补「断点与单步（M24 增补）」
