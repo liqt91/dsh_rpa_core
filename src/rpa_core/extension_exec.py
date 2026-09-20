@@ -39,9 +39,11 @@ _DEFAULT_STATUS_TTL_SECONDS = 2.0
 class ExtensionChannelError(RuntimeError):
     """扩展通道不可用（无 bridge 端点 / 扩展未安装或休眠 / 超时 / 目标浏览器离线）。"""
 
-    def __init__(self, code: str, message: str):
+    def __init__(self, code: str, message: str, *, details: dict | None = None):
         super().__init__(f"{code}: {message}")
         self.code = code
+        # 扩展侧的结构化附加信息（M28 S2 预检：blockedBy / blockedByLabel 等）
+        self.details = details or {}
 
 
 def browser_name_from_user_agent(user_agent: str) -> str | None:
@@ -319,9 +321,15 @@ class ExtensionExecClient:
                 continue
             if not result.get("ok"):
                 error = result.get("error") or {}
+                details = {
+                    key: value
+                    for key, value in error.items()
+                    if key not in ("code", "message")
+                }
                 raise ExtensionChannelError(
                     str(error.get("code") or "EXECUTOR_FAILED"),
                     str(error.get("message") or "extension command failed"),
+                    details=details,
                 )
             value = result.get("value")
             payload_value = value if isinstance(value, dict) else result

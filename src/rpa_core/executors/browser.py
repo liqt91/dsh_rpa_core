@@ -139,6 +139,60 @@ def _fallback_details(fallback: dict[str, Any] | None) -> dict[str, Any]:
     return {"fallback": fallback} if fallback else {}
 
 
+# 执行前预检（M28 S2）的稳定错误码：扩展侧 domOp 在返回值里带 `precheck`
+_PRECHECK_CODES = (
+    ErrorCode.ELEMENT_COVERED,
+    ErrorCode.ELEMENT_DISABLED,
+    ErrorCode.ELEMENT_NOT_VISIBLE,
+)
+
+
+def _describe_blocker(blocked_by: Any) -> str:
+    """把扩展回的遮挡者描述拼成可读标签（tag#id.class，便于在 DevTools 里比对）。"""
+    if not isinstance(blocked_by, dict):
+        return str(blocked_by or "")
+    return "".join(
+        [
+            str(blocked_by.get("tag") or ""),
+            f"#{blocked_by['id']}" if blocked_by.get("id") else "",
+            "." + ".".join(str(blocked_by.get("className") or "").split())
+            if blocked_by.get("className")
+            else "",
+        ]
+    )
+
+
+def _precheck_result(
+    payload: dict[str, Any], *, candidates_tried: int = 0
+) -> CommandResult | None:
+    """把扩展侧的执行前预检失败翻成 `CommandResult`；通过（或无 precheck）返回 None。
+
+    预检失败的 `blockedBy`（谁挡住了）必须原样进入 details——「报错可定位」是这一
+    切片的验收标准之一，只给一句「被遮挡」等于没报。
+    """
+    precheck = payload.get("precheck")
+    if not isinstance(precheck, dict):
+        return None
+    code = str(precheck.get("code") or "")
+    try:
+        error_code = ErrorCode(code)
+    except ValueError:
+        return None
+    details: dict[str, Any] = {"channel": "extension", "precheck": True}
+    if payload.get("matchedCount") is not None:
+        details["matchedCount"] = payload.get("matchedCount")
+    details.update({k: v for k, v in precheck.items() if k not in ("code", "message")})
+    if details.get("blockedBy") and not details.get("blockedByLabel"):
+        details["blockedByLabel"] = _describe_blocker(details["blockedBy"])
+    if candidates_tried:
+        details["candidatesTried"] = candidates_tried
+    return CommandResult.failure(
+        error_code,
+        str(precheck.get("message") or code),
+        details=details,
+    )
+
+
 class PlaywrightExecutor(CommandExecutor):
     def __init__(self, ext_session=None, flow_dir: Path | None = None):
         # 自研扩展单通道：会话 = 用户真实浏览器里的一个标签页句柄
@@ -222,8 +276,14 @@ class PlaywrightExecutor(CommandExecutor):
         """先按 selector 定位；未命中时按元素资产候选依次重试（元素自愈）。
 
         返回 `(payload, fallback)`；`fallback` 非空表示靠候选救回，含所用候选与顺位
-        （写进执行证据，便于事后判断「这次是哪条候选生效」）。候选全部未命中时返回
-        最后一次 payload（调用方照旧报 ELEMENT_NOT_FOUND，并带上尝试过的候选数）。
+        （写进执行证据，便于事后判断「这次是哪条候选生效」）。
+
+        两处「不重试」的判定（M28 S2）：
+        - 主选择器**命中但预检不过**（被遮挡/隐藏/禁用）→ 直接返回该 payload：元素找到了，
+          按候选重试只会把「点错地方」换成「点到另一个元素」，比失败更危险。
+        - 候选**命中但预检不过** → 继续试下一条候选（候选本就是为了绕开改版失效的定位）。
+        候选全部未命中时返回最后一次 payload（调用方照旧报 ELEMENT_NOT_FOUND，并带上
+        尝试过的候选数）。
         """
         payload = await asyncio.to_thread(
             self._ext.page_call, tab_id, selector, method,
@@ -232,13 +292,27 @@ class PlaywrightExecutor(CommandExecutor):
         if int(payload.get("matchedCount") or 0) > 0:
             return payload, None
         candidates = self._element_candidates(selector)
+        last_precheck = payload
         for index, candidate in enumerate(candidates, start=1):
             candidate_selector = str(candidate["selector"])
-            retry = await asyncio.to_thread(
-                self._ext.page_call, tab_id, candidate_selector, method,
-                args=args, timeout_seconds=timeout_s, target_host=target_host,
-            )
+            try:
+                retry = await asyncio.to_thread(
+                    self._ext.page_call, tab_id, candidate_selector, method,
+                    args=args, timeout_seconds=timeout_s, target_host=target_host,
+                )
+            except ExtensionChannelError as exc:
+                # 候选命中了但预检失败：换下一条候选（「不唯一」时换个更稳的定位）
+                if exc.code in _PRECHECK_CODES:
+                    last_precheck = {
+                        "matchedCount": 1,
+                        "precheck": {"code": exc.code, "message": str(exc), **exc.details},
+                    }
+                    continue
+                raise
             if int(retry.get("matchedCount") or 0) > 0:
+                if isinstance(retry.get("precheck"), dict):
+                    last_precheck = retry
+                    continue
                 return retry, {
                     "mainSelector": selector,
                     "usedSelector": candidate_selector,
@@ -246,7 +320,7 @@ class PlaywrightExecutor(CommandExecutor):
                     "index": index,
                     "candidateCount": len(candidates),
                 }
-        return payload, None
+        return last_precheck, None
 
     async def execute(
         self, invocation: CommandInvocation, cancellation: asyncio.Event
@@ -640,6 +714,9 @@ class PlaywrightExecutor(CommandExecutor):
                     args={"infoType": info_type},
                     timeout_s=timeout_s, target_host=host,
                 )
+                precheck = _precheck_result(payload)
+                if precheck is not None:
+                    return precheck
                 count = int(payload.get("matchedCount") or 0)
                 if count == 0:
                     return self._ext_not_found(
@@ -688,6 +765,13 @@ class PlaywrightExecutor(CommandExecutor):
             timeout_s=timeout_s, target_host=target_host,
         )
         count = int(payload.get("matchedCount") or 0)
+        # 预检失败优先于「0 命中」判定：元素被遮挡/隐藏/禁用时扩展回的是带 precheck 的
+        # payload（matchedCount 仍 > 0），必须按具体原因报错而不是静默继续。
+        precheck = _precheck_result(
+            payload, candidates_tried=len(self._element_candidates(selector))
+        )
+        if precheck is not None:
+            return precheck
         if command != "browser.scroll" and count == 0:
             return self._ext_not_found(
                 inputs,
@@ -760,11 +844,27 @@ class PlaywrightExecutor(CommandExecutor):
         }
         if command in page_methods:
             method, effect = page_methods[command]
-            payload = await asyncio.to_thread(
-                self._ext.page_call, tab_id, selector, method,
-                args=self._phase_d_method_args(command, inputs),
-                timeout_seconds=timeout_s, target_host=target_host,
+            # M28 S2：drag 也走自愈 + 预检那条路（S1 遗留的「drag 定位另起 page.call」）。
+            # drag 的源元素同样会「改版失效」和「被遮挡」，与 click/input 同理；
+            # 目标元素（targetSelector）由扩展侧按参数直接取，不在这一层的自愈范围内。
+            if command == "browser.drag":
+                payload, fallback = await self._page_call_with_fallback(
+                    tab_id, selector, method,
+                    args=self._phase_d_method_args(command, inputs),
+                    timeout_s=timeout_s, target_host=target_host,
+                )
+            else:
+                fallback = None
+                payload = await asyncio.to_thread(
+                    self._ext.page_call, tab_id, selector, method,
+                    args=self._phase_d_method_args(command, inputs),
+                    timeout_seconds=timeout_s, target_host=target_host,
+                )
+            precheck = _precheck_result(
+                payload, candidates_tried=len(self._element_candidates(selector))
             )
+            if precheck is not None:
+                return precheck
             count = int(payload.get("matchedCount") or 0)
             if count == 0:
                 return self._ext_not_found(inputs)
@@ -806,7 +906,7 @@ class PlaywrightExecutor(CommandExecutor):
                 outputs["sessionId"] = session_id
             return self._ext_success(
                 invocation, effect, resource + f":selector:{selector}",
-                {"operation": op, "matchedCount": count},
+                {"operation": op, "matchedCount": count, **_fallback_details(fallback)},
                 outputs=outputs,
             )
         # -- Cookie（chrome.cookies，作用域 url 由扩展按 tab 当前页推导） -------
@@ -1082,6 +1182,25 @@ class PlaywrightExecutor(CommandExecutor):
 
     def _ext_channel_failure(self, exc: ExtensionChannelError) -> CommandResult:
         """扩展通道错误整形：把协议码翻译成用户能照着做的说明。"""
+        # 执行前预检（M28 S2）：遮挡/隐藏/禁用是「找到但不可安全操作」，必须显式失败，
+        # 并把「谁挡住了」带出来（只给一句「被遮挡」等于没报）。
+        if exc.code in _PRECHECK_CODES:
+            try:
+                error_code = ErrorCode(exc.code)
+            except ValueError:  # pragma: no cover - 白名单与枚举应当一致
+                error_code = ErrorCode.EXECUTOR_FAILED
+            details: dict[str, Any] = {"channel": "extension", "code": exc.code}
+            if isinstance(exc.details, dict):
+                details.update(exc.details)
+                blocked_by = exc.details.get("blockedBy")
+                label = exc.details.get("blockedByLabel")
+                if blocked_by and not label:
+                    details["blockedByLabel"] = _describe_blocker(blocked_by)
+            return CommandResult.failure(
+                error_code,
+                str(exc).split(": ", 1)[-1] or exc.code,
+                details=details,
+            )
         if exc.code == "TIMEOUT":
             return CommandResult.failure(
                 ErrorCode.TIMEOUT,

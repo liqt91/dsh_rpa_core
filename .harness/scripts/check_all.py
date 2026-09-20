@@ -27,7 +27,7 @@ if "--with-desktop-e2e" in sys.argv:
 node = shutil.which("node")
 if node:
     for script in ("check_param_groups.mjs", "check_retry_policy.mjs", "check_capture_helpers.mjs",
-                   "check_input_helpers.mjs"):
+                   "check_input_helpers.mjs", "check_precheck_helpers.mjs"):
         path = ROOT / "scripts" / script
         if path.exists():
             commands.append([node, str(path)])

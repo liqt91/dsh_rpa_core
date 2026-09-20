@@ -25,7 +25,7 @@
     要么扩展参数（如 `candidates` 由编辑器在插入元素时一并写入节点参数），要么按元素资产名解析。
     实现前先定这一处契约（见「风险 / 注意」第 1 条）。
   - 验收：站点改版导致主选择器失效、但候选仍可命中时，流程**不再失败**且证据里标明所用候选。
-- [ ] **S2 执行前预检与错误分类**
+- [x] **S2 执行前预检与错误分类**（2026-09-20 done）
   - 预检（扩展侧，注入前执行）：`isConnected`、`disabled` / `aria-disabled`、`inert`、
     `checkVisibility({checkOpacity:true, checkVisibilityCSS:true})`、rect 非零且在视口内、
     **`elementFromPoint` 包含性（遮挡拒绝）**。

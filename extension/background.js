@@ -279,6 +279,18 @@ async function runCommand(cmd) {
   try {
     await assertAllowed(cmd);
     const value = await executeCommand(cmd);
+    // 预检失败：扩展不抛异常（抛出去的 message 会被 errorCode 的文本启发式误判），
+    // 而是在返回值里带结构化 precheck；这里把它翻成与执行器对齐的失败响应。
+    if (value && value.precheck && value.precheck.code) {
+      payload = {
+        type: "result",
+        id: cmd.id,
+        ok: false,
+        error: { ...value.precheck, code: value.precheck.code, message: value.precheck.message },
+      };
+      post(payload);
+      return;
+    }
     payload = { type: "result", id: cmd.id, ok: true, value: value || {} };
   } catch (err) {
     payload = {
@@ -291,7 +303,20 @@ async function runCommand(cmd) {
   post(payload);
 }
 
+// 预检/通道的稳定错误码白名单：优先用结构化 code（M28 S2），文本启发式只作兜底
+const KNOWN_ERROR_CODES = [
+  "ELEMENT_NOT_FOUND",
+  "ELEMENT_AMBIGUOUS",
+  "ELEMENT_COVERED",
+  "ELEMENT_DISABLED",
+  "ELEMENT_NOT_VISIBLE",
+  "PERMISSION_DENIED",
+  "TIMEOUT",
+];
+
 function errorCode(err) {
+  const code = String((err && err.code) || "").trim().toUpperCase();
+  if (KNOWN_ERROR_CODES.includes(code)) return code;
   const msg = String(err && err.message || err);
   if (msg.includes("did not match") || msg.includes("no element")) return "ELEMENT_NOT_FOUND";
   if (msg.includes("outside allowed")) return "PERMISSION_DENIED";
@@ -465,6 +490,75 @@ async function domOp(payload) {
     return Math.min(value, 5000);
   };
   // [input-helpers:end]
+  // [precheck-helpers:start]
+  // 纯函数区：scripts/check_precheck_helpers.mjs 按标记抽取求值（标记独占一行便于切片）。
+  // M28 S2 执行前预检：命中元素但**不可安全操作**时必须显式失败，绝不静默点到遮罩层上。
+  const PRECHECK_MESSAGES = {
+    ELEMENT_NOT_VISIBLE: "目标元素不可见（display/visibility/opacity 隐藏、零尺寸或不在视口内）",
+    ELEMENT_DISABLED: "目标元素处于禁用状态（disabled / aria-disabled / inert）",
+    ELEMENT_COVERED: "目标元素被其它元素遮挡，点击会落在遮挡者身上",
+  };
+  // 可操作动作：只有这些 method 需要预检（读取类 getText/getPosition 等照旧允许读隐藏元素）
+  const precheckRequired = (raw) => {
+    const value = String(raw == null ? "" : raw).trim().toLowerCase();
+    return ["click", "hover", "input", "select", "check", "drag"].includes(value);
+  };
+  // 元素是否禁用：原生 disabled + ARIA 语义 + inert 子树（继承祖先可用 closest 判定）
+  const isDisabledElement = (el) => {
+    if (!el) return false;
+    if (el.disabled === true) return true;
+    if (String(el.getAttribute && el.getAttribute("aria-disabled") || "").toLowerCase() === "true") {
+      return true;
+    }
+    if (el.closest && el.closest("[inert]")) return true;
+    return false;
+  };
+  // 元素是否被视口内其它元素遮挡：取中心点做 elementFromPoint 包含性判定。
+  // 返回 null 表示未被遮挡；否则返回遮挡者的可读描述（写进 details，便于排查）。
+  const coveringElement = (el, rects) => {
+    if (!el || typeof document.elementFromPoint !== "function") return null;
+    const rect = (rects && rects[0]) || (el.getBoundingClientRect ? el.getBoundingClientRect() : null);
+    if (!rect || !(rect.width > 0) || !(rect.height > 0)) return null;
+    const x = rect.left + rect.width / 2;
+    const y = rect.top + rect.height / 2;
+    if (x < 0 || y < 0 || x > window.innerWidth || y > window.innerHeight) return null;
+    const top = document.elementFromPoint(x, y);
+    if (!top || top === el || el.contains(top) || top.contains(el)) return null;
+    return {
+      tag: String(top.tagName || "").toLowerCase(),
+      id: String(top.id || ""),
+      className: String((typeof top.className === "string" ? top.className : "") || "").slice(0, 120),
+    };
+  };
+  // 预检总入口：通过 → null；不通过 → { code, message, ... }（code 用稳定错误码）
+  const elementPrecheck = (el) => {
+    if (!el || el.isConnected !== true) {
+      return { code: "ELEMENT_NOT_FOUND", message: "目标元素已从页面移除" };
+    }
+    if (isDisabledElement(el)) {
+      return { code: "ELEMENT_DISABLED", message: PRECHECK_MESSAGES.ELEMENT_DISABLED };
+    }
+    const rects = el.getClientRects ? el.getClientRects() : null;
+    if (!rects || rects.length === 0) {
+      return { code: "ELEMENT_NOT_VISIBLE", message: PRECHECK_MESSAGES.ELEMENT_NOT_VISIBLE };
+    }
+    const style = window.getComputedStyle(el);
+    if (style.visibility === "hidden" || style.display === "none") {
+      return { code: "ELEMENT_NOT_VISIBLE", message: PRECHECK_MESSAGES.ELEMENT_NOT_VISIBLE };
+    }
+    if (typeof el.checkVisibility === "function") {
+      const shown = el.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true });
+      if (!shown) {
+        return { code: "ELEMENT_NOT_VISIBLE", message: PRECHECK_MESSAGES.ELEMENT_NOT_VISIBLE };
+      }
+    }
+    const rect = rects[0];
+    if (!(rect.width > 0) || !(rect.height > 0)) {
+      return { code: "ELEMENT_NOT_VISIBLE", message: PRECHECK_MESSAGES.ELEMENT_NOT_VISIBLE };
+    }
+    return null;
+  };
+  // [precheck-helpers:end]
   const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   const pressEnter = (el) => {
     const enter = { key: "Enter", code: "Enter", keyCode: 13, bubbles: true };
@@ -583,6 +677,46 @@ async function domOp(payload) {
   const el = selector ? document.querySelector(selector) : null;
   const matchedCount = selector ? document.querySelectorAll(selector).length : 0;
   if (!el || matchedCount === 0) return { matchedCount: 0, result: null };
+
+  // 可操作动作先让元素进入视口：预检的「在视口内 / 未被遮挡」必须在滚动后再判，
+  // 否则元素刚被选中就因落在视口外而误报不可见。滚动后再跑 elementPrecheck。
+  // 滚动没把它带进视口（多为祖先容器 overflow 裁剪或滚动被拦截）→ 直接报不可见，
+  // 绝不带着错误坐标继续点（否则「点击」会落在视口内的其它元素上，静默点错）。
+  if (precheckRequired(method)) {
+    el.scrollIntoView({ block: "center", inline: "nearest" });
+    const rect = el.getBoundingClientRect();
+    const inViewport =
+      rect.width > 0 && rect.height > 0 &&
+      rect.bottom > 0 && rect.right > 0 &&
+      rect.top < window.innerHeight && rect.left < window.innerWidth;
+    if (!inViewport) {
+      return {
+        matchedCount,
+        result: null,
+        precheck: { code: "ELEMENT_NOT_VISIBLE", message: PRECHECK_MESSAGES.ELEMENT_NOT_VISIBLE },
+      };
+    }
+    const failed = elementPrecheck(el);
+    if (failed) return { matchedCount, result: null, precheck: failed };
+    const blocker = coveringElement(el, el.getClientRects());
+    if (blocker) {
+      const label = [
+        blocker.tag,
+        blocker.id ? `#${blocker.id}` : "",
+        blocker.className ? `.${blocker.className.trim().split(/\s+/).join(".")}` : "",
+      ].join("");
+      return {
+        matchedCount,
+        result: null,
+        precheck: {
+          code: "ELEMENT_COVERED",
+          message: PRECHECK_MESSAGES.ELEMENT_COVERED,
+          blockedBy: blocker,
+          blockedByLabel: label,
+        },
+      };
+    }
+  }
 
   switch (method) {
     case "getPosition": {

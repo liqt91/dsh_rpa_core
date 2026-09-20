@@ -15,7 +15,7 @@
     "matchedCount": {"label": "匹配数量"},
     "sessionId": {"label": "浏览器实例"}
   },
-  "errors": ["ELEMENT_NOT_FOUND", "SESSION_NOT_FOUND", "TIMEOUT", "CANCELLED", "EXECUTOR_FAILED"],
+  "errors": ["ELEMENT_NOT_FOUND", "SESSION_NOT_FOUND", "TIMEOUT", "CANCELLED", "EXECUTOR_FAILED", "ELEMENT_COVERED", "ELEMENT_DISABLED", "ELEMENT_NOT_VISIBLE"],
   "implementation": {"handler": "browser.playwright:selectOption"},
   "default_timeout_seconds": 15,
   "retryable": false

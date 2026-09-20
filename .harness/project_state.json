@@ -8,7 +8,7 @@
   "active_feature": "element-self-healing",
   "next_milestone": null,
   "later_milestones": [],
-  "notes": "技术路线（ADR 0016）：GUI 为唯一主力形态，Web 编辑器退为可选、冻结演进；GUI 独立运行不需要 web 服务器。M23（GUI 体验对齐）、M24（断点与单步）、M25（运行历史）、M27（工作台 + 编辑器两段式，ADR 0017）均已收口。M28 进行中（元素自愈与执行前预检）：S3 已完成——修两处「manifest 声明了但扩展通道没实现」的漂移（keyIntervalMs 真正生效、clipboard 真实现粘贴注入并在未被接受时显式失败），另补 clickBeforeInput / postDelayMs；S1（运行期消费 candidates）与 S2（执行前预检与错误分类）待做；S4 度量与边界文档待做。已定案不做：新增 mode=insert、后台标签页焦点模拟。M26（流程 inputs 编辑 UI）顺延。",
+  "notes": "技术路线（ADR 0016）：GUI 为唯一主力形态，Web 编辑器退为可选、冻结演进；GUI 独立运行不需要 web 服务器。M23（GUI 体验对齐）、M24（断点与单步）、M25（运行历史）、M27（工作台 + 编辑器两段式，ADR 0017）均已收口。M28 进行中（元素自愈与执行前预检）：S1（运行期消费 candidates）与 S3（参数漂移修复：keyIntervalMs 真正生效、clipboard 真实现）均已完成；S2（执行前预检与错误分类）已完成——扩展侧 domOp 对可操作动作先 scrollIntoView 再预检（isConnected/disabled/aria-disabled/inert/checkVisibility/rect/视口内/elementFromPoint 遮挡），失败以结构化 precheck 随返回值回传并翻成稳定错误码 ELEMENT_COVERED/ELEMENT_DISABLED/ELEMENT_NOT_VISIBLE（details 带 blockedBy），主选择器命中但预检不过时不试候选（换候选=换一个元素点，更危险）；browser.drag 已统一进自愈+预检路径。**S4（度量与边界文档）待做——M28 剩余最后一片**。已定案不做：新增 mode=insert、后台标签页焦点模拟。M26（流程 inputs 编辑 UI）顺延。",
   "task_index": ".harness/tasks/BACKLOG.md",
   "scope": {
     "in": [

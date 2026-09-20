@@ -75,7 +75,10 @@
     "SESSION_NOT_FOUND",
     "TIMEOUT",
     "CANCELLED",
-    "EXECUTOR_FAILED"
+    "EXECUTOR_FAILED",
+    "ELEMENT_COVERED",
+    "ELEMENT_DISABLED",
+    "ELEMENT_NOT_VISIBLE"
   ],
   "implementation": {
     "handler": "browser.playwright:setValue"

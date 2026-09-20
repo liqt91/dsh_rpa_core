@@ -14,7 +14,7 @@
   "x-outputs": {
     "matchedCount": {"label": "匹配数量", "primary": true}
   },
-  "errors": ["ELEMENT_NOT_FOUND", "SESSION_NOT_FOUND", "TIMEOUT", "CANCELLED", "EXECUTOR_FAILED"],
+  "errors": ["ELEMENT_NOT_FOUND", "SESSION_NOT_FOUND", "TIMEOUT", "CANCELLED", "EXECUTOR_FAILED", "ELEMENT_COVERED", "ELEMENT_DISABLED", "ELEMENT_NOT_VISIBLE"],
   "implementation": {"handler": "browser.playwright:wait_for"},
   "default_timeout_seconds": 15,
   "retryable": true
