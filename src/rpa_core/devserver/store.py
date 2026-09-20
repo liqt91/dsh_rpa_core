@@ -124,6 +124,82 @@ class WorkflowDirStore(WorkflowStore):
             raise WorkflowNameError(f"workflow path escapes root: {name!r}")
         return folder
 
+    # ---- 流程管理动作（M27 S3，工作台） -----------------------------------
+    def delete_flow(self, name: str, *, purge: bool = True) -> None:
+        """删除流程。
+
+        `purge=True`（工作台默认）连同流程目录下的一切附属资产（elements/、data/ 等）
+        整目录删除；`purge=False` 保持旧行为（只删 workflow.json，目录空则删）。
+        """
+        import shutil
+
+        directory = self.directory(name)
+        if not (directory / "workflow.json").is_file():
+            raise WorkflowNotFoundError(f"workflow not found: {name}")
+        if purge:
+            shutil.rmtree(directory)
+            return
+        self.delete(name)
+
+    def rename_flow(self, name: str, new_name: str) -> None:
+        """重命名流程目录（名称校验与写入同口径；目标已存在则拒绝）。"""
+        if not _NAME.fullmatch(new_name or ""):
+            raise WorkflowNameError(f"invalid workflow name: {new_name!r}")
+        source = self.directory(name)
+        if not (source / "workflow.json").is_file():
+            raise WorkflowNotFoundError(f"workflow not found: {name}")
+        target = self.directory(new_name)
+        if target.exists():
+            raise WorkflowStoreError(f"workflow already exists: {new_name}")
+        source.rename(target)
+
+    def copy_flow(self, name: str, new_name: str) -> None:
+        """复制流程（含附属资产）为新名称；目标已存在则拒绝。"""
+        import shutil
+
+        if not _NAME.fullmatch(new_name or ""):
+            raise WorkflowNameError(f"invalid workflow name: {new_name!r}")
+        source = self.directory(name)
+        if not (source / "workflow.json").is_file():
+            raise WorkflowNotFoundError(f"workflow not found: {name}")
+        target = self.directory(new_name)
+        if target.exists():
+            raise WorkflowStoreError(f"workflow already exists: {new_name}")
+        shutil.copytree(source, target)
+
+    def export_flow(self, name: str, target_dir: Path) -> Path:
+        """把流程（含附属资产）导出到目标目录；目标已存在且非空则拒绝。"""
+        import shutil
+
+        source = self.directory(name)
+        if not (source / "workflow.json").is_file():
+            raise WorkflowNotFoundError(f"workflow not found: {name}")
+        target = Path(target_dir)
+        if target.exists() and any(target.iterdir()):
+            raise WorkflowStoreError(f"target directory is not empty: {target}")
+        shutil.copytree(source, target, dirs_exist_ok=True)
+        return target
+
+    def import_flow(self, name: str, source: Path) -> None:
+        """从外部目录（或单个 workflow.json）导入为流程 `name`；目标已存在则拒绝。"""
+        import shutil
+
+        if not _NAME.fullmatch(name or ""):
+            raise WorkflowNameError(f"invalid workflow name: {name!r}")
+        source_path = Path(source)
+        if source_path.is_file():
+            if source_path.name != "workflow.json":
+                raise WorkflowStoreError("导入需要 workflow.json 或其所在目录")
+            source_dir = source_path.parent
+        else:
+            source_dir = source_path
+        if not (source_dir / "workflow.json").is_file():
+            raise WorkflowStoreError(f"缺少 workflow.json：{source_dir}")
+        target = self.directory(name)
+        if target.exists():
+            raise WorkflowStoreError(f"workflow already exists: {name}")
+        shutil.copytree(source_dir, target)
+
     def _resolve(self, name: str) -> Path:
         return self.directory(name) / "workflow.json"
 

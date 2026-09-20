@@ -33,7 +33,7 @@ from PySide6.QtWidgets import (
 )
 
 from rpa_core.devserver.store import WorkflowDirStore
-from rpa_core.run_history import list_runs
+from rpa_core.run_history import list_runs, purge_runs
 
 _STATUS_LABELS = {
     "succeeded": "成功",
@@ -95,9 +95,25 @@ class HomeWindow(QMainWindow):
         self.new_button.clicked.connect(self._create_flow)
         self.open_button = QPushButton("打开")
         self.open_button.clicked.connect(self._open_selected)
+        self.copy_button = QPushButton("复制")
+        self.copy_button.clicked.connect(self._copy_flow)
+        self.rename_button = QPushButton("重命名")
+        self.rename_button.clicked.connect(self._rename_flow)
+        self.delete_button = QPushButton("删除")
+        self.delete_button.clicked.connect(self._delete_flow)
+        self.import_button = QPushButton("导入")
+        self.import_button.setToolTip("从 workflow.json 或流程目录导入")
+        self.import_button.clicked.connect(self._import_flow)
+        self.export_button = QPushButton("导出")
+        self.export_button.setToolTip("把流程（含元素/数据表格）导出到指定目录")
+        self.export_button.clicked.connect(self._export_flow)
         self.refresh_button = QPushButton("刷新")
         self.refresh_button.clicked.connect(self.refresh_flows)
-        for widget in (self.new_button, self.open_button, self.refresh_button):
+        for widget in (
+            self.new_button, self.open_button, self.copy_button, self.rename_button,
+            self.delete_button, self.import_button, self.export_button,
+            self.refresh_button,
+        ):
             buttons.addWidget(widget)
         buttons.addStretch(1)
         layout.addLayout(buttons)
@@ -368,3 +384,134 @@ class HomeWindow(QMainWindow):
             return
         self.refresh_flows()
         self.open_flow(name)
+
+    # ---- 管理动作（M27 S3） ------------------------------------------------
+    def _copy_flow(self) -> None:
+        flow = self._selected_flow()
+        if flow is None:
+            self.hint.setText("先在上表选中一个流程。")
+            return
+        new_name, accepted = QInputDialog.getText(
+            self, "复制流程", "新流程名称：", text=f"{flow['name']}_copy"
+        )
+        if not accepted:
+            return
+        try:
+            self._store.copy_flow(flow["name"], (new_name or "").strip())
+        except Exception as exc:  # noqa: BLE001 - 非法名/重名都要看得见
+            QMessageBox.warning(self, "复制流程", f"复制失败：{exc}")
+            return
+        self.refresh_flows()
+        self.hint.setText(f"已复制为 {(new_name or '').strip()}。")
+
+    def _rename_flow(self) -> None:
+        flow = self._selected_flow()
+        if flow is None:
+            self.hint.setText("先在上表选中一个流程。")
+            return
+        if self._is_editing(flow["name"]):
+            QMessageBox.warning(
+                self, "重命名流程",
+                f"流程 {flow['name']} 正在编辑器里打开；请先在编辑器中保存并关闭/切换后再重命名。",
+            )
+            return
+        new_name, accepted = QInputDialog.getText(
+            self, "重命名流程", "新名称：", text=flow["name"]
+        )
+        if not accepted:
+            return
+        try:
+            self._store.rename_flow(flow["name"], (new_name or "").strip())
+        except Exception as exc:  # noqa: BLE001
+            QMessageBox.warning(self, "重命名流程", f"重命名失败：{exc}")
+            return
+        self.refresh_flows()
+        self.hint.setText(f"已重命名为 {(new_name or '').strip()}。")
+
+    def _delete_flow(self) -> None:
+        """删除流程：先列出连带范围（元素/数据表格/运行历史），确认后才整目录删除。"""
+        flow = self._selected_flow()
+        if flow is None:
+            self.hint.setText("先在上表选中一个流程。")
+            return
+        if self._is_editing(flow["name"]):
+            QMessageBox.warning(
+                self, "删除流程",
+                f"流程 {flow['name']} 正在编辑器里打开；请先保存并关闭/切换后再删除。",
+            )
+            return
+        runs = [run for run in self._runs if run.get("workflowId") == flow["workflowId"]]
+        has_table = (self._store.root / flow["name"] / "data").is_dir()
+        lines = [
+            f"流程：{flow['name']}",
+            f"元素资产：{flow['elements']} 个",
+            f"数据表格：{'有' if has_table else '无'}",
+            f"运行历史：{len(runs)} 条",
+            "",
+            "以上内容将被一并删除，且不可撤销。",
+        ]
+        answer = QMessageBox.question(
+            self,
+            "删除流程",
+            "\n".join(lines),
+            QMessageBox.StandardButton.Cancel | QMessageBox.StandardButton.Yes,
+            QMessageBox.StandardButton.Cancel,  # 默认取消（不可逆操作）
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            self.hint.setText("已取消删除。")
+            return
+        try:
+            self._store.delete_flow(flow["name"], purge=True)
+            removed = purge_runs(self._artifacts_root(), flow["workflowId"])
+        except Exception as exc:  # noqa: BLE001
+            QMessageBox.warning(self, "删除流程", f"删除失败：{exc}")
+            return
+        self.refresh_flows()
+        self.hint.setText(f"已删除 {flow['name']}（连带运行历史 {removed} 条）。")
+
+    def _import_flow(self) -> None:
+        from PySide6.QtWidgets import QFileDialog
+
+        chosen, _ = QFileDialog.getOpenFileName(
+            self, "导入流程（选择 workflow.json）", "", "工作流文件 (workflow.json)"
+        )
+        if not chosen:
+            return
+        source = Path(chosen)
+        name = source.parent.name or "imported"
+        try:
+            self._store.import_flow(name, source)
+        except Exception as exc:  # noqa: BLE001
+            QMessageBox.warning(self, "导入流程", f"导入失败：{exc}")
+            return
+        self.refresh_flows()
+        self.hint.setText(f"已导入流程 {name}。")
+
+    def _export_flow(self) -> None:
+        from PySide6.QtWidgets import QFileDialog
+
+        flow = self._selected_flow()
+        if flow is None:
+            self.hint.setText("先在上表选中一个流程。")
+            return
+        target = QFileDialog.getExistingDirectory(self, "导出流程到目录")
+        if not target:
+            return
+        try:
+            self._store.export_flow(flow["name"], Path(target))
+        except Exception as exc:  # noqa: BLE001
+            QMessageBox.warning(self, "导出流程", f"导出失败：{exc}")
+            return
+        self.hint.setText(f"已导出 {flow['name']} 到 {target}。")
+
+    def _is_editing(self, name: str) -> bool:
+        """该流程是否正被编辑器打开（编辑器单例，按 flow_path 判断）。"""
+        from rpa_core.gui import app as app_module
+
+        window = getattr(app_module, "_EDITOR_WINDOW", None)
+        if window is None or window.flow_path is None:
+            return False
+        try:
+            return Path(window.flow_path).parent.name == name
+        except Exception:  # noqa: BLE001 - 判断失败按「未在编辑」处理
+            return False

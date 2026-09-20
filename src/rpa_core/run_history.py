@@ -145,6 +145,31 @@ def _read_events(run_dir: Path) -> list[dict[str, Any]]:
     return events
 
 
+def purge_runs(artifacts_root: Path, workflow_id: str) -> int:
+    """删除某流程的全部历史运行目录，返回删除条数（M27 S3 删除流程的连带动作）。
+
+    **这是本模块唯一的写操作**：其余能力都是只读（M25 的约束不变）。之所以放在这里，
+    是因为「哪些目录属于该流程」的判断依赖本模块对证据格式的了解（`result.json` 的
+    `workflow_id`、`checkpoint.json` 的 `workflowId`），让调用方各自实现会重复且易漂移。
+    删除是整目录移除（不可逆），调用方必须先向用户确认。
+    """
+    import shutil
+
+    removed = 0
+    for run_dir in _run_dirs(artifacts_root):
+        result = _read_json(run_dir / RESULT_FILE) or {}
+        checkpoint = _read_json(run_dir / CHECKPOINT_FILE) or {}
+        owner = result.get("workflow_id") or checkpoint.get("workflowId")
+        if owner != workflow_id:
+            continue
+        try:
+            shutil.rmtree(run_dir)
+        except OSError:
+            continue  # 单个目录删不掉不阻塞其它（例如文件被占用）
+        removed += 1
+    return removed
+
+
 def read_run(artifacts_root: Path, run_id: str) -> dict[str, Any]:
     """读一次运行的详情：摘要 + 输入 + 检查点调试信息 + 事件时间线。"""
     run_dir = Path(artifacts_root) / run_id
