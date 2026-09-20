@@ -6,10 +6,12 @@
 
 - [ ] **M28 元素自愈与执行前预检**（`active`）
   - 计划：`M28-element-self-healing.md`；调研依据：`docs/element-self-healing-plan.md`
-  - 已完成 **S3 参数漂移修复**（2026-09-20）：`keyIntervalMs` 真正生效（逐字间隔）、
-    `clipboard` 实装（粘贴注入 + 未被接受时显式失败），并补 `clickBeforeInput` / `postDelayMs`
-  - 待做：**S1** 运行期消费 `selector.candidates`（主选择器失效时自愈）→ **S2** 执行前预检与
-    错误分类（NOT_FOUND/COVERED/DISABLED/NOT_VISIBLE）→ **S4** 度量基线 + 边界文档
+  - 已完成（2026-09-20）：**S1** 运行期消费 `selector.candidates`（主选择器失效时按稳定性回退，
+    证据记录所用候选）· **S2** 执行前预检与错误分类（`ELEMENT_COVERED`/`DISABLED`/`NOT_VISIBLE`）·
+    **S3** 参数漂移修复（`keyIntervalMs` 真正生效、`clipboard` 实装，并补 `clickBeforeInput`/`postDelayMs`）
+  - 待做：**S4** 度量基线（扩展通道往返数 + 耗时）+ MVP 边界文档 —— M28 仅剩此片
+  - 附（非 M28 切片，2026-09-20 done）：**扩展通道诊断可见性**——状态栏徽标离线时给出
+    「bridge 注册 / 插件安装 / 浏览器运行 / 当前实例是否加载」，而不是一句「离线」
   - 不做（已定案）：新增 `mode: "insert"`；后台标签页焦点模拟
 
 ## 后续任务

@@ -25,6 +25,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -1068,6 +1069,260 @@ def env_status_base(build_dir: Path | None = None) -> dict:
         "version": version,
         "installMode": _derive_install_mode(status),
         "browsers": browsers,
+    }
+
+
+# -- 通道诊断：把「离线」拆成可区分的原因（状态栏 / CLI / 插件对话框共用） -------
+#
+# 只报「离线」无法定位：可能是 bridge 没注册、插件没装、浏览器没开，也可能是
+# **浏览器开着但扩展没被注入**（2026-09-20 真机踩到：浏览器单实例会吞掉后续命令行
+# 的 --load-extension，注入型扩展因此永久离线，而探测只会说「离线」）。
+# 本节全部**只读**、不启动浏览器，使用户在打开浏览器之前就能看清缺哪一环。
+
+OFFLINE_BROWSER_NOT_INSTALLED = "browser-not-installed"
+OFFLINE_BRIDGE_NOT_REGISTERED = "bridge-not-registered"
+OFFLINE_EXTENSION_NOT_INSTALLED = "extension-not-installed"
+OFFLINE_RUNNING_WITHOUT_EXTENSION = "browser-running-without-extension"
+OFFLINE_HOST_NOT_REACHABLE = "host-not-reachable"
+OFFLINE_BROWSER_NOT_RUNNING = "browser-not-running"
+OFFLINE_UNKNOWN = "unknown"
+
+_CHANNEL_STATIC_TTL_SECONDS = 30.0
+_channel_static_cache: tuple[float, dict] | None = None
+
+
+def _pgrep_literal_pattern(literal: str) -> str:
+    """字面串 → pgrep -f 可用模式。
+
+    只还原 ``re.escape`` 对 ``-`` 的转义：macOS 的 pgrep 走 BSD regcomp（默认 BRE），
+    ``\\-`` 在那里行为未定义，会让本可命中的命令行查不到。
+    """
+    return re.escape(literal).replace(r"\-", "-")
+
+
+def browser_extension_injected(browser: str, extension_dir: Path | str | None) -> bool | None:
+    """当前是否有实例把本扩展以命令行 ``--load-extension`` 注入着。
+
+    profile 里 ``location == 8``（LOCATION_COMMAND_LINE）只是**历史记录**：它能证明
+    "曾经注入过"，不能证明当前实例加载了。唯一可靠的当前态判据是进程命令行。
+    返回 ``None`` 表示该平台未实现该判定——调用方不要把 None 当成"没注入"。
+
+    **只是"加载"的一条腿**：开发者模式（``location == 4``）加载的扩展不带任何命令行
+    参数，只看这里会误报「浏览器在跑却没加载插件」。判定当前加载见
+    ``_extension_loaded``。
+    """
+    if not extension_dir:
+        return None
+    if sys.platform == "win32":
+        return None  # Windows 的命令行探测未实现（宁可不结论，也不误报）
+    target = Path(extension_dir)
+    try:
+        resolved = target.resolve()
+    except OSError:
+        resolved = target
+    pattern = _pgrep_literal_pattern(f"--load-extension={resolved}")
+    return _posix_process_matches(pattern)
+
+
+def _extension_loaded(info: dict, running: bool, injected: bool | None) -> bool | None:
+    """尽力判定「当前这个浏览器实例是否加载了本扩展」（纯判定，不查进程）。
+
+    两条腿（任一成立即算已加载）：
+    - **开发者模式加载**（profile 有 location==4 且 path 指向本扩展目录）：浏览器会
+      持久化该记录并在重启后继续加载，因此「有记录 + 实例在跑」即可认定；
+    - **命令行注入**（进程 argv 带 ``--load-extension=<本扩展目录>``，由 ``injected`` 传入）。
+    都没命中且命令行判定可用时为 False（确定没加载）；命令行判定不可用（Windows）
+    时 ``injected is None`` → 返回 None，调用方据此说「未知」而不是「没加载」。
+    """
+    if not running:
+        return False  # 没有实例在跑 = 确定没加载
+    if info.get("extensionUnpacked"):
+        return True
+    return injected
+
+
+def _channel_static_probe(build_dir: Path | None, extension_dir: Path | None) -> dict:
+    """静态体检的实算部分：逐浏览器 bridge 注册 + 插件安装/启用（读 profile）。"""
+    ext_dir = extension_root() if extension_dir is None else Path(extension_dir)
+    status = extension_status("", build_dir, extension_dir=ext_dir)
+    browsers: dict[str, dict] = {}
+    for name, info in status["browsers"].items():
+        host = native_host_status(name)
+        browsers[name] = {
+            "binary": bool(info["binary"]),
+            "bridgeRegistered": bool(host["registered"]),
+            "bridgeHostExecutableExists": bool(host["hostExecutableExists"]),
+            "bridgeExtensionId": host["extensionId"],
+            "extensionInstalled": bool(info["installed"]),
+            "extensionEnabled": bool(info["enabled"]),
+            # 开发者模式（location==4）加载记录：浏览器会持久化它，是「实例在跑即已加载」
+            # 的依据（这类加载**不带**任何命令行参数，只看 pgrep 会误报"没加载"）。
+            "extensionUnpacked": any(
+                item["installed"] for item in info.get("unpackedProfiles", [])
+            ),
+            "uninstallBlocked": bool(info["uninstallBlocked"]),
+        }
+    return {"browsers": browsers, "extensionDir": str(ext_dir)}
+
+
+def channel_static_status(
+    build_dir: Path | None = None,
+    extension_dir: Path | None = None,
+    *,
+    ttl: float | None = None,
+) -> dict:
+    """静态体检（bridge 注册 × 插件安装）：读 profile 较重，故带 TTL 缓存。
+
+    状态栏每 5s 轮询一次，实算却要读多份 Secure Preferences——缓存让重活每 TTL
+    只做一次。传 ``ttl=0`` 强制重算（测试/手动刷新用）。
+    """
+    global _channel_static_cache
+    window = _CHANNEL_STATIC_TTL_SECONDS if ttl is None else ttl
+    now = time.monotonic()
+    if window > 0 and _channel_static_cache is not None:
+        cached_at, payload = _channel_static_cache
+        if now - cached_at < window:
+            return payload
+    payload = _channel_static_probe(build_dir, extension_dir)
+    _channel_static_cache = (now, payload)
+    return payload
+
+
+def _primary_browser(browsers: dict) -> dict | None:
+    """挑一个「最该被用户关注」的浏览器：在运行的 > 已装插件的 > 有二进制的。"""
+    for predicate in (
+        lambda i: i["running"],
+        lambda i: i["extensionInstalled"] or i["extensionEnabled"],
+        lambda i: i["binary"],
+    ):
+        for info in browsers.values():
+            if predicate(info):
+                return info
+    return None
+
+
+def classify_offline_reason(browsers: dict) -> str:
+    """离线时给出最可能的一环（按用户可操作性排序，不做推测性归因）。"""
+    usable = [info for info in browsers.values() if info["binary"]]
+    if not usable:
+        return OFFLINE_BROWSER_NOT_INSTALLED
+    if any(i["running"] and i["extensionLoaded"] for i in usable):
+        # 扩展加载着却没端点：问题在 host 侧（注册/host 入口/端点路径），不在插件
+        return OFFLINE_HOST_NOT_REACHABLE
+    if not any(i["bridgeRegistered"] for i in usable):
+        return OFFLINE_BRIDGE_NOT_REGISTERED
+    if not any(i["extensionInstalled"] for i in usable):
+        return OFFLINE_EXTENSION_NOT_INSTALLED
+    if any(i["running"] and i["extensionLoaded"] is False for i in usable):
+        return OFFLINE_RUNNING_WITHOUT_EXTENSION
+    if any(i["running"] for i in usable):
+        return OFFLINE_UNKNOWN
+    return OFFLINE_BROWSER_NOT_RUNNING
+
+
+_OFFLINE_HINTS = {
+    OFFLINE_BROWSER_NOT_INSTALLED: "未检测到支持的浏览器",
+    OFFLINE_BRIDGE_NOT_REGISTERED: "先在「插件」里注册 bridge",
+    OFFLINE_EXTENSION_NOT_INSTALLED: "先在「插件」里加载插件",
+    OFFLINE_RUNNING_WITHOUT_EXTENSION: (
+        "浏览器已在运行但未加载插件：完全退出浏览器后由本工具拉起"
+        "（浏览器单实例会吞掉注入参数）"
+    ),
+    OFFLINE_HOST_NOT_REACHABLE: "插件已注入但 host 未上线：查 ~/.rpa-core/logs/ext-host.log",
+    OFFLINE_BROWSER_NOT_RUNNING: "静态体检通过，打开浏览器即可",
+    OFFLINE_UNKNOWN: "详见「插件」对话框",
+}
+
+# 状态栏一行的空间有限：徽标只放「三态 + 一句短标签」，处置建议走 offline_hint()
+_OFFLINE_LABELS = {
+    OFFLINE_BROWSER_NOT_INSTALLED: "无可用浏览器",
+    OFFLINE_BRIDGE_NOT_REGISTERED: "bridge 未注册",
+    OFFLINE_EXTENSION_NOT_INSTALLED: "插件未安装",
+    OFFLINE_RUNNING_WITHOUT_EXTENSION: "浏览器未加载插件",
+    OFFLINE_HOST_NOT_REACHABLE: "host 未上线",
+    OFFLINE_BROWSER_NOT_RUNNING: "浏览器未运行",
+    OFFLINE_UNKNOWN: "原因待查",
+}
+
+
+def offline_hint(reason: str) -> str:
+    """该离线原因对应的处置建议（tooltip / 对话框用，不进状态栏徽标）。"""
+    return _OFFLINE_HINTS.get(reason, "")
+
+
+def describe_offline_reason(reason: str, browsers: dict) -> str:
+    """一行短摘要：先答「bridge 注册? 插件安装? 浏览器运行?」，再补一句结论标签。"""
+    info = _primary_browser(browsers)
+    parts: list[str] = []
+    if info is not None:
+        parts.append("bridge 已注册" if info["bridgeRegistered"] else "bridge 未注册")
+        if info["extensionInstalled"]:
+            parts.append("插件已安装")
+        elif info["extensionInjected"]:
+            parts.append("插件已注入")
+        else:
+            parts.append("插件未安装")
+        parts.append("浏览器在运行" if info["running"] else "浏览器未运行")
+    label = _OFFLINE_LABELS.get(reason, "")
+    if label and label not in parts:
+        parts.append(label)
+    return " · ".join(parts)
+
+
+def browser_diagnostics_line(name: str, info: dict) -> str:
+    """单浏览器明细行（tooltip / 对话框用）。"""
+    bridge = "bridge 已注册" if info["bridgeRegistered"] else "bridge 未注册"
+    if info["extensionInstalled"]:
+        plugin = "插件已安装"
+    elif info["extensionInjected"]:
+        plugin = "插件已注入（未安装）"
+    else:
+        plugin = "插件未安装"
+    if info["running"]:
+        if info["extensionLoaded"]:
+            runtime = "运行中·已加载插件"
+        elif info["extensionLoaded"] is False:
+            runtime = "运行中·未加载插件"
+        else:
+            runtime = "运行中·加载状态未知"
+    else:
+        runtime = "未运行"
+    return f"{name}：{bridge} · {plugin} · {runtime}"
+
+
+def channel_diagnostics(
+    build_dir: Path | None = None,
+    extension_dir: Path | None = None,
+    *,
+    static_ttl: float | None = None,
+) -> dict:
+    """通道离线的完整诊断：静态体检（缓存）+ 实时运行态，全部只读。
+
+    返回 ``{"browsers": {name: {...}}, "reason": <稳定标识符>, "summary": <一行中文>}``；
+    ``reason`` 取值见本模块 ``OFFLINE_*`` 常量。
+    """
+    static = channel_static_status(build_dir, extension_dir, ttl=static_ttl)
+    ext_dir = static.get("extensionDir") or None
+    browsers: dict[str, dict] = {}
+    for name, info in static["browsers"].items():
+        running = browser_running(name) if info["binary"] else False
+        if not running:
+            injected = False  # 没实例在跑 = 确定没注入，顺带省一次 pgrep
+        elif info.get("extensionUnpacked"):
+            injected = False  # 开发者模式加载不带命令行参数，无需查进程
+        else:
+            injected = browser_extension_injected(name, ext_dir)
+        browsers[name] = {
+            **info,
+            "running": running,
+            "extensionInjected": injected,
+            "extensionLoaded": _extension_loaded(info, running, injected),
+        }
+    reason = classify_offline_reason(browsers)
+    return {
+        "browsers": browsers,
+        "reason": reason,
+        "summary": describe_offline_reason(reason, browsers),
     }
 
 

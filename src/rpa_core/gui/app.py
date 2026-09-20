@@ -321,6 +321,21 @@ def _apply_filter(tree: QTreeWidget, keyword: str) -> None:
         group.setExpanded(visible > 0)
 
 
+def _ext_badge_tooltip(diag: dict) -> str:
+    """离线诊断的悬浮明细：逐浏览器一行 + 处置建议（模块级纯函数，便于直测）。"""
+    from rpa_core.extension_installer import browser_diagnostics_line, offline_hint
+
+    lines = [
+        browser_diagnostics_line(name, info)
+        for name, info in (diag.get("browsers") or {}).items()
+    ]
+    hint = offline_hint(str(diag.get("reason") or ""))
+    if hint:
+        lines.append("")
+        lines.append(f"建议：{hint}")
+    return "\n".join(lines)
+
+
 class _CaptureBridge(QObject):
     """桌面捕获子进程 → GUI 线程的结果桥（worker 线程 emit，Qt 排队投递）。"""
 
@@ -469,7 +484,7 @@ class MainWindow(QMainWindow):
         self._ext_badge_probe_running = True
 
         def work() -> None:
-            online, hosts = False, []
+            online, hosts, diag = False, [], None
             try:
                 from rpa_core.extension_exec import ExtensionExecClient
 
@@ -478,7 +493,17 @@ class MainWindow(QMainWindow):
                 hosts = status.get("hosts") or []
             except Exception:  # noqa: BLE001 - 探测失败即离线
                 online, hosts = False, []
-            self._ext_badge_result = (online, hosts)  # 纯数据，无 Qt 调用
+            if not online:
+                # 只在离线时做诊断：在线无需解释「为什么离线」。诊断是只读的
+                # （bridge 注册 + 插件安装 + 浏览器运行），静态部分带 TTL 缓存，
+                # 5s 轮询不会反复读 profile。
+                try:
+                    from rpa_core.extension_installer import channel_diagnostics
+
+                    diag = channel_diagnostics()
+                except Exception:  # noqa: BLE001 - 诊断失败不改变「离线」结论
+                    diag = None
+            self._ext_badge_result = (online, hosts, diag)  # 纯数据，无 Qt 调用
 
         threading.Thread(target=work, daemon=True).start()
         if self._ext_badge_result_timer is None:
@@ -506,16 +531,25 @@ class MainWindow(QMainWindow):
             return
         self._on_ext_badge(*result)
 
-    def _on_ext_badge(self, online: bool, hosts: list) -> None:
+    def _on_ext_badge(self, online: bool, hosts: list, diag: object = None) -> None:
         if online:
             joined = ", ".join(sorted({str(h) for h in hosts}))
             self._ext_badge.setText(f"插件通道：在线（{joined}）")
             self._ext_badge.setStyleSheet("color: #1a7f37;")
-        else:
-            self._ext_badge.setText(
-                "插件通道：离线（浏览器指令不可用，详见「插件」）"
-            )
-            self._ext_badge.setStyleSheet("color: #cf222e;")
+            self._ext_badge.setToolTip("")
+            return
+        # 离线时把「缺哪一环」直接写在状态栏上：bridge 注册 / 插件安装 / 浏览器运行
+        # 三态是只读探测出来的，不需要把浏览器开起来（2026-09-20 维护者需求）。
+        summary = ""
+        tooltip = "浏览器指令不可用，详见「插件」"
+        if isinstance(diag, dict):
+            summary = str(diag.get("summary") or "")
+            tooltip = _ext_badge_tooltip(diag) or tooltip
+        text = "插件通道：离线"
+        text += f" · {summary}" if summary else "（浏览器指令不可用，详见「插件」）"
+        self._ext_badge.setText(text)
+        self._ext_badge.setToolTip(tooltip)
+        self._ext_badge.setStyleSheet("color: #cf222e;")
 
     def _prewarm_param_panel(self) -> None:
         """预热参数面板：把「首次复杂表单塞进 QScrollArea」的一次性开销提前消化。
@@ -3011,17 +3045,32 @@ class MainWindow(QMainWindow):
         return "\n".join(lines)
 
     def _ext_hub_text(self) -> str:
-        """bridge 通道当前状态文本（供插件对话框展示）。"""
+        """bridge 通道当前状态文本（供插件对话框展示）。
+
+        离线时给出**具体缺哪一环**（bridge 注册 / 插件安装 / 浏览器运行），而不是
+        一句笼统的「请确认已注册且已加载」。
+        """
         from rpa_core.extension_exec import ExtensionExecClient
 
         status = ExtensionExecClient().status()
         if status.get("online"):
             hosts = ", ".join(sorted({str(h) for h in status.get("hosts") or []}))
             return f"扩展通道：在线（{hosts}）——浏览器指令可用"
-        return (
-            "扩展通道：离线——请确认 bridge 已注册（下方「注册 bridge」按钮）"
-            "且扩展已加载；离线时浏览器指令不可用"
-        )
+        base = "扩展通道：离线——离线时浏览器指令不可用"
+        try:
+            from rpa_core.extension_installer import channel_diagnostics, offline_hint
+
+            diag = channel_diagnostics()
+            summary = str(diag.get("summary") or "")
+            hint = offline_hint(str(diag.get("reason") or ""))
+        except Exception:  # noqa: BLE001 - 诊断失败退回通用文案
+            summary, hint = "", ""
+        if not summary and not hint:
+            return f"{base}；请确认 bridge 已注册（下方「注册 bridge」按钮）且扩展已加载"
+        lines = [f"{base}（{summary}）" if summary else base]
+        if hint:
+            lines.append(f"建议：{hint}")
+        return "\n".join(lines)
 
     def _native_host_status_text(self) -> str:
         """bridge host 注册状态（每浏览器一行，只读探测）。"""

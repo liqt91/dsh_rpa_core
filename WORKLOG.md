@@ -1,5 +1,41 @@
 # 工作日志
 
+## 2026-09-20
+
+- **扩展通道诊断可见性（extension-diagnostics-visibility）**：维护者需求——**不打开浏览器就要能看出 bridge 注册没注册、插件装没装**，而不是只显示一句「离线」。能力层新增只读 `extension_installer.channel_diagnostics()`（bridge 注册 × 插件安装/加载 × 浏览器运行 × 当前实例是否加载）→ 稳定 `reason` + 一行中文摘要 + `offline_hint()` 处置建议；GUI 状态栏徽标、插件对话框共用同一诊断；静态体检（bridge + 读 profile）带 30s TTL，5s 轮询不反复读 Secure Preferences。**全程不启动浏览器**。
+  - **当场修掉一个误报（真机踩到）**：只按进程 argv `--load-extension` 判「当前实例是否加载扩展」，会把**开发者模式加载**（profile `location==4`、argv 无任何参数）误报成「浏览器在跑却没加载插件」——维护者重载扩展后记录恰好由 `location=8` 变 `location=4`，代码随即误报。改为两条腿 `_extension_loaded`（开发者模式记录 OR 命令行注入）；Windows 判不了返回 `None` → 显示「加载状态未知」，不误报。测试 +18 项（`test_extension_installer.py` +12、新增 `test_gui_ext_badge.py` 6）。FULL GATE PASSED。
+- **「插件通道：离线」真因定位（同一晚的上游问题）**：不是 host 坏了，是**当前 Edge 实例压根没加载扩展**——`pgrep -f load-extension` = **0**、`lsof | grep -c dsh_rpa_core/extension` = **0**（对照组 31 证 grep 有效）、65 秒观测 host **零次**出现、端点目录全程为空；profile 记录 `location=8`（命令行注入，从未进 profile）只是历史痕迹。进一步实测：`extension_launch.launch_browser()` **自愈也无效**——浏览器单实例会把新命令行的 `--load-extension` **转交吞掉**（主进程 pid 未变、argv 仍无参数），而 `extension_launch.py` 注释里「自启时不存在既有实例抢参数」的前提在「浏览器在跑但没注入扩展」时**不成立**，属设计缺口。判据与恢复手法已沉淀进 user-level skill `native-messaging-macos`。
+- **M28 元素自愈收官三段（S1/S2/S3）**：**S1** 运行期消费 `selector.candidates`（主选择器失效时按稳定性顺序回退并把归因写进证据）；**S2** 执行前预检 + 错误分类——扩展侧先 `scrollIntoView` 再预检（`isConnected` / `disabled` / `aria-disabled` / `inert` / `checkVisibility` / rect 在视口内 / `elementFromPoint` 遮挡），失败回传结构化 `precheck` 翻成 `ELEMENT_COVERED` / `ELEMENT_DISABLED` / `ELEMENT_NOT_VISIBLE`（details 带 `blockedBy`），并定案交互：**主选择器命中但预检不过时不试候选**（换候选 = 换一个元素去点，比失败更危险），杜绝「报成功但点错地方」；**S3** 修两处「manifest 声明了但扩展通道没实现」的漂移——`keyIntervalMs` 真正逐字间隔、`clipboard` 实装（粘贴注入 + 未被接受时显式失败），补 `clickBeforeInput` / `postDelayMs`。仅剩 S4（扩展通道往返数/耗时基线 + MVP 边界文档）。
+- **宿主形态改两段式 + 工作台（M27，ADR 0017）**：影刀式首页 + 运行历史/流程库分界面。S1 骨架 → S2 运行历史迁入（全局视图 + 按流程筛选 + 双击打开编辑器看时间线）→ S3 流程管理动作（复制/重命名/删除连带/导入导出）→ S4 工作台运行入口与状态联动 + **影刀式交互细节**（点运行后首页收起 + 右下角弹出运行浮窗）。
+- **M24 调试器 + M25 运行历史**：M24 S1 断点契约（`RunControl` 打包「暂停开关 + 断点集合 + 已消费断点 + 单步预算」）、S2–S4 GUI 断点交互（画布编号栏扩出最左断点列，46→58）+ 单步 + 文档；M25 S1 顶层零依赖只读读取器 `run_history.py`、S2+S3 GUI 运行历史 dock（5 列：时间/流程/状态/耗时/错误）+ 文档。
+- **「打开网页」冷启动行为定案 B+（维护者拍板）**：裸拉起浏览器 + 冷启动复用空白启动页，取代前一日 A 案（带 URL 拉起 + 探测绑定）；并**不再关闭空白启动页**——`create+close` 的关页动作是「指令以外的操作」且发生在用户眼前，观感比留个空白页更差。连带修三处：`omnibox` 冷启动后 URL 全选高亮、`launch_blank` 复用导致的「打开网页有时候打开两个」、`_commit_pending_edits` 引起的「切换 browserType 保存不及时、有时要保存两次」。
+- **GUI 一批闪现/卡顿的根因修复**（均为真机报障，靠插桩/A-B/诊断日志定位，非读码猜测）：fx 指令小框闪现（真因 `_wrap_fx_row` 里的 `QToolButton`，重启后仍复现 → 诊断日志实锤）、参数面板旧控件只 `deleteLater()` 未即时隐藏、首次选中复杂表单 `QScrollArea.setWidget` 布局延迟（cProfile 定位）、无法从左侧指令树拖放指令到画布（三处缺陷叠加）、新建流程空画布无法拖放（`indexAt` 命中区域）、「加循环→删除→点其他指令卡死闪退」加固。
+- **指令测试策略定案**（维护者评审）：**定位修正（关键）——按需启用的独立测试，不进默认 harness**（L1 参数矩阵规模会把门禁拖垮）；口径是「测全参数」而非「跑通一次」；用例表 JSON + 覆盖率机器校验；实现顺序刻意 **S2 先行**，让用例表一次纳全新增错误码。
+- **其他**：补「打印日志」指令 + 运行日志显示节点输出值（此前 test 流程不知道最后一个节点抓到的数据对不对）；删除 `frontend/` Vue 迁移中间态（32 个已跟踪文件）+ `.trae` 入 gitignore；状态收口（M22 Linux 真机验证**只记录不测试**、BACKLOG 与任务单同步）。
+
+## 2026-09-19
+
+- **M22 macOS 传输层真机验收（Native Messaging S1–S4 完成）**：M20 三个切片的设计在 macOS 侧全部落地并真机验收通过（Windows 侧此前已验）。沉淀 macOS 路径表（写错会恒报离线）与「别拿 Windows 数据乱比」的口径说明。
+- **M21 GUI 运行控制进阶 done**：跨进程暂停 + 浏览器会话续接 + 恢复人工确认。动工前先核对「计划的地基假设」与 ADR 是否一致；ADR 0013（统一扩展单通道）连带修正 ADR 0004 的半句过时描述；厘清「三方共用的模块不能放 `runtime/`」。
+- **macOS 窗口层级两处平台缺陷**：① 运行时浮窗随主窗口消失——`Qt.Tool` 在 macOS 上 = `NSPanel`，应用失活即被系统隐藏；② 确认框要点 Dock 图标——后台应用的自激活请求被 macOS 忽略。取证手法可复用：零依赖 `ctypes` 调 `objc_msgSend` 向 AppKit 要真相。
+- **捕获格式升级落地 + Mac「红框在但 Ctrl+Click 捕获不到元素」**：升级前先做向后兼容性核查（老数据仍可用）；并厘清「序号 ≠ 可持久化标识」——序号只用于展示，持久化另用稳定 id。
+- **M10 元素候选落地**：候选采集 + 稳定性排序 + 元素资产落盘（为 M28 S1 的自愈消费铺契约）。
+- **调研（未改码）**：`jev-desktop` 不存在（用 GitHub API 逐项核实）；`browser-use/jev-ultrafast` 是真正值得研究的对象；TypeSafe「Jev」对项目的增益评估。
+
+## 2026-09-18
+
+- **macOS「扩展永远离线」根因 + 修复（M22 S4 部分）**：真机首跑暴露——POSIX 端点路径超过 `sun_path` 上限（104 字节），导致 bind 恒失败；同一轮还发现 macOS 上扩展桥契约测试整体是红的（14/16 failed）。修复方案定稿前先补实测（含 socket 上已有 status 握手、哈希后不必再走 sidecar），并明确「生效对象」边界（用户要不要额外操作）。
+- **M23 GUI/UX 对齐（G1 剩余 + G2 + G3 slice A）**：捕获后确认对话框 `ElementDialog`（名称可改、selector 可改）；画布多选 + 批量移动/删除 + 右键菜单 + Ctrl+F 查找；`x-param-groups` 分组折叠。G2 期间连着修五处真机缺陷（拖放后点击不收敛、第二次拖放多选顺序颠倒、多浏览器并存只有一个能框选、PySide6 `QStandardItem` 所有权陷阱等）。
+- **门禁默认不弹窗**：`check_all.py` 的真实桌面 E2E 改为 `RPA_DESKTOP_E2E=1` 显式开启（默认跑会弹窗抢前台）。
+
+## 2026-09-17
+
+- **M20 Native Messaging 全链路 S0–S8 done**：S0 真机硬门槛（Edge 152 + Chrome 152）→ S1 ADR 0015 + 任务单 → S2 host 子进程 `workers/ext_bridge.py`（由浏览器按需拉起，stdio）→ S3 安装器 native host 注册 → S4 扩展改造（manifest 0.2.0 → **0.3.0** + `nativeMessaging`，Edge 152 真机验收通过）→ S5+S6+S7 执行器/捕获/接线三者一并迁移（耦合，拆开会出现不可用中间态）→ S8 文档 `docs/extension-execution-plan.md` 与收口。
+- **产品技术路线定案：GUI 为唯一主力形态（ADR 0016）**：GUI（`rpa-core gui`）新增能力优先且默认落 GUI；Web 编辑器（`devserver`）退为可选形态、`devserver/static/` 冻结演进不删除；GUI 独立运行不需要任何 web 服务器。
+- **GUI/Web 功能对齐九切片 + 运行浮窗**：先出差异矩阵（Web 9 功能域 vs GUI）再切分补齐，含控制流参数编辑；运行时悬浮窗对标影刀（开右下小窗、隐藏主窗、实时显示当前步骤）。
+- **单入口混合捕获 G1（M23，影刀式「一个按钮，指哪捕哪」）**：GUI 元素面板统一入口，捕获桌面元素与网页元素同一按钮；并给 GUI 插件对话框补齐 **bridge host 注册**入口，修掉「引导装完扩展通道仍离线」的缺口。
+- **其他**：pytest 不再抢前台窗口焦点；「编辑未提交就切换」改为自动提交（`test` 流程的 `browserType` 改动不再丢）。
+
 ## 2026-09-16
 
 - **修复 WorkBuddy 连接器「连接失败：Python 3.13.14 does not satisfy runtime requirement 3.12」**——根因是 `workbuddy-connector/cli.json` 把 `runtime.version` 写成了**裸版本号** `"3.12"`。裸版本在 specifier 语义下等价于**精确要求**（`==3.12`，`packaging` 甚至直接判 `InvalidSpecifier`），而宿主托管的 Python 只有一个「当前版本」3.13.x（本机 `binaries/python/versions/current` = 3.13.12，Windows 上 default venv = 3.13.14），于是必然不满足——宿主**不会**为单个连接器另装一个 3.12。

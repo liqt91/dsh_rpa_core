@@ -1103,3 +1103,281 @@ def test_browser_running_win32_keeps_tasklist(monkeypatch):
     monkeypatch.setattr(ext.subprocess, "run", _run)
     assert ext.browser_running("edge") is True
     assert calls[0][:3] == ["tasklist", "/FI", "IMAGENAME eq msedge.exe"]
+
+
+# ---- 通道诊断：把「离线」拆成可区分的原因（状态栏 / CLI / 插件对话框共用）-----------
+#
+# 维护者需求（2026-09-20）：不打开浏览器就要能看出「bridge 有没有注册、插件有没有装」，
+# 而不是只显示一句「离线」。本组用例锁死分类优先级与摘要文案，并确认判定全程只读
+# （唯一的外部调用是进程查询，且没实例时必须短路掉）。
+
+
+@pytest.fixture(autouse=True)
+def _reset_channel_static_cache():
+    """静态体检带进程级 TTL 缓存——用例间必须隔离，否则测的是上一个用例的结果。"""
+    ext._channel_static_cache = None
+    yield
+    ext._channel_static_cache = None
+
+
+def _diag_browser(**overrides):
+    """一个「体检全绿、浏览器没开」的浏览器诊断条目，用例只覆写关心的字段。"""
+    base = {
+        "binary": True,
+        "running": False,
+        "bridgeRegistered": True,
+        "bridgeHostExecutableExists": True,
+        "bridgeExtensionId": "abcdefghijklmnop",
+        "extensionInstalled": True,
+        "extensionEnabled": True,
+        "extensionUnpacked": False,
+        "uninstallBlocked": False,
+        "extensionInjected": False,
+        "extensionLoaded": False,
+    }
+    base.update(overrides)
+    return base
+
+
+def test_extension_loaded_has_two_legs():
+    """「当前实例是否加载了扩展」= 开发者模式记录 OR 命令行注入；都不是才是 False。
+
+    只有一条腿（只看命令行）会把开发者模式加载误判成「没加载」——这是 2026-09-20
+    真机实测踩到的误报（loc=4 加载的扩展 argv 里当然没有 --load-extension）。
+    """
+    assert ext._extension_loaded({"extensionUnpacked": False}, False, False) is False
+    assert ext._extension_loaded({"extensionUnpacked": True}, True, False) is True
+    assert ext._extension_loaded({"extensionUnpacked": False}, True, True) is True
+    assert ext._extension_loaded({"extensionUnpacked": False}, True, False) is False
+    # 命令行判定在该平台不可用 → 未知，不冒充 False
+    assert ext._extension_loaded({"extensionUnpacked": False}, True, None) is None
+
+
+def test_developer_mode_load_is_not_reported_as_missing_plugin():
+    """回归：开发者模式加载（loc=4）且实例在跑、通道却离线 → 应指向 host 侧。
+
+    绝不能报「浏览器未加载插件」——那会把用户引去重装插件，而插件本来就是好的。
+    """
+    info = _diag_browser(
+        running=True,
+        extensionInjected=False,
+        extensionUnpacked=True,
+        extensionLoaded=True,
+    )
+    assert ext.classify_offline_reason({"edge": info}) == ext.OFFLINE_HOST_NOT_REACHABLE
+    assert "host" in ext.offline_hint(ext.OFFLINE_HOST_NOT_REACHABLE)
+    line = ext.browser_diagnostics_line("edge", info)
+    assert "运行中·已加载插件" in line
+
+
+def test_classify_offline_reason_precedence():
+    """分类按可操作性排序：host 侧 > bridge > 插件 > 运行态。"""
+    diag = ext
+    # 没有浏览器 → 最先说清
+    assert diag.classify_offline_reason(
+        {"edge": _diag_browser(binary=False)}
+    ) == diag.OFFLINE_BROWSER_NOT_INSTALLED
+    # 扩展加载着却没端点 → 问题在 host 侧（不再往下判 bridge/插件）
+    assert diag.classify_offline_reason(
+        {"edge": _diag_browser(running=True, extensionInjected=True,
+                               extensionLoaded=True, bridgeRegistered=False,
+                               extensionInstalled=False)}
+    ) == diag.OFFLINE_HOST_NOT_REACHABLE
+    # bridge 未注册优先于插件未安装
+    assert diag.classify_offline_reason(
+        {"edge": _diag_browser(bridgeRegistered=False, extensionInstalled=False)}
+    ) == diag.OFFLINE_BRIDGE_NOT_REGISTERED
+    # 注册了但插件从没装过
+    assert diag.classify_offline_reason(
+        {"edge": _diag_browser(extensionInstalled=False)}
+    ) == diag.OFFLINE_EXTENSION_NOT_INSTALLED
+    # 都装好了、浏览器没开 → 最常见的「打开浏览器即可」
+    assert diag.classify_offline_reason(
+        {"edge": _diag_browser()}
+    ) == diag.OFFLINE_BROWSER_NOT_RUNNING
+
+
+def test_classify_running_without_extension_is_its_own_reason():
+    """本次真因必须可区分：浏览器开着但插件没被注入 ≠ 浏览器没开。"""
+    reason = ext.classify_offline_reason(
+        {"edge": _diag_browser(running=True, extensionInjected=False)}
+    )
+    assert reason == ext.OFFLINE_RUNNING_WITHOUT_EXTENSION
+    summary = ext.describe_offline_reason(reason, {"edge": _diag_browser(
+        running=True, extensionInjected=False)})
+    assert "bridge 已注册" in summary and "插件已安装" in summary
+    assert "浏览器未加载插件" in summary
+    assert "完全退出浏览器" in ext.offline_hint(reason)
+
+
+def test_injected_unknown_never_becomes_false_negative():
+    """loading 状态未知（平台未实现命令行判定）时不得归因成「开着但没加载」。"""
+    assert ext.classify_offline_reason(
+        {"edge": _diag_browser(running=True, extensionInjected=None,
+                               extensionLoaded=None)}
+    ) == ext.OFFLINE_UNKNOWN
+
+
+def test_summary_answers_bridge_and_plugin_before_runtime():
+    """摘要先答维护者的两个问题（bridge 注册? 插件装?），再给运行态。"""
+    reason = ext.OFFLINE_BROWSER_NOT_RUNNING
+    summary = ext.describe_offline_reason(
+        reason, {"edge": _diag_browser(running=False)}
+    )
+    assert summary == "bridge 已注册 · 插件已安装 · 浏览器未运行"
+    # 三态都缺时逐项说缺，不折叠成一句
+    bad = ext.describe_offline_reason(
+        ext.OFFLINE_BRIDGE_NOT_REGISTERED,
+        {"edge": _diag_browser(bridgeRegistered=False, extensionInstalled=False)},
+    )
+    assert "bridge 未注册" in bad and "插件未安装" in bad
+
+
+def test_channel_diagnostics_static_ttl_cache(monkeypatch, tmp_path):
+    """静态体检读 profile 较重：TTL 内复用，ttl=0 强制重算。"""
+    calls = []
+    real_probe = ext._channel_static_probe
+
+    def _probe(build_dir, extension_dir):
+        calls.append(1)
+        return real_probe(build_dir, extension_dir)
+
+    monkeypatch.setattr(ext, "_channel_static_probe", _probe)
+    monkeypatch.setattr(ext, "browser_user_data_dirs", lambda browser: [tmp_path / "none"])
+    monkeypatch.setattr(ext, "_browser_binary_candidates", lambda browser: [tmp_path / "no"])
+    monkeypatch.setattr(ext, "browser_running", lambda name: False)
+
+    ext.channel_static_status(ttl=30)
+    ext.channel_static_status(ttl=30)
+    assert len(calls) == 1
+    ext.channel_static_status(ttl=0)
+    assert len(calls) == 2
+
+
+def test_channel_diagnostics_only_probes_injected_when_running(monkeypatch, tmp_path):
+    """没实例在跑时不得去查命令行（省一次 pgrep，结论也更硬）。"""
+    monkeypatch.setattr(ext, "browser_user_data_dirs", lambda browser: [tmp_path / "none"])
+    injected_calls = []
+
+    def _injected(browser, extension_dir):
+        injected_calls.append(browser)
+        return False
+
+    monkeypatch.setattr(ext, "browser_extension_injected", _injected)
+    # 1) 没装浏览器 → 连 running 都不判，直接不查
+    monkeypatch.setattr(ext, "_browser_binary_candidates", lambda browser: [tmp_path / "no"])
+    monkeypatch.setattr(ext, "browser_running", lambda name: True)
+    ext.channel_diagnostics(static_ttl=0)
+    assert injected_calls == []
+    # 2) 装了但没在跑 → 同样不查
+    monkeypatch.setattr(ext, "_browser_binary_candidates", lambda browser: [ROOT / "README.md"])
+    monkeypatch.setattr(ext, "browser_running", lambda name: False)
+    ext.channel_diagnostics(static_ttl=0)
+    assert injected_calls == []
+    # 3) 只有真在跑的那个浏览器才查
+    monkeypatch.setattr(ext, "browser_running", lambda name: name == "edge")
+    ext.channel_diagnostics(static_ttl=0)
+    assert injected_calls == ["edge"]
+
+
+def _fake_extension_status(*, edge_unpacked=False, binary=True):
+    """最小可用的 extension_status 形状（只喂 channel 诊断关心的字段）。"""
+
+    def _one(unpacked):
+        return {
+            "binary": binary,
+            "registryEntry": None,
+            "profiles": [],
+            "unpackedProfiles": (
+                [{"profile": "Default", "installed": True, "enabled": True,
+                  "location": 4}] if unpacked else []
+            ),
+            "installed": unpacked,
+            "enabled": unpacked,
+            "uninstallBlocked": False,
+        }
+
+    return {"packed": None,
+            "browsers": {"chrome": _one(False), "edge": _one(edge_unpacked)}}
+
+
+def test_channel_diagnostics_skips_process_probe_for_developer_mode_load(monkeypatch):
+    """开发者模式已加载（profile loc=4）就无需再查命令行——顺带证结论已收敛。"""
+    monkeypatch.setattr(ext, "extension_status", lambda *a, **k: _fake_extension_status(
+        edge_unpacked=True
+    ))
+    monkeypatch.setattr(ext, "browser_running", lambda name: name == "edge")
+    monkeypatch.setattr(ext, "_browser_binary_candidates", lambda browser: [ROOT / "README.md"])
+    injected_calls = []
+
+    def _injected(browser, extension_dir):
+        injected_calls.append(browser)
+        return False
+
+    monkeypatch.setattr(ext, "browser_extension_injected", _injected)
+    diag = ext.channel_diagnostics(static_ttl=0)
+    assert injected_calls == []                       # 没白查进程
+    assert diag["browsers"]["edge"]["extensionLoaded"] is True
+    assert diag["reason"] == ext.OFFLINE_HOST_NOT_REACHABLE
+
+
+def test_offline_reason_tables_cover_all_kinds():
+    """新增 reason 常量却忘配文案，会被这条挡住（否则状态栏出现空白）。"""
+    reasons = {
+        value for name, value in vars(ext).items()
+        if name.startswith("OFFLINE_") and isinstance(value, str)
+    }
+    assert reasons  # 常量表本身要存在
+    assert reasons == set(ext._OFFLINE_LABELS)
+    assert reasons == set(ext._OFFLINE_HINTS)
+
+
+def test_browser_extension_injected_matches_real_command_line(monkeypatch, tmp_path):
+    """注入判据 = 进程命令行里的 --load-extension 指向本扩展目录。"""
+    ext_dir = tmp_path / "extension"
+    ext_dir.mkdir()
+    seen = []
+
+    def _run(argv, **_kwargs):
+        seen.append(argv)
+        return SimpleNamespace(returncode=1, stdout="")
+
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr(ext.subprocess, "run", _run)
+    assert ext.browser_extension_injected("edge", ext_dir) is False
+    assert seen[0][0] == "pgrep" and seen[0][1] == "-f"
+    pattern = seen[0][2]
+    real = (
+        "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge "
+        f"--load-extension={ext_dir.resolve()} --new-window about:blank"
+    )
+    assert re.search(pattern, real)
+    # - 不能被转义成 \-（macOS pgrep 走 BSD BRE，\- 行为未定义 → 会查不到）
+    assert r"\-" not in pattern
+    # 指向别的目录的同名参数不得误命中
+    assert not re.search(pattern, "--load-extension=/tmp/other/extension")
+
+
+def test_browser_extension_injected_unknown_on_windows(monkeypatch, tmp_path):
+    """Windows 未实现该判定 → None（宁可不说，也不误报「没注入」）。"""
+    monkeypatch.setattr(sys, "platform", "win32")
+    assert ext.browser_extension_injected("edge", tmp_path) is None
+    assert ext.browser_extension_injected("edge", None) is None
+
+
+def test_browser_diagnostics_line_lists_per_browser_detail():
+    """tooltip 明细：逐浏览器说清三态。"""
+    line = ext.browser_diagnostics_line(
+        "edge", _diag_browser(running=True, extensionInjected=False)
+    )
+    assert line.startswith("edge：")
+    assert "bridge 已注册" in line and "运行中·未加载插件" in line
+    line2 = ext.browser_diagnostics_line(
+        "chrome", _diag_browser(bridgeRegistered=False, extensionInstalled=False)
+    )
+    assert "bridge 未注册" in line2 and "插件未安装" in line2 and "未运行" in line2
+    # 加载状态未知（Windows）时不要把话说过头
+    line3 = ext.browser_diagnostics_line(
+        "edge", _diag_browser(running=True, extensionInjected=None, extensionLoaded=None)
+    )
+    assert "加载状态未知" in line3
