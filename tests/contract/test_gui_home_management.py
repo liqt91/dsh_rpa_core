@@ -261,6 +261,7 @@ class _FakeRunManager:
     def __init__(self, states: list[dict]):
         self._states = list(states)
         self.calls: list[tuple] = []
+        self.cancelled: list[str] = []
         self.closed = False
 
     def start(self, workflow_name, inputs=None, breakpoints=None):
@@ -271,6 +272,13 @@ class _FakeRunManager:
         if len(self._states) > 1:
             return self._states.pop(0)
         return self._states[0]
+
+    def cancel(self, run_id):
+        self.cancelled.append(run_id)
+        return {'runId': run_id}
+
+    def events(self, run_id):
+        return {'events': []}
 
     def close(self):
         self.closed = True
@@ -333,3 +341,95 @@ def test_home_shutdown_releases_run_manager(catalog, tmp_path):
     home._shutdown_run_manager()
     assert fake.closed is True
     assert home._run_manager is None
+
+
+# ---- 影刀式行为：运行收起首页 + 浮窗；打开流程收起首页 + 编辑器最大化 ----------
+
+
+def test_home_run_hides_home_and_shows_float(catalog, tmp_path):
+    """首页运行：收起首页并弹出右下角浮窗；浮窗不提供暂停/继续/单步（控制权在编辑器）。"""
+    store = _store(tmp_path)
+    _write_flow(store, "alpha")
+    from rpa_core.gui.home import HomeWindow
+
+    home = HomeWindow(store, catalog, open_editor=lambda name, run_id=None: None)
+    home.table.setCurrentCell(0, 0)
+    fake = _FakeRunManager([{"running": True, "result": None}])
+    home._run_manager = fake
+
+    home._run_selected()
+    assert home.isVisible() is False            # 首页收起（影刀式）
+    assert home._run_float is not None
+    assert home._run_float.pause_button.isVisible() is False
+    assert home._run_float.continue_button.isVisible() is False
+    assert home._run_float.step_button.isVisible() is False
+    assert "运行中" in home._run_float.title_label.text() or "运行中" in (
+        home._run_float.step_label.text()
+    )
+
+    # 取消：请求取消运行（不直接改状态）
+    home._cancel_run()
+    assert fake.cancelled == ["run-1"]
+
+
+def test_home_restore_brings_back_home_and_closes_float(catalog, tmp_path):
+    """还原：关闭浮窗并重新显示首页。"""
+    store = _store(tmp_path)
+    _write_flow(store, "alpha")
+    from rpa_core.gui.home import HomeWindow
+
+    home = HomeWindow(store, catalog, open_editor=lambda name, run_id=None: None)
+    home.table.setCurrentCell(0, 0)
+    fake = _FakeRunManager([{"running": True, "result": None}])
+    home._run_manager = fake
+    home._run_selected()
+    home._restore_home()
+    assert home._run_float is None
+
+
+def test_home_open_flow_hides_home_and_editor_maximized(catalog, tmp_path, monkeypatch):
+    """打开流程：首页收起；编辑器走 showMaximized（影刀式最大化）。"""
+    store = _store(tmp_path)
+    _write_flow(store, "alpha")
+    from rpa_core.gui import app as app_module
+    from rpa_core.gui.home import HomeWindow
+
+    # 不注入 hook：走真实 app.open_editor_window（其内部用被替换的 _EDITOR_WINDOW）
+    home = HomeWindow(store, catalog)
+    calls: list[str] = []
+
+    class _FakeEditor:
+        def __init__(self):
+            self.flow_path = None
+
+        def showMaximized(self):
+            calls.append("showMaximized")
+
+        def raise_(self):
+            pass
+
+        def _open_named_flow(self, name):
+            calls.append(f"open:{name}")
+
+    fake_editor = _FakeEditor()
+    monkeypatch.setattr(app_module, "_EDITOR_WINDOW", fake_editor, raising=False)
+    home.open_flow("alpha")
+    assert home.isVisible() is False
+    assert calls == ["showMaximized", "open:alpha"]
+
+
+def test_editor_close_returns_to_home(catalog, tmp_path, monkeypatch):
+    """编辑器关闭 → 工作台（首页）重新显示（两段式往返）。"""
+    store = _store(tmp_path)
+    _write_flow(store, "alpha")
+    from rpa_core.gui import app as app_module
+    from rpa_core.gui.home import HomeWindow
+
+    home = HomeWindow(store, catalog, open_editor=lambda name, run_id=None: None)
+    home.hide()
+    monkeypatch.setattr(app_module, "_HOME_WINDOW", home, raising=False)
+
+    editor = app_module.MainWindow(catalog, workflows_root=store.root)
+    editor._dirty = False
+    editor._shutdown_run_manager()  # closeEvent 的收尾路径
+    assert home.isVisible() is True

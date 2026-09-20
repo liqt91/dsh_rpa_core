@@ -73,6 +73,8 @@ class HomeWindow(QMainWindow):
         # 运行入口（M27 S4）：工作台只发起 + 看状态，控制权在编辑器（ADR 0017 决策 3）
         self._run_manager: Any | None = None
         self._run_timer: Any | None = None
+        self._restore_timer: Any | None = None
+        self._run_float: Any | None = None
         self._active_run_id: str | None = None
         self._running_flow: str | None = None
 
@@ -369,11 +371,17 @@ class HomeWindow(QMainWindow):
         self.open_flow(name, run_id=run["runId"])
 
     def open_flow(self, name: str, *, run_id: str | None = None) -> None:
-        """打开编辑器（由注入的 hook 决定实现；缺省走 GUI 的编辑器打开函数）。"""
+        """打开编辑器（影刀式：首页收起，编辑器最大化；编辑器关闭后首页回来）。"""
         if self._open_editor_hook is None:
             from rpa_core.gui.app import open_editor_window
 
-            self._open_editor_hook = open_editor_window
+            # 适配 hook 契约（run_id）与真实签名（history_run_id）
+            self._open_editor_hook = (
+                lambda flow, run_id=None: open_editor_window(
+                    flow, history_run_id=run_id
+                )
+            )
+        self.hide()
         self._open_editor_hook(name, run_id=run_id)
 
     def _create_flow(self) -> None:
@@ -529,7 +537,11 @@ class HomeWindow(QMainWindow):
         return self._run_manager
 
     def _run_selected(self) -> None:
-        """对选中流程发起运行（不提供暂停/继续——控制权在编辑器）。"""
+        """对选中流程发起运行：隐藏首页 + 右下角浮窗显示进度（影刀式）。
+
+        暂停/继续/单步仍只在编辑器（ADR 0017 决策 3）——浮窗上这三个按钮隐藏，
+        只保留「取消」与「还原」。
+        """
         if self._running_flow is not None:
             self.run_status.setText(
                 f"已有运行在进行中（{self._running_flow}）；请在编辑器中控制或等待结束。"
@@ -548,7 +560,67 @@ class HomeWindow(QMainWindow):
         self._running_flow = flow["name"]
         self.run_button.setEnabled(False)
         self.run_status.setText(f"运行中：{flow['name']}…（在编辑器中可暂停/单步）")
+        self._show_run_float()
+        self.hide()  # 影刀式：运行期间收起首页，进度看右下浮窗
         self._start_run_polling()
+
+    # ---- 运行浮窗（影刀式：首页收起，进度看右下角） -------------------------
+    def _show_run_float(self) -> None:
+        from rpa_core.gui.run_float import RunFloatWindow
+
+        if self._run_float is None:
+            self._run_float = RunFloatWindow()
+            self._run_float.cancel_button.clicked.connect(self._cancel_run)
+            self._run_float.restore_button.clicked.connect(self._restore_home)
+            # 控制权在编辑器（ADR 0017 决策 3）：首页浮窗不提供暂停/继续/单步
+            for button in (
+                self._run_float.pause_button,
+                self._run_float.continue_button,
+                self._run_float.step_button,
+            ):
+                button.hide()
+        self._run_float.clear_pause_pending()
+        self._run_float.show_running(
+            f"运行中：{self._running_flow}（暂停/单步请在编辑器中操作）", 0
+        )
+        self._run_float.place_bottom_right()
+        self._run_float.show()
+        self._run_float.raise_()
+
+    def _cancel_run(self) -> None:
+        """取消运行：请求取消后仍等 run 收口（与编辑器同一语义）。"""
+        if self._active_run_id is None or self._run_manager is None:
+            return
+        try:
+            self._run_manager.cancel(self._active_run_id)
+        except Exception as exc:  # noqa: BLE001
+            self.run_status.setText(f"取消失败：{exc}")
+            return
+        if self._run_float is not None:
+            self._run_float.title_label.setText("已请求取消…")
+
+    def _restore_home(self) -> None:
+        """还原首页：关掉浮窗、重新显示并刷新列表。"""
+        if self._run_float is not None:
+            self._run_float.close()
+            self._run_float = None
+        if self._restore_timer is not None:
+            self._restore_timer.stop()
+        self.show()
+        self.raise_()
+        self.activateWindow()
+        self.refresh_flows()
+
+    def _schedule_home_restore(self) -> None:
+        """成功后 2 秒自动还原首页（与编辑器的成功自动还原一致）。"""
+        from PySide6.QtCore import QTimer
+
+        if self._restore_timer is None:
+            self._restore_timer = QTimer(self)
+            self._restore_timer.setSingleShot(True)
+            self._restore_timer.setInterval(2000)
+            self._restore_timer.timeout.connect(self._restore_home)
+        self._restore_timer.start()
 
     def _start_run_polling(self) -> None:
         from PySide6.QtCore import QTimer
@@ -560,7 +632,7 @@ class HomeWindow(QMainWindow):
         self._run_timer.start()
 
     def _poll_run(self) -> None:
-        """轮询运行状态：终态后收尾（刷新列表状态列 + 恢复按钮）。"""
+        """轮询运行状态：运行中刷新浮窗进度，终态后收尾并（成功时）还原首页。"""
         if self._active_run_id is None or self._run_manager is None:
             return
         try:
@@ -568,6 +640,14 @@ class HomeWindow(QMainWindow):
         except Exception:  # noqa: BLE001 - 句柄丢失按结束处理
             status = {"running": False, "result": None}
         if status.get("running"):
+            if self._run_float is not None:
+                done, current = self._progress_from_events(self._active_run_id)
+                self._run_float.show_running(
+                    f"运行中：{self._running_flow}"
+                    + (f" — {current}" if current else "")
+                    + "（暂停/单步请在编辑器中操作）",
+                    done,
+                )
             return
         result = status.get("result") or {}
         state = result.get("status") or "unknown"
@@ -581,12 +661,39 @@ class HomeWindow(QMainWindow):
             f"{flow_name} 运行结束：{_STATUS_LABELS.get(state, state)}"
             + ("（可在编辑器继续/单步）" if state == "paused" else "")
         )
-        self.refresh_flows()
+        if self._run_float is not None:
+            detail = f"{flow_name}：{_STATUS_LABELS.get(state, state)}"
+            if state == "paused":
+                detail += "（在编辑器中可继续/单步）"
+            self._run_float.show_result(state, detail)
+        if state == "succeeded":
+            self._schedule_home_restore()
+        else:
+            self.refresh_flows()
+
+    def _progress_from_events(self, run_id: str) -> tuple[int, str | None]:
+        """从事件流取「已完成步数 + 当前步骤节点」（浮窗进度行用）。"""
+        try:
+            events = self._run_manager.events(run_id)["events"]
+        except Exception:  # noqa: BLE001
+            return 0, None
+        done = sum(1 for event in events if event.get("type") == "stepCompleted")
+        current = None
+        for event in reversed(events):
+            if event.get("type") == "stepStarted":
+                current = event.get("node_id")
+                break
+        return done, current
 
     def _shutdown_run_manager(self) -> None:
-        """关闭窗口时停轮询并释放子进程句柄。"""
+        """关闭窗口时停轮询并释放子进程句柄（浮窗一并收起）。"""
         if self._run_timer is not None:
             self._run_timer.stop()
+        if self._restore_timer is not None:
+            self._restore_timer.stop()
+        if self._run_float is not None:
+            self._run_float.close()
+            self._run_float = None
         if self._run_manager is not None:
             try:
                 self._run_manager.close()

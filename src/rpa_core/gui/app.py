@@ -3219,6 +3219,14 @@ class MainWindow(QMainWindow):
 
     def _shutdown_run_manager(self) -> None:
         """窗口关闭时终止仍在运行的子进程（规则 11）。"""
+        # 编辑器关闭 → 工作台（首页）回来（ADR 0017 影刀式两段式：首页只是收起）
+        home = _HOME_WINDOW
+        if home is not None:
+            try:
+                home.show()
+                home.raise_()
+            except RuntimeError:
+                pass  # 工作台已被销毁：忽略
         if self._run_timer is not None:
             self._run_timer.stop()
         if self._ext_badge_timer is not None:
@@ -3753,6 +3761,8 @@ def _install_crash_diagnostics() -> str:
 
 # 编辑器窗口单例（ADR 0017 决策 2：编辑器是单窗口；工作台反复打开不叠窗）
 _EDITOR_WINDOW: MainWindow | None = None
+# 工作台窗口（ADR 0017）：编辑器关闭后回来，故需持有引用
+_HOME_WINDOW: QWidget | None = None
 
 
 def open_editor_window(
@@ -3765,6 +3775,7 @@ def open_editor_window(
     """打开一个流程的编辑器窗口（工作台双击/「打开」的落地实现，ADR 0017）。
 
     编辑窗口是**单窗口**（ADR 0017 决策 2）：已存在则复用并切换流程，不叠开新窗口。
+    影刀式观感：编辑器**最大化**显示（工作台已由调用方收起）。
     `history_run_id` 非空时（工作台双击一条历史运行）在打开后载入该次运行的时间线。
     返回值供测试断言；无 catalog（未初始化）时返回 None。
     """
@@ -3777,7 +3788,7 @@ def open_editor_window(
         workflows_root = Path("workflows")
     if _EDITOR_WINDOW is None:
         _EDITOR_WINDOW = MainWindow(catalog, workflows_root=workflows_root)
-    _EDITOR_WINDOW.show()
+    _EDITOR_WINDOW.showMaximized()
     _EDITOR_WINDOW.raise_()
     _EDITOR_WINDOW._open_named_flow(flow_name)
     if history_run_id:
@@ -3830,6 +3841,7 @@ def run_gui(
         from rpa_core.gui.home import HomeWindow
 
         window = HomeWindow(WorkflowDirStore(root), catalog, open_editor=open_editor)
+        globals()["_HOME_WINDOW"] = window  # 编辑器关闭后回来（ADR 0017）
     window.show()
     if isinstance(window, MainWindow):
         # 窗口显示后在空闲时机预热参数面板（详见 _prewarm_param_panel 注释）：
