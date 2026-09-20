@@ -683,3 +683,69 @@ def test_command_drag_over_container_keeps_on_mode(window):
         view._drag_target = None
         window._dirty = False
         window.hide()
+
+
+def test_command_drag_into_empty_flow_appends_first_node():
+    """回归（维护者报障「新建流程无法拖放指令到画布」）：空流程一行都没有，
+    indexAt 必然无效——空白区必须接受拖放并追加到根末尾，否则第一条指令永远拖不进去。"""
+    from PySide6.QtCore import QPointF
+
+    empty = {
+        "schema_version": "1.0",
+        "id": "empty",
+        "name": "empty",
+        "root": {"type": "sequence", "id": "root", "children": []},
+    }
+    model = build_model_from_workflow(empty)
+    assert model.invisibleRootItem().rowCount() == 0
+
+    from rpa_core.gui.canvas import FlowTreeView
+
+    view = FlowTreeView()
+    view.setModel(model)
+    view.resize(600, 400)
+    view.show()
+    try:
+        event = _MockDragMove(_command_mime("workflow.sleep"), QPointF(120, 120))
+        view.dragMoveEvent(event)
+        assert event.isAccepted() is True
+        assert view._drag_target is not None
+        assert view._drag_target["mode"] == "root_end"
+        assert view._drag_target["row"] == -1
+
+        drop = _MockDrop(_command_mime("workflow.sleep"))
+        view.dropEvent(drop)
+        assert drop.isAccepted() is True
+        root = model.invisibleRootItem()
+        assert root.rowCount() == 1
+        assert root.child(0) is not None
+    finally:
+        view._drag_target = None
+        view.hide()
+
+
+def test_internal_move_to_blank_area_appends_at_root_end(window):
+    """拖到画布空白区（行下方）：节点移动到根末尾（不再是「拖了没反应」）。"""
+    from PySide6.QtCore import QPointF
+
+    window.show()
+    try:
+        model = window.flow_model
+        view = window.canvas_view
+        _select(window, ["open"])
+        # 空白区 = 最后一行下方
+        last = model.invisibleRootItem().child(model.invisibleRootItem().rowCount() - 1)
+        bottom = view.visualRect(last.index()).bottom()
+        event = _MockDragMove(_mime(["open"]), QPointF(120, bottom + 20))
+        view.dragMoveEvent(event)
+        assert event.isAccepted() is True
+        assert view._drag_target["mode"] == "root_end"
+
+        drop = _MockDrop(_mime(["open"]))
+        view.dropEvent(drop)
+        assert drop.isAccepted() is True
+        ids = _top_ids(model)
+        assert ids[-1] == "open"  # 追加到根末尾
+    finally:
+        window._dirty = False
+        window.hide()

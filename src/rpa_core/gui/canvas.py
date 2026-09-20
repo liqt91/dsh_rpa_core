@@ -229,9 +229,24 @@ class FlowTreeView(QTreeView):
         pos = event.position().toPoint() if hasattr(event, "position") else event.pos()
         index = self.indexAt(pos)
         if not index.isValid():
+            # 空白区（**含空流程**）：落点 = 追加到根末尾（对齐 Web 的 rootEndDrop）。
+            # 空流程一行都没有，indexAt 必然无效——若不在这里接受，新建的流程就永远
+            # 拖不进第一条指令（维护者报障「新建流程无法拖放指令到画布」）。
             self._drag_target = None
+            if not self.model().canDropMimeData(
+                mime, Qt.DropAction.MoveAction, -1, 0, QModelIndex()
+            ):
+                self.viewport().update()
+                event.ignore()
+                return
+            self._drag_target = {
+                "mode": "root_end",
+                "row": -1,
+                "parent": QModelIndex(),
+                "indicator_y": pos.y(),
+            }
+            event.acceptProposedAction()
             self.viewport().update()
-            event.ignore()
             return
 
         rect = self.visualRect(index)
