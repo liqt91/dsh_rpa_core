@@ -4,28 +4,14 @@
 
 ## 当前任务
 
-- [ ] **M23 GUI 体验对齐（用户体验 × 对标影刀）**（`active`）
-  - 计划：`M23-gui-ux-parity.md`；分析依据：2026-09-17 GUI 代码审计（`src/rpa_core/gui/`）+
-    `docs/yingdao-web-cmds-benchmark.md` + `.harness/yingdao-gap-matrix.md`
-  - 切 G1 捕获链路（`done` 主体，2026-09-17）：**单入口混合捕获**已落地——唯一「捕获元素」
-    按钮接 `HybridCaptureSession`（扩展腿网页/桌面 hover 腿先回传者胜）；捕获时主窗最小化/还原；
-    插件离线显式提示；连带修复让位标志断链、离线扩展腿误杀桌面腿、CLI 未 arm 三处存量缺陷。
-    **剩余**：捕获后确认对话框对齐 Web（改名/selector 编辑/命中数/同名覆盖保护，当前仅
-    QInputDialog 命名）
-  - 关联已交付（2026-09-17）：GUI 插件对话框 bridge host 注册入口（`gui-extension-dialog-bridge`）
-  - 切 G2 画布交互（`done`，2026-09-18）：多选（ExtendedSelection）+ 批量移动（多 id 拖放，过滤
-    被拖祖先的后代、成环守卫、保持相对顺序）+ 批量删除（跳过已选中祖先的后代，状态栏报数量）+
-    右键菜单（复制/粘贴/删除/添加否则，可用性 `_canvas_menu_state`）+ Ctrl+F 画布内查找
-    （标题/节点 id/命令 id/参数摘要，Enter 循环定位）；新增 `test_gui_canvas_batch` 14 例；FULL GATE PASSED
-  - 切 G3 属性面板追平 Web：消费 `x-param-groups` 分组折叠（GUI param_form 仍平铺）+
-    输出别名（`output_aliases`/`x-outputs`）编辑 UI + 重试/超时字段（含 unsafe 禁用防呆，
-    对齐 Web `retryCountField`）
-  - 切 G4 失败定位闭环：运行失败点击错误 → 跳转失败节点 + 结构化错误详情
-    （借鉴 Web `startupError` 透出经验）；运行日志加耗时/输出值预览
-  - 切片内次级项：变量面板（设计期静态收集 output_aliases/inputs 列表）、菜单栏
-    （QMenuBar + 快捷键一览）、卡片摘要按关键字段（url/selector/text）优化
-  - 证据：G1 `test_gui_capture` 4 例 + `test_capture_hybrid` +2（full gate 516 passed）；
-    插件对话框 `test_gui_panels` +3（full gate 521 passed）；3 个失败均为已知桌面 E2E 焦点抖动
+- [ ] **M24 断点与单步调试（Debugger）**（`active`）
+  - 计划：`M24-debugger.md`；关联 ADR 0005（暂停/继续，M21 增补）、ADR 0004（检查点）、ADR 0011（子进程 run host）
+  - 目标：在 M21 跨进程暂停通道上做**最小扩展**——节点断点（执行前停下）+ 单步（执行一个节点再停），
+    保持「暂停即收口 + 从检查点续跑」契约不变；`pauseReason`（user/breakpoint/step）供 UI 区分；
+    `consumedBreakpoints` 防「resume 后同断点反复命中」死循环
+  - 切片：S1 断点契约（control_channel/orchestrator/checkpoint/CLI）→ S2 GUI 断点交互（编号栏红点 +
+    右键切换 + 运行透传 + 命中定位）→ S3 单步与暂停原因展示 → S4 测试/文档/ADR
+  - 范围外：条件断点、日志断点、变量监视、调用栈、运行中断点热更新
 
 ## 后续任务
 
@@ -37,8 +23,6 @@
 
 - [ ] 画布缩放 / 缩略导航（`planned`——树形画布长流程纵深远超影刀自由画布；M23 切片外）
 - [ ] 节点禁用/启用（`blocked`——需 AST 增加 `disabled` 字段，属后端契约扩展，不单是 GUI）
-- [ ] 断点 / 单步调试（`planned`——影刀核心调试能力；M21 已铺好跨进程暂停通道与
-  「暂停即收口 + 从检查点续跑」语义，继续往细粒度走需要运行协议按节点粒度下发暂停）
 - [ ] Web 编辑器前端化暂停/继续（`planned`——M21 只做了 PySide6 GUI；ADR 0006 §6 的
   通道对齐要求未落到 devserver HTTP 端点与 `static/app.js`）
 - [ ] 运行历史浏览 / 回放（`planned`——run_artifacts 列表入口；影刀有运行记录）
@@ -55,6 +39,20 @@
 > 主力形态，该条目（「确认非开发者用户为主力后再立项薄壳」）不再适用。
 
 ## 已完成
+
+- [x] M23 GUI 体验对齐（`done`，2026-09-20）——G1–G5 全部完成
+  - 计划：`M23-gui-ux-parity.md`；分析依据：2026-09-17 GUI 代码审计 + `docs/yingdao-web-commands-benchmark.md`
+    + `.harness/yingdao-gap-matrix.md`
+  - 交付：G1 单入口混合捕获（+ 平台退化修正 / macOS 手势与窗口层级）；G2 画布交互（多选/批量移动删除/
+    右键菜单/Ctrl+F）；G3 属性面板追平 Web（分组折叠/输出别名/重试超时防呆）；G4 失败定位闭环
+    （跳转失败节点/结构化错误/日志耗时与输出值）；次级项（变量面板/菜单栏/卡片摘要）
+  - G5 维护者实测反馈批次（9 项，2026-09-20）：打开网页重复标签页、地址栏全选高亮、切换浏览器类型
+    保存两次才生效、指令树拖不进画布、删除后点其他指令崩溃隐患、参数面板残影、fx 指令小框闪现
+    （真因：无父级 QToolButton 被 setVisible 当顶层窗口）、首次点复杂指令卡顿、新增「打印日志」
+    `data.log` + 运行日志显示输出值
+  - 诊断沉淀：`RPA_GUI_DEBUG=1` 窗口 Show 监听（`debug_log.install_window_show_watch`）+
+    `.harness/demo/` 可复用 GUI 交互/拖拽诊断脚本
+  - 验收：维护者确认真实平台观感与交互 ok；`gui-ux-parity` 通过；FULL GATE PASSED
 
 - [x] M21 GUI 运行控制进阶：暂停/继续 + 恢复人工确认（`done`，2026-09-19）
   - 计划：`M21-run-control-advanced.md`（含「实施结果」与计划修正说明）
@@ -78,7 +76,9 @@
     扩展 ID「发现=推导=manifest 放行」三者一致；S4 文档口径更正（§1.2 加平台验证状态表并显式
     标注 bsk 时代旧句失效、ADR 0015 加 §7、README 补 macOS manifest 路径与 host 生命周期语义、
     修「`browser.navigate` 不再暴露」歧义）+ launcher/`pgrep` 路径表核对（16 个 Helper 零误判）
-  - 未完成：Linux 全线未真机（`$XDG_RUNTIME_DIR` 回退、`pgrep` 命中待验）
+  - 未完成：Linux 全线未真机（`$XDG_RUNTIME_DIR` 回退、`pgrep` 命中待验）——
+    **维护者定案（2026-09-20）：只记录不测试**（无 Linux 环境）；待有 Linux 真机时按
+    任务单「未完成」清单复验
 
 - [x] M20 扩展通道迁移 Native Messaging（`done`）
   - 计划：`M20-native-messaging.md`；决策：ADR 0015

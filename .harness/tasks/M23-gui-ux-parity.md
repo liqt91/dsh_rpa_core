@@ -1,6 +1,6 @@
 # M23 GUI 体验对齐（用户体验 × 对标影刀）
 
-状态：`active`
+状态：`done`
 关联：ADR 0016（GUI 为唯一主力形态）、ADR 0014（GUI 宿主形态）、M19（Web 编辑器交互，作为对齐基准）、`docs/yingdao-web-cmds-benchmark.md`、`.harness/yingdao-gap-matrix.md`
 分析依据：2026-09-17 GUI 代码审计（`src/rpa_core/gui/`）+ 影刀对标文档
 
@@ -207,3 +207,27 @@ M19 交互补强）与影刀基准。本任务按「用户体验 × 对标影刀
   捕获结束还原、运行结束还原；`test_gui_run` +1、`test_gui_capture` +1 并把 `FakeDialog` 升级为
   真 `QDialog` 子类；FULL GATE PASSED。取证：真实 cocoa 平台向 AppKit 查询 `hidesOnDeactivate`
   （浮窗 `False` / 对照普通 Tool 窗口 `True`）
+- **G5 维护者实测反馈批次（2026-09-20，全部 done + FULL GATE PASSED）**：本轮由维护者逐条实测驱动，
+  覆盖「指令面 / 编辑器健壮性 / 观感」三类共 9 项（详见 PROGRESS 同日各条）：
+  1. `navigate-launch-double-open`——打开网页在自动拉起路径重复开标签页（`launch_browser` 带 URL
+     拉起 + 随后 `tabs_create` 双开）；改「裸拉起 + `tabs.create`」，冷启动启动页原样保留
+  2. `navigate-omnibox-focus-fix` / `navigate-leave-startup-tab`——不原地导航 NTP（避免地址栏
+     继承焦点呈全选高亮）；最终定案不碰启动页（对照影刀行为）
+  3. `gui-pending-apply-consumed`——「切换浏览器类型后保存两次才生效」：待提交登记被一次性消费
+  4. `gui-palette-drag-in`——指令树拖不进画布（`mimeTypes` 未注册 command MIME + `dragMoveEvent`
+     只认 node MIME + `_insert_item_at_drop` 裸 `insertRow` 所有权丢失三处叠加）
+  5. `gui-stale-pending-crash-hardening`——删除节点后点其他指令的崩溃隐患（陈旧登记按节点 id 校验 +
+     apply 闭包自校验 + 结构变更即清陈旧面板）
+  6. `gui-param-panel-ghost-fix`——切换指令右栏残影（清面板须 hide + setParent(None)，不能只 deleteLater）
+  7. `gui-fx-toolbutton-window-flash`——**fx 指令「小框闪现」真因**：无父级 `QToolButton` 被
+     `setVisible(True)` 时被 Qt 当顶层窗口显示；新增 `RPA_GUI_DEBUG` 窗口 Show 诊断定位
+  8. `gui-first-form-layout-lag`——首次点复杂指令卡顿（Qt 首次复杂表单布局 ~300ms；窗口显示后
+     空闲预热消化）
+  9. `data-log-and-output-preview`——新增「打印日志」`data.log`（catalog 83→84）+ 运行日志显示
+     输出**值**（此前只显示字段名，无法核对抓到的数据）
+- **验收（2026-09-20 维护者确认）**：GUI 观感与交互「ok」（含画布多选/右键/Ctrl+F、参数面板分组、
+  失败定位、暂停继续、拖入指令、fx 指令切换、首次点击流畅度）；`gui-ux-parity` 通过。
+- 诊断资产沉淀：`RPA_GUI_DEBUG=1` 时 `debug_log.install_window_show_watch` 记录任何窗口级控件
+  的 Show 事件（类名/尺寸/位置/调用栈）——本轮 fx 闪现即靠它一击定位；`.harness/demo/` 保留
+  可复用的 GUI 交互/拖拽诊断脚本（`diag_gui_interaction` / `diag_drag_real` / `diag_drag_ab` /
+  `diag_register` / `native_drag_probe`）。

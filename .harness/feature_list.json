@@ -235,16 +235,21 @@
     {
       "id": "run-control-advanced",
       "title": "GUI run control advanced: cross-process pause/continue control channel and human-confirmed recovery for indeterminate/recovery_required runs",
-      "passes": false
+      "passes": true
     },
     {
       "id": "gui-ux-parity",
       "title": "GUI UX parity with Yingdao/Web editor: single-entry hybrid capture (done), canvas multi-select/context-menu/search, param-group + output-alias forms, failure-location loop",
-      "passes": false
+      "passes": true
     },
     {
       "id": "crossplatform-transport-verify",
-      "title": "macOS/Linux native messaging transport verified on real machines (unix socket endpoint + host manifest registration + end-to-end)",
+      "title": "Native messaging transport verified on macOS real machine (unix socket endpoint + host manifest registration + end-to-end); Linux recorded-only per maintainer decision 2026-09-20 (no Linux environment, design/unit-test coverage stands)",
+      "passes": true
+    },
+    {
+      "id": "debugger-breakpoints",
+      "title": "Debugger: node breakpoints (stop before a node, consumed-on-resume) and single-step resume over the M21 cross-process pause channel",
       "passes": false
     }
   ]
