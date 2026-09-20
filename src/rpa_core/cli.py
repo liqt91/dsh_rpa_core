@@ -797,7 +797,8 @@ def main() -> int:
             PlaywrightExecutor,
             PythonWorkerExecutor,
         )
-        browser = PlaywrightExecutor()
+        # 元素自愈（M28 S1）：执行器需要流程目录来反查 <flowDir>/elements/*.json 的候选
+        browser = PlaywrightExecutor(flow_dir=flow_dir)
         executors = {
             "browser.playwright": browser,
             "desktop.uia": DesktopExecutor(),

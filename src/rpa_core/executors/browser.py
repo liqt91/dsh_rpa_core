@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import json
 import re
 import time
 import uuid
@@ -133,8 +134,13 @@ def _ensure_scheme(url: str) -> str:
     return f"https://{stripped}"
 
 
+def _fallback_details(fallback: dict[str, Any] | None) -> dict[str, Any]:
+    """元素自愈命中时，把「哪条候选救回来的」并进执行证据（便于事后归因）。"""
+    return {"fallback": fallback} if fallback else {}
+
+
 class PlaywrightExecutor(CommandExecutor):
-    def __init__(self, ext_session=None):
+    def __init__(self, ext_session=None, flow_dir: Path | None = None):
         # 自研扩展单通道：会话 = 用户真实浏览器里的一个标签页句柄
         self._ext = ext_session or ExtensionExecSession()
         self._ext_sessions: dict[str, str] = {}  # sessionId -> tabId
@@ -142,6 +148,105 @@ class PlaywrightExecutor(CommandExecutor):
         self._ext_session_hosts: dict[str, str] = {}
         # 最近激活的会话：sessionId 可省略时按「最近激活 > 唯一会话」回退（同 desktop）
         self._last_session_id: str | None = None
+        # 流程目录：元素自愈（M28 S1）据此反查本流程的元素资产（<flowDir>/elements/*.json）
+        self._flow_dir = Path(flow_dir) if flow_dir else None
+        self._element_assets_cache: tuple[float, dict[str, list[dict[str, Any]]]] | None = None
+
+    # ---- 元素自愈：运行期按失败的 selector 反查元素资产候选（M28 S1） ----------
+    @staticmethod
+    def _normalize_selector(selector: str) -> str:
+        """比较用归一化：折叠空白（资产里的 selector 与节点参数可能只差空格）。"""
+        return " ".join(str(selector or "").split())
+
+    def _element_candidates(self, selector: str) -> list[dict[str, Any]]:
+        """按 selector 反查元素资产的备选候选（稳定性顺序）。
+
+        契约（M28 S1 定案）：**不改命令参数、不写工作流文件**——候选仍以元素资产
+        （`<flowDir>/elements/*.json`，M10 捕获时落盘）为单一事实来源，运行期用失败的
+        selector 去反查取用；资产缺失/不匹配时行为与今天完全一致（不做任何猜测）。
+        """
+        if self._flow_dir is None:
+            return []
+        elements_dir = self._flow_dir / "elements"
+        try:
+            files = sorted(elements_dir.glob("*.json"))
+        except OSError:
+            return []
+        if not files:
+            return []
+        try:
+            stamp = max(path.stat().st_mtime for path in files)
+        except OSError:
+            return []
+        cached = self._element_assets_cache
+        if cached is None or cached[0] != stamp:
+            index: dict[str, list[dict[str, Any]]] = {}
+            for path in files:
+                try:
+                    document = json.loads(path.read_text(encoding="utf-8"))
+                except (OSError, ValueError):
+                    continue
+                if not isinstance(document, dict):
+                    continue
+                raw_selector = document.get("selector")
+                if not isinstance(raw_selector, dict):
+                    continue
+                css = raw_selector.get("css")
+                candidates = raw_selector.get("candidates")
+                if not isinstance(css, str) or not css:
+                    continue
+                if not isinstance(candidates, list):
+                    continue
+                usable = [
+                    candidate
+                    for candidate in candidates
+                    if isinstance(candidate, dict)
+                    and isinstance(candidate.get("selector"), str)
+                    and candidate.get("selector")
+                ]
+                if usable:
+                    index[self._normalize_selector(css)] = usable
+            self._element_assets_cache = (stamp, index)
+        return self._element_assets_cache[1].get(self._normalize_selector(selector), [])
+
+    async def _page_call_with_fallback(
+        self,
+        tab_id: str,
+        selector: str,
+        method: str,
+        *,
+        args: dict[str, Any],
+        timeout_s: float,
+        target_host: str,
+    ) -> tuple[dict[str, Any], dict[str, Any] | None]:
+        """先按 selector 定位；未命中时按元素资产候选依次重试（元素自愈）。
+
+        返回 `(payload, fallback)`；`fallback` 非空表示靠候选救回，含所用候选与顺位
+        （写进执行证据，便于事后判断「这次是哪条候选生效」）。候选全部未命中时返回
+        最后一次 payload（调用方照旧报 ELEMENT_NOT_FOUND，并带上尝试过的候选数）。
+        """
+        payload = await asyncio.to_thread(
+            self._ext.page_call, tab_id, selector, method,
+            args=args, timeout_seconds=timeout_s, target_host=target_host,
+        )
+        if int(payload.get("matchedCount") or 0) > 0:
+            return payload, None
+        candidates = self._element_candidates(selector)
+        for index, candidate in enumerate(candidates, start=1):
+            candidate_selector = str(candidate["selector"])
+            retry = await asyncio.to_thread(
+                self._ext.page_call, tab_id, candidate_selector, method,
+                args=args, timeout_seconds=timeout_s, target_host=target_host,
+            )
+            if int(retry.get("matchedCount") or 0) > 0:
+                return retry, {
+                    "mainSelector": selector,
+                    "usedSelector": candidate_selector,
+                    "kind": candidate.get("kind"),
+                    "index": index,
+                    "candidateCount": len(candidates),
+                }
+        return payload, None
 
     async def execute(
         self, invocation: CommandInvocation, cancellation: asyncio.Event
@@ -530,18 +635,26 @@ class PlaywrightExecutor(CommandExecutor):
                 )
             if command == "browser.getText":
                 info_type = str(inputs.get("infoType") or "text")
-                payload = await asyncio.to_thread(
-                    self._ext.page_call, tab_id, selector, "getText",
+                payload, fallback = await self._page_call_with_fallback(
+                    tab_id, selector, "getText",
                     args={"infoType": info_type},
-                    timeout_seconds=timeout_s, target_host=host,
+                    timeout_s=timeout_s, target_host=host,
                 )
                 count = int(payload.get("matchedCount") or 0)
                 if count == 0:
-                    return self._ext_not_found(inputs)
+                    return self._ext_not_found(
+                        inputs,
+                        candidates_tried=len(self._element_candidates(selector)),
+                    )
                 value = payload.get("result")
                 return self._ext_success(
                     invocation, EffectKind.READ, resource + f":selector:{selector}",
-                    {"operation": "getText", "infoType": info_type, "matchedCount": count},
+                    {
+                        "operation": "getText",
+                        "infoType": info_type,
+                        "matchedCount": count,
+                        **_fallback_details(fallback),
+                    },
                     outputs={"value": "" if value is None else str(value)},
                     value=value,
                 )
@@ -569,14 +682,17 @@ class PlaywrightExecutor(CommandExecutor):
     ) -> CommandResult:
         method = _EXT_PAGE_METHODS[command]
         resource = f"browser.session:{session_id}:selector:{selector}"
-        payload = await asyncio.to_thread(
-            self._ext.page_call, tab_id, selector, method,
+        payload, fallback = await self._page_call_with_fallback(
+            tab_id, selector, method,
             args=self._ext_method_args(command, inputs),
-            timeout_seconds=timeout_s, target_host=target_host,
+            timeout_s=timeout_s, target_host=target_host,
         )
         count = int(payload.get("matchedCount") or 0)
         if command != "browser.scroll" and count == 0:
-            return self._ext_not_found(inputs)
+            return self._ext_not_found(
+                inputs,
+                candidates_tried=len(self._element_candidates(selector)),
+            )
         # 扩展显式拒绝（如 clipboard 粘贴注入未被接受）：如实失败，不退化成别的模式
         if payload.get("inputRejected"):
             return CommandResult.failure(
@@ -595,14 +711,18 @@ class PlaywrightExecutor(CommandExecutor):
         if command == "browser.check":
             return self._ext_success(
                 invocation, EffectKind.UNSAFE_WRITE, resource,
-                {"operation": "check", "matchedCount": count},
+                {"operation": "check", "matchedCount": count, **_fallback_details(fallback)},
                 outputs={"checked": bool(payload.get("result")), "matchedCount": count},
             )
         # 指针/键盘类原语（click/input/select/hover）统一 unsafe-write：hover 会触发页面
         # mouseover 处理器，同样不可安全重放——必须与各自 manifest 的 effect.kind 严格一致
         return self._ext_success(
             invocation, EffectKind.UNSAFE_WRITE, resource,
-            {"operation": command.rsplit(".", 1)[-1], "matchedCount": count},
+            {
+                "operation": command.rsplit(".", 1)[-1],
+                "matchedCount": count,
+                **_fallback_details(fallback),
+            },
             outputs={"matchedCount": count, "sessionId": session_id},
         )
 
@@ -942,11 +1062,22 @@ class PlaywrightExecutor(CommandExecutor):
             ],
         )
 
-    def _ext_not_found(self, inputs: dict[str, Any]) -> CommandResult:
+    @staticmethod
+    def _ext_not_found(
+        inputs: dict[str, Any], *, candidates_tried: int = 0
+    ) -> CommandResult:
+        details: dict[str, Any] = {
+            "selector": inputs.get("selector"),
+            "matchedCount": 0,
+        }
+        if candidates_tried:
+            # 自愈失败也要可诊断：告诉用户「主选择器 + N 条候选全都没命中」
+            details["candidatesTried"] = candidates_tried
         return CommandResult.failure(
             ErrorCode.ELEMENT_NOT_FOUND,
-            "Target element did not match",
-            details={"selector": inputs.get("selector"), "matchedCount": 0},
+            "Target element did not match"
+            + (f"（含 {candidates_tried} 条备选候选）" if candidates_tried else ""),
+            details=details,
         )
 
     def _ext_channel_failure(self, exc: ExtensionChannelError) -> CommandResult:
