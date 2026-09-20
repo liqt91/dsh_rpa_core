@@ -66,8 +66,15 @@ class ExtensionExecSession:
 
     # -- 标签页（chrome.tabs） -----------------------------------------------
 
-    def tabs_list(self, *, timeout_seconds: float = DEFAULT_COMMAND_TIMEOUT_SECONDS) -> list[dict]:
-        payload = self._client.submit("tabs.list", {}, timeout_seconds=timeout_seconds)
+    def tabs_list(
+        self,
+        *,
+        timeout_seconds: float = DEFAULT_COMMAND_TIMEOUT_SECONDS,
+        target_host: str | None = None,
+    ) -> list[dict]:
+        payload = self._client.submit(
+            "tabs.list", {}, timeout_seconds=timeout_seconds, target_host=target_host,
+        )
         tabs = payload.get("tabs")
         return [dict(t) for t in tabs] if isinstance(tabs, list) else []
 

@@ -258,8 +258,15 @@ class PlaywrightExecutor(CommandExecutor):
     async def _launch_then_create(
         self, target_host: str, inputs: dict[str, Any], url: str, timeout_s: float
     ) -> dict[str, Any] | CommandResult:
-        """拉起目标浏览器 → 等待插件上线 → 重试创建标签页。"""
-        launched = await self._launch_target(target_host, inputs, url)
+        """裸拉起目标浏览器 → 等待插件上线 → tabs.create 创建标签页。
+
+        设计（维护者定案）：拉起**不带 URL**，目标页一律由 tabs.create 创建——
+        创建即返回 tabId，程序创建的标签页地址栏不聚焦，也不需要任何「探测哪个
+        标签页是我们的」逻辑。冷启动时浏览器自己打开的默认启动页（空白 NTP 或
+        恢复的上次会话）**原样保留、不导航也不关闭**（与影刀一致：那是「指令
+        以外的操作」，发生在用户眼前观感差；且绝不动用户已有页面）。
+        """
+        launched = await self._launch_target(target_host, inputs)
         if isinstance(launched, CommandResult):
             return launched
         return await self._create(url, timeout_s, target_host)
@@ -294,9 +301,14 @@ class PlaywrightExecutor(CommandExecutor):
         return await self._launch_then_create(target_host, inputs, url, timeout_s)
 
     async def _launch_target(
-        self, target_host: str, inputs: dict[str, Any], url: str
+        self, target_host: str, inputs: dict[str, Any]
     ) -> CommandResult | None:
-        """自动拉起目标浏览器并等待其插件上线；成功返回 None，否则返回可操作报错。"""
+        """裸拉起目标浏览器（不带 URL）并等待其插件上线；成功返回 None，否则返回可操作报错。
+
+        不带 URL 的原因：目标页统一由拉起后的 tabs.create 创建（创建即返回 tabId、
+        地址栏不聚焦）；浏览器冷启动自己打开的启动页原样保留（与影刀一致），
+        不做任何「指令以外的操作」。
+        """
         browser = target_host
         command_line_args = inputs.get("commandLineArgs")
         if not isinstance(command_line_args, list):
@@ -307,7 +319,7 @@ class PlaywrightExecutor(CommandExecutor):
         extension_dir = find_extension_dir()
         try:
             await asyncio.to_thread(
-                launch_browser, browser, url,
+                launch_browser, browser, None,
                 extension_dir=extension_dir, argv_extra=argv_extra,
             )
         except BrowserLaunchError as exc:

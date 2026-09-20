@@ -126,6 +126,28 @@ def test_launch_browser_builds_argv_with_extension_and_args(monkeypatch, tmp_pat
     assert argv[5] == "--incognito"
 
 
+def test_launch_browser_bare_without_url(monkeypatch, tmp_path):
+    """裸拉起（url=None）：argv 不含 --new-window/URL，仅 exe + 扩展注入 + 自定义参数。"""
+    exe = tmp_path / "chrome_dummy.exe"
+    exe.write_bytes(b"MZ")
+    monkeypatch.setenv("RPA_CHROME_BIN", str(exe))
+
+    captured = {}
+    mock_popen = SimpleNamespace(wait=lambda: None)
+
+    def _popen(argv, **kwargs):
+        captured["argv"] = argv
+        return mock_popen
+
+    monkeypatch.setattr("subprocess.Popen", _popen)
+    from rpa_core.extension_launch import launch_browser
+
+    launch_browser("chrome", None, argv_extra=["--incognito"])
+    argv = captured["argv"]
+    assert argv == [str(exe), "--incognito"]
+    assert "--new-window" not in argv
+
+
 def test_launch_browser_missing_exe_raises(monkeypatch):
     """找不到可执行文件 → BrowserLaunchError。"""
     monkeypatch.delenv("RPA_MSEDGE_BIN", raising=False)
@@ -145,16 +167,22 @@ def test_launch_browser_missing_exe_raises(monkeypatch):
 
 
 def test_navigate_offline_nothing_running_launches_then_opens(monkeypatch):
-    """无任何插件在跑 + 指定 browserType → 按 commandLineArgs 拉起 → 上线后创建标签页成功。"""
+    """无任何插件在跑 + 指定 browserType（冷启动）→ 裸拉起 → tabs.create 创建目标页。
+
+    关键设计（维护者定案）：拉起不带 URL；浏览器冷启动自己打开的启动页**原样保留**
+    （与影刀一致——关闭/导航都是「指令以外的操作」，发生在用户眼前观感差）；
+    目标页由 tabs.create 创建（创建即返回 tabId，程序创建的标签页地址栏不聚焦）。
+    """
     ext_calls = []
     launch_browser_calls = {}
 
     def _tabs_create(url, timeout_seconds=30, target_host=None):
-        ext_calls.append((url, target_host))
-        return {"tabId": 7, "url": "https://a.test/2", "completed": True}
+        ext_calls.append(("tabs.create", url, target_host))
+        return {"tabId": 7, "url": url, "completed": True, "timedOut": False}
 
     def _launch(browser, url, extension_dir=None, argv_extra=()):
         launch_browser_calls["browser"] = browser
+        launch_browser_calls["url"] = url
         launch_browser_calls["argv_extra"] = list(argv_extra)
         # 模拟：拉起后该浏览器扩展上报上线，轮询读到 msedge
         executor._ext.client.hosts = ["msedge"]
@@ -175,15 +203,18 @@ def test_navigate_offline_nothing_running_launches_then_opens(monkeypatch):
     result = asyncio.run(_go())
     assert result.status == "success", result.error
     assert launch_browser_calls.get("browser") == "msedge"
+    assert launch_browser_calls.get("url") is None  # 裸拉起，不带 URL
     assert launch_browser_calls.get("argv_extra") == ["--incognito"]
-    assert ext_calls == [("https://a.test/2", "msedge")]
+    # 仅一次 tabs.create，没有任何对启动页的操作
+    assert ext_calls == [("tabs.create", "https://a.test/2", "msedge")]
+    assert result.outputs["tabId"] == "7"
 
 
 def test_navigate_online_but_target_not_claiming_launches_and_retries(monkeypatch):
-    """有活跃宿主（Edge 在线）但目标 Chrome 无人领取 → 命令级等待后拉起 Chrome → 重试成功。
+    """有活跃宿主（Edge 在线）但目标 Chrome 无人领取 → 裸拉起激活 → 重试创建成功。
 
-    对应「插件 MV3 SW 休眠」场景：目标浏览器其实存在，只是当前无人领取命令——不再因
-    时序竞争误判离线，而是等命令超时后才判定需要拉起。
+    对应「插件 MV3 SW 休眠」场景：浏览器进程本就在跑，裸拉起不新开页面，
+    目标页由拉起后重试的 tabs.create 创建（创建即返回 tabId）。
     """
     ext_calls = []
     launches = []
@@ -195,7 +226,7 @@ def test_navigate_online_but_target_not_claiming_launches_and_retries(monkeypatc
         return {"tabId": 7, "url": "https://a.test/2", "completed": True}
 
     def _launch(browser, url, extension_dir=None, argv_extra=()):
-        launches.append(browser)
+        launches.append((browser, url))
         executor._ext.client.hosts = ["chrome"]  # 拉起后该浏览器上报上线
 
     monkeypatch.setattr("rpa_core.executors.browser.launch_browser", _launch)
@@ -211,8 +242,48 @@ def test_navigate_online_but_target_not_claiming_launches_and_retries(monkeypatc
     executor = None
     result = asyncio.run(_go())
     assert result.status == "success", result.error
-    assert launches == ["chrome"]
-    assert ext_calls == ["chrome", "chrome"]  # 首次无人领取，拉起后重试
+    assert launches == [("chrome", None)]  # 裸拉起
+    assert ext_calls == ["chrome", "chrome"]  # 首次无人领取，拉起后重试创建
+    assert result.outputs["tabId"] == "7"
+
+
+def test_navigate_cold_start_never_touches_user_tabs(monkeypatch):
+    """冷启动（无论启动页是 NTP 还是恢复上次会话）：用户已有标签页绝不被导航/关闭。
+
+    目标页只通过 tabs.create 新增一个；启动页原样保留（维护者对照影刀定案）。
+    """
+    ext_calls = []
+
+    def _tabs_create(url, timeout_seconds=30, target_host=None):
+        ext_calls.append(("tabs.create", url, target_host))
+        return {"tabId": 7, "url": url, "completed": True}
+
+    def _launch(browser, url, extension_dir=None, argv_extra=()):
+        executor._ext.client.hosts = ["msedge"]
+
+    monkeypatch.setattr("rpa_core.executors.browser.launch_browser", _launch)
+    monkeypatch.setattr("rpa_core.executors.browser.find_extension_dir", lambda: None)
+
+    async def _go():
+        nonlocal executor
+        executor = build_executor([])
+        executor._ext.tabs_create = _tabs_create
+        # 若误调 tabs.navigate / tabs.close / tabs.list 即失败：
+        # 不探测、不导航、不关闭任何既有标签页
+        def _forbidden(*args, **kwargs):
+            raise AssertionError(f"不应触碰既有标签页: {args} {kwargs}")
+
+        executor._ext.tabs_navigate = _forbidden
+        executor._ext.tabs_close = _forbidden
+        executor._ext.tabs_list = _forbidden
+        result = await _run(executor, _invocation("https://a.test/2", browserType="msedge"))
+        return result
+
+    executor = None
+    result = asyncio.run(_go())
+    assert result.status == "success", result.error
+    assert ext_calls == [("tabs.create", "https://a.test/2", "msedge")]
+    assert result.outputs["tabId"] == "7"
 
 
 def test_navigate_offline_launch_fails_reports_actionable(monkeypatch):

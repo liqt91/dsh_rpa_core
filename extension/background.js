@@ -326,7 +326,8 @@ async function executeCommand(cmd) {
       const tabId = Number(args.tabId);
       await chrome.tabs.update(tabId, { url: args.url });
       const done = await waitComplete(tabId, args.timeoutMs || 30000);
-      return { tabId: args.tabId, url: done.url || args.url };
+      // completed/timedOut 供执行器按 onTimeout 策略处理（旧版缺省视为已完成）
+      return { tabId: args.tabId, url: done.url || args.url, completed: done.completed, timedOut: done.timedOut };
     }
     case "tabs.history": {
       const tabId = Number(args.tabId);
@@ -355,7 +356,8 @@ async function executeCommand(cmd) {
     case "tabs.waitLoad": {
       const tabId = Number(args.tabId);
       const done = await waitComplete(tabId, args.timeoutMs || 30000);
-      return { url: done.url || "" };
+      // completed/timedOut 供执行器按 onTimeout 策略处理（旧版缺省视为已完成）
+      return { url: done.url || "", completed: done.completed, timedOut: done.timedOut };
     }
     case "screenshot": {
       const tabId = Number(args.tabId);

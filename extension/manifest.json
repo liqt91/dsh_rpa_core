@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "rpa_core element capture",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "rpa_core 扩展：元素捕获 + 浏览器执行通道（Native Messaging 长连接，默认权限：整个浏览器）。",
   "update_url": "https://clients2.google.com/service/update2/crx",
   "permissions": [

@@ -123,13 +123,15 @@ def find_extension_dir() -> Path | None:
 
 def launch_browser(
     browser: str,
-    url: str,
+    url: str | None = None,
     *,
     extension_dir: Path | None = None,
     argv_extra: Sequence[str] = (),
 ) -> Path:
-    """以命令行拉起指定浏览器打开 url（fire-and-forget）。
+    """以命令行拉起指定浏览器（fire-and-forget）。
 
+    传 url 时以 `--new-window <url>` 直达目标页；不传（None）则裸拉起——
+    冷启动由浏览器自己打开默认启动页，已在跑时仅激活现有进程不新开页面。
     返回可执行文件路径；找不到 exe 或启动失败抛 BrowserLaunchError。
     扩展注入与自定义命令行参数均为可选。
     """
@@ -140,7 +142,9 @@ def launch_browser(
             "请先手动打开浏览器让自研插件上线，或用环境变量 "
             f"{_ENV_KEY[browser]} 指定可执行文件路径。"
         )
-    argv = [str(exe), "--new-window", url]
+    argv = [str(exe)]
+    if url:
+        argv += ["--new-window", url]
     if extension_dir is not None and extension_dir.is_dir():
         argv.append(f"--load-extension={extension_dir.resolve()}")
     argv.extend([str(a) for a in argv_extra])
