@@ -436,7 +436,7 @@ async function pageCall(args) {
   return (results && results[0] && results[0].result) || { matchedCount: 0, result: null };
 }
 
-function domOp(payload) {
+async function domOp(payload) {
   const { selector, method, args } = payload;
   const query = (sel) => (sel ? Array.from(document.querySelectorAll(sel)) : []);
   const isVisible = (el) => {
@@ -448,6 +448,101 @@ function domOp(payload) {
   };
   const fire = (el, type, init) => {
     el.dispatchEvent(new (type.startsWith("key") ? KeyboardEvent : MouseEvent)(type, init));
+  };
+  // [input-helpers:start]
+  // 纯函数区：scripts/check_input_helpers.mjs 按标记抽取求值（标记独占一行便于切片）
+  // 输入模式归一化：fill（别名 set）/ type / clipboard；未知值按 fill（与 manifest 默认一致）
+  const inputMode = (raw) => {
+    const value = String(raw == null ? "" : raw).trim().toLowerCase();
+    if (value === "set") return "fill";
+    if (["fill", "type", "clipboard"].includes(value)) return value;
+    return "fill";
+  };
+  // 逐字间隔：非数字/负数一律 0（不因脏数据卡死），上限 5s 防误配
+  const inputGapMs = (raw) => {
+    const value = Number(raw);
+    if (!Number.isFinite(value) || value <= 0) return 0;
+    return Math.min(value, 5000);
+  };
+  // [input-helpers:end]
+  const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  const pressEnter = (el) => {
+    const enter = { key: "Enter", code: "Enter", keyCode: 13, bubbles: true };
+    fire(el, "keydown", enter);
+    fire(el, "keypress", enter);
+    fire(el, "keyup", enter);
+    if (el.form && el.form.requestSubmit) el.form.requestSubmit();
+  };
+  const clickElement = (el) => {
+    const init = { bubbles: true, cancelable: true, view: window, button: 0 };
+    fire(el, "mousedown", init);
+    if (el.focus) el.focus();
+    fire(el, "mouseup", init);
+    fire(el, "click", init);
+  };
+  const selectAll = (el) => {
+    if (typeof el.select === "function") {
+      el.select();
+      return;
+    }
+    const range = document.createRange();
+    range.selectNodeContents(el);
+    const selection = window.getSelection();
+    if (selection) {
+      selection.removeAllRanges();
+      selection.addRange(range);
+    }
+  };
+  // 注入粘贴：beforeinput(insertFromPaste)/paste（带 DataTransfer）→ 校验内容是否变化；
+  // 未变化再退 execCommand('insertText')；仍未变化返回 false（调用方显式失败）。
+  const injectPaste = (el, text) => {
+    const snapshot = () => (el.value == null ? el.innerText : String(el.value));
+    const before = snapshot();
+    let dataTransfer = null;
+    try {
+      dataTransfer = new DataTransfer();
+      dataTransfer.setData("text/plain", text);
+    } catch (error) {
+      dataTransfer = null;
+    }
+    if (dataTransfer) {
+      try {
+        el.dispatchEvent(
+          new InputEvent("beforeinput", {
+            bubbles: true,
+            cancelable: true,
+            inputType: "insertFromPaste",
+            data: text,
+            dataTransfer,
+          }),
+        );
+        el.dispatchEvent(
+          new ClipboardEvent("paste", {
+            bubbles: true,
+            cancelable: true,
+            clipboardData: dataTransfer,
+          }),
+        );
+      } catch (error) {
+        /* 构造失败（老内核）落回 execCommand 路径 */
+      }
+      if (snapshot() !== before) {
+        el.dispatchEvent(new Event("input", { bubbles: true }));
+        el.dispatchEvent(new Event("change", { bubbles: true }));
+        return true;
+      }
+    }
+    try {
+      document.execCommand("insertText", false, text);
+    } catch (error) {
+      return false;
+    }
+    if (snapshot() !== before) {
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+      el.dispatchEvent(new Event("change", { bubbles: true }));
+      return true;
+    }
+    return false;
   };
 
   if (method === "count") {
@@ -567,29 +662,51 @@ function domOp(payload) {
     }
     case "input": {
       el.scrollIntoView({ block: "center", inline: "nearest" });
-      if (el.focus) el.focus();
       const text = args.text == null ? "" : String(args.text);
+      const mode = inputMode(args.mode);
+      if (args.clickBeforeInput) clickElement(el);
+      if (el.focus) el.focus();
+      if (mode === "clipboard") {
+        // 粘贴语义（不写系统剪贴板；面向只接受 paste 的富文本/受控编辑器）：
+        // 构造 DataTransfer 走 beforeinput/paste，失败再退回 execCommand('insertText')，
+        // 两者都没改变内容就**显式失败**——绝不静默退化成逐字输入。
+        if (!args.append) selectAll(el);
+        const accepted = injectPaste(el, text);
+        if (!accepted) {
+          return {
+            matchedCount,
+            result: null,
+            inputRejected: true,
+            message:
+              "该元素未接受剪贴板粘贴注入（可能只接受真实粘贴或按键输入）；"
+              + "请改用「直接填写」或「逐字模拟人工输入」模式",
+          };
+        }
+        if (args.pressEnter) pressEnter(el);
+        return { matchedCount, result: el.value == null ? el.innerText : el.value };
+      }
       const previous = args.append ? String(el.value == null ? el.innerText : el.value) : "";
-      if (args.mode === "set") {
+      if (mode === "fill") {
+        // 直接填写：赋值 + input/change（最快、最稳，但部分受控组件可能忽略赋值）
         el.value = previous + text;
         el.dispatchEvent(new Event("input", { bubbles: true }));
         el.dispatchEvent(new Event("change", { bubbles: true }));
       } else {
-        for (const ch of (previous + text).split("")) {
+        // 逐字模拟人工输入：按键事件 + 逐字间隔（keyIntervalMs 必须真正生效——
+        // 这是风控敏感场景的核心参数；此前被静默忽略）
+        const gap = inputGapMs(args.keyIntervalMs);
+        const chars = (previous + text).split("");
+        for (let index = 0; index < chars.length; index += 1) {
+          const ch = chars[index];
           fire(el, "keydown", { key: ch, bubbles: true });
           el.value = (el.value || "") + ch;
           el.dispatchEvent(new Event("input", { bubbles: true }));
           fire(el, "keyup", { key: ch, bubbles: true });
+          if (gap > 0 && index < chars.length - 1) await delay(gap);
         }
         el.dispatchEvent(new Event("change", { bubbles: true }));
       }
-      if (args.pressEnter) {
-        const enter = { key: "Enter", code: "Enter", keyCode: 13, bubbles: true };
-        fire(el, "keydown", enter);
-        fire(el, "keypress", enter);
-        fire(el, "keyup", enter);
-        if (el.form && el.form.requestSubmit) el.form.requestSubmit();
-      }
+      if (args.pressEnter) pressEnter(el);
       return { matchedCount, result: el.value == null ? null : el.value };
     }
     case "getText": {

@@ -34,8 +34,40 @@ def _child(item, row):
 
 @pytest.fixture(scope="module")
 def real_workflow():
-    path = REPO_ROOT / "workflows" / "test" / "workflow.json"
-    return Workflow.model_validate_json(path.read_text(encoding="utf-8"))
+    """自带夹具：**不读 `workflows/` 活目录**。
+
+    该目录是维护者随时会改动的用户资产，且工作台（M27/ADR 0017）已支持流程重命名/删除
+    ——此前这里读 `workflows/test/workflow.json`，维护者把该流程改名后整套测试在 setup
+    就 ERROR。需要「真实 AST 对象」的用例一律自带夹具（与 `test_flags_enforce_drag_drop_rules`
+    同款做法）。
+    """
+    return Workflow.model_validate(
+        {
+            "schema_version": "1.0",
+            "id": "draft",
+            "name": "fixture",
+            "inputs": {},
+            "root": {
+                "type": "sequence",
+                "id": "root",
+                "children": [
+                    {"type": "action", "id": "setVar", "command": "data.setVar",
+                     "with": {"varName": "url", "varType": "string", "value": "example.com"}},
+                    {"type": "action", "id": "n6", "command": "browser.navigate",
+                     "with": {"browserType": "msedge", "url": "${url}"}},
+                    {"type": "action", "id": "n5", "command": "browser.stopLoading",
+                     "with": {}},
+                    {"type": "if", "id": "n1",
+                     "condition": {"op": "truthy", "left": "${url}"},
+                     "then": [
+                         {"type": "action", "id": "n2", "command": "browser.getText",
+                          "with": {"selector": "#kw"}},
+                     ]},
+                    {"type": "return", "id": "n3", "value": None},
+                ],
+            },
+        }
+    )
 
 
 def test_real_workflow_maps_to_sequence_with_actions(real_workflow):

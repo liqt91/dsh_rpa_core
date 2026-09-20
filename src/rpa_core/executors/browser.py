@@ -577,6 +577,14 @@ class PlaywrightExecutor(CommandExecutor):
         count = int(payload.get("matchedCount") or 0)
         if command != "browser.scroll" and count == 0:
             return self._ext_not_found(inputs)
+        # 扩展显式拒绝（如 clipboard 粘贴注入未被接受）：如实失败，不退化成别的模式
+        if payload.get("inputRejected"):
+            return CommandResult.failure(
+                ErrorCode.EXECUTOR_FAILED,
+                str(payload.get("message") or "输入未被元素接受"),
+                details={"reason": "input_mode_not_accepted"},
+            )
+        await self._post_delay(inputs)
         if command == "browser.scroll":
             scroll_y = payload.get("result")
             return self._ext_success(
@@ -842,6 +850,21 @@ class PlaywrightExecutor(CommandExecutor):
                 )
             await asyncio.sleep(0.3)
 
+    @staticmethod
+    async def _post_delay(inputs: dict[str, Any]) -> None:
+        """`postDelayMs`（manifest 声明）：动作后等待指定毫秒。
+
+        放在执行器侧而不是扩展里：纯等待不必占着扩展通道，且与桌面执行器同口径
+        （桌面侧一直支持该参数，浏览器侧此前声明了却没生效）。
+        """
+        raw = inputs.get("postDelayMs")
+        try:
+            delay_ms = int(raw or 0)
+        except (TypeError, ValueError):
+            return
+        if delay_ms > 0:
+            await asyncio.sleep(min(delay_ms, 60_000) / 1000.0)
+
     def _ext_method_args(self, command: str, inputs: dict[str, Any]) -> dict[str, Any]:
         """命令参数 → 扩展 page.call 参数（未支持的字段在扩展侧忽略）。"""
         if command == "browser.click":
@@ -853,9 +876,14 @@ class PlaywrightExecutor(CommandExecutor):
         if command == "browser.input":
             return {
                 "text": "" if inputs.get("text") is None else str(inputs["text"]),
-                "mode": inputs.get("mode") or "type",
+                # 默认值与 manifest 一致（fill）——此前默认 type 且扩展只认 "set"，
+                # 导致 fill/type/clipboard 三种模式实际落到同一条逐字分支（漂移）
+                "mode": inputs.get("mode") or "fill",
                 "append": bool(inputs.get("append", False)),
                 "pressEnter": bool(inputs.get("pressEnter", False)),
+                # 以下两个此前**声明了但没转发**：逐字间隔（风控场景核心参数）与输入前点击
+                "keyIntervalMs": inputs.get("keyIntervalMs"),
+                "clickBeforeInput": bool(inputs.get("clickBeforeInput", False)),
             }
         if command == "browser.scroll":
             return {

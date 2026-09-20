@@ -3,12 +3,12 @@
   "phase": "command-parity-extension-editor",
   "status": "active",
   "completed_milestone": "M27-workbench-home",
-  "active_milestone": "M26-flow-inputs-editor",
-  "active_plan": ".harness/tasks/M26-flow-inputs-editor.md",
-  "active_feature": "flow-inputs-editor",
+  "active_milestone": "M28-element-self-healing",
+  "active_plan": ".harness/tasks/M28-element-self-healing.md",
+  "active_feature": "element-self-healing",
   "next_milestone": null,
   "later_milestones": [],
-  "notes": "技术路线（ADR 0016）：GUI 为唯一主力形态，Web 编辑器退为可选、冻结演进；GUI 独立运行不需要 web 服务器。M23 收口（GUI 体验对齐）。M24 收口（断点与单步）。M25 收口（运行历史只读读取器 + CLI + 编辑器内面板）。M27 收口（ADR 0017 两段式宿主）：独立「工作台」首页窗口（流程库列表 + 新建/打开/复制/重命名/删除连带资产与运行历史/导入导出 + 运行入口与状态轮询；运行历史全局页签可按流程筛选、双击在编辑器打开时间线）；编辑器保持单窗口，运行控制（暂停/继续/单步）只在编辑器；编辑器为单例不叠窗。M26（流程 inputs 声明编辑 UI）恢复为当前任务。",
+  "notes": "技术路线（ADR 0016）：GUI 为唯一主力形态，Web 编辑器退为可选、冻结演进；GUI 独立运行不需要 web 服务器。M23（GUI 体验对齐）、M24（断点与单步）、M25（运行历史）、M27（工作台 + 编辑器两段式，ADR 0017）均已收口。M28 进行中（元素自愈与执行前预检）：S3 已完成——修两处「manifest 声明了但扩展通道没实现」的漂移（keyIntervalMs 真正生效、clipboard 真实现粘贴注入并在未被接受时显式失败），另补 clickBeforeInput / postDelayMs；S1（运行期消费 candidates）与 S2（执行前预检与错误分类）待做；S4 度量与边界文档待做。已定案不做：新增 mode=insert、后台标签页焦点模拟。M26（流程 inputs 编辑 UI）顺延。",
   "task_index": ".harness/tasks/BACKLOG.md",
   "scope": {
     "in": [

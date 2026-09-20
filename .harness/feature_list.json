@@ -266,6 +266,11 @@
       "id": "gui-home-workbench",
       "title": "Workbench home window (ADR 0017): flow list with run status, global run history tab with filtering, flow management actions (incl. cascading delete with confirmation), and a run entry that hands control to the editor",
       "passes": true
+    },
+    {
+      "id": "element-self-healing",
+      "title": "Element self-healing: consume captured candidate selectors at runtime, pre-action validation (visibility/disabled/occlusion), classified element errors, and fix the declared-but-unimplemented input params (keyIntervalMs, clipboard)",
+      "passes": false
     }
   ]
 }

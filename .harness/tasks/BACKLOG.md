@@ -4,20 +4,31 @@
 
 ## 当前任务
 
-- [ ] **M26 流程 inputs 声明编辑 UI**（`active`）
-  - 计划：`M26-flow-inputs-editor.md`；关联 M21（运行参数对话框只读消费 inputs）、ADR 0016
-  - 目标：流程级 `inputs`（名称/类型/默认值/描述）在 GUI 里可视化增删改，不再手写 JSON；
-    与「运行参数」对话框、`${inputs.x}` 引用补全、编译器输入校验保持一致
-  - 切片：S1 声明模型与校验 → S2 GUI 编辑器（保存回写）→ S3 与运行/引用联动 → S4 测试/文档
+- [ ] **M28 元素自愈与执行前预检**（`active`）
+  - 计划：`M28-element-self-healing.md`；调研依据：`docs/element-self-healing-plan.md`
+  - 已完成 **S3 参数漂移修复**（2026-09-20）：`keyIntervalMs` 真正生效（逐字间隔）、
+    `clipboard` 实装（粘贴注入 + 未被接受时显式失败），并补 `clickBeforeInput` / `postDelayMs`
+  - 待做：**S1** 运行期消费 `selector.candidates`（主选择器失效时自愈）→ **S2** 执行前预检与
+    错误分类（NOT_FOUND/COVERED/DISABLED/NOT_VISIBLE）→ **S4** 度量基线 + 边界文档
+  - 不做（已定案）：新增 `mode: "insert"`；后台标签页焦点模拟
 
 ## 后续任务
 
+- [ ] **M26 流程 inputs 声明编辑 UI**（`planned`——原为 M25 之后第一项，因维护者定向先做
+  M27 工作台、随后做 M28 元素自愈而顺延；计划见 `M26-flow-inputs-editor.md`）
 - [ ] 技术路线（ADR 0016）：GUI 为唯一主力形态——新增能力优先落 GUI；Web 编辑器（devserver）
   `devserver/static/` 冻结演进（不删除、不再补齐 GUI 已有能力）
 - [ ] UI、DSH、MCP、调度器和安装器集成（`planned`）——见远期任务
 
 ## 远期任务
 
+- [ ] **AI 按自然语言生成流程（设计期）**（`planned`）——自然语言 → 流程草稿 AST（catalog 命令 +
+  元素资产引用 + 变量别名）→ compiler 静态校验 + M28 预检 → 用户在 GUI 审阅后保存；**运行时
+  永不生成代码**（规则 6）。调研结论：jev 的**模型**价值低（托管付费、浏览器通用动作空间、无
+  流程 AST），但「受限动作空间 + 观测表 grounding + 执行前校验」的模式价值高；详见
+  `docs/element-self-healing-plan.md` §6
+- [ ] 后台标签页焦点模拟（`planned`，**待证**——影刀无此设计且我们无 CDP；仅当后台标签页
+  可靠性成为实际问题时再评估）
 - [ ] 画布缩放 / 缩略导航（`planned`——树形画布长流程纵深远超影刀自由画布；M23 切片外）
 - [ ] 节点禁用/启用（`blocked`——需 AST 增加 `disabled` 字段，属后端契约扩展，不单是 GUI）
 - [ ] Web 编辑器前端化暂停/继续（`planned`——M21 只做了 PySide6 GUI；ADR 0006 §6 的
