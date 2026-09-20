@@ -24,6 +24,7 @@ window.RPA_I18N = {
     "data.limit": "截取前 N 条",
     "data.format": "格式化文本",
     "data.setVar": "设置变量",
+    "data.log": "打印日志",
     "data.table.getCell": "读取表格单元",
     "data.table.setCell": "写入表格单元",
     "data.table.appendRow": "追加表格行",
@@ -207,6 +208,8 @@ window.RPA_I18N = {
     varName: "接收变量名",
     controlType: "控件类型",
     name: "名称",
+    message: "日志内容",
+    level: "日志级别",
   },
   // 按命令覆盖的字段标签：同名参数在不同命令下含义不同（如 args）
   commandFields: {

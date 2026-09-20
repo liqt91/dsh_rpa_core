@@ -221,3 +221,24 @@ def test_setvar_array_type(tmp_path):
     assert parsed.outputs["value"] == ["x"]
     bad = pw.execute(_inv("data.setVar", workspace, varName="arr", varType="array", value="[1,2"))
     _assert_failed(bad, "INVALID_INPUT")
+
+# ---- data.log（打印日志，影刀对齐） -----------------------------------------
+
+
+def test_log_echoes_message_and_level(tmp_path):
+    """打印日志：原样回传 message/level（变量引用由 orchestrator 解析后传入）。"""
+    workspace = tmp_path / "ws"
+    result = pw.execute(_inv("data.log", workspace, message="抓到的标题是 百度一下"))
+    assert result.status == "success"
+    assert result.outputs["message"] == "抓到的标题是 百度一下"
+    assert result.outputs["level"] == "info"
+    assert result.value == "抓到的标题是 百度一下"
+
+
+def test_log_accepts_level_and_empty_message(tmp_path):
+    """级别可选（默认 info）；空文本也允许（仍产生一条日志行）。"""
+    workspace = tmp_path / "ws"
+    result = pw.execute(_inv("data.log", workspace, message="", level="warn"))
+    assert result.status == "success"
+    assert result.outputs["message"] == ""
+    assert result.outputs["level"] == "warn"

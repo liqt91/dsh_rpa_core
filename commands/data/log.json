@@ -1,0 +1,51 @@
+{
+  "id": "data.log",
+  "version": "1.0.0",
+  "executor": "python.worker",
+  "kind": "transform",
+  "risk": "read",
+  "capabilities": [],
+  "resources": [],
+  "stability": "stable",
+  "effect": {"kind": "pure", "replay": "safe", "idempotency": "none"},
+  "input_schema": {
+    "type": "object",
+    "required": ["message"],
+    "properties": {
+      "message": {
+        "type": "string",
+        "x-fx": true,
+        "description": "要打印的内容。支持变量引用（如 抓到的标题是 ${title}）；fx 模式下可用 [变量名] 标签与文本混排"
+      },
+      "level": {
+        "type": "string",
+        "enum": ["info", "warn", "error"],
+        "default": "info",
+        "x-enum-labels": {
+          "info": "信息",
+          "warn": "警告",
+          "error": "错误"
+        },
+        "description": "日志级别（仅作标记，便于在运行日志里区分）"
+      }
+    },
+    "additionalProperties": false
+  },
+  "output_schema": {
+    "type": "object",
+    "required": ["message"],
+    "properties": {
+      "message": {"type": "string"},
+      "level": {"type": "string"}
+    },
+    "additionalProperties": false
+  },
+  "x-outputs": {
+    "message": {"label": "日志内容", "hidden": true},
+    "level": {"label": "日志级别", "hidden": true}
+  },
+  "errors": ["INVALID_INPUT", "TIMEOUT", "CANCELLED"],
+  "implementation": {"handler": "python.worker:log"},
+  "default_timeout_seconds": 15,
+  "retryable": true
+}

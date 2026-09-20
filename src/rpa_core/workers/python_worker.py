@@ -565,6 +565,14 @@ def execute(invocation: CommandInvocation) -> CommandResult:
         return CommandResult.success(
             value=value, outputs={"varName": var_name, "value": value}
         )
+    if invocation.command_id == "data.log":
+        # 打印日志（对标影刀「打印日志」）：纯透传——message 已由 orchestrator
+        # 按 ${} / fx 标签解析为最终文本，回传 outputs 供运行日志/结果消费。
+        message = str(invocation.inputs.get("message", ""))
+        level = str(invocation.inputs.get("level") or "info")
+        return CommandResult.success(
+            value=message, outputs={"message": message, "level": level}
+        )
     if invocation.command_id == "data.format":
         template = str(invocation.inputs["template"])
         values = invocation.inputs["values"]

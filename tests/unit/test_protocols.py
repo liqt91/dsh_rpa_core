@@ -27,7 +27,7 @@ def test_catalog_is_loaded_and_digest_is_stable():
     clear_catalog_cache()
     second = catalog()
     assert first is not second
-    assert len(first) == 83
+    assert len(first) == 84
     assert first.digest == second.digest
     with pytest.raises(TypeError):
         first._commands["x"] = None
