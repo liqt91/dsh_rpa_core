@@ -21,6 +21,7 @@ from PySide6.QtCore import (
     QRect,
     QSize,
     Qt,
+    Signal,
 )
 from PySide6.QtGui import QColor, QDrag, QFont, QPainter, QPen
 from PySide6.QtWidgets import (
@@ -39,6 +40,7 @@ from rpa_core.gui.flow_model import (
     _MIME_TYPE,
     ROLE_ARGS_RAW,
     ROLE_ARGS_SUMMARY,
+    ROLE_BREAKPOINT,
     ROLE_COMMAND_ID,
     ROLE_IS_VIRTUAL,
     ROLE_NODE_ID,
@@ -72,12 +74,17 @@ _DELETE_BTN_W = 36
 _DELETE_BTN_H = 18
 _DELETE_BTN_MARGIN_RIGHT = 6
 
-# 左侧编号栏（影刀式）：全局行号 + 错误徽标 + 容器收起/展开按钮。
+# 左侧编号栏（影刀式）：断点红点 + 全局行号 + 错误徽标 + 容器收起/展开按钮。
 # 所有行内容统一右移该宽度，编号栏本身不随缩进移动。
-_GUTTER_WIDTH = 46
-_GUTTER_NUMBER_W = 20          # 行号区（右对齐）
-_GUTTER_ERROR_X = 28           # 错误徽标圆心 x
+# 断点列（最左，M24）与错误徽标/收起按钮不会同时出现：错误徽标只给缺必填参数的
+# action 叶子，收起按钮只给有子节点的容器行。
+_GUTTER_WIDTH = 58
+_GUTTER_BREAKPOINT_X = 9       # 断点圆点圆心 x（最左列，影刀式点一下切换）
+_GUTTER_NUMBER_X0 = 18         # 行号区左缘（右对齐到 38）
+_GUTTER_NUMBER_W = 20
+_GUTTER_ERROR_X = 46           # 错误徽标圆心 x
 _COLLAPSE_BTN = 14             # 收起/展开按钮边长
+_BREAKPOINT_RADIUS = 4
 
 
 def delete_button_rect(card_rect: QRect) -> QRect:
@@ -91,6 +98,19 @@ def delete_button_rect(card_rect: QRect) -> QRect:
         card_rect.top() + (card_rect.height() - _DELETE_BTN_H) // 2,
         _DELETE_BTN_W,
         _DELETE_BTN_H,
+    )
+
+
+def breakpoint_button_rect(row_rect: QRect) -> QRect:
+    """编号栏最左列（断点列）的点击热区（影刀式：点行首切换断点）。
+
+    热区比红点大一圈（14×整行高），便于点中；与绘制共用同一 x 基准。
+    """
+    return QRect(
+        max(0, _GUTTER_BREAKPOINT_X - 7),
+        row_rect.top(),
+        14,
+        row_rect.height(),
     )
 
 
@@ -140,6 +160,9 @@ class FlowTreeView(QTreeView):
     # 这样 Above/Below 各有 18px 命中区（_ROW_HEIGHT=46），远大于默认的 23px/极小 OnItem。
     _ABOVE_THRESHOLD = 0.40
     _BELOW_THRESHOLD = 0.60
+
+    # 断点切换请求（M24，影刀式点行首）：由 app 接住并维护断点集合。
+    breakpoint_toggled = Signal(QModelIndex)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -509,6 +532,13 @@ class FlowTreeView(QTreeView):
                     ),
                 )
             if pos.x() <= _GUTTER_WIDTH:
+                if index.isValid() and breakpoint_button_rect(
+                    self.visualRect(index)
+                ).contains(pos):
+                    # 断点列（最左，影刀式）：点一下切换该节点断点
+                    self.breakpoint_toggled.emit(index)
+                    event.accept()
+                    return
                 if (
                     index.isValid()
                     and self.model().hasChildren(index)
@@ -643,12 +673,24 @@ class CardDelegate(QStyledItemDelegate):
         }.get(run_state, "#8c959f")
         painter.setPen(QPen(QColor(number_color)))
         painter.setFont(option.font)
-        number_rect = QRect(0, rect.top(), _GUTTER_NUMBER_W, rect.height())
+        number_rect = QRect(_GUTTER_NUMBER_X0, rect.top(), _GUTTER_NUMBER_W, rect.height())
         painter.drawText(
             number_rect,
             Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
             str(self._row_number(index)),
         )
+
+        # 断点红点（M24，影刀式：编号栏最左列）
+        if index.data(ROLE_BREAKPOINT):
+            center_y = rect.center().y()
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor("#cf222e"))
+            painter.drawEllipse(
+                _GUTTER_BREAKPOINT_X - _BREAKPOINT_RADIUS,
+                center_y - _BREAKPOINT_RADIUS,
+                _BREAKPOINT_RADIUS * 2,
+                _BREAKPOINT_RADIUS * 2,
+            )
 
         # 错误徽标：红底白 !（action 必填参数缺失时）
         if self._has_config_error(index):

@@ -81,11 +81,17 @@ class RunFloatWindow(QWidget):
         self.continue_button = QPushButton("继续")
         self.continue_button.setToolTip("从暂停处继续；需人工确认的终态会先弹确认框")
         self.continue_button.setEnabled(False)
+        self.step_button = QPushButton("单步")
+        self.step_button.setToolTip(
+            "单步：只执行一个节点，然后在下一个节点边界暂停（M24）"
+        )
+        self.step_button.setEnabled(False)
         self.restore_button = QPushButton("还原")
         buttons.addStretch(1)
         buttons.addWidget(self.cancel_button)
         buttons.addWidget(self.pause_button)
         buttons.addWidget(self.continue_button)
+        buttons.addWidget(self.step_button)
         buttons.addWidget(self.restore_button)
         layout.addLayout(buttons)
 
@@ -108,6 +114,7 @@ class RunFloatWindow(QWidget):
         self.pause_button.setEnabled(not self._pause_pending)
         # 请求尚未落地时，「继续」= 撤销请求（run 还在跑）
         self.continue_button.setEnabled(self._pause_pending)
+        self.step_button.setEnabled(False)  # 运行中不能单步
 
     def show_pausing(self) -> None:
         """已请求暂停、等待落到节点边界。"""
@@ -143,6 +150,8 @@ class RunFloatWindow(QWidget):
 
     def set_continue_enabled(self, enabled: bool) -> None:
         self.continue_button.setEnabled(enabled)
+        # 单步只在「已暂停」态可用（需确认恢复的两种终态不能盲单步）
+        self.step_button.setEnabled(enabled and self.state == "paused")
 
     # ---- 定位与拖动 ---------------------------------------------------------
     def place_bottom_right(self) -> None:

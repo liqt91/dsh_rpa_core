@@ -4,14 +4,12 @@
 
 ## 当前任务
 
-- [ ] **M24 断点与单步调试（Debugger）**（`active`）
-  - 计划：`M24-debugger.md`；关联 ADR 0005（暂停/继续，M21 增补）、ADR 0004（检查点）、ADR 0011（子进程 run host）
-  - 目标：在 M21 跨进程暂停通道上做**最小扩展**——节点断点（执行前停下）+ 单步（执行一个节点再停），
-    保持「暂停即收口 + 从检查点续跑」契约不变；`pauseReason`（user/breakpoint/step）供 UI 区分；
-    `consumedBreakpoints` 防「resume 后同断点反复命中」死循环
-  - 切片：S1 断点契约（control_channel/orchestrator/checkpoint/CLI）→ S2 GUI 断点交互（编号栏红点 +
-    右键切换 + 运行透传 + 命中定位）→ S3 单步与暂停原因展示 → S4 测试/文档/ADR
-  - 范围外：条件断点、日志断点、变量监视、调用栈、运行中断点热更新
+- [ ] **M25 运行历史浏览与回放**（`active`）
+  - 计划：`M25-run-history.md`；关联 ADR 0011（子进程 run host）、M21/M24（暂停/继续/断点）
+  - 目标：给 `run_artifacts/<run_id>/` 一个一等入口——列出历史运行（状态/耗时/错误码）→
+    打开事件时间线（复用运行面板格式化）→ 跳到节点 → 用同样输入再跑 → 对 paused 的 run 继续/单步
+  - 切片：S1 只读读取器 + CLI（`runs list` / `runs show`）→ S2 GUI 历史运行面板 → S3 测试/文档
+  - 约束：不新增持久化格式、不建数据库（AGENTS 规则 10）、GUI 不承载 runtime（ADR 0011）
 
 ## 后续任务
 
@@ -25,7 +23,6 @@
 - [ ] 节点禁用/启用（`blocked`——需 AST 增加 `disabled` 字段，属后端契约扩展，不单是 GUI）
 - [ ] Web 编辑器前端化暂停/继续（`planned`——M21 只做了 PySide6 GUI；ADR 0006 §6 的
   通道对齐要求未落到 devserver HTTP 端点与 `static/app.js`）
-- [ ] 运行历史浏览 / 回放（`planned`——run_artifacts 列表入口；影刀有运行记录）
 - [ ] 主题切换入口（`planned`——QDarkStyle 深浅 palette 已在依赖，`apply_theme` 固定浅色）
 - [ ] 窗口布局记忆（`planned`——dock 开合/宽度 QSettings 持久化）
 - [ ] 流程 inputs 声明编辑 UI（`planned`——当前只能手写 JSON；运行对话框只读消费）
@@ -39,6 +36,20 @@
 > 主力形态，该条目（「确认非开发者用户为主力后再立项薄壳」）不再适用。
 
 ## 已完成
+
+- [x] M24 断点与单步调试（`done`，2026-09-20）
+  - 计划：`M24-debugger.md`；决策：ADR 0005 增补「断点与单步（M24 增补）」
+  - 交付：`RunControl`（暂停开关 + 断点集合 + 已消费断点 + 单步预算）在递归执行链上传递；
+    节点执行前统一判定「用户暂停 / 单步 / 命中断点」；`PauseSignal` 带 reason；检查点新增
+    可选字段 `breakpoints` / `consumedBreakpoints` / `pauseReason` / `pausedAtNode`（向后兼容）；
+    CLI `run --breakpoints` / `resume --step`；GUI 编号栏红点 + 行首点击切换 + 右键菜单 +
+    工具栏/浮窗「单步」+ 命中原因与跳转定位
+  - 关键取舍：断点随检查点持久化（resume 是新进程、控制文件会被 reset）；命中即计入
+    consumed 防「resume 后同断点反复命中」；单步用「放行本节点 + 下个边界返回 step」
+    （初版立刻置暂停位会被同节点内的重试边界检查提前拦下）
+  - 证据：新增 `tests/unit/test_debugger_breakpoints.py`（8）与
+    `tests/contract/test_gui_breakpoints.py`（7，含真子进程断点运行与单步链路）；
+    API v1 契约同步登记；FULL GATE PASSED
 
 - [x] M23 GUI 体验对齐（`done`，2026-09-20）——G1–G5 全部完成
   - 计划：`M23-gui-ux-parity.md`；分析依据：2026-09-17 GUI 代码审计 + `docs/yingdao-web-commands-benchmark.md`

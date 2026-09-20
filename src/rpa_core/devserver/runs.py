@@ -42,7 +42,13 @@ class RunManager:
         self._lock = threading.Lock()
         self._seq = 0
 
-    def start(self, workflow_name: str, inputs: dict | None = None) -> dict:
+    def start(
+        self,
+        workflow_name: str,
+        inputs: dict | None = None,
+        breakpoints: list[str] | None = None,
+    ) -> dict:
+        """起一个 run 子进程；`breakpoints`（M24）为节点 id 列表，命中即暂停。"""
         workflow_path = self._workflows_root / workflow_name / "workflow.json"
         if not workflow_path.is_file():
             raise FileNotFoundError(f"workflow not found: {workflow_name}")
@@ -52,6 +58,8 @@ class RunManager:
         ]
         if inputs:
             args += ["--inputs", json.dumps(inputs, ensure_ascii=False)]
+        if breakpoints:
+            args += ["--breakpoints", ",".join(breakpoints)]
         return self._spawn(args, workflow_name)
 
     def _spawn(
@@ -123,12 +131,19 @@ class RunManager:
             return {"runId": run_id, "resumed": "pause-cancelled"}
         return self.resume(run_id)
 
-    def resume(self, run_id: str, *, allow_indeterminate: bool = False) -> dict:
+    def resume(
+        self,
+        run_id: str,
+        *,
+        allow_indeterminate: bool = False,
+        step: bool = False,
+    ) -> dict:
         """spawn `rpa-core resume` 从一个已收口 run 的检查点继续。
 
         `allow_indeterminate` 是 ADR 0004 的第 4 道人工确认门：上次终态为
         `indeterminate`（外部写入结果未知）时，只有用户显式确认「可能重复执行
         未确认的副作用」才置位——默认拒绝，由调用方（GUI 对话）决定。
+        `step`（M24）单步：只执行一个节点后在下一个边界再次暂停。
         """
         entry, real = self._entry_and_real(run_id)
         if entry["proc"].poll() is None:
@@ -143,6 +158,8 @@ class RunManager:
         ]
         if allow_indeterminate:
             args.append("--allow-indeterminate")
+        if step:
+            args.append("--step")
         return self._spawn(args, workflow_name, real_run_id=real)
 
     # ---- 子进程输出 ---------------------------------------------------------

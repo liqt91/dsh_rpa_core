@@ -369,6 +369,8 @@ class MainWindow(QMainWindow):
         self._restore_timer = None
         # 参数面板未应用的编辑（保存/运行/切换节点前自动提交）
         self._pending_apply = None
+        # 断点集合（M24，节点 id）：编号栏红点 + 运行前下发给 run 子进程
+        self._breakpoints: set[str] = set()
         # 进行中的元素捕获会话（混合捕获，窗口关闭时取消）
         self._capture_session = None
         self.setWindowTitle("RPA Core 编辑器")
@@ -630,6 +632,13 @@ class MainWindow(QMainWindow):
         self.continue_run_action.setEnabled(False)
         self.continue_run_action.triggered.connect(self._continue_run)
         toolbar.addAction(self.continue_run_action)
+
+        # 单步（M24 调试）：只执行一个节点，然后在下一个边界再次暂停。
+        self.step_run_action = QAction("单步", self)
+        self.step_run_action.setToolTip("单步：只执行一个节点，然后在下一个节点边界暂停")
+        self.step_run_action.setEnabled(False)
+        self.step_run_action.triggered.connect(self._step_run)
+        toolbar.addAction(self.step_run_action)
 
         # 元素库 / 数据表格 / 指令清单 / 插件（dock 与对话框入口）
         elements_action = QAction("元素库", self)
@@ -894,6 +903,7 @@ class MainWindow(QMainWindow):
         """右键菜单各项可用性（抽出以便测试，不弹菜单）。"""
         from rpa_core.gui.flow_model import (
             _ELSE_BRANCH_TYPE,
+            ROLE_BREAKPOINT,
             ROLE_IS_VIRTUAL,
             ROLE_NODE_TYPE,
         )
@@ -911,6 +921,11 @@ class MainWindow(QMainWindow):
             "paste": bool(self._clipboard),
             "delete": deletable,
             "add_else": self._nearest_if(item) is not None if item is not None else False,
+            # 断点（M24）：只对真实节点（action/控制流/return）可设，虚拟行不行
+            "breakpoint": bool(item is not None and not item.data(ROLE_IS_VIRTUAL)),
+            "has_breakpoint": bool(
+                item is not None and item.data(ROLE_BREAKPOINT)
+            ),
         }
 
     def _canvas_context_menu(self, pos) -> None:
@@ -931,6 +946,11 @@ class MainWindow(QMainWindow):
         remove = menu.addAction("删除")
         remove.setEnabled(state["delete"])
         menu.addSeparator()
+        toggle_bp = menu.addAction(
+            "删除断点" if state["has_breakpoint"] else "添加断点"
+        )
+        toggle_bp.setEnabled(state["breakpoint"])
+        menu.addSeparator()
         add_else = menu.addAction("添加「否则」")
         add_else.setEnabled(state["add_else"])
         chosen = menu.exec(view.viewport().mapToGlobal(pos))
@@ -942,8 +962,50 @@ class MainWindow(QMainWindow):
             self._paste_clipboard()
         elif chosen is remove:
             self._delete_selected_node()
+        elif chosen is toggle_bp:
+            self._toggle_breakpoint(index)
         elif chosen is add_else:
             self._add_else_branch()
+
+    # ---- 断点（M24） -------------------------------------------------------
+    def _toggle_breakpoint(self, index) -> None:
+        """切换某节点的断点（编号栏点击 / 右键菜单共用入口）。"""
+        from rpa_core.gui.flow_model import ROLE_BREAKPOINT, ROLE_NODE_ID
+
+        item = self.flow_model.itemFromIndex(index) if index.isValid() else None
+        if item is None:
+            return
+        node_id = item.data(ROLE_NODE_ID)
+        if not node_id:
+            return  # 虚拟行（结束行/分组行）不参与断点
+        if node_id in self._breakpoints:
+            self._breakpoints.discard(node_id)
+            item.setData(False, ROLE_BREAKPOINT)
+            self.statusBar().showMessage(f"已删除断点：{self._node_title(node_id)}", 4000)
+        else:
+            self._breakpoints.add(node_id)
+            item.setData(True, ROLE_BREAKPOINT)
+            self.statusBar().showMessage(
+                f"已添加断点：{self._node_title(node_id)}（运行到该节点前会暂停）", 5000
+            )
+        self.canvas_view.viewport().update()
+
+    def _apply_breakpoint_flags(self) -> None:
+        """把断点集合落到 item 数据（红点绘制依据），并剪除已不存在的节点 id。
+
+        模型重建（打开流程/撤销重做）会丢掉 item 上的标记，因此每次重建与结构
+        变更后都要重刷；节点被删除时其断点也要一并清理。
+        """
+        from rpa_core.gui.flow_model import ROLE_BREAKPOINT, ROLE_NODE_ID, iter_real_nodes
+
+        existing: set[str] = set()
+        for item in iter_real_nodes(self.flow_model):
+            node_id = item.data(ROLE_NODE_ID)
+            if not node_id:
+                continue
+            existing.add(str(node_id))
+            item.setData(str(node_id) in self._breakpoints, ROLE_BREAKPOINT)
+        self._breakpoints &= existing
 
     def _prompt_discard_changes(self) -> bool:
         """有未保存修改时弹确认。返回 True 表示用户接受丢弃（可以继续操作）。"""
@@ -1112,6 +1174,8 @@ class MainWindow(QMainWindow):
         # _delete_selected_node，面板不会自动清空）：陈旧登记必须就地作废，
         # 否则下一次提交会对已删行 itemFromIndex（返回 None）取数据而崩溃。
         self._invalidate_stale_pending_apply()
+        # 断点标记随结构变更重刷（删除节点要连带清掉它的断点）
+        self._apply_breakpoint_flags()
         self._begin_edit()
         self._end_edit()
 
@@ -1236,7 +1300,10 @@ class MainWindow(QMainWindow):
         self.canvas_view.selectionModel().currentChanged.connect(
             self._on_canvas_selection
         )
+        # 断点列点击（编号栏最左，影刀式）→ 切换该节点断点
+        self.canvas_view.breakpoint_toggled.connect(self._toggle_breakpoint)
         self._wire_canvas_context_menu()
+        self._apply_breakpoint_flags()
         if reset_history:
             self._undo_stack.clear()
             self._redo_stack.clear()
@@ -1518,9 +1585,14 @@ class MainWindow(QMainWindow):
         self._start_run(name, inputs)
 
     def _start_run(self, name: str, inputs: dict | None = None) -> str | None:
-        """启动运行子进程并开始轮询；返回对外 run_id（启动失败返回 None）。"""
+        """启动运行子进程并开始轮询；返回对外 run_id（启动失败返回 None）。
+
+        断点集合（M24）随运行下发：命中断点的节点在**执行前**暂停，可继续/单步。
+        """
         try:
-            handle = self._get_run_manager().start(name, inputs or None)
+            handle = self._get_run_manager().start(
+                name, inputs or None, breakpoints=sorted(self._breakpoints)
+            )
         except FileNotFoundError as exc:
             self.statusBar().showMessage(str(exc), 5000)
             return None
@@ -1533,6 +1605,7 @@ class MainWindow(QMainWindow):
         self.cancel_run_action.setEnabled(True)
         self.pause_run_action.setEnabled(True)
         self.continue_run_action.setEnabled(False)
+        self.step_run_action.setEnabled(False)
         dock = self._run_dock()
         dock.show()
         self._run_status_label.setText(f"运行中…（{name}）")
@@ -1578,6 +1651,7 @@ class MainWindow(QMainWindow):
             self._run_float.restore_button.clicked.connect(self._restore_from_float)
             self._run_float.pause_button.clicked.connect(self._pause_run)
             self._run_float.continue_button.clicked.connect(self._continue_run)
+            self._run_float.step_button.clicked.connect(self._step_run)
         self._run_float.clear_pause_pending()
         self._run_float.show_running("准备中…", 0)
         self._run_float.place_bottom_right()
@@ -1673,7 +1747,12 @@ class MainWindow(QMainWindow):
             return f"⏸ 暂停请求 — 将停在 {title} 之前"
         if etype == "runPaused":
             done = len(payload.get("completedSteps") or [])
-            return f"⏸ 已暂停在节点边界 — 已完成 {done} 步（可从检查点继续）"
+            reason = payload.get("reason")
+            label = {
+                "breakpoint": f"命中断点 {title}",
+                "step": "单步完成",
+            }.get(reason, f"暂停于 {title} 之前")
+            return f"⏸ {label} — 已完成 {done} 步（可从检查点继续）"
         if etype == "runResumed":
             done = len(payload.get("completedSteps") or [])
             return f"▸ 从检查点继续 — 已完成 {done} 步"
@@ -1785,6 +1864,32 @@ class MainWindow(QMainWindow):
             return
         self._adopt_run_handle(handle["runId"])
 
+    def _step_run(self) -> None:
+        """单步（M24）：从暂停点起新进程，只执行一个节点后再次暂停。
+
+        与「继续」同一条 resume 通道，只多带 `--step`；已暂停（进程收口）才有意义，
+        运行中或未开始时不动作。单步不涉及 indeterminate 确认门（那不是暂停态）。
+        """
+        if not self._active_run_id or self._run_manager is None:
+            return
+        try:
+            status = self._run_manager.status(self._active_run_id)
+        except KeyError:
+            return
+        if status.get("running"):
+            self.statusBar().showMessage("运行中不能单步；先暂停再单步", 5000)
+            return
+        terminal = (status.get("result") or {}).get("status")
+        if terminal != "paused":
+            self.statusBar().showMessage("单步只适用于已暂停的运行", 5000)
+            return
+        try:
+            handle = self._run_manager.resume(self._active_run_id, step=True)
+        except Exception as exc:  # noqa: BLE001 - 失败要看得见原因
+            self.statusBar().showMessage(f"单步失败：{exc}", 6000)
+            return
+        self._adopt_run_handle(handle["runId"])
+
     @staticmethod
     def _resume_confirmation(terminal: str) -> tuple[str, str]:
         """恢复确认框的文案（标题, 正文）。
@@ -1839,6 +1944,7 @@ class MainWindow(QMainWindow):
         self.cancel_run_action.setEnabled(True)
         self.pause_run_action.setEnabled(True)
         self.continue_run_action.setEnabled(False)
+        self.step_run_action.setEnabled(False)
         self.continue_run_action.setToolTip("从暂停处继续；需人工确认的终态会先弹确认框")
         self._failed_node_id = None
         # 先确保运行面板（及其内部控件）已创建，再动里面的部件
@@ -1868,6 +1974,7 @@ class MainWindow(QMainWindow):
         self.cancel_run_action.setEnabled(False)
         self.pause_run_action.setEnabled(False)
         self.continue_run_action.setEnabled(False)
+        self.step_run_action.setEnabled(False)
         result = status.get("result")
         run_status = ""
         detail = ""
@@ -1914,9 +2021,25 @@ class MainWindow(QMainWindow):
         # 三种终态不是「跑完了」，而是「等人工接手」——给「继续」入口：
         # paused（暂停收口，无门槛）、recovery_required / indeterminate（需确认）。
         if run_status == "paused":
-            self._run_status_label.setText("已暂停（等待继续）")
+            # 暂停原因（M24）：断点/单步/用户暂停在界面上的说法不同，并给出定位入口
+            reason = self._last_pause_reason(events)
+            hit_node = self._last_paused_node(events)
+            if reason == "breakpoint":
+                self._run_status_label.setText(
+                    f"已暂停：命中断点 {self._node_title(hit_node) if hit_node else ''}"
+                )
+                if hit_node:
+                    self._failed_node_id = hit_node
+                    self._run_jump_button.setText("跳转到命中断点的节点")
+                    self._run_jump_button.setToolTip("在画布中定位并选中命中断点的节点")
+                    self._run_jump_button.show()
+            elif reason == "step":
+                self._run_status_label.setText("已暂停：单步完成（可继续或再单步）")
+            else:
+                self._run_status_label.setText("已暂停（等待继续）")
             self.continue_run_action.setToolTip("从暂停的节点边界继续（新进程从检查点续跑）")
             self.continue_run_action.setEnabled(True)
+            self.step_run_action.setEnabled(True)
             self._run_events_view.appendPlainText(
                 "⏸ 已暂停在节点边界（进行中的步骤已跑完）；点「继续」从检查点续跑"
             )
@@ -1980,6 +2103,22 @@ class MainWindow(QMainWindow):
         self.canvas_view.setCurrentIndex(index)
         self.canvas_view.scrollTo(index, self.canvas_view.ScrollHint.PositionAtCenter)
         self.statusBar().showMessage(f"已定位到失败节点 {node_id}", 4000)
+
+    @staticmethod
+    def _last_pause_reason(events: list[dict]) -> str | None:
+        """最近一次 runPaused 事件里的暂停原因（M24）。"""
+        for event in reversed(events):
+            if event.get("type") == "runPaused":
+                return (event.get("payload") or {}).get("reason")
+        return None
+
+    @staticmethod
+    def _last_paused_node(events: list[dict]) -> str | None:
+        """最近一次 runPaused 事件停下的节点 id。"""
+        for event in reversed(events):
+            if event.get("type") == "runPaused":
+                return event.get("node_id") or (event.get("payload") or {}).get("nodeId")
+        return None
 
     def _show_error_summary(self, error: dict) -> None:
         """填充结构化错误摘要（对齐 Web renderRunError）。"""

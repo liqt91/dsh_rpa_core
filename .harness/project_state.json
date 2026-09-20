@@ -2,13 +2,13 @@
   "project": "rpa_core",
   "phase": "command-parity-extension-editor",
   "status": "active",
-  "completed_milestone": "M23-gui-ux-parity",
-  "active_milestone": "M24-debugger",
-  "active_plan": ".harness/tasks/M24-debugger.md",
-  "active_feature": "debugger-breakpoints",
+  "completed_milestone": "M24-debugger",
+  "active_milestone": "M25-run-history",
+  "active_plan": ".harness/tasks/M25-run-history.md",
+  "active_feature": "run-history-replay",
   "next_milestone": null,
   "later_milestones": [],
-  "notes": "技术路线（ADR 0016）：GUI 为唯一主力形态，Web 编辑器（devserver）退为可选、冻结演进不删除；GUI 独立运行不需要任何 web 服务器（编辑器进程内复用 DevServerApp，运行走子进程，扩展走 Native Messaging）。M23 收口（2026-09-20）：GUI 体验对齐 G1–G5 全部完成（含维护者实测反馈批次 9 项修复：打开网页重复标签页/保存两次生效/指令树拖入/删除崩溃加固/面板残影/fx 窗口闪现/首次卡顿/打印日志+输出值预览），维护者确认观感 ok，feature gui-ux-parity 通过。M24 起进入调试能力：在 M21 跨进程暂停通道上做断点与单步（暂停即收口契约不变）。",
+  "notes": "技术路线（ADR 0016）：GUI 为唯一主力形态，Web 编辑器（devserver）退为可选、冻结演进不删除；GUI 独立运行不需要任何 web 服务器。M23 收口（GUI 体验对齐，含维护者实测反馈批次 9 项修复）。M24 收口（断点与单步）：在 M21 跨进程暂停通道上做最小扩展——节点断点（执行前停、consumedBreakpoints 防死循环、随检查点持久化）+ 单步（resume --step）；CLI 与 GUI 同权（编号栏红点/右键菜单/单步按钮），暂停原因 user|breakpoint|step 在面板区分展示。M25 起做运行历史浏览与回放（只读 run_artifacts，不建库、GUI 不承载 runtime）。",
   "task_index": ".harness/tasks/BACKLOG.md",
   "scope": {
     "in": [

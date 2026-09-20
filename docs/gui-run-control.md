@@ -79,3 +79,33 @@ run 收口后，若终态是下面两种，点「继续」会**先弹确认框**
 - **Web 编辑器（`rpa-core devserver`）尚未前端化暂停/继续**：本期只做了 PySide6 GUI。
   其 HTTP 端点也未加（ADR 0006 的通道对齐要求记在 M21 的后续项里）。
 - **桌面会话不跨进程**（见上表），这是 ADR 0004 的既有约定，M21 未改动。
+
+## 断点与单步（M24）
+
+调试入口对标影刀：
+
+- **断点**：点画布**编号栏最左列**（行首）切换；也可右键卡片 →「添加断点 / 删除断点」。
+  设了断点的行在编号栏显示**红点**。运行到该节点**之前**暂停（该节点不执行）。
+- **单步**：暂停后点工具栏或浮窗的「单步」——只执行一个节点，然后在下一个节点边界
+  再次暂停。
+- **暂停原因**在运行面板/浮窗上区分显示：「命中断点 <节点>」「单步完成」「已暂停」；
+  命中断点时可用「跳转到命中断点的节点」在画布定位。
+
+命令行同权（ADR 0006 §6 的通道对齐）：
+
+```powershell
+# 在 s2 执行前停下
+uv run rpa-core run workflows/demo/workflow.json --breakpoints s2 --artifacts run_artifacts
+
+# 从暂停点继续（一路跑完）
+uv run rpa-core resume workflows/demo/workflow.json --run-id <id> --artifacts run_artifacts
+
+# 单步：只前进一个节点
+uv run rpa-core resume workflows/demo/workflow.json --run-id <id> --artifacts run_artifacts --step
+```
+
+语义要点（详见 ADR 0005「断点与单步（M24 增补）」）：
+
+- 断点集合随**检查点**持久化（resume 是新进程，控制文件会被清空）；
+- 命中过的断点记入 `consumedBreakpoints`，resume 不会在同一节点反复停下；
+- 条件断点 / 日志断点 / 变量监视 / 运行中热更新断点不在本期范围。

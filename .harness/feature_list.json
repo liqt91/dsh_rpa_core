@@ -250,6 +250,11 @@
     {
       "id": "debugger-breakpoints",
       "title": "Debugger: node breakpoints (stop before a node, consumed-on-resume) and single-step resume over the M21 cross-process pause channel",
+      "passes": true
+    },
+    {
+      "id": "run-history-replay",
+      "title": "Run history: list past runs from run_artifacts, open an event timeline, jump to nodes, re-run with the same inputs, and resume/step a paused run",
       "passes": false
     }
   ]

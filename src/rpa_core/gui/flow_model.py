@@ -36,6 +36,7 @@ ROLE_ARGS_SUMMARY = Qt.ItemDataRole.UserRole + 13
 ROLE_IS_VIRTUAL = Qt.ItemDataRole.UserRole + 14  # 虚拟分组（then/else/catch/循环体）
 ROLE_ARGS_RAW = Qt.ItemDataRole.UserRole + 15  # action 的原始 with 参数 dict（供表单编辑）
 ROLE_RUN_STATE = Qt.ItemDataRole.UserRole + 16  # 最近运行状态：running/succeeded/failed
+ROLE_BREAKPOINT = Qt.ItemDataRole.UserRole + 17  # 是否设了断点（M24，编号栏红点）
 
 # 容器节点类型（可放置子节点）；action/return 为叶子
 _CONTAINER_TYPES = {"sequence", "if", "forEach", "try"}
