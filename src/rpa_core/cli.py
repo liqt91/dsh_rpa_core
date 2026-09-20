@@ -458,6 +458,29 @@ def _cmd_env_status() -> int:
     return 0
 
 
+def _cmd_runs(args) -> int:
+    """`runs list|show`（M25）：只读浏览 run_artifacts 里的历史运行。
+
+    输出为 JSON（与其它子命令一致，便于脚本消费）；`show` 额外带事件时间线、
+    历史输入与检查点里的调试信息（断点/已消费断点/暂停原因）。
+    """
+    from rpa_core.run_history import RunNotFoundError, list_runs, read_run
+
+    if args.runs_action == "list":
+        runs = list_runs(args.artifacts, limit=args.limit)
+        print(json.dumps({"artifacts": str(args.artifacts), "runs": runs},
+                         ensure_ascii=False, indent=2))
+        return 0
+    try:
+        detail = read_run(args.artifacts, args.run_id)
+    except RunNotFoundError as exc:
+        print(json.dumps({"error": "RUN_NOT_FOUND", "message": str(exc)},
+                         ensure_ascii=False, indent=2))
+        return 2
+    print(json.dumps(detail, ensure_ascii=False, indent=2))
+    return 0
+
+
 def _cmd_pause(args) -> int:
     """`pause`：请求暂停一个正在运行的 run（跨进程，写控制文件）。
 
@@ -612,7 +635,7 @@ def main() -> int:
     subparsers = parser.add_subparsers(dest="action", required=True)
     for action in ("validate", "run", "resume", "devserver", "catalog", "capture",
                    "elements", "auth", "status", "unauth", "install-extension",
-                   "env-status", "gui", "pause"):
+                   "env-status", "gui", "pause", "runs"):
         sub = subparsers.add_parser(action)
         if action == "devserver":
             sub.add_argument("--port", type=int, default=8765)
@@ -694,6 +717,17 @@ def main() -> int:
                 if elements_action != "list":
                     el.add_argument("name")
             continue
+        if action == "runs":
+            # 运行历史（M25）：只读 run_artifacts
+            runs_sub = sub.add_subparsers(dest="runs_action", required=True)
+            runs_list = runs_sub.add_parser("list")
+            runs_list.add_argument("--artifacts", type=Path, default=Path("run_artifacts"))
+            runs_list.add_argument("--limit", type=int, default=50,
+                                   help="最多返回多少条（0 表示不限制）")
+            runs_show = runs_sub.add_parser("show")
+            runs_show.add_argument("run_id")
+            runs_show.add_argument("--artifacts", type=Path, default=Path("run_artifacts"))
+            continue
         sub.add_argument("workflow", type=Path)
         sub.add_argument("--artifacts", type=Path, default=Path("run_artifacts"))
         if action == "run":
@@ -731,6 +765,8 @@ def main() -> int:
         return _cmd_env_status()
     if args.action == "pause":
         return _cmd_pause(args)
+    if args.action == "runs":
+        return _cmd_runs(args)
     if args.action == "gui":
         return _cmd_gui(args)
     try:

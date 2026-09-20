@@ -31,7 +31,7 @@
 
 ## 任务（切片）
 
-- [ ] **S1 只读读取器（能力层）**
+- [x] **S1 只读读取器（能力层）**（2026-09-20 done）
   - 新增 `run_artifacts` 扫描与解析：`list_runs(artifacts_root, *, limit)` → 摘要列表
     （runId/工作流/状态/起止时间/耗时/错误码/是否有检查点可恢复）；`read_run(artifacts_root, run_id)`
     → 事件列表 + 结果 + 检查点摘要（容错：损坏/半写文件跳过而不是抛错）。
