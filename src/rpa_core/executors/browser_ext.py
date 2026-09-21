@@ -14,6 +14,7 @@ from typing import Any
 
 from rpa_core.extension_exec import (
     DEFAULT_COMMAND_TIMEOUT_SECONDS,
+    ChannelMetrics,
     ExtensionExecClient,
 )
 
@@ -47,6 +48,11 @@ class ExtensionExecSession:
     @property
     def client(self) -> ExtensionExecClient:
         return self._client
+
+    @property
+    def metrics(self) -> ChannelMetrics | None:
+        """通道往返度量器（M28 S4）；客户端不是真 ``ExtensionExecClient`` 时返回 None。"""
+        return getattr(self._client, "metrics", None)
 
     def online(self) -> bool:
         return self._client.online()
@@ -174,43 +180,56 @@ class ExtensionExecSession:
 
     # -- Cookie（chrome.cookies，浏览器级） ----------------------------------
 
-    def cookies_get_all(self, *, filters: dict[str, Any] | None = None,
+    # Cookie：作用域 url 由扩展按**会话绑定的标签页**推导（`args.url || tabUrl(args.tabId)`），
+    # 所以 `tab_id` 必须传下去——M29 S2 之前它从来没传过，扩展拿到 `undefined` → `""`，
+    # chrome.cookies.get/set/remove 等于拿空 url 调 API（cookieGetAll 则退化成浏览器级全量）。
+    def cookies_get_all(self, *, filters: dict[str, Any] | None = None, tab_id: str | None = None,
                         timeout_seconds: float = DEFAULT_COMMAND_TIMEOUT_SECONDS,
                         target_host: str | None = None) -> list[dict]:
+        args = dict(filters or {})
+        if tab_id:
+            args["tabId"] = tab_id
         payload = self._client.submit(
-            "cookies.getAll", dict(filters or {}),
+            "cookies.getAll", args,
             timeout_seconds=timeout_seconds, target_host=target_host,
         )
         cookies = payload.get("cookies")
         return [dict(c) for c in cookies] if isinstance(cookies, list) else []
 
-    def cookies_get(self, name: str, *, url: str | None = None,
+    def cookies_get(self, name: str, *, url: str | None = None, tab_id: str | None = None,
                     timeout_seconds: float = DEFAULT_COMMAND_TIMEOUT_SECONDS,
                     target_host: str | None = None) -> str | None:
         args: dict[str, Any] = {"name": name}
         if url:
             args["url"] = url
+        if tab_id:
+            args["tabId"] = tab_id
         payload = self._client.submit(
             "cookies.get", args, timeout_seconds=timeout_seconds, target_host=target_host,
         )
         value = payload.get("value")
         return None if value is None else str(value)
 
-    def cookies_set(self, cookies: list[dict], *,
+    def cookies_set(self, cookies: list[dict], *, tab_id: str | None = None,
                     timeout_seconds: float = DEFAULT_COMMAND_TIMEOUT_SECONDS,
                     target_host: str | None = None) -> int:
+        args: dict[str, Any] = {"cookies": cookies}
+        if tab_id:
+            args["tabId"] = tab_id
         payload = self._client.submit(
-            "cookies.set", {"cookies": cookies},
+            "cookies.set", args,
             timeout_seconds=timeout_seconds, target_host=target_host,
         )
         return int(payload.get("count") or 0)
 
-    def cookies_remove(self, name: str, *, url: str | None = None,
+    def cookies_remove(self, name: str, *, url: str | None = None, tab_id: str | None = None,
                        timeout_seconds: float = DEFAULT_COMMAND_TIMEOUT_SECONDS,
                        target_host: str | None = None) -> int:
         args: dict[str, Any] = {"name": name}
         if url:
             args["url"] = url
+        if tab_id:
+            args["tabId"] = tab_id
         payload = self._client.submit(
             "cookies.remove", args, timeout_seconds=timeout_seconds, target_host=target_host,
         )

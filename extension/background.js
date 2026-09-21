@@ -513,14 +513,16 @@ async function domOp(payload) {
     if (el.closest && el.closest("[inert]")) return true;
     return false;
   };
-  // 元素是否被视口内其它元素遮挡：取中心点做 elementFromPoint 包含性判定。
+  // 元素是否被视口内其它元素遮挡：取**即将点击的那个点**做 elementFromPoint 包含性判定。
   // 返回 null 表示未被遮挡；否则返回遮挡者的可读描述（写进 details，便于排查）。
-  const coveringElement = (el, rects) => {
+  // `point` 缺省时退回元素中心（保持旧行为）；M29 起 click 会传入实际点击点——
+  // 「按中心判遮挡、按随机点落点击」会让遮挡判定形同虚设。
+  const coveringElement = (el, rects, point) => {
     if (!el || typeof document.elementFromPoint !== "function") return null;
     const rect = (rects && rects[0]) || (el.getBoundingClientRect ? el.getBoundingClientRect() : null);
     if (!rect || !(rect.width > 0) || !(rect.height > 0)) return null;
-    const x = rect.left + rect.width / 2;
-    const y = rect.top + rect.height / 2;
+    const x = point && Number.isFinite(point.x) ? point.x : rect.left + rect.width / 2;
+    const y = point && Number.isFinite(point.y) ? point.y : rect.top + rect.height / 2;
     if (x < 0 || y < 0 || x > window.innerWidth || y > window.innerHeight) return null;
     const top = document.elementFromPoint(x, y);
     if (!top || top === el || el.contains(top) || top.contains(el)) return null;
@@ -559,6 +561,67 @@ async function domOp(payload) {
     return null;
   };
   // [precheck-helpers:end]
+  // [click-helpers:start]
+  // 纯函数区：scripts/check_click_helpers.mjs 按标记抽取求值（标记独占一行便于切片）。
+  // M29：`browser.click` 的 `simulateHuman` / `clickPosition` 此前**声明了不生效**；
+  // 这里把「点哪个坐标」「要不要走事件链」「修饰键怎么映射」钉死成可测的纯函数。
+  // 点击点：center=元素几何中心；random=元素内「偏中心带」随机点（避开 1px 边框与内边距边沿）。
+  // 一律裁剪进「元素矩形 ∩ 视口」——两者不相交时返回 null（调用方按不可见报错）。
+  // 之所以必须裁剪：scrollIntoView 只保证元素**与视口相交**（可能有一半在视口外），
+  // 直接按元素坐标派发事件会把点落在视口外，等于点了个不存在的坐标。
+  const CLICK_POINT_BAND = 0.35; // random 落在中心 ±35%（即 0.15~0.85 区间）
+  const clampNumber = (value, low, high) => Math.min(Math.max(value, low), high);
+  // 位置归一化：manifest 只有 center/random，其余值（含缺省）按 center
+  const clickPositionMode = (raw) =>
+    String(raw == null ? "" : raw).trim().toLowerCase() === "random" ? "random" : "center";
+  const clickPoint = (position, rect, rand, viewport) => {
+    if (!rect) return null;
+    const maxX = Math.max(Number(viewport && viewport.width ? viewport.width : 0) - 1, 0);
+    const maxY = Math.max(Number(viewport && viewport.height ? viewport.height : 0) - 1, 0);
+    const left = clampNumber(rect.left, 0, maxX);
+    const top = clampNumber(rect.top, 0, maxY);
+    const right = clampNumber(rect.right == null ? rect.left + rect.width : rect.right, 0, maxX);
+    const bottom = clampNumber(rect.bottom == null ? rect.top + rect.height : rect.bottom, 0, maxY);
+    if (!(right > left) || !(bottom > top)) return null;
+    const random = clickPositionMode(position) === "random";
+    const roll = typeof rand === "function" ? rand : Math.random;
+    const ratio = () => {
+      if (!random) return 0.5;
+      const raw = Number(roll());
+      const unit = Number.isFinite(raw) ? clampNumber(raw, 0, 1) : 0;
+      return 0.5 - CLICK_POINT_BAND + 2 * CLICK_POINT_BAND * unit;
+    };
+    return {
+      x: Math.round(left + (right - left) * ratio()),
+      y: Math.round(top + (bottom - top) * ratio()),
+    };
+  };
+  // 修饰键归一化：manifest 的枚举是 Alt/Ctrl/Shift/Win，而 DOM 事件字段是
+  // altKey/ctrlKey/metaKey/shiftKey——"Ctrl"/"Win" 必须映射到 ctrlKey/metaKey，
+  // 否则用户勾了「Ctrl」却一个修饰键都没生效（此前的静默漂移）。
+  const modifierFlags = (modifiers) => {
+    const flags = { altKey: false, ctrlKey: false, metaKey: false, shiftKey: false };
+    for (const item of Array.isArray(modifiers) ? modifiers : []) {
+      const name = String(item == null ? "" : item).trim().toLowerCase();
+      if (name === "alt") flags.altKey = true;
+      else if (name === "ctrl" || name === "control") flags.ctrlKey = true;
+      else if (name === "win" || name === "meta" || name === "cmd" || name === "command") {
+        flags.metaKey = true;
+      } else if (name === "shift") flags.shiftKey = true;
+    }
+    return flags;
+  };
+  // simulateHuman：manifest 默认 true。只有**显式** false（含字符串 "false"）才走最短路径
+  const simulateHumanEnabled = (raw) =>
+    String(raw == null ? "" : raw).trim().toLowerCase() !== "false";
+  // 是否走最短路径 el.click()：仅当显式关掉「模拟人工」，且参数面上没有 el.click() 表达不了的东西
+  // （右键/中键、辅助键、双击）。**这些情况下仍走事件链**——静默忽略参数就是新的漂移。
+  const useProgrammaticClick = (simulateHuman, button, modifiers, clickType) =>
+    !simulateHumanEnabled(simulateHuman) &&
+    String(button == null ? "left" : button).trim().toLowerCase() === "left" &&
+    (Array.isArray(modifiers) ? modifiers.length === 0 : true) &&
+    String(clickType == null ? "single" : clickType).trim().toLowerCase() === "single";
+  // [click-helpers:end]
   const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   const pressEnter = (el) => {
     const enter = { key: "Enter", code: "Enter", keyCode: 13, bubbles: true };
@@ -682,14 +745,19 @@ async function domOp(payload) {
   // 否则元素刚被选中就因落在视口外而误报不可见。滚动后再跑 elementPrecheck。
   // 滚动没把它带进视口（多为祖先容器 overflow 裁剪或滚动被拦截）→ 直接报不可见，
   // 绝不带着错误坐标继续点（否则「点击」会落在视口内的其它元素上，静默点错）。
+  // M29：这里同时算出**实际要点击的那个点**（click 按 manifest 的 clickPosition 选点，
+  // 其余动作取中心），该点既用于遮挡判定、也用于派发事件坐标——判定与落点必须是同一个点。
+  let actionPoint = null;
   if (precheckRequired(method)) {
     el.scrollIntoView({ block: "center", inline: "nearest" });
     const rect = el.getBoundingClientRect();
-    const inViewport =
-      rect.width > 0 && rect.height > 0 &&
-      rect.bottom > 0 && rect.right > 0 &&
-      rect.top < window.innerHeight && rect.left < window.innerWidth;
-    if (!inViewport) {
+    actionPoint = clickPoint(
+      method === "click" ? args.clickPosition : "center",
+      rect,
+      Math.random,
+      { width: window.innerWidth, height: window.innerHeight },
+    );
+    if (!actionPoint) {
       return {
         matchedCount,
         result: null,
@@ -698,7 +766,7 @@ async function domOp(payload) {
     }
     const failed = elementPrecheck(el);
     if (failed) return { matchedCount, result: null, precheck: failed };
-    const blocker = coveringElement(el, el.getClientRects());
+    const blocker = coveringElement(el, el.getClientRects(), actionPoint);
     if (blocker) {
       const label = [
         blocker.tag,
@@ -768,13 +836,24 @@ async function domOp(payload) {
     case "click": {
       el.scrollIntoView({ block: "center", inline: "nearest" });
       const button = args.button === "right" ? 2 : (args.button === "middle" ? 1 : 0);
-      const init = { bubbles: true, cancelable: true, button, view: window };
-      for (const mod of args.modifiers || []) {
-        if (mod === "Alt") init.altKey = true;
-        if (mod === "Control") init.ctrlKey = true;
-        if (mod === "Meta") init.metaKey = true;
-        if (mod === "Shift") init.shiftKey = true;
+      const modifiers = args.modifiers || [];
+      // 坐标与遮挡判定用同一个点（actionPoint 在预检块里算好）；
+      // 此前事件完全没有坐标（clientX/clientY 恒为 0），按坐标做区域判断的页面会读到假数据。
+      const point = actionPoint || { x: 0, y: 0 };
+      if (useProgrammaticClick(args.simulateHuman, args.button, modifiers, args.clickType)) {
+        // 最短路径（simulateHuman=false 且是普通左键单击）：直接触发激活行为，不派发 mousedown/mouseup
+        el.click();
+        return { matchedCount, result: true };
       }
+      const init = {
+        bubbles: true,
+        cancelable: true,
+        button,
+        view: window,
+        clientX: point.x,
+        clientY: point.y,
+      };
+      Object.assign(init, modifierFlags(modifiers));
       if (button === 2) fire(el, "contextmenu", init);
       fire(el, "mousedown", init);
       fire(el, "mouseup", init);

@@ -1,5 +1,23 @@
 # 工作日志
 
+## 2026-09-21
+
+- **M29 参数漂移收口（S1–S4 全完）**——把「声明了不生效」的参数一次清完，并把口径变成门禁。
+  - **先换口径，再动手**：M28 的复查是「参数名是否在实现里出现过」，它看不见同名字段在别处出现——`cookieGetAll.name` 就是这么漏掉的。改成**按命令字面量切片**（AST 取 `command == "<id>"` 分支里的 `inputs` 读取）后，立刻又挖出一处 cookie 族漂移。**启示：审计口径的精度决定你看到几张牌**。
+  - **实装（能兑现的）**：`click.simulateHuman`（`false`=最短路径 `el.click()`；**只在普通左键单击时生效**——右键/中键/双击/带辅助键仍走事件链，理由写进 manifest 说明，否则「静默忽略参数」又是一种新漂移）；`click.clickPosition`（random 取元素内偏中心带 15%~85% 的随机点，**裁剪进「元素 ∩ 视口」**，并且**遮挡预检用同一个点**——此前预检看元素中心、事件坐标恒 0，等于「判一个点、点另一个点」；现在事件带真实 `clientX/clientY`）；顺手修掉同族第三处：`modifiers` 的枚举是 `Ctrl`/`Win`，扩展里比的却是 `"Control"`/`"Meta"`，**勾了等于没勾**。
+  - **补传导**：`cookieGetAll` 的 `name`/`domain`/`path` 一个都没转发（等于浏览器级全量返回）；四个 cookie 命令的 `tabId` 从未传给扩展 → `tabUrl(undefined)` → `""` → 拿空 url 调 Chrome API。另外把「支持子串匹配」的错误说明按 Chrome 真实语义改正（name 精确 / domain 含子域 / path 精确）。
+  - **删除（兑现不了的）**：`screenshot.fullPage`/`selector`（`captureVisibleTab` 只能截「当前可见标签页的可见区」，裁剪与整页拼接都要先解码图像，而 MV3 service worker 没有 `Image`/`FileReader`）；`close.forceKill`/`ignoreUnload`（扩展通道的 close 是**本地解绑**，不代关用户标签页、不杀用户浏览器进程，`tabs.remove` 本身也不弹 beforeunload）。**藏一个勾了就假成功的开关，比缺一个功能更坏**；缺口与设计路径另立 BACKLOG。迁移动作只有一步：旧流程删掉那个字段（`additionalProperties:false` 会在校验期显式报错，而不是继续静默跑错）。
+  - **文档也错了一处**：`waitFor` 的 `hidden` 与 `detached` **并不等价**（四态由 `want_visible`/`want_present` 两个正交开关决定：`hidden` 会被「存在但不可见」满足，`detached` 不会）——代码一直是对的，写错的是文档。顺带补记一个真实差异：`count` 的轻量可见判定与执行前预检的严格判定**不是同一套**，所以 `opacity: 0` 或视口外的元素会出现「`waitFor` 说等到了、点击说不可见」。
+  - **门禁落地**：`.harness/scripts/check_param_consumption.py` 进 `check_all.py`——声明的参数必须被该命令分支读取（或属通用读取），返回 `COMMAND_NOT_FOUND` 的未实现命令整表豁免、实现后自动纳入。**做了负向验证**（临时插一个假开关 → 门禁立刻红），否则「不会失败的门禁」等于没有。覆盖 27 条扩展通道命令；范围外的 48 条（桌面/数据通道的分派不是字面量形状）**如实打印跳过条数**并入 BACKLOG，不假装已全清。
+  - **审计顺带发现的桌面通道问题**（已登记、未在本里程碑清）：`desktop.win32.click` 的 `simulateHuman`/`clickPosition` 同样是死的；更要紧的是多条桌面命令声明了 `timeoutMs` 而执行器不读，而 GUI 一见到命令自带 `timeoutMs` 就**隐藏引擎级超时字段**——那些节点等于既没有引擎超时也没有命令超时。
+
+- **M28 S4 收官（度量 + 边界文档），M28 四片全完**：
+  - **度量**：计数点只有一处——截在 `extension_exec.ExtensionExecClient` 的传输层，所以自愈候选重试、跨端点重发、状态探测**天然全部入账**，80+ 条命令不用逐个埋点（也就不会有「新命令忘了埋」）。`ChannelMetrics` 把 `ops`（命令信封，自愈重试各算一次）与 `statusProbes`（探测单独计量）分开——否则「每步一次探测」会被读成「命令变重了」。执行器在命令边界并进 `CommandResult.diagnostics.extension`（成功与失败都有），随 checkpoint 落库 → 每步往返数可复盘。
+  - **顺带修掉度量自身的精度缺陷**：`time.monotonic()` 在 Windows 上粒度约 15.6ms、比一步命令还粗，会把 `stepMs` 与 navigate 的 `durationMs` 整片记成 0 → 改用 `perf_counter()`。**度量写得再细，时钟不对就是零**。
+  - **基线**：每命令信封数表**由测试机器校验**（表即测试，新增命令必须登记）；会话内命令 = 1 次探测 + 1 次命令往返，探测带 2s TTL 摊销（同一命令在不同位置往返数不同，只有这一个合法原因）；真实 `ext_bridge` 子进程实测 20 次 `page.call`：p50 4.8–6.0ms / max 18.9–28.7ms。防回归两条腿：确定性精确断言 + 耗时宽上界。
+  - **边界文档**：17 条矩阵 + 逐条代码依据。两条最容易被误报成缺陷的：**alert 阻塞页面 JS 会伪装成「通道坏了」**（表现为命令等到超时）；**截图截的是「窗口当前可见标签页」**，目标页被切到后台就静默截错页。`:hover` 伪类风险只标注「待真机确认」并附验证步骤——不拿未实测的结论当事实，也不据猜测改实现。
+  - **S4 复查又挖出 4 处参数漂移**（S3 修的是 `input` 那两个）：`click.simulateHuman` 默认 `true` 且说明写着「待元素被遮挡时可用」，实现里根本没消费——而遮挡现在会显式报 `ELEMENT_COVERED`，这个参数是**最容易被当成遮挡解法**的坑；另有 `click.clickPosition`、`screenshot.fullPage`+`selector`、`close.forceKill`+`ignoreUnload`。全部如实登记文档 §3（附可重复的复查脚本）与 BACKLOG——**不在里程碑里假装已清**。
+
 ## 2026-09-20
 
 - **扩展通道诊断可见性（extension-diagnostics-visibility）**：维护者需求——**不打开浏览器就要能看出 bridge 注册没注册、插件装没装**，而不是只显示一句「离线」。能力层新增只读 `extension_installer.channel_diagnostics()`（bridge 注册 × 插件安装/加载 × 浏览器运行 × 当前实例是否加载）→ 稳定 `reason` + 一行中文摘要 + `offline_hint()` 处置建议；GUI 状态栏徽标、插件对话框共用同一诊断；静态体检（bridge + 读 profile）带 30s TTL，5s 轮询不反复读 Secure Preferences。**全程不启动浏览器**。

@@ -7,6 +7,15 @@
 
 > **落地记录 2026-09-10**：P0+P1 建议已采纳实现——新增 `browser.waitLoad / scroll / check / cookieSet / cookieGetAll / cookieGet / cookieRemove / attach / listPages / drag`（catalog 55→65），扩展 `browser.navigate`（action=goto/back/forward/reload）、`browser.getText`（infoType=text/html/outerHTML/value/href）、`browser.waitFor`（state=visible/hidden/detached/attached）。真机 E2E 24 项断言全部通过。P2 待元素句柄/监听协议设计后实施。
 
+> **落地记录 2026-09-21（M29 参数漂移收口）**：本表的「✅ 对齐」此前是**参数面对齐**，
+> 但其中一部分参数在扩展通道**从未被消费**（M28 S4 复查发现、M29 收口）。已处置：
+> `browser.click` 的 `simulateHuman`/`clickPosition`/`modifiers`（Ctrl/Win 与事件字段对不上）
+> **实装**；`browser.cookieGetAll` 的 `name`/`domain`/`path` 与四个 cookie 命令的 `tabId`
+> **补上传导**；`browser.screenshot` 的 `fullPage`/`selector`（第 29 行）与 `browser.close` 的
+> `forceKill`/`ignoreUnload`（第 4 行）在单通道下**无对应物，已从 manifest 删除**（不留假开关）。
+> 口径与门禁见 `docs/element-mvp-boundaries.md` §3；`.harness/scripts/check_param_consumption.py`
+> 已进全门禁，新增「声明了不生效」的参数会直接红。
+
 ---
 
 ## 一、覆盖总览
@@ -33,7 +42,7 @@
 | 1 | [打开网页](yingdao-cmds/打开网页.md) | 浏览器类型(7值枚举)、网址、加载超时、命令行参数（→网页对象） | `browser.navigate` | ✅ | 参数面差异：影刀「浏览器类型」是用户语义枚举（cef/chrome/edge/ie/360se/firefox/QQBrowser），我们收敛为**自研扩展单通道**、仅支持 Edge/Chrome 插件，故 `browserType` 只取 `msedge`/`chrome`（必选一，默认 msedge，无 auto）；playwright / bsk 已彻底移除。多浏览器各自装了插件时，命令按 `browserType` 路由到对应扩展实例，未装插件的浏览器在编辑器下拉置灰、运行期快速失败（TARGET_HOST_OFFLINE）。参数：`browserType/url/action/timeoutMs`（分组：浏览器 + 常规 + 高级）。输出为会话（网页）对象 |
 | 2 | [选择浏览器用户](yingdao-cmds/选择浏览器用户.md) | 浏览器类型（→用户配置对象） | — | ❌ | 多账号/用户配置文件切换，依赖登录态的场景需要 |
 | 3 | [获取已打开的网页对象](yingdao-cmds/获取已打开的网页对象.md) | 浏览器类型、标题/URL匹配（→网页对象） | `browser.attach` | ✅ | 同 context 按 title/url 子串或正则匹配，产出独立网页会话 |
-| 4 | [关闭网页](yingdao-cmds/关闭网页.md) | 操作(关闭指定/关闭所有)、终止浏览器进程、忽略确认离开对话框 | `browser.close` | 🟡 | 有 `forceKill`/`ignoreUnload`；缺「关闭所有网页」（跨会话批量） |
+| 4 | [关闭网页](yingdao-cmds/关闭网页.md) | 操作(关闭指定/关闭所有)、终止浏览器进程、忽略确认离开对话框 | `browser.close` | 🟡 | close=**本地解绑**（不代关用户标签页、不杀用户浏览器进程）；`forceKill`/`ignoreUnload` 在 M29 已删（单通道下无对应物）；缺「关闭所有网页」 |
 | 5 | [跳转至新网址](yingdao-cmds/跳转至新网址.md) | 网页对象、跳转方式(新页面/**后退/前进/重新加载**)、加载超时 | `browser.navigate` | ✅ | `action=goto/back/forward/reload` |
 | 6 | [等待网页加载完成](yingdao-cmds/等待网页加载完成.md) | 网页对象、超时时间(s) | `browser.waitLoad` | ✅ | state=load/domcontentloaded/networkidle |
 | 7 | [停止网页加载](yingdao-cmds/停止网页加载.md) | 网页对象 | — | ❌ | 对应 `page.stopLoading` 类原语 |
@@ -44,7 +53,7 @@
 
 | # | 影刀指令 | 影刀核心参数（→输出） | rpa_core 对应 | 状态 | 差距备注 |
 |---|---|---|---|---|---|
-| 10 | [点击元素(web)](yingdao-cmds/点击元素_web.md) | 网页对象、操作目标、模拟人工、点击方式、鼠标按钮、辅助按键、点击位置、执行后延迟、等待存在(s) | `browser.click` | ✅ | 参数面高度对齐（clickType/button/modifiers/clickPosition/simulateHuman/postDelayMs 齐全） |
+| 10 | [点击元素(web)](yingdao-cmds/点击元素_web.md) | 网页对象、操作目标、模拟人工、点击方式、鼠标按钮、辅助按键、点击位置、执行后延迟、等待存在(s) | `browser.click` | ✅ | 参数面齐全**且已实装**（M29 前 `clickPosition`/`simulateHuman`/`modifiers` 只进 manifest 未消费，属纸面对齐） |
 | 11 | [鼠标悬停在元素上(web)](yingdao-cmds/鼠标悬停在元素上_web.md) | 网页对象、操作目标 | `browser.hover` | ✅ | 一致 |
 | 12 | [填写输入框(web)](yingdao-cmds/填写输入框_web.md) | 网页对象、操作目标、内容、输入模式(set_value/模拟人工/逐字按键)、追加、Enter、执行后延迟、等待存在(s) | `browser.input` | ✅ | mode/append/pressEnter/keyIntervalMs/postDelayMs 对齐 |
 | 13 | [填写密码框(web)](yingdao-cmds/填写密码框_web.md) | 同输入框，值为密码 | `browser.input` | 🟡 | input 可填，但无密码框专用语义（防泄露/掩码展示），编辑器体验差异 |
@@ -68,7 +77,7 @@
 | 26 | [获取网页信息](yingdao-cmds/获取网页信息.md) | 网页对象（→标题/URL/文本长度） | — | 🟡 | executeScript 可变通；建议给 navigate 输出补 title 或加独立命令 |
 | 27 | [获取网页对象列表](yingdao-cmds/获取网页对象列表.md) | —（→网页对象列表） | `browser.listPages` | ✅ | 输出同 context 全部标签页 index/url/title |
 | 28 | [获取滚动条位置](yingdao-cmds/获取滚动条位置.md) | 网页对象（→滚动位置） | — | ❌ | 与 #8 滚动成对 |
-| 29 | [网页截图](yingdao-cmds/网页截图.md) | 截图区域(元素/可视区域/**整个网页**)、保存文件夹、随机文件名、剪切板输出（→文件路径） | `browser.screenshot` | ✅ | selector(元素)/fullPage(整页) 对齐；缺「保存到剪切板」输出方式 |
+| 29 | [网页截图](yingdao-cmds/网页截图.md) | 截图区域(元素/可视区域/**整个网页**)、保存文件夹、随机文件名、剪切板输出（→文件路径） | `browser.screenshot` | 🟡 | 只截「窗口当前可见标签页的可见区」；M29 已删 `selector`/`fullPage`（`captureVisibleTab` 能力边界，整页/元素截图见 BACKLOG）；缺「保存到剪切板」 |
 
 ### 4. 批量抓取（1 条）
 

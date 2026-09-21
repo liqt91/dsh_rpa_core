@@ -190,6 +190,31 @@ check(
   null,
 );
 
+// ---- M29：遮挡判定必须用**实际要点击的那个点**（默认仍是元素中心）----
+let probed = null;
+const probeFactory = makeFactory({
+  ...viewportGlobals,
+  document: {
+    elementFromPoint: (x, y) => {
+      probed = { x, y };
+      return self;
+    },
+  },
+});
+probeFactory.coveringElement(self, [{ width: 200, height: 100, left: 0, top: 0 }]);
+check("不传点 → 用元素中心探测", probed, { x: 100, y: 50 });
+probeFactory.coveringElement(self, [{ width: 200, height: 100, left: 0, top: 0 }], { x: 12, y: 34 });
+check("传点 → 用传入的点探测（随机点击点不能被中心判定掩盖）", probed, { x: 12, y: 34 });
+probeFactory.coveringElement(self, [{ width: 200, height: 100, left: 0, top: 0 }], { x: NaN, y: 34 });
+check("单个坐标非法 → 该轴退回元素中心（不拿 NaN 去探测）", probed, { x: 100, y: 34 });
+const oddMask = { tagName: "DIV", id: "odd", className: "", contains: () => false };
+const oddFactory = makeFactory({ ...viewportGlobals, document: { elementFromPoint: () => oddMask } });
+check(
+  "传入点在视口外 → 不判遮挡（交给视口预检）",
+  oddFactory.coveringElement(self, [{ width: 200, height: 100, left: 0, top: 0 }], { x: 5000, y: 10 }),
+  null,
+);
+
 // ---- 反漂移：预检必须在 domOp 里被真正调用，且失败要结构化回传 ----
 if (!/elementPrecheck\(el\)/.test(source)) {
   failed += 1;
@@ -197,11 +222,11 @@ if (!/elementPrecheck\(el\)/.test(source)) {
 } else {
   console.log("PASS | domOp 调用 elementPrecheck");
 }
-if (!/coveringElement\(el, el\.getClientRects\(\)\)/.test(source)) {
+if (!/coveringElement\(el, el\.getClientRects\(\), actionPoint\)/.test(source)) {
   failed += 1;
-  console.error("FAIL | domOp 未做 elementFromPoint 遮挡判定：点到遮罩层会再次静默成功");
+  console.error("FAIL | domOp 未用实际点击点做遮挡判定：点到遮罩层会再次静默成功");
 } else {
-  console.log("PASS | domOp 做遮挡判定");
+  console.log("PASS | domOp 用实际点击点做遮挡判定");
 }
 if (!/precheckRequired\(method\)/.test(source)) {
   failed += 1;

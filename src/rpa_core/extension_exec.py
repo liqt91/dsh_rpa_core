@@ -20,6 +20,7 @@ import queue
 import threading
 import time
 import uuid
+from dataclasses import dataclass, field
 from typing import Any
 
 from rpa_core import local_transport
@@ -44,6 +45,86 @@ class ExtensionChannelError(RuntimeError):
         self.code = code
         # 扩展侧的结构化附加信息（M28 S2 预检：blockedBy / blockedByLabel 等）
         self.details = details or {}
+
+
+@dataclass
+class ChannelMetrics:
+    """扩展通道往返计数与耗时（M28 S4 度量基线）。
+
+    计数点只有一处：本模块的传输层（``submit`` / ``_status_of``）。因此**所有**命令
+    （含元素自愈的候选重试、跨端点重发、状态探测）都自动被计入，不需要在 80+ 条
+    命令的 executors 里逐个埋点——也就不会有「新命令忘了埋」的漏网。
+
+    口径（改口径等于改基线，勿随手调）：
+
+    - ``ops``：一条命令信封 = 一次 ``submit``。自愈候选重试**各算一次**（这是有意
+      为之：「这次点击花了 3 次往返」正是要看得见的东西）。
+    - ``attempts``：真正发到端点的信封数（≥ ``ops``）。多浏览器并存或端点抖动导致
+      跨端点遍历时它会大于 ``ops``，差额即 ``retries``（同一条命令换个端点再发一次）。
+    - ``probes``：``status`` 探测次数。每次也是一次真实往返，但**不属于命令本身**——
+      执行器的扩展在线前置检查、自启后的上线轮询都会发；单独计量，免得把它混进
+      「命令变慢了」的判断里。
+    - ``round_trips``：``attempts + probes``，这一步在扩展通道上到底走了几个来回。
+    - ``channel_ms``：通道内耗时合计（连接 + 等待应答）；``step_ms`` 由执行器给出，
+      两者相除即「这一步慢在通道还是慢在编排」。
+    """
+
+    ops: int = 0
+    attempts: int = 0
+    probes: int = 0
+    channel_ms: float = 0.0
+    by_op: dict[str, int] = field(default_factory=dict)
+
+    @property
+    def round_trips(self) -> int:
+        return self.attempts + self.probes
+
+    @property
+    def retries(self) -> int:
+        """同一条命令因跨端点重发而多走的次数（正常单端点时为 0）。"""
+        return max(0, self.attempts - self.ops)
+
+    def reset(self) -> None:
+        """命令边界清账（执行器在每步开始时调用）。"""
+        self.ops = 0
+        self.attempts = 0
+        self.probes = 0
+        self.channel_ms = 0.0
+        self.by_op = {}
+
+    def record_envelope(self, op: str, *, exchange_ms: float, first: bool) -> None:
+        """记一次发到端点的信封；``first`` 为假表示这是同一条命令的跨端点重发。"""
+        if first:
+            self.ops += 1
+            self.by_op[op] = self.by_op.get(op, 0) + 1
+        self.attempts += 1
+        self.channel_ms += exchange_ms
+
+    def record_probe(self, *, exchange_ms: float) -> None:
+        """记一次 status 探测（失败也算：它也真的占了一次往返和等待时间）。"""
+        self.probes += 1
+        self.channel_ms += exchange_ms
+
+    def as_diagnostics(
+        self, *, step_ms: float | None = None, extra: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        """转成执行证据里的 JSON（camelCase，与其它 evidence 字段同口径）。"""
+        payload: dict[str, Any] = {
+            "roundTrips": self.round_trips,
+            "ops": self.ops,
+            "statusProbes": self.probes,
+            "retries": self.retries,
+            "channelMs": round(self.channel_ms, 1),
+            "byOp": dict(sorted(self.by_op.items())),
+        }
+        if step_ms is not None:
+            payload["stepMs"] = round(step_ms, 1)
+            payload["channelShare"] = (
+                round(self.channel_ms / step_ms, 3) if step_ms > 0 else None
+            )
+        if extra:
+            payload.update(extra)
+        return payload
 
 
 def browser_name_from_user_agent(user_agent: str) -> str | None:
@@ -129,6 +210,8 @@ class ExtensionExecClient:
         self.endpoint = endpoint or None
         self._status_ttl = status_ttl
         self._status_cache: tuple[float, dict[str, Any]] | None = None
+        # 通道往返度量（M28 S4）：本客户端是这条通道唯一出入口，计数即在此累计
+        self.metrics = ChannelMetrics()
 
     # -- 端点选择 ------------------------------------------------------------
 
@@ -210,12 +293,16 @@ class ExtensionExecClient:
         return value
 
     def _status_of(self, endpoint: str, timeout: float = 1.5) -> dict[str, Any] | None:
+        started = time.perf_counter()  # 度量耗时：perf_counter 才有亚毫秒分辨率
         try:
             reply = self._exchange(
                 endpoint, {"type": "status"}, timeout, expect_type="status"
             )
         except ExtensionChannelError:
             return None
+        finally:
+            # 失败也要记：探测超时同样是「白等了一段」的真实成本
+            self.metrics.record_probe(exchange_ms=(time.perf_counter() - started) * 1000.0)
         if not isinstance(reply, dict):
             return None
         extension = reply.get("extension") or {}
@@ -307,7 +394,9 @@ class ExtensionExecClient:
             "timeoutSeconds": max(0.1, timeout_seconds),
         }
         last_error: ExtensionChannelError | None = None
-        for endpoint in targets:
+        for index, endpoint in enumerate(targets):
+            started = time.perf_counter()
+            attempt_error: ExtensionChannelError | None = None
             try:
                 result = self._exchange(
                     endpoint,
@@ -317,7 +406,15 @@ class ExtensionExecClient:
                     expect_id=command_id,
                 )
             except ExtensionChannelError as exc:
-                last_error = exc
+                attempt_error = last_error = exc
+                result = {}
+            # 度量（M28 S4）：成功与失败都要记——「一次失败重发」同样是往返成本
+            self.metrics.record_envelope(
+                op,
+                exchange_ms=(time.perf_counter() - started) * 1000.0,
+                first=index == 0,
+            )
+            if attempt_error is not None:
                 continue
             if not result.get("ok"):
                 error = result.get("error") or {}

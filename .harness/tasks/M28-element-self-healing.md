@@ -1,6 +1,6 @@
 # M28 元素自愈与执行前预检
 
-状态：`active`
+状态：`done`
 
 关联：M10（元素候选 + 语义特征，已落地数据模型）、ADR 0013（浏览器执行收敛为扩展单通道）、
 `docs/element-self-healing-plan.md`（本计划的调研依据与结论）
@@ -37,10 +37,29 @@
     或改为「分片逐字 + 由执行器按间隔多次调用」——实现前定这一处契约）。
   - `clipboard` 模式实装（或明确报「未实现」而不是静默退化成逐字）。
   - 验收：设了间隔的逐字输入确实有间隔；`clipboard` 有真实粘贴语义或明确失败。
-- [ ] **S4 度量与边界文档**
-  - 记录每步**扩展通道往返数 + 耗时**作为基线（防性能回归）；把 MVP 边界（shadow DOM / iframe /
-    canvas / 上传下载 / 弹窗标签页 / 嵌套滚动 / 键盘控件）写成文档，避免被反复当成缺陷追问。
-  - 验收：full gate 通过；文档落地。
+- [x] **S4 度量与边界文档**（2026-09-21 done）
+  - 度量：计数点只有一处——`extension_exec.ExtensionExecClient` 的传输层（`submit`/`_status_of`），
+    故所有命令（含自愈候选重试、跨端点重发、状态探测）自动被计入，80+ 条命令无需逐个埋点；
+    `ChannelMetrics` 口径 `ops`（命令信封，自愈重试各算一次）/`statusProbes`（探测单独计量）/
+    `roundTrips`/`retries`（跨端点重发）/`channelMs`/`byOp`，执行器在命令边界并进
+    `CommandResult.diagnostics["extension"]`（成功与失败都有）→ 随 `scopes.steps.<node>.diagnostics`
+    进 checkpoint，每步往返数可复盘。**顺带修掉计时精度缺陷**：`stepMs`/`channelMs` 改用
+    `perf_counter`——`time.monotonic()` 在 Windows 上粒度约 15.6ms，比一步命令还粗，会把常见命令
+    整片记成 `stepMs: 0`（navigate 的 `durationMs` 同源一并修正）。
+  - 基线（`docs/extension-channel-baseline.md`）：每命令信封数表**由测试机器校验**（表即测试，
+    新增命令必须登记）；会话内命令「1 次 status 探测 + 1 次命令往返」及其 2s TTL 摊销口径；
+    真实 host 子进程实测耗时（p50 ≈ 5–6ms / max ≈ 19–29ms / 20 次合计 ≈ 107–147ms，不含浏览器）；
+    防回归两条腿（确定性精确断言 + 耗时宽上界）；「合法变化 vs 回归」判别表；刷新口径脚本。
+  - 边界（`docs/element-mvp-boundaries.md`）：17 条边界矩阵 + 逐项代码依据，含 iframe（`all_frames:false`
+    + 无 `allFrames`/`frameId`，捕获与执行**对称**只覆盖主 frame）、shadow DOM（无 `shadowRoot`/
+    `composedPath`）、canvas/无坐标点击、`isTrusted=false` 合成事件、键盘面缺失、上传/下载/原生对话框
+    未实现（含现象与可行替代）、新标签页不被自动接管、嵌套滚动、`waitFor` 的 `hidden`≡`detached`、
+    截图是「窗口当前可见标签页的可见区」（**静默可能截错页**）、受保护页面、命中不唯一、
+    自愈只认本流程资产、CSS `:hover` 标注**待真机确认**；§3 汇总**参数漂移清单**（复查发现 4 处
+    「声明了不生效」，含 `click.simulateHuman` 默认 true 却无效）并附可重复的复查脚本。
+  - 验收：`test_browser_channel_metrics.py` 40 项（含端到端落库：真 catalog + 真编排器 → checkpoint
+    里读到 `diagnostics.extension`）；`test_ext_bridge.py::test_channel_round_trip_baseline` 真实
+    bridge 耗时上界；full gate 通过；两份文档落地。
 
 ## 不做（已定案 2026-09-20）
 
@@ -53,6 +72,17 @@
 
 - 主选择器失效时能靠候选自愈，且证据可追溯；执行前预检杜绝静默误点；
 - 已声明参数不再「声明了不生效」；每切片：契约/单测 + `check_all.py` 全门禁通过；PROGRESS 追加一行。
+  - **口径补充（2026-09-21 S4 复查）**：S3 修掉的是 `input` 两个参数；用同一口径复查全部 30 条
+    `commands/browser/*.json` 后，仍有 4 处「声明了不生效」（`click.simulateHuman` / `click.clickPosition` /
+    `screenshot.fullPage`+`selector` / `close.forceKill`+`ignoreUnload`）——已如实登记进
+    `docs/element-mvp-boundaries.md` §3 与 BACKLOG「浏览器命令参数漂移收口」，**不在本里程碑内假装已清**。
+
+## 收口补充（2026-09-21，S4）
+
+- 度量与边界两份文档落地（`docs/extension-channel-baseline.md`、`docs/element-mvp-boundaries.md`）。
+- 顺带修掉一个**度量自身的精度缺陷**：`time.monotonic()` 在 Windows 上粒度约 15.6ms，比一步命令还粗，
+  用它计时会把 `stepMs` / navigate 的 `durationMs` 记成 0 → 改用 `perf_counter()`。
+- S4 期间发现的 `:hover` 风险标注为**待真机确认**（附验证步骤），不当事实用、不据猜测改实现。
 
 ## 风险 / 注意
 

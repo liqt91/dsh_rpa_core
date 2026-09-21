@@ -4,20 +4,35 @@
 
 ## 当前任务
 
-- [ ] **M28 元素自愈与执行前预检**（`active`）
-  - 计划：`M28-element-self-healing.md`；调研依据：`docs/element-self-healing-plan.md`
-  - 已完成（2026-09-20）：**S1** 运行期消费 `selector.candidates`（主选择器失效时按稳定性回退，
-    证据记录所用候选）· **S2** 执行前预检与错误分类（`ELEMENT_COVERED`/`DISABLED`/`NOT_VISIBLE`）·
-    **S3** 参数漂移修复（`keyIntervalMs` 真正生效、`clipboard` 实装，并补 `clickBeforeInput`/`postDelayMs`）
-  - 待做：**S4** 度量基线（扩展通道往返数 + 耗时）+ MVP 边界文档 —— M28 仅剩此片
-  - 附（非 M28 切片，2026-09-20 done）：**扩展通道诊断可见性**——状态栏徽标离线时给出
-    「bridge 注册 / 插件安装 / 浏览器运行 / 当前实例是否加载」，而不是一句「离线」
-  - 不做（已定案）：新增 `mode: "insert"`；后台标签页焦点模拟
+- [ ] **待维护者定向**（`planned`）——M29 收口后无 active 任务：后续任务里 M26（流程 inputs 编辑 UI）
+  与「桌面/数据通道参数漂移复核」均可直接开工；技术路线（ADR 0016）继续约束新增能力优先落 GUI。
 
 ## 后续任务
 
 - [ ] **M26 流程 inputs 声明编辑 UI**（`planned`——原为 M25 之后第一项，因维护者定向先做
   M27 工作台、随后做 M28 元素自愈而顺延；计划见 `M26-flow-inputs-editor.md`）
+- [ ] **桌面 / 数据通道参数漂移复核**（`planned`，缺陷等级——M29 门禁审计发现，浏览器通道已收口）
+  - 为什么没在 M29 内清：这两类通道的命令分派**不是 `command == "<id>"` 字面量形状**
+    （走注册表/helper），`check_param_consumption.py` 的静态切片不适用，门禁如实打印跳过条数。
+  - 已确认的样例（尚未逐条定「实现它 / 删掉」）：`commands/desktop_win32/click.json` 的
+    `simulateHuman`/`clickPosition`；`desktop.win32.{click,getText,input,hotkey,menuSelect}` 与
+    `desktop.attachWindow` 的 `timeoutMs`、`desktop.attachWindow.className`/`operationTimeoutMs`。
+  - **其中 `timeoutMs` 值得优先定案**：GUI 见到命令自带 `timeoutMs` 就会隐藏引擎级超时字段
+    （`gui/param_form.py` 的 `has_own_timeout`），而执行器不读它 → 这些节点等于
+    **既没有引擎超时、也没有命令超时**（挂死只能靠工作流级 deadline 兜）。
+  - 口径同 M29：先把门禁的覆盖范围扩到这些通道（或改用「实现侧显式声明消费的参数」这类
+    非启发式契约），再逐条实现/删除；`data.*`（python.worker）的读取方式也需一并纳入方法设计。
+- [ ] **整页/元素截图**（`planned`）——M29 S3 从 `browser.screenshot` 删掉 `fullPage`/`selector` 后
+  留下的能力缺口：`chrome.tabs.captureVisibleTab` 只能截可见区，整页要滚动分段拼接、元素要按 rect
+  裁剪，都需要在扩展里解码图像（MV3 service worker 无 `Image`/`FileReader`）→ 走 offscreen document
+  或 CDP `Page.captureScreenshot(captureBeyondViewport/clip)`；另需处理 sticky/fixed 元素在分段里的重复
+- [ ] **关闭标签页 / 终止我们拉起的浏览器进程**（`planned`）——M29 S3 删掉 `close.forceKill`/
+  `ignoreUnload` 后留下的能力缺口：当前 `close` = 本地解绑，不代关用户标签页、不杀进程。若要做，
+  需要独立命令（破坏性契约单独声明），而不是挂在 `close` 的两个布尔上
+- [ ] **两套「可见」口径对齐**（`planned`，语义差异）——`waitFor(state=visible)` 用 `count` 的轻量
+  可见判定（client rects + `visibility`/`display`），执行前预检还额外看 `opacity`/rect 尺寸/视口内，
+  于是 `opacity:0` 或视口外元素会「waitFor 说到了、点击说不可见」。现状已写明在
+  `docs/element-mvp-boundaries.md` §2.11，是否统一口径待定
 - [ ] 技术路线（ADR 0016）：GUI 为唯一主力形态——新增能力优先落 GUI；Web 编辑器（devserver）
   `devserver/static/` 冻结演进（不删除、不再补齐 GUI 已有能力）
 - [ ] UI、DSH、MCP、调度器和安装器集成（`planned`）——见远期任务
@@ -47,6 +62,48 @@
 > 主力形态，该条目（「确认非开发者用户为主力后再立项薄壳」）不再适用。
 
 ## 已完成
+
+- [x] M29 浏览器命令参数漂移收口（`done`，2026-09-21）
+  - 计划：`M29-browser-command-param-drift.md`；口径与门禁：`docs/element-mvp-boundaries.md` §3
+  - 处置 **7 处**「声明了不生效」+ 更正 1 处文档记录错误：**实装** `click.simulateHuman`（`false`=
+    最短路径 `el.click()`，仅普通左键单击）、`click.clickPosition`（random 随机点裁剪进「元素 ∩ 视口」，
+    且**遮挡预检用同一个点**——此前预检看中心、事件坐标恒 0）、`modifiers` 的 `Ctrl`/`Win`
+    （与扩展里比的 `"Control"`/`"Meta"` 对不上，勾了等于没勾）；**补传导** `cookieGetAll` 的
+    `name`/`domain`/`path` 过滤器（此前一个都没转发 → 浏览器级全量）与四个 cookie 命令的 `tabId`
+    （从未传 → 空 url 调 Chrome API），并按 Chrome 真实语义改正「支持子串匹配」的错误说明；
+    **删除** `screenshot.fullPage`/`selector`（`captureVisibleTab` 只能截可见区；裁剪/拼接需解码图像，
+    MV3 SW 无 `Image`/`FileReader`）与 `close.forceKill`/`ignoreUnload`（close=本地解绑）；
+    **更正** `waitFor` 四态「`hidden`≡`detached`」的记录错误（代码本来是对的）。
+  - **门禁**：`.harness/scripts/check_param_consumption.py` 进全门禁——AST 按 `command == "<id>"`
+    切片，声明参数必须被该命令分支读取或属通用读取；返回 `COMMAND_NOT_FOUND` 的未实现命令整表豁免
+    （实现后自动纳入）；**负向验证**：临时插假开关立刻红。覆盖 27 条扩展通道命令，范围外 48 条如实
+    打印跳过条数。
+  - 证据：`scripts/check_click_helpers.mjs`（38）+ `check_precheck_helpers.mjs`（+4）+
+    `test_browser_input_params.py`（3→6）；FULL GATE PASSED
+
+- [x] M28 元素自愈与执行前预检（`done`，2026-09-21）
+  - 计划：`M28-element-self-healing.md`；调研依据：`docs/element-self-healing-plan.md`
+  - **S1**（2026-09-20）运行期消费 `selector.candidates`：主选择器失效时按稳定性顺序回退，
+    命中的候选与顺位进执行证据（不改命令参数、不写工作流文件——候选仍以元素资产为单一事实来源）
+  - **S2**（2026-09-20）执行前预检与错误分类：扩展侧 `scrollIntoView` → `isConnected`/禁用/
+    `<inert>`/`checkVisibility`/rect/视口内/`elementFromPoint` 遮挡，失败以结构化 `precheck`
+    回传并翻成 `ELEMENT_COVERED`/`ELEMENT_DISABLED`/`ELEMENT_NOT_VISIBLE`（details 带 blockedBy）；
+    **主选择器命中但预检不过时不试候选**（换候选＝换一个元素点，比失败更危险）；drag 一并统一
+  - **S3**（2026-09-20）参数漂移修复：`keyIntervalMs` 真正逐字间隔、`clipboard` 实装（粘贴注入 +
+    未被接受时显式失败），补 `clickBeforeInput`/`postDelayMs`
+  - **S4**（2026-09-21）度量与边界文档：传输层唯一计数点 `ChannelMetrics`（ops/statusProbes/
+    roundTrips/retries/channelMs/byOp）→ 每步并进 `CommandResult.diagnostics.extension` 随
+    checkpoint 落库；耗时改用 `perf_counter`（`monotonic` 在 Windows 上粒度 15.6ms，会把常见命令
+    记成 0ms）；基线文档 `docs/extension-channel-baseline.md`（每命令信封数表由测试机器校验 +
+    真实 bridge 实测耗时 + 合法变化/回归判别）与边界文档 `docs/element-mvp-boundaries.md`
+    （iframe/shadow DOM/canvas/不可信事件/上传下载/原生对话框/新标签页/嵌套滚动/截图口径/
+    `:hover` 待验证 + 参数漂移清单）
+  - 附（非 M28 切片，2026-09-20 done）：**扩展通道诊断可见性**——状态栏徽标离线时给出
+    「bridge 注册 / 插件安装 / 浏览器运行 / 当前实例是否加载」，而不是一句「离线」
+  - 不做（已定案）：新增 `mode: "insert"`；后台标签页焦点模拟
+  - 证据：`test_browser_channel_metrics.py`（40）+ `test_browser_precheck.py`（10）+
+    `test_browser_element_fallback.py` + `test_ext_bridge.py::test_channel_round_trip_baseline`；
+    FULL GATE PASSED
 
 - [x] M27 工作台（首页）+ 编辑器两段式（`done`，2026-09-20）
   - 计划：`M27-workbench-home.md`；决策：ADR 0017

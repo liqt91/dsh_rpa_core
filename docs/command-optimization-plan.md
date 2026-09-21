@@ -59,6 +59,12 @@ editor 侧：`schemaField` 的 `session-reference` 下拉读取已注册的 `res
 | `simulateHuman` | `boolean` | `true` | 点击元素_web「模拟人工点击」 |
 | `postDelayMs` | `integer` | `0` | 点击元素_web「执行后延迟」 |
 
+> **M29 落地记录（2026-09-21）**：`clickPosition`/`simulateHuman` 在本表登记时只进了 manifest，
+> 扩展通道**从未消费**（点击事件连坐标都没有，`modifiers` 的 `Ctrl`/`Win` 也与事件字段对不上）
+> ——即「参数面已对齐」曾是纸面对齐。M29 已实装三者：随机点按「元素 ∩ 视口」取点并**用同一点做
+> 遮挡预检**，`simulateHuman=false` 走最短路径 `el.click()`（仅普通左键单击）。详见
+> `docs/element-mvp-boundaries.md` §3。
+
 ### browser.input（填写输入框）
 
 | 新增参数 | 类型 | 默认值 | 影刀参照 |
@@ -74,6 +80,11 @@ editor 侧：`schemaField` 的 `session-reference` 下拉读取已注册的 `res
 |---|---|---|---|
 | `forceKill` | `boolean` | `false` | 关闭网页「终止浏览器进程」 |
 | `ignoreUnload` | `boolean` | `false` | 关闭网页「忽略确认离开对话框」 |
+
+> **M29 定案（2026-09-21）：这两个参数不做，已从 manifest 删除。** 扩展通道的 `close` 是
+> **本地解绑**——不代关用户标签页，也不终止用户的浏览器进程（我们连它的句柄都没有）；
+> `chrome.tabs.remove` 本身也不弹 `beforeunload`。留着就是「声明了不生效」的假开关。
+> 缺口另立 BACKLOG「关闭标签页 / 终止我们拉起的浏览器进程」，与 `close` 的两个布尔无关。
 
 ### desktop.attachWindow（获取窗口对象）
 
@@ -223,7 +234,8 @@ editor 侧：`schemaField` 的 `session-reference` 下拉读取已注册的 `res
 - [x] sessionId 按 resourceType 过滤，browser 和 desktop 不能互传
 - [x] browser.click 支持 clickType/button/modifiers/position/simulateHuman
 - [ ] browser.input 支持 mode/append/pressEnter/clearFirst
-- [ ] browser.close 支持 forceKill/ignoreUnload
+- [ ] browser.close 支持 forceKill/ignoreUnload —— **M29 定案不做**（扩展单通道下 close=本地解绑，
+      两个参数已从 manifest 删除；见 `docs/element-mvp-boundaries.md` §3 与 BACKLOG）
 - [ ] desktop.attachWindow 支持 matchMode(exact/contains/regex)
 - [ ] 所有元素操作指令支持 waitTimeout + postDelay
 - [ ] 第一批8个新指令全部通过 E2E 测试

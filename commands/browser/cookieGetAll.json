@@ -24,19 +24,20 @@
     ],
     "properties": {
       "sessionId": {
-        "type": "string"
+        "type": "string",
+        "description": "浏览器实例会话；同时决定 cookie 的作用域 URL（该会话所绑标签页的当前地址）"
       },
       "name": {
         "type": "string",
-        "description": "按名称精确筛选（可选）"
+        "description": "按名称精确匹配（可选；Chrome cookie 过滤器语义，不是子串）"
       },
       "domain": {
         "type": "string",
-        "description": "按域筛选，支持子串匹配（可选）"
+        "description": "按域筛选（可选）：本域及其子域，如 example.com 也会匹配 a.example.com"
       },
       "path": {
         "type": "string",
-        "description": "按路径筛选，支持子串匹配（可选）"
+        "description": "按路径精确匹配（可选；Chrome cookie 过滤器语义，不是子串）"
       }
     },
     "additionalProperties": false

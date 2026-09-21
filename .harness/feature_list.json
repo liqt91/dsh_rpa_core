@@ -270,7 +270,12 @@
     {
       "id": "element-self-healing",
       "title": "Element self-healing: consume captured candidate selectors at runtime, pre-action validation (visibility/disabled/occlusion), classified element errors, and fix the declared-but-unimplemented input params (keyIntervalMs, clipboard)",
-      "passes": false
+      "passes": true
+    },
+    {
+      "id": "browser-param-contract",
+      "title": "Browser command param contract: implement declared-but-inert click params (simulateHuman/clickPosition with point-accurate occlusion precheck), forward cookie filters and tabId, drop unreachable screenshot/close params, and gate every declared param against actual executor consumption",
+      "passes": true
     }
   ]
 }

@@ -529,3 +529,59 @@ def test_client_offline_without_endpoint():
     with pytest.raises(ExtensionChannelError) as excinfo:
         client.submit("tabs.list", {}, timeout_seconds=1)
     assert excinfo.value.code == "CHANNEL_OFFLINE"
+
+
+# -- 通道往返数与耗时基线（M28 S4）---------------------------------------------
+# 防的是**性能回归**：往返数（确定性）断言精确值，耗时只断言宽上界——机器负载会让
+# 单次毫秒抖动，但「通道里多了个 sleep / 多了次探测」是数量级变化，宽上界足够拦住。
+# 基线表与刷新口径见 docs/extension-channel-baseline.md。
+
+
+def test_channel_round_trip_baseline(host):
+    """真实 host 子进程 + 假扩展：N 次页命令的往返数与 p50/max 耗时基线。"""
+    from rpa_core.extension_exec import ExtensionExecClient
+
+    host.handshake()
+    client = ExtensionExecClient()
+    rounds = 20
+    per_call_ms: list[float] = []
+
+    def responder() -> None:
+        for _ in range(rounds):
+            command = _call_with_timeout(host.from_extension, 20.0)
+            host.to_extension(
+                {
+                    "type": "result",
+                    "id": command["id"],
+                    "ok": True,
+                    "value": {"matchedCount": 1, "result": True},
+                }
+            )
+
+    worker = threading.Thread(target=responder, daemon=True)
+    worker.start()
+    for _ in range(rounds):
+        started = time.perf_counter()
+        client.submit(
+            "page.call",
+            {"tabId": "1", "selector": "#ok", "method": "click", "args": {}},
+            timeout_seconds=20,
+        )
+        per_call_ms.append((time.perf_counter() - started) * 1000.0)
+    worker.join(timeout=20)
+
+    ordered = sorted(per_call_ms)
+    p50 = ordered[len(ordered) // 2]
+    print(
+        f"[channel-baseline] rounds={rounds} ops={client.metrics.ops} "
+        f"p50Ms={p50:.2f} maxMs={max(per_call_ms):.2f} "
+        f"totalMs={sum(per_call_ms):.1f}"
+    )
+    # 往返数：一次命令一个信封，没有重发
+    assert client.metrics.ops == rounds
+    assert client.metrics.attempts == rounds
+    assert client.metrics.retries == 0
+    assert client.metrics.by_op == {"page.call": rounds}
+    # 耗时：本机假扩展（无浏览器、无真实 DOM）应当远低于此上界
+    assert p50 < 200.0, f"通道往返 p50 异常：{p50:.2f}ms（是否有新增等待？）"
+    assert max(per_call_ms) < 2000.0, f"通道往返 max 异常：{max(per_call_ms):.2f}ms"

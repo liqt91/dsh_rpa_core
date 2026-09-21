@@ -10,6 +10,8 @@ commands = [
     [sys.executable, "-m", "ruff", "check", "."],
     [sys.executable, str(ROOT / ".harness" / "scripts" / "check_architecture.py")],
     [sys.executable, str(ROOT / ".harness" / "scripts" / "check_tasks.py")],
+    # manifest 声明的输入参数必须被实现消费（M29：把「漂移清单」变成机器门禁）
+    [sys.executable, str(ROOT / ".harness" / "scripts" / "check_param_consumption.py")],
 ]
 
 # 真实桌面 E2E（记事本/WinForms 演示程序/捕获悬浮框，会弹窗抢前台）**默认不进
@@ -24,10 +26,17 @@ if "--with-desktop-e2e" in sys.argv:
 
 # 前端纯函数一致性校验（编辑器渲染逻辑与后端语义共用同一份源码）。
 # node 不在时跳过，避免门禁在无 node 的机器上硬失败。
+PURE_FUNCTION_SCRIPTS = (
+    "check_param_groups.mjs",
+    "check_retry_policy.mjs",
+    "check_capture_helpers.mjs",
+    "check_input_helpers.mjs",
+    "check_precheck_helpers.mjs",
+    "check_click_helpers.mjs",
+)
 node = shutil.which("node")
 if node:
-    for script in ("check_param_groups.mjs", "check_retry_policy.mjs", "check_capture_helpers.mjs",
-                   "check_input_helpers.mjs", "check_precheck_helpers.mjs"):
+    for script in PURE_FUNCTION_SCRIPTS:
         path = ROOT / "scripts" / script
         if path.exists():
             commands.append([node, str(path)])

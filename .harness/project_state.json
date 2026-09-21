@@ -2,13 +2,13 @@
   "project": "rpa_core",
   "phase": "command-parity-extension-editor",
   "status": "active",
-  "completed_milestone": "M27-workbench-home",
-  "active_milestone": "M28-element-self-healing",
-  "active_plan": ".harness/tasks/M28-element-self-healing.md",
-  "active_feature": "element-self-healing",
+  "completed_milestone": "M29-browser-command-param-drift",
+  "active_milestone": null,
+  "active_plan": null,
+  "active_feature": null,
   "next_milestone": null,
   "later_milestones": [],
-  "notes": "技术路线（ADR 0016）：GUI 为唯一主力形态，Web 编辑器退为可选、冻结演进；GUI 独立运行不需要 web 服务器。M23（GUI 体验对齐）、M24（断点与单步）、M25（运行历史）、M27（工作台 + 编辑器两段式，ADR 0017）均已收口。M28 进行中（元素自愈与执行前预检）：S1（运行期消费 candidates）与 S3（参数漂移修复：keyIntervalMs 真正生效、clipboard 真实现）均已完成；S2（执行前预检与错误分类）已完成——扩展侧 domOp 对可操作动作先 scrollIntoView 再预检（isConnected/disabled/aria-disabled/inert/checkVisibility/rect/视口内/elementFromPoint 遮挡），失败以结构化 precheck 随返回值回传并翻成稳定错误码 ELEMENT_COVERED/ELEMENT_DISABLED/ELEMENT_NOT_VISIBLE（details 带 blockedBy），主选择器命中但预检不过时不试候选（换候选=换一个元素点，更危险）；browser.drag 已统一进自愈+预检路径。**S4（度量与边界文档）待做——M28 剩余最后一片**。已定案不做：新增 mode=insert、后台标签页焦点模拟。M26（流程 inputs 编辑 UI）顺延。",
+  "notes": "技术路线（ADR 0016）：GUI 为唯一主力形态，Web 编辑器退为可选、冻结演进；GUI 独立运行不需要 web 服务器。M28（元素自愈与执行前预检）已收口。M29（浏览器命令参数漂移收口）四片全完：把 M28 的「参数名是否出现」启发式换成**按命令字面量切片的静态审计**（旧口径看不见同名字段在别处出现，cookieGetAll.name 就是这么漏掉的），共处置 7 处「声明了不生效」+1 处文档更正——实装 click.simulateHuman/clickPosition/modifiers（Ctrl/Win 与事件字段对不上）、补传导 cookieGetAll 过滤器与四个 cookie 命令的 tabId、删除 screenshot.fullPage/selector 与 close.forceKill/ignoreUnload（单通道下无对应物，不留假开关）、更正 waitFor 四态「hidden≡detached」的记录错误（代码本来是对的）。门禁 `.harness/scripts/check_param_consumption.py` 已进 check_all（AST 按命令切片；未实现命令整表豁免；负向验证过），覆盖扩展通道 27 条命令；范围外 48 条（桌面/数据通道分派不是字面量形状）如实打印跳过条数。审计新发现已登记 BACKLOG 未清：桌面/数据通道参数漂移复核（含 desktop.win32.click 的两个死参数，以及多条桌面命令声明 timeoutMs 而执行器不读、GUI 又隐藏引擎超时 → 那些节点没有任何可用超时控制）、整页/元素截图、关闭标签页/终止进程、两套「可见」口径对齐。后续任务：M26（流程 inputs 编辑 UI，唯一 passes=false 的既有 feature）与上述四条均可开工。",
   "task_index": ".harness/tasks/BACKLOG.md",
   "scope": {
     "in": [

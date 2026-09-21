@@ -7,7 +7,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from rpa_core.extension_exec import ExtensionChannelError
+from rpa_core.extension_exec import ChannelMetrics, ExtensionChannelError
 from rpa_core.extension_launch import (
     BrowserLaunchError,
     find_extension_dir,
@@ -193,6 +193,12 @@ def _precheck_result(
     )
 
 
+def _session_metrics(session: Any) -> ChannelMetrics | None:
+    """取扩展会话上的通道度量器；测试桩没有该属性时返回 None（度量静默跳过）。"""
+    metrics = getattr(session, "metrics", None)
+    return metrics if isinstance(metrics, ChannelMetrics) else None
+
+
 class PlaywrightExecutor(CommandExecutor):
     def __init__(self, ext_session=None, flow_dir: Path | None = None):
         # 自研扩展单通道：会话 = 用户真实浏览器里的一个标签页句柄
@@ -325,9 +331,43 @@ class PlaywrightExecutor(CommandExecutor):
     async def execute(
         self, invocation: CommandInvocation, cancellation: asyncio.Event
     ) -> CommandResult:
+        """命令边界（M28 S4）：把本步的扩展通道往返数与耗时并进执行证据。
+
+        度量在**这一步**内累计（进入即 `reset()`），随 `diagnostics` 落进
+        `scopes.steps.<node>.diagnostics` 与 checkpoint，形成「每步往返数 + 耗时」
+        基线；将来任何改动让某条命令的往返数悄悄上升（例如无意中多打一次探测、
+        自愈候选退化成逐条重试），都能从运行证据里直接看出来，不必靠肉眼比对代码。
+
+        只统计**真走过通道**的命令：一步里往返数为 0（纯参数校验失败、关闭会话等
+        不需要扩展的路径）就不写这段，免得证据里全是空壳。
+        """
+        metrics = _session_metrics(self._ext)
+        if metrics is not None:
+            metrics.reset()
+        # perf_counter（非 monotonic）：Windows 上 monotonic 的粒度约 15.6ms，比一步
+        # 命令还粗——用它计时会把常见命令记成 0ms，度量直接失去意义。
+        started = time.perf_counter()
+        result = await self._execute_command(invocation, cancellation)
+        if metrics is None or not metrics.round_trips:
+            return result
+        step_ms = (time.perf_counter() - started) * 1000.0
+        # 合并而不是覆盖：navigate 自己已经写了 durationMs
+        return result.model_copy(
+            update={
+                "diagnostics": {
+                    **result.diagnostics,
+                    "extension": metrics.as_diagnostics(step_ms=step_ms),
+                }
+            }
+        )
+
+    async def _execute_command(
+        self, invocation: CommandInvocation, cancellation: asyncio.Event
+    ) -> CommandResult:
         if cancellation.is_set():
             return CommandResult(status="cancelled")
-        started = time.monotonic()
+        # 与 execute() 的度量同源：perf_counter 才有 Windows 上的亚毫秒分辨率
+        started = time.perf_counter()
         command = invocation.command_id
         inputs = invocation.inputs
         try:
@@ -604,7 +644,7 @@ class PlaywrightExecutor(CommandExecutor):
                     },
                 )
             ],
-            diagnostics={"durationMs": int((time.monotonic() - started) * 1000)},
+            diagnostics={"durationMs": int((time.perf_counter() - started) * 1000)},
         )
 
     async def _execute_extension(
@@ -627,6 +667,9 @@ class PlaywrightExecutor(CommandExecutor):
         try:
             if command == "browser.close":
                 # 扩展会话的「关闭」= 解绑：用户浏览器里的标签页留给用户，不代关
+                # M29 S3：manifest 不再声明 `forceKill`/`ignoreUnload`——我们不拥有用户的浏览器
+                # 进程（也没有它的句柄），`chrome.tabs.remove` 本身也不弹 beforeunload 对话框，
+                # 两个参数在单通道下没有对应物。缺口（关标签页/终止进程）见 BACKLOG，属独立命令。
                 self._ext_sessions.pop(session_id, None)
                 self._ext_session_hosts.pop(session_id, None)
                 if self._last_session_id == session_id:
@@ -910,18 +953,32 @@ class PlaywrightExecutor(CommandExecutor):
                 outputs=outputs,
             )
         # -- Cookie（chrome.cookies，作用域 url 由扩展按 tab 当前页推导） -------
+        # M29 S2：这一段此前有两个「声明了不生效」——
+        # (1) `cookieGetAll` 的 `name`/`domain`/`path` 过滤器一个都没转发（浏览器作用域全量返回）；
+        # (2) 四个命令都没把会话绑定的 `tabId` 传给扩展，于是 `tabUrl(undefined)` → `""`，
+        #     `chrome.cookies.get/set/remove` 拿着空 url 调 API（拿不到作用域 URL）。
         if command == "browser.cookieGetAll":
+            # 逐个显式取值（而不是循环一个 tuple）：静态门禁 `check_param_consumption.py` 按
+            # 字面量判定「声明的参数是否真被消费」，用循环变量会让它看不见——那就等于把漂移藏回去。
+            filters: dict[str, str] = {}
+            if inputs.get("name"):
+                filters["name"] = str(inputs["name"])
+            if inputs.get("domain"):
+                filters["domain"] = str(inputs["domain"])
+            if inputs.get("path"):
+                filters["path"] = str(inputs["path"])
             cookies = await asyncio.to_thread(
-                self._ext.cookies_get_all, timeout_seconds=timeout_s, target_host=target_host,
+                self._ext.cookies_get_all, filters=filters or None, tab_id=tab_id,
+                timeout_seconds=timeout_s, target_host=target_host,
             )
             return self._ext_success(
                 invocation, EffectKind.READ, resource,
-                {"operation": "cookieGetAll", "count": len(cookies)},
+                {"operation": "cookieGetAll", "count": len(cookies), "filters": sorted(filters)},
                 outputs={"cookies": cookies, "count": len(cookies)},
             )
         if command == "browser.cookieGet":
             value = await asyncio.to_thread(
-                self._ext.cookies_get, str(inputs["name"]),
+                self._ext.cookies_get, str(inputs["name"]), tab_id=tab_id,
                 timeout_seconds=timeout_s, target_host=target_host,
             )
             return self._ext_success(
@@ -931,7 +988,7 @@ class PlaywrightExecutor(CommandExecutor):
             )
         if command == "browser.cookieSet":
             count = await asyncio.to_thread(
-                self._ext.cookies_set, list(inputs.get("cookies") or []),
+                self._ext.cookies_set, list(inputs.get("cookies") or []), tab_id=tab_id,
                 timeout_seconds=timeout_s, target_host=target_host,
             )
             return self._ext_success(
@@ -941,7 +998,7 @@ class PlaywrightExecutor(CommandExecutor):
             )
         if command == "browser.cookieRemove":
             await asyncio.to_thread(
-                self._ext.cookies_remove, str(inputs.get("name") or ""),
+                self._ext.cookies_remove, str(inputs.get("name") or ""), tab_id=tab_id,
                 timeout_seconds=timeout_s, target_host=target_host,
             )
             return self._ext_success(
@@ -972,6 +1029,10 @@ class PlaywrightExecutor(CommandExecutor):
                 outputs={"url": str(result.get("url") or "")},
             )
         if command == "browser.screenshot":
+            # M29 S3：manifest 不再声明 `fullPage`/`selector`——`chrome.tabs.captureVisibleTab`
+            # 只能截「窗口当前可见标签页的可见区」；元素裁剪与整页拼接都必须先在扩展里解码图像
+            # （MV3 service worker 没有 `Image`/`FileReader`），得走 offscreen document 或 CDP。
+            # 与其留两个「勾了就静默截错」的开关，不如删掉（缺口见 BACKLOG「整页/元素截图」）。
             save_path = str(inputs["savePath"])
             result = await asyncio.to_thread(
                 self._ext.screenshot, tab_id,
@@ -1092,6 +1153,10 @@ class PlaywrightExecutor(CommandExecutor):
                 "button": inputs.get("button") or "left",
                 "clickType": inputs.get("clickType") or "single",
                 "modifiers": inputs.get("modifiers") or [],
+                # M29：这两个此前**声明了却没转发**——点击事件连坐标都没有（clientX/clientY 恒 0），
+                # simulateHuman 则完全是摆设。默认值与 manifest 严格一致（true / center）。
+                "simulateHuman": bool(inputs.get("simulateHuman", True)),
+                "clickPosition": inputs.get("clickPosition") or "center",
             }
         if command == "browser.input":
             return {

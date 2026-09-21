@@ -25,7 +25,8 @@
     ],
     "properties": {
       "sessionId": {
-        "type": "string"
+        "type": "string",
+        "description": "浏览器实例会话；同时决定 cookie 的作用域 URL（该会话所绑标签页的当前地址）"
       },
       "cookies": {
         "type": "array",
