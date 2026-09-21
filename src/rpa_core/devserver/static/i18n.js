@@ -12,6 +12,8 @@ window.RPA_I18N = {
     "browser.getText": "读取元素文本",
     "browser.queryAll": "抓取列表文本",
     "browser.close": "关闭网页",
+    "browser.closeTabs": "关闭标签页",
+    "browser.closeBrowser": "终止浏览器",
     "browser.hover": "鼠标悬停",
     "data.writeJson": "写入 JSON 文件",
     "data.writeText": "写入文本文件",

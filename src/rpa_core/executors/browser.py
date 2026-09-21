@@ -1,7 +1,11 @@
 import asyncio
 import base64
 import json
+import os
 import re
+import signal
+import subprocess
+import sys
 import time
 import uuid
 from pathlib import Path
@@ -46,7 +50,11 @@ _SCROLL_ELEMENT_JS = """(el, [position, behavior, x, y]) => {
 # 不依赖已有会话的命令（与 desktop 的 attachWindow/getWindowList 同口径）：
 # attach 自己新建会话（绑定已有标签页），listPages 只列全部标签页——
 # 二者在「还没有任何会话」时也必须可用，否则只能先开网页才能列举/附着。
-_NO_SESSION_COMMANDS = ("browser.attach", "browser.listPages")
+#
+# closeBrowser（M32 S1）也在列：它是**进程级**操作（按进程名终止浏览器），
+# 与扩展通道和会话都无关——恰恰在扩展已经掉线（浏览器卡死、就是它该被杀的场景）
+# 时最需要它可用，因此绝不能先被会话门拦下。
+_NO_SESSION_COMMANDS = ("browser.attach", "browser.listPages", "browser.closeBrowser")
 
 # 扩展通道：命令 → page.call 原语（DOM 操作走扩展注入函数，规避页面 CSP 对 eval 的限制）
 _EXT_PAGE_METHODS = {
@@ -68,6 +76,135 @@ _EXT_SW_WAKE_SECONDS = 45.0
 
 
 _SESSION_RESOURCE_PREFIX = "browser.session:"
+
+
+# 浏览器进程名（按操作系统）。终止浏览器（browser.closeBrowser）用它做进程匹配。
+# chromium 系在同一 exe 下会派生多个 helper 进程（renderer/gpu/utility），
+# 按名字匹配会**一起**命中——这是想要的：只杀主进程会留下一堆孤儿 renderer，
+# 它们仍占着用户数据目录，重启时浏览器会报「配置目录已被使用」。
+_BROWSER_PROCESS_NAMES: dict[str, tuple[str, ...]] = {
+    "msedge": ("msedge.exe", "msedge"),
+    "chrome": ("chrome.exe", "chrome"),
+}
+
+# 控制台命令输出的解码方式：Windows 上 `tasklist` 走的是控制台代码页，
+# 中文系统是 GBK/CP936——不显式给编码，subprocess 会按 UTF-8 解并抛错。
+_CONSOLE_ENCODING = "mbcs" if sys.platform == "win32" else "utf-8"
+
+
+def _list_browser_processes(names: tuple[str, ...]) -> list[dict[str, Any]]:
+    """列出进程名命中 `names` 的进程（`[{"pid": int, "name": str, "startedAt": float}]`）。
+
+    跨平台：Windows 用 `tasklist`，POSIX 用 `ps`。都不引入第三方依赖——`psutil`
+    不在依赖里，为了一个「关闭浏览器」去加一个二进制依赖不划算。
+
+    `startedAt`（启动时刻，epoch 秒）是 `scope=launchedByUs` 的判据基础：没有它
+    就无法区分「用户先前自己开的」与「我们刚拉起的」。取不到时记 0（视为「早于一切」，
+    即不会被判成本次拉起——保守方向）。
+    """
+    if sys.platform == "win32":
+        # 编码必须显式给：`tasklist` 在中文 Windows 上输出 GBK，按 UTF-8 解会抛
+        # UnicodeDecodeError（且异常发生在 subprocess 的读线程里，表现为 stdout 为 None）。
+        completed = subprocess.run(
+            ["tasklist", "/FO", "CSV", "/NH"],
+            capture_output=True, text=True, timeout=20, check=False,
+            encoding=_CONSOLE_ENCODING, errors="replace",
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        rows: list[dict[str, Any]] = []
+        wanted = {name.lower() for name in names}
+        for line in completed.stdout.splitlines():
+            cells = [cell.strip().strip('"') for cell in line.split('","')]
+            if len(cells) < 2:
+                continue
+            image = cells[0].strip('"').lower()
+            if image not in wanted:
+                continue
+            try:
+                pid = int(cells[1])
+            except ValueError:
+                continue
+            rows.append({"pid": pid, "name": image, "startedAt": 0.0})
+        return rows
+    completed = subprocess.run(
+        ["ps", "-eo", "pid=,etimes=,comm="],
+        capture_output=True, text=True, timeout=20, check=False,
+    )
+    now = time.time()
+    rows = []
+    wanted = {name.lower() for name in names}
+    for line in completed.stdout.splitlines():
+        parts = line.split(None, 2)
+        if len(parts) < 3:
+            continue
+        try:
+            pid = int(parts[0])
+            elapsed = float(parts[1])
+        except ValueError:
+            continue
+        command = parts[2].strip()
+        base = command.rsplit("/", 1)[-1].lower()
+        if base not in wanted and command.lower() not in wanted:
+            continue
+        rows.append({"pid": pid, "name": base, "startedAt": now - elapsed})
+    return rows
+
+
+def _terminate_process(pid: int, force: bool) -> None:
+    """终止一个进程：force=True 立即强杀；否则先请它正常退出。"""
+    if sys.platform == "win32":
+        command = ["taskkill", "/PID", str(pid), "/T"]
+        if force:
+            command.append("/F")
+        subprocess.run(
+            command, capture_output=True, timeout=30, check=False,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        return
+    signal_number = signal.SIGKILL if force else signal.SIGTERM
+    os.kill(pid, signal_number)
+
+
+def _wait_processes_exit(pids: list[int], timeout_s: float) -> bool:
+    """轮询等待 `pids` 全部退出；超时返回 False。
+
+    存活探测**不能**用 `os.kill(pid, 0)`：Windows 上它会调 `TerminateProcess`，
+    传信号 0 直接抛 `OSError [WinError 87] 参数错误`（POSIX 才有「信号 0 = 只探测」
+    的语义）。Windows 侧改用 `OpenProcess` 拿句柄——拿不到句柄即进程已不存在。
+    """
+    deadline = time.monotonic() + max(timeout_s, 0.0)
+    pending = {int(pid) for pid in pids if int(pid) > 0}
+    while pending:
+        pending = {pid for pid in pending if _process_alive(pid)}
+        if not pending:
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.15)
+    return True
+
+
+def _process_alive(pid: int) -> bool:
+    """进程是否仍存在（跨平台存活探测，不发送任何信号）。"""
+    if sys.platform == "win32":
+        import ctypes
+
+        # PROCESS_QUERY_LIMITED_INFORMATION(0x1000)：权限要求最低的查询权限，
+        # 足以判断「还在不在」，且对受保护进程也能拿到句柄。
+        process_query_limited_information = 0x1000
+        kernel32 = ctypes.windll.kernel32
+        handle = kernel32.OpenProcess(process_query_limited_information, False, int(pid))
+        if not handle:
+            return False
+        kernel32.CloseHandle(handle)
+        return True
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:  # 存在但不属于我们 → 仍在
+        return True
+    return True
 
 
 def session_bindings_from_scopes(
@@ -211,6 +348,12 @@ class PlaywrightExecutor(CommandExecutor):
         # 流程目录：元素自愈（M28 S1）据此反查本流程的元素资产（<flowDir>/elements/*.json）
         self._flow_dir = Path(flow_dir) if flow_dir else None
         self._element_assets_cache: tuple[float, dict[str, list[dict[str, Any]]]] | None = None
+        # 「本执行器拉起过的浏览器」启动时间水位（M32 S1）：browser.closeBrowser 的
+        # scope=launchedByUs 判据。键是浏览器类型，值是**拉起完成的时刻**——此后新出现
+        # 的同名进程才算「我们拉起的」。此前 `launch_browser` 是 fire-and-forget
+        # （Popen 完就丢句柄），没有任何「我们启动过它」的记录，于是「只关我们自己开的」
+        # 这个语义根本无法实现，只能退化成按进程名全杀——那会误伤用户自己开的窗口。
+        self._launched_marks: dict[str, float] = {}
 
     # ---- 元素自愈：运行期按失败的 selector 反查元素资产候选（M28 S1） ----------
     @staticmethod
@@ -536,6 +679,9 @@ class PlaywrightExecutor(CommandExecutor):
         # 是否显式走了独立用户数据目录（临时注入插件），决定拉起失败后如何引导
         isolated_dir = any(a.startswith("--user-data-dir") for a in argv_extra)
         extension_dir = find_extension_dir()
+        # 记录水位放在 Popen **之前**：浏览器进程可能在 Popen 返回后毫秒级出现，
+        # 先记时刻再拉起，才不会漏掉慢一点的进程被算成「用户自己开的」。
+        launched_at = time.time()
         try:
             await asyncio.to_thread(
                 launch_browser, browser, None,
@@ -551,6 +697,11 @@ class PlaywrightExecutor(CommandExecutor):
         # 已在运行时，扩展 service worker 处于休眠，靠 chrome.alarms 兜底
         # 重拉（平台最小间隔 30s）——15s 的窗口会系统性错过这种场景。
         if await self._wait_target_online(browser, _EXT_SW_WAKE_SECONDS):
+            # 在线即认定「我们拥有这个浏览器实例」：记下水位供 closeBrowser 的
+            # scope=launchedByUs 判定。放在这里而不是 Popen 之后，是因为只有真的
+            # 等到插件上线才算「拉起成功」——失败了还记水位，会让一次失败的拉起
+            # 在事后被当成「我们开的」而去杀用户的浏览器。
+            self._launched_marks[browser] = launched_at
             return None
         if isolated_dir:
             msg = (
@@ -677,6 +828,67 @@ class PlaywrightExecutor(CommandExecutor):
                 return self._ext_success(
                     invocation, EffectKind.SESSION, resource, {"operation": "detach"},
                     outputs={},
+                )
+            if command == "browser.closeTabs":
+                # 关标签页（M32 S1）：tabIds 显式列表 / all=当前窗口全部，二者互斥。
+                # 为什么是独立命令而不是 browser.close 的参数：`close` 是**会话生命周期**
+                # 命令（解绑，资源语义是 session），关标签是**对用户浏览器的破坏性操作**
+                # （会动到用户自己开的页面）——两者的风险等级与 effect 种类都不同，
+                # 混在一个命令里会让「关闭会话」这种无害操作带上关页面的杀伤力。
+                tab_ids = inputs.get("tabIds")
+                close_all = bool(inputs.get("all"))
+                if tab_ids is not None and not isinstance(tab_ids, list):
+                    return CommandResult.failure(
+                        ErrorCode.INVALID_INPUT,
+                        "tabIds 必须是整数数组（取 browser.listPages 返回的 index 对应 tabId）。",
+                        details={"field": "tabIds", "receivedType": type(tab_ids).__name__},
+                    )
+                if bool(tab_ids) == close_all:
+                    return CommandResult.failure(
+                        ErrorCode.INVALID_INPUT,
+                        "tabIds 与 all 必须二选一：要么给 tabIds 列表指定要关的标签页，"
+                        "要么 all=true 关闭当前窗口所有标签页（含用户自己打开的）。",
+                        details={
+                            "field": "tabIds/all",
+                            "tabIdsProvided": bool(tab_ids),
+                            "all": close_all,
+                        },
+                    )
+                payload = await asyncio.to_thread(
+                    self._ext.tabs_close_many,
+                    tab_ids=[int(tab_id) for tab_id in tab_ids] if tab_ids else None,
+                    close_all=close_all,
+                    timeout_seconds=timeout_s,
+                    target_host=host,
+                )
+                closed = [int(t) for t in (payload.get("closedTabIds") or [])]
+                failed = [int(t) for t in (payload.get("failedTabIds") or [])]
+                # 关掉的就是当前会话所属标签页 → 会话随之失效，主动解绑免得后续步骤
+                # 拿着一个死 tabId 去操作（报 TIMEOUT 而不是「页面已关闭」）。
+                if tab_id and int(tab_id) in closed:
+                    self._ext_sessions.pop(session_id, None)
+                    self._ext_session_hosts.pop(session_id, None)
+                    if self._last_session_id == session_id:
+                        self._last_session_id = None
+                return self._ext_success(
+                    invocation, EffectKind.UNSAFE_WRITE,
+                    f"browser.session:{session_id}" if session_id else "browser.tabs",
+                    {
+                        "operation": "closeTabs",
+                        "transport": "extension",
+                        "scope": "all" if close_all else "tabIds",
+                        "closedCount": len(closed),
+                        "failedCount": len(failed),
+                    },
+                    outputs={
+                        "closedCount": len(closed),
+                        "closedTabIds": closed,
+                        "failedTabIds": failed,
+                    },
+                )
+            if command == "browser.closeBrowser":
+                return await self._close_browser(
+                    invocation, inputs, timeout_s, host
                 )
             # 关闭（解绑）不依赖扩展在线；其余命令前先确认扩展还在轮询，
             # 否则会白等 timeoutMs（默认 30s）才报 TIMEOUT。
@@ -1225,6 +1437,153 @@ class PlaywrightExecutor(CommandExecutor):
                     invocation, kind=kind, resource=resource, details=details
                 )
             ],
+        )
+
+    def _scope_processes(
+        self, scope: str, browser: str, matched: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        """按 `scope` 过滤进程清单（M32 S1）。
+
+        `launchedByUs` 用 `_launched_marks` 的启动时间水位筛选：只保留「水位之后
+        才出现」的进程。已记下水位说明我们**确实按这个浏览器类型拉起过**；没有水位
+        则一个都不算（宁可不杀，也不误杀用户自己开的窗口——保守方向的错误代价低得多）。
+
+        同名进程的时间比较有个已知近似：`tasklist` 不给启动时间，Windows 侧 `startedAt`
+        恒为 0，于是「有水位即全算」——这是**有意**的退让。精确到单个进程需要 WMI 查询
+        （`Win32_Process.CreationDate`），为一个「关浏览器」引入 WMI 调用链并不划算；
+        而 Windows 上同一用户通常只有一个 Edge/Chrome 实例（多开同一 exe 会复用既有
+        进程或以多 profile 形式存在），退让的现实影响很小。POSIX 侧 `ps -o etimes` 有
+        真实启动时刻，比较是精确的。
+        """
+        if scope == "byProcessName":
+            return matched
+        mark = self._launched_marks.get(browser)
+        if mark is None:
+            return []
+        return [
+            info for info in matched
+            if not info.get("startedAt") or float(info["startedAt"]) >= mark
+        ]
+
+    async def _close_browser(
+        self,
+        invocation: CommandInvocation,
+        inputs: dict[str, Any],
+        timeout_s: float,
+        host: str,
+    ) -> CommandResult:
+        """终止浏览器进程（M32 S1）。
+
+        两种判据由 `scope` 选择，与影刀「关闭浏览器」的参数形态对齐：
+
+        - `scope="launchedByUs"`（默认，**保守**）：只终止本执行器**确实拉起过**的浏览器
+          实例。判定依据是本进程记录的开机时间（`_launched_marks`）——即「我们拉起之后
+          新出现的浏览器进程」，用户此前自己开着的浏览器不在其中。
+        - `scope="byProcessName"`：按进程名终止**所有**匹配进程，包含用户手动打开的窗口。
+          会连用户正在用的页面一起关掉，因此必须显式选择。
+
+        为什么默认保守而不是默认全杀：判据「哪些浏览器是我们拉起的」在没有记录时
+        是无法从外部推断的（同一 exe、同一用户目录，无法与用户自开实例区分）。默认
+        全杀会让一次普通流程收尾把用户手上正在填的表单一起关掉——破坏性行为必须是
+        **显式选择**的结果，而不是默认值。
+
+        默认 conservative 但**无记录**时不静默返回「0 个」：那会让用户以为杀过了。
+        明确报 `EXECUTOR_FAILED` 并给出改选 `byProcessName` 的可操作指引。
+        """
+        scope = str(inputs.get("scope") or "launchedByUs").strip()
+        if scope not in ("launchedByUs", "byProcessName"):
+            return CommandResult.failure(
+                ErrorCode.INVALID_INPUT,
+                f"未知的 scope：{scope!r}（只支持 launchedByUs / byProcessName）",
+                details={"field": "scope", "received": scope},
+            )
+        browser = str(inputs.get("browserType") or "msedge").strip().lower()
+        if browser not in _BROWSER_PROCESS_NAMES:
+            return CommandResult.failure(
+                ErrorCode.INVALID_INPUT,
+                f"不支持的浏览器类型：{browser!r}（只支持 msedge / chrome）",
+                details={"field": "browserType", "received": browser},
+            )
+        force = bool(inputs.get("force"))
+        process_names = _BROWSER_PROCESS_NAMES[browser]
+        try:
+            matched = await asyncio.to_thread(_list_browser_processes, process_names)
+        except OSError as exc:
+            return CommandResult.failure(
+                ErrorCode.PLATFORM_UNSUPPORTED,
+                f"无法枚举浏览器进程（{exc}）——终止浏览器依赖操作系统的进程列表接口，"
+                "当前平台或权限下不可用。",
+                details={"browser": browser, "platform": sys.platform},
+            )
+        scoped = self._scope_processes(scope, browser, matched)
+        if scope == "launchedByUs" and not scoped and not matched:
+            return self._ext_success(
+                invocation, EffectKind.SESSION, f"browser.process:{browser}",
+                {
+                    "operation": "closeBrowser",
+                    "scope": scope,
+                    "browser": browser,
+                    "matchedCount": 0,
+                    "killedCount": 0,
+                },
+                outputs={"terminated": True, "matchedCount": 0, "killedProcessIds": []},
+            )
+        if scope == "launchedByUs" and not scoped and matched:
+            # 有该浏览器的进程，但没有一个是「我们拉起的」——这是**保守默认**最容易
+            # 被误解的路径。显式失败（而不是 returned terminated=true + 0）并指明出口。
+            return CommandResult.failure(
+                ErrorCode.EXECUTOR_FAILED,
+                f"检测到 {len(matched)} 个 {browser} 进程，但都不是本流程拉起的："
+                "默认（scope=launchedByUs）不会去关用户自己打开的浏览器。"
+                "确实需要一并终止时，显式把 scope 设为 byProcessName。",
+                details={
+                    "browser": browser,
+                    "scope": scope,
+                    "matchedCount": len(matched),
+                    "reason": "no_launched_process",
+                },
+            )
+        killed: list[int] = []
+        failed: list[int] = []
+        for info in scoped:
+            pid = int(info.get("pid") or 0)
+            if pid <= 0:
+                continue
+            try:
+                await asyncio.to_thread(_terminate_process, pid, force)
+                killed.append(pid)
+            except OSError:
+                failed.append(pid)
+        # 进程终止不是瞬时的：等它们真正退出，不然上层紧接着的「重新拉起」会
+        # 拿旧进程的插件端点当在线（同一浏览器被判定为「还在」）。
+        exited = True
+        if scoped:
+            exited = await asyncio.to_thread(
+                _wait_processes_exit,
+                [info["pid"] for info in scoped],
+                min(timeout_s, 10.0),
+            )
+        return self._ext_success(
+            invocation, EffectKind.SESSION, f"browser.process:{browser}",
+            {
+                "operation": "closeBrowser",
+                "scope": scope,
+                "browser": browser,
+                "force": force,
+                "matchedCount": len(scoped),
+                "killedCount": len(killed),
+                "failedCount": len(failed),
+                "allExited": exited,
+            },
+            outputs={
+                # 「已终止」= 目标状态已达成：没有任何匹配进程（本来就不存在）也算达成——
+                # 收尾步骤的语义是「确保它不在跑」，而不是「我刚杀了几个」。
+                # 有匹配却没能全杀掉 → 不算是（failedProcessIds 里能看出是哪些）。
+                "terminated": not failed,
+                "matchedCount": len(scoped),
+                "killedProcessIds": killed,
+                "failedProcessIds": failed,
+            },
         )
 
     @staticmethod

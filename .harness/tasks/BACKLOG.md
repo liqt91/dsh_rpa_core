@@ -8,6 +8,11 @@
 
 ## 后续任务
 
+> 已完成并移出本清单（2026-09-21）：**两套「可见」口径对齐**——扩展侧已统一为
+> 单一严格判定 `isElementVisible`（`opacity:0`/视口外/零尺寸均判不可见），`waitFor` 的
+> `count` 与执行前预检**复用同一个函数**，并由 `check_precheck_helpers.mjs` 的反漂移断言
+> 钉住（禁止再出现第二份可见性判定）。
+
 - [ ] **M31 GUI 跨平台观感诊断（macOS vs Windows）**（`planned`，诊断型——**先诊断，不写代码**）
   - 计划：`M31-gui-crossplatform-audit.md`
   - 由来：维护者在 macOS 上使用 GUI 后反馈「控件样式、字体大小、控件的显示/隐藏行为与 Windows
@@ -37,13 +42,6 @@
   留下的能力缺口：`chrome.tabs.captureVisibleTab` 只能截可见区，整页要滚动分段拼接、元素要按 rect
   裁剪，都需要在扩展里解码图像（MV3 service worker 无 `Image`/`FileReader`）→ 走 offscreen document
   或 CDP `Page.captureScreenshot(captureBeyondViewport/clip)`；另需处理 sticky/fixed 元素在分段里的重复
-- [ ] **关闭标签页 / 终止我们拉起的浏览器进程**（`planned`）——M29 S3 删掉 `close.forceKill`/
-  `ignoreUnload` 后留下的能力缺口：当前 `close` = 本地解绑，不代关用户标签页、不杀进程。若要做，
-  需要独立命令（破坏性契约单独声明），而不是挂在 `close` 的两个布尔上
-- [ ] **两套「可见」口径对齐**（`planned`，语义差异）——`waitFor(state=visible)` 用 `count` 的轻量
-  可见判定（client rects + `visibility`/`display`），执行前预检还额外看 `opacity`/rect 尺寸/视口内，
-  于是 `opacity:0` 或视口外元素会「waitFor 说到了、点击说不可见」。现状已写明在
-  `docs/element-mvp-boundaries.md` §2.11，是否统一口径待定
 - [ ] 技术路线（ADR 0016）：GUI 为唯一主力形态——新增能力优先落 GUI；Web 编辑器（devserver）
   `devserver/static/` 冻结演进（不删除、不再补齐 GUI 已有能力）
 - [ ] UI、DSH、MCP、调度器和安装器集成（`planned`）——见远期任务
@@ -73,6 +71,33 @@
 > 主力形态，该条目（「确认非开发者用户为主力后再立项薄壳」）不再适用。
 
 ## 已完成
+
+- [x] **M32 浏览器收尾：关标签页与终止浏览器进程**（`done`，2026-09-21）
+  - 计划：`M32-browser-teardown.md`
+  - 兑现 M29 S3 留下的那句话（「缺口属独立命令」）。两条命令**都是独立命令**不是
+    `browser.close` 的新参数：`close` 是会话生命周期（`effect=session`，语义是解绑、
+    不碰用户浏览器），关标签/终止进程是**对用户浏览器的破坏性操作**（`unsafe-write`）——
+    风险等级、声明面、默认策略三者全不同。
+  - `browser.closeTabs`：显式 `tabIds` / `all=true`（当前窗口全部）**二选一**（`oneOf` +
+    互斥校验）；扩展侧 `tabs.closeMany` **逐项记账**（`closedTabIds`/`failedTabIds`），
+    不是一个布尔；关掉当前会话所属标签页时会话随之解绑。
+  - `browser.closeBrowser`：`scope` 参数对齐影刀形态——`launchedByUs`（**默认保守**，
+    只杀本执行器拉起过的实例）/ `byProcessName`（按名全杀，含用户自开窗口）。
+    **默认保守是硬要求**：判据「哪些是我们拉起的」在没有记录时无法从外部推断，默认全杀
+    会让一次普通流程收尾把用户手上正在填的表单一起关掉。
+  - **根因修复**：`launch_browser` 此前 fire-and-forget，无任何「我们启动过它」的记录——
+    这正是该能力此前无法实现、只能退化成按名全杀的原因。现记 `_launched_marks` 水位，
+    且记在「等到插件上线」之后（失败的拉起不记水位，否则事后会去杀用户的浏览器）。
+    保守默认 + 无记录时**刻意不静默成功**（报 `reason=no_launched_process` 并指向出口）。
+  - 顺手修掉两个真 bug：`tasklist` 的 GBK 编码（异常藏在 subprocess 读线程里）、
+    `os.kill(pid, 0)` 在 Windows 上不可用作存活探测。
+  - 新门禁 `scripts/check_close_ops.mjs`（28 项断言）——「逐项记账 / `all` 严格 `=== true` /
+    空 `tabIds` 不退化成全关」这类语义**只有扩展侧能证明**：Python 桩测的是接口形状，
+    一个 `Promise.all` 一把梭的实现能过全部 Python 测试，却会在真机上把「关了 2/3」
+    报成「全关了」。负向验证 3 例（第 2 例第一次是假绿灯，已补用例并记教训）。
+  - 真机未覆盖：终止动作未对真实浏览器执行（会关掉维护者手头窗口）；POSIX 侧解析未在
+    mac 真机跑过。**剩余缺口**：`closeTabs` 的 `all=true` 不区分「我们创建的」与「用户自己的」
+    标签页（与 `byProcessName` 同级杀伤），要做需在 `tabs.create` 时记 tabId。
 
 - [x] **M26 流程 inputs 声明编辑 UI**（`done`，2026-09-21）
   - 计划：`M26-flow-inputs-editor.md`；口径文档：`docs/flow-inputs.md`

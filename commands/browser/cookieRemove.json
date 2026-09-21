@@ -6,7 +6,7 @@
   ],
   "stability": "stable",
   "id": "browser.cookieRemove",
-  "x-palette-order": 34,
+  "x-palette-order": 36,
   "kind": "action",
   "risk": "browser-control",
   "capabilities": [

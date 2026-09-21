@@ -299,6 +299,8 @@ _OP_VALUES: dict[str, dict] = {
     "tabs.history": {"url": "https://a.test/"},
     "tabs.waitLoad": {"url": "https://a.test/"},
     "tabs.stopLoading": {"url": "https://a.test/"},
+    "tabs.closeMany": {"closedTabIds": [7], "failedTabIds": []},
+    "tabs.listWindows": {"windows": [{"windowId": 1, "focused": True, "tabCount": 1}]},
     "screenshot": {"dataUrl": "data:image/png;base64,QUJD"},
     "cookies.get": {"value": "v"},
     "cookies.getAll": {"cookies": [{"name": "n", "value": "v"}]},
@@ -338,6 +340,8 @@ _BASELINE_CASES = [
     ("browser.cookieGet", {"name": "n"}, {"cookies.get": 1}),
     ("browser.cookieSet", {"cookies": [{"name": "n", "value": "v"}]}, {"cookies.set": 1}),
     ("browser.cookieRemove", {"name": "n"}, {"cookies.remove": 1}),
+    # M32 S1：关标签页只打一次批量关闭信封（不是「逐个标签各打一次」）
+    ("browser.closeTabs", {"tabIds": [7, 8]}, {"tabs.closeMany": 1}),
 ]
 
 

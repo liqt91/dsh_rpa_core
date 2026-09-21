@@ -35,6 +35,10 @@ PURE_FUNCTION_SCRIPTS = (
     "check_input_helpers.mjs",
     "check_precheck_helpers.mjs",
     "check_click_helpers.mjs",
+    # 浏览器收尾 op（关标签页 / 终止浏览器）：批量关闭的「逐项记账」语义只有
+    # 扩展侧能证明——Python 桩测的是接口形状，一个把 Promise.all 当成功的实现
+    # 也能过 Python 测试，却会在真机上把「关了 2/3」报成「全关了」。
+    "check_close_ops.mjs",
 )
 node = shutil.which("node")
 if node:

@@ -141,6 +141,46 @@ class ExtensionExecSession:
             timeout_seconds=timeout_seconds, target_host=target_host,
         )
 
+    def tabs_close_many(
+        self,
+        *,
+        tab_ids: list[int] | None = None,
+        close_all: bool = False,
+        window_id: int | None = None,
+        timeout_seconds: float = DEFAULT_COMMAND_TIMEOUT_SECONDS,
+        target_host: str | None = None,
+    ) -> dict[str, Any]:
+        """批量关闭标签页（M32 S1）：显式 `tab_ids` 或 `close_all`（当前窗口全部）。
+
+        返回 `{"closedTabIds": [...], "failedTabIds": [...]}`——**逐个如实记账**，
+        不把「部分失败」折叠成一个布尔值：调用方需要区分「都关了」与「关了一半」。
+        """
+        args: dict[str, Any] = {}
+        if tab_ids:
+            args["tabIds"] = [int(tab_id) for tab_id in tab_ids]
+        if close_all:
+            args["all"] = True
+        if window_id is not None:
+            args["windowId"] = int(window_id)
+        return self._client.submit(
+            "tabs.closeMany", args,
+            timeout_seconds=timeout_seconds, target_host=target_host,
+        )
+
+    def tabs_list_windows(
+        self,
+        *,
+        timeout_seconds: float = DEFAULT_COMMAND_TIMEOUT_SECONDS,
+        target_host: str | None = None,
+    ) -> list[dict]:
+        """窗口清单（只含 id/状态/标签数，不含页面内容）。"""
+        payload = self._client.submit(
+            "tabs.listWindows", {},
+            timeout_seconds=timeout_seconds, target_host=target_host,
+        )
+        windows = payload.get("windows")
+        return [dict(window) for window in windows] if isinstance(windows, list) else []
+
     # -- 页面（scripting 注入，主 frame） ------------------------------------
 
     def page_call(

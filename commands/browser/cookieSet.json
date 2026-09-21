@@ -6,7 +6,7 @@
   ],
   "stability": "stable",
   "id": "browser.cookieSet",
-  "x-palette-order": 31,
+  "x-palette-order": 33,
   "kind": "action",
   "risk": "browser-control",
   "capabilities": [

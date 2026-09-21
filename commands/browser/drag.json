@@ -6,7 +6,7 @@
   ],
   "stability": "stable",
   "id": "browser.drag",
-  "x-palette-order": 18,
+  "x-palette-order": 20,
   "kind": "action",
   "risk": "browser-control",
   "capabilities": [

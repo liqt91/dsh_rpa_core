@@ -1,0 +1,117 @@
+{
+  "id": "browser.closeTabs",
+  "x-palette-order": 5,
+  "version": "1.0.0",
+  "executor": "browser.playwright",
+  "kind": "lifecycle",
+  "risk": "browser-control",
+  "capabilities": [
+    "browser.control"
+  ],
+  "resources": [
+    "browser.session"
+  ],
+  "stability": "stable",
+  "effect": {
+    "kind": "unsafe-write",
+    "replay": "unsafe",
+    "idempotency": "none"
+  },
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "sessionId": {
+        "type": "string"
+      },
+      "tabIds": {
+        "type": "array",
+        "items": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "minItems": 1,
+        "description": "要关闭的标签页 id 列表（来自 browser.listPages）；与 all 二选一"
+      },
+      "all": {
+        "type": "boolean",
+        "description": "关闭当前所有标签页（含用户自己打开的）；与 tabIds 二选一，默认 false"
+      },
+      "browserType": {
+        "type": "string",
+        "enum": [
+          "msedge",
+          "chrome"
+        ],
+        "description": "浏览器类型（多浏览器各自装插件时用于路由到对应扩展实例）",
+        "default": "msedge"
+      },
+      "timeoutMs": {
+        "type": "integer",
+        "minimum": 1
+      }
+    },
+    "oneOf": [
+      {
+        "required": [
+          "tabIds"
+        ]
+      },
+      {
+        "required": [
+          "all"
+        ]
+      }
+    ],
+    "additionalProperties": false
+  },
+  "output_schema": {
+    "type": "object",
+    "required": [
+      "closedCount",
+      "closedTabIds"
+    ],
+    "properties": {
+      "closedCount": {
+        "type": "integer",
+        "minimum": 0
+      },
+      "closedTabIds": {
+        "type": "array",
+        "items": {
+          "type": "integer"
+        }
+      },
+      "failedTabIds": {
+        "type": "array",
+        "items": {
+          "type": "integer"
+        }
+      }
+    },
+    "additionalProperties": false
+  },
+  "x-outputs": {
+    "closedCount": {
+      "label": "已关闭数量",
+      "primary": true
+    },
+    "closedTabIds": {
+      "label": "已关闭标签页"
+    },
+    "failedTabIds": {
+      "label": "关闭失败标签页"
+    }
+  },
+  "errors": [
+    "INVALID_INPUT",
+    "SESSION_NOT_FOUND",
+    "TIMEOUT",
+    "CANCELLED",
+    "EXECUTOR_FAILED"
+  ],
+  "implementation": {
+    "handler": "browser.playwright:close_tabs"
+  },
+  "default_timeout_seconds": 15,
+  "retryable": false
+}

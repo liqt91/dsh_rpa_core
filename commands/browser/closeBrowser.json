@@ -1,0 +1,111 @@
+{
+  "id": "browser.closeBrowser",
+  "x-palette-order": 6,
+  "version": "1.0.0",
+  "executor": "browser.playwright",
+  "kind": "lifecycle",
+  "risk": "browser-control",
+  "capabilities": [
+    "browser.control"
+  ],
+  "resources": [
+    "browser.session"
+  ],
+  "stability": "stable",
+  "effect": {
+    "kind": "session",
+    "replay": "unsafe",
+    "idempotency": "none"
+  },
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "browserType": {
+        "type": "string",
+        "enum": [
+          "msedge",
+          "chrome"
+        ],
+        "description": "要终止的浏览器类型（按进程名匹配）",
+        "default": "msedge"
+      },
+      "scope": {
+        "type": "string",
+        "enum": [
+          "launchedByUs",
+          "byProcessName"
+        ],
+        "description": "终止范围：launchedByUs（默认，只终止本流程拉起过的实例，不动用户自己打开的浏览器）/ byProcessName（按进程名全杀，会连用户正在用的窗口一起关掉）",
+        "default": "launchedByUs"
+      },
+      "force": {
+        "type": "boolean",
+        "description": "true=强制终止（不等待浏览器保存会话）；默认 false 会先请求正常退出",
+        "default": false
+      },
+      "timeoutMs": {
+        "type": "integer",
+        "minimum": 1,
+        "description": "等待进程退出的超时；超时后不再补强杀（force 已决定终止方式）"
+      }
+    },
+    "additionalProperties": false
+  },
+  "output_schema": {
+    "type": "object",
+    "required": [
+      "terminated",
+      "matchedCount"
+    ],
+    "properties": {
+      "terminated": {
+        "type": "boolean"
+      },
+      "matchedCount": {
+        "type": "integer",
+        "minimum": 0
+      },
+      "killedProcessIds": {
+        "type": "array",
+        "items": {
+          "type": "integer"
+        }
+      },
+      "failedProcessIds": {
+        "type": "array",
+        "items": {
+          "type": "integer"
+        }
+      }
+    },
+    "additionalProperties": false
+  },
+  "x-outputs": {
+    "terminated": {
+      "label": "是否已终止",
+      "primary": true
+    },
+    "matchedCount": {
+      "label": "匹配进程数"
+    },
+    "killedProcessIds": {
+      "label": "终止的进程 ID"
+    },
+    "failedProcessIds": {
+      "label": "终止失败进程 ID"
+    }
+  },
+  "errors": [
+    "INVALID_INPUT",
+    "SESSION_NOT_FOUND",
+    "PLATFORM_UNSUPPORTED",
+    "TIMEOUT",
+    "CANCELLED",
+    "EXECUTOR_FAILED"
+  ],
+  "implementation": {
+    "handler": "browser.playwright:close_browser"
+  },
+  "default_timeout_seconds": 30,
+  "retryable": false
+}

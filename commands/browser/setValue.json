@@ -1,6 +1,6 @@
 {
   "id": "browser.setValue",
-  "x-palette-order": 16,
+  "x-palette-order": 18,
   "version": "1.0.0",
   "executor": "browser.playwright",
   "kind": "action",

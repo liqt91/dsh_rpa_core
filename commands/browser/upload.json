@@ -1,6 +1,6 @@
 {
   "id": "browser.upload",
-  "x-palette-order": 38,
+  "x-palette-order": 40,
   "version": "1.0.0",
   "executor": "browser.playwright",
   "kind": "action",

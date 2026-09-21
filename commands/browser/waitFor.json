@@ -1,6 +1,6 @@
 {
   "id": "browser.waitFor",
-  "x-palette-order": 19,
+  "x-palette-order": 21,
   "version": "1.0.0",
   "executor": "browser.playwright",
   "kind": "query",

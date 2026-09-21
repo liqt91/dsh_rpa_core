@@ -366,6 +366,50 @@ async function executeCommand(cmd) {
     case "tabs.close":
       await chrome.tabs.remove(Number(args.tabId));
       return { closed: true };
+    case "tabs.closeMany": {
+      // 批量关闭（M32 S1）：tabIds 显式列表 / all=当前窗口全部标签，二者互斥。
+      // 逐个 remove 并**如实分别记账**：一个失败不该让整批静默成功——调用方要的
+      // 是「哪些关了、哪些没关」，只有关成功的进 closedTabIds。
+      // 注意：chrome.tabs.remove 对最后一个标签的行为——Chrome/Edge 会**关闭整个窗口**
+      // （除非是应用窗口），这是浏览器语义，我们不额外造「留一个空白页」的假动作。
+      const tabIds = Array.isArray(args.tabIds) ? args.tabIds : null;
+      let targets = [];
+      if (tabIds) {
+        targets = tabIds.map((id) => Number(id)).filter((id) => Number.isFinite(id));
+      } else if (args.all === true) {
+        const current = args.windowId == null
+          ? await chrome.windows.getCurrent().catch(() => null)
+          : { id: Number(args.windowId) };
+        const tabs = await chrome.tabs.query(
+          current && current.id != null ? { windowId: current.id } : {},
+        );
+        targets = tabs.map((tab) => tab.id).filter((id) => id != null);
+      }
+      const closedTabIds = [];
+      const failedTabIds = [];
+      for (const tabId of targets) {
+        try {
+          await chrome.tabs.remove(tabId);
+          closedTabIds.push(tabId);
+        } catch (_) {
+          failedTabIds.push(tabId);
+        }
+      }
+      return { closedTabIds, failedTabIds };
+    }
+    case "tabs.listWindows": {
+      // 窗口清单（closeBrowser 的「关窗口」路径用）：只报 id/状态，不报 URL 等页面内容
+      const windows = await chrome.windows.getAll({ populate: false });
+      return {
+        windows: windows.map((win) => ({
+          windowId: win.id,
+          focused: !!win.focused,
+          incognito: !!win.incognito,
+          type: win.type || "normal",
+          tabCount: Array.isArray(win.tabs) ? win.tabs.length : 0,
+        })),
+      };
+    }
     case "tabs.activate":
       await chrome.tabs.update(Number(args.tabId), { active: true });
       return { tabId: args.tabId };
@@ -464,13 +508,6 @@ async function pageCall(args) {
 async function domOp(payload) {
   const { selector, method, args } = payload;
   const query = (sel) => (sel ? Array.from(document.querySelectorAll(sel)) : []);
-  const isVisible = (el) => {
-    if (!el) return false;
-    const rects = el.getClientRects();
-    if (!rects || rects.length === 0) return false;
-    const style = window.getComputedStyle(el);
-    return style.visibility !== "hidden" && style.display !== "none";
-  };
   const fire = (el, type, init) => {
     el.dispatchEvent(new (type.startsWith("key") ? KeyboardEvent : MouseEvent)(type, init));
   };
@@ -497,6 +534,31 @@ async function domOp(payload) {
     ELEMENT_NOT_VISIBLE: "目标元素不可见（display/visibility/opacity 隐藏、零尺寸或不在视口内）",
     ELEMENT_DISABLED: "目标元素处于禁用状态（disabled / aria-disabled / inert）",
     ELEMENT_COVERED: "目标元素被其它元素遮挡，点击会落在遮挡者身上",
+  };
+  // 元素可见性判定——**单一事实来源**（M32）。
+  //
+  // 此前这里是全扩展唯一一份可见性判定，但只查「有 client rects + 非 visibility:hidden/display:none」；
+  // 而 `count`（waitFor 用它当命中信号）另有一份更宽松的同名实现。两份口径不一致，于是
+  // `opacity: 0` 或落在视口外的元素会让 `waitFor(state=visible)` 判定「等到了」，
+  // 紧接着的点击却报 `ELEMENT_NOT_VISIBLE`——**同一个词在两步里意思不同**，是最难排查的一类不一致。
+  //
+  // 现在统一到这个严格口径（比旧的 count 版严，与旧 precheck 版等价），`count` 复用它：
+  // 去掉 `checkOpacity` 以外的项都是在「说可见但其实点不到」，而 waitFor 的全部价值就是
+  // 「等到能操作」——宽松判定会让它给出假的绿灯。
+  const isElementVisible = (el) => {
+    if (!el || el.isConnected !== true) return false;
+    const rects = el.getClientRects ? el.getClientRects() : null;
+    if (!rects || rects.length === 0) return false;
+    const style = window.getComputedStyle(el);
+    if (style.visibility === "hidden" || style.display === "none") return false;
+    if (typeof el.checkVisibility === "function") {
+      // checkOpacity 覆盖 `opacity: 0`（以及祖先链上的 opacity:0）；
+      // checkVisibilityCSS 覆盖 visibility/display（比上面两行更完整，但保留它们是
+      // 为了在旧内核没有 checkVisibility 时仍有兜底）。
+      if (!el.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true })) return false;
+    }
+    const rect = rects[0];
+    return rect.width > 0 && rect.height > 0;
   };
   // 可操作动作：只有这些 method 需要预检（读取类 getText/getPosition 等照旧允许读隐藏元素）
   const precheckRequired = (raw) => {
@@ -540,22 +602,9 @@ async function domOp(payload) {
     if (isDisabledElement(el)) {
       return { code: "ELEMENT_DISABLED", message: PRECHECK_MESSAGES.ELEMENT_DISABLED };
     }
-    const rects = el.getClientRects ? el.getClientRects() : null;
-    if (!rects || rects.length === 0) {
-      return { code: "ELEMENT_NOT_VISIBLE", message: PRECHECK_MESSAGES.ELEMENT_NOT_VISIBLE };
-    }
-    const style = window.getComputedStyle(el);
-    if (style.visibility === "hidden" || style.display === "none") {
-      return { code: "ELEMENT_NOT_VISIBLE", message: PRECHECK_MESSAGES.ELEMENT_NOT_VISIBLE };
-    }
-    if (typeof el.checkVisibility === "function") {
-      const shown = el.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true });
-      if (!shown) {
-        return { code: "ELEMENT_NOT_VISIBLE", message: PRECHECK_MESSAGES.ELEMENT_NOT_VISIBLE };
-      }
-    }
-    const rect = rects[0];
-    if (!(rect.width > 0) || !(rect.height > 0)) {
+    // 可见性判定复用 `isElementVisible`（M32 统一口径）——预检与 count/waitFor
+    // 现在问的是同一个问题，不会再出现「waitFor 说可见、预检说不可见」。
+    if (!isElementVisible(el)) {
       return { code: "ELEMENT_NOT_VISIBLE", message: PRECHECK_MESSAGES.ELEMENT_NOT_VISIBLE };
     }
     return null;
@@ -704,7 +753,9 @@ async function domOp(payload) {
 
   if (method === "count") {
     let list = query(selector);
-    if (args.visible) list = list.filter(isVisible);
+    // 复用 `isElementVisible`（M32 统一口径）：这里的计数是 `waitFor(state=visible)`
+    // 的命中信号，必须与动作命令预检问同一个问题。
+    if (args.visible) list = list.filter(isElementVisible);
     return { matchedCount: list.length, result: list.length };
   }
   if (method === "scroll") {

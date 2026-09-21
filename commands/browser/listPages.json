@@ -6,7 +6,7 @@
   ],
   "stability": "stable",
   "id": "browser.listPages",
-  "x-palette-order": 27,
+  "x-palette-order": 29,
   "kind": "query",
   "risk": "read",
   "capabilities": [

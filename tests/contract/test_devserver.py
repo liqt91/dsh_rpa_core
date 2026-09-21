@@ -94,8 +94,12 @@ def test_browser_palette_ordered_by_yingdao(server):
         # 影刀「网页自动化」章节编号（见 docs/yingdao-web-cmds-benchmark.md §二）
         "browser.navigate",        # 1  打开网页
         "browser.attach",          # 3  获取已打开的网页对象
-        "browser.close",           # 4  关闭网页
-        "browser.waitLoad",        # 6  等待网页加载完成
+            "browser.close",           # 4  关闭网页
+            # M32 S1：关标签页 / 终止浏览器属「关闭网页」族，紧随其后。
+            # 影刀基准表里没有这两条指令，编号取 close 之后的连续值。
+            "browser.closeTabs",       # 5  关闭标签页
+            "browser.closeBrowser",    # 6  终止浏览器
+            "browser.waitLoad",        # 6  等待网页加载完成
         "browser.stopLoading",     # 7  停止网页加载
         "browser.scroll",          # 8  鼠标滚动网页
         "browser.handleDialog",    # 9  自动处理弹框

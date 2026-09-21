@@ -1,6 +1,6 @@
 {
   "id": "browser.getSelectOptions",
-  "x-palette-order": 23,
+  "x-palette-order": 25,
   "version": "1.0.0",
   "executor": "browser.playwright",
   "kind": "query",

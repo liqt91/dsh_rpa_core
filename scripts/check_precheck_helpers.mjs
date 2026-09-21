@@ -34,7 +34,7 @@ const makeFactory = (globals) =>
   new Function(
     "window",
     "document",
-    `${slice}\nreturn { precheckRequired, elementPrecheck, coveringElement, isDisabledElement, PRECHECK_MESSAGES };`,
+    `${slice}\nreturn { precheckRequired, elementPrecheck, coveringElement, isDisabledElement, isElementVisible, PRECHECK_MESSAGES };`,
   )(globals.window, globals.document);
 
 const check = (label, actual, expected) => {
@@ -67,7 +67,8 @@ const baseGlobals = {
   document: {},
 };
 
-const { precheckRequired, elementPrecheck, coveringElement, isDisabledElement } = makeFactory(baseGlobals);
+const { precheckRequired, elementPrecheck, coveringElement, isDisabledElement, isElementVisible } =
+  makeFactory(baseGlobals);
 
 // ---- precheckRequired：只有可操作动作要预检（读取类允许读隐藏元素） ----
 for (const method of ["click", "hover", "input", "select", "check", "drag"]) {
@@ -257,6 +258,70 @@ if (!/KNOWN_ERROR_CODES\.includes\(code\)/.test(source)) {
   console.error("FAIL | errorCode 未优先认结构化 code：预检错误码传不到执行器");
 } else {
   console.log("PASS | errorCode 优先认结构化 code");
+}
+
+// ---- M32：可见性判定是**单一事实来源**，count/waitFor 与预检必须复用同一个 ----
+// 背景：此前 `count` 用的 `isVisible` 比预检宽松（不查 opacity、不查视口），
+// 于是 `waitFor(state=visible)` 说「等到了」，紧接着的点击报 `ELEMENT_NOT_VISIBLE`。
+check("可见：正常元素", isElementVisible(stubElement()), true);
+check("不可见：已脱离文档", isElementVisible(stubElement({ isConnected: false })), false);
+check("不可见：null", isElementVisible(null), false);
+check("不可见：无 client rects", isElementVisible(stubElement({ getClientRects: () => [] })), false);
+check(
+  "不可见：零尺寸 rect",
+  isElementVisible(stubElement({ getClientRects: () => [{ width: 0, height: 10, left: 0, top: 0 }] })),
+  false,
+);
+check(
+  "不可见：visibility:hidden",
+  makeFactory({
+    window: { getComputedStyle: () => ({ visibility: "hidden", display: "block" }) },
+    document: {},
+  }).isElementVisible(stubElement()),
+  false,
+);
+check(
+  "不可见：display:none",
+  makeFactory({
+    window: { getComputedStyle: () => ({ visibility: "visible", display: "none" }) },
+    document: {},
+  }).isElementVisible(stubElement()),
+  false,
+);
+check(
+  "不可见：checkVisibility 说不可见（覆盖 opacity:0）",
+  cvFactory.isElementVisible(stubElement({ checkVisibility: () => false })),
+  false,
+);
+check(
+  "可见：checkVisibility 说可见",
+  cvFactory.isElementVisible(stubElement({ checkVisibility: () => true })),
+  true,
+);
+check(
+  "旧内核无 checkVisibility → 仍按 rect + style 判定（兜底不失效）",
+  cvFactory.isElementVisible(stubElement({ checkVisibility: undefined })),
+  true,
+);
+
+// 反漂移：`count` 必须复用 isElementVisible，不许再出现第二份可见性判定
+if (!/list\.filter\(isElementVisible\)/.test(source)) {
+  failed += 1;
+  console.error("FAIL | count 未复用 isElementVisible：两套可见口径会重新分叉");
+} else {
+  console.log("PASS | count 复用 isElementVisible");
+}
+if (/\bisVisible\b/.test(source)) {
+  failed += 1;
+  console.error("FAIL | 仍存在旧的 isVisible 定义/引用：可见性判定有第二份实现");
+} else {
+  console.log("PASS | 无第二份可见性判定（isVisible 已彻底移除）");
+}
+if (!/selector:\s*"\[inert\]"/.test(source) && !source.includes('"[inert]"')) {
+  failed += 1;
+  console.error("FAIL | inert 判定锚点丢失");
+} else {
+  console.log("PASS | inert 子树判定仍在");
 }
 
 // ---- 反漂移：新增的预检错误码必须真实存在于枚举（跨语言一致性）----
