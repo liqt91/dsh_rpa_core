@@ -1,6 +1,8 @@
 # M33 整页 / 元素级截图
 
-状态：`planned`（**评估已完成，待维护者裁决路线后再开工**）
+状态：`planned`
+
+> **阻塞**：评估已完成，待维护者裁决路线（A/B/C）后再开工。
 
 关联：M29 S3（从 `browser.screenshot` 删掉 `fullPage`/`selector` 留下缺口）、
 ADR 0013（移除 Playwright，单扩展通道）、ADR 0015（Native Messaging 桥）、
