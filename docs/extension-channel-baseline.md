@@ -127,3 +127,42 @@ uv run pytest tests/contract/test_browser_channel_metrics.py -q
 - 度量按「执行器实例」累计：同一 `PlaywrightExecutor` 上并发的两条命令会混在一份计数里。
   当前编排器按节点串行执行，不构成问题；若将来并行化，需要改成按步上下文（thread-local
   或显式传入）。
+
+## 6. 宿主生命周期（M34）
+
+host 随浏览器扩展常驻（Native Messaging 通道），其生死直接决定「能否重装 venv」。
+
+### 6.1 现象：`uv run` 报 `os error 5 拒绝访问`
+
+```
+error: failed to remove file `...\.venv\Scripts\rpa-core-ext-host.exe`: 拒绝访问。 (os error 5)
+```
+
+`uv run` 重装本项目会覆写两个 console script（`rpa-core.exe` / `rpa-core-ext-host.exe`）。
+只要浏览器还连着扩展，宿主进程就**必然锁着这两个文件**——这不是异常，是正常态。
+遇到此报错：**先关掉连着扩展的浏览器，再 `uv run`**。
+
+### 6.2 根因：Windows 垫片残留
+
+Windows 上 console script 是「垫片（`.exe`）+ python.exe」两个进程。真宿主
+（`python.exe`）随扩展断开而退出，但**垫片不一定回收**，会一直攥着 exe 句柄。
+每起一次浏览器多一对残留，攒到 `uv run` 触发重装时必被锁。
+
+### 6.3 修复：空闲自杀
+
+宿主在「**无客户端连接** 且 **静置超过阈值**」时主动 `os._exit(0)`：
+
+- 阈值默认 30 分钟（`RPA_CORE_HOST_IDLE_EXIT_SECONDS`，`0`/负=关闭），宁可多等不可误杀。
+- 有客户端、或扩展仍在发消息（焦点变化等）→ 不退，避免打断正在进行的流程。
+- 退出方式用 `os._exit(0)` 而非 `shutdown()`：实测从监视线程调 `shutdown()` 会在
+  `self._server.close()` 的 `_PipeServer._lock` 处**死锁**（后台 `accept_loop` 攥着锁
+  阻塞在 `WaitForSingleObject`），进程卡死等于没退。置位 `_closed` 信号 `accept_loop`
+  自行退出 + `os._exit` 强杀，无此竞争；管道句柄由 OS 回收。
+
+### 6.4 验证
+
+`tests/contract/test_ext_bridge.py` 的 `TestIdleExitThreshold`（阈值解析，纯函数）+
+ `test_idle_exit_*` 四条（真 spawn host 子进程，断言退出/存活）。
+
+**不拿单测结论冒充真机结论**：空闲自杀的「残留垫片随之回收、文件锁释放」只在真浏览器
+长静置后才会被 OS 实际回收，单测只验证宿主自身退出与日志。

@@ -72,6 +72,24 @@
 
 ## 已完成
 
+- [x] **M34 宿主生命周期：扩展宿主空闲自杀，根治 uv run 锁文件**（`done`，2026-09-21）
+  - 计划：`M34-host-lifecycle.md`；文档：`docs/extension-channel-baseline.md` §6
+  - 触发：`uv run rpa-core gui` 报 `os error 5`（无法删除 `rpa-core-ext-host.exe`）。
+    根因：console-script shim（`.exe` launcher）与真 `python.exe` 宿主**都握 exe 句柄**，
+    宿主因扩展关闭 stdin 退出后孤儿 shim 偶发残留不退（日志特征：宿主侧日志全结束、
+    shim 侧零条目）；而 `uv run` 每次重装项目都要重写 console scripts，exe 被占用即失败。
+  - 修复：宿主**空闲自杀**——无客户端连接且空闲超过阈值（默认 1800s，
+    `RPA_CORE_HOST_IDLE_EXIT_SECONDS` 可调、`0` 禁用）→ 监视线程置 `_closed` 信号
+    accept_loop 自行退出后 `os._exit(0)`；**不调 `shutdown()`**（从监视线程调会在
+    `_PipeServer._lock` 上与 accept_loop 死锁）。活动追踪 `_touch()` 覆盖扩展消息/
+    客户端接入/有活客户端三种刷新。
+  - 实现教训（任务单 §6）：① **合成单线程测试给假绿灯**——`os.close` 宿主自己这端读 fd
+    唤不醒阻塞的 `read()`（EOF 要靠写端关闭），据此放弃 `_wake_extension_loop` 机制；
+    ② 清理孤儿 shim 时 `taskkill /T` 级联杀掉了活宿主（任务单 §4）。
+  - 测试：`test_ext_bridge.py` +10（阈值解析 6 + 集成 4：到点退出/禁用/客户端抑制/
+    消息流抑制）；真机观察：穿越阈值后 rc=0 退出。FULL GATE PASSED
+    （1072 passed / 2 xfailed / 12 skipped）
+
 - [x] **M32 浏览器收尾：关标签页与终止浏览器进程**（`done`，2026-09-21）
   - 计划：`M32-browser-teardown.md`
   - 兑现 M29 S3 留下的那句话（「缺口属独立命令」）。两条命令**都是独立命令**不是

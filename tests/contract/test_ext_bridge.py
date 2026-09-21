@@ -28,29 +28,40 @@ import pytest
 
 from rpa_core import local_transport as lt
 from rpa_core.local_transport import Channel, read_message, write_message
+from rpa_core.workers.ext_bridge import _idle_exit_seconds
 
 
 class _HostProc:
     """host 子进程 + 假扩展（驱动 stdio 帧）。"""
 
-    def __init__(self, browser: str = "msedge", instance_id: str = ""):
+    def __init__(
+        self,
+        browser: str = "msedge",
+        instance_id: str = "",
+        *,
+        idle_exit_seconds: float | None = None,
+    ):
         self.browser = browser
         self.instance_id = instance_id or uuid.uuid4().hex
+        self._idle_env = idle_exit_seconds
         self._tmpdir = Path(tempfile.mkdtemp(prefix="rpa-ext-bridge-"))
         self._stderr_path = self._tmpdir / "stderr.log"
         self._log_path = self._tmpdir / "ext-host.log"
         self._stderr = self._stderr_path.open("w+", encoding="utf-8")
+        env = {
+            **os.environ,
+            "RPA_EXT_BRIDGE_DEBUG": "1",
+            "RPA_EXT_BRIDGE_LOG": str(self._log_path),
+        }
+        if idle_exit_seconds is not None:
+            env["RPA_CORE_HOST_IDLE_EXIT_SECONDS"] = str(idle_exit_seconds)
         self.proc = subprocess.Popen(
             [sys.executable, "-m", "rpa_core.workers.ext_bridge"],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=self._stderr,
             cwd=str(_repo_root()),
-            env={
-                **os.environ,
-                "RPA_EXT_BRIDGE_DEBUG": "1",
-                "RPA_EXT_BRIDGE_LOG": str(self._log_path),
-            },
+            env=env,
         )
         assert self.proc.stdin is not None and self.proc.stdout is not None
         self.endpoint = lt.endpoint_name(self.browser, self.instance_id)
@@ -585,3 +596,121 @@ def test_channel_round_trip_baseline(host):
     # 耗时：本机假扩展（无浏览器、无真实 DOM）应当远低于此上界
     assert p50 < 200.0, f"通道往返 p50 异常：{p50:.2f}ms（是否有新增等待？）"
     assert max(per_call_ms) < 2000.0, f"通道往返 max 异常：{max(per_call_ms):.2f}ms"
+
+
+
+# ===========================================================================
+# M34：宿主空闲自杀（idle exit）
+# ---------------------------------------------------------------------------
+# 解决根因：Windows 上 console script 是「垫片 + python.exe」两个进程，真宿主
+# 退出后垫片不一定回收，会一直锁 .venv/Scripts/rpa-core-ext-host.exe，导致紧随其
+# 后的 `uv run`（重装该 exe）报 `os error 5 拒绝访问`。空闲自杀让真宿主在「无客户端
+# 连接 + 长时间无扩展消息」时主动退出，整条链路随之收敛。
+# ===========================================================================
+
+
+class TestIdleExitThreshold:
+    """阈值解析（纯函数，跨平台）。"""
+
+    def test_default_when_env_absent(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("RPA_CORE_HOST_IDLE_EXIT_SECONDS", raising=False)
+        assert _idle_exit_seconds() == 1800.0
+
+    def test_env_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("RPA_CORE_HOST_IDLE_EXIT_SECONDS", "120")
+        assert _idle_exit_seconds() == 120.0
+
+    def test_zero_disables(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("RPA_CORE_HOST_IDLE_EXIT_SECONDS", "0")
+        assert _idle_exit_seconds() == 0.0
+
+    def test_negative_disables(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("RPA_CORE_HOST_IDLE_EXIT_SECONDS", "-5")
+        assert _idle_exit_seconds() == 0.0
+
+    def test_invalid_falls_back_to_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("RPA_CORE_HOST_IDLE_EXIT_SECONDS", "not-a-number")
+        assert _idle_exit_seconds() == 1800.0
+
+    def test_empty_string_falls_back_to_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("RPA_CORE_HOST_IDLE_EXIT_SECONDS", "   ")
+        assert _idle_exit_seconds() == 1800.0
+
+
+def _wait_exit(proc: subprocess.Popen[bytes], timeout: float) -> int | None:
+    """等进程退出，返回 rc；超时返回 None。"""
+    try:
+        return proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return None
+
+
+def test_idle_exit_fires_without_clients(tmp_path: Path) -> None:
+    """无客户端连接 + 静置超过阈值 → 宿主自动退出（rc=0）。
+
+    这是修复本身：真宿主退出后垫片随之回收，文件锁释放，``uv run`` 不再被拒。
+    """
+    host = _HostProc(idle_exit_seconds=4)
+    try:
+        host.handshake()  # 必须 hello 之后 monitor 才启动；此后不再发任何消息
+        rc = _wait_exit(host.proc, timeout=14)
+        log = host.log_text()  # close() 会 rmtree 临时目录，断言前先取出
+    finally:
+        if host.proc.poll() is None:
+            host.proc.kill()
+        host.close()
+    assert rc == 0, f"宿主未空闲退出；日志尾部：\n{log[-1500:]}"
+    assert "idle exit" in log, log[-1500:]
+
+
+def test_idle_exit_disabled_when_threshold_zero(tmp_path: Path) -> None:
+    """threshold=0 关闭自杀：无客户端也不退出（避免误杀长会话）。"""
+    host = _HostProc(idle_exit_seconds=0)
+    try:
+        host.handshake()
+        rc = _wait_exit(host.proc, timeout=8)  # 远超默认 poll，若误退会抓到
+        log = host.log_text()
+    finally:
+        if host.proc.poll() is None:
+            host.proc.kill()
+        host.close()
+    assert rc is None, f"threshold=0 却退出了：{log[-800:]}"
+    assert "idle exit disabled" in log
+
+
+def test_idle_exit_suppressed_while_client_connected(tmp_path: Path) -> None:
+    """有客户端连接 → 即便无消息也不自杀（执行器正握着宿主）。"""
+    host = _HostProc(idle_exit_seconds=4)
+    try:
+        host.handshake()
+        channel = host.connect(timeout=10)  # 连接即 _touch，monitor 每轮看到 clients 非空
+        # 客户端保持静默，但连接本身应阻止自杀
+        rc = _wait_exit(host.proc, timeout=8)
+        log = host.log_text()
+    finally:
+        try:
+            channel.close()
+        except Exception:
+            pass
+        if host.proc.poll() is None:
+            host.proc.kill()
+        host.close()
+    assert rc is None, f"有客户端却自杀了：{log[-800:]}"
+
+
+def test_idle_exit_suppressed_while_extension_messages_flow(tmp_path: Path) -> None:
+    """扩展持续发消息 → 即便无客户端也不自杀（用户正在操作）。"""
+    host = _HostProc(idle_exit_seconds=4)
+    try:
+        host.handshake()
+        deadline = time.monotonic() + 8
+        while time.monotonic() < deadline:
+            host.to_extension({"type": "focus", "focused": True, "focusedAt": time.time()})
+            time.sleep(0.5)
+        rc = _wait_exit(host.proc, timeout=2)
+        log = host.log_text()
+    finally:
+        if host.proc.poll() is None:
+            host.proc.kill()
+        host.close()
+    assert rc is None, f"扩展活跃却自杀了：{log[-800:]}"

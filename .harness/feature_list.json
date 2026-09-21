@@ -286,6 +286,11 @@
       "id": "browser-teardown",
       "title": "Browser teardown: close tabs (explicit/all) and terminate browser processes (scope=launchedByUs by default, byProcessName opt-in)",
       "passes": true
+    },
+    {
+      "id": "host-idle-exit",
+      "title": "Extension bridge host idle self-termination: exit when no client connected and idle past threshold (default 30min, disabled via RPA_CORE_HOST_IDLE_EXIT_SECONDS=0)",
+      "passes": true
     }
   ]
 }

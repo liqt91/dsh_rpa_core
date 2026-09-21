@@ -51,6 +51,22 @@ _PASSTHROUGH_TO_EXTENSION = {"capture_arm", "capture_disarm", "capture_result", 
 _LOG_ENV = "RPA_EXT_BRIDGE_LOG"
 _LOG_MAX_BYTES = 256 * 1024
 
+# -- 空闲自杀（M34） ---------------------------------------------------------
+# Windows 上 console script 是「垫片 + python.exe」两个进程，垫片在真宿主退出后
+# **不一定回收**，会一直攥着 .venv/Scripts/rpa-core-ext-host.exe 的文件句柄。
+# 后果：紧接着跑 `uv run`（要重装该 exe）会被拒，报 `os error 5 拒绝访问`，
+# 而用户看到的是一句没头没脑的错误——不知道要去关浏览器。
+#
+# 因此宿主在「既无客户端连接、又长时间无扩展消息」时主动退出；真宿主一退，
+# 垫片随之回收，链路整体收敛。
+#
+# 阈值取保守值 30 分钟：宿主是「浏览器活着就该在」的角色，杀早会让正在等用户
+# 操作的流程掉线（扩展会自动重连，但端点与会话要重建）。宁可多等，不可误杀。
+_IDLE_EXIT_ENV = "RPA_CORE_HOST_IDLE_EXIT_SECONDS"
+_IDLE_EXIT_DEFAULT_SECONDS = 1800.0
+# 监视线程的轮询间隔（秒）。取值远小于最小可用阈值，保证退出及时且几乎不耗 CPU。
+_IDLE_POLL_SECONDS = 2.0
+
 
 def _log_path() -> Path:
     override = os.environ.get(_LOG_ENV)
@@ -71,6 +87,23 @@ def _trim_log(path: Path) -> None:
         path.write_bytes(b"[log trimmed]\n" + tail)
     except OSError:  # pragma: no cover - 日志失败不影响主流程
         pass
+
+
+def _idle_exit_seconds(raw: str | None = None) -> float:
+    """解析空闲自杀阈值（秒）。``0`` 或负数表示**关闭**自杀；非法值回退默认。
+
+    非法值**不报错**：宿主由浏览器拉起，启动期报错用户看不到（stderr 无人接收），
+    只会表现成「插件离线」。宁可按默认值继续跑，也不能因一个环境变量写错就罢工。
+    """
+    if raw is None:
+        raw = os.environ.get(_IDLE_EXIT_ENV)
+    if raw is None:
+        return _IDLE_EXIT_DEFAULT_SECONDS
+    try:
+        seconds = float(str(raw).strip())
+    except (TypeError, ValueError):
+        return _IDLE_EXIT_DEFAULT_SECONDS
+    return max(0.0, seconds)
 
 
 def _log(message: str) -> None:
@@ -106,7 +139,7 @@ def _set_binary_stdio() -> None:
 class ExtBridgeHost:
     """把扩展的 Native Messaging 连接暴露为本地端点，并中继命令/结果。"""
 
-    def __init__(self, stdin: Any, stdout: Any):
+    def __init__(self, stdin: Any, stdout: Any, *, idle_exit_seconds: float | None = None):
         self._stdin = stdin
         self._stdout = stdout
         self._write_lock = threading.Lock()
@@ -119,6 +152,58 @@ class ExtBridgeHost:
         self._server: LocalEndpointServer | None = None
         self._closed = threading.Event()
         self.identity: dict[str, Any] = {}
+        # 空闲自杀（M34）：阈值 <=0 表示关闭（见 _idle_exit_seconds）
+        self._idle_exit_seconds = (
+            _idle_exit_seconds() if idle_exit_seconds is None else max(0.0, idle_exit_seconds)
+        )
+        self._last_activity = time.monotonic()
+        self._activity_lock = threading.Lock()
+
+    # -- 活动时间戳（空闲自杀用） --------------------------------------------
+
+    def _touch(self) -> None:
+        """记录一次「有活动」。扩展消息与客户端连接都算。"""
+        with self._activity_lock:
+            self._last_activity = time.monotonic()
+
+    def _idle_seconds(self) -> float:
+        with self._activity_lock:
+            return time.monotonic() - self._last_activity
+
+    def _has_clients(self) -> bool:
+        with self._clients_lock:
+            return bool(self._clients)
+
+    def _idle_monitor_loop(self) -> None:
+        """空闲自杀监视线程（M34）。
+
+        条件：**无客户端连接** 且 **静置超过阈值**。两者缺一不退——有客户端在，
+        说明执行器正握着这个宿主（哪怕它自己也在等用户操作），此时退出会打断流程。
+
+        退出方式：**直接 ``os._exit(0)``**，不经由 ``shutdown()``。
+
+        为什么不走 ``shutdown()``：``shutdown()`` 会 ``self._server.close()``，而
+        ``accept_loop`` 后台线程正攥着服务端锁（`_PipeServer._lock`）阻塞在
+        ``WaitForSingleObject``。实测从监视线程调 ``close()`` 会在 ``with self._lock``
+        处**死锁**——主线程永远卡在 stdin 读、进程不退出，自杀等于没做（残留依旧、
+        文件依旧被锁）。
+
+        从监视线程「既设 ``_closed`` 信号 accept_loop 停，又 ``os._exit`` 强杀」则无此
+        竞争：``_closed`` 已置位，accept_loop 下一轮自行退出；``os._exit`` 由本线程
+        兜底结束整个进程，管道句柄由 OS 回收。空闲宿主无客户端、无在途命令，强退不丢状态。
+        """
+        while not self._closed.wait(_IDLE_POLL_SECONDS):
+            if self._has_clients():
+                self._touch()  # 有活客户端：视作有活动，避免刚断开就被判空闲
+                continue
+            idle = self._idle_seconds()
+            if idle >= self._idle_exit_seconds:
+                _log(
+                    f"idle exit: no clients and {idle:.0f}s >= "
+                    f"{self._idle_exit_seconds:.0f}s threshold; os._exit(0)"
+                )
+                self._closed.set()  # 信号 accept_loop 在下一轮自行退出
+                os._exit(0)
 
     # -- 扩展侧 --------------------------------------------------------------
 
@@ -146,6 +231,7 @@ class ExtBridgeHost:
                 break
             if message is None:
                 break  # 扩展断开/浏览器退出
+            self._touch()
             _log(f"extension -> {message.get('type')!r}")
             self._route_from_extension(message)
         self.shutdown()
@@ -224,6 +310,7 @@ class ExtBridgeHost:
             if channel is None:
                 continue
             client_id = self._client_id()
+            self._touch()
             _log(f"client {client_id} accepted")
             with self._clients_lock:
                 self._clients[client_id] = channel
@@ -357,6 +444,11 @@ class ExtBridgeHost:
         }
         _log(f"hosting {name}")
         self._send_to_extension({"type": "ready", **self.identity})
+        if self._idle_exit_seconds > 0:
+            threading.Thread(target=self._idle_monitor_loop, daemon=True).start()
+            _log(f"idle exit armed: {self._idle_exit_seconds:.0f}s")
+        else:
+            _log("idle exit disabled (threshold <= 0)")
         threading.Thread(target=self._accept_loop, daemon=True).start()
         self._extension_loop()
         return 0
