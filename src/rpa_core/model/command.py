@@ -6,6 +6,17 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from .errors import ErrorCode
 
+# 命令声明的「等待目标元素存在」预算参数名（单位：毫秒）。
+# manifest 里声明了它，语义就是「等待目标元素出现/变为可操作的最长时间」——沿用影刀同名参数
+# 与浏览器通道的既有实现（`browser.py` 的共享定位器把它当作等待选择器的超时）。
+WAIT_BUDGET_INPUT = "timeoutMs"
+
+# 等待预算之上留给「结果回传与收尾」的余量。
+# 等待必须等得到，但引擎超时是兜底，不该反过来掐断用户显式给出的等待预算——
+# 否则用户设 `timeoutMs=30s` 会在引擎默认的 15s 收到 TIMEOUT，而报错说的是「超时」、
+# 不是「元素没出现」，等于同一个参数在两个层里打架（M30 要消灭的正是这种事）。
+WAIT_BUDGET_SLACK_SECONDS = 1.0
+
 
 class CommandKind(StrEnum):
     ACTION = "action"
@@ -140,6 +151,45 @@ class CommandManifest(BaseModel):
         if self.retryable and self.effect.replay == ReplayPolicy.UNSAFE:
             raise ValueError("unsafe replay commands cannot be retryable")
         return self
+
+    def declares_wait_budget(self) -> bool:
+        """是否声明了元素等待预算（`timeoutMs`）。
+
+        声明即承诺：执行器必须真的拿这个值去等目标元素（M30 的口径——声明了不生效是缺陷）。
+        """
+        properties = (self.input_schema or {}).get("properties") or {}
+        return WAIT_BUDGET_INPUT in properties
+
+    def wait_budget_ms(self, inputs: dict[str, Any] | None) -> int:
+        """节点给出的等待预算（毫秒）。未声明该参数、未给值、值非法或为负 → 0（= 不等待）。"""
+        if not self.declares_wait_budget():
+            return 0
+        raw = (inputs or {}).get(WAIT_BUDGET_INPUT)
+        if raw is None:
+            return 0
+        try:
+            value = int(raw)
+        except (TypeError, ValueError):
+            return 0
+        return max(value, 0)
+
+
+def resolve_node_timeout_seconds(
+    manifest: CommandManifest,
+    inputs: dict[str, Any] | None,
+    declared_node_timeout: float | None,
+) -> float:
+    """节点实际可用的超时（秒）：节点显式值 > manifest 默认值，且不低于命令声明的元素等待预算。
+
+    「不低于」这一条是刻意的：`timeoutMs` 是用户为一等公民操作显式给出的等待预算，
+    而节点超时是防挂死的兜底。兜底反咬预算会产生误导性错误（见 `WAIT_BUDGET_SLACK_SECONDS`）。
+    工作流级 deadline 仍由调用方取 min 兜住，不在这里放宽。
+    """
+    base = declared_node_timeout or manifest.default_timeout_seconds
+    budget_seconds = manifest.wait_budget_ms(inputs) / 1000.0
+    if budget_seconds <= 0:
+        return base
+    return max(base, budget_seconds + WAIT_BUDGET_SLACK_SECONDS)
 
 
 class CommandError(BaseModel):

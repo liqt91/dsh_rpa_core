@@ -2,6 +2,73 @@
 
 ## 2026-09-21
 
+- **M30 桌面通道参数漂移收口（S1–S3，进行中）**——把 M29 遗留的「桌面/数据通道」补齐，并且顺手挖出
+  **两个跟参数无关的真 bug** 和**一根新的漂移轴**。
+  - **S1 先纠正归因，再泛化门禁**：BACKLOG 里那句「桌面/数据通道的分派不是 `command == "<id>"` 字面量形状，
+    静态切片不适用」**是错的**——`desktop.py`/`desktop_win32.py` 都是字面量，`python_worker.py` 也是（只是载体名
+    是 `invocation.command_id`/`invocation.inputs`）。真实原因很朴素：`EXECUTOR_FILES` 当时只登记了 `browser.`
+    一条前缀。**教训记进 docstring**：门禁「跳过」的输出里带着一个归因，归因错了会让人以为这里没法机器校验、于是
+    继续靠人工复查——所以跳过项的措辞改成「无实现文件映射，需在 EXECUTOR_FILES 登记」，不再编归因。载体泛化后
+    78 条命令 **75 checked / 3 exempt / 0 skipped**。台账改成**按参数登记**（按整条命令豁免会掩盖「已登记命令上
+    新冒出来的死参数」）且**自我收紧**：登记的参数一旦被消费或从 manifest 删除就报「台账过期」，它只会变短。
+    负向验证 4 例全红。
+  - **S1 第二处更正**：M29 记的「那些节点既没有引擎超时也没有命令超时」**不成立**——manifest 全带
+    `default_timeout_seconds`（桌面 15s），编排器照常套用；GUI 藏的只是**节点级输入框**。真实症状是「用户能改的
+    那个『超时』是死参数，真正生效的是他看不见的 15s」。这条更正直接决定了 S2 的做法。
+  - **S2 `timeoutMs` 从死参数变成真等待**：新增共享纯函数 `base.wait_for_element`（预算内 100ms 轮询，超时仍报
+    `ELEMENT_NOT_FOUND` 但 `details` 带 `waitedMs`/`polls`——否则一次超时在证据里看不出是不是真等过）；**预算为
+    0/未给出时只查一次，与修复前完全一致**（向后兼容是硬要求）。最关键的一条：等待预算把**上两层超时一起抬高**
+    到至少 `timeoutMs + 1s`，否则用户设 30s 会在引擎默认 15s 收到 `TIMEOUT`，报错看上去是「超时」而不是「元素没
+    出现」——同一个参数在两层里打架。删除 `desktop.win32.hotkey`/`menuSelect` 的 `timeoutMs`（全局按键与同步走
+    菜单栏都没有目标可等）；副作用是 GUI 不再隐藏节点级超时字段，**用户重新能回答「这个节点到底有没有超时」**
+    ——这个副作用正是删对了的证据。**又踩一次 monotonic 的坑**：初版用 `time.monotonic()`，测试随即抖动（50ms×2
+    读成 94ms）；实测它在 Windows 上是 `GetTickCount64()`、分辨率 15.625ms，改 `perf_counter()` 后稳定。M28 S4
+    已为度量立过同一条规矩——**同类缺陷在新代码里复发，不是不知道，是没形成习惯**；这次是测试抖动把它抖出来的。
+  - **S3 `click.simulateHuman`/`clickPosition` 变真语义**：决策层抽成 `base.plan_click`/
+    `plan_click_for_element`（纯函数 + 能力探测，两后端共用），口径「**能退让就退让，互斥就报错**」，退让原因写进
+    `effect.details.note`（静默退让就是新的参数漂移，只是从 manifest 挪到了运行时）。`simulateHuman=false` 走
+    `invoke()` 最短路径但**只在普通左键单击时**成立；双击/右键/辅助键退回真实鼠标路径；`random` 走
+    `click_input(coords=...)` 落在元素内偏中心带 15%~85%，元素不收 `coords`（列表/树/表格包装类）时退回中心 +
+    note；`false` + `random` **互斥 → 显式 `INVALID_INPUT`**（`invoke()` 没有坐标概念，静默按中心点点下去用户会
+    以为「随机」生效了）；未知 `clickPosition` 报错而不是退 center（manifest 是 enum，能走到执行器说明输入已越过
+    schema）。
+  - **两个真 bug——门禁结构上查不出（参数确实被读了，错的是读完调用的 API）**：① 双击写
+    `click_input(click_count=2)`，而 `click_input()` **没有** `click_count`（基础包装类与
+    `controls/common_controls` 的包装类都没有）→ 一直是 `TypeError`；② 辅助键写
+    `pywinauto.keyboard.key_down("control")`，而 pywinauto 0.6.9 的 `keyboard` 模块**没有** `key_down`/`key_up`
+    （只有 `send_keys`/`parse_keys`/`KeyAction`）→ 带辅助键的点击一直 `AttributeError → EXECUTOR_FAILED`。**参数
+    消费门禁能证明「参数被读了」，证明不了「读完调用的 API 存在」**——这是它的结构性盲区，如实写进代码注释与文档。
+    修法：`double=True`；新增 `base.click_with_modifiers` + `modifier_key_sequences`（`send_keys("{VK_CONTROL
+    down}")`，抬起写在 `finally` 里——点击抛异常也不能把 Ctrl 永久留住）。
+  - **第三根轴：`errors` 声明面**。顺着「实现返回了 `INVALID_INPUT` 但 manifest 没声明」做全库统计：实现会返回却
+    未声明的只有 3 条命令（三个都是 `INVALID_INPUT`），另 3 条是 `COMMAND_NOT_FOUND` 的未实现占位。于是新增门禁
+    `.harness/scripts/check_error_contract.py`（复用参数门禁的命令切片基础设施）。只做**单向**要求：实现了但没声明
+    = 错；**不反向**卡「声明的都要被触发」——防御性声明是合理的，反过来卡会逼人删掉真话。负向验证 2 例全红。
+  - **未收（已登记，不假装已清）**：`simulateHuman` 归一化**四端不一致**——执行器用 `bool(inputs.get(...))`，
+    于是 `"simulateHuman": "false"`（手写/导入的工作流 JSON）被当成 **true**、`null` 又被当成 false，而扩展侧是
+    `String(raw ?? "").trim().toLowerCase() !== "false"`（`null` → 开）。统一会牵动 `browser.py` 与
+    `scripts/check_click_helpers.mjs` 的反漂移断言，属独立切片；先用 `xfail(strict=True)` 钉住现状——真去统一时
+    会 xpass 并立刻报红提醒摘掉标记。文档 `docs/desktop_backends.md` 新增「点击语义（M30 S3 定案）」表，并写明
+    **契约测试覆盖到哪里、哪里没覆盖**（真机上 `invoke()` 与 `click_input()` 的效果差异、按住修饰键时鼠标点击是否
+    稳定继承键态 → 按需真机复验，**不拿打桩测试冒充真机结论**）。FULL GATE PASSED（910 项：896 passed / 2 xfailed / 12 skipped）。
+    - ⚠️ **环境提示**：直接 `uv run pytest` 可能在**全部用例通过之后**以 `SystemExit: 1` 收尾——那是 pytest 自己清理
+      `%TEMP%\pytest-of-*\garbage-*` 时撞上了本机沙箱的批量删除守卫（日志里会有
+      `[safe-delete][SAFE_DELETE_BULK_CONFIRM_REQUIRED]`，本次 count=1680 而阈值 50），**不是测试失败**；
+      走 `.harness/scripts/check_all.py` 不受影响。
+  - **S4 `attachWindow.className` 后端对称（本次）**：uia 侧 `_find_windows_by_title` 增第 4 个参数 `class_name`——`exact` 路径用 `FindWindowW(class_name, title)` 顺带过滤（省一次枚举），再用 `GetClassNameW` 复核；`contains`/`regex` 路径在枚举回调里做等值比较。**关键**：`FindWindowW` 的类名匹配**不是逐字节等值**（按类名前缀、忽略大小写），不复核的话 uia 侧会悄悄比 win32 侧（`w.class_name() == class_name`）宽。口径定为「**`matchMode` 只作用于 title，className 恒为等值**」，两后端一致。
+    - **顺手修掉两处同类不对称**（补对称性时暴露的，不在原计划）：① uia 侧 `title` 是 `required`、win32 侧不是——同一命令两套必填口径；现统一为「都可省」，并给两侧都加「一个筛选条件都不给 → `INVALID_INPUT`」的前置守卫（win32 原本也没有；它多了 `handle` 分支，守卫相应放宽）。原先的行为是「枚举全桌面 → `ELEMENT_AMBIGUOUS`」，把用户的输入错误伪装成「窗口不唯一」。② `className` 说明原先看不出与 `matchMode` 的关系。
+    - **第一版说明被自己的测试抓了**：我写成「与 win32 侧同为等值比较」/「与 uia 侧…」，对称性测试立刻报「className 的说明在两后端不一致」。**教训**：把「对称」写成「与对方一致」时，两边必然长得不一样——对称的描述要用后端中立的措辞。
+    - **如实记录的固有局限**：`exact` 走 `FindWindowW`，该 API **只返回第一个**匹配句柄，所以「同标题同类名的两个窗口」在 exact 下不报 `ELEMENT_AMBIGUOUS`，而是静默附着第一个——与 win32 侧（全枚举后逐个过滤，能发现歧义）行为不同。**取舍不是 bug**：exact 的价值就是绕开全桌面 UIA 枚举（慢 provider 可达 ~60s）；要歧义检测用 `matchMode=contains`。测试 `test_exact_path_sees_only_one_candidate` 钉住这个差异并附「换 contains 就能看见两个」的对照。
+    - **负向验证踩的坑（值得单独记）**：`check_error_contract.py` 是**单向**门禁（只查「实现了但没声明」）。我第一次做负向验证用的是「删掉一个已声明的返回点」——**门禁不报红**，因为声明比实现多是设计允许的（防御性声明、跨后端兼容）。当时差点当成「门禁失效」去改门禁，其实是打错了方向；改成往分支里注入一个**未声明**的码，立刻红。已写进该门禁 docstring（「单向 = 单向的负向验证」）。**教训**：负向验证必须打在门禁实际检查的方向上，否则「删了也不红」会被误读成门禁没生效——**这比不验证更危险，因为它会让人去修一个没坏的东西**。
+    - **收口**：`KNOWN_GAPS` **清零**（参数消费门禁 75 checked / 3 exempt / 台账 0 条）。新增 `tests/contract/test_desktop_attach_window.py` 29 项（假 `user32` 覆盖过滤矩阵、AND 组合、两条路径互不退化、两侧守卫、报错 details 带 className、两后端 manifest 对称性 + 「唯一合法参数差异 `handle` 逐条登记」）。`docs/desktop_backends.md` 新增「窗口附着筛选（M30 S4 定案）」与「exact 与 contains/regex 的能力差异」两张表 + 两条真机未覆盖面。  - **S5 收口（本次，M30 完结）**：文档同步时**清掉一处过期结论**——`docs/element-mvp-boundaries.md` §3.4 仍然写着 S1 已推翻的「桌面/数据通道的分派不是 `command == "<id>"` 字面量形状、静态切片不适用」。S1 当时只改了门禁 docstring 与 BACKLOG，**漏了这份面向维护者的正式文档**——同一个错误归因在同一里程碑里踩了第二次（第一次是没核实就写，这次是核实了但没改干净）。已改写为四类通道处置表 + 与浏览器通道的两条口径差异（①桌面侧 `timeoutMs` 连带抬高节点超时与执行器操作超时，浏览器侧只交给等待选择器；②桌面侧互斥参数显式 `INVALID_INPUT`，浏览器侧同族场景退回事件链）。**教训：纠正错误结论要搜全仓所有记录它的地方**，否则旧结论会以「另一份文档」的形式活下来，而读它的人不会知道它已经错了。
+    - 另两份文档同步：`command-optimization-plan.md` 补 click 族 M30 落地记录（含两个真 bug）与`attachWindow` 的 `className` 对称口径；`yingdao-web-cmds-benchmark.md` 补「等待尾参」更新——**刻意把「声明了不生效已收口」与「统一带上仍未做」分开写**，避免读者误当前者已完成后者。
+    - 台账收口：`feature_list` 的 `desktop-param-contract` 置 `passes=true`；`project_state` 进入**里程碑间隔期**（`active_milestone`/`active_plan`/`active_feature` 全置 `null`——`check_tasks.py` 显式支持「任务间隔期允许无 active」）；BACKLOG 的 M30 移入「已完成」并置于 M29 前。
+    - 门禁契约踩坑：`check_tasks.py` 的状态行正则 `^(?:Status:|状态：)\s*`([^`]+)`$` 要求**反引号后必须就是行尾**。我先写成「状态：`done`（S1–S5 全部完成…）」→ 门禁报 `missing task status`。M30/M31 两处都改成「状态行独占一行、说明另起一行」。
+    - 新增 BACKLOG 条目 **M31 GUI 跨平台观感诊断**（`planned`，诊断型）：由维护者实测反馈「Qt 的 macOS 观感与 Windows 不一致」触发，**先诊断、不写代码**——把主观感受变成逐条可归因差异（`[U]`单位 / `[F]`字体 / `[Q]`皮肤 / `[W]`系统约束），用 `[U]+[F]+[Q]` 与 `[W]` 的比例判定「要不要迁 Tauri」。已读出的静态线索：`apply_theme` 用 `QFont(family, 9)`（pt）与 QSS 的`font-size: 12/13/14px` **两套单位混用**；候选字体表 Windows 优先（两端字体族不同）；`canvas.py` 行高硬编码 46px 而字号是 pt 相对偏移；GUI 全模块 **零平台分派**（对照 `cli.py`/`executors/`/`local_transport.py` 都有认真分派）。
+    - FULL GATE PASSED（925 项：925 passed / 2 xfailed / 12 skipped）。
+
+FULL GATE PASSED（925 项：925 passed / 2 xfailed / 12 skipped）。
+
 - **M29 参数漂移收口（S1–S4 全完）**——把「声明了不生效」的参数一次清完，并把口径变成门禁。
   - **先换口径，再动手**：M28 的复查是「参数名是否在实现里出现过」，它看不见同名字段在别处出现——`cookieGetAll.name` 就是这么漏掉的。改成**按命令字面量切片**（AST 取 `command == "<id>"` 分支里的 `inputs` 读取）后，立刻又挖出一处 cookie 族漂移。**启示：审计口径的精度决定你看到几张牌**。
   - **实装（能兑现的）**：`click.simulateHuman`（`false`=最短路径 `el.click()`；**只在普通左键单击时生效**——右键/中键/双击/带辅助键仍走事件链，理由写进 manifest 说明，否则「静默忽略参数」又是一种新漂移）；`click.clickPosition`（random 取元素内偏中心带 15%~85% 的随机点，**裁剪进「元素 ∩ 视口」**，并且**遮挡预检用同一个点**——此前预检看元素中心、事件坐标恒 0，等于「判一个点、点另一个点」；现在事件带真实 `clientX/clientY`）；顺手修掉同族第三处：`modifiers` 的枚举是 `Ctrl`/`Win`，扩展里比的却是 `"Control"`/`"Meta"`，**勾了等于没勾**。
@@ -9,7 +76,8 @@
   - **删除（兑现不了的）**：`screenshot.fullPage`/`selector`（`captureVisibleTab` 只能截「当前可见标签页的可见区」，裁剪与整页拼接都要先解码图像，而 MV3 service worker 没有 `Image`/`FileReader`）；`close.forceKill`/`ignoreUnload`（扩展通道的 close 是**本地解绑**，不代关用户标签页、不杀用户浏览器进程，`tabs.remove` 本身也不弹 beforeunload）。**藏一个勾了就假成功的开关，比缺一个功能更坏**；缺口与设计路径另立 BACKLOG。迁移动作只有一步：旧流程删掉那个字段（`additionalProperties:false` 会在校验期显式报错，而不是继续静默跑错）。
   - **文档也错了一处**：`waitFor` 的 `hidden` 与 `detached` **并不等价**（四态由 `want_visible`/`want_present` 两个正交开关决定：`hidden` 会被「存在但不可见」满足，`detached` 不会）——代码一直是对的，写错的是文档。顺带补记一个真实差异：`count` 的轻量可见判定与执行前预检的严格判定**不是同一套**，所以 `opacity: 0` 或视口外的元素会出现「`waitFor` 说等到了、点击说不可见」。
   - **门禁落地**：`.harness/scripts/check_param_consumption.py` 进 `check_all.py`——声明的参数必须被该命令分支读取（或属通用读取），返回 `COMMAND_NOT_FOUND` 的未实现命令整表豁免、实现后自动纳入。**做了负向验证**（临时插一个假开关 → 门禁立刻红），否则「不会失败的门禁」等于没有。覆盖 27 条扩展通道命令；范围外的 48 条（桌面/数据通道的分派不是字面量形状）**如实打印跳过条数**并入 BACKLOG，不假装已全清。
-  - **审计顺带发现的桌面通道问题**（已登记、未在本里程碑清）：`desktop.win32.click` 的 `simulateHuman`/`clickPosition` 同样是死的；更要紧的是多条桌面命令声明了 `timeoutMs` 而执行器不读，而 GUI 一见到命令自带 `timeoutMs` 就**隐藏引擎级超时字段**——那些节点等于既没有引擎超时也没有命令超时。
+  - **审计顺带发现的桌面通道问题**（已登记、未在本里程碑清）：`desktop.win32.click` 的 `simulateHuman`/`clickPosition` 同样是死的；多条桌面命令声明了 `timeoutMs` 而执行器不读。
+    - ⚠️ **M30 复核更正（同日）**：本条当时的两个结论都写错了，见下方 M30 条目——①「范围外的 48 条分派不是字面量形状」是**归因错误**（真实原因只是当时没登记实现文件）；②「那些节点等于既没有引擎超时也没有命令超时」**不成立**——manifest 都带 `default_timeout_seconds`（桌面命令为 15s），编排器照常套用，只是 GUI 把节点级超时输入框藏了。真实症状是「你能改的那个『超时』是死参数，真正生效的是你没看见的 15s」。
 
 - **M28 S4 收官（度量 + 边界文档），M28 四片全完**：
   - **度量**：计数点只有一处——截在 `extension_exec.ExtensionExecClient` 的传输层，所以自愈候选重试、跨端点重发、状态探测**天然全部入账**，80+ 条命令不用逐个埋点（也就不会有「新命令忘了埋」）。`ChannelMetrics` 把 `ops`（命令信封，自愈重试各算一次）与 `statusProbes`（探测单独计量）分开——否则「每步一次探测」会被读成「命令变重了」。执行器在命令边界并进 `CommandResult.diagnostics.extension`（成功与失败都有），随 checkpoint 落库 → 每步往返数可复盘。

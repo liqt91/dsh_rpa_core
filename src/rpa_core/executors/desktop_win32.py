@@ -9,11 +9,23 @@ from typing import Any
 from pywinauto import Desktop
 from pywinauto.keyboard import send_keys
 
-from rpa_core.model.command import CommandInvocation, CommandResult, EffectKind, EffectRecord
+from rpa_core.model.command import (
+    WAIT_BUDGET_SLACK_SECONDS,
+    CommandInvocation,
+    CommandResult,
+    EffectKind,
+    EffectRecord,
+)
 from rpa_core.model.desktop import DesktopLocator
 from rpa_core.model.errors import ErrorCode
 
-from .base import CommandExecutor, resolve_session_id
+from .base import (
+    CommandExecutor,
+    click_with_modifiers,
+    plan_click_for_element,
+    resolve_session_id,
+    wait_for_element,
+)
 
 
 @dataclass
@@ -71,6 +83,19 @@ class Win32DesktopExecutor(CommandExecutor):
                     if op_timeout_ms
                     else self.operation_timeout_seconds
                 )
+                # 命令声明的元素等待预算必须等得到：操作超时是防挂死的兜底，不能反过来把
+                # 用户显式给出的等待预算掐断（否则 30s 的等待会在 15s 报 TIMEOUT，而用户看到的
+                # 原因不是「元素没出现」）。字面量元组是为参数消费门禁留的切片锚点。
+                if invocation.command_id in (
+                    "desktop.win32.click",
+                    "desktop.win32.getText",
+                    "desktop.win32.input",
+                ):
+                    operation_timeout = max(
+                        operation_timeout,
+                        int(invocation.inputs.get("timeoutMs") or 0) / 1000.0
+                        + WAIT_BUDGET_SLACK_SECONDS,
+                    )
                 operation = asyncio.get_running_loop().run_in_executor(
                     self._thread_pool, self._execute_sync, invocation
                 )
@@ -91,6 +116,13 @@ class Win32DesktopExecutor(CommandExecutor):
             handle = inputs.get("handle")
             process_id = inputs.get("processId")
             match_mode = inputs.get("matchMode", "exact")
+            # 一个筛选条件都不给 = 枚举全桌面，报错会落在 ELEMENT_AMBIGUOUS（原因误导）；
+            # 与 uia 侧同口径，前置报 INVALID_INPUT（见 test_desktop_attach_window.py）
+            if handle is None and not title and not class_name and process_id is None:
+                return CommandResult.failure(
+                    ErrorCode.INVALID_INPUT,
+                    "title, className, handle or processId is required",
+                )
             timeout_ms = int(inputs.get("timeoutMs") or 0)
             deadline = time.monotonic() + timeout_ms / 1000.0
             while True:
@@ -430,12 +462,20 @@ class Win32DesktopExecutor(CommandExecutor):
                 ErrorCode.ELEMENT_NOT_FOUND, "Desktop element not found"
             )
         locator = DesktopLocator.model_validate(locator_data)
-        matches = self._find(window, locator)
-        if len(matches) == 0:
+        # 只有会等元素的命令才消费 timeoutMs（等待目标元素存在的最长时间）。
+        # 字面量元组不只是风格：参数消费门禁按 `command in (...)` 的字面量切片做审计，
+        # 换成变量它会看不见（见 .harness/scripts/check_param_consumption.py 的已知盲区）。
+        wait_budget_ms = 0
+        if command in ("desktop.win32.click", "desktop.win32.getText", "desktop.win32.input"):
+            wait_budget_ms = int(inputs.get("timeoutMs") or 0)
+        found = wait_for_element(lambda: self._find(window, locator), wait_budget_ms)
+        if not found.matched:
             return CommandResult.failure(
-                ErrorCode.ELEMENT_NOT_FOUND, "Desktop element not found"
+                ErrorCode.ELEMENT_NOT_FOUND,
+                "Desktop element not found",
+                details=found.details(),
             )
-        element = self._pick(matches, locator.found_index)
+        element = self._pick(found.matches, locator.found_index)
         if element is None:
             return CommandResult.failure(ErrorCode.ELEMENT_NOT_FOUND, "Desktop element not found")
 
@@ -510,29 +550,30 @@ class Win32DesktopExecutor(CommandExecutor):
             modifiers = inputs.get("modifiers", [])
             post_delay = inputs.get("postDelayMs", 0)
 
-            if hasattr(element, "click_input"):
-                click_kwargs: dict = {"button": button}
-                if click_type == "double":
-                    click_kwargs["click_count"] = 2
-                if modifiers:
-                    import pywinauto
-                    _MOD_MAP = {
-                        "Alt": "menu", "Ctrl": "control",
-                        "Shift": "shift", "Win": "win",
-                    }
-                    for mod in modifiers:
-                        pywinauto.keyboard.key_down(_MOD_MAP.get(mod, mod))
-                    try:
-                        element.click_input(**click_kwargs)
-                    finally:
-                        for mod in reversed(modifiers):
-                            pywinauto.keyboard.key_up(_MOD_MAP.get(mod, mod))
-                else:
-                    element.click_input(**click_kwargs)
-            elif hasattr(element, "invoke"):
+            try:
+                plan = plan_click_for_element(
+                    element,
+                    simulate_human=bool(inputs.get("simulateHuman", True)),
+                    click_position=str(inputs.get("clickPosition") or "center"),
+                    click_type=click_type,
+                    button=button,
+                    modifiers=modifiers,
+                )
+            except ValueError as exc:
+                # 参数互斥 / 无路可走 → 显式失败，不静默挑一条路走
+                return CommandResult.failure(ErrorCode.INVALID_INPUT, str(exc))
+
+            if plan.path == "invoke":
                 element.invoke()
             else:
-                element.click_input()
+                click_kwargs: dict = {"button": button}
+                if click_type == "double":
+                    # pywinauto 的 click_input 没有 click_count 参数，此前写 click_count=2
+                    # 会直接 TypeError —— 双击在这两个后端上一直是坏的。
+                    click_kwargs["double"] = True
+                if plan.coords is not None:
+                    click_kwargs["coords"] = plan.coords
+                click_with_modifiers(element, click_kwargs, modifiers)
 
             if post_delay > 0:
                 time.sleep(post_delay / 1000)
@@ -543,7 +584,7 @@ class Win32DesktopExecutor(CommandExecutor):
                         invocation,
                         kind=EffectKind.UNSAFE_WRITE,
                         resource=resource,
-                        details={"operation": "click"},
+                        details={"operation": "click", **plan.evidence()},
                     )
                 ]
             )

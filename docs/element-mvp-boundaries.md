@@ -234,14 +234,49 @@ M28 的处理口径是「参数名是否在实现里出现过」的启发式；�
 函数**里时会算进「通用读取」，让所有命令都通过（如 `waitFor` 的 `state` 读在 `_ext_wait_for` 中）。
 负向验证：往 `click.json` 里临时加一个 `deadSwitch`，门禁立刻红（M29 已实测）。
 
-### 3.4 覆盖范围之外的同类风险（M29 只收口扩展通道）
+### 3.4 其余通道的同口径收口（M30 已全部纳入，跳过 0 条）
 
-- **桌面 / 数据通道**（`desktop.*`、`python.worker`）的分派不是 `command == "<id>"` 字面量形状
-  （走注册表与 helper），静态切片不适用，门禁**如实打印跳过条数**。已知待核对项已登记 BACKLOG
-  「桌面/数据通道参数漂移复核」，其中一条值得单独点名：**多条桌面命令声明了 `timeoutMs` 但执行器
-  不读**，而 GUI 见到命令自带 `timeoutMs` 就会**隐藏引擎级超时字段**（`gui/param_form.py`）——
-  这些节点等于**没有任何可用的超时控制**。
-- **两套「可见」口径**未对齐（`count` 的轻量判定 vs 执行前预检的严格判定），见 §2.11。
+> **历史更正（M30 S1）**：本节原先写「桌面 / 数据通道的分派不是 `command == \"<id>\"` 字面量形状
+> （走注册表与 helper），静态切片不适用」。**该结论是错的**，M30 开工第一步就核实了：
+> `desktop.py` / `desktop_win32.py` 都是 `command == "desktop.x"` 字面量，`python_worker.py`
+> 也是字面量（只是载体名是 `invocation.command_id` / `invocation.inputs`）。
+> **真实原因很朴素：当时 `EXECUTOR_FILES` 只登记了 `browser.` 一条前缀，其余通道是被跳过的。**
+>
+> 教训记在这里：门禁「跳过」的输出里带着一个归因，**而归因错了会让人以为这里没法机器校验、
+> 于是继续靠人工复查**。所以 M30 连带把跳过项的措辞改成「无实现文件映射，需在 `EXECUTOR_FILES`
+> 登记」，不再编归因。
+
+泛化载体名（`command` / `invocation.command_id`、`inputs` / `invocation.inputs`）并登记实现文件后，
+**四类通道 78 条命令全部可切片、跳过 0 条**，一次挖出 12 条命令的参数漂移，M30 内全部收口：
+
+| 命令 | 参数 | 处置 |
+|---|---|---|
+| `desktop.{click,getText,input}`（uia） | `timeoutMs` | **实装**（等待目标元素存在的最长时间，对齐浏览器通道语义） |
+| `desktop.win32.{click,getText,input}` | `timeoutMs` | **实装**（同上） |
+| `desktop.win32.hotkey` | `timeoutMs` | **删除**（`send_keys` 是全局按键，没有目标元素可等） |
+| `desktop.win32.menuSelect` | `timeoutMs` | **删除**（`_menu_select` 同步走菜单栏，等待无意义） |
+| `desktop.click` / `desktop.win32.click` | `simulateHuman`、`clickPosition` | **实装**（两后端共用 `plan_click_for_element`） |
+| `desktop.attachWindow` | `className` | **实装**（uia 侧补齐，与 win32 侧口径对齐） |
+
+**两条口径差异要写清（与浏览器通道不同）**：
+
+1. **`timeoutMs` 会抬高上两层超时**。浏览器侧 `timeoutMs` 只交给「等待选择器」；桌面侧除此之外
+   还会把**节点超时**与**执行器操作超时**抬到至少 `timeoutMs + 1s`
+   （`model.command.resolve_node_timeout_seconds`）——否则用户设 `timeoutMs=30s` 会在引擎默认
+   的 15s 收到 `TIMEOUT`，报错原因看上去是「超时」而不是「元素没出现」（同一个参数在两层里打架）。
+   桌面通道四层超时的完整说明见 `docs/desktop_backends.md`「超时层级与元素等待」。
+2. **互斥参数显式报错，不静默退让**。桌面侧 `simulateHuman=false` + `clickPosition=random` 返回
+   `INVALID_INPUT`（`invoke()` 没有坐标概念，静默按中心点就是新的漂移）。
+   浏览器侧同族场景是**退回事件链**（事件链表达得了，只是不走最短路径）。
+   两处的共同口径是「**能退让就退让（但必须留证据），互斥就报错**」；退让原因写进
+   `effect.details.note`。
+
+**新增门禁（M30 S3）**：`.harness/scripts/check_error_contract.py` —— manifest 的 `errors` 必须覆盖
+实现会返回的错误码。只做**单向**要求（实现了但没声明 = 错），不反向卡「声明的都要被触发」
+（防御性声明、跨后端兼容都是合理的，反过来卡会逼人删掉真话）。
+
+**仍存的两套「可见」口径**未对齐（`count` 的轻量判定 vs 执行前预检的严格判定），见 §2.11。
+
 
 ## 4. 明确不在 MVP 范围（已定案，含理由）
 

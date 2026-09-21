@@ -276,6 +276,11 @@
       "id": "browser-param-contract",
       "title": "Browser command param contract: implement declared-but-inert click params (simulateHuman/clickPosition with point-accurate occlusion precheck), forward cookie filters and tabId, drop unreachable screenshot/close params, and gate every declared param against actual executor consumption",
       "passes": true
+    },
+    {
+      "id": "desktop-param-contract",
+      "title": "Desktop command param contract: the param-consumption gate covers all four channels (78 commands, 0 skipped); every declared-but-inert desktop param is resolved — wait-for-element timeoutMs, click simulateHuman/clickPosition, attachWindow className on uia — and the two win32 params with no counterpart are dropped. Includes a new error-contract gate (manifest errors must cover returned codes). S1-S5 done.",
+      "passes": true
     }
   ]
 }

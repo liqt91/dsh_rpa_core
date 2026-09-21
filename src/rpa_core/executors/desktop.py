@@ -7,11 +7,23 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Any
 
-from rpa_core.model.command import CommandInvocation, CommandResult, EffectKind, EffectRecord
+from rpa_core.model.command import (
+    WAIT_BUDGET_SLACK_SECONDS,
+    CommandInvocation,
+    CommandResult,
+    EffectKind,
+    EffectRecord,
+)
 from rpa_core.model.desktop import DesktopLocator
 from rpa_core.model.errors import ErrorCode
 
-from .base import CommandExecutor, resolve_session_id
+from .base import (
+    CommandExecutor,
+    click_with_modifiers,
+    plan_click_for_element,
+    resolve_session_id,
+    wait_for_element,
+)
 
 
 @dataclass
@@ -74,6 +86,15 @@ class DesktopExecutor(CommandExecutor):
                     if op_timeout_ms
                     else self.operation_timeout_seconds
                 )
+                # 命令声明的元素等待预算必须等得到：操作超时是防挂死的兜底，
+                # 不能反过来把用户显式给出的等待预算掐断（否则 30s 的等待会在 15s 报 TIMEOUT,
+                # 而用户看到的原因不是「元素没出现」）。字面量元组是为参数消费门禁留的切片锚点。
+                if invocation.command_id in ("desktop.click", "desktop.getText", "desktop.input"):
+                    operation_timeout = max(
+                        operation_timeout,
+                        int(invocation.inputs.get("timeoutMs") or 0) / 1000.0
+                        + WAIT_BUDGET_SLACK_SECONDS,
+                    )
                 operation = asyncio.get_running_loop().run_in_executor(
                     self._thread_pool, self._execute_sync, invocation
                 )
@@ -94,14 +115,23 @@ class DesktopExecutor(CommandExecutor):
             command = invocation.command_id
             inputs = invocation.inputs
             if command == "desktop.attachWindow":
-                title = str(inputs["title"])
+                # 至少要有一个筛选条件：一个都不给会退化成「枚举全桌面」，
+                # 报错落在 ELEMENT_AMBIGUOUS（把输入错误伪装成「窗口不唯一」）。
+                # 口径与 win32 侧一致（见 tests/contract/test_desktop_attach_window.py）。
+                title = str(inputs.get("title") or "")
+                class_name = inputs.get("className")
+                if not title and not class_name:
+                    return CommandResult.failure(
+                        ErrorCode.INVALID_INPUT,
+                        "title or className is required",
+                    )
                 process_id = inputs.get("processId")
                 match_mode = inputs.get("matchMode", "exact")
                 timeout_ms = int(inputs.get("timeoutMs") or 0)
                 deadline = time.monotonic() + timeout_ms / 1000.0
                 while True:
                     windows = self._find_windows_by_title(
-                        title, process_id, match_mode
+                        title, process_id, match_mode, class_name
                     )
                     if len(windows) == 1:
                         break
@@ -109,13 +139,21 @@ class DesktopExecutor(CommandExecutor):
                         return CommandResult.failure(
                             ErrorCode.ELEMENT_AMBIGUOUS,
                             "Desktop window matched multiple targets",
-                            details={"title": title, "matchedCount": len(windows)},
+                            details={
+                                "title": title,
+                                "className": class_name,
+                                "matchedCount": len(windows),
+                            },
                         )
                     if time.monotonic() >= deadline:
                         return CommandResult.failure(
                             ErrorCode.ELEMENT_NOT_FOUND,
                             "Desktop window did not match",
-                            details={"title": title, "matchedCount": 0},
+                            details={
+                                "title": title,
+                                "className": class_name,
+                                "matchedCount": 0,
+                            },
                         )
                     time.sleep(0.1)
                 window = windows[0]
@@ -402,12 +440,20 @@ class DesktopExecutor(CommandExecutor):
                     ErrorCode.SESSION_NOT_FOUND, "Desktop window not found"
                 )
             element_locator = DesktopLocator.model_validate(locator_data)
-            matches = self._find(window, element_locator)
-            if len(matches) == 0:
+            # 只有会等元素的命令才消费 timeoutMs（等待目标元素存在的最长时间）。
+            # 字面量元组不只是风格：参数消费门禁按 `command in (...)` 的字面量切片做审计，
+            # 换成变量它会看不见（见 .harness/scripts/check_param_consumption.py 的已知盲区）。
+            wait_budget_ms = 0
+            if command in ("desktop.click", "desktop.getText", "desktop.input"):
+                wait_budget_ms = int(inputs.get("timeoutMs") or 0)
+            found = wait_for_element(lambda: self._find(window, element_locator), wait_budget_ms)
+            if not found.matched:
                 return CommandResult.failure(
-                    ErrorCode.ELEMENT_NOT_FOUND, "Desktop element not found"
+                    ErrorCode.ELEMENT_NOT_FOUND,
+                    "Desktop element not found",
+                    details=found.details(),
                 )
-            element = matches[0]
+            element = found.matches[0]
             if command == "desktop.input":
                 mode = inputs.get("mode", "simulateHuman")
                 text_val = str(inputs["text"])
@@ -478,31 +524,31 @@ class DesktopExecutor(CommandExecutor):
                 modifiers = inputs.get("modifiers", [])
                 post_delay = inputs.get("postDelayMs", 0)
 
-                if hasattr(element, "click_input"):
+                try:
+                    plan = plan_click_for_element(
+                        element,
+                        simulate_human=bool(inputs.get("simulateHuman", True)),
+                        click_position=str(inputs.get("clickPosition") or "center"),
+                        click_type=click_type,
+                        button=button,
+                        modifiers=modifiers,
+                    )
+                except ValueError as exc:
+                    # 参数互斥 / 无路可走 → 显式失败，不静默挑一条路走
+                    return CommandResult.failure(ErrorCode.INVALID_INPUT, str(exc))
+
+                if plan.path == "invoke":
+                    element.invoke()
+                else:
                     click_kwargs: dict = {"button": button}
                     if click_type == "double":
-                        click_kwargs["click_count"] = 2
-                    if modifiers:
-                        import pywinauto
-                        _MOD_MAP = {
-                            "Alt": "menu", "Ctrl": "control",
-                            "Shift": "shift", "Win": "win",
-                        }
-                        for mod in modifiers:
-                            pywinauto.keyboard.key_down(
-                                _MOD_MAP.get(mod, mod)
-                            )
-                        try:
-                            element.click_input(**click_kwargs)
-                        finally:
-                            for mod in reversed(modifiers):
-                                pywinauto.keyboard.key_up(
-                                    _MOD_MAP.get(mod, mod)
-                                )
-                    else:
-                        element.click_input(**click_kwargs)
-                else:
-                    element.invoke()
+                        # pywinauto 的 click_input 没有 click_count 参数（基础包装类与
+                        # controls/common_controls 的包装类都没有），此前写 click_count=2
+                        # 会直接 TypeError —— 双击在这两个后端上一直是坏的。
+                        click_kwargs["double"] = True
+                    if plan.coords is not None:
+                        click_kwargs["coords"] = plan.coords
+                    click_with_modifiers(element, click_kwargs, modifiers)
 
                 if post_delay > 0:
                     time.sleep(post_delay / 1000)
@@ -513,7 +559,7 @@ class DesktopExecutor(CommandExecutor):
                             invocation,
                             kind=EffectKind.UNSAFE_WRITE,
                             resource=resource,
-                            details={"operation": "click"},
+                            details={"operation": "click", **plan.evidence()},
                         )
                     ]
                 )
@@ -646,23 +692,52 @@ class DesktopExecutor(CommandExecutor):
             pythoncom.CoUninitialize()
 
     def _find_windows_by_title(
-        self, title: str, process_id: int | None, match_mode: str
+        self,
+        title: str,
+        process_id: int | None,
+        match_mode: str,
+        class_name: str | None = None,
     ) -> list[Any]:
-        """通过 title 查找窗口，优先走 Win32 路径避免全桌面 UIA 枚举。
+        """通过 title / className / processId 查找窗口，优先走 Win32 路径避免全桌面 UIA 枚举。
+
+        过滤口径与 `desktop.win32.attachWindow`（`_filter_windows` + className/processId）
+        对齐：**无条件等值比较**（className 不支持 contains/regex，`matchMode` 只作用于 title），
+        `title` / `className` / `processId` 之间是 AND。
 
         exact 模式：FindWindowW（毫秒级）→ UIAWrapper 单窗口构造。
         contains/regex 模式：EnumWindows 枚举句柄 → 逐个 UIAWrapper。
         两种路径都不触发 Desktop(backend="uia").windows() 全桌面遍历，
         避免慢 UIA provider（游戏等）导致首次初始化 ~60s 阻塞。
+
+        **exact 路径的固有局限**：`FindWindowW` 只返回第一个匹配句柄，因此同标题同类名的多个
+        窗口不会被发现（不报 ELEMENT_AMBIGUOUS，静默附着第一个）。这是有意取舍——exact 的价值
+        就是绕开全桌面枚举。需要歧义检测请用 contains/regex（走 EnumWindows 看全量候选）。
+
+        title 为空串时：exact 模式改用 FindWindowW(class_name, None)（按类名找窗口，
+        与 win32 侧「只给 className 也能 attach」对齐）；contains/regex 模式下
+        「空串 in 标题」恒真，等价于不按标题过滤。
         """
         from pywinauto.controls.uiawrapper import UIAWrapper
         from pywinauto.uia_element_info import UIAElementInfo
 
         user32 = ctypes.windll.user32
 
+        def _class_matches(hwnd: int) -> bool:
+            """等值比较窗口类名（与 win32 侧的 `w.class_name() == class_name` 同口径）。"""
+            if not class_name:
+                return True
+            buf = ctypes.create_unicode_buffer(256)
+            user32.GetClassNameW(hwnd, buf, 256)
+            return buf.value == class_name
+
         if match_mode == "exact":
-            hwnd = user32.FindWindowW(None, title)
+            # 类名过滤交给 FindWindowW 的 lpClassName（比事后 GetClassNameW 更省），
+            # 但它**不做逐字节等值**：Win32 会按「类名或类名前缀」匹配，且忽略大小写。
+            # 因此拿到的句柄还要用 GetClassNameW 复核一次，保证与 win32 侧口径一致。
+            hwnd = user32.FindWindowW(class_name or None, title or None)
             if not hwnd:
+                return []
+            if not _class_matches(hwnd):
                 return []
             if process_id is not None:
                 owner_pid = ctypes.c_ulong()
@@ -690,6 +765,8 @@ class DesktopExecutor(CommandExecutor):
                 import re
                 matched = bool(re.search(title, win_title))
             if not matched:
+                return True
+            if not _class_matches(hwnd):
                 return True
             if process_id is not None:
                 owner_pid = ctypes.c_ulong()

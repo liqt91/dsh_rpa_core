@@ -8,9 +8,9 @@
   "resources": ["desktop.session", "desktop.window"],
   "stability": "stable",
   "effect": {"kind": "session", "replay": "unsafe", "idempotency": "none"},
-  "input_schema": {"type": "object", "properties": {"title": {"type": "string", "minLength": 1}, "className": {"type": "string", "minLength": 1, "description": "窗口类型名（可选）"}, "handle": {"type": "integer", "minimum": 1, "description": "窗口句柄（可选）"}, "processId": {"type": "integer", "minimum": 1, "description": "进程 ID（可选）"}, "matchMode": {"type": "string", "enum": ["exact", "contains", "regex"], "description": "标题匹配方式", "default": "exact"}, "timeoutMs": {"type": "integer", "minimum": 1}, "operationTimeoutMs": {"type": "integer", "minimum": 1, "description": "操作超时（毫秒），覆盖默认 15s；复杂桌面环境可增大"}}, "additionalProperties": false},
+  "input_schema": {"type": "object", "properties": {"title": {"type": "string", "minLength": 1}, "className": {"type": "string", "minLength": 1, "description": "窗口类型名（可选）；两个后端都是等值比较（不受 matchMode 影响）"}, "handle": {"type": "integer", "minimum": 1, "description": "窗口句柄（可选，win32 独有）"}, "processId": {"type": "integer", "minimum": 1, "description": "进程 ID（可选）"}, "matchMode": {"type": "string", "enum": ["exact", "contains", "regex"], "description": "标题匹配方式（只作用于 title，className 恒为等值）", "default": "exact"}, "timeoutMs": {"type": "integer", "minimum": 1}, "operationTimeoutMs": {"type": "integer", "minimum": 1, "description": "操作超时（毫秒），覆盖默认 15s；复杂桌面环境可增大"}}, "additionalProperties": false},
   "output_schema": {"type": "object", "required": ["sessionId", "resourceType", "processId", "workWindowId"], "properties": {"sessionId": {"type": "string"}, "resourceType": {"type": "string", "const": "windowHandle", "description": "资源类型标签：windowHandle=桌面窗口句柄，webPage=浏览器网页对象"}, "processId": {"type": "integer"}, "workWindowId": {"type": "string"}}, "additionalProperties": false},
-  "errors": ["ELEMENT_NOT_FOUND", "ELEMENT_AMBIGUOUS", "TIMEOUT", "CANCELLED", "PLATFORM_UNSUPPORTED", "EXECUTOR_FAILED"],
+  "errors": ["INVALID_INPUT", "ELEMENT_NOT_FOUND", "ELEMENT_AMBIGUOUS", "TIMEOUT", "CANCELLED", "PLATFORM_UNSUPPORTED", "EXECUTOR_FAILED"],
   "implementation": {"handler": "desktop.win32:attach_window"},
   "default_timeout_seconds": 15,
   "retryable": false

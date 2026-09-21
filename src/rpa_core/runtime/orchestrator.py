@@ -24,6 +24,7 @@ from rpa_core.model.command import (
     EffectKind,
     EffectStatus,
     ReplayPolicy,
+    resolve_node_timeout_seconds,
 )
 from rpa_core.model.errors import ErrorCode, RpaError
 from rpa_core.model.runtime import RunResult, RunStatus
@@ -787,8 +788,11 @@ class Orchestrator:
             remaining = workflow_deadline - time.monotonic()
             if remaining <= 0:
                 raise RpaError(ErrorCode.TIMEOUT, "Workflow deadline exhausted", details=context)
+            # 节点可用超时 = 节点显式值 > manifest 默认值，且**不低于命令声明的元素等待预算**：
+            # 兜底超时反咬用户显式给出的等待预算，会让「等 30 秒」在 15 秒报 TIMEOUT，
+            # 而报错原因看上去是「超时」而不是「元素没出现」——同一个参数在两层里打架。
             timeout = min(
-                node.timeout_seconds or manifest.default_timeout_seconds,
+                resolve_node_timeout_seconds(manifest, command_inputs, node.timeout_seconds),
                 remaining,
             )
             attempt_deadline = time.monotonic() + timeout

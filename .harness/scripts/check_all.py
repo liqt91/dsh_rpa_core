@@ -12,6 +12,8 @@ commands = [
     [sys.executable, str(ROOT / ".harness" / "scripts" / "check_tasks.py")],
     # manifest 声明的输入参数必须被实现消费（M29：把「漂移清单」变成机器门禁）
     [sys.executable, str(ROOT / ".harness" / "scripts" / "check_param_consumption.py")],
+    # manifest 声明的 errors 必须覆盖实现会返回的错误码（M30 S3：同一种病的另一根轴）
+    [sys.executable, str(ROOT / ".harness" / "scripts" / "check_error_contract.py")],
 ]
 
 # 真实桌面 E2E（记事本/WinForms 演示程序/捕获悬浮框，会弹窗抢前台）**默认不进

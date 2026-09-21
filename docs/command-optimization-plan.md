@@ -64,6 +64,16 @@ editor 侧：`schemaField` 的 `session-reference` 下拉读取已注册的 `res
 > ——即「参数面已对齐」曾是纸面对齐。M29 已实装三者：随机点按「元素 ∩ 视口」取点并**用同一点做
 > 遮挡预检**，`simulateHuman=false` 走最短路径 `el.click()`（仅普通左键单击）。详见
 > `docs/element-mvp-boundaries.md` §3。
+>
+> **M30 落地记录（2026-09-21）**：同族的 `desktop.click` / `desktop.win32.click`
+> （`simulateHuman` / `clickPosition` / `timeoutMs`）也已实装——此前桌面侧同样是纸面对齐。
+> 两后端共用 `executors/base.py` 的 `plan_click_for_element`（不再各写一套判断）。
+> **与浏览器通道的一处口径差异**：桌面侧 `simulateHuman=false` + `clickPosition=random` 返回
+> `INVALID_INPUT`（`invoke()` 没有坐标概念，静默按中心点就是新的漂移），而浏览器侧同族场景是
+> 退回事件链。共同口径是「能退让就退让（留证据），互斥就报错」。
+> 顺带修掉两个真 bug：`click_input(click_count=2)`（该参数不存在 → 双击一直 `TypeError`）与
+> `pywinauto.keyboard.key_down`（该函数不存在 → 带辅助键的点击一直 `AttributeError`）。
+> 详见 `docs/desktop_backends.md`「点击语义（M30 S3 定案）」。
 
 ### browser.input（填写输入框）
 
@@ -91,6 +101,14 @@ editor 侧：`schemaField` 的 `session-reference` 下拉读取已注册的 `res
 | 新增参数 | 类型 | 默认值 | 影刀参照 |
 |---|---|---|---|
 | `matchMode` | `enum: ["exact", "contains", "regex"]` | `"exact"` | 获取窗口对象「匹配方式」 |
+
+> **M30 S4 落地记录（2026-09-21）**：`matchMode` 已两后端实装；同表声明的 `className` 此前在
+> **uia 侧被静默忽略**（win32 侧支持），已补齐并统一口径：
+> **`matchMode` 只作用于 `title`，`className` 恒为等值比较**（两后端一致）。
+> 另统一了两处不对称：uia 的 `title` 原为 `required` 而 win32 不是 → 现都为可省；
+> 两侧都加「一个筛选条件都不给 → `INVALID_INPUT`」的前置守卫
+> （原先退化成「枚举全桌面 → `ELEMENT_AMBIGUOUS`」，把输入错误伪装成「窗口不唯一」）。
+> 详见 `docs/desktop_backends.md`「窗口附着筛选（M30 S4 定案）」。
 
 ### desktop.click / desktop.win32.click（点击元素-win）
 
@@ -236,7 +254,10 @@ editor 侧：`schemaField` 的 `session-reference` 下拉读取已注册的 `res
 - [ ] browser.input 支持 mode/append/pressEnter/clearFirst
 - [ ] browser.close 支持 forceKill/ignoreUnload —— **M29 定案不做**（扩展单通道下 close=本地解绑，
       两个参数已从 manifest 删除；见 `docs/element-mvp-boundaries.md` §3 与 BACKLOG）
-- [ ] desktop.attachWindow 支持 matchMode(exact/contains/regex)
-- [ ] 所有元素操作指令支持 waitTimeout + postDelay
+- [ ] desktop.attachWindow 支持 matchMode(exact/contains/regex) —— **M30 已实装**（两后端；
+      `className` 的 uia 侧缺失也已补齐，口径见「窗口附着筛选（M30 S4 定案）」）
+- [ ] 所有元素操作指令支持 waitTimeout + postDelay —— **M30 部分实装**：四类通道 78 条命令的参数
+      已全部纳入静态门禁（跳过 0 条），桌面侧 `timeoutMs` 变真等待；`postDelayMs` 的**统一化**
+      仍是独立议题（各通道现状见 `docs/desktop_backends.md` 与 `docs/element-mvp-boundaries.md` §3.4）
 - [ ] 第一批8个新指令全部通过 E2E 测试
 - [ ] 命令清单 HTML 同步更新

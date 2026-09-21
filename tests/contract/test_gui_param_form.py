@@ -836,6 +836,33 @@ def test_timeout_field_shown_when_no_own_timeout(catalog):
     assert form._timeout_field.placeholderText().startswith("可选")
 
 
+def test_win32_commands_regain_engine_timeout_field(catalog):
+    """M30 S2 删掉 hotkey/menuSelect 的 timeoutMs 后：GUI 恢复渲染节点级超时字段。
+
+    删这两个参数的理由是「没有目标元素可等」；而**副作用正是删对了的证据**——
+    `has_own_timeout` 见到 `timeoutMs` 就隐藏引擎超时输入框，参数是死的时候，
+    用户唯一能改的「超时」是个无效开关，真正生效的是他看不见的 manifest 默认 15s。
+    """
+    from rpa_core.gui.param_form import ParamForm
+
+    for command_id in ("desktop.win32.hotkey", "desktop.win32.menuSelect"):
+        manifest = catalog[command_id]
+        assert manifest.declares_wait_budget() is False, command_id
+        form = ParamForm(manifest.input_schema, {}, manifest=manifest)
+        assert form._timeout_field is not None, command_id
+
+
+def test_element_wait_commands_still_hide_engine_timeout_field(catalog):
+    """反向：真的会等元素的命令仍自带等待预算，节点级超时字段继续由 manifest 默认值接管。"""
+    from rpa_core.gui.param_form import ParamForm
+
+    for command_id in ("desktop.click", "desktop.win32.click", "desktop.getText"):
+        manifest = catalog[command_id]
+        assert manifest.declares_wait_budget() is True, command_id
+        form = ParamForm(manifest.input_schema, {}, manifest=manifest)
+        assert form._timeout_field is None, command_id
+
+
 def test_timeout_field_roundtrip(catalog):
     """超时值读写一致。"""
     from rpa_core.gui.param_form import ParamForm

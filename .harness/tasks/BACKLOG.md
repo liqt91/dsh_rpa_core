@@ -4,24 +4,37 @@
 
 ## 当前任务
 
-- [ ] **待维护者定向**（`planned`）——M29 收口后无 active 任务：后续任务里 M26（流程 inputs 编辑 UI）
-  与「桌面/数据通道参数漂移复核」均可直接开工；技术路线（ADR 0016）继续约束新增能力优先落 GUI。
+（无 active 里程碑；下一项见「后续任务」）
 
 ## 后续任务
 
 - [ ] **M26 流程 inputs 声明编辑 UI**（`planned`——原为 M25 之后第一项，因维护者定向先做
   M27 工作台、随后做 M28 元素自愈而顺延；计划见 `M26-flow-inputs-editor.md`）
-- [ ] **桌面 / 数据通道参数漂移复核**（`planned`，缺陷等级——M29 门禁审计发现，浏览器通道已收口）
-  - 为什么没在 M29 内清：这两类通道的命令分派**不是 `command == "<id>"` 字面量形状**
-    （走注册表/helper），`check_param_consumption.py` 的静态切片不适用，门禁如实打印跳过条数。
-  - 已确认的样例（尚未逐条定「实现它 / 删掉」）：`commands/desktop_win32/click.json` 的
-    `simulateHuman`/`clickPosition`；`desktop.win32.{click,getText,input,hotkey,menuSelect}` 与
-    `desktop.attachWindow` 的 `timeoutMs`、`desktop.attachWindow.className`/`operationTimeoutMs`。
-  - **其中 `timeoutMs` 值得优先定案**：GUI 见到命令自带 `timeoutMs` 就会隐藏引擎级超时字段
-    （`gui/param_form.py` 的 `has_own_timeout`），而执行器不读它 → 这些节点等于
-    **既没有引擎超时、也没有命令超时**（挂死只能靠工作流级 deadline 兜）。
-  - 口径同 M29：先把门禁的覆盖范围扩到这些通道（或改用「实现侧显式声明消费的参数」这类
-    非启发式契约），再逐条实现/删除；`data.*`（python.worker）的读取方式也需一并纳入方法设计。
+- [ ] **M31 GUI 跨平台观感诊断（macOS vs Windows）**（`planned`，诊断型——**先诊断，不写代码**）
+  - 计划：`M31-gui-crossplatform-audit.md`
+  - 由来：维护者在 macOS 上使用 GUI 后反馈「控件样式、字体大小、控件的显示/隐藏行为与 Windows
+    不一致」。**当前是主观感受，不能直接立项**——它可能指向三种成本量级完全不同的根因：
+    **H1** 本项目单位混用（改代码，小）· **H2** Qt 平台抽象层太薄（换宿主，中）·
+    **H3** 前端自绘成本（重写 Web 前端，大）。三者的处置互相排斥。
+  - 已读出的静态线索（**假设，待实测验证**）：
+    ① `apply_theme` 用 `QFont(family, 9)`（**pt**），而 QSS 里散落 `font-size: 12/13/14px`——
+     **同一界面两套单位**，换算依赖 DPI，两端基准不同；
+    ② 候选字体表 **Windows 优先**（`Microsoft YaHei` 排第一），macOS 落到 `PingFang SC`——
+     两端**字体族不同**，同字号下字面高度与行宽也不同；
+    ③ `canvas.py` 行高是硬编码 **46px**、字号是 **pt 相对偏移**（`pointSizeF() - 0.5`），
+     两者比例随平台变；`_GUTTER_ERROR_X = 46` 与 `_ROW_HEIGHT = 46` 数值巧合耦合；
+    ④ GUI 全模块 **零平台分派**（`sys.platform`/`darwin` 命中 0 次）——而 `cli.py`/`executors/`/
+     `capture/`/`local_transport.py` 都有认真分派（M22 甚至处理了 macOS `AF_UNIX` 104 字节上限）。
+     **即 GUI 是唯一没做跨平台分派的模块**，属欠账而非技术选择；
+    ⑤ `WindowStaysOnTop` 在 macOS 不保证置顶（层级由 WindowServer 管）、`hide()` 与
+     `showMinimized()` 在 macOS 语义不同——这类是**系统约束，换 Tauri 也修不掉**。
+  - 交付物：表 A（环境数据，两端各一份）· 表 B（15 项控件观感）· 表 C（8 项窗口行为）·
+    表 D（把每条差异打成 `[U]单位` / `[F]字体` / `[Q]皮肤` / `[W]系统约束` 四类）。
+    **`[U]+[F]+[Q]` 与 `[W]` 的比例就是「要不要迁 Tauri」的量化判据**。
+  - 判据：若绝大多数是 `[U]/[F]/[Q]` → Tauri 收益极低（换壳照样要修，甚至以 CSS 单位问题复发）；
+    若 `[W]` 占主导 → Tauri 也帮不上（约束在系统层）。诊断结论直接决定下一个里程碑的形态。
+  - 注意：诊断**必须两端同 PySide6 版本**（`>=6.7,<7` 可能装到不同 minor，差异会来自 Qt 而非平台）；
+    且必须记录 `devicePixelRatio`——Retina 下 `=2`，本身就能解释一部分「看起来不一致」。
 - [ ] **整页/元素截图**（`planned`）——M29 S3 从 `browser.screenshot` 删掉 `fullPage`/`selector` 后
   留下的能力缺口：`chrome.tabs.captureVisibleTab` 只能截可见区，整页要滚动分段拼接、元素要按 rect
   裁剪，都需要在扩展里解码图像（MV3 service worker 无 `Image`/`FileReader`）→ 走 offscreen document
@@ -62,6 +75,38 @@
 > 主力形态，该条目（「确认非开发者用户为主力后再立项薄壳」）不再适用。
 
 ## 已完成
+
+- [x] **M30 桌面通道命令参数漂移收口**（`done`，缺陷等级，2026-09-21）
+  - 计划：`M30-desktop-param-drift.md`
+  - 立项第一件事是**纠正 M29 留在 BACKLOG 的归因**：原先写「桌面/数据通道分派不是
+    `command == "<id>"` 字面量形状，静态切片不适用」——**错的**。三类实现都是字面量
+    （`desktop.py` / `desktop_win32.py` 用 `command ==`，`python_worker.py` 用
+    `invocation.command_id ==`，只是载体名不同）；真实原因是当时门禁只登记了 `browser.` 前缀。
+    泛化载体名后**四类通道 78 条命令全部可切片、跳过 0 条**，一次挖出 12 条命令的参数漂移。
+  - 进度：**S1–S5 全部完成**。106 项契约测试（13+64+29）；`KNOWN_GAPS` 清零；
+    FULL GATE PASSED（925 passed / 2 xfailed / 12 skipped）。
+  - 数据通道结论：`python.worker` 12 条命令**零漂移**（`data.*` 与 `workflow.sleep` 全部
+    参数都有真实读取）——原条目里「`data.*` 读取方式也需纳入方法设计」已由 S1 的载体泛化解决。
+  - S3 追加发现（不在原审计清单里，已在片内修掉）：① 双击写 `click_input(click_count=2)` 而该参数
+    不存在 → 一直 `TypeError`；② 辅助键写 `pywinauto.keyboard.key_down(...)` 而该函数不存在 →
+    一直 `AttributeError`。两者都是**参数被读了、读完调用的 API 是错的**，参数消费门禁结构上查不出
+    （已写进代码注释与 `docs/desktop_backends.md`，作为该门禁的已知盲区）。
+  - S3 新增门禁：`.harness/scripts/check_error_contract.py`——manifest 的 `errors` 必须覆盖实现会返回的
+    错误码（只做单向要求，不反向卡防御性声明）。统计口径下只有 3 条命令缺声明（全部 `INVALID_INPUT`），
+    已补齐；负向验证 2 例全红。
+  - S3 未收（已登记，属独立切片）：`simulateHuman` 归一化四端不一致——执行器 `bool(inputs.get(...))`
+    把 `"simulateHuman": "false"` 当 true、把 `null` 当 false，扩展侧是
+    `String(raw ?? "").trim().toLowerCase() !== "false"`。统一会牵动 `browser.py` 与
+    `scripts/check_click_helpers.mjs` 的反漂移断言；现由 `xfail(strict=True)` 钉住（统一后会 xpass 报红）。
+  - S4 追加发现：① `attachWindow` 的**必填口径两后端不同**（uia 的 `title` 是 `required`、win32 不是），
+    已统一为「都可省 + 一个筛选条件都不给则 `INVALID_INPUT`」（原先会退化成「枚举全桌面 →
+    `ELEMENT_AMBIGUOUS`」，把输入错误伪装成「窗口不唯一」）。② **exact 路径不报歧义**：
+    `FindWindowW` 只返回第一个句柄，故同标题同类名的多窗口静默附着第一个——**有意取舍**（exact 的价值
+    是绕开全桌面 UIA 枚举，慢 provider 可达 ~60s），要歧义检测请用 `matchMode=contains`。
+    这条与 S1/S3 同源：**声明面与实现面的偏差要逐条写清，而不是留成「用户自己会发现」**。
+  - S4 教训（门禁负向验证的方向）：`check_error_contract.py` 是**单向**门禁，其负向验证必须打在
+    「注入未声明的码」这个方向上。用「删掉已声明的返回点」验证不会报红（声明比实现多是设计允许的），
+    容易被误读成「门禁失效」——**这比不验证更危险**。
 
 - [x] M29 浏览器命令参数漂移收口（`done`，2026-09-21）
   - 计划：`M29-browser-command-param-drift.md`；口径与门禁：`docs/element-mvp-boundaries.md` §3
@@ -279,3 +324,4 @@
   - 证据：稳定错误分类、任务与子进程清理、有界重试、可靠运行证据，以及 24 项测试通过。
 - [x] M1.0 确定性浏览器与 Python worker 垂直切片（`done`）
   - 证据：`../PROGRESS.md`
+
