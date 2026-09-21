@@ -26,17 +26,8 @@
           "msedge",
           "chrome"
         ],
-        "description": "要终止的浏览器类型（按进程名匹配）",
+        "description": "要终止的浏览器类型（按进程名匹配）。终止范围是该类型的全部进程——包含用户自己打开的窗口，执行本命令即视为显式确认",
         "default": "msedge"
-      },
-      "scope": {
-        "type": "string",
-        "enum": [
-          "launchedByUs",
-          "byProcessName"
-        ],
-        "description": "终止范围：launchedByUs（默认，只终止本流程拉起过的实例，不动用户自己打开的浏览器）/ byProcessName（按进程名全杀，会连用户正在用的窗口一起关掉）",
-        "default": "launchedByUs"
       },
       "force": {
         "type": "boolean",

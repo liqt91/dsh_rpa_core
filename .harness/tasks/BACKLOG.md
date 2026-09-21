@@ -72,6 +72,19 @@
 
 ## 已完成
 
+- [x] **M35 closeBrowser 语义收敛：移除 scope，直接杀指定浏览器的全部进程**（`done`，2026-09-21）
+  - 计划：`M35-closebrowser-kill-all.md`
+  - 维护者定案：「没有 scope 的问题，是直接杀某个浏览器的所有进程」。M32 的
+    `launchedByUs`/`byProcessName` 两档删除——授权由执行命令本身给出；「我们拉起过」
+    的水位判据跨进程（GUI 重启 / resume）必然丢失，保守默认把该关的报成
+    `no_launched_process`；只解绑会话的正确工具是 `browser.close`。
+  - 变更：manifest 删 `scope`；`browser.py` 删 `_launched_marks`/`_scope_processes`，
+    `_close_browser` 直线化，`_list_browser_processes` 删 `startedAt`（唯一消费者消失，
+    POSIX etimes 换算简化）；feature `browser-teardown` 标题同步。保留 force/逐进程
+    记账/等真退出/幂等 0 匹配/离线可用/GBK 修复/整树终止。
+  - 测试 -3 项（2 个 scope 专测 + 1 个参数化用例），契约文件 18 项全绿；
+    FULL GATE PASSED（收集实测 1083 项 = 1069 passed / 2 xfailed / 12 skipped）
+
 - [x] **M34 宿主生命周期：扩展宿主空闲自杀，根治 uv run 锁文件**（`done`，2026-09-21）
   - 计划：`M34-host-lifecycle.md`；文档：`docs/extension-channel-baseline.md` §6
   - 触发：`uv run rpa-core gui` 报 `os error 5`（无法删除 `rpa-core-ext-host.exe`）。

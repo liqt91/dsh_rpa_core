@@ -1,4 +1,4 @@
-"""M32 S1 浏览器收尾契约：关标签页（closeTabs）与终止浏览器（closeBrowser）。
+"""M32/M35 浏览器收尾契约：关标签页（closeTabs）与终止浏览器（closeBrowser）。
 
 为什么是两条命令而不是给 `browser.close` 加参数：
 `browser.close` 是**会话生命周期**命令（解绑，effect 是 session，不碰用户浏览器）；
@@ -8,9 +8,9 @@
 两条命令各自的重点：
 - `closeTabs`：`tabIds` 显式列表 / `all=true` 关闭当前窗口全部，**二选一**（两边都不给
   或都给 → INVALID_INPUT，不猜）；
-- `closeBrowser`：`scope` 决定终止范围。默认 `launchedByUs`（只杀本执行器拉起过的
-  实例）是**安全默认**；`byProcessName`（按进程名全杀）必须显式选。默认且无记录时
-  报错而不是静默「成功杀了 0 个」——后者会让用户以为已经关掉了。
+- `closeBrowser`：语义是「直接杀某个浏览器的**所有**进程」（M35 定案，M32 的
+  `launchedByUs`/`byProcessName` 两档经维护者评估删除）——执行本命令本身就是
+  显式的破坏性授权，包含用户自己打开的窗口。
 
 本文件不碰真浏览器进程：进程枚举/终止全部打桩（真机执行由 `.harness/tasks/M32-*.md`
 里登记的手工验收覆盖），打桩结论不冒充真机结论。
@@ -229,37 +229,16 @@ def proc_stub(monkeypatch):
     return state
 
 
-def test_close_browser_default_scope_never_kills_user_processes(proc_stub):
-    """默认（launchedByUs）且没有拉起记录 → 显式失败 + 指向 byProcessName 出口。
-
-    这是最关键的一条：默认值必须是保守的，且**不能**静默返回「成功，杀了 0 个」——
-    那会让用户以为浏览器已经关掉了。
-    """
-    proc_stub["listed"] = [{"pid": 11, "name": "msedge.exe", "startedAt": 0.0}]
-
-    result = _run(
-        _executor(_FakeEndpointClient(lambda op, args: {})),
-        _invocation("browser.closeBrowser", browserType="msedge"),
-    )
-
-    assert result.status == "error"
-    assert result.error.code.value == "EXECUTOR_FAILED"
-    assert result.error.details["reason"] == "no_launched_process"
-    assert result.error.details["matchedCount"] == 1
-    assert "byProcessName" in result.error.message
-    assert proc_stub["killed"] == [], "保守默认下绝不允许终止任何进程"
-
-
-def test_close_browser_scope_by_process_name_kills_all_matched(proc_stub):
-    """显式 byProcessName → 按进程名全杀（含用户自己开的），并在证据里标明范围。"""
+def test_close_browser_kills_all_matched_processes(proc_stub):
+    """全杀语义：该类型的全部匹配进程都被终止，不分「谁拉起的」（M35 定案）。"""
     proc_stub["listed"] = [
-        {"pid": 11, "name": "msedge.exe", "startedAt": 1.0},
-        {"pid": 12, "name": "msedge.exe", "startedAt": 2.0},
+        {"pid": 11, "name": "msedge.exe"},
+        {"pid": 12, "name": "msedge.exe"},
     ]
 
     result = _run(
         _executor(_FakeEndpointClient(lambda op, args: {})),
-        _invocation("browser.closeBrowser", browserType="msedge", scope="byProcessName"),
+        _invocation("browser.closeBrowser", browserType="msedge"),
     )
 
     assert result.status == "success", result.error
@@ -267,34 +246,17 @@ def test_close_browser_scope_by_process_name_kills_all_matched(proc_stub):
     assert result.outputs["terminated"] is True
     assert result.outputs["matchedCount"] == 2
     assert result.outputs["killedProcessIds"] == [11, 12]
-    assert result.effects[0].details["scope"] == "byProcessName"
-
-
-def test_close_browser_launched_by_us_kills_only_processes_after_watermark(proc_stub):
-    """launchedByUs 有水位 → 只杀水位之后出现的进程（用户先前开的那些留下）。"""
-    executor = _executor(_FakeEndpointClient(lambda op, args: {}))
-    executor._launched_marks["msedge"] = 100.0
-    proc_stub["listed"] = [
-        {"pid": 11, "name": "msedge.exe", "startedAt": 50.0},   # 用户先前自己开的
-        {"pid": 12, "name": "msedge.exe", "startedAt": 150.0},  # 我们拉起的
-    ]
-
-    result = _run(executor, _invocation("browser.closeBrowser", browserType="msedge"))
-
-    assert result.status == "success", result.error
-    assert [item["pid"] for item in proc_stub["killed"]] == [12]
-    assert result.outputs["matchedCount"] == 1
+    assert result.effects[0].details["matchedCount"] == 2
+    assert "scope" not in result.effects[0].details, "scope 语义已删，证据里不应再出现"
 
 
 def test_close_browser_force_flag_reaches_terminate(proc_stub):
     """force 必须真的传到终止动作上（不是读了不用）。"""
-    proc_stub["listed"] = [{"pid": 11, "name": "chrome.exe", "startedAt": 1.0}]
+    proc_stub["listed"] = [{"pid": 11, "name": "chrome.exe"}]
 
     _run(
         _executor(_FakeEndpointClient(lambda op, args: {})),
-        _invocation(
-            "browser.closeBrowser", browserType="chrome", scope="byProcessName", force=True
-        ),
+        _invocation("browser.closeBrowser", browserType="chrome", force=True),
     )
 
     assert proc_stub["killed"] == [{"pid": 11, "force": True}]
@@ -306,7 +268,7 @@ def test_close_browser_no_matching_process_is_success_with_zero(proc_stub):
 
     result = _run(
         _executor(_FakeEndpointClient(lambda op, args: {})),
-        _invocation("browser.closeBrowser", browserType="chrome", scope="byProcessName"),
+        _invocation("browser.closeBrowser", browserType="chrome"),
     )
 
     assert result.status == "success", result.error
@@ -318,8 +280,8 @@ def test_close_browser_no_matching_process_is_success_with_zero(proc_stub):
 def test_close_browser_reports_failed_terminations(proc_stub, monkeypatch):
     """个别进程杀不掉 → 如实进 failedProcessIds，terminated 不为真。"""
     proc_stub["listed"] = [
-        {"pid": 11, "name": "msedge.exe", "startedAt": 1.0},
-        {"pid": 12, "name": "msedge.exe", "startedAt": 2.0},
+        {"pid": 11, "name": "msedge.exe"},
+        {"pid": 12, "name": "msedge.exe"},
     ]
 
     def flaky_terminate(pid, force):
@@ -330,7 +292,7 @@ def test_close_browser_reports_failed_terminations(proc_stub, monkeypatch):
 
     result = _run(
         _executor(_FakeEndpointClient(lambda op, args: {})),
-        _invocation("browser.closeBrowser", browserType="msedge", scope="byProcessName"),
+        _invocation("browser.closeBrowser", browserType="msedge"),
     )
 
     assert result.status == "success", result.error
@@ -342,11 +304,10 @@ def test_close_browser_reports_failed_terminations(proc_stub, monkeypatch):
 @pytest.mark.parametrize(
     ("inputs", "field"),
     [
-        ({"scope": "everything"}, "scope"),
         ({"browserType": "firefox"}, "browserType"),
     ],
 )
-def test_close_browser_rejects_unknown_scope_and_browser(inputs, field, proc_stub):
+def test_close_browser_rejects_unknown_browser_type(inputs, field, proc_stub):
     """枚举外的取值必须显式拒绝，且不进入进程枚举（不猜、不静默降级）。"""
     result = _run(
         _executor(_FakeEndpointClient(lambda op, args: {})),
@@ -361,11 +322,11 @@ def test_close_browser_rejects_unknown_scope_and_browser(inputs, field, proc_stu
 
 def test_close_browser_waits_for_processes_and_writes_evidence(proc_stub):
     """终止后要等进程真正退出（否则上层紧接着的拉起会被旧端点判成在线）。"""
-    proc_stub["listed"] = [{"pid": 11, "name": "msedge.exe", "startedAt": 1.0}]
+    proc_stub["listed"] = [{"pid": 11, "name": "msedge.exe"}]
 
     result = _run(
         _executor(_FakeEndpointClient(lambda op, args: {})),
-        _invocation("browser.closeBrowser", browserType="msedge", scope="byProcessName"),
+        _invocation("browser.closeBrowser", browserType="msedge"),
     )
 
     assert proc_stub["waited"][0] == [11]
@@ -383,7 +344,7 @@ def test_close_browser_is_exempt_from_session_gate():
     executor = _executor(_FakeEndpointClient(handler))
     result = _run(
         executor,
-        _invocation("browser.closeBrowser", browserType="msedge", scope="byProcessName"),
+        _invocation("browser.closeBrowser", browserType="msedge"),
     )
 
     assert result.status == "success", result.error
@@ -395,7 +356,7 @@ def test_close_browser_offline_channel_still_works():
     client = _FakeEndpointClient(lambda op, args: {}, online=False)
     result = _run(
         _executor(client),
-        _invocation("browser.closeBrowser", browserType="chrome", scope="byProcessName"),
+        _invocation("browser.closeBrowser", browserType="chrome"),
     )
 
     # 通道离线只影响预检；closeBrowser 在 _NO_SESSION_COMMANDS 里，直接进执行分支
