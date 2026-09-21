@@ -45,13 +45,29 @@ mkdir」，而抛出的 `PermissionError` 不是 `FileExistsError`，`exist_ok=T
 - 目录建完后 best-effort 回收，回收失败不影响结论。
 
 正常机器上探测通过、一切保持 pytest 原生目录布局；显式 `--basetemp` 优先级更高。
+
+## 3. 测试进程禁止合成全局输入（M36 事故防线）
+
+`desktop.input` 的 clipboard 模式实现是「写系统剪贴板 + `send_keys("^v")`」——
+**全局键击落到当时前台聚焦的任何窗口**。M36 之前，`test_desktop_params.py` 的
+clipboard 用例只桩了元素查找，没桩键击与剪贴板：每跑一次套件就清空维护者剪贴板、
+向前台输入框粘贴一次 "hi"（2026-09-21 实证，维护者报告「不同的输入框莫名其妙
+输入 hi」）。
+
+这里用 autouse fixture 把默认测试进程的**全局输入面**钉死：`pywinauto.keyboard.
+send_keys` 与 `win32clipboard` 的写剪贴板入口一律改为报错。个别用例需要桩这两个
+入口时，用例内自己的 `monkeypatch.setattr` 会覆盖守卫（LIFO），互不冲突。
+真实输入面的验证只属于 `RPA_DESKTOP_E2E=1` 的桌面 E2E（守卫在该开关下不安装）。
 """
 
 import getpass
 import os
 import shutil
+import sys
 import tempfile
 from pathlib import Path
+
+import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -66,6 +82,47 @@ if not os.environ.get("QT_QPA_PLATFORM"):
 # 供 pytest_terminal_summary 识别并提示启用方式。
 DESKTOP_E2E_ENABLED = os.environ.get("RPA_DESKTOP_E2E") == "1"
 DESKTOP_E2E_SKIP_MARKER = "RPA_DESKTOP_E2E=1"
+
+
+@pytest.fixture(autouse=True)
+def _block_global_input(monkeypatch):
+    """默认测试进程禁止合成全局键击/写真实剪贴板（M36 事故防线，见模块 docstring §3）。
+
+    - 只在 Windows 安装：pywinauto / win32clipboard 本就是 win32 专属，非 win32
+      上既没有泄漏面、也装不上这两个包（导入即失败）。
+    - `RPA_DESKTOP_E2E=1` 时不安装：桌面 E2E 的天职就是在真机窗口里打真字。
+    - 用例内自己的 `monkeypatch.setattr` 在测试体阶段执行，晚于本 autouse，
+      会**覆盖**守卫的桩（monkeypatch 撤销按 LIFO），两者互不冲突。
+    """
+    if sys.platform != "win32" or DESKTOP_E2E_ENABLED:
+        return
+    reason = (
+        "测试进程禁止合成全局输入（M36 防线）：键击/剪贴板会作用到开发者当前聚焦的"
+        "真实窗口。请为该用例打桩，或把它移入 RPA_DESKTOP_E2E=1 的桌面 E2E。"
+    )
+
+    def _blocked(*_args, **_kwargs):
+        raise AssertionError(reason)
+
+    import pywinauto.keyboard as _pywinauto_keyboard
+
+    monkeypatch.setattr(_pywinauto_keyboard, "send_keys", _blocked)
+    # desktop_win32.py 是模块级 `from pywinauto.keyboard import send_keys`——
+    # 只 patch pywinauto 侧拦不住那个早绑定的名字，两处都要钉。
+    import rpa_core.executors.desktop_win32 as _desktop_win32
+
+    monkeypatch.setattr(_desktop_win32, "send_keys", _blocked, raising=False)
+    try:
+        import win32clipboard as _win32clipboard
+    except ImportError:  # pragma: no cover - Windows 上 pywin32 必装，仅防御
+        return
+    for _name in (
+        "OpenClipboard",
+        "EmptyClipboard",
+        "SetClipboardText",
+        "SetClipboardData",
+    ):
+        monkeypatch.setattr(_win32clipboard, _name, _blocked, raising=False)
 
 # 测试专用端点前缀：本机真实端点（rpa_core_ext_…）因此对默认 client 不可见，
 # 用例走「扩展离线」分支（需要真实通道的用例显式指向测试端点）。

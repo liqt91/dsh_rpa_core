@@ -260,7 +260,30 @@ def test_exhausted_wait_surfaces_waited_ms_and_polls():
 
 
 @DESKTOP_ONLY
-def test_input_command_shares_the_same_wait_semantics():
+def test_input_command_shares_the_same_wait_semantics(monkeypatch):
+    """desktop.input 与 click 共享等待预算；clipboard 模式断言「调度了粘贴动作」。
+
+    M36 事故：本用例最初只桩了 `_find`，剪贴板写入与 `send_keys("^v")` 走了**真实
+    全局路径**——每跑一次套件就清空维护者剪贴板、向前台聚焦的输入框粘贴一次
+    "hi"（2026-09-21 维护者实证）。现在剪贴板与键击全部打桩（conftest 的 autouse
+    守卫 `_block_global_input` 也会硬拦真实调用）；「粘贴真的落在目标控件」属于
+    真机效果，归 `RPA_DESKTOP_E2E=1` 的桌面 E2E，不冒充。
+    """
+    import pywinauto
+    import win32clipboard
+
+    synth: list[tuple] = []
+    monkeypatch.setattr(win32clipboard, "OpenClipboard", lambda: synth.append(("open",)))
+    monkeypatch.setattr(win32clipboard, "EmptyClipboard", lambda: synth.append(("empty",)))
+    monkeypatch.setattr(
+        win32clipboard, "SetClipboardText",
+        lambda text, fmt=None: synth.append(("set", text)),
+    )
+    monkeypatch.setattr(win32clipboard, "CloseClipboard", lambda: synth.append(("close",)))
+    monkeypatch.setattr(
+        pywinauto.keyboard, "send_keys", lambda keys: synth.append(("keys", keys))
+    )
+
     executor, calls, element = _armed_executor(appear_at=2)
 
     result = _execute(
@@ -272,3 +295,5 @@ def test_input_command_shares_the_same_wait_semantics():
     assert result.status == "success", result.error
     assert calls["count"] == 2
     element.set_focus.assert_called()
+    assert ("set", "hi") in synth, "剪贴板应被（桩）写入待输入文本"
+    assert ("keys", "^v") in synth, "clipboard 模式应调度一次 Ctrl+V 粘贴"

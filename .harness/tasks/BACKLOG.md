@@ -72,6 +72,18 @@
 
 ## 已完成
 
+- [x] **M36 门禁测试泄漏全局输入：clipboard 用例往维护者前台粘贴 "hi"**（`done`，2026-09-21）
+  - 计划：`M36-test-input-leak.md`
+  - 根因：M30 S2 的 `test_input_command_shares_the_same_wait_semantics` 只桩了
+    `_find`，`desktop.input` clipboard 模式的「写剪贴板 + `send_keys("^v")`」走了
+    真实全局路径——每跑一次套件清空一次剪贴板、向前台聚焦的输入框粘贴一次 "hi"。
+  - 修复：①肇事用例剪贴板与键击全打桩（断言「调度了粘贴」而非真实效果）；
+    ②conftest autouse 守卫 `_block_global_input` 钉死默认测试进程的全局输入面
+    （`send_keys`/`desktop_win32.send_keys` 早绑定名/`win32clipboard` 写入口），
+    `RPA_DESKTOP_E2E=1` 时让位。负向验证：探针直接调真实 send_keys → 拦红。
+  - 教训：打桩边界沿**真实副作用面**划，不沿参数传递面划。FULL GATE PASSED
+    （1069 passed / 2 xfailed / 12 skipped；用例数与 M35 持平）
+
 - [x] **M35 closeBrowser 语义收敛：移除 scope，直接杀指定浏览器的全部进程**（`done`，2026-09-21）
   - 计划：`M35-closebrowser-kill-all.md`
   - 维护者定案：「没有 scope 的问题，是直接杀某个浏览器的所有进程」。M32 的
