@@ -48,7 +48,7 @@ MV3 提供的 `chrome.offscreen` API，可以创建一个**真正的 DOM 环境*
 | 权限 | 需 `offscreen` 权限（manifest 加一行，**非敏感权限**，不触发商店额外审核） |
 | 用户可见影响 | 无（offscreen document 不显示） |
 | 实现量 | 中：新增 `offscreen.html` + `offscreen.js`，扩展侧加一条消息通道 |
-| 已知坑 | ① offscreen document **同时只能有一个**，要管理生命周期（`hasDocument()` / `closeDocument()`）；② 只能存在于 service worker 生命周期内，**SW 被回收时 offscreen 也会关**——长时间整页截图要防中途被回收；③ 与 service worker 的通信仍是消息传递，不是直接调用 |
+| 已知坑 | ① offscreen document **同时只能有一个**，要管理生命周期（`hasDocument()` / `closeDocument()`）；② 生命周期与 service worker **分离**（2026-09-21 官方文档核实并**更正旧结论**「SW 被回收时 offscreen 也会关」，见 §7-2）——SW 被回收 offscreen 不连带关闭，但重启后的 SW 丢失内存态、需重新建立消息路由；③ 与 service worker 的通信仍是消息传递，不是直接调用 |
 | 确定性 | 高（纯本地图像操作，无外部依赖） |
 
 ### 路线 B：CDP `Page.captureScreenshot`
@@ -95,8 +95,9 @@ MV3 提供的 `chrome.offscreen` API，可以创建一个**真正的 DOM 环境*
 - 图像处理留在扩展侧，**不新增 Python 依赖**，也不放大 IPC 传输量；
 - 与 ADR 0013 的「无 CDP」定位不冲突。
 
-**但要如实记下它的代价**：offscreen document 的生命周期管理（同时只能一个、
-SW 回收会连带关闭），以及整页截图的耗时（分段 + 拼接 + 等待懒加载）会明显长于现在的单次
+**但要如实记下它的代价**：offscreen document 的生命周期管理（同时只能一个；
+生命周期与 SW 分离、不随 SW 回收关闭，但 SW 重启会丢内存态——2026-09-21 官方核实并更正，
+见 §7），以及整页截图的耗时（分段 + 拼接 + 等待懒加载）会明显长于现在的单次
 `captureVisibleTab`，需要一个合理的超时与取消路径。
 
 **范围建议**：先做**元素级截图**（`selector`），它不需要分段拼接，
@@ -116,3 +117,41 @@ SW 回收会连带关闭），以及整页截图的耗时（分段 + 拼接 + �
 - 不引入 CDP（ADR 0013）；
 - 不做「截整个桌面」（那是 `desktop.screenshot` 的范畴，与浏览器通道无关）；
 - 不做视频录制。
+
+## 7. 五个实现约束的核实结论（2026-09-21，官方文档 + 仓库实测核实，未改码）
+
+路线拍板前的五个实现约束问题已逐一核实，结论登记如下——**它们共同指向
+「瓦片级流式产出」这一实现形态**（滚动 → 截一瓦 → 编码 → 回传 → 下一瓦，
+不在任何一侧持有整页位图）：
+
+1. **MV3 SW 30s 空闲回收**：native messaging 的每次往返都会重置 SW 的 30s 空闲计时
+   （M22 既有实测：持续命令流量下 SW 存活 11h23m）。风险集中在「单个长命令」——
+   整页截图若做成一次无消息的长命令，中途即可能被回收。**瓦片级进度消息本身就把 SW 喂活着**；
+   offscreen 生命周期与 SW 分离（见第 2 条），但**重启后的 SW 丢失内存态**
+   （进行中的拼接状态、待发结果），恢复语义按「从头重跑该命令」设计，不做跨 SW 断点续传。
+2. **offscreen document 生命周期（更正 §2 路线 A 坑②与 §4 的旧结论）**：官方文档明确
+   offscreen document 的生命周期 **"separate from that of the extension service worker"**
+   ——SW 被回收**不会**连带关闭 offscreen。真正的约束是：同时只能有一个 offscreen
+   （`hasDocument()` 管理不变）、SW 重启后需重新建立消息路由。
+3. **大图内存控制**：瓦片级「截取 → 画布绘制 → `close()` 释放」逐瓦处理，
+   峰值内存 = 单瓦而非整页；解码用 `createImageBitmap`（SW 可用），编码用
+   `OffscreenCanvas.convertToBlob`。照片类内容默认 JPEG（PNG 编码是内存与耗时峰值）；
+   参数给 `maxHeightPx` / `maxPixels` 上限与 DPR 封顶（≤2）。单瓦尺寸远离 Chrome
+   桌面端 canvas 上限（单边 ≤65535px、总面积 ≤268Mpx）。
+4. **sticky/fixed 与滚动一致性**：截图前注入读 `getComputedStyle` 找出
+   `position: sticky/fixed` 元素 → 临时改 `static` → 截完还原（§3-1 方案定案）；
+   滚动用整数 `scrollTo` 并回读 `scrollY` 校准（接受 ±1px 接缝，§5 已有口径）；
+   懒加载按「渐进滚动 + 每段稳定等待」处理。**DPR 瓦片基准**：瓦片起点用
+   `round(序号 × 瓦片设备像素高)` 整体计算，**不得逐瓦 `round(y × DPR)`**——
+   小数 DPR（1.25 / 1.5 的 Windows 缩放）下逐瓦取整误差会累积出重叠/缝隙；
+   输出元数据记录 DPR 与 `innerWidth` 供 Python 侧核对；可选 `tabs.setZoom(1)` 归一参数
+   （有可见副作用，默认关闭）。
+5. **消息体量上限（native messaging）**：当前官方限额——host→扩展 **1 MB**、
+   扩展→host **64 MiB**（旧文档的 4 GB 已过时）。我们的传输是 `chrome.runtime.connectNative`
+   （`com.rpa_core.ext_bridge`），截图 dataUrl 走**扩展→host 的 64 MiB 方向**；
+   单瓦结果（PNG/JPEG dataUrl，base64 +33% 冗余）控制在 ≤~16 MB 即安全。
+   瓦片化把这条上限从「阻塞项」变成「参数约束」。
+
+**对路线建议的影响**：不改变「倾向路线 A」的结论；瓦片流式是路线 A 的实现形态
+（offscreen 负责单瓦解码/编码），并顺带化解了路线 C 评估中「传输量成倍增大」的担忧
+（逐瓦回传可控；但 C 仍需新增 Pillow 依赖，A 依旧更优）。待维护者拍板后按 §7 口径开工。
