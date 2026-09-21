@@ -2,6 +2,38 @@
 
 ## 2026-09-21
 
+- **M37 closeTabs 增加 `ignoreBeforeUnload`（收官）**——关闭带 `beforeunload` 拦截的页面时
+  不再被「离开此页面？」确认框卡住。五条语义决定：① 默认 `true` 对齐影刀；② Python 侧
+  **显式才转发**（`None` 不进 args），缺省兜底只留在扩展一处（`!== false` 视为 true），
+  避免双份默认值漂移；③ 注入走逐目标 `chrome.scripting.executeScript`
+  （`world: "MAIN"` + `injectImmediately`），`tabs.remove` 前清 `window.onbeforeunload`；
+  ④ **best-effort**：注入失败（chrome://、已休眠标签页等）不阻断关闭，
+  `addEventListener` 注册的拦截无法枚举清除 → 残留弹窗 → 该标签页如实进 `failedTabIds`；
+  ⑤ details 记录生效值（`None` → `True`）。
+  - 门禁：`check_close_ops.mjs` 29→37 项（注入先于 remove 的事件序、显式 false 不注入仍关闭、
+    注入失败不破坏记账；反漂移正则**切进 closeMany case 切片** + manifest `default: true` 断言）；
+    三条负向验证全红后还原复绿（默认语义反转 / 删 `world: "MAIN"` 行 / 删 manifest 默认值）。
+  - 契约 18→21；总测试 **1086 = 1083 + 3**（逐文件 collect-only 求和，非凭印象）。
+  - **两条新教训（已入 MEMORY.md）**：① **同文件多处修改严禁进同一并行批次**——Edit 各自对
+    批次前快照生效、最后写者胜，静默吞掉其余修改；本次先后炸出 NameError 与
+    「门禁断言整段丢失但门禁仍绿」。修法：合并为一个大 Edit 或严格串行，改完 Grep 复核。
+    ② **门禁正则必须切进被测代码自己的切片**——全文件找 `world: "MAIN"` 会被
+    page.call / page.eval（background.js 523/1044 行）喂成假绿，删掉目标行也不红；
+    切到 `case "tabs.closeMany"` → `case "tabs.listWindows"` 之间后，负向验证立刻打到点上。
+  - 真机待验（登记任务单 §4）：带 beforeunload 的页面实际关闭、chrome:// 注入失败路径。
+
+- **M33 五个实现约束问题核实（调研，未改码）**——整页/元素截图路线拍板前的五个实现约束
+  逐一官方核实并登记进任务单 §7（顺带更正任务单两处旧结论）：① SW 30s 空闲靠 native
+  messaging 往返喂活（M22 实测 11h23m），风险集中在单个长命令 → 瓦片级进度消息即保活；
+  ② **offscreen document 生命周期与 SW 分离**（官方原文 "separate from that of the
+  extension service worker"）——更正任务单「SW 回收连带关闭 offscreen」的旧结论
+  （路线 A 坑②与 §4 两处；真实约束是重启 SW 丢内存态 + 重建消息路由）；
+  ③ 瓦片级截取→绘制→释放，峰值内存 = 单瓦，照片默认 JPEG；④ sticky/fixed 临时改 static +
+  整数滚动回读（±1px 接缝）+ 瓦片基准 `round(序号 × 瓦片设备像素高)`
+  （**禁逐瓦 `round(y×DPR)`**，小数 DPR 误差会累积）；⑤ native messaging 官方限额
+  host→扩展 1 MB / 扩展→host **64 MiB**（旧 4 GB 过时），单瓦结果 ≤~16 MB 安全。
+  瓦片流式同时化解 ①③⑤；不改变「倾向路线 A」的结论，待维护者拍板（回 A 即开工）。
+
 - **M26 流程 inputs 声明编辑 UI（S2–S4 全完，M26 收口）**——**feature_list 至此 56/56 全部 `passes=true`**，无未完成 feature。
   - **S2 对话框** `gui/inputs_dialog.py`：两列表格（名称 + 默认值 JSON 文本）。三条设计：
     ① **校验在「确定」之前且不产出半成品**（不通过则留在对话框、`_result` 保持 `None`；
