@@ -38,6 +38,11 @@
     若 `[W]` 占主导 → Tauri 也帮不上（约束在系统层）。诊断结论直接决定下一个里程碑的形态。
   - 注意：诊断**必须两端同 PySide6 版本**（`>=6.7,<7` 可能装到不同 minor，差异会来自 Qt 而非平台）；
     且必须记录 `devicePixelRatio`——Retina 下 `=2`，本身就能解释一部分「看起来不一致」。
+- [ ] **closeTabs 的 `ignoreBeforeUnload` 实装**（`planned`，小切片）——M32 落地时评估：
+  影刀「关闭网页」带「忽略对话框」，对应 `chrome.tabs.remove` 关不掉的
+  `beforeunload` 确认框（有未保存表单的页面会卡住不关）。计划：移除前用
+  `chrome.scripting.executeScript`（MAIN world）对该标签页注入 beforeunload 抑制
+  脚本，best-effort、默认 `true`（对齐影刀）；`scripting` 权限已在扩展 manifest。
 - [ ] **整页/元素截图**（`planned`）——M29 S3 从 `browser.screenshot` 删掉 `fullPage`/`selector` 后
   留下的能力缺口：`chrome.tabs.captureVisibleTab` 只能截可见区，整页要滚动分段拼接、元素要按 rect
   裁剪，都需要在扩展里解码图像（MV3 service worker 无 `Image`/`FileReader`）→ 走 offscreen document
