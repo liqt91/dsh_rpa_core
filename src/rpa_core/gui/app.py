@@ -336,6 +336,21 @@ def _ext_badge_tooltip(diag: dict) -> str:
     return "\n".join(lines)
 
 
+def flow_inputs_prompt(
+    declaration: dict | None, parent: QWidget | None = None
+) -> dict | None:
+    """弹出流程输入声明编辑对话框（模块级接缝）。
+
+    独立成模块级函数是为了让 `MainWindow._edit_flow_inputs` 可测：驱动真实模态对话框
+    需要合成事件，脆且慢；这个接缝让测试直接替换成固定返回值来验证「确定/取消/
+    未变化」三条分支对 `_workflow_meta` 与脏标记的影响。函数体仍是延迟导入
+    （Qt 依赖不进模块顶层，与本包既定约定一致）。
+    """
+    from rpa_core.gui.inputs_dialog import warn_and_edit
+
+    return warn_and_edit(declaration, parent)
+
+
 class _CaptureBridge(QObject):
     """桌面捕获子进程 → GUI 线程的结果桥（worker 线程 emit，Qt 排队投递）。"""
 
@@ -704,6 +719,12 @@ class MainWindow(QMainWindow):
         catalog_action.triggered.connect(self._show_catalog_dialog)
         toolbar.addAction(catalog_action)
 
+        # 流程输入声明（M26 S2）：之前只能手写 workflow.json 顶层 inputs
+        self.flow_inputs_action = QAction("流程输入", self)
+        self.flow_inputs_action.setToolTip("声明本流程运行时接收的输入（${inputs.<名称>}）")
+        self.flow_inputs_action.triggered.connect(self._edit_flow_inputs)
+        toolbar.addAction(self.flow_inputs_action)
+
         extension_action = QAction("插件", self)
         extension_action.setToolTip("浏览器扩展状态与安装引导")
         extension_action.triggered.connect(self._show_extension_dialog)
@@ -745,6 +766,8 @@ class MainWindow(QMainWindow):
         file_menu.addAction(self._new_action_ref)
         file_menu.addAction(self._open_action_ref)
         file_menu.addAction(self._save_action_ref)
+        file_menu.addSeparator()
+        file_menu.addAction(self.flow_inputs_action)
 
         # 编辑
         edit_menu = menu_bar.addMenu("编辑")
@@ -2801,6 +2824,36 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(f"保存失败：{exc}", 5000)
             return False
         return True
+
+    # ---- 流程输入声明（M26 S2） ----------------------------------------------
+    def _edit_flow_inputs(self) -> None:
+        """编辑流程级 `inputs` 声明（保存走既有编辑链路，脏标记/关闭确认一致）。
+
+        落点只写 `_workflow_meta["inputs"]`——**不在这里碰文件**。真正的落盘由
+        `_build_document` → `model_to_workflow` → `Workflow.model_validate` → `save_workflow`
+        完成，因此校验失败的兜底与其它编辑共用同一条路径。
+
+        对话框入口走**模块级属性 `flow_inputs_prompt`**（而非函数内 import）：给测试留一个
+        可替换的接缝，避免为了验证「确定/取消时的状态变更」而去驱动真实模态对话框。
+        """
+        current = copy.deepcopy(self._workflow_meta.get("inputs") or {})
+        updated = flow_inputs_prompt(current, self)
+        if updated is None:
+            return  # 取消：不改动任何状态，也不置脏
+        if updated == current:
+            self.statusBar().showMessage("流程输入未变化", 4000)
+            return
+        self._workflow_meta["inputs"] = updated
+        self._set_dirty(True)
+        # 变量面板与 ${ 补全都按声明列出 inputs.<名>，改了声明要立刻反映
+        self._refresh_variables()
+        count = len(updated)
+        message = (
+            f"流程输入已更新（{count} 项）；Ctrl+S 保存"
+            if count
+            else "已清空流程输入声明；Ctrl+S 保存"
+        )
+        self.statusBar().showMessage(message, 6000)
 
     # ---- 数据表格（切 H） ----------------------------------------------------
     def _toggle_table_dock(self) -> None:

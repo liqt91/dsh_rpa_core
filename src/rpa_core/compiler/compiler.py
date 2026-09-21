@@ -5,6 +5,7 @@ from jsonschema import Draft202012Validator
 
 from rpa_core.catalog import CommandCatalog
 from rpa_core.model.command import ReplayPolicy
+from rpa_core.model.inputs import InputDeclarationError, validate_declaration
 from rpa_core.model.workflow import (
     ActionNode,
     ForEachNode,
@@ -158,6 +159,14 @@ class WorkflowCompiler:
 
         # 别名声明本身先校验（保留名 / 重复），失败即拒绝整份 workflow。
         _validate_alias_declarations(workflow.root, self.catalog)
+
+        # 流程 inputs 声明本身也要校验（M26 S1）：名字必须能被 ${inputs.<名>} 引用，
+        # 且不得占用内置作用域根名——否则声明在册但永远引用不上，属「能跑但结果错」。
+        # 放在引用校验之前：先保证声明合法，再看引用是否落在声明里。
+        try:
+            validate_declaration(workflow.inputs)
+        except InputDeclarationError as exc:
+            raise WorkflowCompileError(f"Invalid workflow inputs declaration: {exc}") from exc
 
         def validate_refs(value: Any, loop_vars: set[str], error_vars: set[str]) -> None:
             for reference in _iter_references(value):

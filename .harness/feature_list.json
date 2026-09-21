@@ -259,8 +259,8 @@
     },
     {
       "id": "flow-inputs-editor",
-      "title": "Flow inputs declaration editor: create/edit/remove workflow inputs in the GUI (name/type/default/description) with validation, wired to the run-params dialog, variable completion, and compile checks",
-      "passes": false
+      "title": "Flow inputs declaration editor: create/edit/remove workflow inputs in the GUI (name + JSON default, the two columns the real {name: default} shape has), with validation before accept, wired to the run-params dialog, variable completion and compile checks. Declaration is NOT a filter for run inputs (history replay passes through unchanged). S1-S4 done.",
+      "passes": true
     },
     {
       "id": "gui-home-workbench",

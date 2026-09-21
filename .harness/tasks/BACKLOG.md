@@ -8,8 +8,6 @@
 
 ## 后续任务
 
-- [ ] **M26 流程 inputs 声明编辑 UI**（`planned`——原为 M25 之后第一项，因维护者定向先做
-  M27 工作台、随后做 M28 元素自愈而顺延；计划见 `M26-flow-inputs-editor.md`）
 - [ ] **M31 GUI 跨平台观感诊断（macOS vs Windows）**（`planned`，诊断型——**先诊断，不写代码**）
   - 计划：`M31-gui-crossplatform-audit.md`
   - 由来：维护者在 macOS 上使用 GUI 后反馈「控件样式、字体大小、控件的显示/隐藏行为与 Windows
@@ -75,6 +73,23 @@
 > 主力形态，该条目（「确认非开发者用户为主力后再立项薄壳」）不再适用。
 
 ## 已完成
+
+- [x] **M26 流程 inputs 声明编辑 UI**（`done`，2026-09-21）
+  - 计划：`M26-flow-inputs-editor.md`；口径文档：`docs/flow-inputs.md`
+  - 结果：**feature_list 56/56 全部 `passes=true`，无未完成 feature**。
+  - 真实形状（开工核实）：`Workflow.inputs` 是 `dict[str, Any]`，语义为 **`{名称: 默认值}`
+    扁平映射**——**没有** `type`/`required`/`description`。故只做**两列**；
+    加那三个字段是形状变更（要动 `${inputs.<名>}` 文法），属 ADR 级决定，未夹带。
+  - S1 能力层 `model/inputs.py`：读取宽松（历史非法声明也要能打开）/ 保存严格；
+    名称 `[A-Za-z_]\w*` **不含点号**（点号是 `${...}` 路径分隔符 → 带点名字「声明在册但
+    永远引用不上」，静默失败比报错更坏）；默认值文本 `sort_keys=True` 规范化；
+    并接入 `WorkflowCompiler.compile`，保证校验真拦得住。
+  - S2 `gui/inputs_dialog.py`：两列表格，**校验在「确定」之前且不产出半成品**；
+    只写 `_workflow_meta["inputs"]` 不碰文件（落盘走既有保存链路，脏标记一致）。
+  - S3 联动：三个消费方本就都读 `_workflow_meta["inputs"]`，故 S3 的实质是**证明**联动
+    成立——用跨层一致性（补全产出的 `inputs.<名>` 必须被 `compiler._REFERENCE` 匹配）
+    加「声明→引用→编译通过」端到端；并补 M25 边界：**声明不是运行输入的过滤器**。
+  - S4 文档 `docs/flow-inputs.md` + 测试 115 项 + **负向验证 4 处**。
 
 - [x] **M30 桌面通道命令参数漂移收口**（`done`，缺陷等级，2026-09-21）
   - 计划：`M30-desktop-param-drift.md`
