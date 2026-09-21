@@ -72,10 +72,19 @@ if (end < 0) {
 const slice = source.slice(start, end);
 
 // ---- chrome 替身：只实现 closeMany / listWindows 用到的那几项 ----
-const makeChrome = ({ tabs = [], windows = [], failRemoveOn = [] } = {}) => {
+const makeChrome = ({
+  tabs = [],
+  windows = [],
+  failRemoveOn = [],
+  failInjectOn = [],
+} = {}) => {
   const removed = [];
+  const injected = [];
+  const log = []; // 统一事件序（inject:N / remove:N），用于断言「先注入后关闭」
   return {
     removed,
+    injected,
+    log,
     tabs: {
       async query(filter) {
         if (filter && filter.windowId != null) {
@@ -85,6 +94,7 @@ const makeChrome = ({ tabs = [], windows = [], failRemoveOn = [] } = {}) => {
       },
       async remove(tabId) {
         if (failRemoveOn.includes(tabId)) throw new Error("no tab with id");
+        log.push(`remove:${tabId}`);
         removed.push(tabId);
       },
     },
@@ -94,6 +104,15 @@ const makeChrome = ({ tabs = [], windows = [], failRemoveOn = [] } = {}) => {
       },
       async getAll() {
         return windows;
+      },
+    },
+    scripting: {
+      // M37：closeMany 的 beforeunload 抑制注入替身（stopLoading 不在本门禁矩阵内）
+      async executeScript(options) {
+        log.push(`inject:${options.target.tabId}`);
+        injected.push(options.target.tabId);
+        if (failInjectOn.includes(options.target.tabId)) throw new Error("cannot inject");
+        return [{ result: true }];
       },
     },
   };
@@ -204,6 +223,37 @@ const makeRunner = (chrome) =>
   check("closeMany all=false：不关任何标签（必须严格 === true）", result.closedTabIds, []);
 }
 
+// ---- M37：ignoreBeforeUnload 默认 true —— 每个目标页先注入抑制脚本再 remove ----
+{
+  const chrome = makeChrome();
+  const result = await makeRunner(chrome)({ op: "tabs.closeMany", args: { tabIds: [1, 2] } });
+  checkTrue(
+    "closeMany M37：默认对每个目标页先注入再逐个关闭（事件序）",
+    JSON.stringify(chrome.log) ===
+      JSON.stringify(["inject:1", "remove:1", "inject:2", "remove:2"]),
+  );
+  check("closeMany M37：注入不改变逐个记账", [result.closedTabIds, result.failedTabIds], [[1, 2], []]);
+}
+
+// ---- M37：ignoreBeforeUnload=false —— 完全不注入（保留页面拦截）----
+{
+  const chrome = makeChrome();
+  const result = await makeRunner(chrome)({
+    op: "tabs.closeMany",
+    args: { tabIds: [1], ignoreBeforeUnload: false },
+  });
+  checkTrue("closeMany M37：显式 false 时不注入", chrome.injected.length === 0);
+  check("closeMany M37：false 只跳过注入，关闭照常", [result.closedTabIds, chrome.removed], [[1], [1]]);
+}
+
+// ---- M37：注入失败是 best-effort —— 不阻断 remove，记账如实 ----
+{
+  const chrome = makeChrome({ failInjectOn: [1] });
+  const result = await makeRunner(chrome)({ op: "tabs.closeMany", args: { tabIds: [1] } });
+  checkTrue("closeMany M37：注入失败仍尝试 remove", chrome.removed.includes(1));
+  check("closeMany M37：注入失败不影响记账", [result.closedTabIds, result.failedTabIds], [[1], []]);
+}
+
 // ---- tabs.listWindows ----
 {
   const chrome = makeChrome({
@@ -229,6 +279,24 @@ checkTrue(
   /closedTabIds\.push\(tabId\)/.test(source) && /failedTabIds\.push\(tabId\)/.test(source),
 );
 
+// ---- 反漂移（M37）：抑制注入必须是 MAIN world + 不等页面加载 + 缺省视为 true ----
+// 注意前两条必须**切进 closeMany case 的作用域**再测：background.js 里 page.call/
+// page.eval 的注入也用 world: "MAIN"，全文件正则会被它们喂出假绿灯（M37 负向验证
+// 实测：删掉 closeMany 的 world 行后全文件正则照样绿）。以相邻 case 名为界切片。
+const closeManyStart = source.indexOf('case "tabs.closeMany"');
+const closeManyEnd = source.indexOf('case "tabs.listWindows"', closeManyStart);
+const closeManySlice = closeManyStart >= 0 && closeManyEnd > closeManyStart
+  ? source.slice(closeManyStart, closeManyEnd)
+  : "";
+checkTrue(
+  "closeMany M37：beforeunload 抑制走 MAIN world 注入且不等加载完成",
+  /world: "MAIN"/.test(closeManySlice) && /injectImmediately: true/.test(closeManySlice),
+);
+checkTrue(
+  "closeMany M37：ignoreBeforeUnload 缺省视为 true（!== false 语义）",
+  /ignoreBeforeUnload !== false/.test(source),
+);
+
 // ---- 跨语言一致性：op 名与 Python 侧封装必须一致 ----
 const extPy = readFileSync(
   join(here, "..", "src", "rpa_core", "executors", "browser_ext.py"),
@@ -247,6 +315,11 @@ checkTrue("closeTabs manifest 声明 INVALID_INPUT", manifest.errors.includes("I
 checkTrue(
   "closeTabs manifest 声明 tabIds/all 二选一约束",
   Array.isArray(manifest.input_schema.oneOf) && manifest.input_schema.oneOf.length === 2,
+);
+checkTrue(
+  "closeTabs manifest 声明 ignoreBeforeUnload 默认 true",
+  Boolean(manifest.input_schema.properties.ignoreBeforeUnload) &&
+    manifest.input_schema.properties.ignoreBeforeUnload.default === true,
 );
 
 if (failed) {

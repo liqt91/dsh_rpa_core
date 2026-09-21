@@ -38,11 +38,6 @@
     若 `[W]` 占主导 → Tauri 也帮不上（约束在系统层）。诊断结论直接决定下一个里程碑的形态。
   - 注意：诊断**必须两端同 PySide6 版本**（`>=6.7,<7` 可能装到不同 minor，差异会来自 Qt 而非平台）；
     且必须记录 `devicePixelRatio`——Retina 下 `=2`，本身就能解释一部分「看起来不一致」。
-- [ ] **closeTabs 的 `ignoreBeforeUnload` 实装**（`planned`，小切片）——M32 落地时评估：
-  影刀「关闭网页」带「忽略对话框」，对应 `chrome.tabs.remove` 关不掉的
-  `beforeunload` 确认框（有未保存表单的页面会卡住不关）。计划：移除前用
-  `chrome.scripting.executeScript`（MAIN world）对该标签页注入 beforeunload 抑制
-  脚本，best-effort、默认 `true`（对齐影刀）；`scripting` 权限已在扩展 manifest。
 - [ ] **整页/元素截图**（`planned`）——M29 S3 从 `browser.screenshot` 删掉 `fullPage`/`selector` 后
   留下的能力缺口：`chrome.tabs.captureVisibleTab` 只能截可见区，整页要滚动分段拼接、元素要按 rect
   裁剪，都需要在扩展里解码图像（MV3 service worker 无 `Image`/`FileReader`）→ 走 offscreen document
@@ -76,6 +71,18 @@
 > 主力形态，该条目（「确认非开发者用户为主力后再立项薄壳」）不再适用。
 
 ## 已完成
+
+- [x] **M37 closeTabs 增加 `ignoreBeforeUnload`：remove 前注入抑制 beforeunload 弹窗**（`done`，2026-09-21）
+  - 计划：`M37-ignore-before-unload.md`
+  - 实装：manifest 参数（默认 true 对齐影刀）；Python「显式才转发」（None 不进
+    args，缺省语义由扩展 `!== false` 单点兜底）；扩展 remove 前向目标页 MAIN world
+    注入清 `window.onbeforeunload`，best-effort——注入失败（chrome:// 等）不阻断
+    关闭；`addEventListener` 形式的拦截清不掉、仍弹窗则如实进 `failedTabIds`。
+  - 门禁：check_close_ops 29→37 项（先注入后关闭的事件序矩阵 / false 不注入 /
+    注入失败不阻断记账 / MAIN world+injectImmediately 反漂移 / manifest default），
+    三条负向验证全过；MAIN world 正则切进 closeMany case 切片（全文件正则被
+    page.call/eval 的同款注入喂出假绿灯，负向验证实测抓到）。
+  - FULL GATE PASSED（收集实测 1086 = M36 后 1083 + 新增 3；契约文件 18→21 项）
 
 - [x] **M36 门禁测试泄漏全局输入：clipboard 用例往维护者前台粘贴 "hi"**（`done`，2026-09-21）
   - 计划：`M36-test-input-leak.md`

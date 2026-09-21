@@ -36,6 +36,11 @@
         "type": "boolean",
         "description": "关闭当前所有标签页（含用户自己打开的）；与 tabIds 二选一，默认 false"
       },
+      "ignoreBeforeUnload": {
+        "type": "boolean",
+        "default": true,
+        "description": "关闭前向目标标签页注入脚本清除 beforeunload 拦截，避免「离开此页面？」确认框卡住程序化关闭。best-effort：addEventListener 形式注册的拦截无法枚举清除，仍可能弹窗（对应标签页会进 failedTabIds）；false 时保留页面拦截"
+      },
       "browserType": {
         "type": "string",
         "enum": [

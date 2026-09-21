@@ -372,6 +372,12 @@ async function executeCommand(cmd) {
       // 是「哪些关了、哪些没关」，只有关成功的进 closedTabIds。
       // 注意：chrome.tabs.remove 对最后一个标签的行为——Chrome/Edge 会**关闭整个窗口**
       // （除非是应用窗口），这是浏览器语义，我们不额外造「留一个空白页」的假动作。
+      // M37：ignoreBeforeUnload（缺省视为 true，对齐影刀）——remove 前先向目标页
+      // 注入 MAIN world 脚本清掉 window.onbeforeunload，避免「离开此页面？」确认框
+      // 卡住程序化关闭。best-effort：注入失败（chrome://、已休眠标签等）不阻断
+      // remove；addEventListener 形式注册的拦截无法枚举清除，仍可能弹窗 → remove
+      // 失败如实进 failedTabIds，调用方看到的就是真实结果。injectImmediately 使
+      // 注入不等页面加载完成（永不 idle 的页面不会把整个 op 拖到超时）。
       const tabIds = Array.isArray(args.tabIds) ? args.tabIds : null;
       let targets = [];
       if (tabIds) {
@@ -385,9 +391,25 @@ async function executeCommand(cmd) {
         );
         targets = tabs.map((tab) => tab.id).filter((id) => id != null);
       }
+      const ignoreBeforeUnload = args.ignoreBeforeUnload !== false;
       const closedTabIds = [];
       const failedTabIds = [];
       for (const tabId of targets) {
+        if (ignoreBeforeUnload) {
+          try {
+            await chrome.scripting.executeScript({
+              target: { tabId },
+              world: "MAIN",
+              injectImmediately: true,
+              func: () => {
+                try { window.onbeforeunload = null; } catch (_) { /* 个别页面冻结了 window */ }
+                return true;
+              },
+            });
+          } catch (_) {
+            // best-effort：注入失败（无 host 权限、已休眠等）不阻断关闭
+          }
+        }
         try {
           await chrome.tabs.remove(tabId);
           closedTabIds.push(tabId);

@@ -822,6 +822,9 @@ class PlaywrightExecutor(CommandExecutor):
                 # 混在一个命令里会让「关闭会话」这种无害操作带上关页面的杀伤力。
                 tab_ids = inputs.get("tabIds")
                 close_all = bool(inputs.get("all"))
+                # M37：None = 未指定，不进 args——缺省语义由扩展兜底（!== false 视为
+                # true），与 all/windowId 同款「显式给才转发」风格，避免双份默认值漂移。
+                ignore_before_unload = inputs.get("ignoreBeforeUnload")
                 if tab_ids is not None and not isinstance(tab_ids, list):
                     return CommandResult.failure(
                         ErrorCode.INVALID_INPUT,
@@ -843,6 +846,7 @@ class PlaywrightExecutor(CommandExecutor):
                     self._ext.tabs_close_many,
                     tab_ids=[int(tab_id) for tab_id in tab_ids] if tab_ids else None,
                     close_all=close_all,
+                    ignore_before_unload=ignore_before_unload,
                     timeout_seconds=timeout_s,
                     target_host=host,
                 )
@@ -862,6 +866,9 @@ class PlaywrightExecutor(CommandExecutor):
                         "operation": "closeTabs",
                         "transport": "extension",
                         "scope": "all" if close_all else "tabIds",
+                        "ignoreBeforeUnload": (
+                            True if ignore_before_unload is None else bool(ignore_before_unload)
+                        ),
                         "closedCount": len(closed),
                         "failedCount": len(failed),
                     },

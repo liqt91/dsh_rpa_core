@@ -118,6 +118,64 @@ def test_close_tabs_all_closes_current_window_and_reports_scope():
     assert result.effects[0].details["scope"] == "all"
 
 
+def test_close_tabs_forwards_ignore_before_unload_false():
+    """显式 ignoreBeforeUnload=false → 原样转发（保留页面拦截，扩展侧不注入）。"""
+    seen: list[dict] = []
+
+    def handler(op: str, args: dict) -> dict:
+        seen.append(args)
+        return {"closedTabIds": [7], "failedTabIds": []}
+
+    result = _run(
+        _with_session(_executor(_FakeEndpointClient(handler))),
+        _invocation("browser.closeTabs", sessionId="s", tabIds=[7], ignoreBeforeUnload=False),
+    )
+
+    assert result.status == "success", result.error
+    assert seen == [{"tabIds": [7], "ignoreBeforeUnload": False}]
+    assert result.effects[0].details["ignoreBeforeUnload"] is False
+
+
+def test_close_tabs_forwards_ignore_before_unload_true():
+    """显式 true 也原样转发——证据与通道一致，不静默吞掉。"""
+    seen: list[dict] = []
+
+    def handler(op: str, args: dict) -> dict:
+        seen.append(args)
+        return {"closedTabIds": [7], "failedTabIds": []}
+
+    result = _run(
+        _with_session(_executor(_FakeEndpointClient(handler))),
+        _invocation("browser.closeTabs", sessionId="s", tabIds=[7], ignoreBeforeUnload=True),
+    )
+
+    assert result.status == "success", result.error
+    assert seen == [{"tabIds": [7], "ignoreBeforeUnload": True}]
+    assert result.effects[0].details["ignoreBeforeUnload"] is True
+
+
+def test_close_tabs_ignore_before_unload_defaults_true_in_evidence():
+    """未指定 → args 省略（缺省语义由扩展 !== false 兜底），证据里生效值记 true。
+
+    为什么不显式发送 true：缺省语义双份（Python 一份、扩展一份）是漂移源——哪天
+    有一侧改默认值，另一侧的「补发默认值」会把它悄悄盖回去。单一兜底点在扩展。
+    """
+    seen: list[dict] = []
+
+    def handler(op: str, args: dict) -> dict:
+        seen.append(args)
+        return {"closedTabIds": [7], "failedTabIds": []}
+
+    result = _run(
+        _with_session(_executor(_FakeEndpointClient(handler))),
+        _invocation("browser.closeTabs", sessionId="s", tabIds=[7]),
+    )
+
+    assert result.status == "success", result.error
+    assert seen == [{"tabIds": [7]}]
+    assert result.effects[0].details["ignoreBeforeUnload"] is True
+
+
 @pytest.mark.parametrize(
     ("inputs", "reason"),
     [

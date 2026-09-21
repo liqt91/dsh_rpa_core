@@ -147,6 +147,7 @@ class ExtensionExecSession:
         tab_ids: list[int] | None = None,
         close_all: bool = False,
         window_id: int | None = None,
+        ignore_before_unload: bool | None = None,
         timeout_seconds: float = DEFAULT_COMMAND_TIMEOUT_SECONDS,
         target_host: str | None = None,
     ) -> dict[str, Any]:
@@ -154,6 +155,8 @@ class ExtensionExecSession:
 
         返回 `{"closedTabIds": [...], "failedTabIds": [...]}`——**逐个如实记账**，
         不把「部分失败」折叠成一个布尔值：调用方需要区分「都关了」与「关了一半」。
+        `ignore_before_unload`（M37）：None = 未指定，省略不发给扩展——缺省语义由
+        扩展兜底（remove 前注入 MAIN world 脚本清除 beforeunload 拦截，best-effort）。
         """
         args: dict[str, Any] = {}
         if tab_ids:
@@ -162,6 +165,8 @@ class ExtensionExecSession:
             args["all"] = True
         if window_id is not None:
             args["windowId"] = int(window_id)
+        if ignore_before_unload is not None:
+            args["ignoreBeforeUnload"] = bool(ignore_before_unload)
         return self._client.submit(
             "tabs.closeMany", args,
             timeout_seconds=timeout_seconds, target_host=target_host,
