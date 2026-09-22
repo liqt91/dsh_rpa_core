@@ -1,7 +1,8 @@
-"""工作台（首页）：流程列表 + 运行历史 + 管理入口 + 运行入口（ADR 0017 / M27）。
+"""工作台（首页）：流程列表 + 运行历史 + 指令测试 + 管理入口 + 运行入口（ADR 0017 / M27 / M38）。
 
 两段式宿主的第一段：这里只做「管理」——列出流程（最近运行状态/时间、元素数、修改时间）、
 新建/打开/（后续切片：复制/重命名/删除/导入导出）、以及发起运行并看状态。
+第三个页签「指令测试」见 `gui/command_matrix.py`（启动 L1 契约矩阵并展示结果）。
 
 **运行控制（暂停/继续/单步）不在这里**：ADR 0017 决策 3 明确控制权留在编辑器，工作台只
 「运行 + 看状态」，避免两处都能控制同一个 run。
@@ -33,6 +34,7 @@ from PySide6.QtWidgets import (
 )
 
 from rpa_core.devserver.store import WorkflowDirStore
+from rpa_core.gui.command_matrix import CommandMatrixPanel
 from rpa_core.run_history import list_runs, purge_runs
 
 _STATUS_LABELS = {
@@ -50,7 +52,7 @@ OpenEditor = Callable[..., None]
 
 
 class HomeWindow(QMainWindow):
-    """工作台窗口：流程库 + 运行历史两个页签。
+    """工作台窗口：流程库 + 运行历史 + 指令测试三个页签。
 
     `open_editor` 是打开编辑器的注入点（默认由 `app.open_editor_window` 提供）：
     测试里可替换成记录调用的桩，避免真的再开一个窗口。
@@ -84,6 +86,11 @@ class HomeWindow(QMainWindow):
         tabs = QTabWidget()
         tabs.addTab(self._build_flows_tab(), "流程库")
         tabs.addTab(self._build_history_tab(), "运行历史")
+        # M38 S1.2「指令测试」页签：启动 L1 契约矩阵并展示结果。放在工作台而不是另起窗口——
+        # 工作台本来就是「管理 + 发起 + 看状态」的入口（ADR 0017），而 ADR 0016 定 GUI 为
+        # 唯一主力形态（devserver 冻结演进），所以不做本地 Web 页。
+        self.matrix_panel = CommandMatrixPanel()
+        tabs.addTab(self.matrix_panel, "指令测试")
         self.tabs = tabs
         self.setCentralWidget(tabs)
 
@@ -703,6 +710,8 @@ class HomeWindow(QMainWindow):
 
     def closeEvent(self, event) -> None:  # noqa: N802 (Qt naming)
         self._shutdown_run_manager()
+        # 指令测试页签可能正跑着矩阵子进程：不 kill 会留下一个还在跑的孤儿 Python
+        self.matrix_panel.shutdown()
         super().closeEvent(event)
 
     def changeEvent(self, event) -> None:  # noqa: N802 (Qt naming)

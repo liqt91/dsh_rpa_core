@@ -36,16 +36,125 @@ M36 的教训是「打桩边界要沿**真实副作用面**划，不沿参数传
 
 全局输入面（`send_keys` / 剪贴板）已由上层 `tests/conftest.py` 的 `_block_global_input`
 覆盖，本目录无需重复。
+
+## 2. 结构化实时报告：给 GUI「指令测试」页签用的数据合同
+
+工作台（`gui/command_matrix.py`）要「启动 + 展示」这套矩阵，需要一份**机器可读、可增量读**的
+结果流。三条候选里选了这个，理由写在这里免得后人重走一遍：
+
+- ❌ **解析 pytest 的 `-v` 输出**：`pyproject.toml` 的 `addopts = "-q"` 会把 `-v` 抵消回默认
+  verbosity（实测：180 个用例只产出 16 行 stdout，没有任何 `PASSED` 行）——依赖调用方的
+  verbosity 算术，太脆。
+- ❌ **只读 `--junitxml`**：格式标准，但它**只在会话结束时落盘**，页面上没有「跑到哪了」。
+- ✅ **本模块的 JSONL 钩子**：由被测方自己按用例逐个 append + flush，既实时又是干净的结构化
+  数据（`command` / `variant` 已切好，页面不必再去解析 pytest 的 nodeid 拼接规则）。
+
+**缺省不写**：只有设置了环境变量 `RPA_COMMAND_MATRIX_REPORT=<路径>` 才启用，默认门禁与
+命令行手工跑都不产出任何文件。
 """
 
 from __future__ import annotations
 
+import json
 import os
+import time
+from pathlib import Path
 
 import pytest
 
 MATRIX_ENABLED = os.environ.get("RPA_COMMAND_MATRIX") == "1"
 MATRIX_ENV_HINT = "RPA_COMMAND_MATRIX=1"
+# 结构化实时报告的落盘路径（GUI 页签用）；未设置则完全不产出文件。
+REPORT_ENV = "RPA_COMMAND_MATRIX_REPORT"
+# 参数化用例的 id 前缀（`_iter_variants` 给每个变体设的 id 是 `<命令>::<变体名>`）。
+_NODE_PREFIX = "test_command_variant["
+# 当前会话的实时报告写入器（`pytest_configure` 里按环境变量决定是否创建）。
+_LIVE: _LiveReport | None = None
+
+
+def split_variant_node(node: str) -> tuple[str, str] | None:
+    """从 pytest nodeid 切出 `(命令, 变体)`；形状不符返回 `None`。
+
+    实测形状：`tests/commands/test_browser_matrix.py::test_command_variant[browser.click::default]`
+    ——参数化 id 里的 `::` 不会被转义，可以直接按它切。
+    """
+    start = node.find(_NODE_PREFIX)
+    if start < 0:
+        return None
+    body = node[start + len(_NODE_PREFIX) :]
+    if not body.endswith("]"):
+        return None
+    command, sep, variant = body[:-1].partition("::")
+    if not sep or not command or not variant:
+        return None
+    return command, variant
+
+
+class _LiveReport:
+    """按行 append + flush 的 JSONL 写入器（页面靠轮询增量读）。"""
+
+    def __init__(self, path: Path) -> None:
+        self.path = path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        self._stream = path.open("w", encoding="utf-8", newline="\n")
+        self.counts: dict[str, int] = {}
+        self.started = time.perf_counter()
+
+    def emit(self, record: dict) -> None:
+        self._stream.write(json.dumps(record, ensure_ascii=False) + "\n")
+        self._stream.flush()
+
+    def case(self, node: str, outcome: str, duration_s: float) -> None:
+        self.counts[outcome] = self.counts.get(outcome, 0) + 1
+        record: dict = {
+            "event": "case",
+            "node": node,
+            "outcome": outcome,
+            "durationMs": round(duration_s * 1000, 3),
+        }
+        split = split_variant_node(node)
+        if split is not None:
+            record["command"], record["variant"] = split
+        self.emit(record)
+
+    def summary(self, collected: int, exit_status: int) -> None:
+        self.emit(
+            {
+                "event": "summary",
+                "collected": collected,
+                "exitStatus": exit_status,
+                "counts": self.counts,
+                "durationMs": round((time.perf_counter() - self.started) * 1000, 3),
+            }
+        )
+        self._stream.close()
+
+
+def pytest_configure(config) -> None:
+    global _LIVE
+    path = os.environ.get(REPORT_ENV)
+    if path:
+        _LIVE = _LiveReport(Path(path))
+
+
+def pytest_runtest_logreport(report) -> None:
+    """每个用例只记一次终态：setup 阶段就失败的记 setup，正常走完的记 call。
+
+    **为什么用模块级引用而不是 `report.config`**：pytest 8 的 `TestReport` 上没有 `config`
+    属性（实测 `AttributeError`，曾被上面这个契约测试抓个正着）。一个 pytest 进程只有一个
+    会话，模块级引用是安全的。
+    """
+    if _LIVE is None:
+        return
+    if report.when == "call" or (
+        report.when == "setup" and report.outcome != "passed"
+    ):
+        _LIVE.case(report.nodeid, report.outcome, report.duration)
+
+
+def pytest_sessionfinish(session, exitstatus) -> None:
+    if _LIVE is not None:
+        _LIVE.summary(session.testscollected, int(exitstatus))
 
 
 @pytest.fixture(autouse=True)
