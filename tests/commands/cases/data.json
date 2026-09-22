@@ -1,0 +1,1906 @@
+{
+  "data.writeText": {
+    "notes": "幂等写（idempotent-write）。`text` 与 `lines` 是 manifest 的 oneOf（二选一，由 orchestrator 的 Draft202012Validator 校验）——执行器层只判「有没有 text」，两者同时给时取 text；本表固化这一实现分支，不假装执行器会拒绝（S1 的口径：schema 校验不是执行器层的责任，执行器层的责任是失败要显式、错误码要可诊断）。`workspace`+`path` 用输出里的绝对路径与磁盘内容双证：只断言 outputs 的话，「写到别处去了」也会绿。",
+    "variants": [
+      {
+        "name": "text-branch-writes-exact-content",
+        "inputs": {
+          "workspace": "{tmp}/ws",
+          "path": "out/a.txt",
+          "text": "你好\n世界"
+        },
+        "expect": {
+          "outputPaths": {
+            "path": "{tmp}/ws/out/a.txt"
+          },
+          "effect": "idempotent-write",
+          "files": [
+            {
+              "path": "ws/out/a.txt",
+              "equals": "你好\n世界"
+            }
+          ]
+        }
+      },
+      {
+        "name": "lines-branch-joins-with-newline",
+        "inputs": {
+          "workspace": "{tmp}/ws",
+          "path": "out/b.txt",
+          "lines": [
+            "第一行",
+            "第二行"
+          ]
+        },
+        "expect": {
+          "outputPaths": {
+            "path": "{tmp}/ws/out/b.txt"
+          },
+          "effect": "idempotent-write",
+          "files": [
+            {
+              "path": "ws/out/b.txt",
+              "equals": "第一行\n第二行"
+            }
+          ]
+        }
+      },
+      {
+        "name": "relative-path-normalizes-within-workspace",
+        "notes": "相对路径先与 workspace 拼接再 resolve：`sub/../ok.txt` 仍落在 workspace 内 → 允许（同一条规则的反面见下一条：`..` 一旦越出 workspace 就被拒）。",
+        "inputs": {
+          "workspace": "{tmp}/ws",
+          "path": "sub/../ok.txt",
+          "text": "N"
+        },
+        "expect": {
+          "outputPaths": {
+            "path": "{tmp}/ws/ok.txt"
+          },
+          "files": [
+            {
+              "path": "ws/ok.txt",
+              "equals": "N"
+            }
+          ]
+        }
+      },
+      {
+        "name": "text-and-lines-both-given-executor-takes-text",
+        "inputs": {
+          "workspace": "{tmp}/ws",
+          "path": "out/c.txt",
+          "text": "T",
+          "lines": [
+            "L"
+          ]
+        },
+        "expect": {
+          "files": [
+            {
+              "path": "ws/out/c.txt",
+              "equals": "T"
+            }
+          ]
+        },
+        "negative": true
+      },
+      {
+        "name": "absolute-path-outside-workspace-is-denied",
+        "inputs": {
+          "workspace": "{tmp}/ws",
+          "path": "{tmp}/escape.txt",
+          "text": "x"
+        },
+        "expect": {
+          "errorCode": "CAPABILITY_DENIED",
+          "files": [
+            {
+              "path": "escape.txt",
+              "missing": true
+            }
+          ]
+        },
+        "negative": true
+      },
+      {
+        "name": "relative-parent-escape-out-of-workspace-is-denied",
+        "notes": "相对路径里的 `..` 只要越出 workspace 就被拒——即使它还在临时目录内（实测固化：判据是**相对于 workspace**，不是相对于磁盘根）。",
+        "inputs": {
+          "workspace": "{tmp}/ws",
+          "path": "../escape.txt",
+          "text": "x"
+        },
+        "expect": {
+          "errorCode": "CAPABILITY_DENIED",
+          "files": [
+            {
+              "path": "escape.txt",
+              "missing": true
+            }
+          ]
+        },
+        "negative": true
+      }
+    ]
+  },
+  "data.appendText": {
+    "notes": "追加写（unsafe-write，非幂等——重放会重复追加，这正是它的语义）。追加内容**不带**前导换行：`lines` 只是用 `\\n` 连接，与 `text` 同样直接拼在文件末尾（实测固化，避免后人「以为会自动加行尾」）。",
+    "variants": [
+      {
+        "name": "appends-text-to-existing-file",
+        "setup": {
+          "files": [
+            {
+              "path": "ws/note.txt",
+              "text": "原始"
+            }
+          ]
+        },
+        "inputs": {
+          "workspace": "{tmp}/ws",
+          "path": "note.txt",
+          "text": "-追加"
+        },
+        "expect": {
+          "outputPaths": {
+            "path": "{tmp}/ws/note.txt"
+          },
+          "effect": "unsafe-write",
+          "files": [
+            {
+              "path": "ws/note.txt",
+              "equals": "原始-追加"
+            }
+          ]
+        }
+      },
+      {
+        "name": "lines-branch-appends-joined-lines",
+        "setup": {
+          "files": [
+            {
+              "path": "ws/note.txt",
+              "text": "原始"
+            }
+          ]
+        },
+        "inputs": {
+          "workspace": "{tmp}/ws",
+          "path": "note.txt",
+          "lines": [
+            "-L1",
+            "-L2"
+          ]
+        },
+        "expect": {
+          "effect": "unsafe-write",
+          "files": [
+            {
+              "path": "ws/note.txt",
+              "equals": "原始-L1\n-L2"
+            }
+          ]
+        }
+      },
+      {
+        "name": "creates-file-and-missing-parent-directories",
+        "inputs": {
+          "workspace": "{tmp}/ws",
+          "path": "deep/nested/x.txt",
+          "text": "d"
+        },
+        "expect": {
+          "outputPaths": {
+            "path": "{tmp}/ws/deep/nested/x.txt"
+          },
+          "files": [
+            {
+              "path": "ws/deep/nested/x.txt",
+              "equals": "d"
+            }
+          ]
+        }
+      },
+      {
+        "name": "absolute-path-outside-workspace-is-denied",
+        "inputs": {
+          "workspace": "{tmp}/ws",
+          "path": "{tmp}/escape.txt",
+          "text": "x"
+        },
+        "expect": {
+          "errorCode": "CAPABILITY_DENIED",
+          "files": [
+            {
+              "path": "escape.txt",
+              "missing": true
+            }
+          ]
+        },
+        "negative": true
+      }
+    ]
+  },
+  "data.readText": {
+    "notes": "读取（read effect）。两条被固化的边界：①**文件不存在与「路径是目录」都报 INVALID_INPUT**（不是 SCRIPT_FAILED，也不是静默空串）——报错文案是 `File not found: <绝对路径>`，带上解析后的路径，用户能立刻看出 workspace 拼到哪去了；②`path` 是相对路径时按 workspace 解析。",
+    "variants": [
+      {
+        "name": "reads-existing-utf8-file",
+        "setup": {
+          "files": [
+            {
+              "path": "ws/note.txt",
+              "text": "内容\n第二行"
+            }
+          ]
+        },
+        "inputs": {
+          "workspace": "{tmp}/ws",
+          "path": "note.txt"
+        },
+        "expect": {
+          "outputs": {
+            "text": "内容\n第二行"
+          },
+          "outputPaths": {
+            "path": "{tmp}/ws/note.txt"
+          },
+          "outputKeys": [
+            "text",
+            "path"
+          ],
+          "effect": "read"
+        }
+      },
+      {
+        "name": "relative-path-resolves-against-workspace",
+        "setup": {
+          "files": [
+            {
+              "path": "ws/sub/x.txt",
+              "text": "S"
+            }
+          ]
+        },
+        "inputs": {
+          "workspace": "{tmp}/ws",
+          "path": "sub/x.txt"
+        },
+        "expect": {
+          "outputs": {
+            "text": "S"
+          },
+          "outputPaths": {
+            "path": "{tmp}/ws/sub/x.txt"
+          }
+        }
+      },
+      {
+        "name": "missing-file-is-invalid-input",
+        "inputs": {
+          "workspace": "{tmp}/ws",
+          "path": "nope.txt"
+        },
+        "expect": {
+          "errorCode": "INVALID_INPUT"
+        },
+        "negative": true
+      },
+      {
+        "name": "directory-is-not-a-file",
+        "setup": {
+          "dirs": [
+            "ws/dir"
+          ]
+        },
+        "inputs": {
+          "workspace": "{tmp}/ws",
+          "path": "dir"
+        },
+        "expect": {
+          "errorCode": "INVALID_INPUT"
+        },
+        "negative": true
+      },
+      {
+        "name": "absolute-path-outside-workspace-is-denied",
+        "inputs": {
+          "workspace": "{tmp}/ws",
+          "path": "{tmp}/escape.txt"
+        },
+        "expect": {
+          "errorCode": "CAPABILITY_DENIED"
+        },
+        "negative": true
+      }
+    ]
+  },
+  "data.fileExists": {
+    "notes": "存在性（read effect）。**路径不存在不是失败**：`exists=false` + 成功返回，调用方按值分支（这决定了下游 if 节点的写法）。目录算「存在」（用 Path.exists 而非 is_file）。",
+    "variants": [
+      {
+        "name": "existing-file-reports-true",
+        "setup": {
+          "files": [
+            {
+              "path": "ws/note.txt",
+              "text": "x"
+            }
+          ]
+        },
+        "inputs": {
+          "workspace": "{tmp}/ws",
+          "path": "note.txt"
+        },
+        "expect": {
+          "outputs": {
+            "exists": true
+          },
+          "outputPaths": {
+            "path": "{tmp}/ws/note.txt"
+          },
+          "effect": "read"
+        }
+      },
+      {
+        "name": "missing-path-is-false-not-an-error",
+        "inputs": {
+          "workspace": "{tmp}/ws",
+          "path": "nope.txt"
+        },
+        "expect": {
+          "outputs": {
+            "exists": false
+          }
+        }
+      },
+      {
+        "name": "directory-counts-as-existing",
+        "setup": {
+          "dirs": [
+            "ws/dir"
+          ]
+        },
+        "inputs": {
+          "workspace": "{tmp}/ws",
+          "path": "dir"
+        },
+        "expect": {
+          "outputs": {
+            "exists": true
+          }
+        }
+      },
+      {
+        "name": "absolute-path-outside-workspace-is-denied",
+        "inputs": {
+          "workspace": "{tmp}/ws",
+          "path": "{tmp}/escape.txt"
+        },
+        "expect": {
+          "errorCode": "CAPABILITY_DENIED"
+        },
+        "negative": true
+      }
+    ]
+  },
+  "data.deletePath": {
+    "notes": "删除（unsafe-write）。两个边界必须钉住：①**删不存在的路径是成功 + `deleted=false`**（幂等友好，不报错）；②`recursive=false` 删非空目录会失败（INVALID_INPUT），且**目录与其中的文件必须原样还在**——所以这条负路径同时断言磁盘未变，否则「报错了但已经删了一半」会漏过。③报错文案来自 OS（WinError 145），跨平台不同，故只断言错误码。",
+    "variants": [
+      {
+        "name": "deletes-file-and-reports-true",
+        "setup": {
+          "files": [
+            {
+              "path": "ws/victim.txt",
+              "text": "bye"
+            }
+          ]
+        },
+        "inputs": {
+          "workspace": "{tmp}/ws",
+          "path": "victim.txt"
+        },
+        "expect": {
+          "outputs": {
+            "deleted": true
+          },
+          "effect": "unsafe-write",
+          "files": [
+            {
+              "path": "ws/victim.txt",
+              "missing": true
+            }
+          ]
+        }
+      },
+      {
+        "name": "empty-directory-deletes-without-recursive",
+        "setup": {
+          "dirs": [
+            "ws/empty"
+          ]
+        },
+        "inputs": {
+          "workspace": "{tmp}/ws",
+          "path": "empty",
+          "recursive": false
+        },
+        "expect": {
+          "outputs": {
+            "deleted": true
+          },
+          "files": [
+            {
+              "path": "ws/empty",
+              "missing": true
+            }
+          ]
+        }
+      },
+      {
+        "name": "nonempty-directory-without-recursive-fails-and-keeps-everything",
+        "setup": {
+          "files": [
+            {
+              "path": "ws/tree/inner/x.txt",
+              "text": "x"
+            }
+          ]
+        },
+        "inputs": {
+          "workspace": "{tmp}/ws",
+          "path": "tree",
+          "recursive": false
+        },
+        "expect": {
+          "errorCode": "INVALID_INPUT",
+          "files": [
+            {
+              "path": "ws/tree/inner/x.txt",
+              "equals": "x"
+            }
+          ]
+        },
+        "negative": true
+      },
+      {
+        "name": "nonempty-directory-with-recursive-deletes",
+        "setup": {
+          "files": [
+            {
+              "path": "ws/tree/inner/x.txt",
+              "text": "x"
+            }
+          ]
+        },
+        "inputs": {
+          "workspace": "{tmp}/ws",
+          "path": "tree",
+          "recursive": true
+        },
+        "expect": {
+          "outputs": {
+            "deleted": true
+          },
+          "effect": "unsafe-write",
+          "files": [
+            {
+              "path": "ws/tree/inner/x.txt",
+              "missing": true
+            }
+          ]
+        }
+      },
+      {
+        "name": "missing-path-reports-not-deleted",
+        "inputs": {
+          "workspace": "{tmp}/ws",
+          "path": "ghost"
+        },
+        "expect": {
+          "outputs": {
+            "deleted": false
+          }
+        }
+      },
+      {
+        "name": "absolute-path-outside-workspace-is-denied",
+        "setup": {
+          "files": [
+            {
+              "path": "keep.txt",
+              "text": "keep"
+            }
+          ]
+        },
+        "inputs": {
+          "workspace": "{tmp}/ws",
+          "path": "{tmp}/keep.txt"
+        },
+        "expect": {
+          "errorCode": "CAPABILITY_DENIED",
+          "files": [
+            {
+              "path": "keep.txt",
+              "equals": "keep"
+            }
+          ]
+        },
+        "negative": true
+      }
+    ]
+  },
+  "data.writeJson": {
+    "notes": "幂等写（indent=2、`ensure_ascii=false`、**末尾无换行**——实测固化，避免后人「顺手」加换行改变文件指纹）。写标量与 null 也是合法输入（`data` 在 schema 里没有类型约束）。",
+    "variants": [
+      {
+        "name": "writes-object-with-indent-and-unicode",
+        "inputs": {
+          "workspace": "{tmp}/ws",
+          "path": "out/d.json",
+          "data": {
+            "名称": "值",
+            "nested": {
+              "list": [
+                1,
+                2
+              ]
+            }
+          }
+        },
+        "expect": {
+          "outputPaths": {
+            "path": "{tmp}/ws/out/d.json"
+          },
+          "effect": "idempotent-write",
+          "files": [
+            {
+              "path": "ws/out/d.json",
+              "jsonContains": {
+                "名称": "值",
+                "nested": {
+                  "list": [
+                    1,
+                    2
+                  ]
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "name": "scalar-value-is-written-as-json-literal",
+        "inputs": {
+          "workspace": "{tmp}/ws",
+          "path": "out/e.json",
+          "data": "plain"
+        },
+        "expect": {
+          "files": [
+            {
+              "path": "ws/out/e.json",
+              "equals": "\"plain\""
+            }
+          ]
+        }
+      },
+      {
+        "name": "null-data-is-written-as-null",
+        "inputs": {
+          "workspace": "{tmp}/ws",
+          "path": "out/f.json",
+          "data": null
+        },
+        "expect": {
+          "files": [
+            {
+              "path": "ws/out/f.json",
+              "equals": "null"
+            }
+          ]
+        }
+      },
+      {
+        "name": "absolute-path-outside-workspace-is-denied",
+        "inputs": {
+          "workspace": "{tmp}/ws",
+          "path": "{tmp}/escape.json",
+          "data": {}
+        },
+        "expect": {
+          "errorCode": "CAPABILITY_DENIED",
+          "files": [
+            {
+              "path": "escape.json",
+              "missing": true
+            }
+          ]
+        },
+        "negative": true
+      }
+    ]
+  },
+  "data.format": {
+    "notes": "模板渲染（pure）。非字符串值按 **JSON 序列化**后嵌入（`[1, 2]`、`{\"k\": \"v\"}`——注意带空格，这是 json.dumps 的默认分隔符）；模板里**没出现的** values 键被忽略（不报错）；**模板里有、values 里没有**的占位符报 INVALID_INPUT 并在 `details.missing` 里给出键名（可诊断性）——details 是本表唯一断言到 `errorDetails` 的地方。",
+    "variants": [
+      {
+        "name": "substitutes-values-and-json-encodes-non-strings",
+        "inputs": {
+          "template": "值={n} 列表={items} 文本={s}",
+          "values": {
+            "n": 3,
+            "items": [
+              1,
+              2
+            ],
+            "s": "x"
+          }
+        },
+        "expect": {
+          "outputs": {
+            "text": "值=3 列表=[1, 2] 文本=x"
+          },
+          "noEffects": true
+        }
+      },
+      {
+        "name": "repeats-placeholder-and-ignores-unused-values",
+        "inputs": {
+          "template": "{a}-{a}-{a}",
+          "values": {
+            "a": "重复",
+            "unused": 1
+          }
+        },
+        "expect": {
+          "outputs": {
+            "text": "重复-重复-重复"
+          }
+        }
+      },
+      {
+        "name": "template-without-placeholder-passes-through",
+        "inputs": {
+          "template": "原样输出",
+          "values": {}
+        },
+        "expect": {
+          "outputs": {
+            "text": "原样输出"
+          }
+        }
+      },
+      {
+        "name": "nested-object-is-json-encoded",
+        "inputs": {
+          "template": "{obj}",
+          "values": {
+            "obj": {
+              "k": "v"
+            }
+          }
+        },
+        "expect": {
+          "outputs": {
+            "text": "{\"k\": \"v\"}"
+          }
+        }
+      },
+      {
+        "name": "missing-placeholder-is-invalid-input-with-details",
+        "inputs": {
+          "template": "{a}+{b}+{c}",
+          "values": {
+            "a": 1
+          }
+        },
+        "expect": {
+          "errorCode": "INVALID_INPUT",
+          "errorDetails": {
+            "missing": [
+              "b",
+              "c"
+            ]
+          }
+        },
+        "negative": true
+      }
+    ]
+  },
+  "data.limit": {
+    "notes": "截断（pure）。`count` 超过长度按长度截断（不报错）；`count=0`（schema 下界）给空数组。**边界固化**：`items` 不是数组时执行器不做 schema 校验——`list(\"abc\")[:2]` 会给出 `[\"a\", \"b\"]`（按字符拆）。这条**不是缺陷**，是「schema 由 orchestrator 的 Draft202012Validator 统一拦」的直接证据（S1 的口径修正），写在这里免得后人当成 bug 去「修」。",
+    "variants": [
+      {
+        "name": "takes-first-count-items",
+        "inputs": {
+          "items": [
+            1,
+            2,
+            3,
+            4
+          ],
+          "count": 2
+        },
+        "expect": {
+          "outputs": {
+            "items": [
+              1,
+              2
+            ],
+            "count": 2
+          },
+          "noEffects": true
+        }
+      },
+      {
+        "name": "count-beyond-length-clamps-to-length",
+        "inputs": {
+          "items": [
+            1,
+            2
+          ],
+          "count": 5
+        },
+        "expect": {
+          "outputs": {
+            "items": [
+              1,
+              2
+            ],
+            "count": 2
+          }
+        }
+      },
+      {
+        "name": "count-zero-returns-empty-list",
+        "inputs": {
+          "items": [
+            1,
+            2
+          ],
+          "count": 0
+        },
+        "expect": {
+          "outputs": {
+            "items": [],
+            "count": 0
+          }
+        }
+      },
+      {
+        "name": "empty-list-stays-empty",
+        "inputs": {
+          "items": [],
+          "count": 3
+        },
+        "expect": {
+          "outputs": {
+            "items": [],
+            "count": 0
+          }
+        }
+      },
+      {
+        "name": "non-array-items-are-not-validated-at-executor-level",
+        "inputs": {
+          "items": "abc",
+          "count": 2
+        },
+        "expect": {
+          "outputs": {
+            "items": [
+              "a",
+              "b"
+            ],
+            "count": 2
+          }
+        },
+        "negative": true
+      }
+    ]
+  },
+  "data.log": {
+    "notes": "打印日志（pure）：**纯透传**——`message` 的 `${}` / fx 标签解析发生在 orchestrator（规则：handler 不改 scopes），worker 只回传最终文本。`level` 缺省 `info`；枚举（info/warn/error）**不在执行器层校验**，未知值原样透传（同 data.limit 的说明）。",
+    "variants": [
+      {
+        "name": "defaults-to-info-level",
+        "inputs": {
+          "message": "普通日志"
+        },
+        "expect": {
+          "outputs": {
+            "message": "普通日志",
+            "level": "info"
+          },
+          "noEffects": true
+        }
+      },
+      {
+        "name": "warn-level-passes-through",
+        "inputs": {
+          "message": "警告",
+          "level": "warn"
+        },
+        "expect": {
+          "outputs": {
+            "level": "warn"
+          }
+        }
+      },
+      {
+        "name": "error-level-passes-through",
+        "inputs": {
+          "message": "错误",
+          "level": "error"
+        },
+        "expect": {
+          "outputs": {
+            "level": "error"
+          }
+        }
+      },
+      {
+        "name": "empty-message-is-allowed",
+        "inputs": {
+          "message": "",
+          "level": "info"
+        },
+        "expect": {
+          "outputs": {
+            "message": "",
+            "level": "info"
+          }
+        },
+        "negative": true
+      },
+      {
+        "name": "unknown-level-is-not-validated-at-executor-level",
+        "inputs": {
+          "message": "x",
+          "level": "INFO"
+        },
+        "expect": {
+          "outputs": {
+            "level": "INFO"
+          }
+        },
+        "negative": true
+      }
+    ]
+  },
+  "data.setVar": {
+    "notes": "变量赋值（pure）——worker 只按 `varType` 把值格式化成目标类型并回传 `varName`/`value`；**真正写进 scopes 由 orchestrator 按 manifest `x-var-write` 完成**（规则 3：handler 不改 scopes）。类型格式化规则逐条固化（对标影刀「设置变量」）：空值给该类型默认值（`\"\"`/0/false/`{}`/`[]`）、number 认布尔与数字串、boolean 认 `true/1/yes`（大小写不敏感，其余为 false）、object/array 认 JSON 串且**类型must相符**。varType 五个枚举取值全覆盖。",
+    "variants": [
+      {
+        "name": "default-var-type-is-string",
+        "inputs": {
+          "varName": "v1",
+          "value": 12
+        },
+        "expect": {
+          "outputs": {
+            "varName": "v1",
+            "value": "12"
+          },
+          "noEffects": true
+        }
+      },
+      {
+        "name": "string-null-becomes-empty-string",
+        "inputs": {
+          "varName": "v2",
+          "varType": "string",
+          "value": null
+        },
+        "expect": {
+          "outputs": {
+            "value": ""
+          }
+        }
+      },
+      {
+        "name": "number-parses-trimmed-numeric-string",
+        "inputs": {
+          "varName": "v3",
+          "varType": "number",
+          "value": " 3.5 "
+        },
+        "expect": {
+          "outputs": {
+            "value": 3.5
+          }
+        }
+      },
+      {
+        "name": "number-maps-boolean-to-int",
+        "inputs": {
+          "varName": "v4",
+          "varType": "number",
+          "value": true
+        },
+        "expect": {
+          "outputs": {
+            "value": 1
+          }
+        }
+      },
+      {
+        "name": "number-from-unparsable-string-is-invalid-input",
+        "inputs": {
+          "varName": "v5",
+          "varType": "number",
+          "value": "abc"
+        },
+        "expect": {
+          "errorCode": "INVALID_INPUT"
+        },
+        "negative": true
+      },
+      {
+        "name": "boolean-from-truthy-string",
+        "inputs": {
+          "varName": "v6",
+          "varType": "boolean",
+          "value": "yes"
+        },
+        "expect": {
+          "outputs": {
+            "value": true
+          }
+        }
+      },
+      {
+        "name": "boolean-from-other-string-is-false",
+        "inputs": {
+          "varName": "v7",
+          "varType": "boolean",
+          "value": "no"
+        },
+        "expect": {
+          "outputs": {
+            "value": false
+          }
+        }
+      },
+      {
+        "name": "object-from-json-string",
+        "inputs": {
+          "varName": "v8",
+          "varType": "object",
+          "value": "{\"k\": 1}"
+        },
+        "expect": {
+          "outputs": {
+            "value": {
+              "k": 1
+            }
+          }
+        }
+      },
+      {
+        "name": "array-from-json-string",
+        "inputs": {
+          "varName": "v10",
+          "varType": "array",
+          "value": "[1, \"a\"]"
+        },
+        "expect": {
+          "outputs": {
+            "value": [
+              1,
+              "a"
+            ]
+          }
+        }
+      },
+      {
+        "name": "array-from-empty-string-is-empty-list",
+        "inputs": {
+          "varName": "v11",
+          "varType": "array",
+          "value": ""
+        },
+        "expect": {
+          "outputs": {
+            "value": []
+          }
+        }
+      },
+      {
+        "name": "object-from-json-array-is-invalid-input",
+        "notes": "类型必须相符：JSON 合法但形状不对（数组喂给 object）也算失败，文案点明「需 JSON 对象或 JSON 字符串」。",
+        "inputs": {
+          "varName": "v9",
+          "varType": "object",
+          "value": "[1]"
+        },
+        "expect": {
+          "errorCode": "INVALID_INPUT"
+        },
+        "negative": true
+      }
+    ]
+  },
+  "data.datetimeNow": {
+    "notes": "取当前时间（pure）。`format` 给了就只作用于 `value`，`iso` **恒为** ISO 串（下游拿 iso 排序/入库）；`format` 缺省或空串时 `value == iso`。**非法格式串是失败路径**（SCRIPT_FAILED，worker 抛异常 → 子进程非零退出 → 执行器按 stderr 报错），不是静默降级。",
+    "variants": [
+      {
+        "name": "default-iso-value-when-format-omitted",
+        "inputs": {},
+        "expect": {
+          "outputKeys": [
+            "value",
+            "iso",
+            "timestamp"
+          ],
+          "outputsMatch": {
+            "value": "\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d+",
+            "iso": "\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d+"
+          },
+          "noEffects": true
+        }
+      },
+      {
+        "name": "custom-format-applies-to-value-only",
+        "inputs": {
+          "format": "%Y-%m-%d"
+        },
+        "expect": {
+          "outputsMatch": {
+            "value": "\\d{4}-\\d{2}-\\d{2}",
+            "iso": "\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d+"
+          }
+        }
+      },
+      {
+        "name": "format-year-only",
+        "inputs": {
+          "format": "%Y"
+        },
+        "expect": {
+          "outputsMatch": {
+            "value": "\\d{4}"
+          }
+        }
+      },
+      {
+        "name": "empty-format-falls-back-to-iso",
+        "inputs": {
+          "format": ""
+        },
+        "expect": {
+          "outputsMatch": {
+            "value": "\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d+"
+          }
+        },
+        "negative": true
+      },
+      {
+        "name": "invalid-format-string-is-script-failed",
+        "inputs": {
+          "format": "%Q"
+        },
+        "expect": {
+          "errorCode": "SCRIPT_FAILED"
+        },
+        "negative": true
+      }
+    ]
+  },
+  "data.table.appendRow": {
+    "notes": "追加行（unsafe-write）。列按**行数据的键**动态补齐（对齐影刀动态加列）：行里出现表 schema 没有的列时自动追加 `{key: label, type: \"text\"}`，顺序为出现顺序。`flowDir` 是 manifest 的 `x-runtime.inject`（运行时由 orchestrator 注入 `<流程目录>`），用法上不接受用户手填，所以本表**显式给值**——覆盖检查要求每个声明参数都被显式设置过，而「缺 flowDir」由 clearance 那条负路径单独证明。",
+    "variants": [
+      {
+        "name": "appends-row-and-creates-columns",
+        "inputs": {
+          "flowDir": "{tmp}/flow",
+          "row": {
+            "姓名": "张三",
+            "年龄": 18
+          }
+        },
+        "expect": {
+          "outputs": {
+            "index": 1,
+            "rowCount": 1
+          },
+          "effect": "unsafe-write",
+          "files": [
+            {
+              "path": "flow/data/table.json",
+              "jsonContains": {
+                "columns": [
+                  {
+                    "key": "姓名",
+                    "label": "姓名",
+                    "type": "text"
+                  },
+                  {
+                    "key": "年龄",
+                    "label": "年龄",
+                    "type": "text"
+                  }
+                ],
+                "rows": [
+                  {
+                    "姓名": "张三",
+                    "年龄": 18
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      },
+      {
+        "name": "appends-second-row-reusing-columns",
+        "setup": {
+          "table": {
+            "path": "flow/data/table.json",
+            "data": {
+              "columns": [
+                {
+                  "key": "姓名",
+                  "label": "姓名",
+                  "type": "text"
+                },
+                {
+                  "key": "年龄",
+                  "label": "年龄",
+                  "type": "text"
+                }
+              ],
+              "rows": [
+                {
+                  "姓名": "张三",
+                  "年龄": 18
+                },
+                {
+                  "姓名": "李四",
+                  "年龄": 30
+                }
+              ]
+            }
+          }
+        },
+        "inputs": {
+          "flowDir": "{tmp}/flow",
+          "row": {
+            "姓名": "王五",
+            "年龄": 40
+          }
+        },
+        "expect": {
+          "outputs": {
+            "index": 3,
+            "rowCount": 3
+          },
+          "files": [
+            {
+              "path": "flow/data/table.json",
+              "jsonContains": {
+                "rows": [
+                  {
+                    "姓名": "张三",
+                    "年龄": 18
+                  },
+                  {
+                    "姓名": "李四",
+                    "年龄": 30
+                  },
+                  {
+                    "姓名": "王五",
+                    "年龄": 40
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      },
+      {
+        "name": "named-table-writes-separate-file",
+        "inputs": {
+          "flowDir": "{tmp}/flow",
+          "table": "other",
+          "row": {
+            "k": "v"
+          }
+        },
+        "expect": {
+          "outputs": {
+            "index": 1
+          },
+          "files": [
+            {
+              "path": "flow/data/other.json",
+              "jsonContains": {
+                "rows": [
+                  {
+                    "k": "v"
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      },
+      {
+        "name": "row-must-be-an-object",
+        "inputs": {
+          "flowDir": "{tmp}/flow",
+          "row": "不是对象"
+        },
+        "expect": {
+          "errorCode": "INVALID_INPUT"
+        },
+        "negative": true
+      }
+    ]
+  },
+  "data.table.setCell": {
+    "notes": "写单元格（idempotent-write）。两条固化：①**行号越过末行会自动补空行**（`{}`）——对齐影刀「写第 N 行」的语义，而不是报错；②列不存在时自动加列。`row` 是 **1 基**，`row=0` 报 `row must be >= 1`（下界）。",
+    "variants": [
+      {
+        "name": "writes-cell-into-existing-row",
+        "setup": {
+          "table": {
+            "path": "flow/data/table.json",
+            "data": {
+              "columns": [
+                {
+                  "key": "姓名",
+                  "label": "姓名",
+                  "type": "text"
+                },
+                {
+                  "key": "年龄",
+                  "label": "年龄",
+                  "type": "text"
+                }
+              ],
+              "rows": [
+                {
+                  "姓名": "张三",
+                  "年龄": 18
+                },
+                {
+                  "姓名": "李四",
+                  "年龄": 30
+                }
+              ]
+            }
+          }
+        },
+        "inputs": {
+          "flowDir": "{tmp}/flow",
+          "table": "default",
+          "row": 1,
+          "column": "年龄",
+          "value": 20
+        },
+        "expect": {
+          "outputs": {
+            "cellCount": 1
+          },
+          "effect": "idempotent-write",
+          "files": [
+            {
+              "path": "flow/data/table.json",
+              "jsonContains": {
+                "rows": [
+                  {
+                    "姓名": "张三",
+                    "年龄": 20
+                  },
+                  {
+                    "姓名": "李四",
+                    "年龄": 30
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      },
+      {
+        "name": "row-beyond-end-pads-with-empty-rows-and-adds-column",
+        "setup": {
+          "table": {
+            "path": "flow/data/table.json",
+            "data": {
+              "columns": [
+                {
+                  "key": "姓名",
+                  "label": "姓名",
+                  "type": "text"
+                }
+              ],
+              "rows": [
+                {
+                  "姓名": "张三"
+                }
+              ]
+            }
+          }
+        },
+        "inputs": {
+          "flowDir": "{tmp}/flow",
+          "row": 3,
+          "column": "备注",
+          "value": "补"
+        },
+        "expect": {
+          "outputs": {
+            "cellCount": 1
+          },
+          "files": [
+            {
+              "path": "flow/data/table.json",
+              "jsonContains": {
+                "rows": [
+                  {
+                    "姓名": "张三"
+                  },
+                  {},
+                  {
+                    "备注": "补"
+                  }
+                ],
+                "columns": [
+                  {
+                    "key": "姓名",
+                    "label": "姓名",
+                    "type": "text"
+                  },
+                  {
+                    "key": "备注",
+                    "label": "备注",
+                    "type": "text"
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      },
+      {
+        "name": "row-zero-is-below-the-lower-bound",
+        "inputs": {
+          "flowDir": "{tmp}/flow",
+          "row": 0,
+          "column": "x",
+          "value": 1
+        },
+        "expect": {
+          "errorCode": "INVALID_INPUT"
+        },
+        "negative": true
+      }
+    ]
+  },
+  "data.table.getCell": {
+    "notes": "读单元格（read）。`x-var-write` 声明了 `varName`（写变量由 orchestrator 完成），worker 只回传 `varName`+`value`。**越界与列不存在都成功返回 `value=null`**（不是报错）——下游要按 null 分支，这条必须钉住，否则「读了个空」在流程里会变成硬失败。列只有 `label` 没有 `key` 时按 label 当 key（兼容编辑器自动生成的列）。",
+    "variants": [
+      {
+        "name": "reads-cell-and-echoes-var-name",
+        "setup": {
+          "table": {
+            "path": "flow/data/table.json",
+            "data": {
+              "columns": [
+                {
+                  "key": "姓名",
+                  "label": "姓名",
+                  "type": "text"
+                }
+              ],
+              "rows": [
+                {
+                  "姓名": "张三"
+                }
+              ]
+            }
+          }
+        },
+        "inputs": {
+          "flowDir": "{tmp}/flow",
+          "table": "default",
+          "row": 1,
+          "column": "姓名",
+          "varName": "who"
+        },
+        "expect": {
+          "outputs": {
+            "varName": "who",
+            "value": "张三"
+          },
+          "effect": "read"
+        }
+      },
+      {
+        "name": "column-without-key-falls-back-to-label",
+        "setup": {
+          "table": {
+            "path": "flow/data/table.json",
+            "data": {
+              "columns": [
+                {
+                  "label": "只有标签"
+                }
+              ],
+              "rows": [
+                {
+                  "只有标签": "v"
+                }
+              ]
+            }
+          }
+        },
+        "inputs": {
+          "flowDir": "{tmp}/flow",
+          "row": 1,
+          "column": "只有标签",
+          "varName": "v"
+        },
+        "expect": {
+          "outputs": {
+            "value": "v"
+          }
+        }
+      },
+      {
+        "name": "row-beyond-end-returns-null-instead-of-failing",
+        "inputs": {
+          "flowDir": "{tmp}/flow",
+          "row": 99,
+          "column": "姓名",
+          "varName": "who"
+        },
+        "expect": {
+          "outputs": {
+            "varName": "who",
+            "value": null
+          }
+        },
+        "negative": true
+      },
+      {
+        "name": "unknown-column-returns-null",
+        "inputs": {
+          "flowDir": "{tmp}/flow",
+          "row": 1,
+          "column": "没有这列",
+          "varName": "who"
+        },
+        "expect": {
+          "outputs": {
+            "value": null
+          }
+        },
+        "negative": true
+      },
+      {
+        "name": "non-integer-row-is-invalid-input",
+        "inputs": {
+          "flowDir": "{tmp}/flow",
+          "row": "x",
+          "column": "姓名",
+          "varName": "who"
+        },
+        "expect": {
+          "errorCode": "INVALID_INPUT"
+        },
+        "negative": true
+      }
+    ]
+  },
+  "data.table.deleteRow": {
+    "notes": "删行（unsafe-write）。**行号越界是失败**（与 getCell 的 null 不同——写操作不能静默）且报错文案带上实际行数（可诊断）。`row` 1 基。",
+    "variants": [
+      {
+        "name": "deletes-first-row-and-reports-count",
+        "setup": {
+          "table": {
+            "path": "flow/data/table.json",
+            "data": {
+              "columns": [
+                {
+                  "key": "姓名",
+                  "label": "姓名",
+                  "type": "text"
+                },
+                {
+                  "key": "年龄",
+                  "label": "年龄",
+                  "type": "text"
+                }
+              ],
+              "rows": [
+                {
+                  "姓名": "张三",
+                  "年龄": 18
+                },
+                {
+                  "姓名": "李四",
+                  "年龄": 30
+                }
+              ]
+            }
+          }
+        },
+        "inputs": {
+          "flowDir": "{tmp}/flow",
+          "row": 1
+        },
+        "expect": {
+          "outputs": {
+            "rowCount": 1
+          },
+          "effect": "unsafe-write",
+          "files": [
+            {
+              "path": "flow/data/table.json",
+              "jsonContains": {
+                "rows": [
+                  {
+                    "姓名": "李四",
+                    "年龄": 30
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      },
+      {
+        "name": "deletes-last-row",
+        "setup": {
+          "table": {
+            "path": "flow/data/table.json",
+            "data": {
+              "columns": [
+                {
+                  "key": "姓名",
+                  "label": "姓名",
+                  "type": "text"
+                }
+              ],
+              "rows": [
+                {
+                  "姓名": "张三"
+                },
+                {
+                  "姓名": "李四"
+                }
+              ]
+            }
+          }
+        },
+        "inputs": {
+          "flowDir": "{tmp}/flow",
+          "table": "default",
+          "row": 2
+        },
+        "expect": {
+          "outputs": {
+            "rowCount": 1
+          },
+          "files": [
+            {
+              "path": "flow/data/table.json",
+              "jsonContains": {
+                "rows": [
+                  {
+                    "姓名": "张三"
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      },
+      {
+        "name": "row-out-of-range-is-invalid-input",
+        "inputs": {
+          "flowDir": "{tmp}/flow",
+          "row": 99
+        },
+        "expect": {
+          "errorCode": "INVALID_INPUT"
+        },
+        "negative": true
+      }
+    ]
+  },
+  "data.table.clear": {
+    "notes": "清空（idempotent-write）：只清 `rows`，**保留 columns**（列的声明是设计态资产，不该被运行时清掉）。缺 `flowDir` 时报 `missing flowDir; table commands require runtime flowDir injection`——这条负路径同时证明「flowDir 确实是运行时注入的、不是从别处猜出来的」。",
+    "variants": [
+      {
+        "name": "clears-rows-and-keeps-columns",
+        "setup": {
+          "table": {
+            "path": "flow/data/table.json",
+            "data": {
+              "columns": [
+                {
+                  "key": "姓名",
+                  "label": "姓名",
+                  "type": "text"
+                },
+                {
+                  "key": "年龄",
+                  "label": "年龄",
+                  "type": "text"
+                }
+              ],
+              "rows": [
+                {
+                  "姓名": "张三",
+                  "年龄": 18
+                },
+                {
+                  "姓名": "李四",
+                  "年龄": 30
+                }
+              ]
+            }
+          }
+        },
+        "inputs": {
+          "flowDir": "{tmp}/flow"
+        },
+        "expect": {
+          "outputs": {
+            "rowCount": 0
+          },
+          "effect": "idempotent-write",
+          "files": [
+            {
+              "path": "flow/data/table.json",
+              "jsonContains": {
+                "rows": [],
+                "columns": [
+                  {
+                    "key": "姓名",
+                    "label": "姓名",
+                    "type": "text"
+                  },
+                  {
+                    "key": "年龄",
+                    "label": "年龄",
+                    "type": "text"
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      },
+      {
+        "name": "clears-missing-table-without-creating-rows",
+        "inputs": {
+          "flowDir": "{tmp}/flow"
+        },
+        "expect": {
+          "outputs": {
+            "rowCount": 0
+          }
+        }
+      },
+      {
+        "name": "invalid-table-name-is-rejected",
+        "notes": "表名进文件名，白名单校验挡路径穿越（`../evil` 会让 `table_file` 跳出 `<flow_dir>/data/`）。",
+        "inputs": {
+          "flowDir": "{tmp}/flow",
+          "table": "../evil"
+        },
+        "expect": {
+          "errorCode": "INVALID_INPUT"
+        },
+        "negative": true
+      },
+      {
+        "name": "missing-flow-dir-is-invalid-input",
+        "inputs": {},
+        "expect": {
+          "errorCode": "INVALID_INPUT"
+        },
+        "negative": true
+      }
+    ]
+  },
+  "data.table.exportCsv": {
+    "notes": "导出 CSV（idempotent-write）。**utf-8-sig（带 BOM）**——Excel 打开中文不乱码；行尾 `\\n`、末尾有换行；缺列值的格留空、dict/list 值经 JSON 序列化后按 CSV 规则转义（含逗号/引号才加引号并把 `\"` 写成 `\"\"`）。路径缺省 = 表文件同名 `.csv`（`<flow_dir>/data/table.csv`）；给了相对路径按 flow dir 解析；**导出目标必须在流程目录内**（CAPABILITY_DENIED，这是越权写防线）。",
+    "variants": [
+      {
+        "name": "default-path-is-table-csv-with-bom",
+        "setup": {
+          "table": {
+            "path": "flow/data/table.json",
+            "data": {
+              "columns": [
+                {
+                  "key": "姓名",
+                  "label": "姓名",
+                  "type": "text"
+                },
+                {
+                  "key": "年龄",
+                  "label": "年龄",
+                  "type": "text"
+                }
+              ],
+              "rows": [
+                {
+                  "姓名": "张三",
+                  "年龄": 18
+                },
+                {
+                  "姓名": "李四",
+                  "年龄": 30
+                }
+              ]
+            }
+          }
+        },
+        "inputs": {
+          "flowDir": "{tmp}/flow"
+        },
+        "expect": {
+          "outputPaths": {
+            "path": "{tmp}/flow/data/table.csv"
+          },
+          "effect": "idempotent-write",
+          "files": [
+            {
+              "path": "flow/data/table.csv",
+              "equals": "\ufeff姓名,年龄\n张三,18\n李四,30\n"
+            }
+          ]
+        }
+      },
+      {
+        "name": "explicit-relative-path-stays-inside-flow-dir",
+        "setup": {
+          "table": {
+            "path": "flow/data/table.json",
+            "data": {
+              "columns": [
+                {
+                  "key": "文本",
+                  "label": "文本",
+                  "type": "text"
+                }
+              ],
+              "rows": [
+                {
+                  "文本": "a,b"
+                }
+              ]
+            }
+          }
+        },
+        "inputs": {
+          "flowDir": "{tmp}/flow",
+          "path": "out/导出.csv"
+        },
+        "expect": {
+          "outputPaths": {
+            "path": "{tmp}/flow/out/导出.csv"
+          },
+          "files": [
+            {
+              "path": "flow/out/导出.csv",
+              "equals": "\ufeff文本\n\"a,b\"\n"
+            }
+          ]
+        }
+      },
+      {
+        "name": "quotes-and-json-encodes-awkward-cells",
+        "notes": "含逗号/引号的格按 CSV 规则转义；缺失列留空；dict 值先 JSON 序列化再转义。",
+        "setup": {
+          "table": {
+            "path": "flow/data/table.json",
+            "data": {
+              "columns": [
+                {
+                  "key": "文本",
+                  "label": "文本",
+                  "type": "text"
+                },
+                {
+                  "key": "备注",
+                  "label": "备注",
+                  "type": "text"
+                }
+              ],
+              "rows": [
+                {
+                  "文本": "a,b",
+                  "备注": {
+                    "k": 1
+                  }
+                },
+                {
+                  "文本": "has \"quote\"",
+                  "备注": null
+                }
+              ]
+            }
+          }
+        },
+        "inputs": {
+          "flowDir": "{tmp}/flow"
+        },
+        "expect": {
+          "files": [
+            {
+              "path": "flow/data/table.csv",
+              "equals": "\ufeff文本,备注\n\"a,b\",\"{\"\"k\"\": 1}\"\n\"has \"\"quote\"\"\",\n"
+            }
+          ]
+        }
+      },
+      {
+        "name": "named-table-defaults-to-its-own-csv-name",
+        "notes": "缺省导出路径由**表名**推导（`<flow_dir>/data/<table>.csv`），不是固定 `table.csv`——多表流程里这条错了会互相覆盖。",
+        "setup": {
+          "table": {
+            "path": "flow/data/other.json",
+            "data": {
+              "columns": [
+                {
+                  "key": "k",
+                  "label": "k",
+                  "type": "text"
+                }
+              ],
+              "rows": [
+                {
+                  "k": "v"
+                }
+              ]
+            }
+          }
+        },
+        "inputs": {
+          "flowDir": "{tmp}/flow",
+          "table": "other"
+        },
+        "expect": {
+          "outputPaths": {
+            "path": "{tmp}/flow/data/other.csv"
+          },
+          "files": [
+            {
+              "path": "flow/data/other.csv",
+              "equals": "\ufeffk\nv\n"
+            }
+          ]
+        }
+      },
+      {
+        "name": "path-outside-flow-dir-is-denied",
+        "inputs": {
+          "flowDir": "{tmp}/flow",
+          "path": "{tmp}/escape.csv"
+        },
+        "expect": {
+          "errorCode": "CAPABILITY_DENIED",
+          "files": [
+            {
+              "path": "escape.csv",
+              "missing": true
+            }
+          ]
+        },
+        "negative": true
+      }
+    ]
+  }
+}

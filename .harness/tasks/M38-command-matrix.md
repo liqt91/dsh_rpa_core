@@ -77,6 +77,41 @@
    （`tests/commands/conftest.py` §1）与全局输入面（`tests/conftest.py`），所以这个按钮点下去
    不会动维护者的浏览器与键盘。
 
+## 1.3 交付（S3：数据 / 工作流通道）
+
+`data` 17 条 + `workflow` 1 条，共 **18 条命令 / 88 个变体**。这一片的插桩点与前两片**不同**，
+理由写在 `tests/commands/test_data_matrix.py` 的 docstring 里：
+
+1. **插桩点 = 真子进程，不是假桩**。浏览器通道的可测面在**通道协议**（下发了什么 op/args），
+   所以 S1 打桩在最底层 `_exchange`；数据通道的命令本身就是纯 Python 的文件/字符串操作，
+   `PythonWorkerExecutor` 真起 `python -m rpa_core.workers.python_worker`——**真子进程就是真机**，
+   一次性能测到三件事：inputs 决定的行为、worker 回的 outputs 形状、**磁盘上留下了什么**。
+   打桩反而会打掉最有价值的证据面。代价是每变体一次进程启动（实测 ~0.6s / 变体，全矩阵 64s）。
+2. **公共驱动层** `tests/commands/matrix.py`：用例表加载、`expect` 解释、`{tmp}` 物化、
+   落盘断言。两个驱动（浏览器 / 数据）共用一套 `expect` 语义——S1.2 的假绿灯正是「同一件事
+   两处口径」的变体，不值得再赌一次。`matrix_tmp_dir` 迁到 `tests/commands/conftest.py`。
+3. **`expect` 新增 5 个键**（数据通道逼出来的，全部记在 `matrix.py` 的表里）：
+   `outputPaths`（按 `Path` 比较，跨平台分隔符无关）、`outputsMatch`（正则，给时间戳这类
+   形状确定值不确定的输出）、`noEffects`（pure 命令**不产出** effect 记录）、
+   `files`（磁盘断言：`equals` / `contains` / `missing` / `jsonContains` 四选一）。
+4. **每个变体一个干净目录**（`{tmp}` 物化到 `matrix_tmp_dir/<命令>::<变体>`）：数据命令真的
+   写文件、删文件，用例之间必须互不干扰，且要把「预置态 → 执行后磁盘状态」逐字节对上。
+   变体可声明 `setup`（`files` / `dirs` / `table`）预置磁盘状态。
+5. **安全阀** `tests/commands/guard.py`：用例表是**数据**，数据会写错，而这一通道真的会删
+   （`data.deletePath` + `recursive` 就是 `shutil.rmtree`）。驱动在执行任何命令前把 `inputs`
+   与 `setup` 里所有路径类值按**实现自己的解析规则**解析成绝对路径，越出本变体目录即判失败。
+   它自己的契约测试在**默认门禁**里（`tests/contract/test_command_matrix_paths_guard.py`：
+   正向不误杀 / 负向拦得住 / **接线**——用源码断言钉住「安全阀跑在执行器构造之前」）。
+6. **子进程回收断言**：每个变体都断言 `active_process_count == 0`（几百个变体跑完不能留下
+   一堆 python 孤儿）。
+
+### 与 S1 一致的、被用例固化的「执行器层不做 schema 校验」
+
+`data.limit` 的 `items` 传字符串会按字符拆、`data.log` 的 `level` 传 `INFO` 原样透传、
+`data.writeText` 同时给 `text` 与 `lines` 取 `text`——三条都**不是缺陷**，而是
+「schema 校验由 orchestrator 的 `Draft202012Validator` 统一负责」的直接证据（§1 的口径修正）。
+三条都在用例表里带 `notes` 说明，免得后人当 bug 去「修」。
+
 ## 2. 关键设计决定
 
 - **桩只替换 `_exchange`**：同时拿到三样东西——真实下发的 `(op, args)`、信封里的
@@ -186,6 +221,21 @@ S1.2 页签有一条白盒集成用例（`test_panel_streams_jsonl_into_rows`：
 比前两次隐蔽。**推论**：凡「收尾时还会兜底做一次」的设计，其增量机制（轮询 / 流式 / 增量读）
 都必须靠**中间态**断言，靠终态永远测不出来。
 
+### 4.4 S3 的两条小账（都不是事故，但都值一句话）
+
+1. **把假设当契约写进了表**：`data.writeText` 那条「相对路径 `../up.txt` 归一化后仍在
+   workspace 内 → 允许」是**读代码推断**出来的，没进探针——实测直接红：
+   `_within_workspace` 的判据是「拼上 workspace 后的绝对路径仍在 workspace 内」，
+   `..` 一越出 workspace 就拒（哪怕还在临时目录里）。改成两条用例后契约才准：
+   `sub/../ok.txt`（归一化后在 workspace 内 → 允许）+ `../escape.txt`（越出 → 拒绝）。
+   **教训**：探针要覆盖**判据的两侧**，只测「反面」很容易把正面写成想象。
+   这次是矩阵自己红出来的，代价只有一次运行——但它是「用例期望先实测再写」这条纪律的又一次实证。
+2. **自检用例混进变体流会污染页签口径**：驱动里那两条安全阀自检用例没有 `<命令>::<变体>`
+   形状，报告钩子照样记成 case，于是页签的进度分子（测试数 270）与分母（用例表变体数 268）
+   对不上。处置：把安全阀自检挪到 `tests/contract/`（**顺带让它在默认门禁里跑**——它是安全
+   性质的，本就不该只在按需矩阵里被验证），矩阵报告恢复「一条 case 一个变体」的干净不变量。
+   与 §1.2 的「同一件事两处口径」是同一类毛病，这次的两处口径是**测试数 vs 变体数**。
+
 ## 5. 验证
 
 - **执行层**：`RPA_COMMAND_MATRIX=1 uv run pytest tests/commands` → **180 passed / exit 0**。
@@ -206,17 +256,43 @@ S1.2 页签有一条白盒集成用例（`test_panel_streams_jsonl_into_rows`：
   注入，三向均 exit=1 且分别落在预期断言，文件逐字节还原。
 - **S1.2 正向回归**：带报告钩子的全量矩阵 180 passed / exit 0，报告 180 条 case + 1 条 summary，
   `(command, variant)` 零缺失——钩子没有影响矩阵本身。
+- **S3 执行层**：`RPA_COMMAND_MATRIX=1 pytest tests/commands` → **268 passed / exit 0**
+  （浏览器 180 + 数据 84 + 工作流 4），带报告钩子重跑：报告 268 条 case + 1 条 summary、
+  `(command, variant)` 唯一组合 268、**无 `command` 缺失记录**、按命名空间
+  `{browser: 180, data: 84, workflow: 4}`、非 passed 为空。
+- **S3 静态层**：`check_command_matrix.py` → `PASSED（已校验 50 条命令；未建表命名空间 1 个
+  共 36 条命令，死参数台账 0 项）`——`PENDING_NAMESPACES` 只剩 `desktop`。
+- **S3 安全阀契约**（在默认门禁里）：`tests/contract/test_command_matrix_paths_guard.py`
+  **3 项**——正向不误杀 / 负向拦得住（越界 `workspace` 与 `../` 越界的 `setup` 都被点名）/
+  接线（源码断言 `assert_confined` 在 `PythonWorkerExecutor(` 之前，即**执行前**）。
+- **S3 五向负向验证**（探针 `.harness/spike/probe_data_matrix_negative.py`，可复跑；判据是
+  「红在**预期的那几条**上」，不是「有没有红」）：
+
+  | 注入 | 结果 |
+  |---|---|
+  | ① 表侧：用例表删掉 `data.deletePath.recursive` 全部出现 | 静态校验器红并点名该参数 |
+  | ② 实现侧：`writeText` 的 `lines` 只写第一行 | 只红 `lines-branch-joins-with-newline` |
+  | ③ 实现侧：摘掉 `writeText` 的 `_within_workspace` 防线 | 只红两条逃逸负路径 |
+  | ④ 实现侧：`data.log` 默认 `level` 改成 `debug` | 只红 `defaults-to-info-level` |
+  | ⑤ 安全阀：用例 workspace 越出变体目录 | 只红该变体，且**没跑到命令层**（信息里是安全阀文案） |
+
+  五向均 exit=1、失败集合与预期逐个相等、注入文件逐字节还原。
 
 ## 6. 剩余（后续切片）
 
 - **S2 桌面通道**（UIA 17 + Win32 19，共 36 条）：需真实桌面 fixture 或既有 WinForms
   测试应用；注意会抢前台，用例自带兜底。已在 `PENDING_NAMESPACES` 登记。
-- **S3 数据 / 工作流通道**（`python.worker` 18 条）：M30 已确认零参数漂移，但**输出契约
-  与错误分支未覆盖**。已在 `PENDING_NAMESPACES` 登记。
+  - 开工前要先定一个口径（**待维护者裁决**）：M30 的桌面契约测试是**打桩 `user32` / 伪句柄**
+    覆盖筛选逻辑（`tests/contract/test_desktop_attach_window.py`，明说「不冒充真机结论」），
+    而 L1 的定位是「断言执行器真实下发了什么」。若照 M30 打桩，成本远低于「真桌面 fixture」，
+    但 `desktop` 通道的 `_exchange` 等价层是 pywinauto/Win32 绑定，打桩点比浏览器通道更深。
 - **S4 L2 真机冒烟**：与 L1 **共用同一份用例表**，把执行后端从假扩展换成真扩展
-  （策略 §2 L2，显式开关启用）。
+  （策略 §2 L2，显式开关启用）。数据通道这一半已经算「真机」（真子进程 + 真文件），
+  所以 S4 的增量只落在浏览器通道。
 - **两个死参数的处置**：**已完成（S1.1，2026-09-22）**——两项均从 manifest 删除，
   删掉的是「声明」而非「能力」，对标差距未扩大。详见 §3.1。
+- **S2 建表时的复用提示**：`matrix.py` 的 `expect` 已经能覆盖「调用面 / 结果面 / 磁盘面」，
+  桌面通道多半只需要再加一个「打桩绑定层的调用记录」（形如 `ExtensionCall`）。
 - **S1.2 页签的显式取舍（不是缺口）**：① 页面**不解析 pytest 输出**，所以「子进程在收集/导入
   阶段就失败」时没有逐用例行可展示，只能看日志面板——`_on_finished` 对 `summary is None` 给了
   专门文案（含「常见原因：pytest 未安装」）。②「停止」用 `kill()` 而非优雅终止：pytest 没有

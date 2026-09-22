@@ -51,6 +51,16 @@ M36 的教训是「打桩边界要沿**真实副作用面**划，不沿参数传
 
 **缺省不写**：只有设置了环境变量 `RPA_COMMAND_MATRIX_REPORT=<路径>` 才启用，默认门禁与
 命令行手工跑都不产出任何文件。
+
+## 3. 共享的临时目录（落盘面的根）
+
+`matrix_tmp_dir` 是**整个矩阵共用的**临时目录，`{tmp}` 占位符由驱动物化到它（浏览器驱动）
+或它的子目录（数据驱动：每个变体一个干净目录，见 `matrix.py` docstring）。
+
+刻意**不用** pytest 的 `tmp_path`：那会为每个用例各建一个编号目录（矩阵几百个用例），
+会话结束时 pytest 在 atexit 里批量删除，在受限执行环境会被批量删除守卫拦下并以
+`SystemExit(1)` 收场——**测试全绿却让整个门禁看起来失败**（2026-09-22 实测）。
+共用一个目录后，pytest 连 basetemp 都不必创建。门禁看的是退出码。
 """
 
 from __future__ import annotations
@@ -155,6 +165,19 @@ def pytest_runtest_logreport(report) -> None:
 def pytest_sessionfinish(session, exitstatus) -> None:
     if _LIVE is not None:
         _LIVE.summary(session.testscollected, int(exitstatus))
+
+
+@pytest.fixture(scope="session")
+def matrix_tmp_dir():
+    """整个矩阵共用的临时目录，供用例表里的 `{tmp}` 占位符落盘（见模块 docstring §3）。"""
+    import shutil
+    import tempfile
+
+    base = Path(tempfile.mkdtemp(prefix="rpa-command-matrix-"))
+    try:
+        yield base
+    finally:
+        shutil.rmtree(base, ignore_errors=True)
 
 
 @pytest.fixture(autouse=True)

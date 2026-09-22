@@ -1,0 +1,53 @@
+{
+  "workflow.sleep": {
+    "notes": "延时（pure）：`sleptMs = int(seconds * 1000)`，缺省上限来自 manifest（60s）。两条必须钉住的：①**真的睡了**——只断言 `sleptMs` 的话，一个「返回 int(seconds*1000) 但从不 sleep」的实现也会绿，所以小数秒的那条同时断言**墙钟下界**（`elapsedAtLeastMs`，比 `sleptMs` 更接近真相，但受进程启动耗时的正向偏差影响，取下界而非等值）；②负秒是**显式失败**（INVALID_INPUT，schema 的 `minimum: 0` 只由 orchestrator 拦，执行器自己也要拦）。",
+    "variants": [
+      {
+        "name": "zero-seconds-is-a-noop",
+        "inputs": {
+          "seconds": 0
+        },
+        "expect": {
+          "outputs": {
+            "sleptMs": 0
+          },
+          "noEffects": true
+        }
+      },
+      {
+        "name": "fractional-seconds-convert-to-milliseconds-and-really-wait",
+        "inputs": {
+          "seconds": 0.05
+        },
+        "expect": {
+          "outputs": {
+            "sleptMs": 50
+          },
+          "elapsedAtLeastMs": 45
+        }
+      },
+      {
+        "name": "two-tenths-of-a-second",
+        "inputs": {
+          "seconds": 0.2
+        },
+        "expect": {
+          "outputs": {
+            "sleptMs": 200
+          },
+          "elapsedAtLeastMs": 190
+        }
+      },
+      {
+        "name": "negative-seconds-is-invalid-input",
+        "inputs": {
+          "seconds": -1
+        },
+        "expect": {
+          "errorCode": "INVALID_INPUT"
+        },
+        "negative": true
+      }
+    ]
+  }
+}

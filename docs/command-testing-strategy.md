@@ -44,7 +44,14 @@
 
 **落地进展**：M38（2026-09-22）已补**浏览器 32 条**（唯一执行通道、参数最密）——
 `tests/commands/cases/browser.json`（180 个变体）+ 公共假扩展 `tests/commands/harness.py`；
-桌面 36 条与数据/工作流 18 条仍待建表（已在 `check_command_matrix.py` 的 `PENDING_NAMESPACES` 登记）。
+**数据/工作流 18 条**（`cases/data.json` 17 + `cases/workflow.json` 1，共 88 个变体）已交付——
+注意这一通道与前一片的**插桩点不同**：它**零参数漂移**（M30 已确认），补的是**输出契约与错误分支**，
+且数据命令是纯 Python 文件操作，`PythonWorkerExecutor` **真起子进程**（真子进程就是真机），
+一次测到「`inputs` 决定的行为 / worker 回的 `outputs` 形状 / 磁盘上留下了什么」三面。
+两片共用同一套 `expect` 语义与同一份驱动层（`tests/commands/matrix.py`），并新增**执行前安全阀**
+（`tests/commands/guard.py`：这条通道真会 `deletePath + recursive`，用例表写错就会删到目录外；
+其契约测试进默认门禁）。桌面 36 条仍待建表（已在 `check_command_matrix.py` 的
+`PENDING_NAMESPACES` 登记，**只剩 `desktop` 一项**）。
 落地时 M38 顺手给出了本策略预判之外的两个收益：**实测出两个静态门禁抓不到的死参数**、
 以及**把「打桩边界沿真实副作用面划」这条教训推广到进程面**（详见 M38 任务单 §3/§4）。
 
