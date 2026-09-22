@@ -44,11 +44,12 @@
   留下的能力缺口：`chrome.tabs.captureVisibleTab` 只能截可见区，整页要滚动分段拼接、元素要按 rect
   裁剪，都需要在扩展里解码图像（MV3 service worker 无 `Image`/`FileReader`）→ 走 offscreen document
   或 CDP `Page.captureScreenshot(captureBeyondViewport/clip)`；另需处理 sticky/fixed 元素在分段里的重复
-- [ ] **两个死参数的处置**（`planned`）——`browser.closeTabs.browserType` 与
-  `browser.waitLoad.state` 声明了但实现未消费（M38 实测；静态门禁因「通用读取」放行）：
-  要么实现（前者覆盖路由、后者下发给扩展），要么从 manifest 删除。清账后同步删掉
-  `check_command_matrix.py` 的 `KNOWN_DEAD_PARAMS` 条目（该台账会自我收紧）
-- [ ] 技术路线（ADR 0016）：GUI 为唯一主力形态——新增能力优先落 GUI；Web 编辑器（devserver）
+- [x] **两个死参数的处置**（`done`，2026-09-22 维护者定案**删除**，M38 S1.1）——删除「声明」
+  而非「能力」：两项从未被消费过（`closeTabs` 的路由由会话绑定的浏览器决定、扩展的
+  `tabs.waitLoad` 只收 `tabId`/`timeoutMs`），删掉后行为不变、`KNOWN_DEAD_PARAMS` 已清空
+  （台账机制保留给 S2/S3）。对标文档同步更正：影刀「等待网页加载完成」本身也只传
+  网页对象 + 超时，故与影刀的差距**没有**扩大
+- [ ] **技术路线（ADR 0016）**：GUI 为唯一主力形态——新增能力优先落 GUI；Web 编辑器（devserver）
   `devserver/static/` 冻结演进（不删除、不再补齐 GUI 已有能力）
 - [ ] UI、DSH、MCP、调度器和安装器集成（`planned`）——见远期任务
 

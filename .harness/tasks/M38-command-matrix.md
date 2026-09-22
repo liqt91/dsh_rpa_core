@@ -73,7 +73,22 @@
 这正是该门禁 docstring 里写明的盲区，M38 首次给出实例。
 
 两处已登记进 `check_command_matrix.py` 的 `KNOWN_DEAD_PARAMS`（带处置说明，且**自我收紧**：
-参数一旦被用例覆盖，门禁立刻报「台账过期」）。处置（实现 or 从 manifest 删）留待维护者定。
+参数一旦被用例覆盖、或从 manifest 删掉，门禁立刻报「台账过期」）。
+
+**处置（2026-09-22 维护者定案：删除，S1.1 已完成）**：两项都从 manifest 删除，
+`KNOWN_DEAD_PARAMS` 随之清空（台账机制保留，供 S2/S3 的通道复用）。
+
+- **删的是「声明」不是「能力」**：两者都没被消费过。`closeTabs` 的目标浏览器由**会话绑定**
+  决定（`_ext_session_hosts`，`navigate` 时记下真实 `instanceId`），本来就没有「用参数覆盖路由」
+  的入口；扩展的 `tabs.waitLoad` 只收 `tabId`/`timeoutMs`，`state` 从来只在纸面上存在。
+- **对标差距没有扩大**：`docs/yingdao-web-cmds-benchmark.md` 里影刀「等待网页加载完成」的核心参数
+  也只有「网页对象 + 超时(s)」——`state` 是我们自己多声明的，不是影刀要求的能力。该文档的差距
+  备注已同步更正（顺带更正第 4 行「缺关闭所有网页」的过期结论：M32 的 `closeTabs` 与 M35 的
+  `closeBrowser` 已补上）。
+- **同步清理面**（漏一处就是「另一份文档里的旧结论」）：manifest ×2、`devserver/static/i18n.js`
+  的参数标签、用例表两条 `notes`、对标文档、BACKLOG、本任务单。
+- **负向验证**：把 `state` 临时加回 `commands/browser/waitLoad.json` → 门禁立刻红
+  （`没有任何变体显式设置该参数`），证明「新声明但没实现也没用例」这件事仍然拦得住。
 
 ### 3.2 被正确断言的既有语义（写期望时以实测为准，不凭读代码猜）
 
@@ -128,5 +143,5 @@
   与错误分支未覆盖**。已在 `PENDING_NAMESPACES` 登记。
 - **S4 L2 真机冒烟**：与 L1 **共用同一份用例表**，把执行后端从假扩展换成真扩展
   （策略 §2 L2，显式开关启用）。
-- **两个死参数的处置**：实现（`closeTabs` 用 `browserType` 覆盖路由、`waitLoad` 把
-  `state` 下发给扩展）或从 manifest 删除——二者取一，清掉 `KNOWN_DEAD_PARAMS`。
+- **两个死参数的处置**：**已完成（S1.1，2026-09-22）**——两项均从 manifest 删除，
+  删掉的是「声明」而非「能力」，对标差距未扩大。详见 §3.1。

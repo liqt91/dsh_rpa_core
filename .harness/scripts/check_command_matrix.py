@@ -31,8 +31,9 @@
 
 - `PENDING_NAMESPACES`：尚未建用例表的命名空间（按命名空间登记 + 理由）。
 - `KNOWN_DEAD_PARAMS`：**已入表但参数确实未被消费**的登记项（按参数登记）。
-  两者都是**一次性欠账**：条目一旦不再需要（命名空间建了表 / 参数被覆盖），
-  本校验器立即报「台账过期」并要求删除——所以它们只会变短。
+  两者都是**一次性欠账**：条目一旦不再需要（命名空间建了表 / 参数被覆盖 / 参数已从
+  manifest 删除），本校验器立即报「台账过期」并要求删除——所以它们只会变短。
+  当前 `KNOWN_DEAD_PARAMS` 为空（S1 的两项已由维护者定案删除）。
 
 运行：uv run python .harness/scripts/check_command_matrix.py
 """
@@ -62,20 +63,11 @@ PENDING_NAMESPACES: dict[str, str] = {
 # 这些是**实测发现的声明-实现偏差**（静态门禁 `check_param_consumption.py` 因「通用读取」
 # 放行：读取发生在不带命令字面量的辅助函数里，于是所有命令都被判为已消费）。
 # 自我收紧：参数一旦在用例表里出现，条目即过期。
-KNOWN_DEAD_PARAMS: dict[str, dict[str, str]] = {
-    "browser.closeTabs": {
-        "browserType": (
-            "声明了但本命令分支未读——路由按会话绑定的 host 走。"
-            "待定：实现（覆盖路由）或从 manifest 删"
-        ),
-    },
-    "browser.waitLoad": {
-        "state": (
-            "声明了但未转发给扩展——`tabs.waitLoad` 只收 tabId/timeoutMs。"
-            "待定：实现或从 manifest 删"
-        ),
-    },
-}
+#
+# 目前**为空**：M38 S1 实测到的两项（`browser.closeTabs.browserType`、
+# `browser.waitLoad.state`）已由维护者定案「删除」，S1.1 已从 manifest 移除——
+# 它们从没被消费过，删掉的是「声明」而不是「能力」。台账机制保留，供后续通道（S2/S3）复用。
+KNOWN_DEAD_PARAMS: dict[str, dict[str, str]] = {}
 
 
 def _load_catalog() -> dict[str, dict[str, Any]]:

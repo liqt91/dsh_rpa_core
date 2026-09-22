@@ -224,7 +224,6 @@ window.RPA_I18N = {
     "browser.cookieGetAll": { name: "Cookie 名称", domain: "域筛选", path: "路径筛选" },
     "browser.attach": { pattern: "匹配内容", matchBy: "匹配方式", useRegex: "正则匹配" },
     "browser.drag": { targetSelector: "目标选择器" },
-    "browser.waitLoad": { state: "加载状态" },
     "browser.setValue": { setWay: "设置方式", value: "要设置的值" },
     "browser.setAttribute": { name: "属性名", value: "属性值" },
   },

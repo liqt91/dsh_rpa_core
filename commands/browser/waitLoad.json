@@ -26,16 +26,6 @@
       "sessionId": {
         "type": "string"
       },
-      "state": {
-        "type": "string",
-        "enum": [
-          "load",
-          "domcontentloaded",
-          "networkidle"
-        ],
-        "description": "等待的加载状态",
-        "default": "load"
-      },
       "timeoutMs": {
         "type": "integer",
         "minimum": 1

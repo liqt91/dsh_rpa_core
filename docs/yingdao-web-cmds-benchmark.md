@@ -42,9 +42,9 @@
 | 1 | [打开网页](yingdao-cmds/打开网页.md) | 浏览器类型(7值枚举)、网址、加载超时、命令行参数（→网页对象） | `browser.navigate` | ✅ | 参数面差异：影刀「浏览器类型」是用户语义枚举（cef/chrome/edge/ie/360se/firefox/QQBrowser），我们收敛为**自研扩展单通道**、仅支持 Edge/Chrome 插件，故 `browserType` 只取 `msedge`/`chrome`（必选一，默认 msedge，无 auto）；playwright / bsk 已彻底移除。多浏览器各自装了插件时，命令按 `browserType` 路由到对应扩展实例，未装插件的浏览器在编辑器下拉置灰、运行期快速失败（TARGET_HOST_OFFLINE）。参数：`browserType/url/action/timeoutMs`（分组：浏览器 + 常规 + 高级）。输出为会话（网页）对象 |
 | 2 | [选择浏览器用户](yingdao-cmds/选择浏览器用户.md) | 浏览器类型（→用户配置对象） | — | ❌ | 多账号/用户配置文件切换，依赖登录态的场景需要 |
 | 3 | [获取已打开的网页对象](yingdao-cmds/获取已打开的网页对象.md) | 浏览器类型、标题/URL匹配（→网页对象） | `browser.attach` | ✅ | 同 context 按 title/url 子串或正则匹配，产出独立网页会话 |
-| 4 | [关闭网页](yingdao-cmds/关闭网页.md) | 操作(关闭指定/关闭所有)、终止浏览器进程、忽略确认离开对话框 | `browser.close` | 🟡 | close=**本地解绑**（不代关用户标签页、不杀用户浏览器进程）；`forceKill`/`ignoreUnload` 在 M29 已删（单通道下无对应物）；缺「关闭所有网页」 |
+| 4 | [关闭网页](yingdao-cmds/关闭网页.md) | 操作(关闭指定/关闭所有)、终止浏览器进程、忽略确认离开对话框 | `browser.close` / `browser.closeTabs` / `browser.closeBrowser` | ✅ | 三条命令分工（M32 引入后两者，M35 收敛 closeBrowser 语义）：`close`=**本地解绑**（把标签页留给用户）；`closeTabs`=关标签页，`tabIds`（自 `browser.listPages`）与 `all`（当前窗口全部）二选一，可选 `ignoreBeforeUnload`（M37，默认 true）；`closeBrowser`=**按类型终止该浏览器的全部进程**（含用户自开窗口，执行即显式授权）。`closeTabs` **没有** `browserType`：路由按会话绑定的那台浏览器走（M38 S1.1 删除该声明——它从未被本命令分支读取） |
 | 5 | [跳转至新网址](yingdao-cmds/跳转至新网址.md) | 网页对象、跳转方式(新页面/**后退/前进/重新加载**)、加载超时 | `browser.navigate` | ✅ | `action=goto/back/forward/reload` |
-| 6 | [等待网页加载完成](yingdao-cmds/等待网页加载完成.md) | 网页对象、超时时间(s) | `browser.waitLoad` | ✅ | state=load/domcontentloaded/networkidle |
+| 6 | [等待网页加载完成](yingdao-cmds/等待网页加载完成.md) | 网页对象、超时时间(s) | `browser.waitLoad` | ✅ | 影刀本身也只传「网页对象 + 超时」；我们**只等 `load`**——manifest 曾声明 `state=load/domcontentloaded/networkidle` 但从未转发给扩展（`tabs.waitLoad` 只收 `tabId`/`timeoutMs`），M38 S1.1 已删除该声明，属删除「声明」而非「能力」 |
 | 7 | [停止网页加载](yingdao-cmds/停止网页加载.md) | 网页对象 | — | ❌ | 对应 `page.stopLoading` 类原语 |
 | 8 | [鼠标滚动网页](yingdao-cmds/鼠标滚动网页.md) | 网页对象、在指定元素上滚动、位置(顶/底/指定/一屏)、平滑/瞬间 | `browser.scroll` | ✅ | position=top/bottom/point/page + 可选元素内滚动 + smooth |
 | 9 | [自动处理弹框(web)](yingdao-cmds/自动处理弹框_web.md) | 网页对象、处理方式(接受/Dismiss) | `browser.handleDialog` | 🟡 | 影刀是「挂自动策略，弹了就按方式处理」；我们是「弹窗出现后主动调用一次」。语义不同，建议补 auto 模式 |

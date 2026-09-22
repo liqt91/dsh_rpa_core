@@ -570,7 +570,7 @@
     ]
   },
   "browser.closeTabs": {
-    "notes": "tabIds 与 all 二选一（互斥校验）；ignoreBeforeUnload 显式给才转发（缺省语义由扩展兜底）。声明的 browserType 在本命令分支未被消费——见 M38 任务单的发现清单。",
+    "notes": "tabIds 与 all 二选一（互斥校验）；ignoreBeforeUnload 显式给才转发（缺省语义由扩展兜底）。路由按会话绑定的那台浏览器走——本命令没有 browserType 参数（M38 S1.1 删除：声明了但本命令分支从不读它）。",
     "stub": {
       "tabs.closeMany": {
         "closedTabIds": [],
@@ -3530,7 +3530,7 @@
     ]
   },
   "browser.waitLoad": {
-    "notes": "state（load/domcontentloaded/networkidle）声明了但未转发给扩展——见 M38 任务单的发现清单；timeoutMs 真实传导到扩展。",
+    "notes": "只等页面 load 完成——没有 state 参数（M38 S1.1 删除：声明了但从未转发给扩展，扩展的 tabs.waitLoad 只收 tabId/timeoutMs）；timeoutMs 真实传导到扩展。",
     "stub": {
       "tabs.waitLoad": {
         "url": "https://example.test/"
