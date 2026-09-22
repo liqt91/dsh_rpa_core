@@ -1,0 +1,3608 @@
+{
+  "browser.attach": {
+    "notes": "无会话命令（_NO_SESSION_COMMANDS）：自建会话绑定已有标签页。声明的 sessionId 在该分支被忽略——用例显式给值以固化这一契约。",
+    "stub": {
+      "tabs.list": {
+        "tabs": [
+          {
+            "id": 9,
+            "url": "https://example.test/a",
+            "title": "Example Page"
+          },
+          {
+            "id": 10,
+            "url": "https://other.test/b",
+            "title": "Other Page"
+          }
+        ]
+      }
+    },
+    "variants": [
+      {
+        "name": "url-substring-match-binds-its-tab",
+        "inputs": {
+          "sessionId": "s",
+          "pattern": "example"
+        },
+        "expect": {
+          "onlyCall": {
+            "op": "tabs.list",
+            "args": {}
+          },
+          "outputs": {
+            "url": "https://example.test/a",
+            "resourceType": "webPage"
+          },
+          "outputKeys": [
+            "sessionId",
+            "url",
+            "resourceType"
+          ],
+          "effect": "session"
+        }
+      },
+      {
+        "name": "matchBy-title-searches-title-field",
+        "inputs": {
+          "pattern": "Other",
+          "matchBy": "title"
+        },
+        "expect": {
+          "outputs": {
+            "url": "https://other.test/b"
+          },
+          "effect": "session"
+        }
+      },
+      {
+        "name": "matchBy-url-does-not-consult-title",
+        "inputs": {
+          "pattern": "Other",
+          "matchBy": "url"
+        },
+        "expect": {
+          "errorCode": "ELEMENT_NOT_FOUND"
+        },
+        "negative": true
+      },
+      {
+        "name": "useRegex-true-matches-by-regex",
+        "inputs": {
+          "pattern": "^https://example\\.test/",
+          "useRegex": true
+        },
+        "expect": {
+          "outputs": {
+            "url": "https://example.test/a"
+          },
+          "effect": "session"
+        }
+      },
+      {
+        "name": "invalid-regex-is-a-miss-not-a-crash",
+        "inputs": {
+          "pattern": "(",
+          "useRegex": true
+        },
+        "expect": {
+          "errorCode": "ELEMENT_NOT_FOUND"
+        },
+        "negative": true
+      },
+      {
+        "name": "no-match-reports-element-not-found",
+        "inputs": {
+          "pattern": "absent-pattern"
+        },
+        "expect": {
+          "errorCode": "ELEMENT_NOT_FOUND",
+          "errorDetails": {
+            "selector": null,
+            "matchedCount": 0
+          }
+        },
+        "negative": true
+      }
+    ]
+  },
+  "browser.check": {
+    "stub": {
+      "page.call": {
+        "matchedCount": 1,
+        "result": true
+      }
+    },
+    "variants": [
+      {
+        "name": "default-operation-is-check",
+        "inputs": {
+          "sessionId": "s",
+          "selector": "#t",
+          "operation": "check"
+        },
+        "expect": {
+          "onlyCall": {
+            "op": "page.call",
+            "args": {
+              "tabId": "7",
+              "selector": "#t",
+              "method": "check",
+              "args": {
+                "operation": "check"
+              }
+            },
+            "timeoutSeconds": 30.0
+          },
+          "outputs": {
+            "checked": true,
+            "matchedCount": 1
+          },
+          "effect": "unsafe-write"
+        }
+      },
+      {
+        "name": "operation-uncheck",
+        "inputs": {
+          "selector": "#t",
+          "operation": "uncheck"
+        },
+        "expect": {
+          "onlyCall": {
+            "args": {
+              "args": {
+                "operation": "uncheck"
+              }
+            }
+          }
+        }
+      },
+      {
+        "name": "operation-toggle",
+        "inputs": {
+          "selector": "#t",
+          "operation": "toggle"
+        },
+        "expect": {
+          "onlyCall": {
+            "args": {
+              "args": {
+                "operation": "toggle"
+              }
+            }
+          }
+        }
+      },
+      {
+        "name": "timeoutMs-changes-channel-timeout",
+        "inputs": {
+          "selector": "#t",
+          "timeoutMs": 2500
+        },
+        "expect": {
+          "onlyCall": {
+            "op": "page.call",
+            "timeoutSeconds": 2.5
+          }
+        }
+      },
+      {
+        "name": "zero-match-reports-element-not-found",
+        "stub": {
+          "page.call": {
+            "matchedCount": 0,
+            "result": null
+          }
+        },
+        "inputs": {
+          "selector": "#t"
+        },
+        "expect": {
+          "errorCode": "ELEMENT_NOT_FOUND"
+        },
+        "negative": true
+      },
+      {
+        "name": "timeoutMs-lower-bound-reaches-the-channel",
+        "inputs": {
+          "sessionId": "s",
+          "selector": "#t",
+          "timeoutMs": 1
+        },
+        "expect": {
+          "onlyCall": {
+            "timeoutSeconds": 0.1,
+            "op": "page.call"
+          }
+        }
+      }
+    ]
+  },
+  "browser.click": {
+    "stub": {
+      "page.call": {
+        "matchedCount": 1,
+        "result": null
+      }
+    },
+    "variants": [
+      {
+        "name": "defaults-are-forwarded-explicitly",
+        "inputs": {
+          "sessionId": "s",
+          "selector": "#t",
+          "clickType": "single",
+          "button": "left",
+          "clickPosition": "center",
+          "simulateHuman": true
+        },
+        "expect": {
+          "onlyCall": {
+            "op": "page.call",
+            "args": {
+              "tabId": "7",
+              "selector": "#t",
+              "method": "click",
+              "args": {
+                "button": "left",
+                "clickType": "single",
+                "modifiers": [],
+                "simulateHuman": true,
+                "clickPosition": "center"
+              }
+            },
+            "timeoutSeconds": 30.0
+          },
+          "outputs": {
+            "matchedCount": 1,
+            "sessionId": "s"
+          },
+          "effect": "unsafe-write"
+        }
+      },
+      {
+        "name": "clickType-double",
+        "inputs": {
+          "selector": "#t",
+          "clickType": "double"
+        },
+        "expect": {
+          "onlyCall": {
+            "args": {
+              "args": {
+                "clickType": "double"
+              }
+            }
+          }
+        }
+      },
+      {
+        "name": "button-right",
+        "inputs": {
+          "selector": "#t",
+          "button": "right"
+        },
+        "expect": {
+          "onlyCall": {
+            "args": {
+              "args": {
+                "button": "right"
+              }
+            }
+          }
+        }
+      },
+      {
+        "name": "button-middle",
+        "inputs": {
+          "selector": "#t",
+          "button": "middle"
+        },
+        "expect": {
+          "onlyCall": {
+            "args": {
+              "args": {
+                "button": "middle"
+              }
+            }
+          }
+        }
+      },
+      {
+        "name": "modifiers-are-forwarded-verbatim",
+        "inputs": {
+          "selector": "#t",
+          "modifiers": [
+            "Ctrl",
+            "Win"
+          ]
+        },
+        "expect": {
+          "onlyCall": {
+            "args": {
+              "args": {
+                "modifiers": [
+                  "Ctrl",
+                  "Win"
+                ]
+              }
+            }
+          }
+        }
+      },
+      {
+        "name": "simulateHuman-false-is-honored",
+        "inputs": {
+          "selector": "#t",
+          "simulateHuman": false
+        },
+        "expect": {
+          "onlyCall": {
+            "args": {
+              "args": {
+                "simulateHuman": false
+              }
+            }
+          }
+        }
+      },
+      {
+        "name": "clickPosition-random",
+        "inputs": {
+          "selector": "#t",
+          "clickPosition": "random"
+        },
+        "expect": {
+          "onlyCall": {
+            "args": {
+              "args": {
+                "clickPosition": "random"
+              }
+            }
+          }
+        }
+      },
+      {
+        "name": "postDelayMs-delays-after-the-action",
+        "inputs": {
+          "selector": "#t",
+          "postDelayMs": 50
+        },
+        "expect": {
+          "onlyCall": {
+            "op": "page.call"
+          },
+          "elapsedAtLeastMs": 45
+        }
+      },
+      {
+        "name": "timeoutMs-changes-channel-timeout",
+        "inputs": {
+          "selector": "#t",
+          "timeoutMs": 1200
+        },
+        "expect": {
+          "onlyCall": {
+            "op": "page.call",
+            "timeoutSeconds": 1.2
+          }
+        }
+      },
+      {
+        "name": "zero-match-reports-element-not-found",
+        "stub": {
+          "page.call": {
+            "matchedCount": 0,
+            "result": null
+          }
+        },
+        "inputs": {
+          "selector": "#t"
+        },
+        "expect": {
+          "errorCode": "ELEMENT_NOT_FOUND"
+        },
+        "negative": true
+      },
+      {
+        "name": "timeoutMs-lower-bound-reaches-the-channel",
+        "inputs": {
+          "selector": "#t",
+          "sessionId": "s",
+          "timeoutMs": 1,
+          "postDelayMs": 0
+        },
+        "expect": {
+          "onlyCall": {
+            "timeoutSeconds": 0.1,
+            "op": "page.call"
+          }
+        }
+      }
+    ]
+  },
+  "browser.close": {
+    "notes": "解绑会话：不碰用户的浏览器（M29 定案，forceKill/ignoreUnload 已删）。",
+    "variants": [
+      {
+        "name": "detach-does-not-touch-the-extension",
+        "inputs": {},
+        "expect": {
+          "noCalls": true,
+          "outputs": {},
+          "effect": "session"
+        }
+      },
+      {
+        "name": "close-without-any-session-fails-explicitly",
+        "sessions": {},
+        "inputs": {},
+        "expect": {
+          "errorCode": "EXECUTOR_FAILED"
+        },
+        "negative": true
+      },
+      {
+        "name": "explicit-sessionId-detaches-that-session-without-extension-call",
+        "inputs": {
+          "sessionId": "s"
+        },
+        "expect": {
+          "noCalls": true,
+          "outputs": {},
+          "effect": "session"
+        }
+      }
+    ]
+  },
+  "browser.closeBrowser": {
+    "notes": "进程级操作：按进程名终止该浏览器全部进程（M35 定案）。用例必须打桩进程面——conftest 的守卫会拦下任何真实终止。",
+    "variants": [
+      {
+        "name": "default-browserType-kills-every-matched-process",
+        "inputs": {
+          "browserType": "msedge"
+        },
+        "processStub": {
+          "pids": [
+            111,
+            222
+          ]
+        },
+        "expect": {
+          "noCalls": true,
+          "outputs": {
+            "terminated": true,
+            "matchedCount": 2,
+            "killedProcessIds": [
+              111,
+              222
+            ],
+            "failedProcessIds": []
+          },
+          "effect": "session"
+        }
+      },
+      {
+        "name": "browserType-chrome-selects-chrome-processes",
+        "inputs": {
+          "browserType": "chrome",
+          "timeoutMs": 1000
+        },
+        "processStub": {
+          "pids": [
+            333
+          ]
+        },
+        "expect": {
+          "outputs": {
+            "matchedCount": 1,
+            "killedProcessIds": [
+              333
+            ]
+          },
+          "effect": "session"
+        }
+      },
+      {
+        "name": "force-true-is-passed-to-termination",
+        "inputs": {
+          "force": true
+        },
+        "processStub": {
+          "pids": [
+            444
+          ],
+          "expectForce": true
+        },
+        "expect": {
+          "outputs": {
+            "killedProcessIds": [
+              444
+            ]
+          },
+          "effect": "session"
+        }
+      },
+      {
+        "name": "no-matched-process-still-counts-as-terminated",
+        "inputs": {},
+        "processStub": {
+          "pids": []
+        },
+        "expect": {
+          "outputs": {
+            "terminated": true,
+            "matchedCount": 0,
+            "killedProcessIds": []
+          },
+          "effect": "session"
+        }
+      },
+      {
+        "name": "unsupported-browserType-is-rejected-before-any-list",
+        "inputs": {
+          "browserType": "firefox"
+        },
+        "expect": {
+          "errorCode": "INVALID_INPUT",
+          "errorDetails": {
+            "field": "browserType",
+            "received": "firefox"
+          }
+        },
+        "negative": true
+      },
+      {
+        "name": "timeoutMs-lower-bound-reaches-the-channel",
+        "inputs": {
+          "sessionId": "s",
+          "timeoutMs": 1
+        },
+        "processStub": {
+          "pids": []
+        },
+        "expect": {
+          "outputKeys": [
+            "terminated"
+          ]
+        }
+      }
+    ]
+  },
+  "browser.closeTabs": {
+    "notes": "tabIds 与 all 二选一（互斥校验）；ignoreBeforeUnload 显式给才转发（缺省语义由扩展兜底）。声明的 browserType 在本命令分支未被消费——见 M38 任务单的发现清单。",
+    "stub": {
+      "tabs.closeMany": {
+        "closedTabIds": [],
+        "failedTabIds": []
+      }
+    },
+    "variants": [
+      {
+        "name": "explicit-tabIds-go-out-as-one-batch",
+        "stub": {
+          "tabs.closeMany": {
+            "closedTabIds": [
+              7,
+              8
+            ],
+            "failedTabIds": []
+          }
+        },
+        "inputs": {
+          "sessionId": "s",
+          "tabIds": [
+            7,
+            8
+          ]
+        },
+        "expect": {
+          "onlyCall": {
+            "op": "tabs.closeMany",
+            "argsExact": {
+              "tabIds": [
+                7,
+                8
+              ]
+            },
+            "timeoutSeconds": 30.0
+          },
+          "outputs": {
+            "closedCount": 2,
+            "closedTabIds": [
+              7,
+              8
+            ],
+            "failedTabIds": []
+          },
+          "effect": "unsafe-write"
+        }
+      },
+      {
+        "name": "all-true-closes-current-window",
+        "stub": {
+          "tabs.closeMany": {
+            "closedTabIds": [
+              1,
+              2,
+              3
+            ],
+            "failedTabIds": []
+          }
+        },
+        "inputs": {
+          "all": true
+        },
+        "expect": {
+          "onlyCall": {
+            "op": "tabs.closeMany",
+            "argsExact": {
+              "all": true
+            }
+          },
+          "outputs": {
+            "closedCount": 3
+          },
+          "effect": "unsafe-write"
+        }
+      },
+      {
+        "name": "ignoreBeforeUnload-false-is-forwarded",
+        "inputs": {
+          "sessionId": "s",
+          "tabIds": [
+            7
+          ],
+          "ignoreBeforeUnload": false
+        },
+        "expect": {
+          "onlyCall": {
+            "argsExact": {
+              "tabIds": [
+                7
+              ],
+              "ignoreBeforeUnload": false
+            }
+          }
+        }
+      },
+      {
+        "name": "ignoreBeforeUnload-true-is-forwarded",
+        "inputs": {
+          "sessionId": "s",
+          "tabIds": [
+            7
+          ],
+          "ignoreBeforeUnload": true
+        },
+        "expect": {
+          "onlyCall": {
+            "argsExact": {
+              "tabIds": [
+                7
+              ],
+              "ignoreBeforeUnload": true
+            }
+          }
+        }
+      },
+      {
+        "name": "ignoreBeforeUnload-unspecified-is-not-sent",
+        "inputs": {
+          "sessionId": "s",
+          "tabIds": [
+            7
+          ]
+        },
+        "expect": {
+          "onlyCall": {
+            "argsExact": {
+              "tabIds": [
+                7
+              ]
+            }
+          }
+        }
+      },
+      {
+        "name": "partial-failure-is-recounted-not-flattened",
+        "stub": {
+          "tabs.closeMany": {
+            "closedTabIds": [
+              7
+            ],
+            "failedTabIds": [
+              8
+            ]
+          }
+        },
+        "inputs": {
+          "sessionId": "s",
+          "tabIds": [
+            7,
+            8
+          ]
+        },
+        "expect": {
+          "outputs": {
+            "closedCount": 1,
+            "closedTabIds": [
+              7
+            ],
+            "failedTabIds": [
+              8
+            ]
+          }
+        }
+      },
+      {
+        "name": "timeoutMs-changes-channel-timeout",
+        "inputs": {
+          "sessionId": "s",
+          "tabIds": [
+            7
+          ],
+          "timeoutMs": 1500
+        },
+        "expect": {
+          "onlyCall": {
+            "op": "tabs.closeMany",
+            "timeoutSeconds": 1.5
+          }
+        }
+      },
+      {
+        "name": "tabIds-and-all-are-mutually-exclusive",
+        "inputs": {
+          "tabIds": [
+            7
+          ],
+          "all": true
+        },
+        "expect": {
+          "errorCode": "INVALID_INPUT",
+          "errorDetails": {
+            "field": "tabIds/all"
+          }
+        },
+        "negative": true
+      },
+      {
+        "name": "neither-tabIds-nor-all-is-rejected",
+        "inputs": {},
+        "expect": {
+          "errorCode": "INVALID_INPUT"
+        },
+        "negative": true
+      },
+      {
+        "name": "tabIds-must-be-an-array",
+        "inputs": {
+          "tabIds": "7"
+        },
+        "expect": {
+          "errorCode": "INVALID_INPUT",
+          "errorDetails": {
+            "field": "tabIds"
+          }
+        },
+        "negative": true
+      },
+      {
+        "name": "timeoutMs-lower-bound-reaches-the-channel",
+        "inputs": {
+          "sessionId": "s",
+          "tabIds": [
+            7
+          ],
+          "timeoutMs": 1
+        },
+        "expect": {
+          "onlyCall": {
+            "timeoutSeconds": 0.1,
+            "op": "tabs.closeMany"
+          }
+        }
+      }
+    ]
+  },
+  "browser.cookieGet": {
+    "stub": {
+      "cookies.get": {
+        "value": null
+      }
+    },
+    "variants": [
+      {
+        "name": "name-and-tab-scope-are-forwarded",
+        "inputs": {
+          "sessionId": "s",
+          "name": "k"
+        },
+        "expect": {
+          "onlyCall": {
+            "op": "cookies.get",
+            "argsExact": {
+              "name": "k",
+              "tabId": "7"
+            },
+            "timeoutSeconds": 30.0
+          },
+          "outputs": {
+            "value": ""
+          },
+          "effect": "read"
+        }
+      },
+      {
+        "name": "existing-value-is-returned-verbatim",
+        "stub": {
+          "cookies.get": {
+            "value": "v1"
+          }
+        },
+        "inputs": {
+          "sessionId": "s",
+          "name": "k"
+        },
+        "expect": {
+          "outputs": {
+            "value": "v1"
+          },
+          "effect": "read"
+        }
+      },
+      {
+        "name": "channel-error-maps-to-executor-failed",
+        "errors": {
+          "cookies.get": {
+            "code": "CHANNEL_OFFLINE",
+            "message": "endpoint down"
+          }
+        },
+        "inputs": {
+          "sessionId": "s",
+          "name": "k"
+        },
+        "expect": {
+          "errorCode": "EXECUTOR_FAILED"
+        },
+        "negative": true
+      }
+    ]
+  },
+  "browser.cookieGetAll": {
+    "stub": {
+      "cookies.getAll": {
+        "cookies": []
+      }
+    },
+    "variants": [
+      {
+        "name": "no-filters-sends-only-the-tab-scope",
+        "inputs": {
+          "sessionId": "s"
+        },
+        "expect": {
+          "onlyCall": {
+            "op": "cookies.getAll",
+            "argsExact": {
+              "tabId": "7"
+            },
+            "timeoutSeconds": 30.0
+          },
+          "outputs": {
+            "cookies": [],
+            "count": 0
+          },
+          "effect": "read"
+        }
+      },
+      {
+        "name": "all-three-filters-are-forwarded",
+        "inputs": {
+          "sessionId": "s",
+          "name": "k",
+          "domain": "d.test",
+          "path": "/p"
+        },
+        "expect": {
+          "onlyCall": {
+            "op": "cookies.getAll",
+            "argsExact": {
+              "name": "k",
+              "domain": "d.test",
+              "path": "/p",
+              "tabId": "7"
+            }
+          }
+        }
+      },
+      {
+        "name": "each-filter-is-optional-independently",
+        "inputs": {
+          "sessionId": "s",
+          "name": "k"
+        },
+        "expect": {
+          "onlyCall": {
+            "argsExact": {
+              "name": "k",
+              "tabId": "7"
+            }
+          }
+        }
+      },
+      {
+        "name": "returned-cookies-are-counted",
+        "stub": {
+          "cookies.getAll": {
+            "cookies": [
+              {
+                "name": "a",
+                "value": "1"
+              },
+              {
+                "name": "b",
+                "value": "2"
+              }
+            ]
+          }
+        },
+        "inputs": {
+          "sessionId": "s"
+        },
+        "expect": {
+          "outputs": {
+            "count": 2
+          }
+        }
+      },
+      {
+        "name": "channel-error-maps-to-executor-failed",
+        "errors": {
+          "cookies.getAll": {
+            "code": "CHANNEL_OFFLINE",
+            "message": "endpoint down"
+          }
+        },
+        "inputs": {
+          "sessionId": "s"
+        },
+        "expect": {
+          "errorCode": "EXECUTOR_FAILED"
+        },
+        "negative": true
+      }
+    ]
+  },
+  "browser.cookieRemove": {
+    "stub": {
+      "cookies.remove": {
+        "count": 1
+      }
+    },
+    "variants": [
+      {
+        "name": "name-and-tab-scope-are-forwarded",
+        "inputs": {
+          "sessionId": "s",
+          "name": "k"
+        },
+        "expect": {
+          "onlyCall": {
+            "op": "cookies.remove",
+            "argsExact": {
+              "name": "k",
+              "tabId": "7"
+            },
+            "timeoutSeconds": 30.0
+          },
+          "outputs": {
+            "sessionId": "s"
+          },
+          "effect": "unsafe-write"
+        }
+      },
+      {
+        "name": "omitted-name-degrades-to-empty-string",
+        "inputs": {
+          "sessionId": "s"
+        },
+        "expect": {
+          "onlyCall": {
+            "op": "cookies.remove",
+            "argsExact": {
+              "name": "",
+              "tabId": "7"
+            }
+          }
+        }
+      },
+      {
+        "name": "channel-error-maps-to-executor-failed",
+        "errors": {
+          "cookies.remove": {
+            "code": "CHANNEL_OFFLINE",
+            "message": "endpoint down"
+          }
+        },
+        "inputs": {
+          "sessionId": "s",
+          "name": "k"
+        },
+        "expect": {
+          "errorCode": "EXECUTOR_FAILED"
+        },
+        "negative": true
+      }
+    ]
+  },
+  "browser.cookieSet": {
+    "stub": {
+      "cookies.set": {
+        "count": 1
+      }
+    },
+    "variants": [
+      {
+        "name": "cookies-array-is-forwarded-with-tab-scope",
+        "inputs": {
+          "sessionId": "s",
+          "cookies": [
+            {
+              "name": "k",
+              "value": "v",
+              "url": "https://example.test/"
+            }
+          ]
+        },
+        "expect": {
+          "onlyCall": {
+            "op": "cookies.set",
+            "argsExact": {
+              "cookies": [
+                {
+                  "name": "k",
+                  "value": "v",
+                  "url": "https://example.test/"
+                }
+              ],
+              "tabId": "7"
+            },
+            "timeoutSeconds": 30.0
+          },
+          "outputs": {
+            "count": 1
+          },
+          "effect": "idempotent-write"
+        }
+      },
+      {
+        "name": "count-from-the-extension-is-returned-verbatim",
+        "stub": {
+          "cookies.set": {
+            "count": 3
+          }
+        },
+        "inputs": {
+          "sessionId": "s",
+          "cookies": [
+            {
+              "name": "a",
+              "value": "1"
+            }
+          ]
+        },
+        "expect": {
+          "outputs": {
+            "count": 3
+          }
+        }
+      },
+      {
+        "name": "empty-array-is-still-sent-not-silently-dropped",
+        "inputs": {
+          "sessionId": "s",
+          "cookies": []
+        },
+        "expect": {
+          "onlyCall": {
+            "op": "cookies.set",
+            "argsExact": {
+              "cookies": [],
+              "tabId": "7"
+            }
+          }
+        }
+      },
+      {
+        "name": "channel-error-maps-to-executor-failed",
+        "errors": {
+          "cookies.set": {
+            "code": "CHANNEL_OFFLINE",
+            "message": "no reply"
+          }
+        },
+        "inputs": {
+          "sessionId": "s",
+          "cookies": [
+            {
+              "name": "a",
+              "value": "1"
+            }
+          ]
+        },
+        "expect": {
+          "errorCode": "EXECUTOR_FAILED"
+        },
+        "negative": true
+      }
+    ]
+  },
+  "browser.download": {
+    "notes": "扩展单通道下本期未实现：显式报 COMMAND_NOT_FOUND（保留 manifest 字段，不硬失败）。",
+    "variants": [
+      {
+        "name": "unimplemented-reports-command-not-found",
+        "inputs": {
+          "saveDir": "/tmp",
+          "timeoutMs": 1000
+        },
+        "expect": {
+          "errorCode": "COMMAND_NOT_FOUND",
+          "errorDetails": {
+            "command": "browser.download"
+          },
+          "noCalls": true
+        },
+        "negative": true
+      }
+    ],
+    "unimplemented": true
+  },
+  "browser.drag": {
+    "stub": {
+      "page.call": {
+        "matchedCount": 1,
+        "result": null
+      }
+    },
+    "variants": [
+      {
+        "name": "source-and-target-selectors-are-forwarded",
+        "inputs": {
+          "sessionId": "s",
+          "selector": "#t",
+          "targetSelector": "#t2"
+        },
+        "expect": {
+          "onlyCall": {
+            "op": "page.call",
+            "args": {
+              "tabId": "7",
+              "selector": "#t",
+              "method": "drag",
+              "args": {
+                "targetSelector": "#t2"
+              }
+            },
+            "timeoutSeconds": 30.0
+          },
+          "outputs": {
+            "matchedCount": 1,
+            "sessionId": "s"
+          },
+          "effect": "unsafe-write"
+        }
+      },
+      {
+        "name": "timeoutMs-changes-channel-timeout",
+        "inputs": {
+          "selector": "#t",
+          "targetSelector": "#t2",
+          "timeoutMs": 1000
+        },
+        "expect": {
+          "onlyCall": {
+            "op": "page.call",
+            "timeoutSeconds": 1.0
+          }
+        }
+      },
+      {
+        "name": "zero-match-reports-element-not-found",
+        "stub": {
+          "page.call": {
+            "matchedCount": 0,
+            "result": null
+          }
+        },
+        "inputs": {
+          "selector": "#t",
+          "targetSelector": "#t2"
+        },
+        "expect": {
+          "errorCode": "ELEMENT_NOT_FOUND"
+        },
+        "negative": true
+      },
+      {
+        "name": "timeoutMs-lower-bound-reaches-the-channel",
+        "inputs": {
+          "sessionId": "s",
+          "selector": "#t",
+          "targetSelector": "#t2",
+          "timeoutMs": 1
+        },
+        "expect": {
+          "onlyCall": {
+            "timeoutSeconds": 0.1,
+            "op": "page.call"
+          }
+        }
+      }
+    ]
+  },
+  "browser.executeScript": {
+    "stub": {
+      "page.eval": {
+        "result": null
+      }
+    },
+    "variants": [
+      {
+        "name": "script-and-args-are-forwarded",
+        "inputs": {
+          "sessionId": "s",
+          "script": "return 1",
+          "args": [
+            1,
+            "a"
+          ]
+        },
+        "expect": {
+          "onlyCall": {
+            "op": "page.eval",
+            "argsExact": {
+              "tabId": "7",
+              "script": "return 1",
+              "args": [
+                1,
+                "a"
+              ]
+            },
+            "timeoutSeconds": 30.0
+          },
+          "outputs": {
+            "result": null,
+            "sessionId": "s"
+          },
+          "effect": "unsafe-write"
+        }
+      },
+      {
+        "name": "omitted-args-degrade-to-empty-list",
+        "inputs": {
+          "sessionId": "s",
+          "script": "return 2"
+        },
+        "expect": {
+          "onlyCall": {
+            "op": "page.eval",
+            "argsExact": {
+              "tabId": "7",
+              "script": "return 2",
+              "args": []
+            }
+          }
+        }
+      },
+      {
+        "name": "evaluated-result-is-returned-verbatim",
+        "stub": {
+          "page.eval": {
+            "result": [
+              1,
+              2
+            ]
+          }
+        },
+        "inputs": {
+          "sessionId": "s",
+          "script": "return [1,2]"
+        },
+        "expect": {
+          "outputs": {
+            "result": [
+              1,
+              2
+            ]
+          }
+        }
+      },
+      {
+        "name": "timeoutMs-changes-channel-timeout",
+        "inputs": {
+          "sessionId": "s",
+          "script": "return 1",
+          "timeoutMs": 500
+        },
+        "expect": {
+          "onlyCall": {
+            "op": "page.eval",
+            "timeoutSeconds": 0.5
+          }
+        }
+      },
+      {
+        "name": "channel-error-maps-to-executor-failed",
+        "errors": {
+          "page.eval": {
+            "code": "TIMEOUT",
+            "message": "script timed out"
+          }
+        },
+        "inputs": {
+          "sessionId": "s",
+          "script": "return 1"
+        },
+        "expect": {
+          "errorCode": "TIMEOUT"
+        },
+        "negative": true
+      },
+      {
+        "name": "timeoutMs-lower-bound-reaches-the-channel",
+        "inputs": {
+          "script": "1",
+          "sessionId": "s",
+          "timeoutMs": 1
+        },
+        "expect": {
+          "onlyCall": {
+            "timeoutSeconds": 0.1,
+            "op": "page.eval"
+          }
+        }
+      }
+    ]
+  },
+  "browser.getPosition": {
+    "stub": {
+      "page.call": {
+        "matchedCount": 1,
+        "result": {
+          "x": 1,
+          "y": 2,
+          "width": 3,
+          "height": 4
+        }
+      }
+    },
+    "variants": [
+      {
+        "name": "bounding-box-is-spread-into-outputs",
+        "inputs": {
+          "sessionId": "s",
+          "selector": "#t"
+        },
+        "expect": {
+          "onlyCall": {
+            "op": "page.call",
+            "args": {
+              "tabId": "7",
+              "selector": "#t",
+              "method": "getPosition",
+              "args": {}
+            },
+            "timeoutSeconds": 30.0
+          },
+          "outputs": {
+            "x": 1,
+            "y": 2,
+            "width": 3,
+            "height": 4
+          },
+          "effect": "read"
+        }
+      },
+      {
+        "name": "timeoutMs-changes-channel-timeout",
+        "inputs": {
+          "selector": "#t",
+          "timeoutMs": 800
+        },
+        "expect": {
+          "onlyCall": {
+            "op": "page.call",
+            "timeoutSeconds": 0.8
+          }
+        }
+      },
+      {
+        "name": "zero-match-reports-element-not-found",
+        "stub": {
+          "page.call": {
+            "matchedCount": 0,
+            "result": null
+          }
+        },
+        "inputs": {
+          "selector": "#t"
+        },
+        "expect": {
+          "errorCode": "ELEMENT_NOT_FOUND"
+        },
+        "negative": true
+      },
+      {
+        "name": "timeoutMs-lower-bound-reaches-the-channel",
+        "inputs": {
+          "selector": "#t",
+          "sessionId": "s",
+          "timeoutMs": 1
+        },
+        "expect": {
+          "onlyCall": {
+            "timeoutSeconds": 0.1,
+            "op": "page.call"
+          }
+        }
+      }
+    ]
+  },
+  "browser.getScrollPosition": {
+    "stub": {
+      "page.call": {
+        "matchedCount": 1,
+        "result": {
+          "scrollX": 0,
+          "scrollY": 0
+        }
+      }
+    },
+    "variants": [
+      {
+        "name": "without-selector-reads-the-window-scroll",
+        "inputs": {
+          "sessionId": "s"
+        },
+        "expect": {
+          "onlyCall": {
+            "op": "page.call",
+            "argsExact": {
+              "tabId": "7",
+              "selector": "",
+              "method": "getScrollPosition",
+              "args": {}
+            },
+            "timeoutSeconds": 30.0
+          },
+          "outputs": {
+            "scrollX": 0,
+            "scrollY": 0
+          },
+          "effect": "read"
+        }
+      },
+      {
+        "name": "with-selector-reads-the-element-scroll",
+        "inputs": {
+          "sessionId": "s",
+          "selector": "#box"
+        },
+        "expect": {
+          "onlyCall": {
+            "op": "page.call",
+            "args": {
+              "selector": "#box"
+            }
+          }
+        }
+      },
+      {
+        "name": "scroll-offsets-are-returned-verbatim",
+        "stub": {
+          "page.call": {
+            "matchedCount": 1,
+            "result": {
+              "scrollX": 5,
+              "scrollY": 7
+            }
+          }
+        },
+        "inputs": {
+          "sessionId": "s"
+        },
+        "expect": {
+          "outputs": {
+            "scrollX": 5,
+            "scrollY": 7
+          }
+        }
+      },
+      {
+        "name": "timeoutMs-changes-channel-timeout",
+        "inputs": {
+          "sessionId": "s",
+          "timeoutMs": 700
+        },
+        "expect": {
+          "onlyCall": {
+            "op": "page.call",
+            "timeoutSeconds": 0.7
+          }
+        }
+      },
+      {
+        "name": "zero-match-reports-element-not-found",
+        "stub": {
+          "page.call": {
+            "matchedCount": 0,
+            "result": null
+          }
+        },
+        "inputs": {
+          "sessionId": "s",
+          "selector": "#box"
+        },
+        "expect": {
+          "errorCode": "ELEMENT_NOT_FOUND"
+        },
+        "negative": true
+      },
+      {
+        "name": "timeoutMs-lower-bound-reaches-the-channel",
+        "inputs": {
+          "sessionId": "s",
+          "timeoutMs": 1
+        },
+        "expect": {
+          "onlyCall": {
+            "timeoutSeconds": 0.1,
+            "op": "page.call"
+          }
+        }
+      }
+    ]
+  },
+  "browser.getSelectOptions": {
+    "stub": {
+      "page.call": {
+        "matchedCount": 1,
+        "result": {
+          "options": [],
+          "count": 0
+        }
+      }
+    },
+    "variants": [
+      {
+        "name": "options-are-returned-with-count",
+        "stub": {
+          "page.call": {
+            "matchedCount": 1,
+            "result": {
+              "options": [
+                {
+                  "value": "a",
+                  "label": "A"
+                }
+              ],
+              "count": 1
+            }
+          }
+        },
+        "inputs": {
+          "sessionId": "s",
+          "selector": "#sel"
+        },
+        "expect": {
+          "onlyCall": {
+            "op": "page.call",
+            "args": {
+              "tabId": "7",
+              "selector": "#sel",
+              "method": "getSelectOptions",
+              "args": {}
+            },
+            "timeoutSeconds": 30.0
+          },
+          "outputs": {
+            "options": [
+              {
+                "value": "a",
+                "label": "A"
+              }
+            ],
+            "count": 1
+          },
+          "effect": "read"
+        }
+      },
+      {
+        "name": "count-falls-back-to-option-length",
+        "stub": {
+          "page.call": {
+            "matchedCount": 1,
+            "result": {
+              "options": [
+                {
+                  "value": "a"
+                },
+                {
+                  "value": "b"
+                }
+              ]
+            }
+          }
+        },
+        "inputs": {
+          "sessionId": "s",
+          "selector": "#sel"
+        },
+        "expect": {
+          "outputs": {
+            "count": 2
+          }
+        }
+      },
+      {
+        "name": "timeoutMs-changes-channel-timeout",
+        "inputs": {
+          "sessionId": "s",
+          "selector": "#sel",
+          "timeoutMs": 600
+        },
+        "expect": {
+          "onlyCall": {
+            "op": "page.call",
+            "timeoutSeconds": 0.6
+          }
+        }
+      },
+      {
+        "name": "zero-match-reports-element-not-found",
+        "stub": {
+          "page.call": {
+            "matchedCount": 0,
+            "result": null
+          }
+        },
+        "inputs": {
+          "sessionId": "s",
+          "selector": "#sel"
+        },
+        "expect": {
+          "errorCode": "ELEMENT_NOT_FOUND"
+        },
+        "negative": true
+      },
+      {
+        "name": "timeoutMs-lower-bound-reaches-the-channel",
+        "inputs": {
+          "selector": "#t",
+          "sessionId": "s",
+          "timeoutMs": 1
+        },
+        "expect": {
+          "onlyCall": {
+            "timeoutSeconds": 0.1,
+            "op": "page.call"
+          }
+        }
+      }
+    ]
+  },
+  "browser.getText": {
+    "stub": {
+      "page.call": {
+        "matchedCount": 1,
+        "result": "text"
+      }
+    },
+    "variants": [
+      {
+        "name": "default-infoType-is-text",
+        "inputs": {
+          "sessionId": "s",
+          "selector": "#t",
+          "infoType": "text"
+        },
+        "expect": {
+          "onlyCall": {
+            "op": "page.call",
+            "args": {
+              "tabId": "7",
+              "selector": "#t",
+              "method": "getText",
+              "args": {
+                "infoType": "text"
+              }
+            },
+            "timeoutSeconds": 30.0
+          },
+          "outputs": {
+            "value": "text"
+          },
+          "effect": "read"
+        }
+      },
+      {
+        "name": "infoType-html",
+        "inputs": {
+          "selector": "#t",
+          "infoType": "html"
+        },
+        "expect": {
+          "onlyCall": {
+            "args": {
+              "args": {
+                "infoType": "html"
+              }
+            }
+          }
+        }
+      },
+      {
+        "name": "infoType-outerHTML",
+        "inputs": {
+          "selector": "#t",
+          "infoType": "outerHTML"
+        },
+        "expect": {
+          "onlyCall": {
+            "args": {
+              "args": {
+                "infoType": "outerHTML"
+              }
+            }
+          }
+        }
+      },
+      {
+        "name": "infoType-value",
+        "inputs": {
+          "selector": "#t",
+          "infoType": "value"
+        },
+        "expect": {
+          "onlyCall": {
+            "args": {
+              "args": {
+                "infoType": "value"
+              }
+            }
+          }
+        }
+      },
+      {
+        "name": "infoType-href",
+        "inputs": {
+          "selector": "#t",
+          "infoType": "href"
+        },
+        "expect": {
+          "onlyCall": {
+            "args": {
+              "args": {
+                "infoType": "href"
+              }
+            }
+          }
+        }
+      },
+      {
+        "name": "null-result-becomes-empty-string",
+        "stub": {
+          "page.call": {
+            "matchedCount": 1,
+            "result": null
+          }
+        },
+        "inputs": {
+          "selector": "#t"
+        },
+        "expect": {
+          "outputs": {
+            "value": ""
+          }
+        }
+      },
+      {
+        "name": "numeric-result-is-stringified",
+        "stub": {
+          "page.call": {
+            "matchedCount": 1,
+            "result": 42
+          }
+        },
+        "inputs": {
+          "selector": "#t"
+        },
+        "expect": {
+          "outputs": {
+            "value": "42"
+          }
+        }
+      },
+      {
+        "name": "timeoutMs-changes-channel-timeout",
+        "inputs": {
+          "selector": "#t",
+          "timeoutMs": 900
+        },
+        "expect": {
+          "onlyCall": {
+            "op": "page.call",
+            "timeoutSeconds": 0.9
+          }
+        }
+      },
+      {
+        "name": "zero-match-reports-element-not-found",
+        "stub": {
+          "page.call": {
+            "matchedCount": 0,
+            "result": null
+          }
+        },
+        "inputs": {
+          "selector": "#t"
+        },
+        "expect": {
+          "errorCode": "ELEMENT_NOT_FOUND"
+        },
+        "negative": true
+      },
+      {
+        "name": "timeoutMs-lower-bound-reaches-the-channel",
+        "inputs": {
+          "selector": "#t",
+          "sessionId": "s",
+          "timeoutMs": 1
+        },
+        "expect": {
+          "onlyCall": {
+            "timeoutSeconds": 0.1,
+            "op": "page.call"
+          }
+        }
+      }
+    ]
+  },
+  "browser.handleDialog": {
+    "notes": "扩展单通道下本期未实现：显式报 COMMAND_NOT_FOUND。",
+    "variants": [
+      {
+        "name": "accept-action-reports-command-not-found",
+        "inputs": {
+          "sessionId": "s",
+          "action": "accept",
+          "promptText": "hi"
+        },
+        "expect": {
+          "errorCode": "COMMAND_NOT_FOUND",
+          "noCalls": true
+        },
+        "negative": true
+      },
+      {
+        "name": "dismiss-action-reports-command-not-found",
+        "inputs": {
+          "sessionId": "s",
+          "action": "dismiss"
+        },
+        "expect": {
+          "errorCode": "COMMAND_NOT_FOUND",
+          "noCalls": true
+        },
+        "negative": true
+      }
+    ],
+    "unimplemented": true
+  },
+  "browser.hover": {
+    "stub": {
+      "page.call": {
+        "matchedCount": 1,
+        "result": null
+      }
+    },
+    "variants": [
+      {
+        "name": "selector-is-forwarded-to-the-hover-primitive",
+        "inputs": {
+          "sessionId": "s",
+          "selector": "#t"
+        },
+        "expect": {
+          "onlyCall": {
+            "op": "page.call",
+            "argsExact": {
+              "tabId": "7",
+              "selector": "#t",
+              "method": "hover",
+              "args": {}
+            },
+            "timeoutSeconds": 30.0
+          },
+          "outputs": {
+            "matchedCount": 1,
+            "sessionId": "s"
+          },
+          "effect": "unsafe-write"
+        }
+      },
+      {
+        "name": "timeoutMs-changes-channel-timeout",
+        "inputs": {
+          "selector": "#t",
+          "timeoutMs": 400
+        },
+        "expect": {
+          "onlyCall": {
+            "op": "page.call",
+            "timeoutSeconds": 0.4
+          }
+        }
+      },
+      {
+        "name": "zero-match-reports-element-not-found",
+        "stub": {
+          "page.call": {
+            "matchedCount": 0,
+            "result": null
+          }
+        },
+        "inputs": {
+          "selector": "#t"
+        },
+        "expect": {
+          "errorCode": "ELEMENT_NOT_FOUND"
+        },
+        "negative": true
+      },
+      {
+        "name": "timeoutMs-lower-bound-reaches-the-channel",
+        "inputs": {
+          "selector": "#t",
+          "sessionId": "s",
+          "timeoutMs": 1
+        },
+        "expect": {
+          "onlyCall": {
+            "timeoutSeconds": 0.1,
+            "op": "page.call"
+          }
+        }
+      }
+    ]
+  },
+  "browser.input": {
+    "stub": {
+      "page.call": {
+        "matchedCount": 1,
+        "result": null
+      }
+    },
+    "variants": [
+      {
+        "name": "defaults-mode-fill-and-all-flags-off",
+        "inputs": {
+          "sessionId": "s",
+          "selector": "#t",
+          "text": "hi",
+          "mode": "fill"
+        },
+        "expect": {
+          "onlyCall": {
+            "op": "page.call",
+            "args": {
+              "tabId": "7",
+              "selector": "#t",
+              "method": "input",
+              "args": {
+                "text": "hi",
+                "mode": "fill",
+                "append": false,
+                "pressEnter": false,
+                "clickBeforeInput": false
+              }
+            },
+            "timeoutSeconds": 30.0
+          },
+          "outputs": {
+            "matchedCount": 1,
+            "sessionId": "s"
+          },
+          "effect": "unsafe-write"
+        }
+      },
+      {
+        "name": "mode-type",
+        "inputs": {
+          "selector": "#t",
+          "text": "hi",
+          "mode": "type"
+        },
+        "expect": {
+          "onlyCall": {
+            "args": {
+              "args": {
+                "mode": "type"
+              }
+            }
+          }
+        }
+      },
+      {
+        "name": "mode-clipboard",
+        "inputs": {
+          "selector": "#t",
+          "text": "hi",
+          "mode": "clipboard"
+        },
+        "expect": {
+          "onlyCall": {
+            "args": {
+              "args": {
+                "mode": "clipboard"
+              }
+            }
+          }
+        }
+      },
+      {
+        "name": "keyIntervalMs-is-forwarded",
+        "inputs": {
+          "selector": "#t",
+          "text": "hi",
+          "mode": "type",
+          "keyIntervalMs": 200
+        },
+        "expect": {
+          "onlyCall": {
+            "args": {
+              "args": {
+                "keyIntervalMs": 200
+              }
+            }
+          }
+        }
+      },
+      {
+        "name": "keyIntervalMs-zero-lower-boundary-is-accepted",
+        "inputs": {
+          "selector": "#t",
+          "text": "hi",
+          "mode": "type",
+          "keyIntervalMs": 0
+        },
+        "expect": {
+          "onlyCall": {
+            "args": {
+              "args": {
+                "keyIntervalMs": 0
+              }
+            }
+          }
+        }
+      },
+      {
+        "name": "append-true",
+        "inputs": {
+          "selector": "#t",
+          "text": "hi",
+          "append": true
+        },
+        "expect": {
+          "onlyCall": {
+            "args": {
+              "args": {
+                "append": true
+              }
+            }
+          }
+        }
+      },
+      {
+        "name": "pressEnter-true",
+        "inputs": {
+          "selector": "#t",
+          "text": "hi",
+          "pressEnter": true
+        },
+        "expect": {
+          "onlyCall": {
+            "args": {
+              "args": {
+                "pressEnter": true
+              }
+            }
+          }
+        }
+      },
+      {
+        "name": "clickBeforeInput-true",
+        "inputs": {
+          "selector": "#t",
+          "text": "hi",
+          "clickBeforeInput": true
+        },
+        "expect": {
+          "onlyCall": {
+            "args": {
+              "args": {
+                "clickBeforeInput": true
+              }
+            }
+          }
+        }
+      },
+      {
+        "name": "postDelayMs-delays-after-the-input",
+        "inputs": {
+          "selector": "#t",
+          "text": "hi",
+          "postDelayMs": 50
+        },
+        "expect": {
+          "onlyCall": {
+            "op": "page.call"
+          },
+          "elapsedAtLeastMs": 45
+        }
+      },
+      {
+        "name": "timeoutMs-changes-channel-timeout",
+        "inputs": {
+          "selector": "#t",
+          "text": "hi",
+          "timeoutMs": 1100
+        },
+        "expect": {
+          "onlyCall": {
+            "op": "page.call",
+            "timeoutSeconds": 1.1
+          }
+        }
+      },
+      {
+        "name": "extension-rejection-of-the-mode-is-an-explicit-failure",
+        "stub": {
+          "page.call": {
+            "matchedCount": 1,
+            "result": null,
+            "inputRejected": true,
+            "message": "paste refused"
+          }
+        },
+        "inputs": {
+          "selector": "#t",
+          "text": "hi",
+          "mode": "clipboard"
+        },
+        "expect": {
+          "errorCode": "EXECUTOR_FAILED",
+          "errorDetails": {
+            "reason": "input_mode_not_accepted"
+          }
+        },
+        "negative": true
+      },
+      {
+        "name": "zero-match-reports-element-not-found",
+        "stub": {
+          "page.call": {
+            "matchedCount": 0,
+            "result": null
+          }
+        },
+        "inputs": {
+          "selector": "#t",
+          "text": "hi"
+        },
+        "expect": {
+          "errorCode": "ELEMENT_NOT_FOUND"
+        },
+        "negative": true
+      },
+      {
+        "name": "timeoutMs-lower-bound-reaches-the-channel",
+        "inputs": {
+          "selector": "#t",
+          "text": "hi",
+          "sessionId": "s",
+          "timeoutMs": 1,
+          "postDelayMs": 0
+        },
+        "expect": {
+          "onlyCall": {
+            "timeoutSeconds": 0.1,
+            "op": "page.call"
+          }
+        }
+      }
+    ]
+  },
+  "browser.listPages": {
+    "notes": "无会话命令：列举用户浏览器里的全部标签页，index 即后续 tabIds 的取值来源。",
+    "stub": {
+      "tabs.list": {
+        "tabs": [
+          {
+            "id": 9,
+            "url": "https://a.test/",
+            "title": "A"
+          },
+          {
+            "id": 10,
+            "url": "https://b.test/",
+            "title": "B"
+          }
+        ]
+      }
+    },
+    "variants": [
+      {
+        "name": "pages-are-enumerated-with-stable-index",
+        "inputs": {
+          "sessionId": "s"
+        },
+        "expect": {
+          "onlyCall": {
+            "op": "tabs.list",
+            "argsExact": {},
+            "timeoutSeconds": 30.0
+          },
+          "outputs": {
+            "pages": [
+              {
+                "index": 0,
+                "url": "https://a.test/",
+                "title": "A"
+              },
+              {
+                "index": 1,
+                "url": "https://b.test/",
+                "title": "B"
+              }
+            ],
+            "count": 2
+          },
+          "effect": "read"
+        }
+      },
+      {
+        "name": "no-open-tabs-yields-empty-page-list",
+        "stub": {
+          "tabs.list": {
+            "tabs": []
+          }
+        },
+        "inputs": {},
+        "expect": {
+          "outputs": {
+            "pages": [],
+            "count": 0
+          }
+        }
+      },
+      {
+        "name": "timeoutMs-changes-channel-timeout",
+        "inputs": {
+          "timeoutMs": 300
+        },
+        "expect": {
+          "onlyCall": {
+            "op": "tabs.list",
+            "timeoutSeconds": 0.3
+          }
+        }
+      },
+      {
+        "name": "channel-error-maps-to-executor-failed",
+        "errors": {
+          "tabs.list": {
+            "code": "CHANNEL_OFFLINE",
+            "message": "endpoint down"
+          }
+        },
+        "inputs": {},
+        "expect": {
+          "errorCode": "EXECUTOR_FAILED"
+        },
+        "negative": true
+      }
+    ]
+  },
+  "browser.navigate": {
+    "notes": "goto 在无会话时新建标签页（tabs.create，通道超时抬到 45s 的 SW 唤醒窗口）、在已有会话上走 tabs.navigate；back/forward/reload 走 tabs.history。commandLineArgs 只在「目标浏览器离线→自动拉起」路径被消费。",
+    "stub": {
+      "tabs.create": {
+        "tabId": "1",
+        "url": "https://example.test/",
+        "instanceId": "inst"
+      }
+    },
+    "variants": [
+      {
+        "name": "goto-without-session-creates-a-tab-and-binds-a-session",
+        "sessions": {},
+        "inputs": {
+          "browserType": "msedge",
+          "action": "goto",
+          "url": "https://example.test/"
+        },
+        "expect": {
+          "onlyCall": {
+            "op": "tabs.create",
+            "argsExact": {
+              "url": "https://example.test/",
+              "active": true
+            }
+          },
+          "outputs": {
+            "url": "https://example.test/",
+            "resourceType": "webPage",
+            "browserType": "msedge",
+            "tabId": "1"
+          },
+          "outputKeys": [
+            "sessionId"
+          ],
+          "effect": "session"
+        }
+      },
+      {
+        "name": "goto-prepends-https-when-scheme-is-missing",
+        "sessions": {},
+        "inputs": {
+          "browserType": "msedge",
+          "action": "goto",
+          "url": "example.test"
+        },
+        "expect": {
+          "onlyCall": {
+            "op": "tabs.create",
+            "argsExact": {
+              "url": "https://example.test",
+              "active": true
+            }
+          }
+        }
+      },
+      {
+        "name": "browserType-chrome",
+        "sessions": {},
+        "inputs": {
+          "browserType": "chrome",
+          "action": "goto",
+          "url": "https://example.test/"
+        },
+        "expect": {
+          "outputs": {
+            "browserType": "chrome"
+          },
+          "effect": "session"
+        }
+      },
+      {
+        "name": "goto-on-an-existing-session-navigates-that-tab",
+        "inputs": {
+          "sessionId": "s",
+          "browserType": "msedge",
+          "action": "goto",
+          "url": "https://example.test/x"
+        },
+        "expect": {
+          "onlyCall": {
+            "op": "tabs.navigate",
+            "argsExact": {
+              "tabId": "7",
+              "url": "https://example.test/x"
+            }
+          },
+          "outputs": {
+            "sessionId": "s",
+            "url": "https://example.test/"
+          },
+          "effect": "session"
+        }
+      },
+      {
+        "name": "action-back-uses-history",
+        "inputs": {
+          "sessionId": "s",
+          "action": "back"
+        },
+        "expect": {
+          "onlyCall": {
+            "op": "tabs.history",
+            "argsExact": {
+              "tabId": "7",
+              "action": "back"
+            }
+          },
+          "effect": "session"
+        }
+      },
+      {
+        "name": "action-forward-uses-history",
+        "inputs": {
+          "sessionId": "s",
+          "action": "forward"
+        },
+        "expect": {
+          "onlyCall": {
+            "op": "tabs.history",
+            "argsExact": {
+              "tabId": "7",
+              "action": "forward"
+            }
+          }
+        }
+      },
+      {
+        "name": "action-reload-uses-history",
+        "inputs": {
+          "sessionId": "s",
+          "action": "reload"
+        },
+        "expect": {
+          "onlyCall": {
+            "op": "tabs.history",
+            "argsExact": {
+              "tabId": "7",
+              "action": "reload"
+            }
+          }
+        }
+      },
+      {
+        "name": "onTimeout-stop-stops-loading-and-succeeds",
+        "sessions": {},
+        "stub": {
+          "tabs.create": {
+            "tabId": "1",
+            "url": "https://example.test/",
+            "timedOut": true
+          }
+        },
+        "inputs": {
+          "browserType": "msedge",
+          "action": "goto",
+          "url": "https://example.test/",
+          "onTimeout": "stop"
+        },
+        "expect": {
+          "calls": [
+            {
+              "op": "tabs.create"
+            },
+            {
+              "op": "tabs.stopLoading",
+              "argsExact": {
+                "tabId": "1"
+              }
+            }
+          ],
+          "effect": "session"
+        }
+      },
+      {
+        "name": "onTimeout-error-fails-with-timeout-on-a-timed-out-load",
+        "sessions": {},
+        "stub": {
+          "tabs.create": {
+            "tabId": "1",
+            "url": "https://example.test/",
+            "timedOut": true
+          }
+        },
+        "inputs": {
+          "browserType": "msedge",
+          "action": "goto",
+          "url": "https://example.test/",
+          "onTimeout": "error"
+        },
+        "expect": {
+          "errorCode": "TIMEOUT",
+          "errorDetails": {
+            "reason": "navigate_load_timeout"
+          }
+        },
+        "negative": true
+      },
+      {
+        "name": "goto-without-url-is-rejected-before-any-channel-call",
+        "sessions": {},
+        "inputs": {
+          "browserType": "msedge",
+          "action": "goto"
+        },
+        "expect": {
+          "errorCode": "INVALID_INPUT",
+          "noCalls": true
+        },
+        "negative": true
+      },
+      {
+        "name": "channel-timeout-is-raised-to-the-service-worker-wake-window",
+        "sessions": {},
+        "inputs": {
+          "browserType": "msedge",
+          "action": "goto",
+          "url": "https://example.test/",
+          "timeoutMs": 2000
+        },
+        "expect": {
+          "onlyCall": {
+            "op": "tabs.create",
+            "timeoutSeconds": 45.0
+          }
+        }
+      },
+      {
+        "name": "commandLineArgs-does-not-change-the-normal-path",
+        "sessions": {},
+        "inputs": {
+          "browserType": "msedge",
+          "action": "goto",
+          "url": "https://example.test/",
+          "commandLineArgs": [
+            "--user-data-dir=/tmp/isolated"
+          ]
+        },
+        "expect": {
+          "onlyCall": {
+            "op": "tabs.create",
+            "argsExact": {
+              "url": "https://example.test/",
+              "active": true
+            }
+          },
+          "effect": "session"
+        }
+      },
+      {
+        "name": "timeoutMs-lower-bound-reaches-the-channel",
+        "inputs": {
+          "browserType": "msedge",
+          "sessionId": "s",
+          "timeoutMs": 1,
+          "action": "goto",
+          "url": "https://example.test/"
+        },
+        "sessions": {},
+        "expect": {
+          "onlyCall": {
+            "op": "tabs.create",
+            "timeoutSeconds": 45.0
+          }
+        }
+      }
+    ]
+  },
+  "browser.queryAll": {
+    "stub": {
+      "page.call": {
+        "matchedCount": 1,
+        "result": []
+      }
+    },
+    "variants": [
+      {
+        "name": "matched-values-are-returned-as-items",
+        "stub": {
+          "page.call": {
+            "matchedCount": 2,
+            "result": [
+              {
+                "v": "a"
+              },
+              {
+                "v": "b"
+              }
+            ]
+          }
+        },
+        "inputs": {
+          "sessionId": "s",
+          "selector": "#t"
+        },
+        "expect": {
+          "onlyCall": {
+            "op": "page.call",
+            "args": {
+              "method": "queryAll"
+            }
+          },
+          "outputs": {
+            "count": 2
+          },
+          "effect": "read"
+        }
+      },
+      {
+        "name": "non-list-result-degrades-to-empty-items",
+        "stub": {
+          "page.call": {
+            "matchedCount": 1,
+            "result": "not-a-list"
+          }
+        },
+        "inputs": {
+          "sessionId": "s",
+          "selector": "#t"
+        },
+        "expect": {
+          "outputs": {
+            "items": []
+          }
+        }
+      },
+      {
+        "name": "timeoutMs-changes-channel-timeout",
+        "inputs": {
+          "sessionId": "s",
+          "selector": "#t",
+          "timeoutMs": 200
+        },
+        "expect": {
+          "onlyCall": {
+            "op": "page.call",
+            "timeoutSeconds": 0.2
+          }
+        }
+      },
+      {
+        "name": "zero-match-reports-element-not-found",
+        "stub": {
+          "page.call": {
+            "matchedCount": 0,
+            "result": null
+          }
+        },
+        "inputs": {
+          "sessionId": "s",
+          "selector": "#t"
+        },
+        "expect": {
+          "errorCode": "ELEMENT_NOT_FOUND"
+        },
+        "negative": true
+      }
+    ]
+  },
+  "browser.screenshot": {
+    "stub": {
+      "screenshot": {
+        "dataUrl": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8AAAwAB/AF+2gAAAABJRU5ErkJggg=="
+      }
+    },
+    "variants": [
+      {
+        "name": "data-url-is-decoded-and-written-to-savePath",
+        "inputs": {
+          "sessionId": "s",
+          "savePath": "{tmp}/rpa-m38-shot.png"
+        },
+        "expect": {
+          "onlyCall": {
+            "op": "screenshot",
+            "argsExact": {
+              "tabId": "7"
+            },
+            "timeoutSeconds": 30.0
+          },
+          "outputKeys": [
+            "filePath"
+          ],
+          "effect": "idempotent-write"
+        }
+      },
+      {
+        "name": "empty-image-data-fails-explicitly",
+        "stub": {
+          "screenshot": {
+            "dataUrl": "data:image/png;base64,"
+          }
+        },
+        "inputs": {
+          "sessionId": "s",
+          "savePath": "{tmp}/rpa-m38-empty.png"
+        },
+        "expect": {
+          "errorCode": "EXECUTOR_FAILED",
+          "errorDetails": {
+            "channel": "extension"
+          }
+        },
+        "negative": true
+      },
+      {
+        "name": "channel-error-maps-to-executor-failed",
+        "errors": {
+          "screenshot": {
+            "code": "TIMEOUT",
+            "message": "no frame"
+          }
+        },
+        "inputs": {
+          "sessionId": "s",
+          "savePath": "{tmp}/rpa-m38-timeout.png"
+        },
+        "expect": {
+          "errorCode": "TIMEOUT"
+        },
+        "negative": true
+      }
+    ]
+  },
+  "browser.scroll": {
+    "notes": "position 必填；无 selector 时滚 window、有 selector 时滚元素。0 命中不报错（滚动本身不需要命中元素）。",
+    "stub": {
+      "page.call": {
+        "matchedCount": 1,
+        "result": 0
+      }
+    },
+    "variants": [
+      {
+        "name": "window-scroll-when-no-selector-is-given",
+        "inputs": {
+          "sessionId": "s",
+          "position": "top"
+        },
+        "expect": {
+          "onlyCall": {
+            "op": "page.call",
+            "argsExact": {
+              "tabId": "7",
+              "selector": "",
+              "method": "scroll",
+              "args": {
+                "position": "top",
+                "x": null,
+                "y": null,
+                "smooth": false
+              }
+            },
+            "timeoutSeconds": 30.0
+          },
+          "outputs": {
+            "scrollY": 0.0
+          },
+          "effect": "unsafe-write"
+        }
+      },
+      {
+        "name": "position-bottom",
+        "inputs": {
+          "sessionId": "s",
+          "position": "bottom"
+        },
+        "expect": {
+          "onlyCall": {
+            "args": {
+              "args": {
+                "position": "bottom"
+              }
+            }
+          }
+        }
+      },
+      {
+        "name": "position-page",
+        "inputs": {
+          "sessionId": "s",
+          "position": "page"
+        },
+        "expect": {
+          "onlyCall": {
+            "args": {
+              "args": {
+                "position": "page"
+              }
+            }
+          }
+        }
+      },
+      {
+        "name": "position-point-forwards-coordinates",
+        "inputs": {
+          "sessionId": "s",
+          "position": "point",
+          "x": 10,
+          "y": 20
+        },
+        "expect": {
+          "onlyCall": {
+            "args": {
+              "args": {
+                "position": "point",
+                "x": 10,
+                "y": 20
+              }
+            }
+          }
+        }
+      },
+      {
+        "name": "selector-switches-to-element-scroll",
+        "inputs": {
+          "sessionId": "s",
+          "position": "top",
+          "selector": "#box"
+        },
+        "expect": {
+          "onlyCall": {
+            "args": {
+              "selector": "#box"
+            }
+          }
+        }
+      },
+      {
+        "name": "smooth-true",
+        "inputs": {
+          "sessionId": "s",
+          "position": "bottom",
+          "smooth": true
+        },
+        "expect": {
+          "onlyCall": {
+            "args": {
+              "args": {
+                "smooth": true
+              }
+            }
+          }
+        }
+      },
+      {
+        "name": "scroll-offset-is-returned-as-float",
+        "stub": {
+          "page.call": {
+            "matchedCount": 1,
+            "result": 120
+          }
+        },
+        "inputs": {
+          "sessionId": "s",
+          "position": "bottom"
+        },
+        "expect": {
+          "outputs": {
+            "scrollY": 120.0
+          }
+        }
+      },
+      {
+        "name": "zero-match-does-not-fail-for-scroll",
+        "stub": {
+          "page.call": {
+            "matchedCount": 0,
+            "result": 0
+          }
+        },
+        "inputs": {
+          "sessionId": "s",
+          "position": "top",
+          "selector": "#absent"
+        },
+        "expect": {
+          "outputs": {
+            "scrollY": 0.0
+          },
+          "effect": "unsafe-write"
+        }
+      },
+      {
+        "name": "timeoutMs-changes-channel-timeout",
+        "inputs": {
+          "sessionId": "s",
+          "position": "top",
+          "timeoutMs": 1000
+        },
+        "expect": {
+          "onlyCall": {
+            "op": "page.call",
+            "timeoutSeconds": 1.0
+          }
+        }
+      },
+      {
+        "name": "channel-error-maps-to-executor-failed",
+        "errors": {
+          "page.call": {
+            "code": "CHANNEL_OFFLINE",
+            "message": "endpoint down"
+          }
+        },
+        "inputs": {
+          "sessionId": "s",
+          "position": "top"
+        },
+        "expect": {
+          "errorCode": "EXECUTOR_FAILED"
+        },
+        "negative": true
+      },
+      {
+        "name": "timeoutMs-lower-bound-reaches-the-channel",
+        "inputs": {
+          "sessionId": "s",
+          "position": "top",
+          "timeoutMs": 1
+        },
+        "expect": {
+          "onlyCall": {
+            "timeoutSeconds": 0.1,
+            "op": "page.call"
+          }
+        }
+      }
+    ]
+  },
+  "browser.select": {
+    "stub": {
+      "page.call": {
+        "matchedCount": 1,
+        "result": null
+      }
+    },
+    "variants": [
+      {
+        "name": "default-selectBy-value",
+        "inputs": {
+          "sessionId": "s",
+          "selector": "#t",
+          "value": "v",
+          "selectBy": "value"
+        },
+        "expect": {
+          "onlyCall": {
+            "op": "page.call",
+            "argsExact": {
+              "tabId": "7",
+              "selector": "#t",
+              "method": "select",
+              "args": {
+                "value": "v",
+                "selectBy": "value"
+              }
+            },
+            "timeoutSeconds": 30.0
+          },
+          "outputs": {
+            "matchedCount": 1,
+            "sessionId": "s"
+          },
+          "effect": "unsafe-write"
+        }
+      },
+      {
+        "name": "selectBy-label",
+        "inputs": {
+          "selector": "#t",
+          "value": "Label",
+          "selectBy": "label"
+        },
+        "expect": {
+          "onlyCall": {
+            "args": {
+              "args": {
+                "selectBy": "label",
+                "value": "Label"
+              }
+            }
+          }
+        }
+      },
+      {
+        "name": "selectBy-index",
+        "inputs": {
+          "selector": "#t",
+          "value": "2",
+          "selectBy": "index"
+        },
+        "expect": {
+          "onlyCall": {
+            "args": {
+              "args": {
+                "selectBy": "index",
+                "value": "2"
+              }
+            }
+          }
+        }
+      },
+      {
+        "name": "timeoutMs-changes-channel-timeout",
+        "inputs": {
+          "selector": "#t",
+          "value": "v",
+          "timeoutMs": 300
+        },
+        "expect": {
+          "onlyCall": {
+            "op": "page.call",
+            "timeoutSeconds": 0.3
+          }
+        }
+      },
+      {
+        "name": "zero-match-reports-element-not-found",
+        "stub": {
+          "page.call": {
+            "matchedCount": 0,
+            "result": null
+          }
+        },
+        "inputs": {
+          "selector": "#t",
+          "value": "v"
+        },
+        "expect": {
+          "errorCode": "ELEMENT_NOT_FOUND"
+        },
+        "negative": true
+      },
+      {
+        "name": "timeoutMs-lower-bound-reaches-the-channel",
+        "inputs": {
+          "selector": "#t",
+          "value": "v",
+          "sessionId": "s",
+          "timeoutMs": 1
+        },
+        "expect": {
+          "onlyCall": {
+            "timeoutSeconds": 0.1,
+            "op": "page.call"
+          }
+        }
+      }
+    ]
+  },
+  "browser.setAttribute": {
+    "stub": {
+      "page.call": {
+        "matchedCount": 1,
+        "result": null
+      }
+    },
+    "variants": [
+      {
+        "name": "name-and-value-are-forwarded",
+        "inputs": {
+          "sessionId": "s",
+          "selector": "#t",
+          "name": "data-x",
+          "value": "y"
+        },
+        "expect": {
+          "onlyCall": {
+            "op": "page.call",
+            "argsExact": {
+              "tabId": "7",
+              "selector": "#t",
+              "method": "setAttribute",
+              "args": {
+                "name": "data-x",
+                "value": "y"
+              }
+            },
+            "timeoutSeconds": 30.0
+          },
+          "outputKeys": [
+            "matchedCount"
+          ],
+          "effect": "unsafe-write"
+        }
+      },
+      {
+        "name": "timeoutMs-changes-channel-timeout",
+        "inputs": {
+          "selector": "#t",
+          "name": "a",
+          "value": "b",
+          "timeoutMs": 900
+        },
+        "expect": {
+          "onlyCall": {
+            "op": "page.call",
+            "timeoutSeconds": 0.9
+          }
+        }
+      },
+      {
+        "name": "zero-match-reports-element-not-found",
+        "stub": {
+          "page.call": {
+            "matchedCount": 0,
+            "result": null
+          }
+        },
+        "inputs": {
+          "selector": "#t",
+          "name": "a",
+          "value": "b"
+        },
+        "expect": {
+          "errorCode": "ELEMENT_NOT_FOUND"
+        },
+        "negative": true
+      },
+      {
+        "name": "timeoutMs-lower-bound-reaches-the-channel",
+        "inputs": {
+          "selector": "#t",
+          "name": "k",
+          "value": "v",
+          "sessionId": "s",
+          "timeoutMs": 1
+        },
+        "expect": {
+          "onlyCall": {
+            "timeoutSeconds": 0.1,
+            "op": "page.call"
+          }
+        }
+      }
+    ]
+  },
+  "browser.setValue": {
+    "stub": {
+      "page.call": {
+        "matchedCount": 1,
+        "result": null
+      }
+    },
+    "variants": [
+      {
+        "name": "default-setWay-value",
+        "inputs": {
+          "sessionId": "s",
+          "selector": "#t",
+          "value": "v",
+          "setWay": "value"
+        },
+        "expect": {
+          "onlyCall": {
+            "op": "page.call",
+            "argsExact": {
+              "tabId": "7",
+              "selector": "#t",
+              "method": "setValue",
+              "args": {
+                "setWay": "value",
+                "value": "v"
+              }
+            },
+            "timeoutSeconds": 30.0
+          },
+          "outputKeys": [
+            "matchedCount"
+          ],
+          "effect": "unsafe-write"
+        }
+      },
+      {
+        "name": "setWay-innerText",
+        "inputs": {
+          "selector": "#t",
+          "value": "v",
+          "setWay": "innerText"
+        },
+        "expect": {
+          "onlyCall": {
+            "args": {
+              "args": {
+                "setWay": "innerText"
+              }
+            }
+          }
+        }
+      },
+      {
+        "name": "setWay-innerHTML",
+        "inputs": {
+          "selector": "#t",
+          "value": "v",
+          "setWay": "innerHTML"
+        },
+        "expect": {
+          "onlyCall": {
+            "args": {
+              "args": {
+                "setWay": "innerHTML"
+              }
+            }
+          }
+        }
+      },
+      {
+        "name": "timeoutMs-changes-channel-timeout",
+        "inputs": {
+          "selector": "#t",
+          "value": "v",
+          "timeoutMs": 700
+        },
+        "expect": {
+          "onlyCall": {
+            "op": "page.call",
+            "timeoutSeconds": 0.7
+          }
+        }
+      },
+      {
+        "name": "zero-match-reports-element-not-found",
+        "stub": {
+          "page.call": {
+            "matchedCount": 0,
+            "result": null
+          }
+        },
+        "inputs": {
+          "selector": "#t",
+          "value": "v"
+        },
+        "expect": {
+          "errorCode": "ELEMENT_NOT_FOUND"
+        },
+        "negative": true
+      },
+      {
+        "name": "timeoutMs-lower-bound-reaches-the-channel",
+        "inputs": {
+          "selector": "#t",
+          "value": "v",
+          "sessionId": "s",
+          "timeoutMs": 1
+        },
+        "expect": {
+          "onlyCall": {
+            "timeoutSeconds": 0.1,
+            "op": "page.call"
+          }
+        }
+      }
+    ]
+  },
+  "browser.stopLoading": {
+    "stub": {
+      "tabs.stopLoading": {
+        "url": "https://example.test/"
+      }
+    },
+    "variants": [
+      {
+        "name": "stops-loading-and-returns-current-url",
+        "inputs": {
+          "sessionId": "s"
+        },
+        "expect": {
+          "onlyCall": {
+            "op": "tabs.stopLoading",
+            "argsExact": {
+              "tabId": "7"
+            },
+            "timeoutSeconds": 30.0
+          },
+          "outputs": {
+            "url": "https://example.test/"
+          },
+          "effect": "unsafe-write"
+        }
+      },
+      {
+        "name": "timeoutMs-changes-channel-timeout",
+        "inputs": {
+          "sessionId": "s",
+          "timeoutMs": 250
+        },
+        "expect": {
+          "onlyCall": {
+            "op": "tabs.stopLoading",
+            "timeoutSeconds": 0.25
+          }
+        }
+      },
+      {
+        "name": "channel-error-maps-to-executor-failed",
+        "errors": {
+          "tabs.stopLoading": {
+            "code": "TIMEOUT",
+            "message": "no reply"
+          }
+        },
+        "inputs": {
+          "sessionId": "s"
+        },
+        "expect": {
+          "errorCode": "TIMEOUT"
+        },
+        "negative": true
+      },
+      {
+        "name": "timeoutMs-lower-bound-reaches-the-channel",
+        "inputs": {
+          "sessionId": "s",
+          "timeoutMs": 1
+        },
+        "expect": {
+          "onlyCall": {
+            "timeoutSeconds": 0.1,
+            "op": "tabs.stopLoading"
+          }
+        }
+      }
+    ]
+  },
+  "browser.upload": {
+    "notes": "扩展单通道下本期未实现：显式报 COMMAND_NOT_FOUND。",
+    "variants": [
+      {
+        "name": "unimplemented-reports-command-not-found",
+        "inputs": {
+          "sessionId": "s",
+          "selector": "#t",
+          "files": [
+            "/tmp/f.txt"
+          ],
+          "timeoutMs": 1000
+        },
+        "expect": {
+          "errorCode": "COMMAND_NOT_FOUND",
+          "errorDetails": {
+            "command": "browser.upload"
+          },
+          "noCalls": true
+        },
+        "negative": true
+      }
+    ],
+    "unimplemented": true
+  },
+  "browser.waitFor": {
+    "notes": "四态语义：visible/hidden 带可见性判据，attached/detached 只看命中数。轮询走 page.call(count)。",
+    "stub": {
+      "page.call": {
+        "matchedCount": 1,
+        "result": 1
+      }
+    },
+    "variants": [
+      {
+        "name": "default-state-visible-counts-visible-matches",
+        "inputs": {
+          "sessionId": "s",
+          "selector": "#t"
+        },
+        "expect": {
+          "onlyCall": {
+            "op": "page.call",
+            "args": {
+              "tabId": "7",
+              "selector": "#t",
+              "method": "count",
+              "args": {
+                "visible": true
+              }
+            }
+          },
+          "outputs": {
+            "matchedCount": 1
+          },
+          "effect": "read"
+        }
+      },
+      {
+        "name": "state-hidden-succeeds-when-no-visible-match-remains",
+        "stub": {
+          "page.call": {
+            "matchedCount": 0,
+            "result": 0
+          }
+        },
+        "inputs": {
+          "sessionId": "s",
+          "selector": "#t",
+          "state": "hidden"
+        },
+        "expect": {
+          "onlyCall": {
+            "op": "page.call",
+            "args": {
+              "args": {
+                "visible": true
+              }
+            }
+          },
+          "outputs": {
+            "matchedCount": 0
+          }
+        }
+      },
+      {
+        "name": "state-attached-ignores-visibility",
+        "inputs": {
+          "sessionId": "s",
+          "selector": "#t",
+          "state": "attached"
+        },
+        "expect": {
+          "onlyCall": {
+            "op": "page.call",
+            "args": {
+              "args": {
+                "visible": false
+              }
+            }
+          }
+        }
+      },
+      {
+        "name": "state-detached-succeeds-when-element-is-gone",
+        "stub": {
+          "page.call": {
+            "matchedCount": 0,
+            "result": 0
+          }
+        },
+        "inputs": {
+          "sessionId": "s",
+          "selector": "#t",
+          "state": "detached"
+        },
+        "expect": {
+          "onlyCall": {
+            "op": "page.call",
+            "args": {
+              "args": {
+                "visible": false
+              }
+            }
+          },
+          "outputs": {
+            "matchedCount": 0
+          }
+        }
+      },
+      {
+        "name": "unsatisfied-state-times-out",
+        "stub": {
+          "page.call": {
+            "matchedCount": 0,
+            "result": 0
+          }
+        },
+        "inputs": {
+          "sessionId": "s",
+          "selector": "#t",
+          "state": "visible",
+          "timeoutMs": 1
+        },
+        "expect": {
+          "errorCode": "TIMEOUT",
+          "errorDetails": {
+            "state": "visible"
+          }
+        },
+        "negative": true
+      },
+      {
+        "name": "channel-error-maps-to-executor-failed",
+        "errors": {
+          "page.call": {
+            "code": "CHANNEL_OFFLINE",
+            "message": "endpoint down"
+          }
+        },
+        "inputs": {
+          "sessionId": "s",
+          "selector": "#t"
+        },
+        "expect": {
+          "errorCode": "EXECUTOR_FAILED"
+        },
+        "negative": true
+      },
+      {
+        "name": "timeoutMs-changes-channel-timeout",
+        "inputs": {
+          "selector": "#t",
+          "sessionId": "s",
+          "timeoutMs": 300
+        },
+        "expect": {
+          "onlyCall": {
+            "timeoutSeconds": 0.3,
+            "op": "page.call"
+          }
+        }
+      }
+    ]
+  },
+  "browser.waitLoad": {
+    "notes": "state（load/domcontentloaded/networkidle）声明了但未转发给扩展——见 M38 任务单的发现清单；timeoutMs 真实传导到扩展。",
+    "stub": {
+      "tabs.waitLoad": {
+        "url": "https://example.test/"
+      }
+    },
+    "variants": [
+      {
+        "name": "default-timeoutMs-is-forwarded-to-the-extension",
+        "inputs": {
+          "sessionId": "s"
+        },
+        "expect": {
+          "onlyCall": {
+            "op": "tabs.waitLoad",
+            "argsExact": {
+              "tabId": "7",
+              "timeoutMs": 30000
+            },
+            "timeoutSeconds": 30.0
+          },
+          "outputs": {
+            "url": "https://example.test/"
+          },
+          "effect": "read"
+        }
+      },
+      {
+        "name": "explicit-timeoutMs-is-forwarded-verbatim",
+        "inputs": {
+          "sessionId": "s",
+          "timeoutMs": 5000
+        },
+        "expect": {
+          "onlyCall": {
+            "op": "tabs.waitLoad",
+            "argsExact": {
+              "tabId": "7",
+              "timeoutMs": 5000
+            },
+            "timeoutSeconds": 5.0
+          }
+        }
+      },
+      {
+        "name": "channel-error-maps-to-executor-failed",
+        "errors": {
+          "tabs.waitLoad": {
+            "code": "TIMEOUT",
+            "message": "load never finished"
+          }
+        },
+        "inputs": {
+          "sessionId": "s"
+        },
+        "expect": {
+          "errorCode": "TIMEOUT"
+        },
+        "negative": true
+      },
+      {
+        "name": "timeoutMs-lower-bound-reaches-the-channel",
+        "inputs": {
+          "sessionId": "s",
+          "timeoutMs": 1
+        },
+        "expect": {
+          "onlyCall": {
+            "timeoutSeconds": 0.1,
+            "op": "tabs.waitLoad"
+          }
+        }
+      }
+    ]
+  }
+}

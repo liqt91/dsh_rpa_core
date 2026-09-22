@@ -14,6 +14,10 @@ commands = [
     [sys.executable, str(ROOT / ".harness" / "scripts" / "check_param_consumption.py")],
     # manifest 声明的 errors 必须覆盖实现会返回的错误码（M30 S3：同一种病的另一根轴）
     [sys.executable, str(ROOT / ".harness" / "scripts" / "check_error_contract.py")],
+    # 指令测试用例表与 catalog 是否对齐（M38）：**静态层**——只读用例表 JSON 与 manifest、
+    # 不执行任何命令，毫秒级。全量参数矩阵本身按需跑（RPA_COMMAND_MATRIX=1），
+    # 而「新增命令没补用例 / 参数改了没人改表」这类腐烂必须每次提交就拦住。
+    [sys.executable, str(ROOT / ".harness" / "scripts" / "check_command_matrix.py")],
 ]
 
 # 真实桌面 E2E（记事本/WinForms 演示程序/捕获悬浮框，会弹窗抢前台）**默认不进
