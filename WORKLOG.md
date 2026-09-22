@@ -1,5 +1,84 @@
 # 工作日志
 
+## 2026-09-22
+
+- **cua 评估 + computer use × RPA 结合策略（调研，未改码）**——产出两份新文档
+  `docs/cua-fit-assessment.md`、`docs/computer-use-x-rpa-strategy.md`。
+  - **对象核实**：`trycua/cua`（25,547 stars / MIT / 2025-01 建 / 当日仍在 push），
+    定位是 **computer-use agent 的基础设施层**（Cua Driver + Sandbox + Lume + Cua-Bench + CUA-S1），
+    **不是 RPA**——无流程 AST / 循环 / 条件 / 变量。动作面以**生成物**为准：
+    `cua-driver/contract/manifest.json`（`contract_version 0.8.0`、`transport mcp_stdio`、**28 个工具**）。
+  - **两处宣传语打折扣（承诺 ≠ 计划）**：① CUA-S1 官方原话
+    "No checkpoint performance claim is established by this source-only release"（无权重、无数据集）；
+    ② README 宣称 macOS 后台驱动已实现，内部 `docs/macos-background-input-v1-plan.md`
+    却标 `Status: Proposed implementation plan`。
+  - **Windows 侧深挖（关键——初版读错了平台）**：`cua-driver-uia.manifest` 用
+    `<requestedExecutionLevel level="asInvoker" uiAccess="true"/>` 解 UIPI（门槛：Authenticode
+    签名 / 必须 `ShellExecute` 启动 / 二进制在 Program Files）；`uia/fg_bypass.rs` 实测 UWP
+    `InvokePattern.Invoke` **自我前台化**（基线 91% 轮询采样 → 加 `EnableWindow` RAII 盾后 **0 / 507**）；
+    `input/delivery.rs` 的 `delivery_mode` 两档（`background` 默认**永不前台化**，而
+    **静默 SendInput 回退的 `auto` 模式被明确移除**）；`uia/cache_uaf_repro.rs` 的 UIA 缓存 UAF
+    ——**我方天然规避**（`desktop.py:418` 存 `locator.model_dump()`，序列化 dict、不持有 COM 对象；
+    纪律：别为"性能"改成缓存 `UIAWrapper`）。
+  - **我方现状实测**：四条输入路径**全是真输入 / 前台语义**（`click_input()` 真移光标、
+    `send_keys` 全局键击、`set_focus()` 主动抢前台）；`executors/desktop.py:52` 硬性
+    `sys.platform != "win32" → PLATFORM_UNSUPPORTED`。
+  - **能力栈七层对照**（L0 环境 / L1 感知 / L2 决策 / L3 执行 / L4 审计 / L5 契约 / L6 接入 + 横切权限）：
+    差距是**错开**的——它压在 L3 与 L6，我方压在 L2 与 L5。**L2 双方完全不重叠，且是唯一
+    决定性的一层**（它整层不存在，不是做得差）。
+  - **两处对己方判断的修正**：① L6 原判「无 agent 协议面 / 盲区」**偏重**——实测 `cli.py:636`
+    有 **15 个顶层子命令**、输出强制 UTF-8 JSON，且 **ADR 0006 §6 早已把 CLI 定位为
+    「agent/脚本通道，M15 WorkBuddy 主路径」**，该 ADR 当初列的 CLI 缺口（catalog / capture /
+    elements）现已全部补齐 →「**门早有，缺的是门的说明书**」；② 「不动 MCP」的两条理由不成立
+    （ADR 0016 管的是**宿主形态**，既不涉及"对谁暴露能力"，也未覆盖 agent 这一新调用方）。
+  - **行业实证**：UiPath Screen Agent（OSWorld-Verified 2026-01 Claude Opus 4.5 **第 1**）
+    + `UiPath for Coding Agents` + Maestro（950 客户 / 36.5 万流程）；影刀官方口径
+    「**让 Agent 做大脑，让 RPA 做手脚**」+ **MCP + CLI 技能双通道**。方向是**双向**的：
+    AI **调用** RPA（RPA 是依赖项，位置稳固）vs AI **生成** RPA（编排界面被替代，
+    执行与契约层保留）。
+  - **两个 40% 的证据成色不同（诚实性修正）**：超 40% agentic 项目 2027 年底前被取消
+    = **Gartner 原始预测**（2025-06，**3,400+ 组织**调研；原因是成本 / 价值 / 风控，
+    **无一条是模型能力问题**）；40% 企业 RPA 部署 2027 年无法达标 = **二手转述，未见原文**。
+    另有**第三个 40%**（正面采用率）常被混用。维护成本口径亦从单一数字改为区间
+    （Forrester "up to ~60%" / 行业 70–75% / **30–40% 团队时间**花在维护既有资产）。
+  - **核心判断**：RPA 价值锚点三阶——① 能操作系统（AI 出现后**归零**）② 可靠地操作（**升值**）
+    ③ 在真实已登录环境里可靠地操作（**升值**）。**AI 只吃掉第一阶。** 竞争力从「我会点界面」
+    转移到「我能被信赖地调用」。结合四形态：A 当执行后端 / B 异常兜底（最贵的是**交接契约**
+    而非 CUA 本身）/ C AI 在设计期（**我们最该走**，地基已全）/ D CUA 当发现者。
+    判据「变化率 ÷ 调用频次 ÷ 可判定性」，且**在流程之内按环节分**，不在流程之间。
+  - **§7 补强地图（本轮新增，回答"未来补强在哪里"）**：主线 = **补强的瓶颈不在 AI 侧，
+    在收敛侧**——CUA 的错是**无声的**（确定性错误可定位：错误码 / `blockedBy` / 往返数），
+    能否用取决于「能否把自由输出收敛回确定性资产、且过程可审计」；反直觉推论：
+    **我方收敛闸门最厚，反而最能安全引入 CUA**。五处补强面（定位 / 判断 / 运维 / 设计 / 契约）
+    逐处给出正确形态；**P0 两项** = **用基线**（跨运行比对 `diagnostics` 产漂移报告，
+    **零 AI 成本**）+ **错误码 → 恢复动作路由表**（形态 B 交接契约的真身是**一张有限路由表**，
+    不是一份文档）。附**负收益判据**：引入 CUA 会把「选择器维护」换成「**模型行为维护**」，
+    后者不可定位（除非有决策留痕）也不可复现 → **补强成立的标志是长期维护总量下降**，
+    不是脆弱性换了个地方。
+
+- **更正 `element-self-healing-plan.md` 三处过期现状（文档落后于实现）**——原文 §2 表格记的
+  ❌/⚠️ **均已落地**（M28 执行完毕，文档未回头更新）：① `selector.candidates` **已在运行期消费**
+  （`executors/browser.py:357 _element_candidates()` 反查 `<flowDir>/elements/*.json` 候选，
+  `:436-465 _page_call_with_fallback()` 逐条重试，契约明文"不改命令参数、不写工作流文件、
+  不做任何猜测"）；② **执行前预检已实现**（`:301 _precheck_result()`，`blockedBy` 原样进
+  details 并附 `blockedByLabel`）；③ **三级错误分类已实现**（`model/errors.py:14-16` 有
+  `ELEMENT_COVERED` / `ELEMENT_DISABLED` / `ELEMENT_NOT_VISIBLE`，全集 **19** 个）。
+  已就地更正并加「2026-09-22 复核」注记。
+  - **顺带挖到两件此前未意识到的**：① `_page_call_with_fallback()` docstring 刻着一条设计原则
+    ——主选择器**命中但预检不过 → 不重试**（原话「按候选重试只会把『点错地方』换成
+    『点到另一个元素』，比失败更危险」），与 cua-driver 的「宁可拒绝，也不要一个改错了兄弟
+    窗口却看起来成功的键事件」是**双方独立收敛出的同一条原则**；② **行为基线已自动落盘**
+    ——`browser.py:470-489` 每步命令统计 `round_trips`（attempts + probes）+ 耗时，经
+    `extension_exec.py:108-113 as_diagnostics()` 落进 `scopes.steps.<node>.diagnostics` 与
+    checkpoint（`orchestrator.py:939`），即行业所称「行为基线（偏离即告警）」的**前半截已经在了**，
+    只差阈值与跨运行比对。
+  - **真实缺口（更正后的结论）**：候选**只能来自 M10 捕获时的静态枚举**，运行期没有
+    「生成新候选」的能力——界面大改致存量候选全失效时仍只报 `ELEMENT_NOT_FOUND`。
+  - **教训（已进 `ai-capability-fit-assessment` skill）**：写「我们缺 X」之前**必须落到源码**
+    ——项目自己的 `docs/*-plan.md` 可能落后于实现；且**读实现要连 docstring / 契约注释一起读**，
+    设计理由常是与外部项目比较时最有价值的发现。本次差点把「已实现」当成「计划中」，
+    会让结论从"加一层"错成"新建一套"。
+
 ## 2026-09-21
 
 - **M37 closeTabs 增加 `ignoreBeforeUnload`（收官）**——关闭带 `beforeunload` 拦截的页面时

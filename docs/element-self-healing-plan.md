@@ -17,10 +17,23 @@ LLM 浏览器 Agent：给一句自然语言目标，TypeSafe 的 Jev 策略模�
 | 机制 | 它的实现（`snapshot.js` / `browser.py`） | 我们的现状 |
 |---|---|---|
 | 元素语义快照 | `role` 归一化 + `accessibleName` 优先级链 + 容器文本 | ✅ M10 已借鉴（`extension/content.js`） |
-| **运行期消费候选（元素自愈）** | 动作时按 `identity` 重新解析目标，**校验后才执行** | ❌ **只存不用**：`selector.candidates` 仅在 `model/capture.py` 校验，运行期 `page.call` 只传单个 `selector` |
-| **执行前预检** | `isConnected` / `disabled` / `aria-disabled` / `inert` / `checkVisibility({checkOpacity,checkVisibilityCSS})` / rect 非零且在视口内 / **`e.contains(document.elementFromPoint(x,y))`（遮挡拒绝）** | ❌ 无：点在被覆盖元素上会**静默点到遮罩层** |
-| **失败不盲重试** | 校验失败抛 `StalePage("Target changed or is covered. Observe again.")`，显式报错 | ⚠️ 只有 `ELEMENT_NOT_FOUND`，缺「被遮挡 / 不可见 / 禁用」分类 |
+| **运行期消费候选（元素自愈）** | 动作时按 `identity` 重新解析目标，**校验后才执行** | ✅ **已实现**（M28 S1）：`browser.py:357 _element_candidates()` 按失败的 selector 反查 `<flowDir>/elements/*.json` 候选，`:436-465 _page_call_with_fallback()` 逐条重试 |
+| **执行前预检** | `isConnected` / `disabled` / `aria-disabled` / `inert` / `checkVisibility({checkOpacity,checkVisibilityCSS})` / rect 非零且在视口内 / **`e.contains(document.elementFromPoint(x,y))`（遮挡拒绝）** | ✅ **已实现**：扩展侧 `precheck` 经 `browser.py:301 _precheck_result()` 翻成 `CommandResult`；`blockedBy`（谁挡住的）原样进 `details` 并附 `blockedByLabel` |
+| **失败不盲重试** | 校验失败抛 `StalePage("Target changed or is covered. Observe again.")`，显式报错 | ✅ **已实现**：`ErrorCode` 含 `ELEMENT_COVERED` / `ELEMENT_DISABLED` / `ELEMENT_NOT_VISIBLE`（`model/errors.py:14-16`，全集 19 个） |
 | 等待有用状态 | 输入后等 `[role=option]` 可见（≤200ms）；其它交互 ≤2 帧或 50ms | ⚠️ 无「等联想列表」语义（列为可选增强，暂不做） |
+
+> **2026-09-22 复核**：上表原记的三处 ❌/⚠️（消费候选 / 执行前预检 / 三级错误分类）
+> **均已落地**，M28 计划执行完毕——原判断是写作时点的快照，已按源码更正。
+>
+> 其中 `_page_call_with_fallback()` 有一处**值得保留的设计**：它明文区别对待两种"预检不过"——
+> 主选择器**命中但预检不过 → 不重试**（原话："按候选重试只会把『点错地方』换成
+> 『点到另一个元素』，比失败更危险"）；**候选**命中但预检不过 → 换下一条候选。
+> 这与 cua-driver 的口径（"宁可拒绝，也不要一个改错了兄弟窗口却看起来成功的键事件"）
+> 是**独立收敛出的同一条原则**，见 `cua-fit-assessment.md` §3.4。
+>
+> 当前真正的缺口不在上表：**候选只能来自 M10 捕获时的静态枚举**——运行期没有
+> "生成新候选"的能力。界面大改导致存量候选全失效时，我们仍只能报 `ELEMENT_NOT_FOUND`。
+> 展开见 `computer-use-x-rpa-strategy.md` §7 补强面 1。
 
 ## 3. 不借鉴（含理由）
 
