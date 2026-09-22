@@ -20,9 +20,14 @@
   （Win32 19 条 / 81 变体）+ 两个驱动 + 共享装配 `tests/commands/desktop_harness.py`
   （每变体自建会话跑完即弃、每变体前重新抢前台、`{session}`/`{element:名字}`/`{appTitle}`/`{pid}`/`{handle}`
   占位符物化），`PENDING_NAMESPACES` 清空——**86 条命令全部有表**，且**建表即自动出现在页签里**，
-  不用改页面。**执行层未跑**（维护者 2026-09-22 指令「建表吧，建完不测」）：159 个变体一次
-  未真机执行，未实测的期望与靶子缺口（可拖/下拉控件、菜单栏、Win32 可定位控件、`forceKill=true`、
-  `visible=false`）逐条登记在任务单 §1.5，启用方式 `RPA_COMMAND_MATRIX=1 RPA_DESKTOP_E2E=1 pytest tests/commands`
+  不用改页面。  **S2 补靶子 + 执行层首跑已完成（2026-09-22，S2.2）**：靶子补上原生菜单栏（`MainMenu`，**不是**
+  `MenuStrip`——托管控件 `GetMenu(hwnd)` 拿不到）、ListBox/ComboBox、可拖 Label、只读 Edit；
+  两条旧判因当场被推翻（win32 的 `title` 其实可用、`menuSelect` 正路径真机通过）；**159 个变体首次
+  上真机**，30 处「读代码猜的期望」逐类校正；新增变体级 `knownGap`（严格 xfail，缺口一修就 XPASS
+  转红）与 `expect.outputListContains`（治「枚举被拒 → pywinauto 静默返回空列表」与「真没匹配窗口」
+  同形）；**172 个变体 → 170 passed + 2 xfailed / exit 0**，四驱动全量 440 项 → 438 passed + 2 xfailed。
+  产品侧剩余缺口已逐条转入「后续任务」（`screenshot` 依赖、`select`/`getText` 实现、`className`/
+  `controlId`、`getWindowList` 的会话声明与静默空列表）
   - 计划：`M38-command-matrix.md`
 
 ## 后续任务
@@ -113,6 +118,55 @@
   留下的能力缺口：`chrome.tabs.captureVisibleTab` 只能截可见区，整页要滚动分段拼接、元素要按 rect
   裁剪，都需要在扩展里解码图像（MV3 service worker 无 `Image`/`FileReader`）→ 走 offscreen document
   或 CDP `Page.captureScreenshot(captureBeyondViewport/clip)`；另需处理 sticky/fixed 元素在分段里的重复
+- [ ] **桌面 `screenshot` 的依赖缺口**（`planned`，M38 S2 补靶子时实测；两个后端的正路径现由
+  变体级 `knownGap` 钉成**严格 xfail**，修好就 XPASS 转红）
+  - 现象：`desktop.screenshot` / `desktop.win32.screenshot` 的正路径**必然** `EXECUTOR_FAILED`
+    （`'NoneType' object has no attribute 'save'`）。实现先试 UIA 图像属性（win32 元素没有
+    `iface_*` 属性族、必抛），回落到 pywinauto 的 `window.capture_as_image()`——而后者需要 PIL，
+    而 `pyproject.toml` 的 `dependencies` 里**没有 Pillow**（只有 pydantic / jsonschema /
+    pywinauto）。也就是说这条命令在 catalog 里存在，但**干净安装永远截图不出来**。
+  - 两条出路（二选一，属产品决策）：① 加 `Pillow` 依赖（改运行时依赖面，要评估包体与许可证）；
+    ② 改走 Win32 `BitBlt`/GDI 自己写图（无第三方依赖，但要自己处理位深与 DPI 缩放）。
+- [ ] **桌面 `select` / `getSelectedText` / uia `getText` 的实现缺口**（`planned`，M38 S2 补靶子时
+  实测；`tests/e2e/test_desktop_target_effects.py` 两条 `xfail` 钉住，任务单 §1.5 下半张表）
+  - `desktop.select`（两后端）三个 `selectBy` 分支**静默假成功**：ListBox 的 `iface_selection`
+    是 `IUIAutomationSelectionPattern`，方法面只有 `GetCurrentSelection` /
+    `CurrentCanSelectMultiple` / `CurrentIsSelectionRequired`，**没有 `Select`**；而 `label`/`value`
+    分支把 `GetCurrentSelection()`（= **当前已选中项**）当成「全部选项」遍历。出路：按
+    `SelectionItemPattern` 对列表项调 `Select()`，`label`/`value` 改成枚举全部子项。
+  - `desktop.win32.select` / `getSelectedText` 在 win32 后端**不可能生效**：win32 包装出的元素
+    **没有 `iface_*` 属性族**（实测对窗口里每个子控件取 `iface_selection`/`iface_value`/
+    `iface_invoke` 全部抛异常），两处都被 `except: pass` 吞掉 → `select` 返回 success、
+    `getSelectedText` 恒返回空串。出路：改走 win32 原生接口（如 `SendMessage(CB_SETCURSEL)`），
+    或至少**显式报错**，别静默成功。
+  - uia `desktop.getText` 对 Edit / ListBox 读到**相邻 Label 的文本**（`queryInput` → `'Name'`、
+    `readOnlyNote` → `'Drag'`、`optionsList` → `'Ready'`）：WinForms 的 Edit/ListBox 没有
+    AccessibleName，UIA 按 MSAA 的 labeled-by 规则回落。出路：改走 ValuePattern / TextPattern。
+- [ ] **`desktop.win32` 的 `className` / `controlId` 作为定位字段名不副实**
+  （`planned`，M38 S2 实测）
+  - `control_id` 的过滤**完全不生效**：`descendants(control_id=<任意值>)` 一律返回全部子控件
+    （实测 14/14/14）。于是定位器只给 `controlId` 时必然报 `ELEMENT_AMBIGUOUS`——把「过滤没生效」
+    伪装成「元素不唯一」，**错误码指错了方向**（会把人引去查元素是否重复）。
+  - `className` 是 `WindowsForms10.*.app.0.<哈希>` 这类**动态名**（哈希随编译产物变），且两个
+    Edit 撞同一个类名——作为用户可见的定位字段同样存疑。
+  - 出路：自己按 `GetDlgCtrlID` / `GetClassNameW` 过滤（不复用 pywinauto 的 kwargs），或把这两个
+    字段从 win32 locator 的可用面里拿掉。**注意**：`title` 是好的（它比的是控件窗口文本，实测
+    `Submit`/`Count`/`note-ready` 都唯一命中），别一起误删。
+- [ ] **`desktop.getWindowList`：声明与实现不一致 + 枚举被拒时静默返回空列表**
+  （`planned`，M38 S2 实测）
+  - 不一致：`execute` 的「无需会话」名单（`_no_session_commands`）含本命令，但会话检查在命令
+    分派**之前**，实际仍需要会话（`setup: session=none` 直接吃 `SESSION_NOT_FOUND`，两后端同款）。
+    要么把检查移到分派之后，要么把它从名单里删掉——**别让两处口径打架**。
+  - 静默空列表：本命令走 pywinauto 的 `uia_element_info._get_elements`，那里
+    `except (COMError, ValueError): return []`——全桌面枚举被 COM 拒绝时**返回空列表而不是报错**
+    （实测的 `0x8001010d` = `RPC_E_CANTCALLOUT_ININPUTSYNCCALL` 就是这条路径，pywinauto 内部吞掉、
+    进程继续；注意 pytest ≥5 默认的 faulthandler 会把它渲染成 `Windows fatal exception`，**那是
+    噪声不是崩溃**）。于是「枚举失败」与「本机真没有匹配窗口」在 outputs 上完全同形。
+  - 现状：已用 `expect.outputListContains`（锚点是靶子窗口标题）把两后端 8 条正路径从形状断言
+    变成真判据；探针 `.harness/spike/probe_desktop_window_list.py` 连跑 8×2 次枚举**没撞上**
+    （本机稳定 11 / 13 项），所以登记的是「路径存在、本轮未复现」。
+  - 可选加固（未定）：枚举失败时**区分**「空」与「被拒绝」，或对 COM 拒绝做一次短重试
+    （M7 对同类 `RPC_E_SERVERCALL_RETRYLATER` 已有处置先例）。
 - [x] **两个死参数的处置**（`done`，2026-09-22 维护者定案**删除**，M38 S1.1）——删除「声明」
   而非「能力」：两项从未被消费过（`closeTabs` 的路由由会话绑定的浏览器决定、扩展的
   `tabs.waitLoad` 只收 `tabId`/`timeoutMs`），删掉后行为不变、`KNOWN_DEAD_PARAMS` 已清空

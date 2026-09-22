@@ -19,6 +19,8 @@
 4. **边界覆盖**：声明了 `minimum`/`maximum` 的参数至少出现两个不同的值；
 5. **最少变体数**：每条命令的变体数不低于阈值（`MIN_VARIANTS`，缺省 3）；
 6. **负路径**：每条命令至少有 1 个标记 `negative: true` 的变体（失败路径或边界行为）。
+7. **`knownGap` 的记账**：变体级的 `knownGap` 必须是非空字符串（写清缺口与出路），
+   且**标记过的变体不计入**第 2–6 条的任何口径——缺口不许用来凑覆盖率。
 
 第 6 条与策略原文的「required 缺省必须被拒」**口径不同**，理由：输入 schema 的
 `required` 由 **orchestrator** 统一校验（`runtime/orchestrator.py` 用
@@ -26,6 +28,17 @@
 （如 `browser.navigate` 的 goto 缺 url）。所以「缺必填必失败」不是执行器层的契约，
 把责任压到这里会写出与实现不符的断言。**执行器层真正的责任是「失败路径要显式、
 错误码要可诊断」**，第 6 条验的就是它。
+
+### 第 7 条的边界（为什么阈值仍数全部变体）
+
+`MIN_VARIANTS` 数的是**表里的行数**（结构性下限），2–6 条数的是**未被标记的变体**
+（行为性覆盖）：一条 `knownGap` 行仍然是一行真实存在的用例，只是它现在证不了产品行为。
+真正要防的是「拿缺口盖住整条命令」——那由第 6 条兜住：要求**至少一个未标记的
+negative 变体**，所以全表标成 `knownGap` 必然报红。
+
+`knownGap` 的自我收紧不在本文件（静态层看不到「缺口修没修」），而在**执行层**：
+标记会变成 `pytest.mark.xfail(strict=True)`，缺口一修那行就 XPASS 转红。
+详见 `tests/commands/matrix.py` 的 `knownGap` 一节。
 
 ## 台账（会自我收紧）
 
@@ -94,6 +107,23 @@ def _variants(spec: dict[str, Any]) -> list[dict[str, Any]]:
     return list(spec.get("variants") or [])
 
 
+def _has_known_gap(variant: dict[str, Any]) -> bool:
+    """变体是否被标记为已登记的实现缺口（口径见模块 docstring 第 7 条）。"""
+    return bool(str(variant.get("knownGap") or "").strip())
+
+
+def _check_known_gaps(command: str, variants: list[dict[str, Any]]) -> list[str]:
+    """第 7 条的记账检查：`knownGap` 必须写明缺口与出路（空字符串等于没记）。"""
+    problems: list[str] = []
+    for variant in variants:
+        if "knownGap" in variant and not _has_known_gap(variant):
+            problems.append(
+                f"{command}.{variant.get('name')}: knownGap 是空串——必须写清「实测现象 + 出路」，"
+                "否则它只是把红盖住的被子"
+            )
+    return problems
+
+
 def _check_bounds(name: str, spec: dict[str, Any], values: list[Any]) -> str | None:
     """有 minimum/maximum 的参数至少要有两个不同取值（合法值 + 边界/越界值）。"""
     has_bound = "minimum" in spec or "maximum" in spec
@@ -123,8 +153,15 @@ def _check_command(
 
     if len(variants) < MIN_VARIANTS:
         problems.append(f"{command}: 变体数 {len(variants)} < 阈值 {MIN_VARIANTS}")
-    if not any(variant.get("negative") for variant in variants):
-        problems.append(f"{command}: 没有任何 negative 变体（失败路径/边界行为未覆盖）")
+    problems.extend(_check_known_gaps(command, variants))
+    # 2–6 条只看**未被 knownGap 标记**的变体：缺口不许用来凑覆盖率（模块 docstring 第 7 条）。
+    effective = [variant for variant in variants if not _has_known_gap(variant)]
+    if not any(variant.get("negative") for variant in effective):
+        problems.append(
+            f"{command}: 没有任何**未标 knownGap** 的 negative 变体"
+            "（失败路径/边界行为未覆盖，或整条命令都被缺口盖住了）"
+        )
+    variants = effective
 
     dead = KNOWN_DEAD_PARAMS.get(command, {})
 
@@ -212,16 +249,26 @@ def main() -> int:
         return 1
 
     dead_params = sum(len(items) for items in KNOWN_DEAD_PARAMS.values())
+    # 已登记的实现缺口（变体级 knownGap）逐条列出来——它们是「用例表上真实的红」，
+    # 静态层只能记账（执行层用严格 xfail 自我收紧，见模块 docstring 第 7 条）。
+    gaps = [
+        (command, variant.get("name"), str(variant["knownGap"]))
+        for command, spec in sorted(cases.items())
+        for variant in _variants(spec)
+        if _has_known_gap(variant)
+    ]
     print(
         f"COMMAND MATRIX CHECK PASSED（已校验 {checked} 条命令；"
         f"未建表命名空间 {len(PENDING_NAMESPACES)} 个共 {pending} 条命令，"
-        f"死参数台账 {dead_params} 项）"
+        f"死参数台账 {dead_params} 项，实现缺口 {len(gaps)} 条）"
     )
     for namespace, reason in PENDING_NAMESPACES.items():
         print(f"  待建表：{namespace} —— {reason}")
     for command, items in sorted(KNOWN_DEAD_PARAMS.items()):
         for name, reason in sorted(items.items()):
             print(f"  死参数：{command}.{name} —— {reason}")
+    for command, name, reason in gaps:
+        print(f"  实现缺口：{command}::{name} —— {reason}")
     return 0
 
 

@@ -16,6 +16,7 @@ outputs/effects/错误码/落盘内容）。差别只在**插桩点**（假扩�
 | `onlyCall` | 断言**恰好一次**下发；`op`、`args`（子集）、`argsExact`（等值）、`timeoutSeconds` |
 | `calls` | 断言完整调用序列（逐项同 `onlyCall` 的语义） |
 | `outputs` | `result.outputs` 的子集（递归） |
+| `outputListContains` | `result.outputs` 指定键是**列表**，且**至少有一项**匹配（dict 按子集、其它按等值）。给「结果随本机环境漂移、但被操作对象本身恒定」的命令用（如 `getWindowList` 的整桌面枚举） |
 | `outputKeys` | `result.outputs` 必须包含的键（值不确定时用，如 uuid 形式的 sessionId） |
 | `outputPaths` | 指定键的值是**路径**：按 `Path` 比较（分隔符无关；用例表写 `{tmp}/a/b.txt`） |
 | `outputsMatch` | `result.outputs` 指定键的**正则**匹配（时间戳这类形状确定、值不确定的输出） |
@@ -36,7 +37,30 @@ outputs/effects/错误码/落盘内容）。差别只在**插桩点**（假扩�
 变体可选的键：`inputs` / `sessions`（覆盖默认会话表，浏览器用）/ `stub`（覆盖命令级桩应答）/
 `errors`（op → 扩展侧错误）/ `processStub`（打桩进程面，`browser.closeBrowser` 专用）/
 `setup`（预置磁盘状态，数据通道用：`files` / `dirs` / `table`）/ `negative`（标记负路径与
-边界行为变体，供覆盖率校验器统计）。
+边界行为变体，供覆盖率校验器统计）/ `knownGap`（见下节）。
+
+## `knownGap`：已实测、已登记、但产品侧还没修的缺口
+
+`knownGap: "缺口说明 + 出路"` 把一个变体钉成**严格 xfail**（`strict=True`）。判据是
+「这条期望是对的，产品现在是错的」——与「实测出来实现就是这样，于是把期望改成实际行为」
+相反。两者都要用，分界是**期望本身对不对**：
+
+- 期望错（把实现语义想歪了）→ **改期望**（S3 的 `data.writeText` 相对路径那条）；
+- 期望对（能力该有，产品没做到）→ **`knownGap`**，期望原样留着。
+
+为什么是严格 xfail 而不是「让这行红着」或「把期望改成实测的错误行为」：
+
+1. **红着不成立**：矩阵要能整段跑绿给人看，一条永久红灯会让「有没有新红」失效；
+2. **改期望会把 bug 固化成契约**：下一手读者会以为「正路径就该报 EXECUTOR_FAILED」；
+3. **严格模式自我收紧**：缺口一修（或换到装了缺失依赖的环境），这行 **XPASS → 用例失败**，
+   强制回来把标记摘掉。与 `check_command_matrix.py` 里 `PENDING_NAMESPACES` /
+   `KNOWN_DEAD_PARAMS` 的「台账过期即报红」是同一套自律方式。
+
+配套约束在静态校验器里（同一份 JSON 的另一处口径）：`knownGap` 必须是非空字符串，且
+**标记过的变体不计入任何覆盖率口径**——缺口不许用来凑覆盖（见该文件的
+`_check_command`）。**不要**拿它盖住一条只是写错了的期望：那是把缺口变成被子。
+工作台页签会把 xfail 显示成「跳过」（报告钩子记的是 pytest 的 outcome）——这条在
+`tests/commands/conftest.py` §2 的数据合同里也一样，别当成「用例没跑」。
 
 ## `{tmp}` 占位符
 
@@ -83,6 +107,18 @@ def namespace_of(command: str) -> str:
     return command.split(".")[0]
 
 
+def variant_marks(variant: Mapping[str, Any]) -> list[Any]:
+    """变体级标记：目前只有 `knownGap` → 严格 xfail（语义见模块 docstring）。
+
+    `strict=True` 是刻意的：缺口一旦被修好（或跑在装了缺失依赖的环境里），这行会
+    **XPASS 并被判为失败**，逼着人来摘标记——台账不会悄悄过期。
+    """
+    gap = variant.get("knownGap")
+    if not gap:
+        return []
+    return [pytest.mark.xfail(reason=str(gap), strict=True)]
+
+
 def iter_variants(*namespaces: str) -> Iterator[Any]:
     """把用例表展开成 `pytest.param(command, spec, variant)`，id 为 `<命令>::<变体名>`。
 
@@ -91,7 +127,13 @@ def iter_variants(*namespaces: str) -> Iterator[Any]:
     """
     for command, spec in sorted(load_cases(*namespaces).items()):
         for variant in spec.get("variants", []):
-            yield pytest.param(command, spec, variant, id=f"{command}::{variant['name']}")
+            yield pytest.param(
+                command,
+                spec,
+                variant,
+                id=f"{command}::{variant['name']}",
+                marks=variant_marks(variant),
+            )
 
 
 def subset_problems(actual: Any, expected: Any, path: str = "args") -> list[str]:
@@ -133,7 +175,7 @@ def check_call(actual, expected: dict[str, Any], path: str) -> list[str]:
 
 
 def materialize_inputs(
-    value: Any, tmp_dir: Path, extra: Mapping[str, str] | None = None
+    value: Any, tmp_dir: Path, extra: Mapping[str, Any] | None = None
 ) -> Any:
     """把用例表里的占位符替换成本次运行的真实值（递归，含列表与字典键值）。
 
@@ -146,11 +188,20 @@ def materialize_inputs(
       所以只能由驱动在运行时注入，不能写进表里；其它通道不传 `extra`，行为与从前一致。
 
     `extra` 先替、`{tmp}` 后替：两者的键不重叠，顺序只为确定性。
+
+    **整串占位符保留原类型**：`"{pid}"` 整个字符串就是一个占位符时，替回去的是原始的
+    `int` 而不是 `"12345"`。`processId` 这类参数在 schema 里是 integer，而执行器层
+    **不做类型转换**（它收到什么就 `==` 比什么），替成字符串会让过滤恒不命中——
+    实测踩过：`title` + `processId` 的 attach 变体报 `ELEMENT_NOT_FOUND`，
+    而 pid 明明是对的。
     """
     if isinstance(value, str):
         text = value
         for key, replacement in (extra or {}).items():
-            text = text.replace("{" + key + "}", str(replacement))
+            token = "{" + key + "}"
+            if text == token:
+                return replacement
+            text = text.replace(token, str(replacement))
         return text.replace("{tmp}", str(tmp_dir))
     if isinstance(value, dict):
         return {
@@ -158,6 +209,30 @@ def materialize_inputs(
         }
     if isinstance(value, list):
         return [materialize_inputs(item, tmp_dir, extra) for item in value]
+    return value
+
+
+def substitute_extra(value: Any, extra: Mapping[str, Any]) -> Any:
+    """只替换 `extra` 里的占位符（递归），**不动** `{tmp}`。
+
+    给 `expect` 用：断言里同样会出现运行时才有的值（`outputs.title == "{appTitle}"`、
+    `outputs.workWindowId == "{handle}"`、`outputs.processId == "{pid}"`），不替换就变成
+    拿字面量 `'{appTitle}'` 去比真实标题，必然红。而 `{tmp}` 不能在这里替——
+    `check_expect` 要自己把 `{tmp}/shot.png` 解析成真实路径再查磁盘。
+
+    整串占位符同样保留原类型（见 `materialize_inputs`）。
+    """
+    if isinstance(value, str):
+        for key, replacement in extra.items():
+            token = "{" + key + "}"
+            if value == token:
+                return replacement
+            value = value.replace(token, str(replacement))
+        return value
+    if isinstance(value, dict):
+        return {key: substitute_extra(item, extra) for key, item in value.items()}
+    if isinstance(value, list):
+        return [substitute_extra(item, extra) for item in value]
     return value
 
 
@@ -224,6 +299,42 @@ def _check_files(expect: dict[str, Any], tmp_dir: Path) -> list[str]:
                 problems.extend(
                     subset_problems(actual_json, item["jsonContains"], where)
                 )
+    return problems
+
+
+def check_list_contains(expect: dict[str, Any], result) -> list[str]:
+    """`expect.outputListContains`：outputs 里某个**列表**至少有一项匹配期望。
+
+    为什么需要这个键（而不是拿 `outputs` 凑）：`outputs` 的语义是**子集比较**，列表值
+    只能整体等值——而「整桌面枚举」这类命令的结果随本机环境漂移（维护者开着几个窗口就
+    几项），于是正路径只能退化成断言形状（`outputKeys`）。形状断言的问题不是不精确，
+    而是**收不了错**：`desktop.getWindowList` 走 pywinauto 的
+    `uia_element_info._get_elements`，那里 `except (COMError, ValueError): return []`
+    ——COM 拒绝调用时**静默返回空列表**（实测到的 `0x8001010d` 就是这条路径，见任务单
+    §1.6），报出的 `windows: []` 与「本机真没有匹配窗口」**完全同形**。
+
+    能按值断言而不漂移的锚点不是「整个列表」，而是**被操作对象自己**：靶子窗口的标题、
+    刚写入的那条记录。所以这个键的口径是「列表里至少有这一项」，不看其余项。
+    """
+    problems: list[str] = []
+    for key, wanted in (expect.get("outputListContains") or {}).items():
+        actual = result.outputs.get(key)
+        if not isinstance(actual, list):
+            problems.append(
+                f"outputListContains.{key}: 期望一个列表，实得 "
+                f"{type(actual).__name__}：{actual!r}"
+            )
+            continue
+        matched = [
+            item
+            for item in actual
+            if not subset_problems(item, wanted, f"outputListContains.{key}")
+        ]
+        if not matched:
+            problems.append(
+                f"outputListContains.{key}: {len(actual)} 项里没有一项匹配 {wanted!r}"
+                f"（实得 {actual!r}）"
+            )
     return problems
 
 
@@ -295,6 +406,7 @@ def check_expect(
 
     if "outputs" in expect:
         problems.extend(subset_problems(result.outputs, expect["outputs"], "outputs"))
+    problems.extend(check_list_contains(expect, result))
     if "outputKeys" in expect:
         missing = [key for key in expect["outputKeys"] if key not in result.outputs]
         if missing:
@@ -354,6 +466,7 @@ __all__ = [
     "CASES_DIR",
     "check_call",
     "check_expect",
+    "check_list_contains",
     "iter_variants",
     "load_cases",
     "materialize_inputs",
@@ -361,4 +474,5 @@ __all__ = [
     "prepare_setup",
     "scripted_error",
     "subset_problems",
+    "variant_marks",
 ]

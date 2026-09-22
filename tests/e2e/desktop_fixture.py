@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import ctypes
+import ctypes.wintypes
 import os
 import subprocess
 import sys
@@ -101,6 +102,29 @@ def warmup_uia(title: str) -> None:
         UIAWrapper(UIAElementInfo(hwnd))
     finally:
         pythoncom.CoUninitialize()
+
+
+def client_center(title: str) -> tuple[int, int] | None:
+    """靶子窗口客户区中心的屏幕坐标；窗口不在时返回 `None`。
+
+    `desktop.drag` 的 `targetX`/`targetY` 是**绝对屏幕坐标**，而这个坐标写不死：靶子用
+    `FormStartPosition.CenterScreen`，可「屏幕中心」取决于会话的虚拟屏布局——实测本机
+    1920x1080 的远程会话把窗口放在了 y=-765（主显示器**上方**那块区域）里。照抄任何
+    常量，要么拖拽终点落在窗口外、要么把真实鼠标甩到桌面上无关的位置。
+    """
+    user32 = ctypes.windll.user32
+    hwnd = user32.FindWindowW(None, title)
+    if not hwnd:
+        return None
+    rect = ctypes.wintypes.RECT()
+    user32.GetClientRect(hwnd, ctypes.byref(rect))
+    origin = ctypes.wintypes.POINT(0, 0)
+    if not user32.ClientToScreen(hwnd, ctypes.byref(origin)):
+        return None
+    return (
+        origin.x + (rect.right - rect.left) // 2,
+        origin.y + (rect.bottom - rect.top) // 2,
+    )
 
 
 def force_foreground(title: str) -> None:

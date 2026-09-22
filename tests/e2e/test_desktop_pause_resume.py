@@ -26,9 +26,13 @@
    另从 events 的续跑段断言「暂停前的节点一个都没再出现」（不靠推断，靠事件流）。
 
 真机边界（如实记录）：这里只跑 **UIA** 后端。win32 后端的 `restore_from_scopes` 有
-契约测试（`tests/unit/test_desktop_session_restore.py`），但**没有**对应的真机用例——
-win32 定位器认的是 title/class/controlId，而本 fixture 的控件是 `Name`（UIA AutomationId），
-拿 win32 后端定位它们要另做一套靶子，属独立切片。
+契约测试（`tests/unit/test_desktop_session_restore.py`），但**没有**对应的真机用例。
+*（2026-09-22 补靶子时纠正）* 此前这里写的理由是「win32 定位器认的是 title/class/controlId，
+而本 fixture 的控件是 `Name`（UIA AutomationId），拿 win32 后端定位它们要另做一套靶子」
+——实测**不成立**：win32 的 `title` 比的是控件的**窗口文本**，`title='Count'` /
+`title='Submit'` / `title='note-ready'` 都唯一命中这些控件（正路径见
+`tests/commands/cases/desktop_win32.json`）。所以缺的只是「补一个 win32 版的暂停/继续」
+这件事本身，不是靶子能力。
 """
 
 from __future__ import annotations

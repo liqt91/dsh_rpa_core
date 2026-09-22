@@ -157,8 +157,11 @@ HWND 是 32 位整数句柄号、**会被系统复用**，不校验就可能把�
 ### 真机边界（如实记录）
 
 - **只跑 UIA 后端**。win32 后端的 `restore_from_scopes` 有契约测试覆盖，但**没有**对应的真机
-  用例——win32 定位器认的是 title/class/controlId，而 fixture 的控件是 UIA `AutomationId`，
-  拿 win32 后端定位它们要另做一套靶子，属独立切片。
+  用例——**判因已纠正（2026-09-22，§1.6.2）**：本节原先写的理由是「win32 定位器认的是
+  title/class/controlId，而 fixture 的控件是 UIA `AutomationId`，拿 win32 后端定位它们要另做
+  一套靶子」——**后半句不成立**，win32 的 `title` 比的是控件**窗口文本**，`Submit` / `Count` /
+  `note-ready` 都唯一命中（S2 补靶子时实测）。所以「win32 没有真机用例」是**当时没写**，
+  不是「写不了」；缺的只是那一条针对 `restore_from_scopes` 的 win32 真机用例（靶子已够用）。
 - 本片**不含** S2 的 36 条 L1 用例表；`PENDING_NAMESPACES` 里的 `desktop` 仍在。
 
 ### 顺带查清的一件事：既有的记事本切片在整目录运行时是抖的（**不是**本片引入）
@@ -184,7 +187,8 @@ win32 模块**，所以没有用「大概是环境问题」带过，而是做了
 ## 1.5 交付（S2：桌面通道 36 条用例表）
 
 **做法**：`cases/desktop.json`（UIA 17 条 / 78 个变体）+ `cases/desktop_win32.json`
-（Win32 19 条 / 81 个变体），两个驱动 `tests/commands/test_desktop_matrix.py` /
+（Win32 19 条 / 81 个变体；两数均为**建表时**，补靶子后是 80 / 92，见 §1.6），两个驱动
+`tests/commands/test_desktop_matrix.py` /
 `test_desktop_win32_matrix.py`，共享装配 `tests/commands/desktop_harness.py`。
 
 1. **真靶子，不是打桩绑定层**（维护者 2026-09-22 定案）：驱动在真 fixture 上执行命令，
@@ -207,13 +211,27 @@ win32 模块**，所以没有用「大概是环境问题」带过，而是做了
 
 ### 已知缺口（都在本片如实登记，没有静默）
 
-| 缺口 | 影响 | 出路 |
+**靶子侧的缺口已由 §1.6 补齐（2026-09-22）**，下表是补齐后的状态；下半张表是补靶子时
+**新暴露出来的实现缺口**——它们此前连测都测不了（没有对应控件），现在有了可测面：
+
+| 缺口 | 影响 | 状态 |
 |---|---|---|
-| 靶子无可拖 / 无下拉控件 | `desktop.select`（两后端）与 `desktop.drag` 只有负路径 | 给 `Program.cs` 加 ComboBox / ListBox + 可拖控件 |
-| 靶子无菜单栏 | `win32.menuSelect` 的成功路径无从谈起（表里那条 `EXECUTOR_FAILED` 是**推断**） | 给靶子加菜单栏 |
-| win32 定位不到靶子控件 | win32 侧所有吃 `elementId` 的命令只有负路径（WinForms 类名是 `WindowsForms10.*.app.0.xxx` 动态串、无稳定 `controlId`） | 给靶子加一套 Win32 可定位的控件 |
-| `closeSession.forceKill=true` 会结束靶子进程 | 只覆盖缺省 `false` | 需要独立的靶子实例 |
-| `setWindowVisible=false` 会把窗口藏起来 | 只覆盖 `visible=true` | 需要一个变体内部完成的显隐对（属流程层） |
+| 靶子无可拖 / 无下拉控件 | `desktop.select`（两后端）与 `desktop.drag` 只有负路径 | **已补**（§1.6）：`drag` 正路径打通；`select` 反而暴露实现缺口（见下表） |
+| 靶子无菜单栏 | `win32.menuSelect` 的成功路径无从谈起（表里那条 `EXECUTOR_FAILED` 是**推断**） | **已补**：原生 `MainMenu`（HMENU）→ 正路径实测通过，推断也换成了实测 |
+| win32 定位不到靶子控件 | win32 侧所有吃 `elementId` 的命令只有负路径 | **判因有误，已纠正**：win32 的 `title` 比的是控件**窗口文本**，实测 `title='Submit'` / `'Count'` / `'note-ready'` 都唯一命中——元素级正路径本来就有（§1.6） |
+| `closeSession.forceKill=true` 会结束靶子进程 | 只覆盖缺省 `false` | 未解（需要独立的靶子实例） |
+| `setWindowVisible=false` 会把窗口藏起来 | 只覆盖 `visible=true` | 未解（需要一个变体内部完成的显隐对，属流程层） |
+
+补靶子时新暴露的**实现缺口**（都不是靶子的问题，靶子只是把它们变成了可实测的事实）：
+
+| 缺口 | 实测证据 | 出路 |
+|---|---|---|
+| `desktop.select`（两后端）三个 `selectBy` 分支**静默假成功** | 三个分支都返回 success 而 `listStatus` 一步没动。ListBox 的 `iface_selection` 是 SelectionPattern（方法面只有 `GetCurrentSelection` / `CurrentCanSelectMultiple` / `CurrentIsSelectionRequired`，**没有 `Select`**），而 `label`/`value` 分支把 `GetCurrentSelection()`（= **当前已选中项**）当成「全部选项」遍历 | 按 SelectionItemPattern 对列表项调 `Select()`；`label`/`value` 改成枚举全部子项。由 `tests/e2e/test_desktop_target_effects.py` 的 xfail 钉住 |
+| `desktop.win32.select` / `getSelectedText` 在 win32 后端**不可能生效** | win32 包装出的元素**没有 `iface_*` 属性族**（对窗口里每个子控件取 `iface_selection` / `iface_value` / `iface_invoke` 全部抛异常），两处都被 `except: pass` 吞掉 → `select` 返回 success，`getSelectedText` 恒返回空串 | 改走 win32 原生接口（如 `SendMessage(CB_SETCURSEL)`）或显式报 `EXECUTOR_FAILED`，别静默成功 |
+| uia `desktop.getText` 对 Edit / ListBox 读到**相邻 Label 的文本** | `queryInput` → `'Name'`（旁边的 nameLabel）、`readOnlyNote` → `'Drag'`（旁边的 dragHandle）、`optionsList` → `'Ready'`（旁边的 resultText）。WinForms 的 Edit/ListBox 没有 AccessibleName，UIA 按 MSAA 的 labeled-by 规则回落 | 改走 ValuePattern / TextPattern。由 e2e 的 xfail 钉住。顺带纠正了 S2.1 里那句「读输入框要押注 getText 对 UIA Edit 也返回文本」——**那条假设实测是错的**，当时绕开是对的选择 |
+| 项目依赖里**没有 Pillow**，而 `screenshot` 的回退路径要用它 | 两个后端的 `screenshot` 正路径都必然 `EXECUTOR_FAILED`（`'NoneType' object has no attribute 'save'`）：实现先试 UIA 图像属性（win32 侧没有 `iface_*` 必抛），回落到 `window.capture_as_image()` | 独立决策：加 Pillow 依赖，或改走 Win32 `BitBlt`（无第三方依赖） |
+| `control_id` 过滤在 pywinauto 上**完全不生效** | `descendants(control_id=<任意值>)` 一律返回全部子控件（实测 14 / 14 / 14）。于是 `DesktopLocator` 的 `controlId` 字段：只给它会必然报 `ELEMENT_AMBIGUOUS`（把「过滤没生效」伪装成「元素不唯一」） | 换定位实现，或把 `controlId` 从 win32 locator 的可用字段里拿掉 |
+
 
 ### 验证（S2）
 
@@ -227,13 +245,153 @@ win32 模块**，所以没有用「大概是环境问题」带过，而是做了
   ③ 把 `desktop.getWindowTitle` 砍到 2 个变体 → 报「变体数 2 < 阈值 3」。
 - **驱动可收集**：`RPA_COMMAND_MATRIX=1 pytest tests/commands --collect-only` →
   browser 180 / data 88 / **desktop 78 / desktop_win32 81**（共 427 个用例；
-  收集阶段不启真机）。
-- **执行层未跑**（维护者 2026-09-22 指令：「建表吧，建完不测」）：159 个桌面变体
-  **一次都没在真机上跑过**，所以表里未实测的期望（`contains` / `regex` 匹配、
-  `clipboard` 模式、`menuSelect` 的 `EXECUTOR_FAILED`、各 `elapsedAtLeastMs` 下界）
-  **首次启用时按实际结果校正**。启用方式：
-  `RPA_COMMAND_MATRIX=1 RPA_DESKTOP_E2E=1 pytest tests/commands/test_desktop_matrix.py`。
-  这是本片**显式欠下的账，不是遗漏**。
+  收集阶段不启真机）。补靶子后桌面两表长到 **desktop 80 / desktop_win32 92**（见 §1.6）。
+- **执行层已跑（2026-09-22 补，原本是本片显式欠下的账）**：建表当天维护者的指令是
+  「建表吧，建完不测」，所以 159 个变体的期望全是**读代码写的**；随后按「先补靶子」
+  补完靶子并**首次上真机**，30 处期望被实测推翻并逐条校正，最终 172 个变体
+  170 passed + 2 xfailed（exit 0）。完整过程、五类偏差与缺口登记见 **§1.6**；
+  启用方式 `RPA_COMMAND_MATRIX=1 RPA_DESKTOP_E2E=1 pytest tests/commands`。
+
+## 1.6 交付（S2 补靶子 + 桌面执行层首跑）
+
+**维护者指令（2026-09-22）**：「先补靶子」——给靶子补上缺失的可测面，让只有负路径的命令
+（`select` / `drag` / `menuSelect`）有正路径可走。
+
+### 1.6.1 靶子新增（`testapps/desktop/Program.cs`）
+
+| 新控件 | 给谁用 | 行为 |
+|---|---|---|
+| **原生菜单栏**（`MainMenu` → HMENU） | `win32.menuSelect` 的成功路径 | `Actions → Increment`、`Actions → Nested → Deep`，各写一个状态 Label |
+| `optionsList`（ListBox，alpha/beta/gamma） | `select` / `getSelectedText` 的正路径面 | `SelectedIndexChanged` → `listStatus = "list:<idx>:<item>"` |
+| `optionsCombo`（ComboBox，one/two/three） | 同上（下拉与列表是两种控件语义） | → `comboStatus` |
+| `dragHandle`（Label，Text="Drag"） | `drag` 的正路径面 | 自实现 `MouseDown/Move/Up` → `dragStatus = moved:dx,dy` / `up:x,y` |
+| `readOnlyNote`（只读 TextBox，Text="note-ready"） | 给两后端一个**文本恒定**的元素锚点 | `ReadOnly = true` |
+| 4 个状态回显 Label | 让副作用可断言 | 初值都是 `none` |
+
+窗口 `ClientSize` 440x260 → **620x360**（新控件要放得下）。
+
+两处刻意选择：
+
+1. **菜单必须用原生 `MainMenu`（HMENU），不能用 `MenuStrip`**：MenuStrip 是托管控件、
+   画在客户区里，`GetMenu(hwnd)` 拿不到——而 `desktop.win32.menuSelect` 走的正是 pywinauto
+   的**原生菜单**路径，MenuStrip 在它眼里等于「这个窗口没有菜单」。用错会以
+   「窗口没有菜单」收场，然后人会掉进「实现是不是没接菜单」的坑里——靶子本身的假象。
+2. **菜单项不碰 `countLabel`**：那是「暂停/继续零重跑」用例的判据（非幂等计数器），
+   菜单项写它会把两个用例的判据缠在一起。菜单项只写自己的状态 Label。
+
+### 1.6.2 靶子补齐后立刻被推翻的两条旧判因
+
+| 旧结论（§1.5 表里的原文） | 实测 | 结论 |
+|---|---|---|
+| 「win32 定位不到靶子控件，所以 win32 侧只能全走负路径」 | win32 定位器的 `title` 比的是控件**窗口文本**：`title='Submit'` / `'Count'` / `'note-ready'` 都唯一命中（`matchedCount=1`） | **判因错**。真正不成立的是另外两条路：`className` 是 `WindowsForms10.*.app.0.<哈希>` 这类动态名（哈希随编译产物变，两个 Edit 还撞同一类名），`control_id` 的过滤**完全不生效**（`descendants(control_id=<任意值>)` 恒返回全部 14 个子控件） |
+| 「靶子无菜单栏 → `menuSelect` 的成功路径无从谈起」，表里那条 `EXECUTOR_FAILED` 是**推断** | 两条正路径真机通过：`["Actions","Increment"]` → `menu:increment`；`["Actions","Nested","Deep"]` → `menu:deep`；不存在的项 → pywinauto `MatchError` → `EXECUTOR_FAILED` | 推断换成了实测 |
+
+顺带把「拖拽能不能真动控件」也钉了：两后端 `dragStatus` 都从 `none` → `up:225,150`。
+
+**屏幕几何**：远程会话里 `CenterScreen` 把窗口放到**负 Y 区**（实测 window rect
+`(647,-765)-(1273,-356)`，client 620x360），所以 `drag` 的绝对终点坐标必须在装配期现算
+（`desktop_harness` 的 `{windowCenterX}/{windowCenterY}`，底层是
+`desktop_fixture.client_center`：`GetClientRect` + `ClientToScreen`）。写死坐标要么拖不到
+窗口内、要么把真实鼠标甩到桌面上无关的位置。
+
+### 1.6.3 执行层首跑：30 处期望按实测校正
+
+159 个「只建表没跑过」的变体第一次上真机，把「读代码猜的期望」全逼出来了。逐类如下
+（改的都是**期望**，不是实现）：
+
+| 类 | 条数 | 实测真相 |
+|---|---|---|
+| 空会话串 | 13 | `resolve_session_id` 把空串当「未提供」（`str(requested or '').strip()` 为空即回退）→ 落到**默认会话**，不是 `SESSION_NOT_FOUND`；元素级命令的失败点因此变成那个不存在的元素。两条变体名随之改成 `empty-session-string-falls-back-*` |
+| 占位符没物化 | 4 | 两处驱动缺陷：① `materialize_inputs` 把**整串占位符**替成字符串，而 `processId` 在 schema 里是 integer、执行器不做转换 → 过滤恒不命中（`{pid}` 的 attach 报 `ELEMENT_NOT_FOUND`，pid 明明是对的）；② `expect` 从未被物化（`{appTitle}` 拿字面量去比真标题）。修法：整串占位符**保留原类型** + 新增 `substitute_extra`（只替 `extra`、不动 `{tmp}`，后者由 `check_files` 自己解析） |
+| `getWindowList` 要会话 | 10 | 实现把会话检查放在命令分派**之前**，而 `_no_session_commands` 声明它不需要——**声明与实现不一致**（两后端同款）。表按实现建档（建会话）并登记 |
+| `win32.attachWindow` 负路径 | 2 | 无效句柄报 `EXECUTOR_FAILED`（pywinauto 抛 `Handle ... is not a vaild window handle`），不是 `ELEMENT_NOT_FOUND`；details 只有 `{title, matchedCount}`（**没有** `className`） |
+
+### 1.6.4 新增的两件记账 / 判据机制
+
+**一、`knownGap`（变体级）**——把「期望是对的、产品是错的」这条正路径钉成**严格 xfail**。
+与「期望写歪了就改期望」相反（S3 的 `data.writeText` 相对路径那条），分界是**期望本身对不对**：
+期望错 → 改期望；期望对而产品没做到 → `knownGap`，期望原样留着。为什么不是「让这行红着」
+或「把期望改成实测的错误行为」：前者会让「有没有新红」失效，后者会把 bug 固化成契约
+（下一手读者会以为「正路径就该报 EXECUTOR_FAILED」）。严格模式则保证缺口一修就
+**XPASS 转红**，逼着回来摘标记。
+
+静态校验器配套三条（自我收紧）：`knownGap` 必须是非空理由、**标记过的变体不计入任何
+覆盖率口径**（缺口不许凑覆盖率）、每条命令至少要有一个**未标记的** negative 变体
+（缺口不许盖住整条命令）。两个后端的 `screenshot` 正路径用了它：
+`'NoneType' object has no attribute 'save'`（Pillow 缺口，见 §1.5 下半张表）。
+
+**二、`outputListContains`（`expect` 新键）**——给「结果随本机环境漂移、但被操作对象恒定」
+的命令用。`getWindowList` 的正路径此前只断言形状（`outputKeys`），因为 `outputs` 是子集比较、
+列表值只能整体等值，而整桌面枚举的结果随维护者开着的窗口漂移。问题不是「不够精确」而是
+**收不了错**：`desktop.getWindowList` 走 pywinauto 的 `uia_element_info._get_elements`，那里
+`except (COMError, ValueError): return []`——COM 拒绝调用时**静默返回空列表**，于是
+「枚举失败」与「本机真没有匹配窗口」在断言上**完全同形**（都是 `windows: []`）。
+锚点换成靶子窗口自己的标题后，两后端共 8 条正路径从「形状断言」变成真判据。
+
+### 1.6.5 实测与噪声：`Windows fatal exception: code 0x8001010d` 已定性（**不是缺陷**）
+
+首跑输出里 5 次出现 `Windows fatal exception: code 0x8001010d` 的线程栈，栈顶完全相同，
+都落在 `desktop.getWindowList` 的 `PyDesktop(backend="uia").windows()`（`desktop.py:225`）。
+定性结论：**噪声，不影响结论**，三条依据：
+
+1. `0x8001010d` = `RPC_E_CANTCALLOUT_ININPUTSYNCCALL`：全桌面 UIA 枚举撞上某个窗口正在派发
+   输入同步调用时，COM 拒绝本次调用。**pytest ≥5 默认启用 faulthandler**，它把这个 SEH 异常
+   渲染成「fatal exception」；异常随后被 pywinauto 自己吞掉，进程继续。（上游同款记录：
+   pytest issue #7059、StackOverflow 57523762——都是「COM + pytest ≥5」这一组合。）
+2. 同一次运行里 **172 项：170 passed + 2 xfailed，exit 0**；5 条 `getWindowList` 变体全过，
+   `-rfExX` 摘要里没有任何 FAILED / ERROR。
+3. 单独复跑 `-k getWindowList`（两后端）也全过。另有 M7 已登记的同类 COM 健壮性缺口
+   （`RPC_E_SERVERCALL_RETRYLATER` 被兜底成 `EXECUTOR_FAILED`），属同一类。
+
+**刻意不采用 `-p no:faulthandler` 消音**：它会连真实的 C 层崩溃一起藏掉，而「测试进程崩了」
+正是这个门禁最需要的信号（M38 §4.2 的教训就是「门禁看的是退出码」）。噪声留在日志里，
+定性写在这里。
+
+**但顺着这条路径查出一个真缺口**（见 1.6.4 第二条）：吞错返回 `[]` 是**静默**的。
+专门验证「静默空列表能否复现」的探针（`.harness/spike/probe_desktop_window_list.py`）
+连跑 8×2 次枚举，本机稳定 11（uia）/ 13（win32）项、每次都能命中靶子窗口，**没撞上**；
+所以登记的是「路径存在、本轮未复现」，不是「已观察到故障」——别把没测到当没风险。
+
+### 1.6.6 一个真 bug：session 级 fixture 被 setup 两次（已修）
+
+`demo_app` 原先定义在 `desktop_harness.py`，两个驱动各自 import → pytest 按「fixture 定义
+位置的模块」给**每个模块**建一份 FixtureDef → session 级 fixture 在两个驱动段各 setup 一次；
+第二次现场编译时，第一次拉起的靶子进程正占着输出 exe，`csc /out:` 覆盖失败退出码 1 →
+**第二个驱动整段 ERROR**。修法：fixture 收到 `tests/commands/conftest.py` 转出（全仓只剩
+一份），并把 `kill_demo_apps()` 前移到编译**之前**（残留进程占住 exe 是同一个坑的另一半）。
+
+**教训**：`--collect-only` **不解析 fixture**，装配层面的错误在收集阶段完全看不见
+（当时两次 `--collect-only` 都干净）。**装配类改动必须以真实运行收口**——与 S1.2 那次
+「只收集不执行看不见问题」同源。
+
+### 1.6.7 验证（S2 补靶子 + 执行层）
+
+- **靶子验收（真机 E2E）** `tests/e2e/test_desktop_target_effects.py`（新，`RPA_DESKTOP_E2E=1`）
+  → **4 passed / 2 xfailed**：菜单两级选中、拖拽移动（两后端各一条）三条正路径真机通过；
+  另两条 `xfail(strict=False)` 钉住 `select` 与 `getText` 的实现缺口（§1.5 下半张表）——
+  用 xfail 而不是删掉，是为了让缺口一直是**可执行的**证据而不是一句注释。
+- **静态层**：`check_command_matrix.py` → `COMMAND MATRIX CHECK PASSED（已校验 86 条命令；
+  未建表命名空间 0 个；死参数台账 0 项；实现缺口 2 条）`——缺口逐条打印在 PASSED 行下面，
+  每次门禁都可见。
+- **桌面矩阵（执行层，两后端）**：172 个变体（UIA 80 / Win32 92）→ **170 passed + 2 xfailed，
+  exit 0**；`-rfExX` 摘要无 FAILED / ERROR。
+- **全量四驱动回归**（`RPA_COMMAND_MATRIX=1 RPA_DESKTOP_E2E=1 pytest tests/commands`）：
+  见下（浏览器 180 + 数据 84 + 工作流 4 + 桌面 172）。
+- **六向负向验证**（探针 `.harness/spike/probe_desktop_matrix_negative.py`，可复跑；
+  判据是「红在**预期的那几条**上」）：
+
+  | 注入 | 结果 |
+  |---|---|
+  | ① `knownGap` 写成空白串 | 静态校验器红，点名「knownGap 是空串」 |
+  | ② `desktop.win32.screenshot` 全变体标 `knownGap` | 红在「没有任何未标 knownGap 的 negative 变体」——缺口盖不住整条命令 |
+  | ③ 摘掉非缺口变体的 `savePath` | 红且点名 `desktop.screenshot.savePath`——缺口行确实**不计入**参数覆盖 |
+  | ④ 删掉 `knownGap` 标记（对照） | 静态层**照样 PASSED**——证明自我收紧只能在执行层（严格 xfail），静态层够不着 |
+  | ⑤ 真机两跑：带标记 / 摘标记 | 带标记 → 1 xfailed / exit 0；摘标记 → 那行**真红**且信息里是 `NoneType` |
+  | ⑥ 真机两跑：`getWindowList` 锚点正常 / 换成不存在的标题 | 正常全过；换掉后**恰好那 4 条**正路径红，信息里有 `outputListContains.windows`——新判据真的被求值 |
+
+  六向均按预期红/绿，用例表逐字节还原（探针自己断言 `read_bytes()` 相等）。
+  第 ⑥ 向是「判据写了但没人执行」这道假绿灯的专用护栏（M38 §4.3 的同类）。
+- **FULL GATE PASSED**（`check_all.py` 退出码 0）。
 
 ## 2. 关键设计决定
 
@@ -420,16 +578,25 @@ S1.2 页签有一条白盒集成用例（`test_panel_streams_jsonl_into_rows`：
   ④ 临时停用 uia 执行器的 `restore_from_scopes` → 真机 E2E 红在「续跑段」，失败详情精确落在
   `nodeId: clickCount` / `commandId: desktop.click` / `effects: []`（**修复前的状态被复现**）。
   四例均逐字节还原，还原后 E2E 与契约测试复跑全绿。
-- **FULL GATE PASSED**（`check_all.py` 退出码 0；契约测试 28 处 E501 已改成模块级构造器后
-  `ruff check .` 全通过）。
+- **FULL GATE PASSED**（S2 补靶子后：静态层 + 契约测试 + ruff + .mjs 切片检查全过；
+  桌面 E2E 与指令矩阵仍按需，见 §1.6.7）。
+- **S2 执行层（2026-09-22 补跑）**：`RPA_COMMAND_MATRIX=1 RPA_DESKTOP_E2E=1 pytest tests/commands`
+  → 四驱动全绿（桌面 172：170 passed + 2 xfailed，exit 0）；六向负向验证见 §1.6.7。
 
 ## 6. 剩余（后续切片）
 
 - **S2 桌面通道**（UIA 17 + Win32 19，共 36 条）：**已完成（2026-09-22）**——
-  两表 + 两驱动 + 共享装配见 §1.5；`PENDING_NAMESPACES` 已清空（86 条命令全部有表）。
-  剩下的不是「建表」，而是两件事：**靶子缺口**（§1.5 那张表：可拖/下拉控件、菜单栏、
-  Win32 可定位控件、`forceKill=true`、`visible=false`）与**执行层的首次真机跑**
-  （本片按维护者指令「建表吧，建完不测」只建表、未跑，159 个变体的未实测期望列在 §1.5）。
+  两表 + 两驱动 + 共享装配见 §1.5；`PENDING_NAMESPACES` 已清空（86 条命令全部有表）；
+  靶子缺口已补、执行层已首跑并校正（§1.6）。**剩下的都是「产品侧的决策/实现」**，
+  不是用例表的事：
+  - `desktop.select`（两后端）与 `desktop.getText`（uia）的实现缺口——出路写在 §1.5 下半张表；
+    e2e 的两条 xfail 会一直亮着，实现修好后它们转 XPASS（同 `knownGap` 的自律方式）；
+  - `desktop.screenshot` 的依赖决策：加 Pillow，或改走 Win32 `BitBlt`（两条正路径现在是
+    `knownGap`，一修就 XPASS 转红，逼着回来摘标记）；
+  - `control_id` 过滤失效与 `getWindowList` 的「声明不需要会话、实现需要」——都是**声明与实现
+    不一致**，要么改实现要么改声明；
+  - 靶子侧仍未覆盖的两条：`closeSession.forceKill=true` 会结束靶子进程（要独立的靶子实例）、
+    `setWindowVisible=false` 需要「一个变体内部完成的显隐对」（属流程层）。
   - **S2 建表时的复用提示**（按「真桌面 fixture」这一定案重写）：桌面通道的可测面是
     「执行器真实下发了什么 + 真窗口上发生了什么」，而 `matrix.py` 的 `expect` 已经能覆盖
     「调用面 / 结果面 / 磁盘面」。**不要再加「打桩绑定层的调用记录」**——那正是被裁决掉

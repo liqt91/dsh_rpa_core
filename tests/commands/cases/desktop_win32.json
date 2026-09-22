@@ -22,14 +22,14 @@
         "negative": true
       },
       {
-        "name": "empty-session-string-is-not-a-wildcard",
+        "name": "empty-session-string-falls-back-to-the-default-session",
         "inputs": {
           "sessionId": ""
         },
         "expect": {
-          "errorCode": "SESSION_NOT_FOUND"
+          "effect": "unsafe-write"
         },
-        "negative": true
+        "notes": "空会话串的实测语义（2026-09-22 执行层首跑校正）：`resolve_session_id` 把空串当「未提供」（`str(requested or '').strip()` 为空即回退），于是命令落到**默认会话**上，并不存在「拿空串去匹配某个会话」这一步——这才是『空串不是通配符』的真实含义。 本命令只吃会话，所以回退之后就是一次正常执行；`missing-session-is-explicit` 那条才是真正的失败路径。"
       }
     ]
   },
@@ -128,9 +128,10 @@
           "session": "none"
         },
         "expect": {
-          "errorCode": "ELEMENT_NOT_FOUND"
+          "errorCode": "EXECUTOR_FAILED"
         },
-        "negative": true
+        "negative": true,
+        "notes": "实测（2026-09-22 执行层首跑）：无效句柄**不是** `ELEMENT_NOT_FOUND`——pywinauto 直接抛（'Handle 999999999 is not a vaild window handle'，原文拼写如此），执行器统一包成`EXECUTOR_FAILED`。此前按 uia 侧直觉写成 ELEMENT_NOT_FOUND，是推断错误。"
       },
       {
         "name": "class-name-is-compared-by-equality-and-can-miss",
@@ -145,10 +146,11 @@
         "expect": {
           "errorCode": "ELEMENT_NOT_FOUND",
           "errorDetails": {
-            "className": "Notepad"
+            "matchedCount": 0
           }
         },
-        "negative": true
+        "negative": true,
+        "notes": "className 恒为等值比较（matchMode 只管 title），配一个错的类名必然找不到。**details 形状与 uia 侧不同（实测）**：win32 的 ELEMENT_NOT_FOUND 只回带 `{title, matchedCount}`，没有 `className`——uia 侧两个都带。此前这条期望是从 uia 表抄过来的，首次执行就红。"
       },
       {
         "name": "no-filter-at-all-is-invalid-input",
@@ -216,8 +218,51 @@
     ]
   },
   "desktop.win32.click": {
-    "notes": "**当前只有负路径**：靶子的控件是 WinForms 动态类名（WindowsForms10.BUTTON.app.0.xxx）、没有稳定的 controlId，win32 定位器（title / className / controlId）匹配不到它们——所以所有吃 elementId 的变体都只能走『元素不存在』这条确定路径。需要正路径得先给靶子加一套 Win32 可定位的控件（登记在任务单 §3）。负路径本身仍有价值：它钉住了参数被接受、且失败码与 uia 侧一致。",
+    "notes": "纠正（2026-09-22）：此前写『靶子的 WinForms 控件匹配不到 win32 定位器，所以只有负路径』——实测 title 锚点可用（见 findElement 的 notes），因此本表补上真机正路径。元素用 countButton（title='Count'）：点它只让计数器加一，无其它副作用。『点下去真的生效』不在这里断言——矩阵一次只跑一条命令，读不到点击后的状态；实测已确认会生效（countLabel '0'→'1'），由 e2e 钉住。",
     "variants": [
+      {
+        "name": "clicks-a-button-through-a-win32-element",
+        "notes": "正路径：显式写全缺省值（clickType/button/clickPosition/postDelayMs）。",
+        "setup": {
+          "find": {
+            "count": {
+              "backend": "win32",
+              "title": "Count"
+            }
+          }
+        },
+        "inputs": {
+          "sessionId": "{session}",
+          "elementId": "{element:count}",
+          "clickType": "single",
+          "button": "left",
+          "clickPosition": "center",
+          "postDelayMs": 0
+        },
+        "expect": {
+          "effect": "unsafe-write"
+        }
+      },
+      {
+        "name": "clicks-a-button-with-simulate-human-off",
+        "notes": "正路径：simulateHuman=false 走最短路径分支（win32 的 ButtonWrapper 没有 invoke，实际仍是坐标点击）。实测同样让计数器加一。",
+        "setup": {
+          "find": {
+            "count": {
+              "backend": "win32",
+              "title": "Count"
+            }
+          }
+        },
+        "inputs": {
+          "sessionId": "{session}",
+          "elementId": "{element:count}",
+          "simulateHuman": false
+        },
+        "expect": {
+          "effect": "unsafe-write"
+        }
+      },
       {
         "name": "default-values-are-spelled-out",
         "notes": "四个缺省值显式写出来，否则没有任何变体『出现』过这些枚举值（覆盖校验会红）；timeoutMs=200 是等待预算的短侧取值。",
@@ -359,20 +404,41 @@
         "negative": true
       },
       {
-        "name": "empty-session-string-is-not-a-wildcard",
+        "name": "empty-session-string-falls-back-to-the-default-session",
         "inputs": {
           "sessionId": ""
         },
         "expect": {
-          "errorCode": "SESSION_NOT_FOUND"
+          "effect": "session"
         },
-        "negative": true
+        "notes": "空会话串的实测语义（2026-09-22 执行层首跑校正）：`resolve_session_id` 把空串当「未提供」（`str(requested or '').strip()` 为空即回退），于是命令落到**默认会话**上，并不存在「拿空串去匹配某个会话」这一步——这才是『空串不是通配符』的真实含义。 本命令只吃会话，所以回退之后就是一次正常执行；`missing-session-is-explicit` 那条才是真正的失败路径。"
       }
     ]
   },
   "desktop.win32.drag": {
-    "notes": "与 uia 侧同构：靶子无可拖控件，且真机拖动会操作真实鼠标（外部副作用），所以只覆盖『目标不存在时显式失败』。",
+    "notes": "与 uia 侧同构：靶子已补可拖控件 dragHandle（窗口文本恒为 'Drag'，win32 侧可直接按 title 定位）。终点用 {windowCenterX}/{windowCenterY} 现算（理由见 uia 侧 drag 的 notes）。真机拖动会操作真实鼠标（按住-移动-松开），在共享桌面上仍是明确的副作用——所以终点必须落在靶子窗口内。副作用（dragStatus）由 e2e 用例断言。",
     "variants": [
+      {
+        "name": "drags-the-handle-into-the-window-center",
+        "notes": "正路径：元素按 title 定位，终点在窗口内。",
+        "setup": {
+          "find": {
+            "handle": {
+              "backend": "win32",
+              "title": "Drag"
+            }
+          }
+        },
+        "inputs": {
+          "sessionId": "{session}",
+          "elementId": "{element:handle}",
+          "targetX": "{windowCenterX}",
+          "targetY": "{windowCenterY}"
+        },
+        "expect": {
+          "effect": "unsafe-write"
+        }
+      },
       {
         "name": "unknown-element-id-is-element-not-found",
         "inputs": {
@@ -415,8 +481,80 @@
     ]
   },
   "desktop.win32.findElement": {
-    "notes": "**当前只有负路径**，原因同 click：win32 定位器认 title / className / controlId，而靶子控件的类名是 WinForms 动态生成的、没有稳定 controlId。locator 里的 backend 字段必须显式写成 win32——DesktopLocator 按后端校验必填身份字段，缺了会在模型层就报 ValidationError（不是本命令的错）。",
+    "notes": "expect 里的 matchedCount=1 不是猜的：实现只在唯一匹配时成功（歧义另有 ELEMENT_AMBIGUOUS），这个字段目前是常量 1。**判因纠正（2026-09-22 补靶子时实测）**：此前这里写的是『靶子控件的类名是 WinForms 动态生成的、没有稳定 controlId，因此 win32 定位器匹配不到任何控件，只能全走负路径』——实测**不成立**。win32 定位器的 `title` 比的是控件的**窗口文本**，对 Button / Label 这类文本恒定的控件完全可用：`title='Submit'`、`title='Drag'`、`title='note-ready'` 都 uniquely 命中（matchedCount=1）。真正不成立的是另外两条路：`className` 是 WindowsForms10.*.app.0.<哈希> 这类动态名（哈希随编译产物变，且两个 Edit 撞同一个类名），`control_id` 则**过滤根本不生效**——实测 `descendants(control_id=<任一值>)` 一律返回全部 子控件（14/14/14）。controlId 过滤失效是 pywinauto 的行为，登记在任务单。`title='alpha'` 那条钉住另一件事：ListBox 的条目不是子窗口，win32 侧看不到它们。",
     "variants": [
+      {
+        "name": "a-stable-window-text-resolves-the-button",
+        "notes": "正路径：Button 的窗口文本恒定（'Submit' 由靶子写死，没有任何命令会改它）。",
+        "inputs": {
+          "sessionId": "{session}",
+          "locator": {
+            "backend": "win32",
+            "title": "Submit"
+          },
+          "timeoutMs": 3000
+        },
+        "expect": {
+          "outputs": {
+            "matchedCount": 1
+          },
+          "outputKeys": [
+            "elementId",
+            "matchedCount"
+          ],
+          "effect": "read"
+        }
+      },
+      {
+        "name": "a-read-only-edit-is-addressable-by-its-content",
+        "notes": "正路径：只读 Edit 的窗口文本就是它的内容，内容不被任何命令改写，所以拿得到稳定锚点（queryInput 做不到——它的文本既是空串又会跟着输入变）。",
+        "inputs": {
+          "sessionId": "{session}",
+          "locator": {
+            "backend": "win32",
+            "title": "note-ready"
+          },
+          "timeoutMs": 3000
+        },
+        "expect": {
+          "outputs": {
+            "matchedCount": 1
+          },
+          "effect": "read"
+        }
+      },
+      {
+        "name": "a-title-matching-many-controls-is-ambiguous",
+        "notes": "歧义面：靶子上有多个 Label 的窗口文本都是 'none'（各个状态回显框），唯一匹配才成功。不按值断言 matchedCount——它会随跑过哪些变体而变化（menuSelect/drag 变体会改写其中一个状态框），钉住『≥2 个匹配报 ELEMENT_AMBIGUOUS』这个判据本身即可。",
+        "inputs": {
+          "sessionId": "{session}",
+          "locator": {
+            "backend": "win32",
+            "title": "none"
+          },
+          "timeoutMs": 200
+        },
+        "expect": {
+          "errorCode": "ELEMENT_AMBIGUOUS"
+        },
+        "negative": true
+      },
+      {
+        "name": "list-box-entries-are-not-child-windows",
+        "notes": "负路径，但钉的是一条实现事实而不是参数：ListBox 的条目（alpha/beta/gamma）是控件内部数据、不是子窗口，所以 win32 侧按 title 永远看不见它们。要在 win32 通道选下拉/列表，只能按 ListBox/ComboBox 自身的句柄走 （`desktop.win32.select` 的现状见那条命令的 notes）。",
+        "inputs": {
+          "sessionId": "{session}",
+          "locator": {
+            "backend": "win32",
+            "title": "alpha"
+          },
+          "timeoutMs": 200
+        },
+        "expect": {
+          "errorCode": "ELEMENT_NOT_FOUND"
+        },
+        "negative": true
+      },
       {
         "name": "unknown-class-name-is-element-not-found",
         "inputs": {
@@ -462,7 +600,7 @@
         "negative": true
       },
       {
-        "name": "empty-session-string-is-not-a-wildcard",
+        "name": "empty-session-falls-back-then-the-element-is-missing",
         "inputs": {
           "sessionId": "",
           "locator": {
@@ -471,14 +609,15 @@
           }
         },
         "expect": {
-          "errorCode": "SESSION_NOT_FOUND"
+          "errorCode": "ELEMENT_NOT_FOUND"
         },
-        "negative": true
+        "negative": true,
+        "notes": "空会话串的实测语义（2026-09-22 执行层首跑校正）：`resolve_session_id` 把空串当「未提供」（`str(requested or '').strip()` 为空即回退），于是命令落到**默认会话**上，并不存在「拿空串去匹配某个会话」这一步——这才是『空串不是通配符』的真实含义。 但本命令还要元素：回退成功之后，失败点变成了那个不存在的元素 id（不是会话）。"
       }
     ]
   },
   "desktop.win32.getSelectedText": {
-    "notes": "与 uia 侧同构：靶子控件可用 win32 定位器匹配之前只有负路径（原因见 click）。",
+    "notes": "**本表刻意不给正路径**（纠正 2026-09-22：此前归因于『靶子控件匹配不到 win32 定位器』）。实现用 `element.iface_value.GetSelection()`，而 win32 后端的元素没有 iface_* 属性族 （同 desktop.win32.select）→ 异常被吞 → 实测对 title=note-ready / Submit / Drag 三个元素都返回 success 且 text 恒为空串。返回 success 证明不了读到过选区，所以不写正路径。",
     "variants": [
       {
         "name": "unknown-element-id-is-element-not-found",
@@ -503,21 +642,74 @@
         "negative": true
       },
       {
-        "name": "empty-session-string-is-not-a-wildcard",
+        "name": "empty-session-falls-back-then-the-element-is-missing",
         "inputs": {
           "sessionId": "",
           "elementId": "no-such-element"
         },
         "expect": {
-          "errorCode": "SESSION_NOT_FOUND"
+          "errorCode": "ELEMENT_NOT_FOUND"
         },
-        "negative": true
+        "negative": true,
+        "notes": "空会话串的实测语义（2026-09-22 执行层首跑校正）：`resolve_session_id` 把空串当「未提供」（`str(requested or '').strip()` 为空即回退），于是命令落到**默认会话**上，并不存在「拿空串去匹配某个会话」这一步——这才是『空串不是通配符』的真实含义。 但本命令还要元素：回退成功之后，失败点变成了那个不存在的元素 id（不是会话）。"
       }
     ]
   },
   "desktop.win32.getText": {
-    "notes": "与 uia 侧同构：只有负路径。outputs 的 value 键在 uia 侧有真机证据（S2.1 的 readResult），win32 侧等靶子补齐后再补正路径。",
+    "notes": "正路径按值断言，锚点选的是**文本恒定**的控件：只读 Edit（'note-ready'）与按钮（'Count'）。此前这里写『只有负路径，等靶子补齐后再补正路径』——补靶子时实测发现win32 侧本来就用的是 title 锚点、早就可以走正路径，判因写错了（详见 desktop.win32.findElement 的 notes）。仍然避开 countLabel 与 resultText：它们会被别的变体改写（点计数器、点提交），按值断言等于把用例顺序写进期望。",
     "variants": [
+      {
+        "name": "reads-the-read-only-edit-by-value",
+        "notes": "按值断言：只读 Edit 的内容不被任何命令改写，这一条是稳定的。",
+        "setup": {
+          "find": {
+            "note": {
+              "backend": "win32",
+              "title": "note-ready"
+            }
+          }
+        },
+        "inputs": {
+          "sessionId": "{session}",
+          "elementId": "{element:note}",
+          "timeoutMs": 2000
+        },
+        "expect": {
+          "outputs": {
+            "value": "note-ready"
+          },
+          "outputKeys": [
+            "value"
+          ],
+          "effect": "read"
+        }
+      },
+      {
+        "name": "reads-a-button-label-by-value",
+        "notes": "按钮的窗口文本 = 它的标题，点它也不会改标题。",
+        "setup": {
+          "find": {
+            "button": {
+              "backend": "win32",
+              "title": "Count"
+            }
+          }
+        },
+        "inputs": {
+          "sessionId": "{session}",
+          "elementId": "{element:button}",
+          "timeoutMs": 2000
+        },
+        "expect": {
+          "outputs": {
+            "value": "Count"
+          },
+          "outputKeys": [
+            "value"
+          ],
+          "effect": "read"
+        }
+      },
       {
         "name": "unknown-element-id-is-element-not-found",
         "inputs": {
@@ -556,7 +748,7 @@
     ]
   },
   "desktop.win32.getWindowList": {
-    "notes": "不需要会话。与 uia 侧同一口径：outputs 是整桌面的窗口列表，内容随本机环境漂移，所以正路径只断言形状，唯一按值断言的是『一个都不匹配 → 空列表』。",
+    "notes": "不需要会话（自己就是枚举）——**这句此前写错了，2026-09-22 执行层首跑纠正**：实现里 `execute` 的「无需会话」名单（`_no_session_commands`）确实含本命令，但 `_execute_sync` 把会话检查放在了命令分派**之前**，所以实际执行仍然要求会话存在，`setup: session=none` 会直接吃 `SESSION_NOT_FOUND`（两后端同款）。这是声明与实现的不一致，已登记在任务单；表里按实现的实际行为建档（建会话）。另：outputs 是**整桌面**的窗口列表，内容随本机环境漂移（实测本机 11 项，win32 侧 13 项）——所以正路径**不断言整个列表**，改断言『列表里至少有靶子窗口那一项』（`outputListContains`，锚点是恒定的 `{appTitle}`）。这条是 2026-09-22 补上的：此前三条正路径只断言形状（`outputKeys` + `effect`），而 `outputs` 是子集比较、列表值只能整体等值，于是「枚举被 COM 拒绝 → pywinauto 静默返回空列表」与「本机真没有匹配窗口」在断言上完全同形（`uia_element_info._get_elements` 里 `except COMError: return []`，实测的 0x8001010d 就是这条路径）——形状断言收不了这个错。负路径那条仍按值断言空列表，它是唯一确定值。注意 matchMode 在本命令缺省是 contains（与 attachWindow 的 exact 不同）。",
     "variants": [
       {
         "name": "exact-pattern-finds-the-fixture-window",
@@ -564,14 +756,16 @@
           "titlePattern": "{appTitle}",
           "matchMode": "exact"
         },
-        "setup": {
-          "session": "none"
-        },
         "expect": {
           "outputKeys": [
             "windows"
           ],
-          "effect": "read"
+          "effect": "read",
+          "outputListContains": {
+            "windows": {
+              "title": "{appTitle}"
+            }
+          }
         }
       },
       {
@@ -580,14 +774,16 @@
           "titlePattern": "Desktop Demo",
           "matchMode": "contains"
         },
-        "setup": {
-          "session": "none"
-        },
         "expect": {
           "outputKeys": [
             "windows"
           ],
-          "effect": "read"
+          "effect": "read",
+          "outputListContains": {
+            "windows": {
+              "title": "{appTitle}"
+            }
+          }
         }
       },
       {
@@ -596,14 +792,16 @@
           "titlePattern": "^RPA Core .*Demo$",
           "matchMode": "regex"
         },
-        "setup": {
-          "session": "none"
-        },
         "expect": {
           "outputKeys": [
             "windows"
           ],
-          "effect": "read"
+          "effect": "read",
+          "outputListContains": {
+            "windows": {
+              "title": "{appTitle}"
+            }
+          }
         }
       },
       {
@@ -611,9 +809,6 @@
         "inputs": {
           "titlePattern": "no-such-window-probe-xyz-42",
           "matchMode": "exact"
-        },
-        "setup": {
-          "session": "none"
         },
         "expect": {
           "outputs": {
@@ -626,14 +821,16 @@
       {
         "name": "no-filter-declares-every-window",
         "inputs": {},
-        "setup": {
-          "session": "none"
-        },
         "expect": {
           "outputKeys": [
             "windows"
           ],
-          "effect": "read"
+          "effect": "read",
+          "outputListContains": {
+            "windows": {
+              "title": "{appTitle}"
+            }
+          }
         }
       }
     ]
@@ -669,14 +866,22 @@
         "negative": true
       },
       {
-        "name": "empty-session-string-is-not-a-wildcard",
+        "name": "empty-session-string-falls-back-to-the-default-session",
         "inputs": {
           "sessionId": ""
         },
         "expect": {
-          "errorCode": "SESSION_NOT_FOUND"
+          "outputs": {
+            "title": "{appTitle}"
+          },
+          "outputKeys": [
+            "title",
+            "className",
+            "processId"
+          ],
+          "effect": "read"
         },
-        "negative": true
+        "notes": "空会话串的实测语义（2026-09-22 执行层首跑校正）：`resolve_session_id` 把空串当「未提供」（`str(requested or '').strip()` 为空即回退），于是命令落到**默认会话**上，并不存在「拿空串去匹配某个会话」这一步——这才是『空串不是通配符』的真实含义。 本命令只吃会话，所以回退之后就是一次正常执行；`missing-session-is-explicit` 那条才是真正的失败路径。"
       }
     ]
   },
@@ -705,20 +910,20 @@
         "negative": true
       },
       {
-        "name": "empty-session-string-is-not-a-wildcard",
+        "name": "empty-session-string-falls-back-to-the-default-session",
         "inputs": {
           "sessionId": "",
           "keys": "{VK_F5}"
         },
         "expect": {
-          "errorCode": "SESSION_NOT_FOUND"
+          "effect": "unsafe-write"
         },
-        "negative": true
+        "notes": "空会话串的实测语义（2026-09-22 执行层首跑校正）：`resolve_session_id` 把空串当「未提供」（`str(requested or '').strip()` 为空即回退），于是命令落到**默认会话**上，并不存在「拿空串去匹配某个会话」这一步——这才是『空串不是通配符』的真实含义。 本命令只吃会话，所以回退之后就是一次正常执行；`missing-session-is-explicit` 那条才是真正的失败路径。"
       }
     ]
   },
   "desktop.win32.input": {
-    "notes": "**当前只有负路径**（原因见 click：靶子控件匹配不到 win32 定位器）。三个 mode、append、keyIntervalMs、clickBeforeInput、postDelayMs 都覆盖了，但都停在『元素不存在』这一步——参数分支的效果要等靶子补齐后才能验。",
+    "notes": "**当前只有负路径**。纠正（2026-09-22 补靶子时实测）：此前归因于『靶子控件匹配不到 win32 定位器』不成立——title 锚点是可用的（见 findElement 的 notes）。真正的原因是**本命令需要一个『可写的 Edit』，而 win32 定位器给不出它的稳定锚点**：可写 Edit 的窗口文本就是它的内容（queryInput 初始为空、写过一次就跟着变，两种状态都当不了锚点）；className 是动态名且两个 Edit 撞同名；control_id 过滤实测失效；handle 每次运行都不同、写不进静态表。实测旁证：拿只读 Edit 当锚点时 `mode=automation` 的 `set_edit_text` （走 WM_SETTEXT）**能改写只读框的内容**——内容一变，按 title 的锚点立刻消失，后续按值断言会连带崩，所以也不能拿它凑一条正路径。参数整形（三个 mode / append / keyIntervalMs / clickBeforeInput / postDelayMs）在 uia 侧有同构正路径覆盖。",
     "variants": [
       {
         "name": "default-values-are-spelled-out",
@@ -843,28 +1048,44 @@
     ]
   },
   "desktop.win32.menuSelect": {
-    "notes": "win32 侧独有。**靶子还没有菜单栏**，所以成功路径无从谈起：用真实会话配一条菜单路径，pywinauto 的 menu_select 会抛，执行器包成 EXECUTOR_FAILED。这条期望是**推断**（依据：实现里 _menu_select 直接转给 pywinauto，没有自己的菜单不存在分支），首次启用时按实际结果校正——正路要真靶子先有菜单栏（登记在任务单 §3）。",
+    "notes": "靶子已补**原生**菜单栏（HMENU，由 MainMenu 创建；MenuStrip 是托管控件、`GetMenu(hwnd)` 看不到，等于没有菜单）。实测：`menu_select('Actions->Increment')` 与嵌套的 `'Actions->Nested->Deep'` 都返回成功，且靶子的 menuStatus 回显框真的从 'none' 变成 'menu:increment' / 'menu:deep'（多级路径按 '->' 拼接这一口径得到实证）。不存在的项（如 'File'）实测抛 MatchError，被执行器包成 EXECUTOR_FAILED——这条此前是**推断**，现在有实测支撑。",
     "variants": [
       {
-        "name": "no-menu-bar-shows-up-as-an-executor-failure",
+        "name": "selects-a-two-level-menu-item",
+        "notes": "正路径：Actions->Increment。副作用（menuStatus）由 e2e 用例断言。",
+        "inputs": {
+          "sessionId": "{session}",
+          "menuPath": [
+            "Actions",
+            "Increment"
+          ]
+        },
+        "expect": {
+          "effect": "unsafe-write"
+        }
+      },
+      {
+        "name": "selects-a-nested-menu-item",
+        "notes": "正路径：三级路径 Actions->Nested->Deep，钉住多级菜单的拼接口径。",
+        "inputs": {
+          "sessionId": "{session}",
+          "menuPath": [
+            "Actions",
+            "Nested",
+            "Deep"
+          ]
+        },
+        "expect": {
+          "effect": "unsafe-write"
+        }
+      },
+      {
+        "name": "an-unknown-menu-item-is-an-executor-failure",
+        "notes": "负路径（实测）：pywinauto 抛 MatchError（'Could not find File in dict_keys([Actions])'），执行器统一包成 EXECUTOR_FAILED。注意菜单路径不合法**不**映射成 ELEMENT_NOT_FOUND——manifest 的 errors 里本来就没有它，别按直觉改名。",
         "inputs": {
           "sessionId": "{session}",
           "menuPath": [
             "File"
-          ]
-        },
-        "expect": {
-          "errorCode": "EXECUTOR_FAILED"
-        },
-        "negative": true
-      },
-      {
-        "name": "multi-level-path-uses-the-same-arrow-join",
-        "inputs": {
-          "sessionId": "{session}",
-          "menuPath": [
-            "File",
-            "Exit"
           ]
         },
         "expect": {
@@ -877,13 +1098,13 @@
         "inputs": {
           "sessionId": "no-such-session",
           "menuPath": [
-            "File"
+            "Actions",
+            "Increment"
           ]
         },
         "expect": {
           "errorCode": "SESSION_NOT_FOUND"
-        },
-        "negative": true
+        }
       }
     ]
   },
@@ -966,8 +1187,38 @@
     ]
   },
   "desktop.win32.screenshot": {
-    "notes": "与 uia 侧同构：只有负路径（元素匹配不到）。磁盘断言用『存在』形式——PNG 是二进制。",
+    "notes": "**实测（2026-09-22）：连正路径也走不通**——实现先试 `element.iface_value.GetCurrentPropertyValue(30013)`（win32 后端包装出的元素没有 `iface_*` 属性族，必抛），回落到 `window.capture_as_image()`，而后者需要 PIL，项目依赖里没有 Pillow，命令以 EXECUTOR_FAILED 收场（'NoneType' object has no attribute 'save'）。这是依赖缺口，与用例无关；期望按原样留着（正路径就该写出 PNG），钉成严格 xfail（缺口一修就 XPASS 转红，逼着回来摘标记）。修法是独立决策（加 Pillow 或改走 Win32 BitBlt）。",
     "variants": [
+      {
+        "name": "writes-a-png-into-the-variant-temp-dir",
+        "knownGap": "依赖缺口：win32 侧 `iface_value` 分支必抛（win32 元素没有 iface_* 属性族）后回落到 pywinauto 的 capture_as_image()，而它需要 PIL，项目依赖里没有 Pillow —— 两个后端的 screenshot 正路径都必然 EXECUTOR_FAILED（'NoneType' object has no attribute 'save'）。出路是二选一：加 Pillow 依赖，或改走 Win32 BitBlt（无第三方依赖）。详见 M38 任务单 §1.5 缺口表。",
+        "notes": "锚点选只读 Edit（窗口文本恒为 'note-ready'，不被任何命令改写）——与 getText 正路径同一个锚点，理由相同。",
+        "setup": {
+          "find": {
+            "note": {
+              "backend": "win32",
+              "title": "note-ready"
+            }
+          }
+        },
+        "inputs": {
+          "sessionId": "{session}",
+          "elementId": "{element:note}",
+          "savePath": "{tmp}/shot.png"
+        },
+        "expect": {
+          "outputPaths": {
+            "filePath": "{tmp}/shot.png"
+          },
+          "effect": "idempotent-write",
+          "files": [
+            {
+              "path": "{tmp}/shot.png",
+              "missing": false
+            }
+          ]
+        }
+      },
       {
         "name": "unknown-element-id-is-element-not-found",
         "inputs": {
@@ -999,21 +1250,22 @@
         "negative": true
       },
       {
-        "name": "empty-session-string-is-not-a-wildcard",
+        "name": "empty-session-falls-back-then-the-element-is-missing",
         "inputs": {
           "sessionId": "",
           "elementId": "no-such-element",
           "savePath": "{tmp}/nope.png"
         },
         "expect": {
-          "errorCode": "SESSION_NOT_FOUND"
+          "errorCode": "ELEMENT_NOT_FOUND"
         },
-        "negative": true
+        "negative": true,
+        "notes": "空会话串的实测语义（2026-09-22 执行层首跑校正）：`resolve_session_id` 把空串当「未提供」（`str(requested or '').strip()` 为空即回退），于是命令落到**默认会话**上，并不存在「拿空串去匹配某个会话」这一步——这才是『空串不是通配符』的真实含义。 但本命令还要元素：回退成功之后，失败点变成了那个不存在的元素 id（不是会话）。"
       }
     ]
   },
   "desktop.win32.select": {
-    "notes": "与 uia 侧同构：selectBy 三值都覆盖，但靶子上没有下拉控件、也没有可匹配的 win32 定位器，所以全是负路径。",
+    "notes": "**本表刻意不给正路径**（纠正 2026-09-22：此前写『靶子上没有下拉控件、也没有可匹配的 win32 定位器』——靶子已补 ListBox/ComboBox，真正的问题在实现）。win32 侧更彻底：实现走 `element.iface_selection` / `iface_value`，而 win32 后端包装出的元素**根本没有 iface_* 这一族属性**（实测对窗口里每个子控件取 iface_selection / iface_value / iface_invoke 全部抛异常），于是整段被 `except Exception: pass` 吞掉、命令照旧返回 success。也就是说 `desktop.win32.select` 在当前实现下**不可能生效**，给它写正路径只会种假绿灯。缺口由 tests/e2e/test_desktop_target_effects.py 的 xfail 钉住。",
     "variants": [
       {
         "name": "value-mode-fails-on-an-unknown-element",
@@ -1139,15 +1391,15 @@
         "negative": true
       },
       {
-        "name": "empty-session-string-is-not-a-wildcard",
+        "name": "empty-session-string-falls-back-to-the-default-session",
         "inputs": {
           "sessionId": "",
           "visible": true
         },
         "expect": {
-          "errorCode": "SESSION_NOT_FOUND"
+          "effect": "unsafe-write"
         },
-        "negative": true
+        "notes": "空会话串的实测语义（2026-09-22 执行层首跑校正）：`resolve_session_id` 把空串当「未提供」（`str(requested or '').strip()` 为空即回退），于是命令落到**默认会话**上，并不存在「拿空串去匹配某个会话」这一步——这才是『空串不是通配符』的真实含义。 本命令只吃会话，所以回退之后就是一次正常执行；`missing-session-is-explicit` 那条才是真正的失败路径。"
       }
     ]
   }

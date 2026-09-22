@@ -18,6 +18,10 @@
 
 表与 catalog 的对齐由 `.harness/scripts/check_command_matrix.py` 静态校验（在默认门禁里）；
 本文件的用例按需跑：`RPA_COMMAND_MATRIX=1 RPA_DESKTOP_E2E=1 pytest tests/commands`。
+
+`demo_app`（真靶子）由 `tests/commands/conftest.py` 转出，本文件**不要**自己 import 它——
+那会让 pytest 为两个驱动各建一份 FixtureDef，session 级 fixture 被 setup 两次（第二次现场
+编译撞上第一次拉起的进程占着的 exe，整段 ERROR，见 conftest 里的记录）。
 """
 
 from __future__ import annotations

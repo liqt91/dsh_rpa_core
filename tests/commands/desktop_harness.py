@@ -23,6 +23,10 @@
 - `setup.attach`：覆盖 attach 的入参（默认按靶子标题 exact 匹配）。
 - `setup.find`：`名字 → locator`，按顺序 findElement，id 注入成 `{element:名字}`。
 - `{appTitle}` / `{pid}`：靶子窗口标题与进程 id。
+- `{windowCenterX}` / `{windowCenterY}`：靶子窗口**客户区中心**的屏幕坐标。
+  `desktop.drag` 的 `targetX`/`targetY` 是绝对屏幕坐标，而窗口位置随会话漂移
+  （实测：本机 1920x1080 的远程会话里 `CenterScreen` 把窗口放到了 y=-765），
+  写死坐标要么拖不到窗口内、要么把真实鼠标甩到桌面上的无关位置——只能现算。
 
 **每个变体自建会话、跑完即弃**（不是整个矩阵共用一个长命会话）。多花一次 attach
 的时间，换来的是变体之间**没有状态污染**——`countLabel` 被点过、窗口被最小化或隐藏、
@@ -112,8 +116,10 @@ def demo_app(matrix_tmp_dir) -> Any:
         pytest.skip(_UNAVAILABLE)
     app_dir = matrix_tmp_dir / "demo-app"
     app_dir.mkdir(parents=True, exist_ok=True)
-    exe = desktop_fixture.compile_demo_app(app_dir)
+    # 先清残留进程再编译：上一次会话留下的靶子会占住输出 exe，现场编译无法覆盖它
+    # （`csc /out:` 直接以退出码 1 收场，现象是整段用例 ERROR 在 fixture setup 上）。
     desktop_fixture.kill_demo_apps()
+    exe = desktop_fixture.compile_demo_app(app_dir)
     process = subprocess.Popen([str(exe)])
     try:
         desktop_fixture.wait_for_window(desktop_fixture.APP_TITLE)
@@ -196,18 +202,26 @@ async def _prepare(
     tmp_dir: Path,
     *,
     backend: DesktopBackend,
-) -> dict[str, str]:
+) -> dict[str, Any]:
     """按变体的 `setup` 现算占位符表（`{session}` / `{element:x}` / `{appTitle}` / `{pid}`）。
 
     装配失败直接抛 `AssertionError`：这是**用例表/靶子**的问题，不该伪装成被测命令的
     失败（否则一句话「命令报错了」会把人引到实现上去查）。
+
+    **数值类占位符存原始类型**（`{pid}` / `{windowCenterX}` / `{windowCenterY}` 是 int）：
+    `processId` / `targetX` 这些参数在 schema 里就是 integer，而占位符替换出来的字符串
+    会让执行器的过滤/比较恒不命中（实测：`{pid}` 存成字符串后 attach 报
+    `ELEMENT_NOT_FOUND`，pid 明明是对的）。
     """
     from tests.commands.matrix import materialize_inputs
 
-    extra: dict[str, str] = {
+    center = desktop_fixture.client_center(app.title) or (0, 0)
+    extra: dict[str, Any] = {
         "appTitle": app.title,
-        "pid": str(app.pid),
+        "pid": app.pid,
         "handle": _window_handle(app.title),
+        "windowCenterX": center[0],
+        "windowCenterY": center[1],
     }
     if setup.get("session", "shared") == "none":
         return extra
@@ -270,7 +284,8 @@ async def _execute_variant(
         started = time.perf_counter()
         result = await executor.execute(_invocation(command, inputs), asyncio.Event())
         elapsed_ms = (time.perf_counter() - started) * 1000.0
-        return result, elapsed_ms
+        # 占位符表要跟着回去：`expect` 里也会有 `{appTitle}` / `{pid}` / `{handle}` / `{element:x}`
+        return result, elapsed_ms, extra
     finally:
         await executor.close()
 
@@ -289,15 +304,18 @@ def run_variant(
     `calls=None` 时会把这些声明直接判成违规，而不是静默跳过（「断言写了但没人执行」
     正是假绿灯的成因）。桌面侧的证据面是结果的 `outputs` / `effects` / 错误码 / 磁盘。
     """
-    from tests.commands.matrix import check_expect
+    from tests.commands.matrix import check_expect, substitute_extra
 
     # 上一个变体可能把窗口最小化/隐藏了：每个变体开始前把前台焦点与可见性要回来。
     desktop_fixture.force_foreground(app.title)
-    result, elapsed_ms = asyncio.run(
+    result, elapsed_ms, extra = asyncio.run(
         _execute_variant(backend, app, tmp_dir, command, variant)
     )
     return check_expect(
-        variant["expect"], result=result, tmp_dir=tmp_dir, elapsed_ms=elapsed_ms
+        substitute_extra(variant["expect"], extra),
+        result=result,
+        tmp_dir=tmp_dir,
+        elapsed_ms=elapsed_ms,
     )
 
 

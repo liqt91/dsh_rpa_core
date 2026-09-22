@@ -180,6 +180,16 @@ def matrix_tmp_dir():
         shutil.rmtree(base, ignore_errors=True)
 
 
+# 桌面靶子 fixture 在这里**转出**（不是直接用模块里的那份），两个驱动文件都不再自己 import：
+# pytest 按「fixture 定义位置的模块」给每个模块建一份 FixtureDef，于是同一个 `demo_app`
+# 被 uia / win32 两个驱动各拿到一份 → **session 级 fixture 被 setup 两次** → 第二次现场编译
+# 时，第一次拉起的靶子进程正占着输出 exe，`csc /out:` 覆盖失败退出码 1，整个 win32 段
+# 169 个变体全部 ERROR（2026-09-22 实测）。
+# 从 conftest 转出后只剩一份 FixtureDef，会话内只编译并启动一次。
+# 代价：任何模块再自己 `from ... import demo_app` 都会把这条又拆回两份——别这么干。
+from tests.commands.desktop_harness import demo_app  # noqa: E402,F401
+
+
 @pytest.fixture(autouse=True)
 def _block_destructive_browser_ops(monkeypatch):
     """禁止用例真的终止进程或拉起浏览器（见模块 docstring §1）。
