@@ -11,8 +11,13 @@
   输出）；**S3 数据/工作流通道已交付**——插桩点与前两片不同（`PythonWorkerExecutor` **真起子进程**，
   真子进程就是真机，一次测到行为/outputs 形状/磁盘状态三面）、抽公共驱动层 `tests/commands/matrix.py`
   统一 `expect` 语义、新增**执行前安全阀** `tests/commands/guard.py`（这条通道真会
-  `deletePath + recursive`，用例表写错就会删到目录外；契约测试已进默认门禁）；S2 桌面 36 条待建表
-  （**建表即自动出现在页签里**，不用改页面）
+  `deletePath + recursive`，用例表写错就会删到目录外；契约测试已进默认门禁）；**S2.1 已交付**
+  （2026-09-22，维护者定案**走真桌面 fixture**）：靶子加非幂等计数器、装配抽成
+  `tests/e2e/desktop_fixture.py` 共用、桌面通道「暂停/继续」的真机证据补上（跨进程 `resume`
+  续接同一窗口 / 会话与元素都接回 / 零重跑，两处缺口都是探针实测逼出来的，实装
+  `base.desktop_sessions_from_scopes` + 两后端 `restore_from_scopes`，契约测试进默认门禁）。
+  S2 剩下的是 **36 条桌面用例表本身**（`cases/desktop.json` + `cases/desktop_win32.json` + 驱动
+  + `PENDING_NAMESPACES` 删 `desktop`；**建表即自动出现在页签里**，不用改页面）
   - 计划：`M38-command-matrix.md`
 
 ## 后续任务
@@ -30,6 +35,44 @@
   - 为什么要登记：它打在「退出码即门禁结论」这条纪律上——**间歇红最容易被当成无关噪声忽略**，
     而 M38 §4.2 已经证明过「全绿的用例数」与「门禁通过」是两件事。归因前遇到该红，
     请先复跑确认，不要直接改断言放宽（会把真实缺陷一起放掉）。
+
+- [ ] **门禁偶发红：桌面 E2E 记事本切片在整目录运行时失败**（`planned`，待归因；
+  **已用干净对照排除与 M38 S2.1 改动相关**）
+  - 观测（2026-09-22，M38 S2.1 收口期间）：`RPA_DESKTOP_E2E=1 pytest tests/e2e`（整目录）
+    **连跑三次都红在同一处**——`test_windows_desktop.py::test_windows_desktop_vertical_slice`
+    （三次进度行都是 `.....F.`，即那三次是**稳定复现**而非随机），而同文件单跑、两两组合、
+    本次新增的两个文件单独跑均绿。缺省门禁不含该目录（`--with-desktop-e2e` 才跑）。
+  - 取证：pytest 的 `tmp_path` 保留最近三次，失败运行的 `events.jsonl` 还在盘上，配合探针
+    `.harness/spike/probe_win32_notepad_slice.py`（含 `--dump <events.jsonl>` 模式，用例本身
+    只断言 status、拿不到细节）取出**三个不同失败签名**，全部落在**本次改动未触及的节点**：
+    ① `attachMain` / `desktop.win32.attachWindow` → `ELEMENT_NOT_FOUND`
+       `details={"title": "无标题 - 记事本", "matchedCount": 0}`。该节点按 title **精确匹配**，
+       而 fixture 期望的是**全新未命名**的记事本——怀疑与 Windows 11 记事本「重启恢复上次
+       标签页」（标题变成 `test.txt - 记事本`）有关，即**跨运行状态累积**；
+    ② `openDialog` / `desktop.win32.menuSelect` 或 `inputPath` / `desktop.win32.input`
+       → `EXECUTOR_FAILED` `(0, 'SetForegroundWindow', 'No error message is available')`；
+    ③ `attachOpened` / `desktop.win32.attachWindow` → `EXECUTOR_FAILED`
+       `Handle <n> is not a vaild window handle`（打开对话框已被 Enter 关掉、句柄已失效）。
+    ②③ 都是**真实桌面焦点/时序竞态**，①更像跨运行状态累积。
+  - **对照实验（排除与本次改动的相关性）**：从 `HEAD` 建干净 worktree
+    （`git worktree add --detach`）并用**同一探针**跑，先确认导入的确是改动前的代码
+    （`hasattr(Win32DesktopExecutor, "restore_from_scopes") is False`）。结果：HEAD **14 次红 4 次**
+    （①×1、②×1、③×2），本仓库 **14 次红 5 次**（同三款签名）；为进一步排掉「环境随时间漂移」，
+    又做**交替 A/B 六轮**（HEAD、本仓库轮流跑）——HEAD 六次红 2 次、本仓库六次**全绿**。
+    结论：**既有抖动，与本里程碑 diff 无关**（4/14 vs 5/14 无差别；此前看到的「本仓库红得多」
+    是时间聚集造成的假象）。结构上也不该相关：该切片**不走 resume 路径**，本次新增的
+    `restore_from_scopes` 在此根本不会被调用，另一处改动只是给 effect 的 `details` 多写一个
+    `locator` 键（纯数据）。
+  - 线索/候选（**未验证，不下结论**）：① `attachMain` 改按 `processId` 定位（测试侧本就
+    `Popen` 拿得到 pid，且下游 `attachDialog`/`attachOpened` 已是按 pid/类名定位），可去掉
+    「标题随记事本状态变」这个变量；② `SetForegroundWindow` 返回 0 是 Windows 的前台权限语义，
+    可能要在实现层重试或走 `AttachThreadInput`；③ `attachOpened` 前应对句柄做轮询等待。
+    **三者修法互相独立，且②③不是用例侧能修的**——先登记，等 M38 S2 真要把桌面通道进 L1
+    矩阵时一并处理（届时这片的稳定性就是前提）。
+  - 为什么要登记：缺省门禁不含桌面 E2E，**最容易在需要它的时候才发现它抖**；且
+    `tests/e2e/test_uia_desktop.py` 的 `force_foreground` 注释早记过「门禁内抖、单跑即过」的
+    同类现象，本条可能是同一根因的另一个面。归因前遇到该红，先复跑确认，不要直接改断言或
+    放宽 fixture。
 
 > 已完成并移出本清单（2026-09-21）：**两套「可见」口径对齐**——扩展侧已统一为
 > 单一严格判定 `isElementVisible`（`opacity:0`/视口外/零尺寸均判不可见），`waitFor` 的

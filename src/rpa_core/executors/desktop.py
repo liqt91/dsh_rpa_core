@@ -18,8 +18,11 @@ from rpa_core.model.desktop import DesktopLocator
 from rpa_core.model.errors import ErrorCode
 
 from .base import (
+    UIA_SESSION_RESOURCE_PREFIX,
     CommandExecutor,
     click_with_modifiers,
+    desktop_sessions_from_scopes,
+    desktop_window_alive,
     plan_click_for_element,
     resolve_session_id,
     wait_for_element,
@@ -423,7 +426,17 @@ class DesktopExecutor(CommandExecutor):
                             invocation,
                             kind=EffectKind.READ,
                             resource=f"desktop.session:{session_id}:element:{element_id}",
-                            details={"operation": "findElement"},
+                            # 定位器进 effect details（M38 S2.1）：`elementId` 是进程内
+                            # 标识，「继续」= 新进程（ADR 0005），不把「这个 id 指向什么」
+                            # 写进快照，暂停点之后引用它的命令就无从还原。
+                            # 放 details 而不是 outputs：快照里「资源绑定」的权威位置
+                            # 一向是 resource + details（M21 浏览器侧的 tabId 就在这里），
+                            # 且 outputs 是面向用户与表达式的公开面（x-outputs 会进 GUI），
+                            # 把内部定位器塞进去等于把它升格成契约。
+                            details={
+                                "operation": "findElement",
+                                "locator": locator.model_dump(by_alias=True),
+                            },
                         )
                     ],
                 )
@@ -816,6 +829,35 @@ class DesktopExecutor(CommandExecutor):
             return UIAWrapper(UIAElementInfo(handle))
         except Exception:
             return None
+
+    def restore_from_scopes(self, scopes: Any) -> None:
+        """resume 时按快照重建桌面会话（M38 S2.1 跨进程续接，由 `ExecutorRegistry` 调用）。
+
+        暂停 = 干净收口 + 进程退出（ADR 0005），「继续」是 `rpa-core resume` 起新进程
+        （GUI 的「继续」在暂停已落地时就走 `RunManager.resume` 这条路）。**窗口本身不随
+        run 进程退出而消失**，消失的只是新进程里那张句柄表——不还原的话，暂停点之后第一个
+        会话类命令会以 `SESSION_NOT_FOUND` 失败，而用户的窗口明明还在那儿。
+
+        会话与**元素定位器缓存**都要还原：`elementId` 是 `findElement` 在旧进程里发出的，
+        它在快照里（`findElement` 的 effect details 带上了 `locator`），但新进程的
+        `session.elements` 是空的——只补会话的话，暂停点之后引用旧 `elementId` 的命令
+        会 ELEMENT_NOT_FOUND（实测：补上会话后同一个节点正好从 SESSION_NOT_FOUND 变成这个码）。
+
+        窗口已不存在（或句柄被系统回收复用给了别的进程）时不还原：后续命令照旧报
+        `SESSION_NOT_FOUND`，错误码与浏览器侧一致，但不会把命令指到别人的窗口上——
+        这条与浏览器侧**刻意不同**，理由见 `base.desktop_window_alive`。
+        """
+        sessions, last_sid = desktop_sessions_from_scopes(
+            scopes, resource_prefix=UIA_SESSION_RESOURCE_PREFIX
+        )
+        for session_id, snapshot in sessions.items():
+            if not desktop_window_alive(snapshot.process_id, snapshot.window_handle):
+                continue
+            self._sessions[session_id] = _DesktopSession(
+                snapshot.process_id, snapshot.window_handle, dict(snapshot.elements)
+            )
+        if last_sid is not None and last_sid in self._sessions:
+            self._last_session_id = last_sid
 
     async def close(self) -> None:
         async with self._lock:

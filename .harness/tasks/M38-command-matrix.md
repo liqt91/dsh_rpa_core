@@ -112,6 +112,75 @@
 「schema 校验由 orchestrator 的 `Draft202012Validator` 统一负责」的直接证据（§1 的口径修正）。
 三条都在用例表里带 `notes` 说明，免得后人当 bug 去「修」。
 
+## 1.4 交付（S2.1：桌面 fixture 升级 + 「暂停/继续」真机证据）
+
+**维护者定案（2026-09-22，两句）**：① S2 走**真桌面 fixture**，不走「打桩绑定层」那条更
+便宜的路——这解掉了 §6 里悬置的口径；② 先补「**含桌面命令的流程 → 中途暂停 → 继续**」
+的真机证据。第 ② 条此前只在**浏览器通道**验过（M21，macOS + Edge），桌面通道没有。
+
+1. **靶子升级** `testapps/desktop/Program.cs`：新增**非幂等**计数器（`countButton` 点击累加、
+   `countLabel` 只增不减）。这一条是「零重跑」从推断变成硬证据的关键——重跑一次读数就是 `2`。
+2. **共享装配** `tests/e2e/desktop_fixture.py`（新）：编译 / 启动 / 抢前台 / 清理 + `csc.exe`
+   可用性判据，由两个真机用例共用。复制一份的下场是「同一件事两处口径」——本仓刚在
+   S1.2 的假绿灯上吃过这个亏，不赌第二次。
+3. **真机用例** `tests/e2e/test_desktop_pause_resume.py`（新，`RPA_DESKTOP_E2E=1`）：
+   `run`（子进程）→ 慢节点期间写暂停请求 → 收口为 `paused` → **`resume`（另一个子进程，
+   与 GUI 的「继续」按钮同一条路）** → 三条断言（同一窗口 / 会话与元素都接回 / 零重跑，
+   后者另附事件级证据：续跑段的 `stepCompleted` 集合恰好等于暂停点之后的节点）。
+4. **跨进程续接实装（两后端）**：`base.desktop_sessions_from_scopes` 与
+   `base.desktop_window_alive` 两个共用纯函数 + 两个后端各自的 `restore_from_scopes`。
+   纯函数放 `base` 的理由与 S1.2 同：同一件事不该两处口径。
+
+### 两处缺口都是实测出来的（「先探针后断言」的价值就在这里）
+
+探针逐轮把缺口逼出来，**每一轮的错误码本身就是证据**：
+
+| 实测顺序 | 续跑段的错误 | 说明 |
+|---|---|---|
+| 1 | `SESSION_NOT_FOUND`（`desktop.click`，`effects: []`） | 会话表没还原：窗口还在，句柄表是新的 |
+| 2 | `ELEMENT_NOT_FOUND`（**同一个节点**） | 补上会话后才暴露的第二处：`elementId → 定位器` 映射也没还原 |
+| 3 | `succeeded` | 两处补齐 |
+
+第二处缺口的修法顺带定了一条口径：**定位器进 `effect.details.locator`，不进 `outputs`**——
+快照里「资源绑定」的权威位置一向是 `resource + details`（M21 浏览器侧的 `tabId` 就在那里），
+而 `outputs` 是面向用户与表达式的公开面（`x-outputs` 会进 GUI），把内部定位器塞进去等于把它
+升格成契约。
+
+### 与浏览器侧**刻意不同**的一处：HWND 会被回收复用
+
+`browser.restore_from_scopes` 不校验标签页是否还在（理由：校验要一次扩展往返，而「跑起来才
+发现页面被用户关了」与恢复期判定本来就是同一种错误）。桌面侧反过来——本地校验是微秒级，而
+HWND 是 32 位整数句柄号、**会被系统复用**，不校验就可能把暂停点之后的命令指到一个刚好继承了
+同一句柄号的**别人的窗口**上。所以还原前会 `IsWindow` + `GetWindowThreadProcessId` 复核属主，
+失效则**不还原**，让后续命令照旧报 `SESSION_NOT_FOUND`（错误码与浏览器侧一致，风险面不同）。
+
+### 真机边界（如实记录）
+
+- **只跑 UIA 后端**。win32 后端的 `restore_from_scopes` 有契约测试覆盖，但**没有**对应的真机
+  用例——win32 定位器认的是 title/class/controlId，而 fixture 的控件是 UIA `AutomationId`，
+  拿 win32 后端定位它们要另做一套靶子，属独立切片。
+- 本片**不含** S2 的 36 条 L1 用例表；`PENDING_NAMESPACES` 里的 `desktop` 仍在。
+
+### 顺带查清的一件事：既有的记事本切片在整目录运行时是抖的（**不是**本片引入）
+
+S2.1 收口时发现 `RPA_DESKTOP_E2E=1 pytest tests/e2e`（整目录）红在**既有**的
+`test_windows_desktop.py::test_windows_desktop_vertical_slice` 上。因为它落在**被本片改过的
+win32 模块**，所以没有用「大概是环境问题」带过，而是做了对照实验：
+
+1. 探针 `probe_win32_notepad_slice.py` 复用 pytest 留下的失败运行 `events.jsonl`（`tmp_path`
+   保留最近三次），取出**三个不同失败签名**——`attachMain` 的 `ELEMENT_NOT_FOUND`
+   （`title: 无标题 - 记事本`，`matchedCount: 0`）、`openDialog`/`inputPath` 的
+   `SetForegroundWindow` 返回 0、`attachOpened` 的 `Handle <n> is not a vaild window handle`。
+   **没有一个落在本片新增/修改的节点上**。
+2. 从 `HEAD` 建干净 worktree（先确认导入的确是改动前的 `rpa_core`）跑同一探针：HEAD 14 次红 4、
+   本仓库 14 次红 5，**同三款签名**；再做**交替 A/B 六轮**（控制环境随时间漂移）——HEAD 六次
+   红 2、本仓库六次全绿。
+
+→ 结论：**既有抖动，与本片无关**（此前「本仓库红得多」是时间聚集的假象）。该切片不走 resume
+路径，本片新增的 `restore_from_scopes` 在此**根本不被调用**。已按 BACKLOG 先例登记（含三条
+未验证的候选修法）——**登记而非顺手改**：②③ 两类不是用例侧能修的，且真要把桌面通道进 L1 矩阵
+时，这片的稳定性才是前提。
+
 ## 2. 关键设计决定
 
 - **桩只替换 `_exchange`**：同时拿到三样东西——真实下发的 `(op, args)`、信封里的
@@ -277,22 +346,54 @@ S1.2 页签有一条白盒集成用例（`test_panel_streams_jsonl_into_rows`：
   | ⑤ 安全阀：用例 workspace 越出变体目录 | 只红该变体，且**没跑到命令层**（信息里是安全阀文案） |
 
   五向均 exit=1、失败集合与预期逐个相等、注入文件逐字节还原。
+- **S2.1 真机 E2E**（`RPA_DESKTOP_E2E=1 uv run pytest tests/e2e/test_desktop_pause_resume.py`）
+  → **2 passed / exit 0**：① 跨进程「暂停 → 继续」用例（`resume.wait() == 0`、
+  `status == succeeded`、`return_value == "1"` 即零重跑、`readResult` 读回暂停前敲进去的
+  那句话即同一窗口、续跑段 `stepCompleted` 集合**恰好等于**暂停点之后的节点集）；② 流程形状
+  用例（钉命令序列 + 钉「暂停点之后的 `click` 必须引用暂停**之前**的 `sessionId`/`elementId`」
+  ——这两条引用就是会话/元素还原的触发点，改动流程的人会在这里被拦下）。
+- **S2.1 正向回归**：`tests/e2e/test_uia_desktop.py` **3 passed / exit 0**——fixture 加了计数器
+  控件、装配抽到共享模块，既有的 UIA 全链路（`hello rpa` / `dialog:world`）不受影响。
+- **S2.1 契约测试** `tests/unit/test_desktop_session_restore.py` **14 项**（进默认门禁）：
+  解析器矩阵（attach/findElement/closeSession/坏数据/**两后端前缀隔离**/`last_sid` 归一）、
+  **写侧驱动**的反漂移（驱动真实的 `attachWindow`/`findElement` 产出 effect，再交给解析器读回）、
+  还原后旧 `elementId` 真能被后续命令解析（对照组：只还原会话 → `ELEMENT_NOT_FOUND`，
+  正是实测里那个中间态）、窗口已失效不还原、恢复是叠加不是清空。
+- **S2.1 负向验证 4 例**（都打在门禁/用例实际检查的方向上）：
+  ① **只改写侧**前缀字面量（读侧常量不动）→ 契约测试 2 红（字面量断言 + 写→读往返 KeyError）；
+  ② **只改读侧**常量（写侧不动）→ 同样的 2 红（两个方向都闭合）；
+  ③ 摘掉 uia `findElement` 的 `details.locator` → 契约测试 1 红（`KeyError: 'locator'`）；
+  ④ 临时停用 uia 执行器的 `restore_from_scopes` → 真机 E2E 红在「续跑段」，失败详情精确落在
+  `nodeId: clickCount` / `commandId: desktop.click` / `effects: []`（**修复前的状态被复现**）。
+  四例均逐字节还原，还原后 E2E 与契约测试复跑全绿。
+- **FULL GATE PASSED**（`check_all.py` 退出码 0；契约测试 28 处 E501 已改成模块级构造器后
+  `ruff check .` 全通过）。
 
 ## 6. 剩余（后续切片）
 
 - **S2 桌面通道**（UIA 17 + Win32 19，共 36 条）：需真实桌面 fixture 或既有 WinForms
   测试应用；注意会抢前台，用例自带兜底。已在 `PENDING_NAMESPACES` 登记。
-  - 开工前要先定一个口径（**待维护者裁决**）：M30 的桌面契约测试是**打桩 `user32` / 伪句柄**
-    覆盖筛选逻辑（`tests/contract/test_desktop_attach_window.py`，明说「不冒充真机结论」），
-    而 L1 的定位是「断言执行器真实下发了什么」。若照 M30 打桩，成本远低于「真桌面 fixture」，
-    但 `desktop` 通道的 `_exchange` 等价层是 pywinauto/Win32 绑定，打桩点比浏览器通道更深。
+  - **口径已定（2026-09-22 维护者裁决：走真桌面 fixture）**，且它的前置已由 **S2.1** 做掉
+    （见 §1.4）：靶子加了非幂等计数器、装配抽成 `tests/e2e/desktop_fixture.py` 共用、
+    「暂停/继续」的真机证据也补上了。**S2 剩下的是那 36 条的用例表本身**
+    （`cases/desktop.json` + `cases/desktop_win32.json` + 驱动 + `PENDING_NAMESPACES` 删
+    `desktop`），不再需要先裁决什么。
+  - **S2 建表时的复用提示**（按「真桌面 fixture」这一定案重写）：桌面通道的可测面是
+    「执行器真实下发了什么 + 真窗口上发生了什么」，而 `matrix.py` 的 `expect` 已经能覆盖
+    「调用面 / 结果面 / 磁盘面」。**不要再加「打桩绑定层的调用记录」**——那正是被裁决掉
+    的那条路：桌面侧的绑定层是 pywinauto/Win32，桩它等于把「真机证据」换成「桩被怎么
+    调用」，而 S2.1 已经证明真 fixture 跑得动（一次 ~11s，可接受）。
+  - 已知要另做靶子的部分：**win32 后端没有真机用例**（它的定位器认 title/class/controlId，
+    fixture 的控件是 UIA `AutomationId`），若要覆盖需给 fixture 加一套 Win32 可定位的控件。
+  - **波动风险（不阻塞 S2）**：既有记事本切片在 `tests/e2e` 整目录运行时抖（§1.4 末节，已按
+    BACKLOG 先例登记，含三条未验证的候选修法）。S2 的用例表走 `tests/commands` 那套矩阵驱动
+    （`RPA_COMMAND_MATRIX=1`），**与 `tests/e2e` 无关**，故不被它阻塞；但若日后要把桌面 E2E
+    纳入常规回归，那片的稳定性是前提。
 - **S4 L2 真机冒烟**：与 L1 **共用同一份用例表**，把执行后端从假扩展换成真扩展
   （策略 §2 L2，显式开关启用）。数据通道这一半已经算「真机」（真子进程 + 真文件），
   所以 S4 的增量只落在浏览器通道。
 - **两个死参数的处置**：**已完成（S1.1，2026-09-22）**——两项均从 manifest 删除，
   删掉的是「声明」而非「能力」，对标差距未扩大。详见 §3.1。
-- **S2 建表时的复用提示**：`matrix.py` 的 `expect` 已经能覆盖「调用面 / 结果面 / 磁盘面」，
-  桌面通道多半只需要再加一个「打桩绑定层的调用记录」（形如 `ExtensionCall`）。
 - **S1.2 页签的显式取舍（不是缺口）**：① 页面**不解析 pytest 输出**，所以「子进程在收集/导入
   阶段就失败」时没有逐用例行可展示，只能看日志面板——`_on_finished` 对 `summary is None` 给了
   专门文案（含「常见原因：pytest 未安装」）。②「停止」用 `kill()` 而非优雅终止：pytest 没有

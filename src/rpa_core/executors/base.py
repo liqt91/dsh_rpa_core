@@ -1,11 +1,12 @@
 import asyncio
+import ctypes
 import inspect
 import math
 import random
 import time
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from rpa_core.model.command import CommandInvocation, CommandResult
@@ -320,6 +321,144 @@ def resolve_session_id(
     if len(sessions) == 1:
         return next(iter(sessions))
     return ""
+
+
+# 桌面会话在 effect `resource` 里的前缀（格式 `<前缀><sessionId>:<kind>:<value>`）。
+# 两个后端各一份。常量放在这里，是为了让「写 effect」与「从快照还原」两处共用同一个
+# 字面量——反漂移由 `tests/unit/test_desktop_session_restore.py` 里**驱动真实
+# `attachWindow`** 的用例钉住（改了写侧不改读侧，那条会红）。
+UIA_SESSION_RESOURCE_PREFIX = "desktop.session:"
+WIN32_SESSION_RESOURCE_PREFIX = "desktop.win32.session:"
+
+
+@dataclass
+class DesktopSessionSnapshot:
+    """从快照还原出来的一次桌面会话（跨进程续跑用）。
+
+    `elements` 是 `elementId → 定位器` 的还原结果：元素缓存存的本来就是定位器
+    （`desktop.findElement` 的产物），不是活的对象，所以能原样复原；漏掉它，
+    暂停点之后凡是引用「暂停前那次 findElement 的 elementId」的命令都会
+    `ELEMENT_NOT_FOUND`（实测：会话补上后同一个节点从 SESSION_NOT_FOUND 变成这个码）。
+    """
+
+    process_id: int
+    window_handle: int
+    elements: dict[str, dict[str, Any]] = field(default_factory=dict)
+
+
+def desktop_sessions_from_scopes(
+    scopes: Any, *, resource_prefix: str
+) -> tuple[dict[str, DesktopSessionSnapshot], str | None]:
+    """从 checkpoint 快照还原桌面会话绑定与元素定位器（M38 S2.1 跨进程续接）。
+
+    返回 `(sessionId → 会话快照, 最后活跃的 sessionId)`。
+
+    为什么要从**快照**还原：暂停 = 干净收口 + 进程退出（ADR 0005），「继续」是
+    `rpa-core resume` 起**新进程**（GUI 的「继续」按钮在暂停已落地时就走这条，
+    见 `RunManager.continue_run`）。桌面会话绑定在旧进程的内存里（`_sessions`），
+    不还原的话，暂停点之后的第一个会话类命令会以 `SESSION_NOT_FOUND` 失败——
+    而**窗口本身并没有消失**，它只是不在新进程的句柄表里。
+
+    数据来源与浏览器侧同一形状（`browser.session_bindings_from_scopes`）：
+    - `effects`：`resource = "<前缀><sid>:window:<handle>"` / `"<前缀><sid>:element:<eid>"`，
+      `details.operation` 区分生命周期——`attachWindow` 绑定、`closeSession` 解绑、
+      `findElement` 补一条元素（定位器在 `details.locator` 里）；
+    - `outputs`：`sessionId`，用于判定「最后活跃的会话」。
+
+    容错：结构不符（缺 `steps`、effect 不是 dict、句柄不是整数）一律跳过，
+    与 `control_channel.read_control` 同口径——快照是外部文件，坏数据不该炸掉恢复过程。
+    """
+    sessions: dict[str, DesktopSessionSnapshot] = {}
+    elements: dict[str, dict[str, dict[str, Any]]] = {}
+    last_sid: str | None = None
+    if not isinstance(scopes, dict):
+        return sessions, last_sid
+    steps = scopes.get("steps")
+    if not isinstance(steps, dict):
+        return sessions, last_sid
+
+    for step in steps.values():
+        if not isinstance(step, dict):
+            continue
+        outputs = step.get("outputs")
+        if isinstance(outputs, dict):
+            sid = outputs.get("sessionId")
+            if isinstance(sid, str) and sid:
+                last_sid = sid
+        for effect in step.get("effects") or []:
+            if not isinstance(effect, dict):
+                continue
+            resource = effect.get("resource")
+            if not isinstance(resource, str) or not resource.startswith(resource_prefix):
+                continue
+            parts = resource[len(resource_prefix) :].split(":")
+            sid = parts[0] if parts else ""
+            if not sid:
+                continue
+            details = effect.get("details")
+            details = details if isinstance(details, dict) else {}
+            operation = str(details.get("operation") or "")
+            if operation == "closeSession":
+                sessions.pop(sid, None)
+                elements.pop(sid, None)
+                continue
+            if len(parts) < 3:
+                continue
+            if operation == "attachWindow":
+                try:
+                    handle = int(parts[2])
+                    process_id = int(details.get("processId") or 0)
+                except (TypeError, ValueError):
+                    continue
+                if handle <= 0 or process_id <= 0:
+                    continue
+                sessions[sid] = DesktopSessionSnapshot(process_id, handle)
+                continue
+            if operation == "findElement":
+                # 定位器是「这个 elementId 指向什么」的唯一来源。旧快照（本片之前产的）
+                # 没有这一项 → 该元素不被还原，后续引用它的命令报 ELEMENT_NOT_FOUND：
+                # 这是如实的降级，不是静默错配。
+                locator = details.get("locator")
+                if not isinstance(locator, dict) or not locator:
+                    continue
+                elements.setdefault(sid, {})[parts[2]] = locator
+
+    # 元素与话题顺序解耦后再合并：快照里的 steps 顺序恰好是执行顺序（dict 保序），
+    # 但依赖它就会让「元素先于 attach 出现」变成静默丢失——不值得赌。
+    for sid, snapshot in sessions.items():
+        snapshot.elements = dict(elements.get(sid) or {})
+
+    if last_sid is not None and last_sid not in sessions:
+        last_sid = None
+    return sessions, last_sid
+
+
+def desktop_window_alive(process_id: int, window_handle: int) -> bool:
+    """句柄是否仍是**那个进程**的那个窗口（本地校验，零往返）。
+
+    与浏览器侧的取舍**刻意不同**：`browser.restore_from_scopes` 不校验，理由是
+    「校验要一次扩展往返，而『跑起来才发现页面被用户关了』和恢复期判定是同一种错误」。
+    桌面侧校验是本地调用（微秒级），**而且 HWND 会被系统回收复用**——不校验就可能把
+    暂停点之后的命令指到一个刚好继承了同一句柄号的其他窗口上（浏览器侧的 tabId 是长
+    随机串，没有这个风险）。窗口已消失时按「不还原」处理，后续命令照旧报
+    `SESSION_NOT_FOUND`，错误码与浏览器侧一致。
+
+    非 Windows 上不做校验（这条路径只在 Windows 有意义）；校验本身抛异常时**放行**
+    （宁可让后续命令去撞 `_window_by_handle` 的 SESSION_NOT_FOUND，也不因为一次
+    ctypes 抖动把本来就好的会话丢掉）。
+    """
+    try:
+        user32 = ctypes.windll.user32
+    except AttributeError:  # 非 Windows
+        return True
+    try:
+        if not user32.IsWindow(window_handle):
+            return False
+        owner = ctypes.c_ulong()
+        user32.GetWindowThreadProcessId(window_handle, ctypes.byref(owner))
+        return int(owner.value) == int(process_id)
+    except Exception:  # noqa: BLE001 —— 校验失败不阻断还原（见 docstring）
+        return True
 
 
 class CommandExecutor(ABC):

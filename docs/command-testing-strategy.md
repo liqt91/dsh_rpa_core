@@ -51,7 +51,8 @@
 两片共用同一套 `expect` 语义与同一份驱动层（`tests/commands/matrix.py`），并新增**执行前安全阀**
 （`tests/commands/guard.py`：这条通道真会 `deletePath + recursive`，用例表写错就会删到目录外；
 其契约测试进默认门禁）。桌面 36 条仍待建表（已在 `check_command_matrix.py` 的
-`PENDING_NAMESPACES` 登记，**只剩 `desktop` 一项**）。
+`PENDING_NAMESPACES` 登记，**只剩 `desktop` 一项**）——但**它的前置已由 M38 S2.1 做掉**
+（2026-09-22 维护者定案走真桌面 fixture；靶子能承载真机验证、装配可复用，见 §3）。
 落地时 M38 顺手给出了本策略预判之外的两个收益：**实测出两个静态门禁抓不到的死参数**、
 以及**把「打桩边界沿真实副作用面划」这条教训推广到进程面**（详见 M38 任务单 §3/§4）。
 
@@ -92,6 +93,14 @@ Shadow DOM/动态渲染），用**真实扩展**连通后逐条跑**无副作用
   `findElement`（locator 各字段）、窗口操作族（state/visible/move/resize）；
 - **注意**：桌面命令会抢前台焦点，L2 必须显式启用（沿用现有 `--with-desktop-e2e` 约定），
   且用例要自带 `_force_foreground` 兜底。
+- **L1 的载体已定（M38 S2.1，2026-09-22 维护者裁决）**：走**真桌面 fixture**，不走「打桩
+  pywinauto/Win32 绑定层」那条更便宜的路——绑定层桩掉之后只剩「桩被怎么调用」，而桌面侧要的
+  证据本来就在真窗口上。fixture 已被验证能承载这件事（`RPA_DESKTOP_E2E=1`，一次 ~11s），并且
+  已经用它补上了桌面通道的**「暂停/继续」真机证据**（跨进程 `resume` 续接同一窗口 / 会话与元素
+  都接回 / 已完成节点零重跑）；装配（编译/启动/抢前台/清理）抽在 `tests/e2e/desktop_fixture.py`，
+  S2 建表时直接复用。详见 M38 任务单 §1.4。
+- **win32 后端要另做靶子**：它的定位器认 title/class/controlId，而现有 fixture 的控件是 UIA
+  `AutomationId`——S2.1 只覆盖了 uia 后端的真机路径（win32 的还原目前只有契约测试）。
 
 ## 4. 与门禁/CI 的关系（定案：按需启用，不进默认 harness）
 

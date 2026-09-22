@@ -20,8 +20,11 @@ from rpa_core.model.desktop import DesktopLocator
 from rpa_core.model.errors import ErrorCode
 
 from .base import (
+    WIN32_SESSION_RESOURCE_PREFIX,
     CommandExecutor,
     click_with_modifiers,
+    desktop_sessions_from_scopes,
+    desktop_window_alive,
     plan_click_for_element,
     resolve_session_id,
     wait_for_element,
@@ -450,7 +453,12 @@ class Win32DesktopExecutor(CommandExecutor):
                         invocation,
                         kind=EffectKind.READ,
                         resource=f"desktop.win32.session:{session_id}:element:{element_id}",
-                        details={"operation": "findElement"},
+                        # 定位器进 effect details（M38 S2.1）：理由见 uia 侧同处的注释
+                        # ——续跑要靠它还原元素缓存，而 details 是快照里资源绑定的权威位置。
+                        details={
+                            "operation": "findElement",
+                            "locator": locator.model_dump(by_alias=True),
+                        },
                     )
                 ],
             )
@@ -759,6 +767,26 @@ class Win32DesktopExecutor(CommandExecutor):
     @staticmethod
     def _menu_select(hwnd: int, menu_path: list[str]) -> None:
         Desktop(backend="win32").window(handle=hwnd).menu_select("->".join(menu_path))
+
+    def restore_from_scopes(self, scopes: Any) -> None:
+        """resume 时按快照重建桌面会话（M38 S2.1 跨进程续接，由 `ExecutorRegistry` 调用）。
+
+        与 uia 后端同一口径（见 `DesktopExecutor.restore_from_scopes` 的完整说明）：
+        窗口不随 run 进程退出而消失，消失的是新进程里的句柄表；会话与元素定位器都要还原；
+        句柄已失效/被回收时不还原，让后续命令报 `SESSION_NOT_FOUND`，
+        而不是把命令指到别人的窗口上。
+        """
+        sessions, last_sid = desktop_sessions_from_scopes(
+            scopes, resource_prefix=WIN32_SESSION_RESOURCE_PREFIX
+        )
+        for session_id, snapshot in sessions.items():
+            if not desktop_window_alive(snapshot.process_id, snapshot.window_handle):
+                continue
+            self._sessions[session_id] = _Win32Session(
+                snapshot.process_id, snapshot.window_handle, dict(snapshot.elements)
+            )
+        if last_sid is not None and last_sid in self._sessions:
+            self._last_session_id = last_sid
 
     async def close(self) -> None:
         async with self._lock:

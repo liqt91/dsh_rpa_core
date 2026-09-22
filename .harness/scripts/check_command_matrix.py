@@ -54,7 +54,7 @@ MIN_VARIANTS = 3
 # 尚未建用例表的命名空间：`命名空间 → 理由`。
 # **自我收紧**：一旦 `cases/<ns>.json` 出现，这里的条目就必须删除，否则报「台账过期」。
 PENDING_NAMESPACES: dict[str, str] = {
-    "desktop": "M38 S2：桌面通道（UIA 17 + Win32 19）——需真实桌面 fixture，另起切片",
+    "desktop": "M38 S2：桌面 36 条——真 fixture 前置已做（S2.1），装配可复用",
 }
 
 # 已入表、但参数确实未被该命令消费的登记项：`命令 → {参数: 说明}`。
