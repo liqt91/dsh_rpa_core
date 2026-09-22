@@ -181,6 +181,60 @@ win32 模块**，所以没有用「大概是环境问题」带过，而是做了
 未验证的候选修法）——**登记而非顺手改**：②③ 两类不是用例侧能修的，且真要把桌面通道进 L1 矩阵
 时，这片的稳定性才是前提。
 
+## 1.5 交付（S2：桌面通道 36 条用例表）
+
+**做法**：`cases/desktop.json`（UIA 17 条 / 78 个变体）+ `cases/desktop_win32.json`
+（Win32 19 条 / 81 个变体），两个驱动 `tests/commands/test_desktop_matrix.py` /
+`test_desktop_win32_matrix.py`，共享装配 `tests/commands/desktop_harness.py`。
+
+1. **真靶子，不是打桩绑定层**（维护者 2026-09-22 定案）：驱动在真 fixture 上执行命令，
+   断言结果契约与错误码。装配复用 S2.1 抽出的 `tests/e2e/desktop_fixture.py`
+   （编译 / 启动 / 抢前台 / 清理），并补三件事：**每变体自建会话、跑完即弃**
+   （避免 `countLabel` 被点过、窗口被最小化或隐藏、会话被关掉之后成片假红）、
+   **每变体前重新抢前台**、**占位符物化**（`{session}` / `{element:名字}` /
+   `{appTitle}` / `{pid}` / `{handle}`——这些值每次运行都不同，写不进表里）。
+2. **驱动层两处小改**（`tests/commands/matrix.py`）：`materialize_inputs` 支持额外
+   占位符表（其它通道不传，行为不变）；`_check_files` 只在需要文本断言时才读文件
+   （`desktop.screenshot` 的 PNG 不是 UTF-8，无条件 `read_text` 会把「文件被写出来了」
+   这条断言变成整个变体崩掉）。
+3. **`PENDING_NAMESPACES` 清空**：86 条命令全部有表。
+4. **expect 的证据来源**（不凭读代码编）：有真机或门禁内证据的按值断言
+   （`matchedCount=1`、`resourceType=windowHandle`、`getWindowTitle.title == 靶子标题`、
+   `ELEMENT_NOT_FOUND` + `details.matchedCount=0`、无过滤 → `INVALID_INPUT`）；
+   没证据的只断言形状（`outputKeys` / `effect`）。**刻意不做的两类**：
+   ① 按值断言控件文本（矩阵共用一个靶子进程，前面的变体会改它——那是把用例顺序写进期望）；
+   ② 写「想象的正路径」（例如给一个 Edit 调 `select` 会怎样，未实测就不写）。
+
+### 已知缺口（都在本片如实登记，没有静默）
+
+| 缺口 | 影响 | 出路 |
+|---|---|---|
+| 靶子无可拖 / 无下拉控件 | `desktop.select`（两后端）与 `desktop.drag` 只有负路径 | 给 `Program.cs` 加 ComboBox / ListBox + 可拖控件 |
+| 靶子无菜单栏 | `win32.menuSelect` 的成功路径无从谈起（表里那条 `EXECUTOR_FAILED` 是**推断**） | 给靶子加菜单栏 |
+| win32 定位不到靶子控件 | win32 侧所有吃 `elementId` 的命令只有负路径（WinForms 类名是 `WindowsForms10.*.app.0.xxx` 动态串、无稳定 `controlId`） | 给靶子加一套 Win32 可定位的控件 |
+| `closeSession.forceKill=true` 会结束靶子进程 | 只覆盖缺省 `false` | 需要独立的靶子实例 |
+| `setWindowVisible=false` 会把窗口藏起来 | 只覆盖 `visible=true` | 需要一个变体内部完成的显隐对（属流程层） |
+
+### 验证（S2）
+
+- **静态层**：`check_command_matrix.py` → `COMMAND MATRIX CHECK PASSED（已校验 86 条命令；
+  未建表命名空间 0 个）`。建表过程中它先报出**两轮真缺口**（枚举缺省值没被显式写出、
+  边界参数只有单侧取值；首轮还有 JSON 用 Python 式字符串拼接导致的解析失败），
+  逐条修掉后才转绿——这正是它进默认门禁的价值。
+- **负向验证 3 例**（都打在门禁实际检查的方向上，逐字节还原后复跑 PASSED）：
+  ① 删掉 `desktop.drag` 整条用例 → 报「用例表里没有这条命令」；
+  ② 把 `desktop` 写回 `PENDING_NAMESPACES` → 报「台账过期：cases/desktop.json 已存在」；
+  ③ 把 `desktop.getWindowTitle` 砍到 2 个变体 → 报「变体数 2 < 阈值 3」。
+- **驱动可收集**：`RPA_COMMAND_MATRIX=1 pytest tests/commands --collect-only` →
+  browser 180 / data 88 / **desktop 78 / desktop_win32 81**（共 427 个用例；
+  收集阶段不启真机）。
+- **执行层未跑**（维护者 2026-09-22 指令：「建表吧，建完不测」）：159 个桌面变体
+  **一次都没在真机上跑过**，所以表里未实测的期望（`contains` / `regex` 匹配、
+  `clipboard` 模式、`menuSelect` 的 `EXECUTOR_FAILED`、各 `elapsedAtLeastMs` 下界）
+  **首次启用时按实际结果校正**。启用方式：
+  `RPA_COMMAND_MATRIX=1 RPA_DESKTOP_E2E=1 pytest tests/commands/test_desktop_matrix.py`。
+  这是本片**显式欠下的账，不是遗漏**。
+
 ## 2. 关键设计决定
 
 - **桩只替换 `_exchange`**：同时拿到三样东西——真实下发的 `(op, args)`、信封里的
@@ -371,21 +425,19 @@ S1.2 页签有一条白盒集成用例（`test_panel_streams_jsonl_into_rows`：
 
 ## 6. 剩余（后续切片）
 
-- **S2 桌面通道**（UIA 17 + Win32 19，共 36 条）：需真实桌面 fixture 或既有 WinForms
-  测试应用；注意会抢前台，用例自带兜底。已在 `PENDING_NAMESPACES` 登记。
-  - **口径已定（2026-09-22 维护者裁决：走真桌面 fixture）**，且它的前置已由 **S2.1** 做掉
-    （见 §1.4）：靶子加了非幂等计数器、装配抽成 `tests/e2e/desktop_fixture.py` 共用、
-    「暂停/继续」的真机证据也补上了。**S2 剩下的是那 36 条的用例表本身**
-    （`cases/desktop.json` + `cases/desktop_win32.json` + 驱动 + `PENDING_NAMESPACES` 删
-    `desktop`），不再需要先裁决什么。
+- **S2 桌面通道**（UIA 17 + Win32 19，共 36 条）：**已完成（2026-09-22）**——
+  两表 + 两驱动 + 共享装配见 §1.5；`PENDING_NAMESPACES` 已清空（86 条命令全部有表）。
+  剩下的不是「建表」，而是两件事：**靶子缺口**（§1.5 那张表：可拖/下拉控件、菜单栏、
+  Win32 可定位控件、`forceKill=true`、`visible=false`）与**执行层的首次真机跑**
+  （本片按维护者指令「建表吧，建完不测」只建表、未跑，159 个变体的未实测期望列在 §1.5）。
   - **S2 建表时的复用提示**（按「真桌面 fixture」这一定案重写）：桌面通道的可测面是
     「执行器真实下发了什么 + 真窗口上发生了什么」，而 `matrix.py` 的 `expect` 已经能覆盖
     「调用面 / 结果面 / 磁盘面」。**不要再加「打桩绑定层的调用记录」**——那正是被裁决掉
     的那条路：桌面侧的绑定层是 pywinauto/Win32，桩它等于把「真机证据」换成「桩被怎么
-    调用」，而 S2.1 已经证明真 fixture 跑得动（一次 ~11s，可接受）。
-  - 已知要另做靶子的部分：**win32 后端没有真机用例**（它的定位器认 title/class/controlId，
-    fixture 的控件是 UIA `AutomationId`），若要覆盖需给 fixture 加一套 Win32 可定位的控件。
-  - **波动风险（不阻塞 S2）**：既有记事本切片在 `tests/e2e` 整目录运行时抖（§1.4 末节，已按
+    调用」，而 S2.1 已经证明真 fixture 跑得动（一次 ~11s，可接受）。S2 落地时又验了一次
+    这条：装配上唯一需要补的是**会话与元素的预置**（`desktop_harness.py` 的 `setup`），
+    不是任何桩。
+  - **波动风险（S2 未被它影响）**：既有记事本切片在 `tests/e2e` 整目录运行时抖（§1.4 末节，已按
     BACKLOG 先例登记，含三条未验证的候选修法）。S2 的用例表走 `tests/commands` 那套矩阵驱动
     （`RPA_COMMAND_MATRIX=1`），**与 `tests/e2e` 无关**，故不被它阻塞；但若日后要把桌面 E2E
     纳入常规回归，那片的稳定性是前提。

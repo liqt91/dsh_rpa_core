@@ -1,0 +1,1271 @@
+{
+  "desktop.attachWindow": {
+    "notes": "会话命令。覆盖：title / className / processId / matchMode 三值 / timeoutMs 两值 / operationTimeoutMs。expect 的形状依据：outputs 四键与 resourceType='windowHandle' 来自 manifest 与实现；'找不到' 的 ELEMENT_NOT_FOUND + details.matchedCount=0 与 '无任何过滤 → INVALID_INPUT' 都是 tests/contract/test_desktop_contract.py 与 test_desktop_attach_window.py 在门禁里实测过的。contains/regex 两个变体会走 EnumWindows 全桌面枚举（不是 FindWindowW 快路径），真机耗时更长但不影响结论。",
+    "variants": [
+      {
+        "name": "exact-title-binds-the-fixture-window",
+        "notes": "显式给出 operationTimeoutMs 的一个取值：它是『单次操作』预算，与 timeoutMs（等窗口出现的总预算）是两个参数，覆盖校验要求它至少有合法值 + 另一个取值两侧。",
+        "inputs": {
+          "title": "{appTitle}",
+          "matchMode": "exact",
+          "timeoutMs": 5000,
+          "operationTimeoutMs": 2000
+        },
+        "setup": {
+          "session": "none"
+        },
+        "expect": {
+          "outputs": {
+            "resourceType": "windowHandle"
+          },
+          "outputKeys": [
+            "sessionId",
+            "resourceType",
+            "processId",
+            "workWindowId"
+          ],
+          "effect": "session"
+        }
+      },
+      {
+        "name": "contains-mode-matches-a-title-substring",
+        "inputs": {
+          "title": "Desktop Demo",
+          "matchMode": "contains",
+          "timeoutMs": 5000
+        },
+        "setup": {
+          "session": "none"
+        },
+        "expect": {
+          "outputKeys": [
+            "sessionId",
+            "workWindowId"
+          ],
+          "effect": "session"
+        }
+      },
+      {
+        "name": "regex-mode-matches-the-whole-title",
+        "inputs": {
+          "title": "^RPA Core .*Demo$",
+          "matchMode": "regex",
+          "timeoutMs": 5000
+        },
+        "setup": {
+          "session": "none"
+        },
+        "expect": {
+          "outputKeys": [
+            "sessionId",
+            "workWindowId"
+          ],
+          "effect": "session"
+        }
+      },
+      {
+        "name": "class-name-is-compared-by-equality-and-can-miss",
+        "notes": "className 恒为等值比较（matchMode 只管 title），所以给一个真实存在窗口配一个错的类名必然找不到；details.className 原样回带，是 test_desktop_attach_window.py 钉过的契约。",
+        "inputs": {
+          "title": "{appTitle}",
+          "className": "Notepad",
+          "timeoutMs": 200
+        },
+        "setup": {
+          "session": "none"
+        },
+        "expect": {
+          "errorCode": "ELEMENT_NOT_FOUND",
+          "errorDetails": {
+            "className": "Notepad"
+          }
+        },
+        "negative": true
+      },
+      {
+        "name": "no-filter-at-all-is-invalid-input",
+        "inputs": {},
+        "setup": {
+          "session": "none"
+        },
+        "expect": {
+          "errorCode": "INVALID_INPUT"
+        },
+        "negative": true
+      },
+      {
+        "name": "process-id-narrows-to-the-fixture-process",
+        "inputs": {
+          "title": "{appTitle}",
+          "processId": "{pid}",
+          "timeoutMs": 5000
+        },
+        "setup": {
+          "session": "none"
+        },
+        "expect": {
+          "outputKeys": [
+            "sessionId",
+            "processId"
+          ],
+          "outputs": {
+            "processId": "{pid}"
+          },
+          "effect": "session"
+        }
+      },
+      {
+        "name": "unknown-process-id-is-not-found",
+        "notes": "processId=999999 是按 min=1 取的第二侧取值：证明 processId 真的参与了筛选（不是被静默忽略）。",
+        "inputs": {
+          "title": "{appTitle}",
+          "processId": 999999,
+          "timeoutMs": 200
+        },
+        "setup": {
+          "session": "none"
+        },
+        "expect": {
+          "errorCode": "ELEMENT_NOT_FOUND"
+        },
+        "negative": true
+      },
+      {
+        "name": "unknown-title-reports-zero-matches",
+        "inputs": {
+          "title": "no-such-window-rpa-core-probe",
+          "timeoutMs": 200
+        },
+        "setup": {
+          "session": "none"
+        },
+        "expect": {
+          "errorCode": "ELEMENT_NOT_FOUND",
+          "errorDetails": {
+            "matchedCount": 0
+          }
+        },
+        "negative": true
+      },
+      {
+        "name": "operation-timeout-budget-is-consumed",
+        "notes": "operationTimeoutMs 与 timeoutMs 是两个不同预算（前者是单次操作超时，后者是等窗口出现的总预算）。此变体只证明它被接受且不改变成功结论——真机上是哪一个先到期需要专门造慢窗口才能区分，不在本表的证据面内。",
+        "inputs": {
+          "title": "{appTitle}",
+          "timeoutMs": 5000,
+          "operationTimeoutMs": 4000
+        },
+        "setup": {
+          "session": "none"
+        },
+        "expect": {
+          "outputKeys": [
+            "sessionId"
+          ],
+          "effect": "session"
+        }
+      }
+    ]
+  },
+  "desktop.activateWindow": {
+    "notes": "窗口级命令，只要会话。注意它会真的抢前台焦点——装配在每个变体开始前都会重新抢一次前台，顺序不敏感。",
+    "variants": [
+      {
+        "name": "activates-the-session-window",
+        "inputs": {
+          "sessionId": "{session}"
+        },
+        "expect": {
+          "effect": "unsafe-write"
+        }
+      },
+      {
+        "name": "missing-session-is-explicit",
+        "inputs": {
+          "sessionId": "no-such-session"
+        },
+        "expect": {
+          "errorCode": "SESSION_NOT_FOUND"
+        },
+        "negative": true
+      },
+      {
+        "name": "empty-session-string-is-not-a-wildcard",
+        "inputs": {
+          "sessionId": ""
+        },
+        "expect": {
+          "errorCode": "SESSION_NOT_FOUND"
+        },
+        "negative": true
+      }
+    ]
+  },
+  "desktop.click": {
+    "notes": "有副作用的指针命令。本表测的是参数整形与结果契约；'点下去真的生效'在真机 E2E 里验（tests/e2e/test_desktop_pause_resume.py 用非幂等计数器钉住『只点了一次』）。靶子元素用 countButton（点它只让计数器加一，无其它副作用）。",
+    "variants": [
+      {
+        "name": "default-click-on-the-count-button-succeeds",
+        "notes": "把四个缺省值显式写出来：枚举覆盖要求每个取值至少出现一次，而 single / left / center / postDelayMs=0 恰好**全是缺省值**——不显式写出来就没有任何变体『出现』过它们，覆盖校验会红。",
+        "inputs": {
+          "sessionId": "{session}",
+          "elementId": "{element:count}",
+          "clickType": "single",
+          "button": "left",
+          "clickPosition": "center",
+          "postDelayMs": 0
+        },
+        "setup": {
+          "find": {
+            "count": {
+              "automationId": "countButton",
+              "controlType": "Button"
+            }
+          }
+        },
+        "expect": {
+          "effect": "unsafe-write"
+        }
+      },
+      {
+        "name": "double-click-type-is-accepted",
+        "inputs": {
+          "sessionId": "{session}",
+          "elementId": "{element:count}",
+          "clickType": "double"
+        },
+        "setup": {
+          "find": {
+            "count": {
+              "automationId": "countButton",
+              "controlType": "Button"
+            }
+          }
+        },
+        "expect": {
+          "effect": "unsafe-write"
+        }
+      },
+      {
+        "name": "right-button-is-accepted",
+        "inputs": {
+          "sessionId": "{session}",
+          "elementId": "{element:count}",
+          "button": "right"
+        },
+        "setup": {
+          "find": {
+            "count": {
+              "automationId": "countButton",
+              "controlType": "Button"
+            }
+          }
+        },
+        "expect": {
+          "effect": "unsafe-write"
+        }
+      },
+      {
+        "name": "modifiers-are-accepted",
+        "notes": "带辅助键会强制走真实鼠标路径（invoke() 表达不了组合键）——这条在 test_desktop_click_plan.py 里钉过。",
+        "inputs": {
+          "sessionId": "{session}",
+          "elementId": "{element:count}",
+          "modifiers": [
+            "Ctrl"
+          ]
+        },
+        "setup": {
+          "find": {
+            "count": {
+              "automationId": "countButton",
+              "controlType": "Button"
+            }
+          }
+        },
+        "expect": {
+          "effect": "unsafe-write"
+        }
+      },
+      {
+        "name": "simulate-human-false-takes-the-shortest-path",
+        "inputs": {
+          "sessionId": "{session}",
+          "elementId": "{element:count}",
+          "simulateHuman": false
+        },
+        "setup": {
+          "find": {
+            "count": {
+              "automationId": "countButton",
+              "controlType": "Button"
+            }
+          }
+        },
+        "expect": {
+          "effect": "unsafe-write"
+        }
+      },
+      {
+        "name": "random-position-lands-inside-the-element",
+        "notes": "clickPosition=random 会走真实鼠标路径并在元素矩形内取点（带 0.15~0.85 内缩）。真机上只能断言『没报错』——落点具体坐标是内部的，不进 outputs。",
+        "inputs": {
+          "sessionId": "{session}",
+          "elementId": "{element:count}",
+          "clickPosition": "random"
+        },
+        "setup": {
+          "find": {
+            "count": {
+              "automationId": "countButton",
+              "controlType": "Button"
+            }
+          }
+        },
+        "expect": {
+          "effect": "unsafe-write"
+        }
+      },
+      {
+        "name": "post-delay-is-consumed",
+        "notes": "postDelayMs 是『只改变时长、不进任何 args』的参数，唯一能证明它被消费的方式是墙钟下界（不消费的实现会立刻返回）。",
+        "inputs": {
+          "sessionId": "{session}",
+          "elementId": "{element:count}",
+          "postDelayMs": 200
+        },
+        "setup": {
+          "find": {
+            "count": {
+              "automationId": "countButton",
+              "controlType": "Button"
+            }
+          }
+        },
+        "expect": {
+          "effect": "unsafe-write",
+          "elapsedAtLeastMs": 200
+        }
+      },
+      {
+        "name": "timeout-budget-is-consumed-when-the-element-is-there",
+        "inputs": {
+          "sessionId": "{session}",
+          "elementId": "{element:count}",
+          "timeoutMs": 2000
+        },
+        "setup": {
+          "find": {
+            "count": {
+              "automationId": "countButton",
+              "controlType": "Button"
+            }
+          }
+        },
+        "expect": {
+          "effect": "unsafe-write"
+        }
+      },
+      {
+        "name": "unknown-element-id-is-element-not-found",
+        "notes": "会话在、元素 id 不在 → ELEMENT_NOT_FOUND（desktop.py 的元素解析通用路径）。这是本表适用面最广的一条负路径：所有吃 elementId 的命令都是同一个码。",
+        "inputs": {
+          "sessionId": "{session}",
+          "elementId": "no-such-element",
+          "timeoutMs": 200
+        },
+        "expect": {
+          "errorCode": "ELEMENT_NOT_FOUND"
+        },
+        "negative": true
+      },
+      {
+        "name": "missing-session-is-explicit",
+        "inputs": {
+          "sessionId": "no-such-session",
+          "elementId": "no-such-element"
+        },
+        "expect": {
+          "errorCode": "SESSION_NOT_FOUND"
+        },
+        "negative": true
+      }
+    ]
+  },
+  "desktop.closeSession": {
+    "notes": "本变体用的是自己那个会话（装配默认就给每个变体自建一个），所以关掉它不会影响别的变体——这正是『每变体自建会话』这个取舍换来的东西。forceKill 只覆盖默认的 false：true 会真的结束靶子进程，会把整个矩阵的靶子毁掉，需要单独一个靶子实例才能测（登记在任务单 §3）。",
+    "variants": [
+      {
+        "name": "closes-a-session-it-owns",
+        "inputs": {
+          "sessionId": "{session}",
+          "forceKill": false
+        },
+        "expect": {
+          "effect": "session"
+        }
+      },
+      {
+        "name": "missing-session-is-explicit",
+        "inputs": {
+          "sessionId": "no-such-session"
+        },
+        "expect": {
+          "errorCode": "SESSION_NOT_FOUND"
+        },
+        "negative": true
+      },
+      {
+        "name": "empty-session-string-is-not-a-wildcard",
+        "inputs": {
+          "sessionId": ""
+        },
+        "expect": {
+          "errorCode": "SESSION_NOT_FOUND"
+        },
+        "negative": true
+      }
+    ]
+  },
+  "desktop.drag": {
+    "notes": "靶子上没有可拖动的控件，而且真机拖动会操作真实鼠标（按住-移动-松开），在共享桌面上是明确的外部副作用——所以本表只覆盖『目标不存在时显式失败』这一类。正路径需要专用靶子（登记在任务单 §3）。",
+    "variants": [
+      {
+        "name": "unknown-element-id-is-element-not-found",
+        "inputs": {
+          "sessionId": "{session}",
+          "elementId": "no-such-element",
+          "targetX": 100,
+          "targetY": 100
+        },
+        "expect": {
+          "errorCode": "ELEMENT_NOT_FOUND"
+        },
+        "negative": true
+      },
+      {
+        "name": "target-far-outside-the-element-still-fails-on-the-element-first",
+        "notes": "先解析元素再算坐标：元素不存在时不该因为坐标越界换一个错误码。",
+        "inputs": {
+          "sessionId": "{session}",
+          "elementId": "no-such-element",
+          "targetX": 99999,
+          "targetY": 99999
+        },
+        "expect": {
+          "errorCode": "ELEMENT_NOT_FOUND"
+        },
+        "negative": true
+      },
+      {
+        "name": "missing-session-is-explicit",
+        "inputs": {
+          "sessionId": "no-such-session",
+          "elementId": "no-such-element",
+          "targetX": 0,
+          "targetY": 0
+        },
+        "expect": {
+          "errorCode": "SESSION_NOT_FOUND"
+        },
+        "negative": true
+      }
+    ]
+  },
+  "desktop.findElement": {
+    "notes": "本表是『元素 id 的来源』。expect 里的 matchedCount=1 不是猜的：实现只在唯一匹配时成功（歧义另有 ELEMENT_AMBIGUOUS），这个字段目前是常量 1（desktop.py 的 findElement 成功分支）。locator 的内部字段（automationId / controlType / title / className / foundIndex / backend）不是 input_schema 的顶层属性，本表用几个不同形状的 locator 覆盖它，而不是逐个字段展开。",
+    "variants": [
+      {
+        "name": "automation-id-and-control-type-resolve-the-input-box",
+        "inputs": {
+          "sessionId": "{session}",
+          "locator": {
+            "automationId": "queryInput",
+            "controlType": "Edit"
+          },
+          "timeoutMs": 5000
+        },
+        "expect": {
+          "outputs": {
+            "matchedCount": 1
+          },
+          "outputKeys": [
+            "elementId",
+            "matchedCount"
+          ],
+          "effect": "read"
+        }
+      },
+      {
+        "name": "locator-without-a-control-type-still-resolves",
+        "inputs": {
+          "sessionId": "{session}",
+          "locator": {
+            "automationId": "countLabel"
+          },
+          "timeoutMs": 5000
+        },
+        "expect": {
+          "outputKeys": [
+            "elementId",
+            "matchedCount"
+          ],
+          "effect": "read"
+        }
+      },
+      {
+        "name": "longer-wait-budget-is-accepted",
+        "inputs": {
+          "sessionId": "{session}",
+          "locator": {
+            "automationId": "submitButton",
+            "controlType": "Button"
+          },
+          "timeoutMs": 2000
+        },
+        "expect": {
+          "outputKeys": [
+            "elementId"
+          ],
+          "effect": "read"
+        }
+      },
+      {
+        "name": "unknown-automation-id-is-element-not-found",
+        "inputs": {
+          "sessionId": "{session}",
+          "locator": {
+            "automationId": "no-such-control-xyz"
+          },
+          "timeoutMs": 200
+        },
+        "expect": {
+          "errorCode": "ELEMENT_NOT_FOUND"
+        },
+        "negative": true
+      },
+      {
+        "name": "missing-session-is-explicit",
+        "inputs": {
+          "sessionId": "no-such-session",
+          "locator": {
+            "automationId": "queryInput"
+          }
+        },
+        "expect": {
+          "errorCode": "SESSION_NOT_FOUND"
+        },
+        "negative": true
+      }
+    ]
+  },
+  "desktop.getSelectedText": {
+    "notes": "靶子的 Edit 没有预置选区，所以正路径只能断言『有 text 这个键』——空选区返回空串也是合法结果。真要有内容的选区，得先 input 一段文字再全选，那是两步（属于流程层，见 tests/e2e）。",
+    "variants": [
+      {
+        "name": "reads-the-selection-from-the-input-box",
+        "inputs": {
+          "sessionId": "{session}",
+          "elementId": "{element:input}"
+        },
+        "setup": {
+          "find": {
+            "input": {
+              "automationId": "queryInput",
+              "controlType": "Edit"
+            }
+          }
+        },
+        "expect": {
+          "outputKeys": [
+            "text"
+          ],
+          "effect": "read"
+        }
+      },
+      {
+        "name": "unknown-element-id-is-element-not-found",
+        "inputs": {
+          "sessionId": "{session}",
+          "elementId": "no-such-element"
+        },
+        "expect": {
+          "errorCode": "ELEMENT_NOT_FOUND"
+        },
+        "negative": true
+      },
+      {
+        "name": "missing-session-is-explicit",
+        "inputs": {
+          "sessionId": "no-such-session",
+          "elementId": "no-such-element"
+        },
+        "expect": {
+          "errorCode": "SESSION_NOT_FOUND"
+        },
+        "negative": true
+      }
+    ]
+  },
+  "desktop.getText": {
+    "notes": "不断言具体文本值：整个矩阵共用一个靶子进程，前面变体敲进去的字、点过的计数器都会留在控件里，按值断言等于把用例顺序写进期望（那是假红/假绿的混来源）。『读回来的确实是刚敲进去的那句话』在真机 E2E 里验（S2.1 的 readResult == TYPED_TEXT）。",
+    "variants": [
+      {
+        "name": "reads-the-count-label-by-element-id",
+        "inputs": {
+          "sessionId": "{session}",
+          "elementId": "{element:label}",
+          "timeoutMs": 2000
+        },
+        "setup": {
+          "find": {
+            "label": {
+              "automationId": "countLabel"
+            }
+          }
+        },
+        "expect": {
+          "outputKeys": [
+            "value"
+          ],
+          "effect": "read"
+        }
+      },
+      {
+        "name": "unknown-element-id-is-element-not-found",
+        "inputs": {
+          "sessionId": "{session}",
+          "elementId": "no-such-element",
+          "timeoutMs": 200
+        },
+        "expect": {
+          "errorCode": "ELEMENT_NOT_FOUND"
+        },
+        "negative": true
+      },
+      {
+        "name": "missing-session-is-explicit",
+        "inputs": {
+          "sessionId": "no-such-session",
+          "elementId": "no-such-element"
+        },
+        "expect": {
+          "errorCode": "SESSION_NOT_FOUND"
+        },
+        "negative": true
+      },
+      {
+        "name": "empty-session-string-is-not-a-wildcard",
+        "inputs": {
+          "sessionId": "",
+          "elementId": "no-such-element"
+        },
+        "expect": {
+          "errorCode": "SESSION_NOT_FOUND"
+        },
+        "negative": true
+      }
+    ]
+  },
+  "desktop.getWindowList": {
+    "notes": "不需要会话（自己就是枚举）。这个命令的 outputs 是**整桌面**的窗口列表，内容随本机环境漂移——所以正路径只断言形状（有 windows 这个键），唯一能按值断言的是『一个都不匹配时是空列表』（那一条是确定的）。注意 matchMode 在这里缺省是 contains（与 attachWindow 的 exact 不同）。",
+    "variants": [
+      {
+        "name": "exact-pattern-finds-the-fixture-window",
+        "inputs": {
+          "titlePattern": "{appTitle}",
+          "matchMode": "exact"
+        },
+        "setup": {
+          "session": "none"
+        },
+        "expect": {
+          "outputKeys": [
+            "windows"
+          ],
+          "effect": "read"
+        }
+      },
+      {
+        "name": "contains-pattern-finds-a-title-substring",
+        "inputs": {
+          "titlePattern": "Desktop Demo",
+          "matchMode": "contains"
+        },
+        "setup": {
+          "session": "none"
+        },
+        "expect": {
+          "outputKeys": [
+            "windows"
+          ],
+          "effect": "read"
+        }
+      },
+      {
+        "name": "regex-pattern-matches-the-fixture-window",
+        "inputs": {
+          "titlePattern": "^RPA Core .*Demo$",
+          "matchMode": "regex"
+        },
+        "setup": {
+          "session": "none"
+        },
+        "expect": {
+          "outputKeys": [
+            "windows"
+          ],
+          "effect": "read"
+        }
+      },
+      {
+        "name": "unknown-pattern-yields-an-empty-list",
+        "inputs": {
+          "titlePattern": "no-such-window-probe-xyz-42",
+          "matchMode": "exact"
+        },
+        "setup": {
+          "session": "none"
+        },
+        "expect": {
+          "outputs": {
+            "windows": []
+          },
+          "effect": "read"
+        },
+        "negative": true
+      },
+      {
+        "name": "no-filter-declares-every-window",
+        "inputs": {},
+        "setup": {
+          "session": "none"
+        },
+        "expect": {
+          "outputKeys": [
+            "windows"
+          ],
+          "effect": "read"
+        }
+      }
+    ]
+  },
+  "desktop.getWindowTitle": {
+    "notes": "窗口身份三项都来自实现（title / className / processId）。title 可以按值断言——装配就是靠这个标题 attach 成功的，两处必须一致，这条同时钉住了『attach 的标题匹配口径』与『读回来的标题』是同一个窗口。className 是 WinForms 动态生成的（WindowsForms10.Window.8.app.0.xxx），不按值断言。",
+    "variants": [
+      {
+        "name": "reports-the-fixture-window-identity",
+        "inputs": {
+          "sessionId": "{session}"
+        },
+        "expect": {
+          "outputs": {
+            "title": "{appTitle}"
+          },
+          "outputKeys": [
+            "title",
+            "className",
+            "processId"
+          ],
+          "effect": "read"
+        }
+      },
+      {
+        "name": "missing-session-is-explicit",
+        "inputs": {
+          "sessionId": "no-such-session"
+        },
+        "expect": {
+          "errorCode": "SESSION_NOT_FOUND"
+        },
+        "negative": true
+      },
+      {
+        "name": "empty-session-string-is-not-a-wildcard",
+        "inputs": {
+          "sessionId": ""
+        },
+        "expect": {
+          "errorCode": "SESSION_NOT_FOUND"
+        },
+        "negative": true
+      }
+    ]
+  },
+  "desktop.input": {
+    "notes": "靶子输入框是共享的，所以按值断言『读回来的就是刚写进去的』会受变体顺序影响，留给真机 E2E。这里覆盖的是三个 mode、append、keyIntervalMs、clickBeforeInput、postDelayMs 这些参数分支的效果与耗时。",
+    "variants": [
+      {
+        "name": "default-simulate-human-mode-writes-text",
+        "notes": "与 click 的同名变体同理：mode=simulateHuman 是缺省值，不显式写出来就没有变体覆盖它；postDelayMs 也要两侧取值。",
+        "inputs": {
+          "sessionId": "{session}",
+          "elementId": "{element:input}",
+          "text": "matrix",
+          "mode": "simulateHuman",
+          "timeoutMs": 2000,
+          "postDelayMs": 0
+        },
+        "setup": {
+          "find": {
+            "input": {
+              "automationId": "queryInput",
+              "controlType": "Edit"
+            }
+          }
+        },
+        "expect": {
+          "effect": "unsafe-write"
+        }
+      },
+      {
+        "name": "clipboard-mode-is-accepted",
+        "notes": "**首次启用时需要确认这条**：clipboard 模式要写系统剪贴板 + 合成 Ctrl+V，而 tests/conftest.py 的 _block_global_input 会把全局输入面（剪贴板/键击）钉住。若它拦下了这里的剪贴板写入，本变体会红在桩的 AssertionError 上——那是**预期内的环境结论**（该模式在缺省隔离下不可用），届时把此变体改成断言显式失败即可，别去改实现。",
+        "inputs": {
+          "sessionId": "{session}",
+          "elementId": "{element:input}",
+          "text": "clip",
+          "mode": "clipboard"
+        },
+        "setup": {
+          "find": {
+            "input": {
+              "automationId": "queryInput",
+              "controlType": "Edit"
+            }
+          }
+        },
+        "expect": {
+          "effect": "unsafe-write"
+        }
+      },
+      {
+        "name": "automation-mode-writes-without-synthesized-keys",
+        "inputs": {
+          "sessionId": "{session}",
+          "elementId": "{element:input}",
+          "text": "auto",
+          "mode": "automation"
+        },
+        "setup": {
+          "find": {
+            "input": {
+              "automationId": "queryInput",
+              "controlType": "Edit"
+            }
+          }
+        },
+        "expect": {
+          "effect": "unsafe-write"
+        }
+      },
+      {
+        "name": "append-adds-instead-of-replacing",
+        "inputs": {
+          "sessionId": "{session}",
+          "elementId": "{element:input}",
+          "text": "+more",
+          "append": true
+        },
+        "setup": {
+          "find": {
+            "input": {
+              "automationId": "queryInput",
+              "controlType": "Edit"
+            }
+          }
+        },
+        "expect": {
+          "effect": "unsafe-write"
+        }
+      },
+      {
+        "name": "zero-key-interval-types-without-pausing",
+        "inputs": {
+          "sessionId": "{session}",
+          "elementId": "{element:input}",
+          "text": "fast",
+          "keyIntervalMs": 0
+        },
+        "setup": {
+          "find": {
+            "input": {
+              "automationId": "queryInput",
+              "controlType": "Edit"
+            }
+          }
+        },
+        "expect": {
+          "effect": "unsafe-write"
+        }
+      },
+      {
+        "name": "key-interval-is-consumed-as-real-waiting",
+        "notes": "41 字 × 80ms 在 S2.1 的真机 E2E 里实测过 3735ms，所以这里用墙钟下界证明『逐字敲』没被静默忽略（这是 M28 S3 查出过的那类漂移）。",
+        "inputs": {
+          "sessionId": "{session}",
+          "elementId": "{element:input}",
+          "text": "interval probe",
+          "keyIntervalMs": 80
+        },
+        "setup": {
+          "find": {
+            "input": {
+              "automationId": "queryInput",
+              "controlType": "Edit"
+            }
+          }
+        },
+        "expect": {
+          "effect": "unsafe-write",
+          "elapsedAtLeastMs": 600
+        }
+      },
+      {
+        "name": "click-before-input-is-consumed",
+        "inputs": {
+          "sessionId": "{session}",
+          "elementId": "{element:input}",
+          "text": "clicked",
+          "clickBeforeInput": true
+        },
+        "setup": {
+          "find": {
+            "input": {
+              "automationId": "queryInput",
+              "controlType": "Edit"
+            }
+          }
+        },
+        "expect": {
+          "effect": "unsafe-write"
+        }
+      },
+      {
+        "name": "post-delay-is-consumed",
+        "inputs": {
+          "sessionId": "{session}",
+          "elementId": "{element:input}",
+          "text": "delayed",
+          "postDelayMs": 150
+        },
+        "setup": {
+          "find": {
+            "input": {
+              "automationId": "queryInput",
+              "controlType": "Edit"
+            }
+          }
+        },
+        "expect": {
+          "effect": "unsafe-write",
+          "elapsedAtLeastMs": 150
+        }
+      },
+      {
+        "name": "unknown-element-id-is-element-not-found",
+        "inputs": {
+          "sessionId": "{session}",
+          "elementId": "no-such-element",
+          "text": "nope",
+          "timeoutMs": 200
+        },
+        "expect": {
+          "errorCode": "ELEMENT_NOT_FOUND"
+        },
+        "negative": true
+      },
+      {
+        "name": "missing-session-is-explicit",
+        "inputs": {
+          "sessionId": "no-such-session",
+          "elementId": "no-such-element",
+          "text": "nope"
+        },
+        "expect": {
+          "errorCode": "SESSION_NOT_FOUND"
+        },
+        "negative": true
+      }
+    ]
+  },
+  "desktop.moveWindow": {
+    "notes": "窗口级命令。x=0,y=0 是边界侧取值（schema 没有 minimum，但 0 与正数是两个不同取值，覆盖要求是『至少两个不同取值』）。",
+    "variants": [
+      {
+        "name": "moves-the-window-to-positive-coordinates",
+        "inputs": {
+          "sessionId": "{session}",
+          "x": 120,
+          "y": 120
+        },
+        "expect": {
+          "effect": "unsafe-write"
+        }
+      },
+      {
+        "name": "moves-the-window-to-the-origin",
+        "inputs": {
+          "sessionId": "{session}",
+          "x": 0,
+          "y": 0
+        },
+        "expect": {
+          "effect": "unsafe-write"
+        }
+      },
+      {
+        "name": "missing-session-is-explicit",
+        "inputs": {
+          "sessionId": "no-such-session",
+          "x": 10,
+          "y": 10
+        },
+        "expect": {
+          "errorCode": "SESSION_NOT_FOUND"
+        },
+        "negative": true
+      }
+    ]
+  },
+  "desktop.resizeWindow": {
+    "notes": "两个尺寸取值都是常见的正数；不踩 width=1 那种退化尺寸——它会把窗口缩到读不到控件，污染后续变体（按值断言没必要买这个险）。",
+    "variants": [
+      {
+        "name": "resizes-to-640-by-480",
+        "inputs": {
+          "sessionId": "{session}",
+          "width": 640,
+          "height": 480
+        },
+        "expect": {
+          "effect": "unsafe-write"
+        }
+      },
+      {
+        "name": "resizes-to-1024-by-768",
+        "inputs": {
+          "sessionId": "{session}",
+          "width": 1024,
+          "height": 768
+        },
+        "expect": {
+          "effect": "unsafe-write"
+        }
+      },
+      {
+        "name": "missing-session-is-explicit",
+        "inputs": {
+          "sessionId": "no-such-session",
+          "width": 800,
+          "height": 600
+        },
+        "expect": {
+          "errorCode": "SESSION_NOT_FOUND"
+        },
+        "negative": true
+      }
+    ]
+  },
+  "desktop.screenshot": {
+    "notes": "落盘产物是 PNG（二进制），所以磁盘断言只声明『存在』——`files` 里给文本类断言会去 read_text 而崩（matrix.py 里已按这条加了一行保护）。",
+    "variants": [
+      {
+        "name": "writes-a-png-into-the-variant-temp-dir",
+        "inputs": {
+          "sessionId": "{session}",
+          "elementId": "{element:label}",
+          "savePath": "{tmp}/shot.png"
+        },
+        "setup": {
+          "find": {
+            "label": {
+              "automationId": "countLabel"
+            }
+          }
+        },
+        "expect": {
+          "outputPaths": {
+            "filePath": "{tmp}/shot.png"
+          },
+          "effect": "idempotent-write",
+          "files": [
+            {
+              "path": "{tmp}/shot.png",
+              "missing": false
+            }
+          ]
+        }
+      },
+      {
+        "name": "unknown-element-id-is-element-not-found",
+        "inputs": {
+          "sessionId": "{session}",
+          "elementId": "no-such-element",
+          "savePath": "{tmp}/nope.png"
+        },
+        "expect": {
+          "errorCode": "ELEMENT_NOT_FOUND",
+          "files": [
+            {
+              "path": "{tmp}/nope.png",
+              "missing": true
+            }
+          ]
+        },
+        "negative": true
+      },
+      {
+        "name": "missing-session-is-explicit",
+        "inputs": {
+          "sessionId": "no-such-session",
+          "elementId": "no-such-element",
+          "savePath": "{tmp}/nope.png"
+        },
+        "expect": {
+          "errorCode": "SESSION_NOT_FOUND"
+        },
+        "negative": true
+      }
+    ]
+  },
+  "desktop.select": {
+    "notes": "**本命令当前只有负路径**：selectBy 的三个取值都覆盖了，但靶子上没有 ComboBox / ListBox，任何 selectBy 都注定 ELEMENT_NOT_FOUND。这不是用例偷懒——真给一个 Edit 去 select，取决于控件是否支持 select()，结果是不确定的（未实测），所以不写想象出来的正路径。正路径需要先给靶子加一个下拉控件（登记在任务单 §3）。",
+    "variants": [
+      {
+        "name": "value-mode-fails-on-an-unknown-element",
+        "inputs": {
+          "sessionId": "{session}",
+          "elementId": "no-such-element",
+          "value": "option-a",
+          "selectBy": "value"
+        },
+        "expect": {
+          "errorCode": "ELEMENT_NOT_FOUND"
+        },
+        "negative": true
+      },
+      {
+        "name": "label-mode-fails-on-an-unknown-element",
+        "inputs": {
+          "sessionId": "{session}",
+          "elementId": "no-such-element",
+          "value": "option-a",
+          "selectBy": "label"
+        },
+        "expect": {
+          "errorCode": "ELEMENT_NOT_FOUND"
+        },
+        "negative": true
+      },
+      {
+        "name": "index-mode-fails-on-an-unknown-element",
+        "inputs": {
+          "sessionId": "{session}",
+          "elementId": "no-such-element",
+          "value": "0",
+          "selectBy": "index"
+        },
+        "expect": {
+          "errorCode": "ELEMENT_NOT_FOUND"
+        },
+        "negative": true
+      },
+      {
+        "name": "missing-session-is-explicit",
+        "inputs": {
+          "sessionId": "no-such-session",
+          "elementId": "no-such-element",
+          "value": "option-a"
+        },
+        "expect": {
+          "errorCode": "SESSION_NOT_FOUND"
+        },
+        "negative": true
+      }
+    ]
+  },
+  "desktop.setWindowState": {
+    "notes": "三个状态各一个变体。minimized 放在最后一个：它真的会把窗口最小化，虽然装配在每个变体前都会重新抢前台，但把破坏性最强的放最后能少依赖一次恢复。",
+    "variants": [
+      {
+        "name": "normal-state-is-applied",
+        "inputs": {
+          "sessionId": "{session}",
+          "state": "normal"
+        },
+        "expect": {
+          "effect": "unsafe-write"
+        }
+      },
+      {
+        "name": "maximized-state-is-applied",
+        "inputs": {
+          "sessionId": "{session}",
+          "state": "maximized"
+        },
+        "expect": {
+          "effect": "unsafe-write"
+        }
+      },
+      {
+        "name": "minimized-state-is-applied",
+        "inputs": {
+          "sessionId": "{session}",
+          "state": "minimized"
+        },
+        "expect": {
+          "effect": "unsafe-write"
+        }
+      },
+      {
+        "name": "missing-session-is-explicit",
+        "inputs": {
+          "sessionId": "no-such-session",
+          "state": "normal"
+        },
+        "expect": {
+          "errorCode": "SESSION_NOT_FOUND"
+        },
+        "negative": true
+      }
+    ]
+  },
+  "desktop.setWindowVisible": {
+    "notes": "只覆盖 visible=true 的正路径：visible=false 会把窗口藏起来，后续变体的 attach 未必还能拿到它（隐藏窗口不参与前台激活），那是拿整个矩阵的稳定性换一个布尔分支。隐藏/恢复这一对需要在一个变体内部完成（属于流程层）。",
+    "variants": [
+      {
+        "name": "visible-true-is-applied",
+        "inputs": {
+          "sessionId": "{session}",
+          "visible": true
+        },
+        "expect": {
+          "effect": "unsafe-write"
+        }
+      },
+      {
+        "name": "missing-session-is-explicit",
+        "inputs": {
+          "sessionId": "no-such-session",
+          "visible": true
+        },
+        "expect": {
+          "errorCode": "SESSION_NOT_FOUND"
+        },
+        "negative": true
+      },
+      {
+        "name": "empty-session-string-is-not-a-wildcard",
+        "inputs": {
+          "sessionId": "",
+          "visible": true
+        },
+        "expect": {
+          "errorCode": "SESSION_NOT_FOUND"
+        },
+        "negative": true
+      }
+    ]
+  }
+}

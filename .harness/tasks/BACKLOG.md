@@ -16,8 +16,13 @@
   `tests/e2e/desktop_fixture.py` 共用、桌面通道「暂停/继续」的真机证据补上（跨进程 `resume`
   续接同一窗口 / 会话与元素都接回 / 零重跑，两处缺口都是探针实测逼出来的，实装
   `base.desktop_sessions_from_scopes` + 两后端 `restore_from_scopes`，契约测试进默认门禁）。
-  S2 剩下的是 **36 条桌面用例表本身**（`cases/desktop.json` + `cases/desktop_win32.json` + 驱动
-  + `PENDING_NAMESPACES` 删 `desktop`；**建表即自动出现在页签里**，不用改页面）
+  **S2 已完成（2026-09-22）**：`cases/desktop.json`（UIA 17 条 / 78 变体）+ `cases/desktop_win32.json`
+  （Win32 19 条 / 81 变体）+ 两个驱动 + 共享装配 `tests/commands/desktop_harness.py`
+  （每变体自建会话跑完即弃、每变体前重新抢前台、`{session}`/`{element:名字}`/`{appTitle}`/`{pid}`/`{handle}`
+  占位符物化），`PENDING_NAMESPACES` 清空——**86 条命令全部有表**，且**建表即自动出现在页签里**，
+  不用改页面。**执行层未跑**（维护者 2026-09-22 指令「建表吧，建完不测」）：159 个变体一次
+  未真机执行，未实测的期望与靶子缺口（可拖/下拉控件、菜单栏、Win32 可定位控件、`forceKill=true`、
+  `visible=false`）逐条登记在任务单 §1.5，启用方式 `RPA_COMMAND_MATRIX=1 RPA_DESKTOP_E2E=1 pytest tests/commands`
   - 计划：`M38-command-matrix.md`
 
 ## 后续任务

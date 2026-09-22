@@ -25,11 +25,13 @@ outputs/effects/错误码/落盘内容）。差别只在**插桩点**（假扩�
 | `elapsedAtLeastMs` | 整条命令的墙钟耗时下界（验证 `postDelayMs` 这类「只花时间」的参数） |
 | `files` | 磁盘断言（数据通道的主要证据面），见下方说明 |
 
-`files` 每项的形状：`path`（支持 `{tmp}`）+ 四选一的断言方式——
+`files` 每项的形状：`path`（支持 `{tmp}`）+ 断言方式（可组合，也可以都不给）——
 
 - `equals`：逐字节相等；`contains`：子串包含；
 - `missing`：断言路径**不存在**（删除类命令）；
-- `jsonContains`：实际 JSON 是期望的**子集**（绕开 `updated_at` 这类噪声字段）。
+- `jsonContains`：实际 JSON 是期望的**子集**（绕开 `updated_at` 这类噪声字段）；
+- **一个都不给**（或只给 `missing: false`）：只断言**存在**——二进制产物走这条
+  （`desktop.screenshot` 的 PNG 不是 UTF-8，文本类断言会去 `read_text` 而崩）。
 
 变体可选的键：`inputs` / `sessions`（覆盖默认会话表，浏览器用）/ `stub`（覆盖命令级桩应答）/
 `errors`（op → 扩展侧错误）/ `processStub`（打桩进程面，`browser.closeBrowser` 专用）/
@@ -50,7 +52,7 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -130,18 +132,32 @@ def check_call(actual, expected: dict[str, Any], path: str) -> list[str]:
     return problems
 
 
-def materialize_inputs(value: Any, tmp_dir: Path) -> Any:
-    """把用例表里的 `{tmp}` 占位符替换成本次运行的临时目录（递归，含列表与字典键值）。
+def materialize_inputs(
+    value: Any, tmp_dir: Path, extra: Mapping[str, str] | None = None
+) -> Any:
+    """把用例表里的占位符替换成本次运行的真实值（递归，含列表与字典键值）。
 
-    用例表是纯数据、不能写死本机路径；真实落盘的命令（`browser.screenshot`、
-    `data.*` 全套）必须写进临时目录，否则会污染仓库工作树。
+    - `{tmp}`（所有通道）：本次运行的临时目录。用例表是纯数据、不能写死本机路径；
+      真实落盘的命令（`browser.screenshot`、`data.*` 全套）必须写进临时目录，
+      否则会污染仓库工作树。
+    - `extra`（桌面通道专用）：调用方按变体的 `setup` **现算**出来的值——`{session}`
+      （预置会话 id）、`{element:input}`（预置元素 id）、`{appTitle}`（靶子窗口标题）、
+      `{pid}`（靶子进程 id）。这些值每次都不同（会话 id 是 uuid、pid 随进程变），
+      所以只能由驱动在运行时注入，不能写进表里；其它通道不传 `extra`，行为与从前一致。
+
+    `extra` 先替、`{tmp}` 后替：两者的键不重叠，顺序只为确定性。
     """
     if isinstance(value, str):
-        return value.replace("{tmp}", str(tmp_dir))
+        text = value
+        for key, replacement in (extra or {}).items():
+            text = text.replace("{" + key + "}", str(replacement))
+        return text.replace("{tmp}", str(tmp_dir))
     if isinstance(value, dict):
-        return {key: materialize_inputs(item, tmp_dir) for key, item in value.items()}
+        return {
+            key: materialize_inputs(item, tmp_dir, extra) for key, item in value.items()
+        }
     if isinstance(value, list):
-        return [materialize_inputs(item, tmp_dir) for item in value]
+        return [materialize_inputs(item, tmp_dir, extra) for item in value]
     return value
 
 
@@ -188,6 +204,11 @@ def _check_files(expect: dict[str, Any], tmp_dir: Path) -> list[str]:
             continue
         if not path.exists():
             problems.append(f"{where}: 期望存在，实际不存在：{path}")
+            continue
+        # 文本类断言才读文件。`desktop.screenshot` 落的是 PNG——二进制不是 UTF-8，
+        # 无条件 read_text 会 UnicodeDecodeError，把一条「文件确实被写出来了」的断言
+        # 变成整个变体崩掉。只声明 `missing: false` 的用例需要的只是「存在」这一步。
+        if not ({"equals", "contains", "jsonContains"} & set(item)):
             continue
         text = path.read_text(encoding="utf-8")
         if "equals" in item and text != item["equals"]:

@@ -1,0 +1,1154 @@
+{
+  "desktop.win32.activateWindow": {
+    "notes": "会话级命令，与 uia 侧同构。它会真的抢前台焦点。",
+    "variants": [
+      {
+        "name": "activates-the-session-window",
+        "inputs": {
+          "sessionId": "{session}"
+        },
+        "expect": {
+          "effect": "unsafe-write"
+        }
+      },
+      {
+        "name": "missing-session-is-explicit",
+        "inputs": {
+          "sessionId": "no-such-session"
+        },
+        "expect": {
+          "errorCode": "SESSION_NOT_FOUND"
+        },
+        "negative": true
+      },
+      {
+        "name": "empty-session-string-is-not-a-wildcard",
+        "inputs": {
+          "sessionId": ""
+        },
+        "expect": {
+          "errorCode": "SESSION_NOT_FOUND"
+        },
+        "negative": true
+      }
+    ]
+  },
+  "desktop.win32.attachWindow": {
+    "notes": "比 uia 侧多一个 handle 参数（直连分支：不枚举、不按标题匹配，直接按句柄构造）。expect 的形状依据与 uia 侧同一组契约测试（test_desktop_contract.py / test_desktop_attach_window.py 断言两后端在这条命令上一致：outputs 四键、INVALID_INPUT、ELEMENT_NOT_FOUND + matchedCount / className）。",
+    "variants": [
+      {
+        "name": "exact-title-binds-the-fixture-window",
+        "notes": "显式给出 operationTimeoutMs 的一个取值（两侧覆盖要求）。",
+        "inputs": {
+          "title": "{appTitle}",
+          "matchMode": "exact",
+          "timeoutMs": 5000,
+          "operationTimeoutMs": 2000
+        },
+        "setup": {
+          "session": "none"
+        },
+        "expect": {
+          "outputs": {
+            "resourceType": "windowHandle"
+          },
+          "outputKeys": [
+            "sessionId",
+            "resourceType",
+            "processId",
+            "workWindowId"
+          ],
+          "effect": "session"
+        }
+      },
+      {
+        "name": "contains-mode-matches-a-title-substring",
+        "inputs": {
+          "title": "Desktop Demo",
+          "matchMode": "contains",
+          "timeoutMs": 5000,
+          "operationTimeoutMs": 4000
+        },
+        "setup": {
+          "session": "none"
+        },
+        "expect": {
+          "outputKeys": [
+            "sessionId",
+            "workWindowId"
+          ],
+          "effect": "session"
+        }
+      },
+      {
+        "name": "regex-mode-matches-the-whole-title",
+        "inputs": {
+          "title": "^RPA Core .*Demo$",
+          "matchMode": "regex",
+          "timeoutMs": 5000
+        },
+        "setup": {
+          "session": "none"
+        },
+        "expect": {
+          "outputKeys": [
+            "sessionId"
+          ],
+          "effect": "session"
+        }
+      },
+      {
+        "name": "handle-connects-without-any-title-matching",
+        "notes": "handle 直连是 win32 侧独有的快路径：不枚举、不比标题。句柄由装配用 FindWindowW 现取（每次运行都不同，写不进表里）。",
+        "inputs": {
+          "handle": "{handle}",
+          "timeoutMs": 5000
+        },
+        "setup": {
+          "session": "none"
+        },
+        "expect": {
+          "outputKeys": [
+            "sessionId",
+            "workWindowId"
+          ],
+          "outputs": {
+            "workWindowId": "{handle}"
+          },
+          "effect": "session"
+        }
+      },
+      {
+        "name": "unknown-handle-is-not-found",
+        "inputs": {
+          "handle": "999999999",
+          "timeoutMs": 200
+        },
+        "setup": {
+          "session": "none"
+        },
+        "expect": {
+          "errorCode": "ELEMENT_NOT_FOUND"
+        },
+        "negative": true
+      },
+      {
+        "name": "class-name-is-compared-by-equality-and-can-miss",
+        "inputs": {
+          "title": "{appTitle}",
+          "className": "Notepad",
+          "timeoutMs": 200
+        },
+        "setup": {
+          "session": "none"
+        },
+        "expect": {
+          "errorCode": "ELEMENT_NOT_FOUND",
+          "errorDetails": {
+            "className": "Notepad"
+          }
+        },
+        "negative": true
+      },
+      {
+        "name": "no-filter-at-all-is-invalid-input",
+        "inputs": {},
+        "setup": {
+          "session": "none"
+        },
+        "expect": {
+          "errorCode": "INVALID_INPUT"
+        },
+        "negative": true
+      },
+      {
+        "name": "process-id-narrows-to-the-fixture-process",
+        "inputs": {
+          "title": "{appTitle}",
+          "processId": "{pid}",
+          "timeoutMs": 5000
+        },
+        "setup": {
+          "session": "none"
+        },
+        "expect": {
+          "outputs": {
+            "processId": "{pid}"
+          },
+          "outputKeys": [
+            "sessionId"
+          ],
+          "effect": "session"
+        }
+      },
+      {
+        "name": "unknown-process-id-is-not-found",
+        "inputs": {
+          "title": "{appTitle}",
+          "processId": 999999,
+          "timeoutMs": 200
+        },
+        "setup": {
+          "session": "none"
+        },
+        "expect": {
+          "errorCode": "ELEMENT_NOT_FOUND"
+        },
+        "negative": true
+      },
+      {
+        "name": "unknown-title-reports-zero-matches",
+        "inputs": {
+          "title": "no-such-window-rpa-core-probe",
+          "timeoutMs": 200
+        },
+        "setup": {
+          "session": "none"
+        },
+        "expect": {
+          "errorCode": "ELEMENT_NOT_FOUND",
+          "errorDetails": {
+            "matchedCount": 0
+          }
+        },
+        "negative": true
+      }
+    ]
+  },
+  "desktop.win32.click": {
+    "notes": "**当前只有负路径**：靶子的控件是 WinForms 动态类名（WindowsForms10.BUTTON.app.0.xxx）、没有稳定的 controlId，win32 定位器（title / className / controlId）匹配不到它们——所以所有吃 elementId 的变体都只能走『元素不存在』这条确定路径。需要正路径得先给靶子加一套 Win32 可定位的控件（登记在任务单 §3）。负路径本身仍有价值：它钉住了参数被接受、且失败码与 uia 侧一致。",
+    "variants": [
+      {
+        "name": "default-values-are-spelled-out",
+        "notes": "四个缺省值显式写出来，否则没有任何变体『出现』过这些枚举值（覆盖校验会红）；timeoutMs=200 是等待预算的短侧取值。",
+        "inputs": {
+          "sessionId": "{session}",
+          "elementId": "no-such-element",
+          "clickType": "single",
+          "button": "left",
+          "clickPosition": "center",
+          "postDelayMs": 0,
+          "timeoutMs": 200
+        },
+        "expect": {
+          "errorCode": "ELEMENT_NOT_FOUND"
+        },
+        "negative": true
+      },
+      {
+        "name": "double-click-type-is-accepted",
+        "inputs": {
+          "sessionId": "{session}",
+          "elementId": "no-such-element",
+          "clickType": "double"
+        },
+        "expect": {
+          "errorCode": "ELEMENT_NOT_FOUND"
+        },
+        "negative": true
+      },
+      {
+        "name": "right-button-is-accepted",
+        "inputs": {
+          "sessionId": "{session}",
+          "elementId": "no-such-element",
+          "button": "right"
+        },
+        "expect": {
+          "errorCode": "ELEMENT_NOT_FOUND"
+        },
+        "negative": true
+      },
+      {
+        "name": "modifiers-are-accepted",
+        "inputs": {
+          "sessionId": "{session}",
+          "elementId": "no-such-element",
+          "modifiers": [
+            "Ctrl",
+            "Shift"
+          ]
+        },
+        "expect": {
+          "errorCode": "ELEMENT_NOT_FOUND"
+        },
+        "negative": true
+      },
+      {
+        "name": "simulate-human-false-is-accepted",
+        "inputs": {
+          "sessionId": "{session}",
+          "elementId": "no-such-element",
+          "simulateHuman": false
+        },
+        "expect": {
+          "errorCode": "ELEMENT_NOT_FOUND"
+        },
+        "negative": true
+      },
+      {
+        "name": "random-position-is-accepted",
+        "inputs": {
+          "sessionId": "{session}",
+          "elementId": "no-such-element",
+          "clickPosition": "random"
+        },
+        "expect": {
+          "errorCode": "ELEMENT_NOT_FOUND"
+        },
+        "negative": true
+      },
+      {
+        "name": "post-delay-is-accepted",
+        "inputs": {
+          "sessionId": "{session}",
+          "elementId": "no-such-element",
+          "postDelayMs": 120
+        },
+        "expect": {
+          "errorCode": "ELEMENT_NOT_FOUND"
+        },
+        "negative": true
+      },
+      {
+        "name": "timeout-budget-is-accepted",
+        "inputs": {
+          "sessionId": "{session}",
+          "elementId": "no-such-element",
+          "timeoutMs": 2000
+        },
+        "expect": {
+          "errorCode": "ELEMENT_NOT_FOUND"
+        },
+        "negative": true
+      },
+      {
+        "name": "missing-session-is-explicit",
+        "inputs": {
+          "sessionId": "no-such-session",
+          "elementId": "no-such-element"
+        },
+        "expect": {
+          "errorCode": "SESSION_NOT_FOUND"
+        },
+        "negative": true
+      }
+    ]
+  },
+  "desktop.win32.closeSession": {
+    "notes": "与 uia 侧同构：用自己那个会话，不影响别的变体。forceKill 只覆盖缺省 false（true 会结束靶子进程）。",
+    "variants": [
+      {
+        "name": "closes-a-session-it-owns",
+        "inputs": {
+          "sessionId": "{session}",
+          "forceKill": false
+        },
+        "expect": {
+          "effect": "session"
+        }
+      },
+      {
+        "name": "missing-session-is-explicit",
+        "inputs": {
+          "sessionId": "no-such-session"
+        },
+        "expect": {
+          "errorCode": "SESSION_NOT_FOUND"
+        },
+        "negative": true
+      },
+      {
+        "name": "empty-session-string-is-not-a-wildcard",
+        "inputs": {
+          "sessionId": ""
+        },
+        "expect": {
+          "errorCode": "SESSION_NOT_FOUND"
+        },
+        "negative": true
+      }
+    ]
+  },
+  "desktop.win32.drag": {
+    "notes": "与 uia 侧同构：靶子无可拖控件，且真机拖动会操作真实鼠标（外部副作用），所以只覆盖『目标不存在时显式失败』。",
+    "variants": [
+      {
+        "name": "unknown-element-id-is-element-not-found",
+        "inputs": {
+          "sessionId": "{session}",
+          "elementId": "no-such-element",
+          "targetX": 100,
+          "targetY": 100
+        },
+        "expect": {
+          "errorCode": "ELEMENT_NOT_FOUND"
+        },
+        "negative": true
+      },
+      {
+        "name": "target-far-outside-the-element-still-fails-on-the-element-first",
+        "inputs": {
+          "sessionId": "{session}",
+          "elementId": "no-such-element",
+          "targetX": 99999,
+          "targetY": 99999
+        },
+        "expect": {
+          "errorCode": "ELEMENT_NOT_FOUND"
+        },
+        "negative": true
+      },
+      {
+        "name": "missing-session-is-explicit",
+        "inputs": {
+          "sessionId": "no-such-session",
+          "elementId": "no-such-element",
+          "targetX": 0,
+          "targetY": 0
+        },
+        "expect": {
+          "errorCode": "SESSION_NOT_FOUND"
+        },
+        "negative": true
+      }
+    ]
+  },
+  "desktop.win32.findElement": {
+    "notes": "**当前只有负路径**，原因同 click：win32 定位器认 title / className / controlId，而靶子控件的类名是 WinForms 动态生成的、没有稳定 controlId。locator 里的 backend 字段必须显式写成 win32——DesktopLocator 按后端校验必填身份字段，缺了会在模型层就报 ValidationError（不是本命令的错）。",
+    "variants": [
+      {
+        "name": "unknown-class-name-is-element-not-found",
+        "inputs": {
+          "sessionId": "{session}",
+          "locator": {
+            "backend": "win32",
+            "className": "NoSuchControlClass"
+          },
+          "timeoutMs": 200
+        },
+        "expect": {
+          "errorCode": "ELEMENT_NOT_FOUND"
+        },
+        "negative": true
+      },
+      {
+        "name": "longer-wait-budget-is-accepted",
+        "inputs": {
+          "sessionId": "{session}",
+          "locator": {
+            "backend": "win32",
+            "className": "NoSuchControlClass"
+          },
+          "timeoutMs": 2000
+        },
+        "expect": {
+          "errorCode": "ELEMENT_NOT_FOUND"
+        },
+        "negative": true
+      },
+      {
+        "name": "missing-session-is-explicit",
+        "inputs": {
+          "sessionId": "no-such-session",
+          "locator": {
+            "backend": "win32",
+            "className": "NoSuchControlClass"
+          }
+        },
+        "expect": {
+          "errorCode": "SESSION_NOT_FOUND"
+        },
+        "negative": true
+      },
+      {
+        "name": "empty-session-string-is-not-a-wildcard",
+        "inputs": {
+          "sessionId": "",
+          "locator": {
+            "backend": "win32",
+            "className": "NoSuchControlClass"
+          }
+        },
+        "expect": {
+          "errorCode": "SESSION_NOT_FOUND"
+        },
+        "negative": true
+      }
+    ]
+  },
+  "desktop.win32.getSelectedText": {
+    "notes": "与 uia 侧同构：靶子控件可用 win32 定位器匹配之前只有负路径（原因见 click）。",
+    "variants": [
+      {
+        "name": "unknown-element-id-is-element-not-found",
+        "inputs": {
+          "sessionId": "{session}",
+          "elementId": "no-such-element"
+        },
+        "expect": {
+          "errorCode": "ELEMENT_NOT_FOUND"
+        },
+        "negative": true
+      },
+      {
+        "name": "missing-session-is-explicit",
+        "inputs": {
+          "sessionId": "no-such-session",
+          "elementId": "no-such-element"
+        },
+        "expect": {
+          "errorCode": "SESSION_NOT_FOUND"
+        },
+        "negative": true
+      },
+      {
+        "name": "empty-session-string-is-not-a-wildcard",
+        "inputs": {
+          "sessionId": "",
+          "elementId": "no-such-element"
+        },
+        "expect": {
+          "errorCode": "SESSION_NOT_FOUND"
+        },
+        "negative": true
+      }
+    ]
+  },
+  "desktop.win32.getText": {
+    "notes": "与 uia 侧同构：只有负路径。outputs 的 value 键在 uia 侧有真机证据（S2.1 的 readResult），win32 侧等靶子补齐后再补正路径。",
+    "variants": [
+      {
+        "name": "unknown-element-id-is-element-not-found",
+        "inputs": {
+          "sessionId": "{session}",
+          "elementId": "no-such-element",
+          "timeoutMs": 200
+        },
+        "expect": {
+          "errorCode": "ELEMENT_NOT_FOUND"
+        },
+        "negative": true
+      },
+      {
+        "name": "longer-wait-budget-is-accepted",
+        "inputs": {
+          "sessionId": "{session}",
+          "elementId": "no-such-element",
+          "timeoutMs": 2000
+        },
+        "expect": {
+          "errorCode": "ELEMENT_NOT_FOUND"
+        },
+        "negative": true
+      },
+      {
+        "name": "missing-session-is-explicit",
+        "inputs": {
+          "sessionId": "no-such-session",
+          "elementId": "no-such-element"
+        },
+        "expect": {
+          "errorCode": "SESSION_NOT_FOUND"
+        },
+        "negative": true
+      }
+    ]
+  },
+  "desktop.win32.getWindowList": {
+    "notes": "不需要会话。与 uia 侧同一口径：outputs 是整桌面的窗口列表，内容随本机环境漂移，所以正路径只断言形状，唯一按值断言的是『一个都不匹配 → 空列表』。",
+    "variants": [
+      {
+        "name": "exact-pattern-finds-the-fixture-window",
+        "inputs": {
+          "titlePattern": "{appTitle}",
+          "matchMode": "exact"
+        },
+        "setup": {
+          "session": "none"
+        },
+        "expect": {
+          "outputKeys": [
+            "windows"
+          ],
+          "effect": "read"
+        }
+      },
+      {
+        "name": "contains-pattern-finds-a-title-substring",
+        "inputs": {
+          "titlePattern": "Desktop Demo",
+          "matchMode": "contains"
+        },
+        "setup": {
+          "session": "none"
+        },
+        "expect": {
+          "outputKeys": [
+            "windows"
+          ],
+          "effect": "read"
+        }
+      },
+      {
+        "name": "regex-pattern-matches-the-fixture-window",
+        "inputs": {
+          "titlePattern": "^RPA Core .*Demo$",
+          "matchMode": "regex"
+        },
+        "setup": {
+          "session": "none"
+        },
+        "expect": {
+          "outputKeys": [
+            "windows"
+          ],
+          "effect": "read"
+        }
+      },
+      {
+        "name": "unknown-pattern-yields-an-empty-list",
+        "inputs": {
+          "titlePattern": "no-such-window-probe-xyz-42",
+          "matchMode": "exact"
+        },
+        "setup": {
+          "session": "none"
+        },
+        "expect": {
+          "outputs": {
+            "windows": []
+          },
+          "effect": "read"
+        },
+        "negative": true
+      },
+      {
+        "name": "no-filter-declares-every-window",
+        "inputs": {},
+        "setup": {
+          "session": "none"
+        },
+        "expect": {
+          "outputKeys": [
+            "windows"
+          ],
+          "effect": "read"
+        }
+      }
+    ]
+  },
+  "desktop.win32.getWindowTitle": {
+    "notes": "窗口身份三项来自实现。title 按值断言——attach 就是靠这个标题成功的，两处必须指向同一个窗口。className 是 WinForms 动态生成的，不按值断言。",
+    "variants": [
+      {
+        "name": "reports-the-fixture-window-identity",
+        "inputs": {
+          "sessionId": "{session}"
+        },
+        "expect": {
+          "outputs": {
+            "title": "{appTitle}"
+          },
+          "outputKeys": [
+            "title",
+            "className",
+            "processId"
+          ],
+          "effect": "read"
+        }
+      },
+      {
+        "name": "missing-session-is-explicit",
+        "inputs": {
+          "sessionId": "no-such-session"
+        },
+        "expect": {
+          "errorCode": "SESSION_NOT_FOUND"
+        },
+        "negative": true
+      },
+      {
+        "name": "empty-session-string-is-not-a-wildcard",
+        "inputs": {
+          "sessionId": ""
+        },
+        "expect": {
+          "errorCode": "SESSION_NOT_FOUND"
+        },
+        "negative": true
+      }
+    ]
+  },
+  "desktop.win32.hotkey": {
+    "notes": "win32 侧独有。F5 在靶子上没有任何绑定，所以既证明按键被真的发出去、又不会改靶子状态。注意这条命令只吃 sessionId（不需要元素），所以它是本表里少数有真机正路径的输入类命令。",
+    "variants": [
+      {
+        "name": "sends-an-unbound-function-key",
+        "inputs": {
+          "sessionId": "{session}",
+          "keys": "{VK_F5}"
+        },
+        "expect": {
+          "effect": "unsafe-write"
+        }
+      },
+      {
+        "name": "missing-session-is-explicit",
+        "inputs": {
+          "sessionId": "no-such-session",
+          "keys": "{VK_F5}"
+        },
+        "expect": {
+          "errorCode": "SESSION_NOT_FOUND"
+        },
+        "negative": true
+      },
+      {
+        "name": "empty-session-string-is-not-a-wildcard",
+        "inputs": {
+          "sessionId": "",
+          "keys": "{VK_F5}"
+        },
+        "expect": {
+          "errorCode": "SESSION_NOT_FOUND"
+        },
+        "negative": true
+      }
+    ]
+  },
+  "desktop.win32.input": {
+    "notes": "**当前只有负路径**（原因见 click：靶子控件匹配不到 win32 定位器）。三个 mode、append、keyIntervalMs、clickBeforeInput、postDelayMs 都覆盖了，但都停在『元素不存在』这一步——参数分支的效果要等靶子补齐后才能验。",
+    "variants": [
+      {
+        "name": "default-values-are-spelled-out",
+        "inputs": {
+          "sessionId": "{session}",
+          "elementId": "no-such-element",
+          "text": "matrix",
+          "mode": "simulateHuman",
+          "timeoutMs": 2000,
+          "postDelayMs": 0
+        },
+        "expect": {
+          "errorCode": "ELEMENT_NOT_FOUND"
+        },
+        "negative": true
+      },
+      {
+        "name": "clipboard-mode-is-accepted",
+        "inputs": {
+          "sessionId": "{session}",
+          "elementId": "no-such-element",
+          "text": "clip",
+          "mode": "clipboard"
+        },
+        "expect": {
+          "errorCode": "ELEMENT_NOT_FOUND"
+        },
+        "negative": true
+      },
+      {
+        "name": "automation-mode-is-accepted",
+        "inputs": {
+          "sessionId": "{session}",
+          "elementId": "no-such-element",
+          "text": "auto",
+          "mode": "automation"
+        },
+        "expect": {
+          "errorCode": "ELEMENT_NOT_FOUND"
+        },
+        "negative": true
+      },
+      {
+        "name": "append-is-accepted",
+        "inputs": {
+          "sessionId": "{session}",
+          "elementId": "no-such-element",
+          "text": "+more",
+          "append": true
+        },
+        "expect": {
+          "errorCode": "ELEMENT_NOT_FOUND"
+        },
+        "negative": true
+      },
+      {
+        "name": "zero-key-interval-is-accepted",
+        "inputs": {
+          "sessionId": "{session}",
+          "elementId": "no-such-element",
+          "text": "fast",
+          "keyIntervalMs": 0
+        },
+        "expect": {
+          "errorCode": "ELEMENT_NOT_FOUND"
+        },
+        "negative": true
+      },
+      {
+        "name": "key-interval-is-accepted",
+        "inputs": {
+          "sessionId": "{session}",
+          "elementId": "no-such-element",
+          "text": "interval probe",
+          "keyIntervalMs": 80
+        },
+        "expect": {
+          "errorCode": "ELEMENT_NOT_FOUND"
+        },
+        "negative": true
+      },
+      {
+        "name": "click-before-input-is-accepted",
+        "inputs": {
+          "sessionId": "{session}",
+          "elementId": "no-such-element",
+          "text": "clicked",
+          "clickBeforeInput": true
+        },
+        "expect": {
+          "errorCode": "ELEMENT_NOT_FOUND"
+        },
+        "negative": true
+      },
+      {
+        "name": "post-delay-is-accepted",
+        "notes": "顺带给出 timeoutMs 的另一个取值（短侧），否则等待预算只有长侧一个值。",
+        "inputs": {
+          "sessionId": "{session}",
+          "elementId": "no-such-element",
+          "text": "delayed",
+          "postDelayMs": 150,
+          "timeoutMs": 200
+        },
+        "expect": {
+          "errorCode": "ELEMENT_NOT_FOUND"
+        },
+        "negative": true
+      },
+      {
+        "name": "missing-session-is-explicit",
+        "inputs": {
+          "sessionId": "no-such-session",
+          "elementId": "no-such-element",
+          "text": "nope"
+        },
+        "expect": {
+          "errorCode": "SESSION_NOT_FOUND"
+        },
+        "negative": true
+      }
+    ]
+  },
+  "desktop.win32.menuSelect": {
+    "notes": "win32 侧独有。**靶子还没有菜单栏**，所以成功路径无从谈起：用真实会话配一条菜单路径，pywinauto 的 menu_select 会抛，执行器包成 EXECUTOR_FAILED。这条期望是**推断**（依据：实现里 _menu_select 直接转给 pywinauto，没有自己的菜单不存在分支），首次启用时按实际结果校正——正路要真靶子先有菜单栏（登记在任务单 §3）。",
+    "variants": [
+      {
+        "name": "no-menu-bar-shows-up-as-an-executor-failure",
+        "inputs": {
+          "sessionId": "{session}",
+          "menuPath": [
+            "File"
+          ]
+        },
+        "expect": {
+          "errorCode": "EXECUTOR_FAILED"
+        },
+        "negative": true
+      },
+      {
+        "name": "multi-level-path-uses-the-same-arrow-join",
+        "inputs": {
+          "sessionId": "{session}",
+          "menuPath": [
+            "File",
+            "Exit"
+          ]
+        },
+        "expect": {
+          "errorCode": "EXECUTOR_FAILED"
+        },
+        "negative": true
+      },
+      {
+        "name": "missing-session-is-explicit",
+        "inputs": {
+          "sessionId": "no-such-session",
+          "menuPath": [
+            "File"
+          ]
+        },
+        "expect": {
+          "errorCode": "SESSION_NOT_FOUND"
+        },
+        "negative": true
+      }
+    ]
+  },
+  "desktop.win32.moveWindow": {
+    "notes": "会话级命令，有真机正路径。两个坐标取值（正数与原点）双双覆盖。",
+    "variants": [
+      {
+        "name": "moves-the-window-to-positive-coordinates",
+        "inputs": {
+          "sessionId": "{session}",
+          "x": 140,
+          "y": 140
+        },
+        "expect": {
+          "effect": "unsafe-write"
+        }
+      },
+      {
+        "name": "moves-the-window-to-the-origin",
+        "inputs": {
+          "sessionId": "{session}",
+          "x": 0,
+          "y": 0
+        },
+        "expect": {
+          "effect": "unsafe-write"
+        }
+      },
+      {
+        "name": "missing-session-is-explicit",
+        "inputs": {
+          "sessionId": "no-such-session",
+          "x": 10,
+          "y": 10
+        },
+        "expect": {
+          "errorCode": "SESSION_NOT_FOUND"
+        },
+        "negative": true
+      }
+    ]
+  },
+  "desktop.win32.resizeWindow": {
+    "notes": "两个尺寸取值都取常规正数，不踩退化尺寸（会把控件挤出可视区、污染后续变体）。",
+    "variants": [
+      {
+        "name": "resizes-to-640-by-480",
+        "inputs": {
+          "sessionId": "{session}",
+          "width": 640,
+          "height": 480
+        },
+        "expect": {
+          "effect": "unsafe-write"
+        }
+      },
+      {
+        "name": "resizes-to-1024-by-768",
+        "inputs": {
+          "sessionId": "{session}",
+          "width": 1024,
+          "height": 768
+        },
+        "expect": {
+          "effect": "unsafe-write"
+        }
+      },
+      {
+        "name": "missing-session-is-explicit",
+        "inputs": {
+          "sessionId": "no-such-session",
+          "width": 800,
+          "height": 600
+        },
+        "expect": {
+          "errorCode": "SESSION_NOT_FOUND"
+        },
+        "negative": true
+      }
+    ]
+  },
+  "desktop.win32.screenshot": {
+    "notes": "与 uia 侧同构：只有负路径（元素匹配不到）。磁盘断言用『存在』形式——PNG 是二进制。",
+    "variants": [
+      {
+        "name": "unknown-element-id-is-element-not-found",
+        "inputs": {
+          "sessionId": "{session}",
+          "elementId": "no-such-element",
+          "savePath": "{tmp}/nope.png"
+        },
+        "expect": {
+          "errorCode": "ELEMENT_NOT_FOUND",
+          "files": [
+            {
+              "path": "{tmp}/nope.png",
+              "missing": true
+            }
+          ]
+        },
+        "negative": true
+      },
+      {
+        "name": "missing-session-is-explicit",
+        "inputs": {
+          "sessionId": "no-such-session",
+          "elementId": "no-such-element",
+          "savePath": "{tmp}/nope.png"
+        },
+        "expect": {
+          "errorCode": "SESSION_NOT_FOUND"
+        },
+        "negative": true
+      },
+      {
+        "name": "empty-session-string-is-not-a-wildcard",
+        "inputs": {
+          "sessionId": "",
+          "elementId": "no-such-element",
+          "savePath": "{tmp}/nope.png"
+        },
+        "expect": {
+          "errorCode": "SESSION_NOT_FOUND"
+        },
+        "negative": true
+      }
+    ]
+  },
+  "desktop.win32.select": {
+    "notes": "与 uia 侧同构：selectBy 三值都覆盖，但靶子上没有下拉控件、也没有可匹配的 win32 定位器，所以全是负路径。",
+    "variants": [
+      {
+        "name": "value-mode-fails-on-an-unknown-element",
+        "inputs": {
+          "sessionId": "{session}",
+          "elementId": "no-such-element",
+          "value": "option-a",
+          "selectBy": "value"
+        },
+        "expect": {
+          "errorCode": "ELEMENT_NOT_FOUND"
+        },
+        "negative": true
+      },
+      {
+        "name": "label-mode-fails-on-an-unknown-element",
+        "inputs": {
+          "sessionId": "{session}",
+          "elementId": "no-such-element",
+          "value": "option-a",
+          "selectBy": "label"
+        },
+        "expect": {
+          "errorCode": "ELEMENT_NOT_FOUND"
+        },
+        "negative": true
+      },
+      {
+        "name": "index-mode-fails-on-an-unknown-element",
+        "inputs": {
+          "sessionId": "{session}",
+          "elementId": "no-such-element",
+          "value": "0",
+          "selectBy": "index"
+        },
+        "expect": {
+          "errorCode": "ELEMENT_NOT_FOUND"
+        },
+        "negative": true
+      },
+      {
+        "name": "missing-session-is-explicit",
+        "inputs": {
+          "sessionId": "no-such-session",
+          "elementId": "no-such-element",
+          "value": "option-a"
+        },
+        "expect": {
+          "errorCode": "SESSION_NOT_FOUND"
+        },
+        "negative": true
+      }
+    ]
+  },
+  "desktop.win32.setWindowState": {
+    "notes": "三个状态各一个变体，minimized 放最后（它真的会把窗口最小化，虽然装配在每个变体前会重新抢前台）。",
+    "variants": [
+      {
+        "name": "normal-state-is-applied",
+        "inputs": {
+          "sessionId": "{session}",
+          "state": "normal"
+        },
+        "expect": {
+          "effect": "unsafe-write"
+        }
+      },
+      {
+        "name": "maximized-state-is-applied",
+        "inputs": {
+          "sessionId": "{session}",
+          "state": "maximized"
+        },
+        "expect": {
+          "effect": "unsafe-write"
+        }
+      },
+      {
+        "name": "minimized-state-is-applied",
+        "inputs": {
+          "sessionId": "{session}",
+          "state": "minimized"
+        },
+        "expect": {
+          "effect": "unsafe-write"
+        }
+      },
+      {
+        "name": "missing-session-is-explicit",
+        "inputs": {
+          "sessionId": "no-such-session",
+          "state": "normal"
+        },
+        "expect": {
+          "errorCode": "SESSION_NOT_FOUND"
+        },
+        "negative": true
+      }
+    ]
+  },
+  "desktop.win32.setWindowVisible": {
+    "notes": "只覆盖 visible=true：visible=false 会把窗口藏起来，后续变体未必还能 attach 到它。",
+    "variants": [
+      {
+        "name": "visible-true-is-applied",
+        "inputs": {
+          "sessionId": "{session}",
+          "visible": true
+        },
+        "expect": {
+          "effect": "unsafe-write"
+        }
+      },
+      {
+        "name": "missing-session-is-explicit",
+        "inputs": {
+          "sessionId": "no-such-session",
+          "visible": true
+        },
+        "expect": {
+          "errorCode": "SESSION_NOT_FOUND"
+        },
+        "negative": true
+      },
+      {
+        "name": "empty-session-string-is-not-a-wildcard",
+        "inputs": {
+          "sessionId": "",
+          "visible": true
+        },
+        "expect": {
+          "errorCode": "SESSION_NOT_FOUND"
+        },
+        "negative": true
+      }
+    ]
+  }
+}
