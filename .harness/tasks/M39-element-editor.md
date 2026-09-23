@@ -130,12 +130,13 @@
 - **测试**：新增 42 条（`tests/contract/test_gui_element_editor.py` 31 条，
   `test_gui_panels.py` +11 条）。全量 `1155 passed / 21 skipped / 2 xfailed`。
 - **负向验证 14 处注入 / 23 条断言精确变红**（每条注入都打在判据的检查方向上，逐字节还原
-  后核对 md5）：
-  - ① 2 处：状态栏消息去掉限定语、按钮文案回退 → 2 条红；
-  - ② 7 处：候选不展示 / 语义特征不展示 / `className` 行删除 / 加回 `windowHandle` /
-    **写侧**重建 selector → 7 条红；
-  - ③ 14 处：旧主定位不交换回候选 / 字段表塞死字段 / `promotable` 恒真 / 死字段不提示 /
-    组装跨后端字段 / `accept()` 不拦 / 后端行不过滤 → 14 条红。
+  后核对 md5）。三批的对应关系：
+  - ① **2 处注入 → 2 条红**：状态栏消息去掉限定语、按钮文案回退；
+  - ② **5 处注入 → 7 条红**：候选不展示（连带 3 条）/ 语义特征不展示 / `className` 行删除 /
+    加回 `windowHandle` / **写侧**重建 selector；
+  - ③ **7 处注入 → 14 条红**：纯函数层 5 处（旧主定位不交换回候选 / 字段表塞死字段 /
+    `promotable` 恒真 / 死字段不提示 / 组装跨后端字段）+ 对话框层 2 处
+    （`accept()` 不拦 / 后端字段不过滤）。
 - **探针**：`.harness/spike/probe_element_dialog_display.py`（真机桌面腿：编译靶子 →
   真实控件取点 → `desktop-capture-agent --point` → 真描述符喂进对话框，打印真实渲染文本；
   浏览器腿的形状逐键对照 `content.js` 第 234-259 行，非真机）。
