@@ -16,7 +16,7 @@ outputs/effects/错误码/落盘内容）。差别只在**插桩点**（假扩�
 | `onlyCall` | 断言**恰好一次**下发；`op`、`args`（子集）、`argsExact`（等值）、`timeoutSeconds` |
 | `calls` | 断言完整调用序列（逐项同 `onlyCall` 的语义） |
 | `outputs` | `result.outputs` 的子集（递归） |
-| `outputListContains` | `result.outputs` 指定键是**列表**，且**至少有一项**匹配（dict 按子集、其它按等值）。给「结果随本机环境漂移、但被操作对象本身恒定」的命令用（如 `getWindowList` 的整桌面枚举） |
+| `outputListContains` | 指定键是**列表**且**至少有一项**匹配（详见下方说明） |
 | `outputKeys` | `result.outputs` 必须包含的键（值不确定时用，如 uuid 形式的 sessionId） |
 | `outputPaths` | 指定键的值是**路径**：按 `Path` 比较（分隔符无关；用例表写 `{tmp}/a/b.txt`） |
 | `outputsMatch` | `result.outputs` 指定键的**正则**匹配（时间戳这类形状确定、值不确定的输出） |
@@ -25,6 +25,13 @@ outputs/effects/错误码/落盘内容）。差别只在**插桩点**（假扩�
 | `errorCode` / `errorDetails` | 失败路径：错误码（精确）/ details（子集） |
 | `elapsedAtLeastMs` | 整条命令的墙钟耗时下界（验证 `postDelayMs` 这类「只花时间」的参数） |
 | `files` | 磁盘断言（数据通道的主要证据面），见下方说明 |
+
+`outputListContains`：`result.outputs` 的指定键必须是列表、且至少有一项匹配——
+
+- dict 项按子集比、其它按等值；给「结果随本机环境漂移、但被操作对象本身恒定」的命令用
+  （`getWindowList` 的整桌面枚举：列表内容随开着的窗口漂移，但靶子窗口那一项恒定）；
+- 它同时收住「COM 拒绝 → pywinauto **静默返回空列表**」这条路径——形状断言
+  分不清「枚举失败」和「真没有」，这个键能。
 
 `files` 每项的形状：`path`（支持 `{tmp}`）+ 断言方式（可组合，也可以都不给）——
 

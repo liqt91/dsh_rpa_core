@@ -6,8 +6,9 @@
 装配与断言都走 `desktop_harness.py` 与 uia 侧同一份代码。
 
 **元素级正路径的现状（2026-09-22 补靶子后重写）**：此前这里写的是「win32 后端的定位器认
-`title` / `className` / `controlId`，而靶子的控件是 WinForms 动态类名（`WindowsForms10.EDIT.app.0.xxx`）
-且没有稳定的 `controlId`，所以 `findElement` 只能覆盖负路径」——**这个判因实测不成立**：
+`title` / `className` / `controlId`，而靶子的控件是 WinForms 动态类名
+（`WindowsForms10.EDIT.app.0.xxx`）且没有稳定的 `controlId`，所以 `findElement`
+只能覆盖负路径」——**这个判因实测不成立**：
 `title` 比的是控件的窗口文本，对文本恒定的控件（Button / Label / 只读 Edit）完全可用，
 元素级正路径早就可以跑（实测 `title='Submit'`、`title='note-ready'` 都唯一命中）。
 真正不成立的是另外两条：`className` 是随编译产物变的动态名（且两个 Edit 撞同名），
