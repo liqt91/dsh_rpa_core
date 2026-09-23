@@ -275,8 +275,25 @@
     桌面 metadata 的 `className` / `name`（`className` 是 win32 侧定位无窗口文本控件的唯一手段、
     也是 `classNameRe` 的输入）。刻意**不展示** `windowHandle`/`point`（运行期值，摆出来会诱导
     用户粘进 locator）。展示是只读的，写回仍是「以原 selector 为基底覆盖一个键」，candidates 原样保留。
-  - **后续（M39 ③）**：候选从「只能看」变成「可选中提升为主定位」，见
-    `M39-element-editor.md` §2.3。
+  - **两端同步（M39 收尾，2026-09-23）**：Web 侧 `static/app.js` 的同源展示也补上了——只读区块
+    改走新增的纯函数区（`element-display-helpers` 锚点），两端 **17 个字段标签逐字相同**（契约
+    测试钉死），渲染行为由 node 门禁 `scripts/check_element_display_helpers.mjs` 按真实捕获载荷
+    验。不再存在「同一个元素两端显示不同事实」。
+  - **后续（M39 ③）**：候选从「只能看」变成「可选中提升为主定位」（GUI 已做；Web 侧见下一条）。
+- [ ] **元素编辑器的 Web 侧未同步（③ 只在 GUI 落地）**（`planned`，2026-09-23 M39 收尾）
+  - 现状：GUI 有离线元素编辑器（`gui/element_editor.py`：候选**提升**为主定位 + 桌面 locator
+    **字段勾选** + **就地**结构校验）；Web 侧 `openElementDialog` 仍是「selector 单行输入 +
+    桌面 locator 手写 JSON」，与捕获确认框共用一套简化界面。
+  - **卡点只有一个：草稿校验通道**。GUI 的就地校验直接调 pydantic 模型（`DesktopLocator`），
+    浏览器侧够不着。要在 Web 上做同一个「改 → 校验 → 再改」回路，只有两条路：① 加一个
+    **不落盘**的草稿校验端点（如 `POST /api/workflows/{flow}/elements/validate`，复用
+    `selector_errors` / `_validate_element_document`）；② 在 JS 里再抄一份规则——**② 直接违背
+    本项目既有的「判据权威唯一、两套规则必然漂移」结论，不建议**。即「要不要新增这层 HTTP
+    接口面」需要维护者拍板，**未擅自决定**。
+  - 其余部分落地成本不高：候选提升、按 backend 分的字段集（uia: controlType/automationId/name；
+    win32: title/className/classNameRe/controlId）都是纯客户端逻辑，且字段集与执行器消费面的
+    一致性可以照 GUI 那条**自维护判据**（AST 扫 `locator.<字段>` ↔ 界面字段表）同法钉死。
+  - 参考：`M39-element-editor.md` §6 / §7。
 - [ ] **`menuPath` 作为 locator 身份字段：声明与实现不一致**（`planned`，2026-09-23 M39 ③ 实测发现）
   - 事实：`grep -o 'locator\.[a-z_]*'` 逐个核过——**两个执行器都不读 locator 里的 `menuPath`**
     （`desktop.py::_find` 读 automation_id/control_type/name；`desktop_win32.py::_find` 读

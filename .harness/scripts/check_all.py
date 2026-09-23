@@ -43,6 +43,10 @@ PURE_FUNCTION_SCRIPTS = (
     # 扩展侧能证明——Python 桩测的是接口形状，一个把 Promise.all 当成功的实现
     # 也能过 Python 测试，却会在真机上把「关了 2/3」报成「全关了」。
     "check_close_ops.mjs",
+    # 编辑器确认框的「只读区块」纯函数区（app.js）：把已捕获的候选定位与语义特征
+    # 如实渲染出来。这一段**只在浏览器里跑**——Python 侧读源码只能证明「写了这行字」，
+    # 证明不了「渲染出哪几行」，而它的唯一职责就是渲染对。
+    "check_element_display_helpers.mjs",
 )
 node = shutil.which("node")
 if node:

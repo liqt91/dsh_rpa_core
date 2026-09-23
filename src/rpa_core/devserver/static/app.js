@@ -2466,6 +2466,95 @@ function elementSummary(element) {
   return JSON.stringify(element.selector || {});
 }
 
+// ---------------------------------------------------------------------------
+// 元素展示纯函数区（确认框的只读区块）
+//
+// 与 GUI `gui/element_panel.py` 的 `_metadata_text` / `semantic_meta_text` /
+// `candidates_text` **同口径**：同一个元素在两个编辑器里必须显示同一组事实。
+// 一端显示、另一端不显示，就是同一份数据的语义错位——用户会以为「这边没这条信息
+// = 库里没有」，实际只是没画出来。
+//
+// 只读：这些函数不参与写回。保存仍以原 selector 为基底只覆盖 css/locator 一个键
+// （见 openElementDialog），界面不展示的键一律原样保留。
+//
+// `windowHandle` / `point` 刻意**不展示**：它们是本次会话的运行期值（句柄每次启动
+// 都变），摆出来只会诱导用户粘进 locator，写出一个下次必定失效的元素。
+// [element-display-helpers:start]
+const ELEMENT_DISPLAY_CLIP = 80;
+
+// 压平空白并截断（页面 URL / 容器文本上限 200 字，不截会撑爆对话框）
+function clipElementText(value) {
+  const text = String(value == null ? "" : value).split(/\s+/).filter(Boolean).join(" ");
+  return text.length <= ELEMENT_DISPLAY_CLIP ? text : `${text.slice(0, ELEMENT_DISPLAY_CLIP)}…`;
+}
+
+function elementMetadataLines(descriptor) {
+  const meta = descriptor.metadata || {};
+  const desktop = descriptor.kind === "desktop";
+  const classes = meta.classes || [];
+  return [
+    meta.tag && `tag: ${meta.tag}`,
+    meta.id && `id: ${meta.id}`,
+    classes.length && `classes: ${classes.join(" ")}`,
+    meta.text && `text: ${meta.text}`,
+    meta.rect && `rect: ${meta.rect.width}×${meta.rect.height} @ (${meta.rect.x},${meta.rect.y})`,
+    desktop && meta.controlType && `controlType: ${meta.controlType}`,
+    desktop && meta.automationId && `automationId: ${meta.automationId}`,
+    desktop && meta.name && `name: ${meta.name}`,
+    // className 是 win32 侧定位**无窗口文本控件**（ListBox/ComboBox）的唯一手段，
+    // 也是 classNameRe 正则的输入。捕获 agent 一直带着它回传，编辑器却从没显示过。
+    desktop && meta.className && `className: ${clipElementText(meta.className)}`,
+    desktop && meta.windowTitle && `window: ${meta.windowTitle}`,
+  ].filter(Boolean);
+}
+
+// browser 的语义特征与页面指纹（desktop 没有这些键 → 空数组）。
+// 这些是捕获侧为「命中多个时人工消歧 / 候选排序」收集的，此前只入库不展示。
+function elementSemanticLines(descriptor) {
+  if (descriptor.kind !== "browser") return [];
+  const meta = descriptor.metadata || {};
+  return [
+    meta.role && `role: ${meta.role}`,
+    meta.accessibleName && `accessibleName: ${clipElementText(meta.accessibleName)}`,
+    meta.placeholder && `placeholder: ${clipElementText(meta.placeholder)}`,
+    meta.label && `label: ${clipElementText(meta.label)}`,
+    meta.containerText && `containerText: ${clipElementText(meta.containerText)}`,
+    meta.url && `url: ${clipElementText(meta.url)}`,
+    meta.title && `title: ${clipElementText(meta.title)}`,
+  ].filter(Boolean);
+}
+
+// 备选定位（捕获时收集，运行期主选择器失效时按序回退）。
+// `matchedCount > 1` 的候选本身不唯一——回退到它有可能点到别的元素，如实标
+// 「不唯一」而不替用户过滤：选哪条是用户的判断，不是展示层的判断。
+function elementCandidateLines(descriptor) {
+  const selector = descriptor.selector && typeof descriptor.selector === "object"
+    ? descriptor.selector : {};
+  const raw = Array.isArray(selector.candidates) ? selector.candidates : [];
+  const items = raw.filter((item) => item && typeof item === "object");
+  if (!items.length) return [];
+  const lines = [`备选定位 ${items.length} 条（主选择器失效时按序回退）`];
+  items.forEach((item, index) => {
+    const matched = item.matchedCount;
+    const matchText = Number.isInteger(matched)
+      ? `命中 ${matched}${matched > 1 ? "（不唯一）" : ""}`
+      : "命中未实测";
+    lines.push(`  ${index + 1}. [${item.kind || "?"}] ${item.selector || ""} · ${matchText}`);
+  });
+  return lines;
+}
+
+// 确认框只读区块的完整文本
+function elementDisplayText(descriptor) {
+  const lines = [
+    ...elementMetadataLines(descriptor),
+    ...elementSemanticLines(descriptor),
+    ...elementCandidateLines(descriptor),
+  ];
+  return lines.join("\n") || "(无 metadata)";
+}
+// [element-display-helpers:end]
+
 function currentFlow() {
   const name = $("file-name").value.trim();
   return NAME_PATTERN.test(name) ? name : "";
@@ -2666,17 +2755,9 @@ function openElementDialog({ mode, flow, descriptor, existingName }) {
     nameInput.value = defaultName;
     selectorInput.value = descriptor.selector?.css
       || JSON.stringify(descriptor.selector?.locator || descriptor.selector || "");
-    const meta = descriptor.metadata || {};
-    metaEl.textContent = [
-      meta.tag && `tag: ${meta.tag}`,
-      meta.id && `id: ${meta.id}`,
-      meta.classes?.length && `classes: ${meta.classes.join(" ")}`,
-      meta.text && `text: ${meta.text}`,
-      meta.rect && `rect: ${meta.rect.width}×${meta.rect.height} @ (${meta.rect.x},${meta.rect.y})`,
-      descriptor.kind === "desktop" && meta.controlType && `controlType: ${meta.controlType}`,
-      descriptor.kind === "desktop" && meta.automationId && `automationId: ${meta.automationId}`,
-      descriptor.kind === "desktop" && meta.windowTitle && `window: ${meta.windowTitle}`,
-    ].filter(Boolean).join("\n") || "(无 metadata)";
+    // 只读区块统一走 elementDisplayText：把此前「只入库不展示」的候选定位与语义特征
+    // 也画出来（见 element-display-helpers 区）。内联拼装会与 GUI 侧口径漂移。
+    metaEl.textContent = elementDisplayText(descriptor);
     const vc = descriptor.verifyCount;
     verifyEl.textContent = vc != null ? `捕获时命中 ${vc} 个` : "";
     verifyEl.className = "dlg-verify " + (vc === 1 ? "ok" : "bad");

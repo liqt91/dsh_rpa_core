@@ -186,8 +186,49 @@
 - ③-2 按 §5.1 的决策推进（当前：**等维护者拍板**）；
 - `menuPath` 作为 locator 身份字段的「声明与实现不一致」已进 BACKLOG，跟 ③-2 或独立小任务
   一起修（改动面小：要么让某个执行器消费它，要么把它从 win32 身份清单里去掉）。
-- **Web 编辑器未同步本轮改动（显式欠账）**：① 不需要动 Web（Web 侧本来就是澄清过的口径）；
-  但 ② 的候选/语义特征展示与 ③ 的元素编辑器**只在 GUI 落地**，`devserver/static` 那侧同源
-  的 `metaEl` / `openElementDialog` 还是旧样。两端形态一致是这个项目一直在守的东西
-  （M23 切 G 就是「GUI 功能补齐」），所以这笔账要么补上、要么明确接受差异——**不建议
-  默默留着**：同一个元素在两端看到的信息不一致，本身就是一类语义错位。
+- **Web 编辑器同步这笔欠账已拆成两半**：
+  - **② 已落地（2026-09-23 收尾）**：`devserver/static/app.js` 的确认框只读区块改走新增的纯函数区
+    （`element-display-helpers` 锚点），两端显示同一组字段（17 个标签逐字相同，契约测试钉死），
+    渲染行为由 node 门禁按真实捕获载荷验。详见 §7。
+  - **③ 仍欠**：Web 侧的元素编辑器要落到同一个「改 → 校验 → 再改」回路，就得有一个
+    **不落盘的草稿校验通道**——GUI 侧直接调 pydantic 模型，浏览器侧够不着；在 JS 里再抄一份
+    规则正是本项目一直在避免的「两套规则必然漂移」。所以要么加一个
+    `POST /api/workflows/{flow}/elements/validate`，要么接受 Web 侧「保存时才校验」。这是
+    接口/产品决策，**未擅自决定**（见 BACKLOG）。
+
+## 7. Web 侧同步 ②（2026-09-23 收尾）
+
+**为什么算欠账而不是差异**：同一个元素在两个编辑器里显示不同的事实，用户会以为「这边没有这条
+= 库里没有」。截图类差异可以接受，**数据面的差异不行**——这正是 §1 调研里记的那类静默错位。
+
+**改动**（`src/rpa_core/devserver/static/app.js`）：
+
+- 新增锚点区 `// [element-display-helpers:start] … :end`：`clipElementText` /
+  `elementMetadataLines` / `elementSemanticLines` / `elementCandidateLines` /
+  `elementDisplayText`，与 GUI `element_panel.py` 的同名三个函数**逐条同口径**。
+- `openElementDialog` 的只读区块从**内联拼装**改成
+  `metaEl.textContent = elementDisplayText(descriptor)`。内联拼装正是漂移的成因——Web 那份
+  漏掉了候选与语义特征。桌面 metadata 同时补 `name` / `className`（`className` 是 win32 侧
+  定位无窗口文本控件的唯一手段、也是 `classNameRe` 的输入）。
+
+**验证**（三条判据，各司其职，互不替代）：
+
+1. **node 门禁** `scripts/check_element_display_helpers.mjs`（已进 `check_all.py` 的
+   `PURE_FUNCTION_SCRIPTS`，与其余 7 个前端纯函数门禁同一批）：按锚点切片求值，**23 条断言**
+   用真实捕获载荷验「渲染出哪几行」——browser 全量行序、候选不唯一标记、`matchedCount` 缺席
+   →「命中未实测」、超长值截断 80 + 省略号、坏形状不崩、`windowHandle`/`point` 不出现。
+   *这一段只在浏览器里跑*：Python 读源码只能证明「写了这行字」，证明不了「渲染出哪几行」。
+2. **契约测试** `tests/contract/test_editor_element_display.py`（4 条）管 Python 测得到的：
+   **接线**（确认框真的调用纯函数；回归断言「不能再出现内联拼装」——纯函数没接上去就是死代码）
+   与**两端字段口径**（17 个标签集合相等 + 6 个 must-have，后者防「两端一起删」）。
+3. **负向验证 4 处注入，两个方向都做**：
+   - 摘掉 JS 的候选行 → node 门禁**精确红**，Python 判据仍绿（说明两条判据分工清楚、没有互相顶替）；
+   - JS 退回内联拼装 → 接线判据红；
+   - JS 少 `className` → 口径判据红 `仅 GUI ['className']`；
+   - **GUI 少 `className`（反方向）** → 口径判据红 `仅 Web ['className']`。
+   全部逐字节还原并核 md5（`c75d57c22e027d323864c58375ea6bd5` / `7bc5e815a83793f97b4d66aeb22af704`），
+   全仓 `grep INJECTED` 无残留。
+
+**结果**：全量 **1159 passed / 21 skipped / 2 xfailed**；**FULL GATE PASSED**（exit 0）。
+
+**未做**：③ 的 Web 侧编辑器（理由见 §6，卡点是草稿校验通道）、③-2（等 §5.1 决策）。
