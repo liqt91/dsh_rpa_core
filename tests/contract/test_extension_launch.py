@@ -50,7 +50,7 @@ class _RecordingExt:
     def host(self):
         return None
 
-    def tabs_create(self, url, *, timeout_seconds=5, target_host=None):
+    def tabs_create(self, url, *, timeout_ms=None, timeout_seconds=5, target_host=None):
         self.submitted.append(("tabs.create", target_host))
         return {"tabId": "7", "url": url, "completed": True}
 
@@ -176,7 +176,7 @@ def test_navigate_offline_nothing_running_launches_then_opens(monkeypatch):
     ext_calls = []
     launch_browser_calls = {}
 
-    def _tabs_create(url, timeout_seconds=30, target_host=None):
+    def _tabs_create(url, timeout_ms=None, timeout_seconds=30, target_host=None):
         ext_calls.append(("tabs.create", url, target_host))
         return {"tabId": 7, "url": url, "completed": True, "timedOut": False}
 
@@ -219,7 +219,7 @@ def test_navigate_online_but_target_not_claiming_launches_and_retries(monkeypatc
     ext_calls = []
     launches = []
 
-    def _tabs_create(url, timeout_seconds=30, target_host=None):
+    def _tabs_create(url, timeout_ms=None, timeout_seconds=30, target_host=None):
         ext_calls.append(target_host)
         if target_host == "chrome" and "chrome" not in executor._ext.client.hosts:
             raise ExtensionChannelError("TIMEOUT", "chrome not claiming yet")
@@ -254,7 +254,7 @@ def test_navigate_cold_start_never_touches_user_tabs(monkeypatch):
     """
     ext_calls = []
 
-    def _tabs_create(url, timeout_seconds=30, target_host=None):
+    def _tabs_create(url, timeout_ms=None, timeout_seconds=30, target_host=None):
         ext_calls.append(("tabs.create", url, target_host))
         return {"tabId": 7, "url": url, "completed": True}
 
@@ -317,9 +317,11 @@ def test_navigate_online_no_launch_command_driven(monkeypatch):
 
     async def _go():
         executor = build_executor(["msedge"])
-        executor._ext.tabs_create = lambda url, timeout_seconds=30, target_host=None: {
-            "tabId": 7, "url": "https://a.test/2", "completed": True,
-        }
+
+        def _tabs_create(url, timeout_ms=None, timeout_seconds=30, target_host=None):
+            return {"tabId": 7, "url": "https://a.test/2", "completed": True}
+
+        executor._ext.tabs_create = _tabs_create
         result = await _run(executor, _invocation("https://a.test/2", browserType="msedge"))
         return result
 

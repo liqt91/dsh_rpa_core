@@ -89,12 +89,18 @@ class ExtensionExecSession:
         url: str,
         *,
         active: bool = True,
+        timeout_ms: int | None = None,
         timeout_seconds: float = DEFAULT_COMMAND_TIMEOUT_SECONDS,
         target_host: str | None = None,
     ) -> dict[str, Any]:
+        # timeoutMs 必须进 args：扩展侧 waitComplete 读它做「加载等待」预算，
+        # 只抬信封超时会变成「声明了但加载等待恒 30s」（M38 S4.4 真机探针实测抓到）。
+        args: dict[str, Any] = {"url": url, "active": active}
+        if timeout_ms is not None:
+            args["timeoutMs"] = int(timeout_ms)
         return self._client.submit(
             "tabs.create",
-            {"url": url, "active": active},
+            args,
             timeout_seconds=timeout_seconds,
             target_host=target_host,
         )
@@ -104,12 +110,16 @@ class ExtensionExecSession:
         tab_id: str,
         url: str,
         *,
+        timeout_ms: int | None = None,
         timeout_seconds: float = DEFAULT_COMMAND_TIMEOUT_SECONDS,
         target_host: str | None = None,
     ) -> dict[str, Any]:
+        args: dict[str, Any] = {"tabId": tab_id, "url": url}
+        if timeout_ms is not None:
+            args["timeoutMs"] = int(timeout_ms)
         return self._client.submit(
             "tabs.navigate",
-            {"tabId": tab_id, "url": url},
+            args,
             timeout_seconds=timeout_seconds,
             target_host=target_host,
         )
@@ -119,12 +129,16 @@ class ExtensionExecSession:
         tab_id: str,
         action: str,
         *,
+        timeout_ms: int | None = None,
         timeout_seconds: float = DEFAULT_COMMAND_TIMEOUT_SECONDS,
         target_host: str | None = None,
     ) -> dict[str, Any]:
+        args: dict[str, Any] = {"tabId": tab_id, "action": action}
+        if timeout_ms is not None:
+            args["timeoutMs"] = int(timeout_ms)
         return self._client.submit(
             "tabs.history",
-            {"tabId": tab_id, "action": action},
+            args,
             timeout_seconds=timeout_seconds,
             target_host=target_host,
         )

@@ -599,12 +599,14 @@ class PlaywrightExecutor(CommandExecutor):
         return isinstance(hosts, list) and bool(hosts)
 
     async def _create(
-        self, url: str, timeout_s: float, target_host: str | None
+        self, url: str, timeout_s: float, target_host: str | None,
+        timeout_ms: int | None = None,
     ) -> dict[str, Any] | CommandResult:
         """发一次 tabs.create；通道错误收敛为可读 CommandResult（含失败）。"""
         try:
             return await asyncio.to_thread(
                 self._ext.tabs_create, url,
+                timeout_ms=timeout_ms,
                 timeout_seconds=timeout_s, target_host=target_host,
             )
         except ExtensionChannelError as exc:
@@ -624,7 +626,10 @@ class PlaywrightExecutor(CommandExecutor):
         launched = await self._launch_target(target_host, inputs)
         if isinstance(launched, CommandResult):
             return launched
-        return await self._create(url, timeout_s, target_host)
+        return await self._create(
+            url, timeout_s, target_host,
+            timeout_ms=int(inputs.get("timeoutMs", 30_000)),
+        )
 
     async def _open_with_launch(
         self, target_host: str | None, inputs: dict[str, Any], url: str, timeout_s: float
@@ -645,6 +650,7 @@ class PlaywrightExecutor(CommandExecutor):
         try:
             return await asyncio.to_thread(
                 self._ext.tabs_create, url,
+                timeout_ms=int(inputs.get("timeoutMs", 30_000)),
                 timeout_seconds=first_wait, target_host=target_host,
             )
         except ExtensionChannelError as exc:
@@ -889,17 +895,36 @@ class PlaywrightExecutor(CommandExecutor):
                 return offline
             if command == "browser.navigate":
                 action = str(inputs.get("action") or "goto")
+                timeout_ms = int(inputs.get("timeoutMs", 30_000))
                 if action == "goto":
                     result = await asyncio.to_thread(
                         self._ext.tabs_navigate, tab_id, str(inputs["url"]),
+                        timeout_ms=timeout_ms,
                         timeout_seconds=timeout_s, target_host=host,
                     )
                 else:
                     result = await asyncio.to_thread(
                         self._ext.tabs_history, tab_id, action,
+                        timeout_ms=timeout_ms,
                         timeout_seconds=timeout_s, target_host=host,
                     )
                 final_url = str(result.get("url") or "")
+                # 已有会话路径同样要按 onTimeout 处置加载超时（此前只在新标签页
+                # 路径做，换会话导航会静默吞掉 timedOut——M38 S4.4 补齐对称性）。
+                if bool(result.get("timedOut")):
+                    on_timeout = str(inputs.get("onTimeout") or "error").strip().lower()
+                    if on_timeout == "stop":
+                        await asyncio.to_thread(
+                            self._ext.stop_loading, tab_id, target_host=host,
+                        )
+                    else:
+                        return CommandResult.failure(
+                            ErrorCode.TIMEOUT,
+                            f"页面加载超时（timeoutMs={timeout_ms}ms）："
+                            "网页未在限时内加载完成。可设「加载超时后」为停止网页加载，"
+                            "或调大 timeoutMs。",
+                            details={"reason": "navigate_load_timeout", "url": final_url},
+                        )
                 return self._ext_success(
                     invocation, EffectKind.SESSION, resource,
                     {"operation": action, "transport": "extension", "url": final_url},

@@ -356,9 +356,40 @@ async function executeCommand(cmd) {
     }
     case "tabs.history": {
       const tabId = Number(args.tabId);
-      if (args.action === "back") await chrome.tabs.goBack(tabId);
-      else if (args.action === "forward") await chrome.tabs.goForward(tabId);
-      else await chrome.tabs.reload(tabId);
+      if (args.action === "back" || args.action === "forward") {
+        // 不用 chrome.tabs.goBack/goForward：实测它对「历史栈明明有上一页」的
+        // 标签页也报 "Cannot find a next page in history"（M38 S4.4 真机探针，
+        // history.length=2 仍必现）——该 API 在 MV3 下不可靠。改用页内
+        // history.back()/forward()：语义一致，且所有 Chromium 版本行为相同。
+        const before = await chrome.tabs.get(tabId).catch(() => ({}));
+        await chrome.scripting.executeScript({
+          target: { tabId },
+          world: "MAIN",
+          func: (action) => { window.history[action](); },
+          args: [args.action],
+        });
+        // 先等导航**开始**（status 离开 complete 或 url 变化），否则 waitComplete
+        // 会在导航还没起步时就看到 complete 而提前返回，把「真的 back 了」误判成
+        // 「没有历史」。3s 宽限覆盖 SW/页面调度的正常抖动。
+        const moveDeadline = Date.now() + 3000;
+        let moving = false;
+        while (Date.now() < moveDeadline) {
+          const t = await chrome.tabs.get(tabId).catch(() => null);
+          if (!t) break;
+          if (t.status === "loading" || (t.url && t.url !== (before.url || ""))) {
+            moving = true;
+            break;
+          }
+          await new Promise((resolve) => setTimeout(resolve, 100));
+        }
+        if (!moving) {
+          throw new Error(`no ${args.action} page in history`);
+        }
+        const done = await waitComplete(tabId, args.timeoutMs || 30000);
+        const tab = await chrome.tabs.get(tabId).catch(() => ({}));
+        return { tabId: args.tabId, url: tab.url || done.url || "" };
+      }
+      await chrome.tabs.reload(tabId);
       const done = await waitComplete(tabId, args.timeoutMs || 30000);
       const tab = await chrome.tabs.get(tabId).catch(() => ({}));
       return { tabId: args.tabId, url: tab.url || done.url || "" };

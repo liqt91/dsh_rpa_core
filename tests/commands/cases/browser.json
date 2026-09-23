@@ -39,6 +39,22 @@
             "resourceType"
           ],
           "effect": "session"
+        },
+        "l2": {
+          "page": "basic",
+          "inputs": {
+            "pattern": "basic"
+          },
+          "expect": {
+            "outputs": {
+              "url": "{page}",
+              "resourceType": "webPage"
+            },
+            "outputKeys": [
+              "sessionId"
+            ],
+            "effect": "session"
+          }
         }
       },
       {
@@ -52,6 +68,25 @@
             "url": "https://other.test/b"
           },
           "effect": "session"
+        },
+        "l2": {
+          "page": "basic",
+          "pre": [
+            {
+              "command": "browser.navigate",
+              "inputs": {
+                "browserType": "msedge",
+                "action": "goto",
+                "url": "{page:other}"
+              }
+            }
+          ],
+          "expect": {
+            "outputs": {
+              "url": "{page:other}"
+            },
+            "effect": "session"
+          }
         }
       },
       {
@@ -63,7 +98,13 @@
         "expect": {
           "errorCode": "ELEMENT_NOT_FOUND"
         },
-        "negative": true
+        "negative": true,
+        "l2": {
+          "page": "basic",
+          "expect": {
+            "errorCode": "ELEMENT_NOT_FOUND"
+          }
+        }
       },
       {
         "name": "useRegex-true-matches-by-regex",
@@ -76,6 +117,18 @@
             "url": "https://example.test/a"
           },
           "effect": "session"
+        },
+        "l2": {
+          "page": "basic",
+          "inputs": {
+            "pattern": "^http://127\\.0\\.0\\.1:\\d+/basic\\.html$"
+          },
+          "expect": {
+            "outputs": {
+              "url": "{page}"
+            },
+            "effect": "session"
+          }
         }
       },
       {
@@ -87,7 +140,13 @@
         "expect": {
           "errorCode": "ELEMENT_NOT_FOUND"
         },
-        "negative": true
+        "negative": true,
+        "l2": {
+          "page": "basic",
+          "expect": {
+            "errorCode": "ELEMENT_NOT_FOUND"
+          }
+        }
       },
       {
         "name": "no-match-reports-element-not-found",
@@ -101,7 +160,13 @@
             "matchedCount": 0
           }
         },
-        "negative": true
+        "negative": true,
+        "l2": {
+          "page": "basic",
+          "expect": {
+            "errorCode": "ELEMENT_NOT_FOUND"
+          }
+        }
       }
     ]
   },
@@ -743,6 +808,24 @@
           "noCalls": true,
           "outputs": {},
           "effect": "session"
+        },
+        "l2": {
+          "page": "basic",
+          "expect": {
+            "effect": "session"
+          },
+          "verify": [
+            {
+              "command": "browser.getText",
+              "inputs": {
+                "sessionId": "s",
+                "selector": "#t"
+              },
+              "expect": {
+                "errorCode": "EXECUTOR_FAILED"
+              }
+            }
+          ]
         }
       },
       {
@@ -752,7 +835,14 @@
         "expect": {
           "errorCode": "EXECUTOR_FAILED"
         },
-        "negative": true
+        "negative": true,
+        "l2": {
+          "page": "basic",
+          "session": false,
+          "expect": {
+            "errorCode": "EXECUTOR_FAILED"
+          }
+        }
       },
       {
         "name": "explicit-sessionId-detaches-that-session-without-extension-call",
@@ -763,6 +853,12 @@
           "noCalls": true,
           "outputs": {},
           "effect": "session"
+        },
+        "l2": {
+          "page": "basic",
+          "expect": {
+            "effect": "session"
+          }
         }
       }
     ]
@@ -929,6 +1025,24 @@
             "failedTabIds": []
           },
           "effect": "unsafe-write"
+        },
+        "l2": {
+          "page": "basic",
+          "inputs": {
+            "tabIds": [
+              "{tab}"
+            ]
+          },
+          "expect": {
+            "outputs": {
+              "closedCount": 1,
+              "closedTabIds": [
+                "{tab}"
+              ],
+              "failedTabIds": []
+            },
+            "effect": "unsafe-write"
+          }
         }
       },
       {
@@ -1015,6 +1129,20 @@
               ]
             }
           }
+        },
+        "l2": {
+          "page": "basic",
+          "inputs": {
+            "tabIds": [
+              "{tab}"
+            ]
+          },
+          "expect": {
+            "outputs": {
+              "closedCount": 1
+            },
+            "effect": "unsafe-write"
+          }
         }
       },
       {
@@ -1045,6 +1173,27 @@
             "failedTabIds": [
               8
             ]
+          }
+        },
+        "l2": {
+          "page": "basic",
+          "inputs": {
+            "tabIds": [
+              "{tab}",
+              999999
+            ]
+          },
+          "expect": {
+            "outputs": {
+              "closedCount": 1,
+              "closedTabIds": [
+                "{tab}"
+              ],
+              "failedTabIds": [
+                999999
+              ]
+            },
+            "effect": "unsafe-write"
           }
         }
       },
@@ -1078,7 +1227,13 @@
             "field": "tabIds/all"
           }
         },
-        "negative": true
+        "negative": true,
+        "l2": {
+          "page": "basic",
+          "expect": {
+            "errorCode": "INVALID_INPUT"
+          }
+        }
       },
       {
         "name": "neither-tabIds-nor-all-is-rejected",
@@ -1086,7 +1241,13 @@
         "expect": {
           "errorCode": "INVALID_INPUT"
         },
-        "negative": true
+        "negative": true,
+        "l2": {
+          "page": "basic",
+          "expect": {
+            "errorCode": "INVALID_INPUT"
+          }
+        }
       },
       {
         "name": "tabIds-must-be-an-array",
@@ -1099,7 +1260,13 @@
             "field": "tabIds"
           }
         },
-        "negative": true
+        "negative": true,
+        "l2": {
+          "page": "basic",
+          "expect": {
+            "errorCode": "INVALID_INPUT"
+          }
+        }
       },
       {
         "name": "timeoutMs-lower-bound-reaches-the-channel",
@@ -3096,6 +3263,18 @@
             "count": 2
           },
           "effect": "read"
+        },
+        "l2": {
+          "page": "basic",
+          "expect": {
+            "outputListContains": {
+              "pages": {
+                "url": "{page}",
+                "title": "RPA L2 靶页 basic"
+              }
+            },
+            "effect": "read"
+          }
         }
       },
       {
@@ -3164,7 +3343,8 @@
             "op": "tabs.create",
             "argsExact": {
               "url": "https://example.test/",
-              "active": true
+              "active": true,
+              "timeoutMs": 30000
             }
           },
           "outputs": {
@@ -3177,6 +3357,23 @@
             "sessionId"
           ],
           "effect": "session"
+        },
+        "l2": {
+          "page": "basic",
+          "inputs": {
+            "url": "{page}"
+          },
+          "expect": {
+            "outputs": {
+              "url": "{page}",
+              "resourceType": "webPage"
+            },
+            "outputKeys": [
+              "sessionId",
+              "tabId"
+            ],
+            "effect": "session"
+          }
         }
       },
       {
@@ -3192,7 +3389,8 @@
             "op": "tabs.create",
             "argsExact": {
               "url": "https://example.test",
-              "active": true
+              "active": true,
+              "timeoutMs": 30000
             }
           }
         }
@@ -3225,7 +3423,8 @@
             "op": "tabs.navigate",
             "argsExact": {
               "tabId": "7",
-              "url": "https://example.test/x"
+              "url": "https://example.test/x",
+              "timeoutMs": 30000
             }
           },
           "outputs": {
@@ -3233,6 +3432,19 @@
             "url": "https://example.test/"
           },
           "effect": "session"
+        },
+        "l2": {
+          "page": "basic",
+          "inputs": {
+            "url": "{page:other}"
+          },
+          "expect": {
+            "outputs": {
+              "url": "{page:other}",
+              "resourceType": "webPage"
+            },
+            "effect": "session"
+          }
         }
       },
       {
@@ -3246,10 +3458,31 @@
             "op": "tabs.history",
             "argsExact": {
               "tabId": "7",
-              "action": "back"
+              "action": "back",
+              "timeoutMs": 30000
             }
           },
           "effect": "session"
+        },
+        "l2": {
+          "page": "basic",
+          "pre": [
+            {
+              "command": "browser.navigate",
+              "inputs": {
+                "sessionId": "s",
+                "browserType": "msedge",
+                "action": "goto",
+                "url": "{page:other}"
+              }
+            }
+          ],
+          "expect": {
+            "outputs": {
+              "url": "{page}"
+            },
+            "effect": "session"
+          }
         }
       },
       {
@@ -3263,8 +3496,36 @@
             "op": "tabs.history",
             "argsExact": {
               "tabId": "7",
-              "action": "forward"
+              "action": "forward",
+              "timeoutMs": 30000
             }
+          }
+        },
+        "l2": {
+          "page": "basic",
+          "pre": [
+            {
+              "command": "browser.navigate",
+              "inputs": {
+                "sessionId": "s",
+                "browserType": "msedge",
+                "action": "goto",
+                "url": "{page:other}"
+              }
+            },
+            {
+              "command": "browser.navigate",
+              "inputs": {
+                "sessionId": "s",
+                "action": "back"
+              }
+            }
+          ],
+          "expect": {
+            "outputs": {
+              "url": "{page:other}"
+            },
+            "effect": "session"
           }
         }
       },
@@ -3279,8 +3540,18 @@
             "op": "tabs.history",
             "argsExact": {
               "tabId": "7",
-              "action": "reload"
+              "action": "reload",
+              "timeoutMs": 30000
             }
+          }
+        },
+        "l2": {
+          "page": "basic",
+          "expect": {
+            "outputs": {
+              "url": "{page}"
+            },
+            "effect": "session"
           }
         }
       },
@@ -3313,6 +3584,20 @@
             }
           ],
           "effect": "session"
+        },
+        "l2": {
+          "page": "basic",
+          "inputs": {
+            "url": "{page:slow}",
+            "timeoutMs": 1000
+          },
+          "expect": {
+            "outputs": {
+              "url": "{page:slow}",
+              "resourceType": "webPage"
+            },
+            "effect": "session"
+          }
         }
       },
       {
@@ -3337,7 +3622,17 @@
             "reason": "navigate_load_timeout"
           }
         },
-        "negative": true
+        "negative": true,
+        "l2": {
+          "page": "basic",
+          "inputs": {
+            "url": "{page:slow}",
+            "timeoutMs": 1000
+          },
+          "expect": {
+            "errorCode": "TIMEOUT"
+          }
+        }
       },
       {
         "name": "goto-without-url-is-rejected-before-any-channel-call",
@@ -3350,7 +3645,13 @@
           "errorCode": "INVALID_INPUT",
           "noCalls": true
         },
-        "negative": true
+        "negative": true,
+        "l2": {
+          "page": "basic",
+          "expect": {
+            "errorCode": "INVALID_INPUT"
+          }
+        }
       },
       {
         "name": "channel-timeout-is-raised-to-the-service-worker-wake-window",
@@ -3384,7 +3685,8 @@
             "op": "tabs.create",
             "argsExact": {
               "url": "https://example.test/",
-              "active": true
+              "active": true,
+              "timeoutMs": 30000
             }
           },
           "effect": "session"

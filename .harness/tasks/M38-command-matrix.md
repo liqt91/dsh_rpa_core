@@ -537,6 +537,47 @@ dragStatus 未变（单跑与后续两轮整模块均过）——前台竞争类
 不存在命令 + onlyCall → 恰好该变体两条报红 exit=1（第 8 条 verify 口径
 真在检查方向生效）。
 
+### 1.11 S4.4：导航/attach/标签页族 24 变体 + 两个半真机 bug（2026-09-23）
+
+探针（`probe_browser_l2_nav.py` + 深挖 `probe_browser_l2_history.py`）又抓到
+**两个产品 bug 和一处对称性缺口**——全部是 L1 桩断言结构上不可见的：
+
+1. **`navigate` 的 back/forward 恒失败**：`chrome.tabs.goBack/goForward` 对
+   「历史栈明明有上一页」（history.length=2 实测）的标签页也必报
+   "Cannot find a next page in history"——该 API 在 MV3 下不可靠。
+   修复：改页内 `history.back()/forward()`（MAIN world），并补「先等导航
+   开始（status/url 变化，3s 宽限）再 waitComplete」——否则 waitComplete
+   会在导航起步前看到 complete 提前返回，把「真的 back 了」误判成无历史；
+   真无历史时显式报错（保住旧 API 的失败语义）。
+2. **`timeoutMs` 从不进 args**：`tabs_create/tabs_navigate/tabs_history` 只抬
+   信封超时、不把 timeoutMs 发给扩展 → 加载等待恒 30s，`onTimeout` 策略
+   永不触发（实测 onTimeout=error 的 3s 慢页照样成功）。修复：三个封装函数
+   真转发；L1 表 7 条变体的 args 断言同步补上 timeoutMs（**契约变化被 L1
+   当场抓住**——这正是矩阵该干的活，期望更新是刻意的）。
+3. **已有会话路径吞掉 `timedOut`**：`onTimeout` 此前只在新标签页路径处置，
+   换会话导航静默忽略。已补齐对称（stop→stopLoading / error→TIMEOUT）。
+
+**机制增量**（驱动与静态校验器同步）：`l2.pre` 准备步（建历史栈、开第二页）、
+`saveAs` 捕获 pre 步 tabId、`{page:NAME}` 命名页占位（先它后 `{page}`，
+防子串腐蚀）、expect 侧的 `substitute_extra` 替换（listPages/attach 的
+URL 动态端口断言就靠 `{page}`）、`l2.session: false` 显式不预置会话
+（close 的空会话负路径）。`{tab}` 按 **int** 注入（navigate outputs 的
+tabId 是字符串，closedTabIds 是 int——首跑假红过一次）。
+新增靶页 `other.html`（标题靶子）与 `/slow.html` 动态路由（睡 3s，
+onTimeout 两态的「必然超时」靶子）。
+
+**取舍**：`closeTabs all=true` **不收**（会关掉整个测试窗口、端掉共享浏览器）；
+`listPages no-open-tabs` 不可真机构造（关完最后一个标签页浏览器即退出）；
+`goto-prepends-https`/`browserType-chrome`/`commandLineArgs` 留在 L1
+（字符串逻辑/多浏览器/拉起路径，非 L2 价值点）。
+
+**验证**：L2 真机 `86 passed in 31.07s`（85 变体 + 隔离用例）；L1 回归
+180 passed；静态层 PASSED（l2 块 85 个）。**负向验证 2 例**（均红在预期
+那条、逐字节还原）：① back 的期望改成 other → 恰好该变体红且报文显示
+`{page:other}` 已替换成真 URL（pre 建栈 + 命名页替换 + 断言链全真）；
+② 校验器注入 session 非布尔 + pre 坏命令 + `{page:nosuchpage}` → 恰好
+三条报红 exit=1。
+
 ## 2. 关键设计决定
 
 - **桩只替换 `_exchange`**：同时拿到三样东西——真实下发的 `(op, args)`、信封里的

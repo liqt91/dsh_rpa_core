@@ -46,10 +46,26 @@ _EXE_NAMES = {"msedge": "msedge.exe", "chrome": "chrome.exe"}
 
 class _QuietHandler(http.server.SimpleHTTPRequestHandler):
     """静默版请求处理：access log 全吞（它只是给靶页跑腿的服务端，出问题会在
-    客户端以更可诊断的方式红出来——getText 读不到值之类）。"""
+    客户端以更可诊断的方式红出来——getText 读不到值之类）。
+
+    特例：`/slow.html` 睡 3 秒再应答——`navigate` 的 `onTimeout` 两态
+    （stop/error）需要一个「必然超时的加载」当真机靶子，静态文件做不到这件事。
+    """
 
     def log_message(self, format: str, *args: object) -> None:  # noqa: A002
         pass
+
+    def do_GET(self) -> None:
+        if self.path == "/slow.html":
+            time.sleep(3)
+            body = b"<html><head><title>Slow</title></head><body>slow</body></html>"
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        super().do_GET()
 
 
 class _QuietServer(http.server.ThreadingHTTPServer):

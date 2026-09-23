@@ -24,8 +24,10 @@
 8. **`l2` 块的形状**（M38 S4，L2 真机冒烟）：`l2` 必须是对象；`page` 必填且
    `testapps/browser/<page>.html` 必须存在；`expect` 必填非空且**不得含调用类键**
    （`onlyCall`/`calls`/`noCalls`——L2 没有调用记录面，那是 L1 的桩断言，写了
-   执行层必违规）；`inputs` 若给必须是对象。`verify` 若给必须是**非空对象列表**，
-   每步 `command` 必填且在 catalog 里、`expect` 同样非空且禁含调用类键。
+   执行层必违规）；`inputs` 若给必须是对象；`session` 若给必须是布尔。
+   `pre`/`verify` 若给必须是**非空对象列表**，每步 `command` 必填且在 catalog
+   里、`expect` 同样非空且禁含调用类键（pre 步的 expect 可省——它是准备动作，
+   成功即可）。块内出现的 `{page:NAME}` 占位符必须有对应靶页文件。
 
 第 6 条与策略原文的「required 缺省必须被拒」**口径不同**，理由：输入 schema 的
 `required` 由 **orchestrator** 统一校验（`runtime/orchestrator.py` 用
@@ -59,6 +61,7 @@ negative 变体**，所以全表标成 `knownGap` 必然报红。
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -70,6 +73,9 @@ TESTAPPS_BROWSER_DIR = ROOT / "testapps" / "browser"
 # L2 的 expect 不得出现的调用类键（第 8 条）：L2 是真后端，没有调用记录面——
 # 这些键是 L1 假扩展的桩断言，混进 l2.expect 后执行层必然违规（calls=None 判红）。
 L2_FORBIDDEN_EXPECT_KEYS = ("onlyCall", "calls", "noCalls")
+
+# l2 块里的命名页占位符（驱动的 _substitute_page_tokens 消费）
+_PAGE_TOKEN = re.compile(r"\{page:([\w-]+)\}")
 
 # 每条命令最少变体数（策略 §5.2 第 4 条）
 MIN_VARIANTS = 3
@@ -176,24 +182,36 @@ def _check_l2_block(
     problems.extend(_check_l2_expect(command, name, l2.get("expect"), "l2.expect"))
     if "inputs" in l2 and not isinstance(l2["inputs"], dict):
         problems.append(f"{command}.{name}: l2.inputs 必须是对象（覆盖 variant.inputs）")
-    verify = l2.get("verify")
-    if verify is not None:
-        if not isinstance(verify, list) or not verify:
-            problems.append(f"{command}.{name}: l2.verify 必须是非空列表")
-        else:
-            for index, step in enumerate(verify):
-                where = f"l2.verify[{index}]"
-                if not isinstance(step, dict):
-                    problems.append(f"{command}.{name}: {where} 必须是对象")
-                    continue
-                step_command = step.get("command")
-                if not isinstance(step_command, str) or step_command not in catalog:
-                    problems.append(
-                        f"{command}.{name}: {where}.command={step_command!r} 不在 catalog 里"
-                    )
+    if "session" in l2 and not isinstance(l2["session"], bool):
+        problems.append(f"{command}.{name}: l2.session 必须是布尔")
+    for key, expect_required in (("pre", False), ("verify", True)):
+        steps = l2.get(key)
+        if steps is None:
+            continue
+        if not isinstance(steps, list) or not steps:
+            problems.append(f"{command}.{name}: l2.{key} 必须是非空列表")
+            continue
+        for index, step in enumerate(steps):
+            where = f"l2.{key}[{index}]"
+            if not isinstance(step, dict):
+                problems.append(f"{command}.{name}: {where} 必须是对象")
+                continue
+            step_command = step.get("command")
+            if not isinstance(step_command, str) or step_command not in catalog:
+                problems.append(
+                    f"{command}.{name}: {where}.command={step_command!r} 不在 catalog 里"
+                )
+            if expect_required or "expect" in step:
                 problems.extend(
                     _check_l2_expect(command, name, step.get("expect"), f"{where}.expect")
                 )
+    # {page:NAME} 占位符的靶页必须存在（驱动的 _substitute_page_tokens 消费它们）
+    for token in sorted(set(_PAGE_TOKEN.findall(json.dumps(l2)))):
+        if not (TESTAPPS_BROWSER_DIR / f"{token}.html").is_file():
+            problems.append(
+                f"{command}.{name}: 占位符 {{page:{token}}} 没有对应靶页 "
+                f"testapps/browser/{token}.html"
+            )
     return problems
 
 
