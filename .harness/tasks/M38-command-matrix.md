@@ -578,6 +578,29 @@ onTimeout 两态的「必然超时」靶子）。
 ② 校验器注入 session 非布尔 + pre 坏命令 + `{page:nosuchpage}` → 恰好
 三条报红 exit=1。
 
+### 1.12 S4.5+S4.6：cookies/截图/等待族 + 未实现命令钉死，S4 收官（2026-09-23）
+
+- **cookies 族真机语义**（host-only cookie，127.0.0.1）：set/get/remove 全链路
+  互读（verify 用 cookieGet 独立读回）；实测语义入档：cookieGet 读不存在的名
+  返回**空串**（不是 null）；cookieRemove outputs 只有 sessionId。
+  **cookie 名按变体独立**（`l2cs`/`l2cg`/…）——profile 共享，防变体间污染读数。
+- **waitFor 四态真机全过**（靶页补 `#hidden` = display:none）：visible=1 /
+  hidden=0 / attached=1 / detached=0；不满足态 600ms 超时 → TIMEOUT +
+  `elapsedAtLeastMs` 真计时断言（实测 627ms）。
+- **screenshot 真 PNG 落盘**（16762 字节）；**waitLoad** 已加载页回当前 url；
+  **stopLoading**：pre 步 executeScript 触发向 slow 的导航后立刻停——
+  导航未提交前停掉，标签页留在 basic（实测口径）。
+- **upload/download/handleDialog**（策略 §6 定案的本期未实现）四条变体在
+  L2 钉 `COMMAND_NOT_FOUND` 显式失败——真后端同码。
+- **`browser.closeBrowser` 全 6 变体不收 L2**（硬边界）：它按进程名杀该浏览器
+  **全部**进程，L2 里跑会连维护者真实浏览器一起杀——这不是测试能隔离的东西，
+  测试价值已在 L1 的进程面打桩里。至此浏览器 32 条命令全部有了 L2 处置：
+  **109 个 l2 块**（28 条收真机正/负路径，closeBrowser 1 条显式不收，
+  upload/download/handleDialog 3 条钉未实现）。
+- **验证**：L2 真机 `110 passed in 38.22s`；L1 回归 180 passed；静态层
+  PASSED（l2 块 109 个）。负向验证：waitFor 超时的 errorCode 改错 → 恰好
+  该变体红（报文带真实错误消息），逐字节还原。
+
 ## 2. 关键设计决定
 
 - **桩只替换 `_exchange`**：同时拿到三样东西——真实下发的 `(op, args)`、信封里的
@@ -795,10 +818,12 @@ S1.2 页签有一条白盒集成用例（`test_panel_streams_jsonl_into_rows`：
     纳入常规回归，那片的稳定性是前提。
 - **S4 L2 真机冒烟**：与 L1 **共用同一份用例表**，把执行后端从假扩展换成真扩展
   （策略 §2 L2，显式开关启用）。数据通道这一半已经算「真机」（真子进程 + 真文件），
-  所以 S4 的增量只落在浏览器通道。**进行中**：S4.1 最小链路（§1.8）、S4.2 读族
-  15 变体（§1.9）、S4.3 交互族 46 变体 + check 反转 bug 修复（§1.10）已落地；
-  后续切片：navigate/attach/标签页族、cookies、screenshot/waitFor/waitLoad/
-  stopLoading、`listPages` 的 URL 动态端口断言口径。
+  所以 S4 的增量只落在浏览器通道。**已完成（2026-09-23，§1.8–§1.12）**：
+  浏览器 32 条命令全部有了 L2 处置——109 个 l2 块真机全绿
+  （`RPA_BROWSER_L2=1 pytest tests/commands/test_browser_l2_matrix.py`，
+  110 passed 含隔离用例）；过程中修复 3 个真机才可见的产品 bug
+  （check 三操作反转、back/forward 的 goBack API 不可靠、timeoutMs 不进 args）
+  与 1 处对称性缺口（已有会话路径吞 timedOut）。
 - **两个死参数的处置**：**已完成（S1.1，2026-09-22）**——两项均从 manifest 删除，
   删掉的是「声明」而非「能力」，对标差距未扩大。详见 §3.1。
 - **S1.2 页签的显式取舍（不是缺口）**：① 页面**不解析 pytest 输出**，所以「子进程在收集/导入

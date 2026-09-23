@@ -1312,6 +1312,33 @@
             "value": ""
           },
           "effect": "read"
+        },
+        "l2": {
+          "page": "basic",
+          "inputs": {
+            "name": "l2cg"
+          },
+          "pre": [
+            {
+              "command": "browser.cookieSet",
+              "inputs": {
+                "sessionId": "s",
+                "cookies": [
+                  {
+                    "name": "l2cg",
+                    "value": "got",
+                    "url": "{page}"
+                  }
+                ]
+              }
+            }
+          ],
+          "expect": {
+            "outputs": {
+              "value": "got"
+            },
+            "effect": "read"
+          }
         }
       },
       {
@@ -1330,6 +1357,33 @@
             "value": "v1"
           },
           "effect": "read"
+        },
+        "l2": {
+          "page": "basic",
+          "inputs": {
+            "name": "l2cg2"
+          },
+          "pre": [
+            {
+              "command": "browser.cookieSet",
+              "inputs": {
+                "sessionId": "s",
+                "cookies": [
+                  {
+                    "name": "l2cg2",
+                    "value": "verbatim",
+                    "url": "{page}"
+                  }
+                ]
+              }
+            }
+          ],
+          "expect": {
+            "outputs": {
+              "value": "verbatim"
+            },
+            "effect": "read"
+          }
         }
       },
       {
@@ -1376,6 +1430,33 @@
             "count": 0
           },
           "effect": "read"
+        },
+        "l2": {
+          "page": "basic",
+          "pre": [
+            {
+              "command": "browser.cookieSet",
+              "inputs": {
+                "sessionId": "s",
+                "cookies": [
+                  {
+                    "name": "l2ca",
+                    "value": "ca",
+                    "url": "{page}"
+                  }
+                ]
+              }
+            }
+          ],
+          "expect": {
+            "outputListContains": {
+              "cookies": {
+                "name": "l2ca",
+                "value": "ca"
+              }
+            },
+            "effect": "read"
+          }
         }
       },
       {
@@ -1396,6 +1477,41 @@
               "tabId": "7"
             }
           }
+        },
+        "l2": {
+          "page": "basic",
+          "inputs": {
+            "name": "l2ca3",
+            "domain": "127.0.0.1",
+            "path": "/"
+          },
+          "pre": [
+            {
+              "command": "browser.cookieSet",
+              "inputs": {
+                "sessionId": "s",
+                "cookies": [
+                  {
+                    "name": "l2ca3",
+                    "value": "triple",
+                    "url": "{page}"
+                  }
+                ]
+              }
+            }
+          ],
+          "expect": {
+            "outputs": {
+              "count": 1
+            },
+            "outputListContains": {
+              "cookies": {
+                "name": "l2ca3",
+                "value": "triple"
+              }
+            },
+            "effect": "read"
+          }
         }
       },
       {
@@ -1410,6 +1526,33 @@
               "name": "k",
               "tabId": "7"
             }
+          }
+        },
+        "l2": {
+          "page": "basic",
+          "inputs": {
+            "name": "l2ca4"
+          },
+          "pre": [
+            {
+              "command": "browser.cookieSet",
+              "inputs": {
+                "sessionId": "s",
+                "cookies": [
+                  {
+                    "name": "l2ca4",
+                    "value": "solo",
+                    "url": "{page}"
+                  }
+                ]
+              }
+            }
+          ],
+          "expect": {
+            "outputs": {
+              "count": 1
+            },
+            "effect": "read"
           }
         }
       },
@@ -1435,6 +1578,16 @@
         "expect": {
           "outputs": {
             "count": 2
+          }
+        },
+        "l2": {
+          "page": "basic",
+          "expect": {
+            "outputKeys": [
+              "cookies",
+              "count"
+            ],
+            "effect": "read"
           }
         }
       },
@@ -1482,6 +1635,48 @@
             "sessionId": "s"
           },
           "effect": "unsafe-write"
+        },
+        "l2": {
+          "page": "basic",
+          "inputs": {
+            "name": "l2cr"
+          },
+          "pre": [
+            {
+              "command": "browser.cookieSet",
+              "inputs": {
+                "sessionId": "s",
+                "cookies": [
+                  {
+                    "name": "l2cr",
+                    "value": "gone",
+                    "url": "{page}"
+                  }
+                ]
+              }
+            }
+          ],
+          "expect": {
+            "outputKeys": [
+              "sessionId"
+            ],
+            "effect": "unsafe-write"
+          },
+          "verify": [
+            {
+              "command": "browser.cookieGet",
+              "inputs": {
+                "sessionId": "s",
+                "name": "l2cr"
+              },
+              "expect": {
+                "outputs": {
+                  "value": ""
+                },
+                "effect": "read"
+              }
+            }
+          ]
         }
       },
       {
@@ -1496,6 +1691,15 @@
               "name": "",
               "tabId": "7"
             }
+          }
+        },
+        "l2": {
+          "page": "basic",
+          "expect": {
+            "outputKeys": [
+              "sessionId"
+            ],
+            "effect": "unsafe-write"
           }
         }
       },
@@ -1556,6 +1760,39 @@
             "count": 1
           },
           "effect": "idempotent-write"
+        },
+        "l2": {
+          "page": "basic",
+          "inputs": {
+            "cookies": [
+              {
+                "name": "l2cs",
+                "value": "v",
+                "url": "{page}"
+              }
+            ]
+          },
+          "expect": {
+            "outputs": {
+              "count": 1
+            },
+            "effect": "idempotent-write"
+          },
+          "verify": [
+            {
+              "command": "browser.cookieGet",
+              "inputs": {
+                "sessionId": "s",
+                "name": "l2cs"
+              },
+              "expect": {
+                "outputs": {
+                  "value": "v"
+                },
+                "effect": "read"
+              }
+            }
+          ]
         }
       },
       {
@@ -1578,6 +1815,39 @@
           "outputs": {
             "count": 3
           }
+        },
+        "l2": {
+          "page": "basic",
+          "inputs": {
+            "cookies": [
+              {
+                "name": "l2cs2",
+                "value": "1",
+                "url": "{page}"
+              }
+            ]
+          },
+          "expect": {
+            "outputs": {
+              "count": 1
+            },
+            "effect": "idempotent-write"
+          },
+          "verify": [
+            {
+              "command": "browser.cookieGet",
+              "inputs": {
+                "sessionId": "s",
+                "name": "l2cs2"
+              },
+              "expect": {
+                "outputs": {
+                  "value": "1"
+                },
+                "effect": "read"
+              }
+            }
+          ]
         }
       },
       {
@@ -1593,6 +1863,15 @@
               "cookies": [],
               "tabId": "7"
             }
+          }
+        },
+        "l2": {
+          "page": "basic",
+          "expect": {
+            "outputs": {
+              "count": 0
+            },
+            "effect": "idempotent-write"
           }
         }
       },
@@ -1636,7 +1915,13 @@
           },
           "noCalls": true
         },
-        "negative": true
+        "negative": true,
+        "l2": {
+          "page": "basic",
+          "expect": {
+            "errorCode": "COMMAND_NOT_FOUND"
+          }
+        }
       }
     ],
     "unimplemented": true
@@ -2586,7 +2871,13 @@
           "errorCode": "COMMAND_NOT_FOUND",
           "noCalls": true
         },
-        "negative": true
+        "negative": true,
+        "l2": {
+          "page": "basic",
+          "expect": {
+            "errorCode": "COMMAND_NOT_FOUND"
+          }
+        }
       },
       {
         "name": "dismiss-action-reports-command-not-found",
@@ -2598,7 +2889,13 @@
           "errorCode": "COMMAND_NOT_FOUND",
           "noCalls": true
         },
-        "negative": true
+        "negative": true,
+        "l2": {
+          "page": "basic",
+          "expect": {
+            "errorCode": "COMMAND_NOT_FOUND"
+          }
+        }
       }
     ],
     "unimplemented": true
@@ -3852,6 +4149,20 @@
             "filePath"
           ],
           "effect": "idempotent-write"
+        },
+        "l2": {
+          "page": "basic",
+          "expect": {
+            "outputPaths": {
+              "filePath": "{tmp}/rpa-m38-shot.png"
+            },
+            "files": [
+              {
+                "path": "{tmp}/rpa-m38-shot.png"
+              }
+            ],
+            "effect": "idempotent-write"
+          }
         }
       },
       {
@@ -4787,6 +5098,24 @@
             "url": "https://example.test/"
           },
           "effect": "unsafe-write"
+        },
+        "l2": {
+          "page": "basic",
+          "pre": [
+            {
+              "command": "browser.executeScript",
+              "inputs": {
+                "sessionId": "s",
+                "script": "location.href = \"{page:slow}\"; return 1"
+              }
+            }
+          ],
+          "expect": {
+            "outputs": {
+              "url": "{page}"
+            },
+            "effect": "unsafe-write"
+          }
         }
       },
       {
@@ -4853,7 +5182,13 @@
           },
           "noCalls": true
         },
-        "negative": true
+        "negative": true,
+        "l2": {
+          "page": "basic",
+          "expect": {
+            "errorCode": "COMMAND_NOT_FOUND"
+          }
+        }
       }
     ],
     "unimplemented": true
@@ -4889,6 +5224,15 @@
             "matchedCount": 1
           },
           "effect": "read"
+        },
+        "l2": {
+          "page": "basic",
+          "expect": {
+            "outputs": {
+              "matchedCount": 1
+            },
+            "effect": "read"
+          }
         }
       },
       {
@@ -4916,6 +5260,18 @@
           "outputs": {
             "matchedCount": 0
           }
+        },
+        "l2": {
+          "page": "basic",
+          "inputs": {
+            "selector": "#hidden"
+          },
+          "expect": {
+            "outputs": {
+              "matchedCount": 0
+            },
+            "effect": "read"
+          }
         }
       },
       {
@@ -4933,6 +5289,18 @@
                 "visible": false
               }
             }
+          }
+        },
+        "l2": {
+          "page": "basic",
+          "inputs": {
+            "selector": "#hidden"
+          },
+          "expect": {
+            "outputs": {
+              "matchedCount": 1
+            },
+            "effect": "read"
           }
         }
       },
@@ -4961,6 +5329,18 @@
           "outputs": {
             "matchedCount": 0
           }
+        },
+        "l2": {
+          "page": "basic",
+          "inputs": {
+            "selector": "#absent"
+          },
+          "expect": {
+            "outputs": {
+              "matchedCount": 0
+            },
+            "effect": "read"
+          }
         }
       },
       {
@@ -4983,7 +5363,18 @@
             "state": "visible"
           }
         },
-        "negative": true
+        "negative": true,
+        "l2": {
+          "page": "basic",
+          "inputs": {
+            "selector": "#absent",
+            "timeoutMs": 600
+          },
+          "expect": {
+            "errorCode": "TIMEOUT",
+            "elapsedAtLeastMs": 600
+          }
+        }
       },
       {
         "name": "channel-error-maps-to-executor-failed",
@@ -5044,6 +5435,15 @@
             "url": "https://example.test/"
           },
           "effect": "read"
+        },
+        "l2": {
+          "page": "basic",
+          "expect": {
+            "outputs": {
+              "url": "{page}"
+            },
+            "effect": "read"
+          }
         }
       },
       {
@@ -5060,6 +5460,15 @@
               "timeoutMs": 5000
             },
             "timeoutSeconds": 5.0
+          }
+        },
+        "l2": {
+          "page": "basic",
+          "expect": {
+            "outputs": {
+              "url": "{page}"
+            },
+            "effect": "read"
           }
         }
       },

@@ -30,7 +30,12 @@
   `controlId`、`getWindowList` 的会话声明与静默空列表）；**S2.3（2026-09-23）清掉其中大半**：
   `screenshot` 加 Pillow、uia `select`/`getText` 修复、win32 `select`/`getSelectedText` 显式失败、
   `controlId` 过滤修活、`getWindowList` 会话声明对齐——剩余见「win32 原生消息实现」、
-  「className 动态名」、「枚举被拒静默空列表」三条
+  「className 动态名」、「枚举被拒静默空列表」三条。**S4 L2 真机冒烟已完成
+  （2026-09-23，§1.8–§1.12）**：浏览器 32 条命令全部有了 L2 处置——109 个 l2 块
+  （`l2` = page/inputs/expect/pre/verify/session），真机 110 passed；过程中修复
+  3 个真机才可见的产品 bug（check 三操作反转 / goBack API 不可靠 / timeoutMs
+  不进 args）+ 1 处 onTimeout 对称性缺口。closeBrowser 显式不收（杀真进程，
+  超出测试可隔离面）。L2 显式开关：`RPA_BROWSER_L2=1`。
   - 计划：`M38-command-matrix.md`
 
 ## 后续任务
