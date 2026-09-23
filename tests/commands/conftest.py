@@ -72,11 +72,16 @@ from pathlib import Path
 
 import pytest
 
-MATRIX_ENABLED = os.environ.get("RPA_COMMAND_MATRIX") == "1"
-MATRIX_ENV_HINT = "RPA_COMMAND_MATRIX=1"
+MATRIX_ENV = "RPA_COMMAND_MATRIX"
+MATRIX_ENABLED = os.environ.get(MATRIX_ENV) == "1"
+MATRIX_ENV_HINT = f"{MATRIX_ENV}=1"
 # L2 真机冒烟（浏览器通道）有自己的开关（策略 §4：浏览器侧同类显式开关）。
-# 只开它时收集层放行 L2 驱动、把 L1 驱动全部 ignore 掉。
-L2_ENABLED = os.environ.get("RPA_BROWSER_L2") == "1"
+# 开关名与「只开它时放行 L2 驱动、把 L1 驱动全部 ignore」的口径都在下面；
+# GUI 页签要在运行时拼这三个名字，两处是**一份约定两处副本**，
+# `tests/contract/test_gui_command_matrix.py::test_env_names_match_the_pytest_side` 钉住不许漂。
+L2_ENV = "RPA_BROWSER_L2"
+L2_ENABLED = os.environ.get(L2_ENV) == "1"
+L2_ENV_HINT_VALUE = "1"
 L2_DRIVER_NAME = "test_browser_l2_matrix.py"
 # 结构化实时报告的落盘路径（GUI 页签用）；未设置则完全不产出文件。
 REPORT_ENV = "RPA_COMMAND_MATRIX_REPORT"
@@ -84,6 +89,37 @@ REPORT_ENV = "RPA_COMMAND_MATRIX_REPORT"
 _NODE_PREFIX = "test_command_variant["
 # 当前会话的实时报告写入器（`pytest_configure` 里按环境变量决定是否创建）。
 _LIVE: _LiveReport | None = None
+
+
+def collection_ignore(
+    *,
+    matrix_enabled: bool,
+    l2_enabled: bool,
+    existing: list[str] | None = None,
+) -> list[str]:
+    """按三个开关算 `collect_ignore` 的文件名清单（纯函数，便于契约测试直接验四格）。
+
+    三开关的收集口径（与下面模块尾部的内联块是同一份约定）：
+
+    | matrix | l2 | 收集什么 |
+    |---|---|---|
+    | 未开 | 未开 | 什么都不收集（返回全部文件名） |
+    | 未开 | 开 | **只有** L2 驱动（返回除 L2 驱动外的全部） |
+    | 开 | 未开 | 全部 L1 驱动（L2 驱动被 ignore） |
+    | 开 | 开 | 全部 L1 驱动 **+** L2 驱动（返回空清单，**本表新开的一格**） |
+
+    `existing` 只在测试里注入固定清单——真实调用时按目录枚举现存 `test_*.py`。
+    """
+    names = (
+        list(existing)
+        if existing is not None
+        else [path.name for path in Path(__file__).parent.glob("test_*.py")]
+    )
+    if not matrix_enabled and not l2_enabled:
+        return names
+    if matrix_enabled:
+        return [] if l2_enabled else [L2_DRIVER_NAME]
+    return [name for name in names if name != L2_DRIVER_NAME]
 
 
 def split_variant_node(node: str) -> tuple[str, str] | None:
@@ -236,15 +272,27 @@ def pytest_terminal_summary(terminalreporter) -> None:
 
 
 # 缺省忽略本目录的全部用例文件：新增用例文件不必回来改这里。
-# 只开 L2 开关时例外：放行 L2 驱动、忽略其余（枚举现存文件而不是反向 glob——
-# 反向 glob「忽略除某文件外全部」表达不了，正向枚举将来新增 L1 驱动也不会漏 ignore）。
+#
+# 三个开关**可叠加**（2026-09-23 改，M38 §6「页签集成」的前置）：
+#
+# | RPA_COMMAND_MATRIX | RPA_BROWSER_L2 | RPA_DESKTOP_E2E | 收集什么 |
+# |---|---|---|---|
+# | 未设 | 未设 | * | 什么都不收集（提示启用方式） |
+# | 未设 | `1` | * | **只有** L2 驱动（真机冒烟单独跑，沿用旧口径） |
+# | `1` | 未设 | 未设 | 全部 L1 驱动（桌面驱动的用例会 skip，由 `requires_desktop` 把关） |
+# | `1` | `1` | * | 全部 L1 驱动 **+** L2 驱动（**本表新开的一格**） |
+#
+# 改前只有「MATRIX 决定 L1、L2 决定放行哪一个」的二选一，于是「L1 + L2 一起跑」
+# 这条路根本不存在（只开 L2 时会 ignore 掉**全部** L1 驱动）。页签要提供
+# 「L1 + L2」这个目标就必须先补上这一格。
+#
+# 实现：枚举现存文件、按集合差集算 collect_ignore，而不是反向 glob
+# （反向 glob「忽略除某文件外全部」表达不了，正向枚举将来新增驱动也不会漏 ignore）。
 # 覆盖率静态校验不在本目录——见 `.harness/scripts/check_command_matrix.py`（在默认门禁里）。
-if not MATRIX_ENABLED:
-    if L2_ENABLED:
-        collect_ignore = [
-            path.name
-            for path in Path(__file__).parent.glob("test_*.py")
-            if path.name != L2_DRIVER_NAME
-        ]
-    else:
-        collect_ignore_glob = ["test_*.py"]
+_L2_ENABLED = L2_ENABLED
+_DESKTOP_DRIVER_NAMES = ("test_desktop_matrix.py", "test_desktop_win32_matrix.py")
+
+_ignore_names = collection_ignore(matrix_enabled=MATRIX_ENABLED, l2_enabled=_L2_ENABLED)
+collect_ignore = _ignore_names
+if not MATRIX_ENABLED and not _L2_ENABLED:
+    collect_ignore_glob = ["test_*.py"]

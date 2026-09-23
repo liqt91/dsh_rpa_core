@@ -25,7 +25,9 @@
   两条旧判因当场被推翻（win32 的 `title` 其实可用、`menuSelect` 正路径真机通过）；**159 个变体首次
   上真机**，30 处「读代码猜的期望」逐类校正；新增变体级 `knownGap`（严格 xfail，缺口一修就 XPASS
   转红）与 `expect.outputListContains`（治「枚举被拒 → pywinauto 静默返回空列表」与「真没匹配窗口」
-  同形）；**172 个变体 → 170 passed + 2 xfailed / exit 0**，四驱动全量 440 项 → 438 passed + 2 xfailed。
+  同形）；**172 个变体 → 170 passed + 2 xfailed / exit 0**（**2026-09-23 订正：桌面两表经尾巴 #1
+  加变体后当前真值是 190（UIA 85 / Win32 105），实测 `190 passed / exit 0`**——当日数字见
+  M38 任务单 §1.14），四驱动全量 440 项 → 438 passed + 2 xfailed。
   产品侧剩余缺口已逐条转入「后续任务」（`screenshot` 依赖、`select`/`getText` 实现、`className`/
   `controlId`、`getWindowList` 的会话声明与静默空列表）；**S2.3（2026-09-23）清掉其中大半**：
   `screenshot` 加 Pillow、uia `select`/`getText` 修复、win32 `select`/`getSelectedText` 显式失败、

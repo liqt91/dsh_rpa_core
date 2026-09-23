@@ -50,12 +50,71 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-# 与 tests/commands/conftest.py 的开关/报告环境变量同名——两边是一份约定，改一处要改两处
+# 与 tests/commands/conftest.py 的开关/报告环境变量同名——两边是一份约定，改一处要改两处。
+# `_HINT` 是给提示文案用的 `名字=值` 拼法（与 conftest 的 `MATRIX_ENV_HINT` 同形）。
 MATRIX_ENV = "RPA_COMMAND_MATRIX"
+MATRIX_ENV_HINT = f"{MATRIX_ENV}=1"
 REPORT_ENV = "RPA_COMMAND_MATRIX_REPORT"
+# 另外两个按需开关（2026-09-23 页签集成新增）。三个开关**可叠加**——
+# `RPA_DESKTOP_E2E` 管桌面驱动、`RPA_BROWSER_L2` 管 L2 驱动、`RPA_COMMAND_MATRIX` 管 L1 全量。
+DESKTOP_ENV = "RPA_DESKTOP_E2E"
+L2_ENV = "RPA_BROWSER_L2"
 PYTEST_TARGET = "tests/commands"
 CASES_DIR = Path("tests") / "commands" / "cases"
 STATIC_CHECK = Path(".harness") / "scripts" / "check_command_matrix.py"
+
+
+@dataclass(frozen=True)
+class RunTarget:
+    """页签能点火的一个目标：环境变量组合 + 给人看的说明。
+
+    三个目标而不是一个「全跑」按钮——三者的**副作用面完全不同**（不碰浏览器 / 抢前台 /
+    拉起真浏览器），混在一起会让「我点了运行，然后浏览器被开了」这种体验出现。
+    """
+
+    key: str
+    label: str
+    env: dict[str, str]
+    note: str
+
+    @property
+    def runs_l2(self) -> bool:
+        return L2_ENV in self.env
+
+    @property
+    def runs_desktop(self) -> bool:
+        return DESKTOP_ENV in self.env
+
+
+# 顺序即按钮顺序，由窄到宽（副作用面递增）
+RUN_TARGETS: tuple[RunTarget, ...] = (
+    RunTarget(
+        key="l1",
+        label="运行 L1 契约矩阵",
+        env={MATRIX_ENV: "1"},
+        note="假扩展，不碰本机浏览器（桌面那部分会被收集但全部跳过）",
+    ),
+    RunTarget(
+        key="l1+desktop",
+        label="L1 + 桌面真机",
+        env={MATRIX_ENV: "1", DESKTOP_ENV: "1"},
+        note="会真实开窗并抢前台（现场编译 WinForms 靶子），约半分钟",
+    ),
+    RunTarget(
+        key="l1+l2",
+        label="L1 + 浏览器真机",
+        env={MATRIX_ENV: "1", L2_ENV: "1"},
+        note="会拉起一个真实浏览器窗口（独立 profile，不碰你已开的浏览器）",
+    ),
+)
+
+
+def find_target(key: str) -> RunTarget:
+    for target in RUN_TARGETS:
+        if target.key == key:
+            return target
+    raise KeyError(key)
+
 
 _OUTCOME_LABELS = {
     "passed": "通过",
@@ -100,6 +159,36 @@ class NamespaceInfo:
     name: str
     commands: int
     variants: int
+
+
+@dataclass(frozen=True)
+class ScopeBreakdown:
+    """「本页点下去实际会跑什么」的账。
+
+    区分三件事，因为它们的环境要求与副作用面**完全不同**（2026-09-23 补，见任务单 §1.14）：
+
+    - `matrix_core`：本页那个按钮真会跑的变体数（浏览器 / 数据 / 工作流 L1）；
+    - `desktop`：桌面两表的变体数——**收集得到但会全 skip**，驱动要求 `RPA_DESKTOP_E2E=1`
+      （真开窗 + 抢前台），本页不设它；
+    - `l2`：浏览器用例表里带 `l2` 块（真机冒烟）的变体数——**连收集都不收集**，
+      它归 `RPA_BROWSER_L2` 这个独立开关管（`tests/commands/conftest.py` 的
+      `collect_ignore` 里「只开 L2 时放行 L2 驱动、忽略其余」，即两个开关目前**不叠加**）。
+
+    **`l2` 是 `matrix_core` 的子集，不是并列项**——那些变体在本页仍会被 L1 侧跑到。
+    所以全量是 `total = matrix_core + desktop`，**不能**再加一遍 `l2`。
+
+    几个数字从用例表算出来而不是写死：分类规则是「文件在不在 `DESKTOP_NAMESPACES` +
+    变体是否带 `l2` 块」，与 `tests/commands/` 的收集口径同源，新增表/新增 l2 块会自动反映。
+    """
+
+    matrix_core: int
+    desktop: int
+    l2: int
+
+    @property
+    def total(self) -> int:
+        """用例表里的变体总数（`l2` 已含在 `matrix_core` 内，不重复计入）。"""
+        return self.matrix_core + self.desktop
 
 
 def load_case_table(root: Path) -> dict[str, dict]:
@@ -151,6 +240,38 @@ def total_variants(root: Path) -> int:
     """已建表命名空间的变体总数（进度条分母）。"""
     built, _ = describe_namespaces(root)
     return sum(info.variants for info in built)
+
+
+# 桌面两表（UIA / Win32）的命名空间名。它们由 `RPA_DESKTOP_E2E` 单独把关，
+# 与「本页那个按钮实际会跑什么」不是一回事——见 `ScopeBreakdown`。
+DESKTOP_NAMESPACES = frozenset({"desktop", "desktop_win32"})
+
+
+def scope_breakdown(root: Path) -> ScopeBreakdown:
+    """算出「本页会跑 / 桌面（会 skip）/ L2（不收集）」三笔账（`ScopeBreakdown`）。"""
+    core = desktop = l2 = 0
+    cases_dir = root / CASES_DIR
+    if not cases_dir.is_dir():
+        return ScopeBreakdown(0, 0, 0)
+    for path in sorted(cases_dir.glob("*.json")):
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(data, dict):
+            continue
+        is_desktop = path.stem in DESKTOP_NAMESPACES
+        for spec in data.values():
+            if not isinstance(spec, dict):
+                continue
+            for variant in spec.get("variants") or []:
+                if is_desktop:
+                    desktop += 1
+                else:
+                    core += 1
+                    if isinstance(variant, dict) and variant.get("l2"):
+                        l2 += 1
+    return ScopeBreakdown(core, desktop, l2)
 
 
 def build_pytest_command(python: str) -> list[str]:
@@ -278,6 +399,7 @@ class CommandMatrixPanel(QWidget):
         self._state = MatrixState()
         self._rows: dict[str, QTreeWidgetItem] = {}
         self._mode: str | None = None
+        self._target = RUN_TARGETS[0]
 
         self._process = QProcess(self)
         self._process.setProcessChannelMode(QProcess.ProcessChannelMode.MergedChannels)
@@ -303,11 +425,19 @@ class CommandMatrixPanel(QWidget):
         layout.addWidget(self.scope_label)
 
         buttons = QHBoxLayout()
-        self.run_button = QPushButton("运行 L1 契约矩阵")
-        self.run_button.setToolTip(
-            "另起子进程跑 tests/commands 的全量参数矩阵（假扩展，不碰本机浏览器）"
-        )
-        self.run_button.clicked.connect(self._on_run_clicked)
+        # 三个目标按钮而不是一个「全跑」：副作用面差别太大（不碰浏览器 / 抢前台 /
+        # 拉起真浏览器），点的人必须**明确选**自己接受哪一种。
+        self.target_buttons: dict[str, QPushButton] = {}
+        for target in RUN_TARGETS:
+            button = QPushButton(target.label)
+            button.setToolTip(f"{target.note}。另起子进程跑 {PYTEST_TARGET}。")
+            button.clicked.connect(
+                lambda _checked=False, key=target.key: self._on_target_clicked(key)
+            )
+            self.target_buttons[target.key] = button
+            buttons.addWidget(button)
+        # 向后兼容的别名：主按钮 = 第一个目标（L1），既有契约测试读它
+        self.run_button = self.target_buttons[RUN_TARGETS[0].key]
         self.static_button = QPushButton("跑覆盖率校验")
         self.static_button.setToolTip(
             "只读用例表与 manifest 的静态校验（毫秒级）——就是默认门禁里的那一步"
@@ -316,10 +446,15 @@ class CommandMatrixPanel(QWidget):
         self.report_button = QPushButton("打开报告目录")
         self.report_button.setToolTip("结构化结果（JSONL）落盘处")
         self.report_button.clicked.connect(self._open_report_dir)
-        for widget in (self.run_button, self.static_button, self.report_button):
+        for widget in (self.static_button, self.report_button):
             buttons.addWidget(widget)
         buttons.addStretch(1)
         layout.addLayout(buttons)
+
+        self.target_note = QLabel("")
+        self.target_note.setWordWrap(True)
+        self.target_note.setStyleSheet(f"color: {_NEUTRAL};")
+        layout.addWidget(self.target_note)
 
         row = QHBoxLayout()
         self.progress = QProgressBar()
@@ -362,20 +497,55 @@ class CommandMatrixPanel(QWidget):
         built, pending = describe_namespaces(self._root)
         if not built:
             return "用例表为空。"
+        scope = scope_breakdown(self._root)
         covered = " / ".join(
             f"{info.name} {info.commands} 条命令 · {info.variants} 个变体" for info in built
         )
         text = f"已覆盖：{covered}。"
+        # 「三个按钮各跑什么」（2026-09-23 起页签能点火三个目标，见 `RUN_TARGETS`）。
+        text += f"按钮一（L1）跑 {scope.matrix_core} 个变体（假扩展，不碰本机浏览器）。"
+        if scope.desktop:
+            text += (
+                f"按钮二（L1 + 桌面真机）再加 {scope.desktop} 个桌面变体"
+                "——会真开窗并抢前台（现场编译 WinForms 靶子）。"
+            )
+        if scope.l2:
+            text += (
+                f"按钮三（L1 + 浏览器真机）再加 {scope.l2} 个 L2 块"
+                "——会拉起一个真实浏览器窗口（独立 profile，不碰你已开的浏览器）。"
+            )
         if pending:
             text += f"未建表（不参与本次运行）：{' / '.join(pending)}。"
         return text
 
     # ---- 交互 -------------------------------------------------------------
-    def _on_run_clicked(self) -> None:
+    def _on_target_clicked(self, key: str) -> None:
+        """点目标按钮：正在跑就先停，否则以该目标点火（同一个按钮兼作「停止」）。"""
         if self._process.state() != QProcess.ProcessState.NotRunning:
             self._stop()
             return
+        self._target = find_target(key)
         self._run_matrix()
+
+    def _on_run_clicked(self) -> None:
+        """向后兼容入口：等价于点第一个目标（L1）。"""
+        self._on_target_clicked(RUN_TARGETS[0].key)
+
+    def _progress_total(self) -> int:
+        """进度条分母 = 本次目标**实际会收集**的变体数（不是全表）。
+
+        目标不同分母不同：L1 只收 `matrix_core`；带桌面要加 `desktop`；
+        带 L2 要加 `l2`（那些变体在目标里会额外跑一遍真机）。
+        """
+        if self._root is None:
+            return 1
+        scope = scope_breakdown(self._root)
+        total = scope.matrix_core
+        if self._target.runs_desktop:
+            total += scope.desktop
+        if self._target.runs_l2:
+            total += scope.l2
+        return max(total, 1)
 
     def _run_matrix(self) -> None:
         if self._root is None:
@@ -391,14 +561,16 @@ class CommandMatrixPanel(QWidget):
         self._rows.clear()
         self.results.clear()
         self.log.clear()
-        self.progress.setRange(0, max(total_variants(self._root), 1))
+        self.progress.setRange(0, self._progress_total())
         self.progress.setValue(0)
         env = QProcessEnvironment.systemEnvironment()
-        env.insert(MATRIX_ENV, "1")
+        for name, value in self._target.env.items():
+            env.insert(name, value)
         env.insert(REPORT_ENV, str(report_path))
         env.insert("PYTHONIOENCODING", "utf-8")
         self._process.setProcessEnvironment(env)
         self._process.setWorkingDirectory(str(self._root))
+        self.target_note.setText(f"目标：{self._target.label} —— {self._target.note}。")
         self._start(build_pytest_command(sys.executable), "matrix")
         self._timer.start()
 

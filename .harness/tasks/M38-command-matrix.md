@@ -678,6 +678,126 @@ S2.3 时两条命令在 win32 侧是显式 `EXECUTOR_FAILED`（止血）。可�
 状态与 S2.2 一致（路径存在、8×2 次枚举未复现；另有四驱动连跑时一次 15s 操作预算
 被全桌面枚举冷启动吃满的观测）。仍待与 `operationTimeoutMs` 一并做产品决策。
 
+### 1.14 桌面变体数三处错账订正 + 页面口径说明（2026-09-23）
+
+维护者问「这些测试都集成在指令测试页面了吗」，查代码时**顺手撞出三处过期数字**——
+根因是尾巴 #1 那一轮给桌面两表加了变体（win32 95→105、uia 75→85），
+**只改了任务单，BACKLOG / PROGRESS / 策略文档三处没跟上**。
+与 M26 那次「纠正结论只改眼前一处」同病，只是这次漏的是**数字**而不是定性。
+
+**本轮一手实测的真值**（不是转抄）：
+
+| 口径 | 真值 | 怎么取的 |
+| --- | --- | --- |
+| 桌面 UIA `desktop.json` | 85 变体（17 条命令） | 逐命令数 + `--collect-only` 双向吻合 |
+| 桌面 Win32 `desktop_win32.json` | 105 变体（19 条命令） | 同上 |
+| **桌面合计** | **190** | `190 passed in 23.45s / exit 0`（`-p no:faulthandler -o console_output_style=count`） |
+| 浏览器 L1 | 180 | 不变 |
+| 数据 + 工作流 L1 | 84 + 4 = 88 | 不变 |
+| 浏览器 L2 块 | 109 | 不变 |
+| **全表变体总数** | **458**（`core 268 + desktop 190`） | 与 `load_case_table` 合并结果吻合 |
+
+**一处我自己现算错的账（记下来）**：初次算总表时写成了 **567** = `core + desktop + l2`——
+**错在把 `l2` 又加了一遍**。`l2` 是 `matrix_core` 的**子集**（那些变体在本页仍会被 L1 侧跑到），
+不是并列项。正确口径是 `total = core + desktop = 458`。这个错**当场被新写的契约测试抓住**
+（`assert 567 == 458`），正是「数字要先跑一遍再写」的又一个实例——本轮开头刚因为
+没这么做而沿用了三处过期数字。
+
+**订正的三处**：任务单 §1.6.7 与 §5 的两处 172（加指向本节的说明，不改写当时的历史记录）、
+BACKLOG 当前任务段的 172、策略文档 §2/§4/§5 的三处 172 → 190。
+`PROGRESS.md` 的 S2.2 条目里也有 172，**刻意保留**——那是当日的实测记录，
+历史条目不该被回改（本轮的订正另立一条，见 PROGRESS 同日「桌面变体数订正」）。
+
+**页面口径说明（本轮的实质交付）**：`scope_label` 原先只列「已覆盖：<5 个命名空间及其变体数>」，
+读起来像「点下去这些都会跑」，而主按钮只点火 L1。新增 `ScopeBreakdown`（纯函数，
+按**文件名 + 变体是否带 `l2` 块**分类，与 `tests/commands/` 的收集口径同源，
+不写死数字）与三段文案：
+
+- 「本页按钮实际跑 268 个变体（浏览器 / 数据 / 工作流 L1，假扩展、不碰本机浏览器）」；
+- 「另有桌面 190 个变体：会被收集但因缺开关**全部跳过**（要 `RPA_DESKTOP_E2E=1`，
+  它会真开窗并抢前台），本页不设」；
+- 「浏览器真机 L2（109 个变体）由独立开关 `RPA_BROWSER_L2` 把关，本页连收集都不收集」。
+
+契约测试补两条：① `test_scope_text_states_what_the_button_actually_runs`（三段文案都要在，
+且**先断言三笔账非零**——否则空数据会把这条喂成假绿）；②
+`test_scope_breakdown_matches_the_case_tables`（不钉死数字，只钉**划分规则**：
+桌面两表进 `desktop`、带 `l2` 块的 `l2` 且 `l2 ⊆ core`、`total == core + desktop`）。
+页签契约测试 16 → **18 项**，全绿。
+
+**负向验证 3 例**（`tests/contract/test_gui_command_matrix.py`，判据是「红在**预期的那一条**上」，
+注入文件 `md5 cb7d717…` 逐字节还原后复跑全绿）：
+
+| 注入 | 结果 | 说明 |
+|---|---|---|
+| ① `l2` 计数点整段切掉（计数器恒 0） | **恰好 2 条红** | 一条落在 `assert (268 > 0 and 190 > 0 and 0 > 0)`（**「三笔账非零」这条假绿防线自己先炸了**，证明它不是摆设）；一条落在 `assert 0 == 109` |
+| ② `DESKTOP_NAMESPACES` 漏掉 `desktop_win32` | **恰好 1 条红** | `assert 85 == 190`——105 个 win32 变体被误算进 `core`，点名精确 |
+| ③ 文案写死旧数字 `172`（与数据脱钩） | **恰好 1 条红** | `'桌面 190 个变体' not in ...`，且失败报文**把成品文案整段打出来**，正好肉眼复核三段都在 |
+
+②③ 是**两个方向**：②打「数据侧」（划归规则），③打「文案侧」（是否真从数据算）。
+只做一个方向的话，另一侧脱钩不会被发现。
+
+**未做的事（如实记）**：本轮**没有**把桌面与 L2 接进页面按钮——那是下一个切片
+（三目标开关：L1 / L1+桌面 / L1+L2）。它需要先改 `tests/commands/conftest.py` 的收集口径
+（现在 `RPA_BROWSER_L2` 与 `RPA_COMMAND_MATRIX` **不叠加**：只开 L2 时它会 ignore 掉全部 L1 驱动），
+再给页面加开关。**这是设计好的欠账，不是遗漏**（已进 §6）。
+
+### 1.15 页签集成三目标：L1 / L1+桌面 / L1+L2（2026-09-23，§6 那笔欠账的兑现）
+
+§1.14 把「页签只点火 L1」如实写在了页面上，但页签仍**点不动**桌面与 L2。本节把它做实。
+
+**前置：先让两个开关能叠加（`tests/commands/conftest.py`）**。改前 `collect_ignore` 是
+`if/else` 二选一——`RPA_COMMAND_MATRIX` 一开就 ignore 掉 L2 驱动、`RPA_BROWSER_L2` 一开就
+ignore 掉**全部** L1 驱动，所以「L1 + L2 一起跑」这条路**根本不存在**。改成把口径抽成纯函数
+`collection_ignore(*, matrix_enabled, l2_enabled, existing=None)`，四格：
+
+| matrix | l2 | 收集 | 实测（`--collect-only`） |
+|---|---|---|---|
+| 未开 | 未开 | 什么都不收集 | **0** |
+| 未开 | 开 | 只有 L2 驱动（旧口径保持） | **110** |
+| 开 | 未开 | 全部 L1 驱动（L2 驱动被 ignore） | **458** |
+| 开 | 开 | 全部 L1 驱动 **+** L2 驱动（**新开的一格**） | **568** |
+
+`458 + 110 = 568` 直接证明可叠加。抽成纯函数是为了让契约测试能注入固定清单验四格——
+**不随目录里新增/删除驱动文件而漂**。
+
+**页面侧：三个目标按钮**（`RUN_TARGETS` 三元组 + `find_target(key)`）：
+
+| 按钮 | env 组合 | 副作用面 | 进度分母 |
+|---|---|---|---|
+| 运行 L1 契约矩阵 | `RPA_COMMAND_MATRIX=1` | 假扩展，不碰本机浏览器 | 268 |
+| L1 + 桌面真机 | `+ RPA_DESKTOP_E2E=1` | 真开窗并抢前台（现场编译 WinForms 靶子），约半分钟 | 458 |
+| L1 + 浏览器真机 | `+ RPA_BROWSER_L2=1` | 拉起一个真实浏览器窗口（独立 profile，不碰你已开的浏览器） | 377 |
+
+做**三个**而不是一个「全跑」按钮，是因为三者副作用面完全不同（不碰浏览器 / 抢前台 / 拉起真浏览器），
+混成一个会让「我点了运行然后浏览器被开了」出现。`_run_matrix` 从「硬编码注 `MATRIX_ENV=1`」
+改成 `for name, value in self._target.env.items(): env.insert(...)`；`_progress_total()` 的分母随目标变。
+保留 `self.run_button` 别名 = 第一个目标，兼容既有契约测试。
+
+**契约测试 18 → 22 项**，新增四条：`test_targets_map_to_the_three_switches`、
+`test_progress_total_follows_the_chosen_target`、`test_run_matrix_really_injects_the_target_env`、
+`test_collection_matrix_is_additive`；扩展 `test_env_names_match_the_pytest_side` 到三个开关名
++ 三者互不相同。
+
+**抓到一条自己写的假绿灯（本轮最重要的一条）**：第四条 `test_targets_map_to_the_three_switches`
+只断言了 `RUN_TARGETS[i].env` 这个**数据定义**——而 §1.14 的教训已经写明「数据定义对 ≠ 注入真发生」。
+把它跟 `test_progress_total_*` 一起跑仍 20 项全绿，直到我**摘掉 `_run_matrix` 的 env 注入循环**去做
+负向验证，才发现没有任何一条能拦住「按钮二安静地跑成按钮一」。补了
+`test_run_matrix_really_injects_the_target_env`（**中间态断言**：走真实入口 `_on_target_clicked`、
+只打桩 `_start`，断言子进程**真实持有的**三个开关）——注入后它精确红在 `AssertionError: l1`。
+
+**负向验证 2 例（两个方向，都做了）**：
+
+| 注入 | 结果 | 说明 |
+|---|---|---|
+| ① 页面侧：`_run_matrix` 不注入目标 env（`pass` 掉那段循环） | **恰好 1 条红** | `test_run_matrix_really_injects_the_target_env` → `AssertionError: l1` |
+| ② conftest 侧：`collection_ignore` 两开关不叠加（`return [L2_DRIVER_NAME]`） | **恰好 1 条红** | `test_collection_matrix_is_additive` → 红在第 372 行「两个都开」那一格 |
+
+① 打「注入侧」、② 打「收集侧」——只做一个方向的话，另一侧脱钩不会被发现。两处注入文件
+均逐字节还原（`grep INJECTED` 无残留）后复跑 22 项全绿。
+
+**探针复核**：`.harness/spike/probe_gui_targets.py` 走真实入口，实测三个目标注入互不串味，
+子进程真实持有的开关与上表一致、进度分母 268 / 458 / 377。
+
 ## 2. 关键设计决定
 
 - **桩只替换 `_exchange`**：同时拿到三样东西——真实下发的 `(op, args)`、信封里的
@@ -804,7 +924,8 @@ S1.2 页签有一条白盒集成用例（`test_panel_streams_jsonl_into_rows`：
 
 ## 5. 验证
 
-- **执行层**：`RPA_COMMAND_MATRIX=1 uv run pytest tests/commands` → **180 passed / exit 0**。
+- **执行层**：`RPA_COMMAND_MATRIX=1 uv run pytest tests/commands` → **180 passed / exit 0**
+  （浏览器通道单驱动；**四驱动全量的当前真值见 §1.13 的桌面订正**——2026-09-23）。
 - **静态层**：`check_command_matrix.py` → `PASSED（已校验 32 条命令；未建表命名空间 3 个
   共 54 条命令；死参数台账 2 项）`。
 - **实现级负向验证**（证明 L1 真能抓漂移）：临时删掉 `browser.click` 里 M29 修好的
@@ -817,6 +938,12 @@ S1.2 页签有一条白盒集成用例（`test_panel_streams_jsonl_into_rows`：
   状态累计 / **面板与 pytest 侧的环境变量名一致**——一份约定两处副本的反漂移钉）+ 数据合同 2（真跑一个变体：`RPA_COMMAND_MATRIX_REPORT` 一设就产出可增量读的
   JSONL；不设则零产出）+ 页签装配 5（三个页签与控件齐 / 覆盖范围文案含未建表命名空间 /
   找不到用例表时只提示不起子进程 / **真实入口的实时流式管道** / `shutdown` 收掉子进程）。
+  **§1.15 扩到 22 项**（+ `test_targets_map_to_the_three_switches` /
+  `test_progress_total_follows_the_chosen_target` / `test_run_matrix_really_injects_the_target_env` /
+  `test_collection_matrix_is_additive`；`test_env_names_match_the_pytest_side` 扩到三个开关名），
+  22 passed / exit 0。
+- **§1.15 收集口径四格（实测）**：`--collect-only` 数得 0 / 110 / 458 / 568（矩阵关+L2 关 / 只 L2 /
+  只矩阵 / 两者都开），`458 + 110 = 568` 证明可叠加。
 - **S1.2 三向负向验证**（见 §4.3；探针保留为 `.harness/spike/probe_gui_matrix_panel.py`，
   与 `probe_browser_commands.py` 同性质，可复跑）：摘点火 / 摘 `timeout.connect` / 摘 `REPORT_ENV`
   注入，三向均 exit=1 且分别落在预期断言，文件逐字节还原。
@@ -866,10 +993,14 @@ S1.2 页签有一条白盒集成用例（`test_panel_streams_jsonl_into_rows`：
 - **FULL GATE PASSED**（S2 补靶子后：静态层 + 契约测试 + ruff + .mjs 切片检查全过；
   桌面 E2E 与指令矩阵仍按需，见 §1.6.7）。
 - **S2 执行层（2026-09-22 补跑）**：`RPA_COMMAND_MATRIX=1 RPA_DESKTOP_E2E=1 pytest tests/commands`
-  → 四驱动全绿（桌面 172：170 passed + 2 xfailed，exit 0）；六向负向验证见 §1.6.7。
+  → 四驱动全绿（桌面当时的 172）——**这个 172 已过期，见 §1.13 的订正：当前真值 190**；
+  六向负向验证见 §1.6.7。
 
 ## 6. 剩余（后续切片）
 
+- **页签集成桌面与 L2**（2026-09-23 新增，**已完成**）：见 §1.15。页签现有三个明确目标
+  （L1 / L1+桌面 / L1+L2，副作用面各不相同），前置的 conftest 收集口径已改成可叠加
+  （四格实测 0 / 110 / 458 / 568），契约测试 18 → 22 项，双向负向验证各 1 例。
 - **S2 桌面通道**（UIA 17 + Win32 19，共 36 条）：**已完成（2026-09-22）**——
   两表 + 两驱动 + 共享装配见 §1.5；`PENDING_NAMESPACES` 已清空（86 条命令全部有表）；
   靶子缺口已补、执行层已首跑并校正（§1.6）。**剩下的都是「产品侧的决策/实现」**，
