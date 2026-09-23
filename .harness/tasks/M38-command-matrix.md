@@ -433,6 +433,35 @@ beta→gamma → 恰好该行红（`effectDetails` 接线生效）；② 停用 
 dragStatus 未变（单跑与后续两轮整模块均过）——前台竞争类抖动，与 S2.3 改动无因果证据，
 先记录不处置。
 
+### 1.8 S4.1：L2 最小链路（2026-09-23，两案均按维护者推荐的来）
+
+策略 §2 L2（真机冒烟）的第一步：不铺表，先把「起服务 + 拉起浏览器 + 真通道往返 +
+会话建立」全链路打通。
+
+- **插桩形状与 L1 同构**：唯一差别是后端——`ScriptedExtension` 换成**真的**
+  `ExtensionExecClient`，执行器/会话/错误整形零改动（构造注入的回报）。
+- **隔离两道**（M36 杀 21 个真进程教训的防线）：① `RPA_EXT_ENDPOINT_PREFIX=
+  rpa_core_ext_l2_`——host 继承浏览器环境、pytest 客户端读自己的 env，两边只见
+  测试端点，用例内顺带断言「可见端点全部带测试前缀」；② 独立
+  `--user-data-dir` 临时 profile + `--load-extension` 注入（unpacked ID 由路径
+  派生，host manifest 早已白名单，`extension_installer.native_host_origins` 的
+  既有机制直接复用，**零机器状态变更**）。收尾按「命令行含 profile 路径」精确
+  杀进程（CIM 查询，不碰同名浏览器其它实例）。
+- **门禁**：`RPA_BROWSER_L2=1`（策略 §4 定案的浏览器侧同类开关）。只开它时
+  conftest 收集层放行 L2 驱动、正向枚举 ignore 掉全部 L1 驱动；缺省 skip 并在
+  尾部提示启用方式（与 L1/桌面 E2E 同款）。
+- **首跑实测**：`1 passed in 6.05s`——navigate 真建会话 → getText 读真实 DOM
+  的 `#t` == `'text'`、effect==read。收尾核验：0 个 l2-profile 的 msedge 残留
+  （当时机器上另有 21 个真实浏览器进程与 1 个 09:55 拉起的 ext-host，均为
+  维护者真实实例，未被触碰——隔离真实生效，不是纸面设计）。
+- **新增**：`testapps/browser/basic.html`（靶页：#t 文本、#kw 输入、#sel 下拉、
+  #chk 勾选、#btn 点击回写、#covered 遮挡对）、
+  `tests/commands/test_browser_l2_matrix.py`（驱动 + session 装配 fixture）。
+- **下一步（S4.2 起）**：给 `browser.json` 正路径变体逐个补 `l2` 块
+  （page + 真机 expect；calls 类断言 L1 独有、不进 `l2`），驱动按 `l2` 块
+  表驱动展开；静态校验器加 `l2` 块口径校验。逐类先探针实测再写期望
+  （沿用 S2/S2.3 纪律）。
+
 ## 2. 关键设计决定
 
 - **桩只替换 `_exchange`**：同时拿到三样东西——真实下发的 `(op, args)`、信封里的

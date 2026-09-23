@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>RPA L2 靶页 basic</title>
+<style>
+  /* 遮挡靶子：#covered 被 #overlay 完全盖住，供 click 的 ELEMENT_COVERED 负路径用 */
+  #stage { position: relative; width: 300px; height: 120px; }
+  #covered { position: absolute; left: 10px; top: 10px; width: 100px; height: 40px; }
+  #overlay {
+    position: absolute; left: 0; top: 0; width: 300px; height: 120px;
+    background: rgba(128, 128, 128, 0.6); z-index: 10;
+  }
+</style>
+</head>
+<body>
+<!-- getText 靶子：textContent 恰为 "text"（text/html/outerHTML 三态后续变体用） -->
+<div id="t">text</div>
+
+<!-- input 靶子：三模式（fill/type/clipboard）与 append/pressEnter 的读侧 -->
+<input id="kw" type="text" value="">
+
+<!-- select 靶子：三个 option，供 select 的 index/label/value 三态用 -->
+<select id="sel">
+  <option value="alpha">Alpha</option>
+  <option value="beta">Beta</option>
+  <option value="gamma">Gamma</option>
+</select>
+
+<!-- check 靶子 -->
+<input id="chk" type="checkbox">
+
+<!-- click 靶子：点击后回写 #status，副作用读侧不依赖 prompt/alert -->
+<button id="btn" onclick="document.getElementById('status').textContent = 'clicked'">Button</button>
+<span id="status">idle</span>
+
+<!-- 遮挡靶子 -->
+<div id="stage">
+  <button id="covered">Covered</button>
+  <div id="overlay"></div>
+</div>
+</body>
+</html>

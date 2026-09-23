@@ -74,6 +74,10 @@ import pytest
 
 MATRIX_ENABLED = os.environ.get("RPA_COMMAND_MATRIX") == "1"
 MATRIX_ENV_HINT = "RPA_COMMAND_MATRIX=1"
+# L2 真机冒烟（浏览器通道）有自己的开关（策略 §4：浏览器侧同类显式开关）。
+# 只开它时收集层放行 L2 驱动、把 L1 驱动全部 ignore 掉。
+L2_ENABLED = os.environ.get("RPA_BROWSER_L2") == "1"
+L2_DRIVER_NAME = "test_browser_l2_matrix.py"
 # 结构化实时报告的落盘路径（GUI 页签用）；未设置则完全不产出文件。
 REPORT_ENV = "RPA_COMMAND_MATRIX_REPORT"
 # 参数化用例的 id 前缀（`_iter_variants` 给每个变体设的 id 是 `<命令>::<变体名>`）。
@@ -224,9 +228,23 @@ def pytest_terminal_summary(terminalreporter) -> None:
     terminalreporter.write_line(
         f"需要时：{MATRIX_ENV_HINT} uv run pytest tests/commands"
     )
+    if not L2_ENABLED:
+        terminalreporter.write_line(
+            "L2 真机冒烟（浏览器通道）缺省跳过：RPA_BROWSER_L2=1 uv run pytest "
+            f"tests/commands/{L2_DRIVER_NAME}（会拉起真实浏览器窗口）"
+        )
 
 
 # 缺省忽略本目录的全部用例文件：新增用例文件不必回来改这里。
+# 只开 L2 开关时例外：放行 L2 驱动、忽略其余（枚举现存文件而不是反向 glob——
+# 反向 glob「忽略除某文件外全部」表达不了，正向枚举将来新增 L1 驱动也不会漏 ignore）。
 # 覆盖率静态校验不在本目录——见 `.harness/scripts/check_command_matrix.py`（在默认门禁里）。
 if not MATRIX_ENABLED:
-    collect_ignore_glob = ["test_*.py"]
+    if L2_ENABLED:
+        collect_ignore = [
+            path.name
+            for path in Path(__file__).parent.glob("test_*.py")
+            if path.name != L2_DRIVER_NAME
+        ]
+    else:
+        collect_ignore_glob = ["test_*.py"]
