@@ -1028,7 +1028,10 @@ async function domOp(payload) {
       el.checked = operation === "check" ? true : (operation === "uncheck" ? false : !before);
       el.dispatchEvent(new Event("input", { bubbles: true }));
       el.dispatchEvent(new Event("change", { bubbles: true }));
-      fire(el, "click", { bubbles: true, view: window });
+      // 不要再补发 click：合成 click 在 checkbox/radio 上会触发**激活行为**（再切换
+      // 一次 checked），把刚设的值翻回去——check/uncheck/toggle 三个操作曾因此全部
+      // 反转（M38 S4.3 L2 真机探针实测抓住；L1 桩断言天然看不见这类病）。
+      // input+change 是框架监听状态变更的标准事件面，足够了。
       return { matchedCount, result: !!el.checked };
     }
     default:

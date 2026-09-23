@@ -24,7 +24,8 @@
 8. **`l2` 块的形状**（M38 S4，L2 真机冒烟）：`l2` 必须是对象；`page` 必填且
    `testapps/browser/<page>.html` 必须存在；`expect` 必填非空且**不得含调用类键**
    （`onlyCall`/`calls`/`noCalls`——L2 没有调用记录面，那是 L1 的桩断言，写了
-   执行层必违规）；`inputs` 若给必须是对象。
+   执行层必违规）；`inputs` 若给必须是对象。`verify` 若给必须是**非空对象列表**，
+   每步 `command` 必填且在 catalog 里、`expect` 同样非空且禁含调用类键。
 
 第 6 条与策略原文的「required 缺省必须被拒」**口径不同**，理由：输入 schema 的
 `required` 由 **orchestrator** 统一校验（`runtime/orchestrator.py` 用
@@ -133,7 +134,24 @@ def _check_known_gaps(command: str, variants: list[dict[str, Any]]) -> list[str]
     return problems
 
 
-def _check_l2_block(command: str, variant: dict[str, Any]) -> list[str]:
+def _check_l2_expect(command: str, name: Any, expect: Any, where: str) -> list[str]:
+    """l2 块里一处 expect 的形状校验（主 expect 与 verify 步共用同一口径）。"""
+    problems: list[str] = []
+    if not isinstance(expect, dict) or not expect:
+        problems.append(f"{command}.{name}: {where} 缺失或为空——真机跑完不断言等于白跑")
+        return problems
+    for key in L2_FORBIDDEN_EXPECT_KEYS:
+        if key in expect:
+            problems.append(
+                f"{command}.{name}: {where} 含调用类键 {key!r}——L2 没有调用记录面"
+                "（那是 L1 假扩展的桩断言），写了执行层必违规"
+            )
+    return problems
+
+
+def _check_l2_block(
+    command: str, variant: dict[str, Any], catalog: dict[str, dict[str, Any]]
+) -> list[str]:
     """第 8 条：`l2` 块的形状校验（口径见模块 docstring）。
 
     没有 `l2` 块的变体合法（L1-only：桩形状整形、通道错误映射、纯下发断言
@@ -145,7 +163,7 @@ def _check_l2_block(command: str, variant: dict[str, Any]) -> list[str]:
         return problems
     name = variant.get("name")
     if not isinstance(l2, dict):
-        problems.append(f"{command}.{name}: l2 必须是对象（page/inputs/expect）")
+        problems.append(f"{command}.{name}: l2 必须是对象（page/inputs/expect/verify）")
         return problems
     page = l2.get("page")
     if not isinstance(page, str) or not page.strip():
@@ -155,18 +173,27 @@ def _check_l2_block(command: str, variant: dict[str, Any]) -> list[str]:
             f"{command}.{name}: l2.page={page!r} 没有对应靶页 "
             f"testapps/browser/{page.strip()}.html"
         )
-    expect = l2.get("expect")
-    if not isinstance(expect, dict) or not expect:
-        problems.append(f"{command}.{name}: l2.expect 缺失或为空——真机跑完不断言等于白跑")
-    else:
-        for key in L2_FORBIDDEN_EXPECT_KEYS:
-            if key in expect:
-                problems.append(
-                    f"{command}.{name}: l2.expect 含调用类键 {key!r}——L2 没有调用记录面"
-                    "（那是 L1 假扩展的桩断言），写了执行层必违规"
-                )
+    problems.extend(_check_l2_expect(command, name, l2.get("expect"), "l2.expect"))
     if "inputs" in l2 and not isinstance(l2["inputs"], dict):
         problems.append(f"{command}.{name}: l2.inputs 必须是对象（覆盖 variant.inputs）")
+    verify = l2.get("verify")
+    if verify is not None:
+        if not isinstance(verify, list) or not verify:
+            problems.append(f"{command}.{name}: l2.verify 必须是非空列表")
+        else:
+            for index, step in enumerate(verify):
+                where = f"l2.verify[{index}]"
+                if not isinstance(step, dict):
+                    problems.append(f"{command}.{name}: {where} 必须是对象")
+                    continue
+                step_command = step.get("command")
+                if not isinstance(step_command, str) or step_command not in catalog:
+                    problems.append(
+                        f"{command}.{name}: {where}.command={step_command!r} 不在 catalog 里"
+                    )
+                problems.extend(
+                    _check_l2_expect(command, name, step.get("expect"), f"{where}.expect")
+                )
     return problems
 
 
@@ -281,13 +308,13 @@ def main() -> int:
         if command not in catalog:
             problems.append(f"{command}: 用例表里有，但 catalog 里没有（命令已删或改名？）")
 
-    # 第 8 条：l2 块形状校验（不依赖 catalog，全表扫）
+    # 第 8 条：l2 块形状校验（不依赖 catalog 收录与否，全表扫；verify 步的命令引用要查 catalog）
     l2_count = 0
     for command, spec in sorted(cases.items()):
         for variant in _variants(spec):
             if "l2" in variant:
                 l2_count += 1
-            problems.extend(_check_l2_block(command, variant))
+            problems.extend(_check_l2_block(command, variant, catalog))
 
     pending = sum(
         1 for command in catalog if command.split(".")[0] in PENDING_NAMESPACES

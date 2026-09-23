@@ -138,6 +138,32 @@
             "matchedCount": 1
           },
           "effect": "unsafe-write"
+        },
+        "l2": {
+          "page": "basic",
+          "inputs": {
+            "selector": "#chk"
+          },
+          "expect": {
+            "outputs": {
+              "checked": true
+            },
+            "effect": "unsafe-write"
+          },
+          "verify": [
+            {
+              "command": "browser.executeScript",
+              "inputs": {
+                "script": "return document.querySelector('#chk').checked"
+              },
+              "expect": {
+                "outputs": {
+                  "result": true
+                },
+                "effect": "unsafe-write"
+              }
+            }
+          ]
         }
       },
       {
@@ -154,6 +180,32 @@
               }
             }
           }
+        },
+        "l2": {
+          "page": "basic",
+          "inputs": {
+            "selector": "#chk"
+          },
+          "expect": {
+            "outputs": {
+              "checked": false
+            },
+            "effect": "unsafe-write"
+          },
+          "verify": [
+            {
+              "command": "browser.executeScript",
+              "inputs": {
+                "script": "return document.querySelector('#chk').checked"
+              },
+              "expect": {
+                "outputs": {
+                  "result": false
+                },
+                "effect": "unsafe-write"
+              }
+            }
+          ]
         }
       },
       {
@@ -170,6 +222,32 @@
               }
             }
           }
+        },
+        "l2": {
+          "page": "basic",
+          "inputs": {
+            "selector": "#chk"
+          },
+          "expect": {
+            "outputs": {
+              "checked": true
+            },
+            "effect": "unsafe-write"
+          },
+          "verify": [
+            {
+              "command": "browser.executeScript",
+              "inputs": {
+                "script": "return document.querySelector('#chk').checked"
+              },
+              "expect": {
+                "outputs": {
+                  "result": true
+                },
+                "effect": "unsafe-write"
+              }
+            }
+          ]
         }
       },
       {
@@ -199,7 +277,16 @@
         "expect": {
           "errorCode": "ELEMENT_NOT_FOUND"
         },
-        "negative": true
+        "negative": true,
+        "l2": {
+          "page": "basic",
+          "inputs": {
+            "selector": "#absent"
+          },
+          "expect": {
+            "errorCode": "ELEMENT_NOT_FOUND"
+          }
+        }
       },
       {
         "name": "timeoutMs-lower-bound-reaches-the-channel",
@@ -257,6 +344,33 @@
             "sessionId": "s"
           },
           "effect": "unsafe-write"
+        },
+        "l2": {
+          "page": "basic",
+          "inputs": {
+            "selector": "#btn"
+          },
+          "expect": {
+            "outputs": {
+              "matchedCount": 1
+            },
+            "effect": "unsafe-write"
+          },
+          "verify": [
+            {
+              "command": "browser.getText",
+              "inputs": {
+                "selector": "#status",
+                "infoType": "text"
+              },
+              "expect": {
+                "outputs": {
+                  "value": "clicked:1"
+                },
+                "effect": "read"
+              }
+            }
+          ]
         }
       },
       {
@@ -273,6 +387,33 @@
               }
             }
           }
+        },
+        "l2": {
+          "page": "basic",
+          "inputs": {
+            "selector": "#btn"
+          },
+          "expect": {
+            "outputs": {
+              "matchedCount": 1
+            },
+            "effect": "unsafe-write"
+          },
+          "verify": [
+            {
+              "command": "browser.getText",
+              "inputs": {
+                "selector": "#status",
+                "infoType": "text"
+              },
+              "expect": {
+                "outputs": {
+                  "value": "dblclicked"
+                },
+                "effect": "read"
+              }
+            }
+          ]
         }
       },
       {
@@ -289,6 +430,33 @@
               }
             }
           }
+        },
+        "l2": {
+          "page": "basic",
+          "inputs": {
+            "selector": "#btn"
+          },
+          "expect": {
+            "outputs": {
+              "matchedCount": 1
+            },
+            "effect": "unsafe-write"
+          },
+          "verify": [
+            {
+              "command": "browser.getText",
+              "inputs": {
+                "selector": "#status",
+                "infoType": "text"
+              },
+              "expect": {
+                "outputs": {
+                  "value": "ctx"
+                },
+                "effect": "read"
+              }
+            }
+          ]
         }
       },
       {
@@ -305,6 +473,33 @@
               }
             }
           }
+        },
+        "l2": {
+          "page": "basic",
+          "inputs": {
+            "selector": "#btn"
+          },
+          "expect": {
+            "outputs": {
+              "matchedCount": 1
+            },
+            "effect": "unsafe-write"
+          },
+          "verify": [
+            {
+              "command": "browser.getText",
+              "inputs": {
+                "selector": "#status",
+                "infoType": "text"
+              },
+              "expect": {
+                "outputs": {
+                  "value": "middle-down"
+                },
+                "effect": "read"
+              }
+            }
+          ]
         }
       },
       {
@@ -327,6 +522,33 @@
               }
             }
           }
+        },
+        "l2": {
+          "page": "basic",
+          "inputs": {
+            "selector": "#btn"
+          },
+          "expect": {
+            "outputs": {
+              "matchedCount": 1
+            },
+            "effect": "unsafe-write"
+          },
+          "verify": [
+            {
+              "command": "browser.getText",
+              "inputs": {
+                "selector": "#mods",
+                "infoType": "text"
+              },
+              "expect": {
+                "outputs": {
+                  "value": "CW"
+                },
+                "effect": "read"
+              }
+            }
+          ]
         }
       },
       {
@@ -343,6 +565,33 @@
               }
             }
           }
+        },
+        "l2": {
+          "page": "basic",
+          "inputs": {
+            "selector": "#btn"
+          },
+          "expect": {
+            "outputs": {
+              "matchedCount": 1
+            },
+            "effect": "unsafe-write"
+          },
+          "verify": [
+            {
+              "command": "browser.getText",
+              "inputs": {
+                "selector": "#status",
+                "infoType": "text"
+              },
+              "expect": {
+                "outputs": {
+                  "value": "clicked:1"
+                },
+                "effect": "read"
+              }
+            }
+          ]
         }
       },
       {
@@ -359,6 +608,33 @@
               }
             }
           }
+        },
+        "l2": {
+          "page": "basic",
+          "inputs": {
+            "selector": "#btn"
+          },
+          "expect": {
+            "outputs": {
+              "matchedCount": 1
+            },
+            "effect": "unsafe-write"
+          },
+          "verify": [
+            {
+              "command": "browser.getText",
+              "inputs": {
+                "selector": "#status",
+                "infoType": "text"
+              },
+              "expect": {
+                "outputs": {
+                  "value": "clicked:1"
+                },
+                "effect": "read"
+              }
+            }
+          ]
         }
       },
       {
@@ -372,6 +648,34 @@
             "op": "page.call"
           },
           "elapsedAtLeastMs": 45
+        },
+        "l2": {
+          "page": "basic",
+          "inputs": {
+            "selector": "#btn"
+          },
+          "expect": {
+            "outputs": {
+              "matchedCount": 1
+            },
+            "effect": "unsafe-write",
+            "elapsedAtLeastMs": 50
+          },
+          "verify": [
+            {
+              "command": "browser.getText",
+              "inputs": {
+                "selector": "#status",
+                "infoType": "text"
+              },
+              "expect": {
+                "outputs": {
+                  "value": "clicked:1"
+                },
+                "effect": "read"
+              }
+            }
+          ]
         }
       },
       {
@@ -401,7 +705,16 @@
         "expect": {
           "errorCode": "ELEMENT_NOT_FOUND"
         },
-        "negative": true
+        "negative": true,
+        "l2": {
+          "page": "basic",
+          "inputs": {
+            "selector": "#absent"
+          },
+          "expect": {
+            "errorCode": "ELEMENT_NOT_FOUND"
+          }
+        }
       },
       {
         "name": "timeoutMs-lower-bound-reaches-the-channel",
@@ -1194,6 +1507,34 @@
             "sessionId": "s"
           },
           "effect": "unsafe-write"
+        },
+        "l2": {
+          "page": "basic",
+          "inputs": {
+            "selector": "#src",
+            "targetSelector": "#drop"
+          },
+          "expect": {
+            "outputs": {
+              "matchedCount": 1
+            },
+            "effect": "unsafe-write"
+          },
+          "verify": [
+            {
+              "command": "browser.getText",
+              "inputs": {
+                "selector": "#status",
+                "infoType": "text"
+              },
+              "expect": {
+                "outputs": {
+                  "value": "dropped"
+                },
+                "effect": "read"
+              }
+            }
+          ]
         }
       },
       {
@@ -1225,7 +1566,17 @@
         "expect": {
           "errorCode": "ELEMENT_NOT_FOUND"
         },
-        "negative": true
+        "negative": true,
+        "l2": {
+          "page": "basic",
+          "inputs": {
+            "selector": "#absent",
+            "targetSelector": "#drop"
+          },
+          "expect": {
+            "errorCode": "ELEMENT_NOT_FOUND"
+          }
+        }
       },
       {
         "name": "timeoutMs-lower-bound-reaches-the-channel",
@@ -1539,6 +1890,16 @@
             "scrollY": 0
           },
           "effect": "read"
+        },
+        "l2": {
+          "page": "basic",
+          "expect": {
+            "outputs": {
+              "scrollX": 0,
+              "scrollY": 0
+            },
+            "effect": "read"
+          }
         }
       },
       {
@@ -1553,6 +1914,16 @@
             "args": {
               "selector": "#box"
             }
+          }
+        },
+        "l2": {
+          "page": "basic",
+          "expect": {
+            "outputs": {
+              "scrollX": 0,
+              "scrollY": 0
+            },
+            "effect": "read"
           }
         }
       },
@@ -1605,7 +1976,16 @@
         "expect": {
           "errorCode": "ELEMENT_NOT_FOUND"
         },
-        "negative": true
+        "negative": true,
+        "l2": {
+          "page": "basic",
+          "inputs": {
+            "selector": "#absent"
+          },
+          "expect": {
+            "errorCode": "ELEMENT_NOT_FOUND"
+          }
+        }
       },
       {
         "name": "timeoutMs-lower-bound-reaches-the-channel",
@@ -2086,6 +2466,33 @@
             "sessionId": "s"
           },
           "effect": "unsafe-write"
+        },
+        "l2": {
+          "page": "basic",
+          "inputs": {
+            "selector": "#hv"
+          },
+          "expect": {
+            "outputs": {
+              "matchedCount": 1
+            },
+            "effect": "unsafe-write"
+          },
+          "verify": [
+            {
+              "command": "browser.getText",
+              "inputs": {
+                "selector": "#status",
+                "infoType": "text"
+              },
+              "expect": {
+                "outputs": {
+                  "value": "hovered"
+                },
+                "effect": "read"
+              }
+            }
+          ]
         }
       },
       {
@@ -2115,7 +2522,16 @@
         "expect": {
           "errorCode": "ELEMENT_NOT_FOUND"
         },
-        "negative": true
+        "negative": true,
+        "l2": {
+          "page": "basic",
+          "inputs": {
+            "selector": "#absent"
+          },
+          "expect": {
+            "errorCode": "ELEMENT_NOT_FOUND"
+          }
+        }
       },
       {
         "name": "timeoutMs-lower-bound-reaches-the-channel",
@@ -2171,6 +2587,33 @@
             "sessionId": "s"
           },
           "effect": "unsafe-write"
+        },
+        "l2": {
+          "page": "basic",
+          "inputs": {
+            "selector": "#kw"
+          },
+          "expect": {
+            "outputs": {
+              "matchedCount": 1
+            },
+            "effect": "unsafe-write"
+          },
+          "verify": [
+            {
+              "command": "browser.getText",
+              "inputs": {
+                "selector": "#kw",
+                "infoType": "value"
+              },
+              "expect": {
+                "outputs": {
+                  "value": "hi"
+                },
+                "effect": "read"
+              }
+            }
+          ]
         }
       },
       {
@@ -2188,6 +2631,33 @@
               }
             }
           }
+        },
+        "l2": {
+          "page": "basic",
+          "inputs": {
+            "selector": "#kw"
+          },
+          "expect": {
+            "outputs": {
+              "matchedCount": 1
+            },
+            "effect": "unsafe-write"
+          },
+          "verify": [
+            {
+              "command": "browser.getText",
+              "inputs": {
+                "selector": "#kw",
+                "infoType": "value"
+              },
+              "expect": {
+                "outputs": {
+                  "value": "presethi"
+                },
+                "effect": "read"
+              }
+            }
+          ]
         }
       },
       {
@@ -2205,6 +2675,33 @@
               }
             }
           }
+        },
+        "l2": {
+          "page": "basic",
+          "inputs": {
+            "selector": "#kw"
+          },
+          "expect": {
+            "outputs": {
+              "matchedCount": 1
+            },
+            "effect": "unsafe-write"
+          },
+          "verify": [
+            {
+              "command": "browser.getText",
+              "inputs": {
+                "selector": "#kw",
+                "infoType": "value"
+              },
+              "expect": {
+                "outputs": {
+                  "value": "hi"
+                },
+                "effect": "read"
+              }
+            }
+          ]
         }
       },
       {
@@ -2223,6 +2720,34 @@
               }
             }
           }
+        },
+        "l2": {
+          "page": "basic",
+          "inputs": {
+            "selector": "#kw"
+          },
+          "expect": {
+            "outputs": {
+              "matchedCount": 1
+            },
+            "effect": "unsafe-write",
+            "elapsedAtLeastMs": 200
+          },
+          "verify": [
+            {
+              "command": "browser.getText",
+              "inputs": {
+                "selector": "#kw",
+                "infoType": "value"
+              },
+              "expect": {
+                "outputs": {
+                  "value": "presethi"
+                },
+                "effect": "read"
+              }
+            }
+          ]
         }
       },
       {
@@ -2241,6 +2766,33 @@
               }
             }
           }
+        },
+        "l2": {
+          "page": "basic",
+          "inputs": {
+            "selector": "#kw"
+          },
+          "expect": {
+            "outputs": {
+              "matchedCount": 1
+            },
+            "effect": "unsafe-write"
+          },
+          "verify": [
+            {
+              "command": "browser.getText",
+              "inputs": {
+                "selector": "#kw",
+                "infoType": "value"
+              },
+              "expect": {
+                "outputs": {
+                  "value": "presethi"
+                },
+                "effect": "read"
+              }
+            }
+          ]
         }
       },
       {
@@ -2258,6 +2810,33 @@
               }
             }
           }
+        },
+        "l2": {
+          "page": "basic",
+          "inputs": {
+            "selector": "#kw"
+          },
+          "expect": {
+            "outputs": {
+              "matchedCount": 1
+            },
+            "effect": "unsafe-write"
+          },
+          "verify": [
+            {
+              "command": "browser.getText",
+              "inputs": {
+                "selector": "#kw",
+                "infoType": "value"
+              },
+              "expect": {
+                "outputs": {
+                  "value": "presethi"
+                },
+                "effect": "read"
+              }
+            }
+          ]
         }
       },
       {
@@ -2275,6 +2854,33 @@
               }
             }
           }
+        },
+        "l2": {
+          "page": "basic",
+          "inputs": {
+            "selector": "#kw"
+          },
+          "expect": {
+            "outputs": {
+              "matchedCount": 1
+            },
+            "effect": "unsafe-write"
+          },
+          "verify": [
+            {
+              "command": "browser.getText",
+              "inputs": {
+                "selector": "#kw",
+                "infoType": "value"
+              },
+              "expect": {
+                "outputs": {
+                  "value": "hi"
+                },
+                "effect": "read"
+              }
+            }
+          ]
         }
       },
       {
@@ -2292,6 +2898,33 @@
               }
             }
           }
+        },
+        "l2": {
+          "page": "basic",
+          "inputs": {
+            "selector": "#kw"
+          },
+          "expect": {
+            "outputs": {
+              "matchedCount": 1
+            },
+            "effect": "unsafe-write"
+          },
+          "verify": [
+            {
+              "command": "browser.getText",
+              "inputs": {
+                "selector": "#kw",
+                "infoType": "value"
+              },
+              "expect": {
+                "outputs": {
+                  "value": "hi"
+                },
+                "effect": "read"
+              }
+            }
+          ]
         }
       },
       {
@@ -2306,6 +2939,34 @@
             "op": "page.call"
           },
           "elapsedAtLeastMs": 45
+        },
+        "l2": {
+          "page": "basic",
+          "inputs": {
+            "selector": "#kw"
+          },
+          "expect": {
+            "outputs": {
+              "matchedCount": 1
+            },
+            "effect": "unsafe-write",
+            "elapsedAtLeastMs": 50
+          },
+          "verify": [
+            {
+              "command": "browser.getText",
+              "inputs": {
+                "selector": "#kw",
+                "infoType": "value"
+              },
+              "expect": {
+                "outputs": {
+                  "value": "hi"
+                },
+                "effect": "read"
+              }
+            }
+          ]
         }
       },
       {
@@ -2360,7 +3021,16 @@
         "expect": {
           "errorCode": "ELEMENT_NOT_FOUND"
         },
-        "negative": true
+        "negative": true,
+        "l2": {
+          "page": "basic",
+          "inputs": {
+            "selector": "#absent"
+          },
+          "expect": {
+            "errorCode": "ELEMENT_NOT_FOUND"
+          }
+        }
       },
       {
         "name": "timeoutMs-lower-bound-reaches-the-channel",
@@ -2955,6 +3625,28 @@
             "scrollY": 0.0
           },
           "effect": "unsafe-write"
+        },
+        "l2": {
+          "page": "basic",
+          "expect": {
+            "outputs": {
+              "scrollY": 0
+            },
+            "effect": "unsafe-write"
+          },
+          "verify": [
+            {
+              "command": "browser.getScrollPosition",
+              "inputs": {},
+              "expect": {
+                "outputs": {
+                  "scrollX": 0,
+                  "scrollY": 0
+                },
+                "effect": "read"
+              }
+            }
+          ]
         }
       },
       {
@@ -2971,6 +3663,28 @@
               }
             }
           }
+        },
+        "l2": {
+          "page": "basic",
+          "expect": {
+            "outputs": {
+              "scrollY": 2595
+            },
+            "effect": "unsafe-write"
+          },
+          "verify": [
+            {
+              "command": "browser.getScrollPosition",
+              "inputs": {},
+              "expect": {
+                "outputs": {
+                  "scrollX": 0,
+                  "scrollY": 2595
+                },
+                "effect": "read"
+              }
+            }
+          ]
         }
       },
       {
@@ -2987,6 +3701,28 @@
               }
             }
           }
+        },
+        "l2": {
+          "page": "basic",
+          "expect": {
+            "outputs": {
+              "scrollY": 808
+            },
+            "effect": "unsafe-write"
+          },
+          "verify": [
+            {
+              "command": "browser.getScrollPosition",
+              "inputs": {},
+              "expect": {
+                "outputs": {
+                  "scrollX": 0,
+                  "scrollY": 808
+                },
+                "effect": "read"
+              }
+            }
+          ]
         }
       },
       {
@@ -3007,6 +3743,28 @@
               }
             }
           }
+        },
+        "l2": {
+          "page": "basic",
+          "expect": {
+            "outputs": {
+              "scrollY": 20
+            },
+            "effect": "unsafe-write"
+          },
+          "verify": [
+            {
+              "command": "browser.getScrollPosition",
+              "inputs": {},
+              "expect": {
+                "outputs": {
+                  "scrollX": 0,
+                  "scrollY": 20
+                },
+                "effect": "read"
+              }
+            }
+          ]
         }
       },
       {
@@ -3022,6 +3780,33 @@
               "selector": "#box"
             }
           }
+        },
+        "l2": {
+          "page": "basic",
+          "inputs": {
+            "position": "bottom"
+          },
+          "expect": {
+            "outputs": {
+              "scrollY": 700
+            },
+            "effect": "unsafe-write"
+          },
+          "verify": [
+            {
+              "command": "browser.getScrollPosition",
+              "inputs": {
+                "selector": "#box"
+              },
+              "expect": {
+                "outputs": {
+                  "scrollX": 0,
+                  "scrollY": 700
+                },
+                "effect": "read"
+              }
+            }
+          ]
         }
       },
       {
@@ -3077,6 +3862,15 @@
             "scrollY": 0.0
           },
           "effect": "unsafe-write"
+        },
+        "l2": {
+          "page": "basic",
+          "expect": {
+            "outputs": {
+              "scrollY": 0
+            },
+            "effect": "unsafe-write"
+          }
         }
       },
       {
@@ -3161,6 +3955,34 @@
             "sessionId": "s"
           },
           "effect": "unsafe-write"
+        },
+        "l2": {
+          "page": "basic",
+          "inputs": {
+            "selector": "#sel",
+            "value": "beta"
+          },
+          "expect": {
+            "outputs": {
+              "matchedCount": 1
+            },
+            "effect": "unsafe-write"
+          },
+          "verify": [
+            {
+              "command": "browser.getText",
+              "inputs": {
+                "selector": "#sel",
+                "infoType": "value"
+              },
+              "expect": {
+                "outputs": {
+                  "value": "beta"
+                },
+                "effect": "read"
+              }
+            }
+          ]
         }
       },
       {
@@ -3179,6 +4001,34 @@
               }
             }
           }
+        },
+        "l2": {
+          "page": "basic",
+          "inputs": {
+            "selector": "#sel",
+            "value": "Gamma"
+          },
+          "expect": {
+            "outputs": {
+              "matchedCount": 1
+            },
+            "effect": "unsafe-write"
+          },
+          "verify": [
+            {
+              "command": "browser.getText",
+              "inputs": {
+                "selector": "#sel",
+                "infoType": "value"
+              },
+              "expect": {
+                "outputs": {
+                  "value": "gamma"
+                },
+                "effect": "read"
+              }
+            }
+          ]
         }
       },
       {
@@ -3197,6 +4047,33 @@
               }
             }
           }
+        },
+        "l2": {
+          "page": "basic",
+          "inputs": {
+            "selector": "#sel"
+          },
+          "expect": {
+            "outputs": {
+              "matchedCount": 1
+            },
+            "effect": "unsafe-write"
+          },
+          "verify": [
+            {
+              "command": "browser.getText",
+              "inputs": {
+                "selector": "#sel",
+                "infoType": "value"
+              },
+              "expect": {
+                "outputs": {
+                  "value": "gamma"
+                },
+                "effect": "read"
+              }
+            }
+          ]
         }
       },
       {
@@ -3228,7 +4105,16 @@
         "expect": {
           "errorCode": "ELEMENT_NOT_FOUND"
         },
-        "negative": true
+        "negative": true,
+        "l2": {
+          "page": "basic",
+          "inputs": {
+            "selector": "#absent"
+          },
+          "expect": {
+            "errorCode": "ELEMENT_NOT_FOUND"
+          }
+        }
       },
       {
         "name": "timeoutMs-lower-bound-reaches-the-channel",
@@ -3281,6 +4167,29 @@
             "matchedCount"
           ],
           "effect": "unsafe-write"
+        },
+        "l2": {
+          "page": "basic",
+          "expect": {
+            "outputs": {
+              "matchedCount": 1
+            },
+            "effect": "unsafe-write"
+          },
+          "verify": [
+            {
+              "command": "browser.executeScript",
+              "inputs": {
+                "script": "return document.querySelector('#t').getAttribute('data-x')"
+              },
+              "expect": {
+                "outputs": {
+                  "result": "y"
+                },
+                "effect": "unsafe-write"
+              }
+            }
+          ]
         }
       },
       {
@@ -3314,7 +4223,16 @@
         "expect": {
           "errorCode": "ELEMENT_NOT_FOUND"
         },
-        "negative": true
+        "negative": true,
+        "l2": {
+          "page": "basic",
+          "inputs": {
+            "selector": "#absent"
+          },
+          "expect": {
+            "errorCode": "ELEMENT_NOT_FOUND"
+          }
+        }
       },
       {
         "name": "timeoutMs-lower-bound-reaches-the-channel",
@@ -3368,6 +4286,34 @@
             "matchedCount"
           ],
           "effect": "unsafe-write"
+        },
+        "l2": {
+          "page": "basic",
+          "inputs": {
+            "selector": "#kw",
+            "value": "v2"
+          },
+          "expect": {
+            "outputs": {
+              "matchedCount": 1
+            },
+            "effect": "unsafe-write"
+          },
+          "verify": [
+            {
+              "command": "browser.getText",
+              "inputs": {
+                "selector": "#kw",
+                "infoType": "value"
+              },
+              "expect": {
+                "outputs": {
+                  "value": "v2"
+                },
+                "effect": "read"
+              }
+            }
+          ]
         }
       },
       {
@@ -3385,6 +4331,33 @@
               }
             }
           }
+        },
+        "l2": {
+          "page": "basic",
+          "inputs": {
+            "value": "v2"
+          },
+          "expect": {
+            "outputs": {
+              "matchedCount": 1
+            },
+            "effect": "unsafe-write"
+          },
+          "verify": [
+            {
+              "command": "browser.getText",
+              "inputs": {
+                "selector": "#t",
+                "infoType": "text"
+              },
+              "expect": {
+                "outputs": {
+                  "value": "v2"
+                },
+                "effect": "read"
+              }
+            }
+          ]
         }
       },
       {
@@ -3402,6 +4375,33 @@
               }
             }
           }
+        },
+        "l2": {
+          "page": "basic",
+          "inputs": {
+            "value": "<b>b</b>"
+          },
+          "expect": {
+            "outputs": {
+              "matchedCount": 1
+            },
+            "effect": "unsafe-write"
+          },
+          "verify": [
+            {
+              "command": "browser.getText",
+              "inputs": {
+                "selector": "#t",
+                "infoType": "html"
+              },
+              "expect": {
+                "outputs": {
+                  "value": "<b>b</b>"
+                },
+                "effect": "read"
+              }
+            }
+          ]
         }
       },
       {
@@ -3433,7 +4433,16 @@
         "expect": {
           "errorCode": "ELEMENT_NOT_FOUND"
         },
-        "negative": true
+        "negative": true,
+        "l2": {
+          "page": "basic",
+          "inputs": {
+            "selector": "#absent"
+          },
+          "expect": {
+            "errorCode": "ELEMENT_NOT_FOUND"
+          }
+        }
       },
       {
         "name": "timeoutMs-lower-bound-reaches-the-channel",

@@ -11,13 +11,20 @@
     position: absolute; left: 0; top: 0; width: 300px; height: 120px;
     background: rgba(128, 128, 128, 0.6); z-index: 10;
   }
+  /* 滚动靶子：页面整体可滚（spacer 撑高）+ 元素内滚动 #box */
+  #box { height: 100px; overflow: auto; border: 1px solid #999; }
+  #boxinner { height: 800px; }
+  #spacer { height: 3000px; }
+  /* 拖拽靶子 */
+  #src { width: 80px; height: 30px; background: #cde; }
+  #drop { width: 160px; height: 60px; background: #eee; border: 1px dashed #666; }
 </style>
 </head>
 <body>
 <!-- getText 靶子：textContent 恰为 "text"（text/html/outerHTML 三态后续变体用） -->
 <div id="t">text</div>
 
-<!-- getText href 靶子：href 读回的是绝对 URL（端口随运行漂移，断言用正则） -->
+<!-- getText href 靶子：href 读回的是属性原值（S4.2 探针实测），断言用精确值 -->
 <a id="link" href="/next">next</a>
 
 <!-- queryAll 多匹配靶子 -->
@@ -37,14 +44,78 @@
 <!-- check 靶子 -->
 <input id="chk" type="checkbox">
 
-<!-- click 靶子：点击后回写 #status，副作用读侧不依赖 prompt/alert -->
-<button id="btn" onclick="document.getElementById('status').textContent = 'clicked'">Button</button>
+<!--
+  交互读侧约定：动作类命令的读侧是 #status / #mods 两个 span——
+  动作回写 #status，修饰键回写 #mods（CWAS = Ctrl/Win/Shift/Alt）。
+  L2 的 verify 步用 getText/executeScript 独立读回，不拿执行器自报当证据。
+-->
+<button id="btn">Button</button>
 <span id="status">idle</span>
+<span id="mods"></span>
+
+<!-- hover 靶子 -->
+<div id="hv">hover me</div>
+
+<!-- 元素内滚动靶子 -->
+<div id="box"><div id="boxinner">inner</div></div>
+
+<!-- 拖拽靶子 -->
+<div id="src" draggable="true">drag me</div>
+<div id="drop">drop here</div>
 
 <!-- 遮挡靶子 -->
 <div id="stage">
   <button id="covered">Covered</button>
   <div id="overlay"></div>
 </div>
+
+<!-- 窗口滚动余量 -->
+<div id="spacer"></div>
+
+<script>
+(function () {
+  var clicks = 0;
+  var status = document.getElementById("status");
+  var mods = document.getElementById("mods");
+  function setStatus(text) { status.textContent = text; }
+  function setMods(e) {
+    mods.textContent = (e.ctrlKey ? "C" : "") + (e.metaKey ? "W" : "")
+      + (e.shiftKey ? "S" : "") + (e.altKey ? "A" : "");
+  }
+  var btn = document.getElementById("btn");
+  // click 只认左键：真实浏览器右键不发 click（发 contextmenu/auxclick），
+  // 让 #status 能被右键/中键的专属事件占据而不被覆盖
+  btn.addEventListener("click", function (e) {
+    if (e.button !== 0) return;
+    clicks += 1;
+    setStatus("clicked:" + clicks);
+    setMods(e);
+  });
+  btn.addEventListener("dblclick", function (e) {
+    setStatus("dblclicked");
+    setMods(e);
+  });
+  btn.addEventListener("mousedown", function (e) {
+    if (e.button === 1) { setStatus("middle-down"); setMods(e); }
+  });
+  btn.addEventListener("contextmenu", function (e) {
+    e.preventDefault();
+    setStatus("ctx");
+    setMods(e);
+  });
+  btn.addEventListener("auxclick", function (e) {
+    if (e.button === 1) { setStatus("aux"); setMods(e); }
+  });
+  document.getElementById("hv").addEventListener("mouseover", function () {
+    setStatus("hovered");
+  });
+  var drop = document.getElementById("drop");
+  drop.addEventListener("dragover", function (e) { e.preventDefault(); });
+  drop.addEventListener("drop", function (e) {
+    e.preventDefault();
+    setStatus("dropped");
+  });
+})();
+</script>
 </body>
 </html>

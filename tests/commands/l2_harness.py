@@ -134,6 +134,9 @@ def l2_browser_session(browser: str = "msedge") -> Iterator[SimpleNamespace]:
                 f"--user-data-dir={profile_dir}",
                 "--no-first-run",
                 "--no-default-browser-check",
+                # 钉住窗口尺寸：scroll 类断言的 scrollY 精确值依赖视口高，
+                # 不钉就随显示器/DPI 漂移（L2 是本机可选冒烟，接受机器相关的钉值）
+                "--window-size=1280,900",
             ],
         )
 

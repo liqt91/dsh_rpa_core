@@ -496,6 +496,47 @@ dragStatus 未变（单跑与后续两轮整模块均过）——前台竞争类
   多匹配）、`#kw` 预置值 `preset`（value 靶子）；`#t` 保持 textContent
   恰为 `text`（S4.1 冒烟依赖它）。
 
+### 1.10 S4.3：交互族 10 命令 46 变体 + 一个真产品 bug（2026-09-23）
+
+**L2 的第一笔回报就是一个真 bug**：`browser.check` 的 check/uncheck/toggle
+**三个操作全部反转**——扩展侧设完 `el.checked` 又补发了一个合成 `click`，
+而合成 click 在 checkbox 上触发**激活行为**（再切换一次 checked），把刚设的
+值翻回去（`background.js` check case）。L1 桩断言天然看不见这类病
+（stub 应答里 `checked` 永远是脚本写的值）；只有真 DOM 读侧能抓到。
+修复：删掉那行 click 补发（input+change 是框架监听状态变更的标准事件面）。
+**这是 L2 存在意义的实证**——策略 §2 预判的「真实浏览器里到底有没有生效」
+类缺陷，第一个被抓的就是它。
+
+**读侧机制落地（桌面 S2.3 双读侧教训的浏览器版）**：`l2` 块新增 `verify`
+步——主命令之后、同执行器同会话、用**另一条命令**独立读回页面状态
+（`#status`/`#mods` 读侧约定：动作回写 status、修饰键按 CWAS 回写 mods）。
+驱动与静态校验器（第 8 条扩展：verify 步 command 必须在 catalog、expect
+同样禁调用类键）同步支持。
+
+**探针实测的其它语义**（都已写进表）：
+- `input` 的 type 模式是**追加**（`preset`+`hi`→`presethi`），fill/clipboard
+  是替换——真实语义差，L1 的参数下发断言看不出来；
+- `click` 的 double 发的是 `click`+`dblclick`（不是 click×2）——靶页按真实
+  语义收（左键 click 才计数、dblclick/右键 contextmenu/中键 mousedown 各自
+  回写），不拿想象写期望；
+- `keyIntervalMs`/`postDelayMs` 在真机上用 `elapsedAtLeastMs` 断言（实测
+  216.9/318.8ms，下界取 200/50）；
+- scroll 的 scrollY 精确值依赖视口——`l2_harness` 钉 `--window-size=1280,900`
+  （L2 是本机可选冒烟，接受钉值）；`smooth` 变体**不收**（动画时序竞态，
+  命令返回时位置未到位，无法同步断言）。
+
+**注入方式**：46 个 l2 块用 `.harness/spike/add_l2_interact.py` 脚本注入
+（browser.json 的 json.dumps 往返逐字节稳定已验证；每目标断言「恰好命中
+一条且尚无 l2」）。手工补了一课：`selectBy-label` 的 `value` 也要覆盖
+（L1 的 "Label" 是桩世界的值，真页面不存在——首跑恰好它红，改 `"Gamma"`）。
+
+**验证**：L2 真机 `62 passed in 21.65s`（61 变体 + 隔离用例）；L1 回归
+180 passed；静态层 PASSED（l2 块 61 个）。**负向验证 2 例**（均红在预期
+那条、逐字节还原）：① click 的 verify 期望改错 → 恰好该变体红、报文带
+`[verify[0] browser.getText]` 前缀（verify 链真在扛）；② verify 步注入
+不存在命令 + onlyCall → 恰好该变体两条报红 exit=1（第 8 条 verify 口径
+真在检查方向生效）。
+
 ## 2. 关键设计决定
 
 - **桩只替换 `_exchange`**：同时拿到三样东西——真实下发的 `(op, args)`、信封里的
@@ -713,9 +754,10 @@ S1.2 页签有一条白盒集成用例（`test_panel_streams_jsonl_into_rows`：
     纳入常规回归，那片的稳定性是前提。
 - **S4 L2 真机冒烟**：与 L1 **共用同一份用例表**，把执行后端从假扩展换成真扩展
   （策略 §2 L2，显式开关启用）。数据通道这一半已经算「真机」（真子进程 + 真文件），
-  所以 S4 的增量只落在浏览器通道。**进行中**：S4.1 最小链路（§1.8）与 S4.2 读族
-  15 变体（§1.9）已落地；后续切片：交互族（click/input/select/check/scroll 等）、
-  `listPages` 的 URL 动态端口断言口径、navigate/attach 族。
+  所以 S4 的增量只落在浏览器通道。**进行中**：S4.1 最小链路（§1.8）、S4.2 读族
+  15 变体（§1.9）、S4.3 交互族 46 变体 + check 反转 bug 修复（§1.10）已落地；
+  后续切片：navigate/attach/标签页族、cookies、screenshot/waitFor/waitLoad/
+  stopLoading、`listPages` 的 URL 动态端口断言口径。
 - **两个死参数的处置**：**已完成（S1.1，2026-09-22）**——两项均从 manifest 删除，
   删掉的是「声明」而非「能力」，对标差距未扩大。详见 §3.1。
 - **S1.2 页签的显式取舍（不是缺口）**：① 页面**不解析 pytest 输出**，所以「子进程在收集/导入

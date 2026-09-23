@@ -7,10 +7,16 @@ L1 的 `expect` 一个字不动（它是按假扩展应答写的契约断言）�
 "l2": {
   "page": "basic",                 // testapps/browser/<page>.html
   "inputs": {"selector": "#kw"},   // 覆盖 variant.inputs（可选；如换靶子元素）
-  "expect": {...}                  // 真机期望：outputs/effect/errorCode/files 等
+  "expect": {...},                 // 真机期望：outputs/effect/errorCode/files 等
+  "verify": [                      // 可选：主命令之后的独立读侧（S4.3 起）
+    {"command": "browser.getText", "inputs": {...}, "expect": {...}}
+  ]
 }
 ```
 
+`verify` 步与主命令**同执行器、同会话**，逐条跑并用各自的 `expect` 断言——
+动作类命令的证据不在执行器自报的 outputs 里（那是自证），而在「另一条命令
+独立读回的页面状态」里（S2.3 桌面 select 的双读侧教训搬到浏览器侧）。
 没有 `l2` 块的变体在 L2 不收集（桩形状整形、通道错误映射、纯 timeoutSeconds
 下发断言天然是 L1 的事——真后端上要么不可诱导、要么不可见）。
 
@@ -167,4 +173,18 @@ def test_command_variant(l2_browser, matrix_tmp_dir, command, spec, variant):
         calls=None,  # L2 没有调用记录面；l2.expect 出现调用类键会被这里判违规
         elapsed_ms=elapsed_ms,
     )
+
+    # -- verify 步：主命令之后的独立读侧（同执行器、同会话） -------------------
+    for index, step in enumerate(l2.get("verify") or []):
+        step_inputs = materialize_inputs(
+            step.get("inputs", {}), matrix_tmp_dir, extra={"page": page_url}
+        )
+        if session_id is not None and "sessionId" not in step_inputs:
+            step_inputs["sessionId"] = session_id
+        step_result = _run_command(executor, step["command"], step_inputs)
+        for problem in check_expect(
+            step["expect"], result=step_result, tmp_dir=matrix_tmp_dir, calls=None
+        ):
+            problems.append(f"[verify[{index}] {step['command']}] {problem}")
+
     assert not problems, "\n".join(["L2 用例断言失败：", *problems])
