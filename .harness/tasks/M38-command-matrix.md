@@ -462,6 +462,40 @@ dragStatus 未变（单跑与后续两轮整模块均过）——前台竞争类
   表驱动展开；静态校验器加 `l2` 块口径校验。逐类先探针实测再写期望
   （沿用 S2/S2.3 纪律）。
 
+### 1.9 S4.2：L2 表驱动化 + 读族 6 命令落地（2026-09-23）
+
+- **`l2` 块定形**（策略「同一份表」的落地形态）：变体级可选 `l2` =
+  `{page, inputs?, expect}`；L1 的 `expect` 一字不动（那是假扩展口径的契约
+  断言），真机期望独立成块。无 `l2` 的变体 L2 不收集——桩形状整形
+  （null→"" 之类）、通道错误映射、纯 timeoutSeconds 下发断言天然 L1-only。
+- **装配抽出共用**：`tests/commands/l2_harness.py`（`l2_browser_session()`
+  上下文管理器）——pytest 驱动与 spike 探针共用同一份「起服务/拉浏览器/
+  等上线/精确收尾」，避免「同一件事两处口径」。
+- **先探针后写期望**：`.harness/spike/probe_browser_l2_read.py` 实测 15 条
+  候选全过，并纠正一处推断——`getText` 的 `infoType=href` 读回的是**属性
+  原值** `/next` 而非绝对 URL（少了一个动态端口断言的麻烦）。其余实测值
+  直接进表（outerHTML 逐字节、getSelectOptions 的 options 全字段、queryAll
+  的 `.q` 双匹配、executeScript 的 result 原样回传）。
+- **范围**：读族 6 命令 15 变体（getText 6 / getSelectOptions 2 /
+  getPosition 2 / queryAll 2 / executeScript 3）+ 端点隔离断言独立用例。
+  `listPages` 本批**未收**：真实标签页列表的 URL 含动态端口，现有 expect 键
+  没有「列表项正则匹配」能力——不为它单开键，留待后续切片连同 attach/
+  navigate 的 URL 断言一起定口径。
+- **驱动**：每变体新执行器 + 新会话（navigate 预置到 l2.page），变体间零
+  状态泄漏；`sessionId` 一律替换为真建会话；`{page}` 占位符走
+  `materialize_inputs` 的 extra 通道。
+- **静态校验器第 8 条**（`check_command_matrix.py`）：l2 必须是对象、page
+  必填且靶页存在、expect 非空且**禁含调用类键**（onlyCall/calls/noCalls）。
+  PASSED 行新增 l2 块计数。
+- **验证**：L2 真机 `16 passed in 8.56s`（15 变体 + 隔离用例）；L1 回归
+  `180 passed`；静态层 PASSED。**负向验证 2 例**（均红在预期那条、逐字节
+  还原）：① getText text 的 l2 期望改错 → 恰好该变体红（L2 断言链真在
+  扛）；② l2.page 指向不存在靶页 + expect 混入 onlyCall → 恰好该变体两条
+  报红、exit=1（第 8 条真在检查方向生效）。
+- **靶页扩充**：`basic.html` 新增 `#link`（href 靶子）、`.q` ×2（queryAll
+  多匹配）、`#kw` 预置值 `preset`（value 靶子）；`#t` 保持 textContent
+  恰为 `text`（S4.1 冒烟依赖它）。
+
 ## 2. 关键设计决定
 
 - **桩只替换 `_exchange`**：同时拿到三样东西——真实下发的 `(op, args)`、信封里的
@@ -679,7 +713,9 @@ S1.2 页签有一条白盒集成用例（`test_panel_streams_jsonl_into_rows`：
     纳入常规回归，那片的稳定性是前提。
 - **S4 L2 真机冒烟**：与 L1 **共用同一份用例表**，把执行后端从假扩展换成真扩展
   （策略 §2 L2，显式开关启用）。数据通道这一半已经算「真机」（真子进程 + 真文件），
-  所以 S4 的增量只落在浏览器通道。
+  所以 S4 的增量只落在浏览器通道。**进行中**：S4.1 最小链路（§1.8）与 S4.2 读族
+  15 变体（§1.9）已落地；后续切片：交互族（click/input/select/check/scroll 等）、
+  `listPages` 的 URL 动态端口断言口径、navigate/attach 族。
 - **两个死参数的处置**：**已完成（S1.1，2026-09-22）**——两项均从 manifest 删除，
   删掉的是「声明」而非「能力」，对标差距未扩大。详见 §3.1。
 - **S1.2 页签的显式取舍（不是缺口）**：① 页面**不解析 pytest 输出**，所以「子进程在收集/导入

@@ -17,8 +17,15 @@
 <!-- getText 靶子：textContent 恰为 "text"（text/html/outerHTML 三态后续变体用） -->
 <div id="t">text</div>
 
-<!-- input 靶子：三模式（fill/type/clipboard）与 append/pressEnter 的读侧 -->
-<input id="kw" type="text" value="">
+<!-- getText href 靶子：href 读回的是绝对 URL（端口随运行漂移，断言用正则） -->
+<a id="link" href="/next">next</a>
+
+<!-- queryAll 多匹配靶子 -->
+<span class="q">q1</span>
+<span class="q">q2</span>
+
+<!-- input 靶子：三模式（fill/type/clipboard）与 append/pressEnter 的读侧；预置值供 getText value 用 -->
+<input id="kw" type="text" value="preset">
 
 <!-- select 靶子：三个 option，供 select 的 index/label/value 三态用 -->
 <select id="sel">

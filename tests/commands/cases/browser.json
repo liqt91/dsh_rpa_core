@@ -1279,6 +1279,15 @@
             "sessionId": "s"
           },
           "effect": "unsafe-write"
+        },
+        "l2": {
+          "page": "basic",
+          "expect": {
+            "outputs": {
+              "result": 1
+            },
+            "effect": "unsafe-write"
+          }
         }
       },
       {
@@ -1295,6 +1304,15 @@
               "script": "return 2",
               "args": []
             }
+          }
+        },
+        "l2": {
+          "page": "basic",
+          "expect": {
+            "outputs": {
+              "result": 2
+            },
+            "effect": "unsafe-write"
           }
         }
       },
@@ -1318,6 +1336,18 @@
               1,
               2
             ]
+          }
+        },
+        "l2": {
+          "page": "basic",
+          "expect": {
+            "outputs": {
+              "result": [
+                1,
+                2
+              ]
+            },
+            "effect": "unsafe-write"
           }
         }
       },
@@ -1405,6 +1435,22 @@
             "height": 4
           },
           "effect": "read"
+        },
+        "l2": {
+          "page": "basic",
+          "expect": {
+            "outputKeys": [
+              "x",
+              "y",
+              "width",
+              "height"
+            ],
+            "outputs": {
+              "x": 8,
+              "y": 8
+            },
+            "effect": "read"
+          }
         }
       },
       {
@@ -1434,7 +1480,16 @@
         "expect": {
           "errorCode": "ELEMENT_NOT_FOUND"
         },
-        "negative": true
+        "negative": true,
+        "l2": {
+          "page": "basic",
+          "inputs": {
+            "selector": "#absent"
+          },
+          "expect": {
+            "errorCode": "ELEMENT_NOT_FOUND"
+          }
+        }
       },
       {
         "name": "timeoutMs-lower-bound-reaches-the-channel",
@@ -1619,6 +1674,35 @@
             "count": 1
           },
           "effect": "read"
+        },
+        "l2": {
+          "page": "basic",
+          "expect": {
+            "outputs": {
+              "options": [
+                {
+                  "index": 0,
+                  "label": "Alpha",
+                  "selected": true,
+                  "value": "alpha"
+                },
+                {
+                  "index": 1,
+                  "label": "Beta",
+                  "selected": false,
+                  "value": "beta"
+                },
+                {
+                  "index": 2,
+                  "label": "Gamma",
+                  "selected": false,
+                  "value": "gamma"
+                }
+              ],
+              "count": 3
+            },
+            "effect": "read"
+          }
         }
       },
       {
@@ -1677,7 +1761,16 @@
         "expect": {
           "errorCode": "ELEMENT_NOT_FOUND"
         },
-        "negative": true
+        "negative": true,
+        "l2": {
+          "page": "basic",
+          "inputs": {
+            "selector": "#absent"
+          },
+          "expect": {
+            "errorCode": "ELEMENT_NOT_FOUND"
+          }
+        }
       },
       {
         "name": "timeoutMs-lower-bound-reaches-the-channel",
@@ -1727,6 +1820,15 @@
             "value": "text"
           },
           "effect": "read"
+        },
+        "l2": {
+          "page": "basic",
+          "expect": {
+            "outputs": {
+              "value": "text"
+            },
+            "effect": "read"
+          }
         }
       },
       {
@@ -1742,6 +1844,15 @@
                 "infoType": "html"
               }
             }
+          }
+        },
+        "l2": {
+          "page": "basic",
+          "expect": {
+            "outputs": {
+              "value": "text"
+            },
+            "effect": "read"
           }
         }
       },
@@ -1759,6 +1870,15 @@
               }
             }
           }
+        },
+        "l2": {
+          "page": "basic",
+          "expect": {
+            "outputs": {
+              "value": "<div id=\"t\">text</div>"
+            },
+            "effect": "read"
+          }
         }
       },
       {
@@ -1775,6 +1895,18 @@
               }
             }
           }
+        },
+        "l2": {
+          "page": "basic",
+          "inputs": {
+            "selector": "#kw"
+          },
+          "expect": {
+            "outputs": {
+              "value": "preset"
+            },
+            "effect": "read"
+          }
         }
       },
       {
@@ -1790,6 +1922,18 @@
                 "infoType": "href"
               }
             }
+          }
+        },
+        "l2": {
+          "page": "basic",
+          "inputs": {
+            "selector": "#link"
+          },
+          "expect": {
+            "outputs": {
+              "value": "/next"
+            },
+            "effect": "read"
           }
         }
       },
@@ -1854,7 +1998,16 @@
         "expect": {
           "errorCode": "ELEMENT_NOT_FOUND"
         },
-        "negative": true
+        "negative": true,
+        "l2": {
+          "page": "basic",
+          "inputs": {
+            "selector": "#absent"
+          },
+          "expect": {
+            "errorCode": "ELEMENT_NOT_FOUND"
+          }
+        }
       },
       {
         "name": "timeoutMs-lower-bound-reaches-the-channel",
@@ -2624,6 +2777,22 @@
             "count": 2
           },
           "effect": "read"
+        },
+        "l2": {
+          "page": "basic",
+          "inputs": {
+            "selector": ".q"
+          },
+          "expect": {
+            "outputs": {
+              "items": [
+                "q1",
+                "q2"
+              ],
+              "count": 2
+            },
+            "effect": "read"
+          }
         }
       },
       {
@@ -2673,7 +2842,16 @@
         "expect": {
           "errorCode": "ELEMENT_NOT_FOUND"
         },
-        "negative": true
+        "negative": true,
+        "l2": {
+          "page": "basic",
+          "inputs": {
+            "selector": "#absent"
+          },
+          "expect": {
+            "errorCode": "ELEMENT_NOT_FOUND"
+          }
+        }
       }
     ]
   },

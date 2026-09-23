@@ -21,6 +21,10 @@
 6. **负路径**：每条命令至少有 1 个标记 `negative: true` 的变体（失败路径或边界行为）。
 7. **`knownGap` 的记账**：变体级的 `knownGap` 必须是非空字符串（写清缺口与出路），
    且**标记过的变体不计入**第 2–6 条的任何口径——缺口不许用来凑覆盖率。
+8. **`l2` 块的形状**（M38 S4，L2 真机冒烟）：`l2` 必须是对象；`page` 必填且
+   `testapps/browser/<page>.html` 必须存在；`expect` 必填非空且**不得含调用类键**
+   （`onlyCall`/`calls`/`noCalls`——L2 没有调用记录面，那是 L1 的桩断言，写了
+   执行层必违规）；`inputs` 若给必须是对象。
 
 第 6 条与策略原文的「required 缺省必须被拒」**口径不同**，理由：输入 schema 的
 `required` 由 **orchestrator** 统一校验（`runtime/orchestrator.py` 用
@@ -60,6 +64,11 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[2]
 COMMANDS_DIR = ROOT / "commands"
 CASES_DIR = ROOT / "tests" / "commands" / "cases"
+TESTAPPS_BROWSER_DIR = ROOT / "testapps" / "browser"
+
+# L2 的 expect 不得出现的调用类键（第 8 条）：L2 是真后端，没有调用记录面——
+# 这些键是 L1 假扩展的桩断言，混进 l2.expect 后执行层必然违规（calls=None 判红）。
+L2_FORBIDDEN_EXPECT_KEYS = ("onlyCall", "calls", "noCalls")
 
 # 每条命令最少变体数（策略 §5.2 第 4 条）
 MIN_VARIANTS = 3
@@ -121,6 +130,43 @@ def _check_known_gaps(command: str, variants: list[dict[str, Any]]) -> list[str]
                 f"{command}.{variant.get('name')}: knownGap 是空串——必须写清「实测现象 + 出路」，"
                 "否则它只是把红盖住的被子"
             )
+    return problems
+
+
+def _check_l2_block(command: str, variant: dict[str, Any]) -> list[str]:
+    """第 8 条：`l2` 块的形状校验（口径见模块 docstring）。
+
+    没有 `l2` 块的变体合法（L1-only：桩形状整形、通道错误映射、纯下发断言
+    在真后端上要么不可诱导、要么不可见），这里只校验**声明了**的块。
+    """
+    problems: list[str] = []
+    l2 = variant.get("l2")
+    if l2 is None:
+        return problems
+    name = variant.get("name")
+    if not isinstance(l2, dict):
+        problems.append(f"{command}.{name}: l2 必须是对象（page/inputs/expect）")
+        return problems
+    page = l2.get("page")
+    if not isinstance(page, str) or not page.strip():
+        problems.append(f"{command}.{name}: l2.page 缺失或为空——驱动不知道把会话建到哪页")
+    elif not (TESTAPPS_BROWSER_DIR / f"{page.strip()}.html").is_file():
+        problems.append(
+            f"{command}.{name}: l2.page={page!r} 没有对应靶页 "
+            f"testapps/browser/{page.strip()}.html"
+        )
+    expect = l2.get("expect")
+    if not isinstance(expect, dict) or not expect:
+        problems.append(f"{command}.{name}: l2.expect 缺失或为空——真机跑完不断言等于白跑")
+    else:
+        for key in L2_FORBIDDEN_EXPECT_KEYS:
+            if key in expect:
+                problems.append(
+                    f"{command}.{name}: l2.expect 含调用类键 {key!r}——L2 没有调用记录面"
+                    "（那是 L1 假扩展的桩断言），写了执行层必违规"
+                )
+    if "inputs" in l2 and not isinstance(l2["inputs"], dict):
+        problems.append(f"{command}.{name}: l2.inputs 必须是对象（覆盖 variant.inputs）")
     return problems
 
 
@@ -235,6 +281,14 @@ def main() -> int:
         if command not in catalog:
             problems.append(f"{command}: 用例表里有，但 catalog 里没有（命令已删或改名？）")
 
+    # 第 8 条：l2 块形状校验（不依赖 catalog，全表扫）
+    l2_count = 0
+    for command, spec in sorted(cases.items()):
+        for variant in _variants(spec):
+            if "l2" in variant:
+                l2_count += 1
+            problems.extend(_check_l2_block(command, variant))
+
     pending = sum(
         1 for command in catalog if command.split(".")[0] in PENDING_NAMESPACES
     )
@@ -260,7 +314,7 @@ def main() -> int:
     print(
         f"COMMAND MATRIX CHECK PASSED（已校验 {checked} 条命令；"
         f"未建表命名空间 {len(PENDING_NAMESPACES)} 个共 {pending} 条命令，"
-        f"死参数台账 {dead_params} 项，实现缺口 {len(gaps)} 条）"
+        f"死参数台账 {dead_params} 项，实现缺口 {len(gaps)} 条，l2 块 {l2_count} 个）"
     )
     for namespace, reason in PENDING_NAMESPACES.items():
         print(f"  待建表：{namespace} —— {reason}")

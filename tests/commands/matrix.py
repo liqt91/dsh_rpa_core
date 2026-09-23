@@ -45,7 +45,9 @@ outputs/effects/错误码/落盘内容）。差别只在**插桩点**（假扩�
 变体可选的键：`inputs` / `sessions`（覆盖默认会话表，浏览器用）/ `stub`（覆盖命令级桩应答）/
 `errors`（op → 扩展侧错误）/ `processStub`（打桩进程面，`browser.closeBrowser` 专用）/
 `setup`（预置磁盘状态，数据通道用：`files` / `dirs` / `table`）/ `negative`（标记负路径与
-边界行为变体，供覆盖率校验器统计）/ `knownGap`（见下节）。
+边界行为变体，供覆盖率校验器统计）/ `knownGap`（见下节）/ `l2`（L2 真机冒烟块：
+`page` + `inputs` 覆盖 + 真机 `expect`；后端换成真扩展，见
+`test_browser_l2_matrix.py`——L1 驱动不读这个键）。
 
 ## `knownGap`：已实测、已登记、但产品侧还没修的缺口
 
