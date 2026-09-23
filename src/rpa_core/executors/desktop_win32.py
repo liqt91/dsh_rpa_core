@@ -60,7 +60,7 @@ class Win32DesktopExecutor(CommandExecutor):
             return CommandResult(status="cancelled")
         _no_session_commands = (
             "desktop.win32.attachWindow",
-            "desktop.win32.getWindowList",
+            # getWindowList 声明对齐实现（同 uia 侧说明，M38 任务单 §1.7）。
         )
         if invocation.command_id not in _no_session_commands:
             # sessionId 可省略：默认作用于最近激活（或唯一）的桌面会话
@@ -612,24 +612,16 @@ class Win32DesktopExecutor(CommandExecutor):
                 ],
             )
         if command == "desktop.win32.getSelectedText":
-            try:
-                sel = element.iface_value.GetSelection()
-                if sel:
-                    text = sel[0].iface_value.GetCurrentValue() or ""
-                else:
-                    text = ""
-            except Exception:
-                text = ""
-            return CommandResult.success(
-                outputs={"text": text},
-                effects=[
-                    EffectRecord.committed(
-                        invocation,
-                        kind=EffectKind.READ,
-                        resource=resource,
-                        details={"operation": "getSelectedText"},
-                    )
-                ],
+            # win32 包装元素没有 UIA 的 iface_* 接口族（对子控件取 iface_value 一律抛
+            # 异常），旧实现 except 后静默返回空串——「恒空的成功」比显式失败更坏
+            # （实测见 M38 任务单 §1.5）。原生消息路径（LB_GETCURSEL/LB_GETTEXT，
+            # 跨进程缓冲区）登记在 BACKLOG，实现前这里显式失败。
+            return CommandResult.failure(
+                ErrorCode.EXECUTOR_FAILED,
+                "getSelectedText is not supported on the win32 backend: UIA pattern "
+                "interfaces (iface_*) do not exist on win32 wrappers; the native-message "
+                "path (LB_GETCURSEL/LB_GETTEXT) is registered in BACKLOG but not implemented",
+                details={"operation": "getSelectedText"},
             )
         if command == "desktop.win32.screenshot":
             save_path = str(inputs["savePath"])
@@ -659,35 +651,21 @@ class Win32DesktopExecutor(CommandExecutor):
                 ],
             )
         if command == "desktop.win32.select":
-            value = str(inputs["value"])
-            select_by = inputs.get("selectBy", "value")
-            try:
-                sel = element.iface_selection
-                if select_by == "index":
-                    sel.Select(int(value))
-                elif select_by == "label":
-                    items = sel.GetCurrentSelection()
-                    for item in items:
-                        if item.GetCurrentPropertyValue(30005) == value:
-                            item.Select()
-                            break
-                else:
-                    items = sel.GetCurrentSelection()
-                    for item in items:
-                        if item.GetCurrentPropertyValue(30006) == value:
-                            item.Select()
-                            break
-            except Exception:
-                pass
-            return CommandResult.success(
-                effects=[
-                    EffectRecord.committed(
-                        invocation,
-                        kind=EffectKind.UNSAFE_WRITE,
-                        resource=resource,
-                        details={"operation": "selectOption"},
-                    )
-                ]
+            # 与 getSelectedText 同因：win32 包装元素没有 iface_selection（UIA
+            # SelectionPattern），旧实现 except 后照常返回 success——三个 selectBy
+            # 分支全部静默假成功（实测见 M38 任务单 §1.5）。原生消息路径
+            # （LB_SETCURSEL / CB_SETCURSEL，跨进程缓冲区）登记在 BACKLOG，
+            # 实现前这里显式失败，不再让「以为选了、其实没选」发生。
+            return CommandResult.failure(
+                ErrorCode.EXECUTOR_FAILED,
+                "select is not supported on the win32 backend: UIA pattern interfaces "
+                "(iface_*) do not exist on win32 wrappers; the native-message path "
+                "(LB_SETCURSEL/CB_SETCURSEL) is registered in BACKLOG but not implemented",
+                details={
+                    "operation": "selectOption",
+                    "selectBy": inputs.get("selectBy", "value"),
+                    "requestedValue": inputs.get("value"),
+                },
             )
         if command == "desktop.win32.drag":
             target_x = int(inputs["targetX"])
@@ -740,9 +718,17 @@ class Win32DesktopExecutor(CommandExecutor):
             criteria["title"] = locator.title
         if locator.class_name:
             criteria["class_name"] = locator.class_name
-        if locator.control_id is not None:
-            criteria["control_id"] = locator.control_id
         matches = window.descendants(**criteria)
+        if locator.control_id is not None:
+            # pywinauto 的 descendants/children 路径**不消费 control_id**
+            # （children 只读 class_name/title/control_type，实测任何取值都返回
+            # 全部子控件——manifest 声明的过滤条件被静默忽略，M38 任务单 §1.5；
+            # findwindows.find_elements 虽然支持，但这里已拿到列表）。
+            # 注意走 ElementInfo 的 control_id（property，GetDlgCtrlID）——
+            # 包装元素上的 control_id 在 0.6.9 是 deprecated 的**方法**，比出来恒 False。
+            matches = [
+                m for m in matches if m.element_info.control_id == locator.control_id
+            ]
         if locator.found_index is not None:
             if locator.found_index >= len(matches):
                 return []

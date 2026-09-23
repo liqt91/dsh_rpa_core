@@ -232,6 +232,10 @@ win32 模块**，所以没有用「大概是环境问题」带过，而是做了
 | 项目依赖里**没有 Pillow**，而 `screenshot` 的回退路径要用它 | 两个后端的 `screenshot` 正路径都必然 `EXECUTOR_FAILED`（`'NoneType' object has no attribute 'save'`）：实现先试 UIA 图像属性（win32 侧没有 `iface_*` 必抛），回落到 `window.capture_as_image()` | 独立决策：加 Pillow 依赖，或改走 Win32 `BitBlt`（无第三方依赖） |
 | `control_id` 过滤在 pywinauto 上**完全不生效** | `descendants(control_id=<任意值>)` 一律返回全部子控件（实测 14 / 14 / 14）。于是 `DesktopLocator` 的 `controlId` 字段：只给它会必然报 `ELEMENT_AMBIGUOUS`（把「过滤没生效」伪装成「元素不唯一」） | 换定位实现，或把 `controlId` 从 win32 locator 的可用字段里拿掉 |
 
+> **S2.3 处置（2026-09-23，维护者定案）**：上表 5 行已清掉 4 个半——`screenshot` 加
+> Pillow、uia `select`/`getText` 修复、win32 `select`/`getSelectedText` 显式失败、
+> `controlId` 在 `_find` 里手工补滤，`getWindowList` 的会话声明也一并对齐——
+> 过程、坑与验证详见 **§1.7**。剩余：`className` 动态名、win32 原生消息实现（均在 BACKLOG）。
 
 ### 验证（S2）
 
@@ -392,6 +396,42 @@ win32 模块**，所以没有用「大概是环境问题」带过，而是做了
   六向均按预期红/绿，用例表逐字节还原（探针自己断言 `read_bytes()` 相等）。
   第 ⑥ 向是「判据写了但没人执行」这道假绿灯的专用护栏（M38 §4.3 的同类）。
 - **FULL GATE PASSED**（`check_all.py` 退出码 0）。
+
+### 1.7 S2.3：产品侧缺口修复（2026-09-23，维护者定案「按推荐的来」）
+
+§1.5 下半张表的 5 个实现缺口，本片清掉 4 个半（剩「className 动态名」与「win32 原生
+消息实现」留在 BACKLOG）：
+
+| 缺口 | 处置 |
+|---|---|
+| `screenshot` 无 Pillow | **加依赖**（维护者定案）：`pillow>=10,<12; sys_platform=='win32'`。`capture_as_image()` 内部就是 PIL，加依赖即修复；两后端正路径真机落盘 PNG（文件头 `\x89PNG` 实测）。BitBlt 方案否决（为省一个通用库背一截 GDI+PNG 编码代码，不划算）。`knownGap` 标记摘除，静态层「实现缺口 2 条」清零 |
+| uia `desktop.select` 静默假成功 | 改按**列表项** `SelectionItemPattern.Select()`；label/value 按列表项文本匹配（WinForms ListItem 的 Value 属性实测恒空，`30006`=`''`）；无匹配显式 `ELEMENT_NOT_FOUND`（details 带 enumerableItems），不再吞错 |
+| uia `desktop.getText` 串位 | `_read_element_text`：ValuePattern 优先、`window_text()` 回落（Label 的 Name 就是文本，行为不变）。**坑**：comtypes 生成的 ValuePattern 只有 `CurrentValue` **属性**，`GetCurrentValue()` 方法不存在（实测 `AttributeError: GetCurrentValue`）——这正是修复初版仍回落串位的原因 |
+| win32 `select`/`getSelectedText` 静默假成功/恒空串 | 维护者定案**先显式失败**：`EXECUTOR_FAILED` + details(operation)；原生消息实现登记 BACKLOG（LB_SETCURSEL 等，缓冲区要跨进程） |
+| win32 `controlId` 过滤失效 | `_find` 拿到 descendants 后按 **ElementInfo** 的 control_id（GetDlgCtrlID）手工补滤。两个坑：pywinauto 的 `children` 只读 class_name/title/control_type（`control_id` 被静默忽略）；包装元素上的 `control_id` 在 0.6.9 是 deprecated **方法**而非属性（比出来恒 False），必须走 `element_info.control_id` |
+| `getWindowList` 声明与实现不一致 | 从 `_no_session_commands` 移除（两后端），声明对齐实现：它需要会话 |
+
+**读侧的一课（select）**：UIA 的 `Select()` 改的是 ListBox 选中项，但**不触发** WinForms
+的 `SelectedIndexChanged`（探针 round5：选中=beta 而 listStatus 回显仍是 `'none'`）——
+状态回显 Label 对这条命令不是有效读侧。处置：执行器把选中项读回写进
+`effectDetails.selectedItem`（新增 expect 键 `effectDetails`，`effects[0].details` 的
+子集断言），e2e 用例再叠加**独立于执行器**的 UIA SelectionPattern 读回防自证。
+
+**controlId 的用例表口径**：WinForms 给控件分的 control id 实测**随编译漂移**（同一代码
+三次编译三次不同），没有按值正路径可写；用「错误 id 排除 title 命中」负路径钉住——旧
+实现下它是 `matchedCount=1` 的成功，新实现才是 `ELEMENT_NOT_FOUND`。
+
+**验证**：真机探针五项全过（`.harness/spike/probe_desktop_s23_fixes.py`，中途经
+round2–round5 四轮深挖定位 `GetCurrentValue` 方法缺失与 Select 不触发事件两处真相）；
+e2e 靶子验收 `tests/e2e/test_desktop_target_effects.py` **6 passed**（两条 xfail 转正：
+select 断言执行器读回 + 独立 UIA 读回，getText 断言 `note-ready`）；两后端桌面矩阵
+180 项 exit 0（uia 85 / win32 95 变体）；静态层 PASSED（86 条命令，**实现缺口 0 条**）。
+**负向验证 2 例**（均红在预期的那一条上、逐字节还原）：① index 行 `selectedItem` 期望
+beta→gamma → 恰好该行红（`effectDetails` 接线生效）；② 停用 `_find` 的 control_id 补滤
+→ 恰好「错误 id 排除」行红（证明过滤在扛判据）。
+**已知波动**：整模块连跑中 `test_drag_moves_the_target_control[uia]` 出现过 1 次
+dragStatus 未变（单跑与后续两轮整模块均过）——前台竞争类抖动，与 S2.3 改动无因果证据，
+先记录不处置。
 
 ## 2. 关键设计决定
 

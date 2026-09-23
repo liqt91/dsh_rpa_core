@@ -27,7 +27,10 @@
   转红）与 `expect.outputListContains`（治「枚举被拒 → pywinauto 静默返回空列表」与「真没匹配窗口」
   同形）；**172 个变体 → 170 passed + 2 xfailed / exit 0**，四驱动全量 440 项 → 438 passed + 2 xfailed。
   产品侧剩余缺口已逐条转入「后续任务」（`screenshot` 依赖、`select`/`getText` 实现、`className`/
-  `controlId`、`getWindowList` 的会话声明与静默空列表）
+  `controlId`、`getWindowList` 的会话声明与静默空列表）；**S2.3（2026-09-23）清掉其中大半**：
+  `screenshot` 加 Pillow、uia `select`/`getText` 修复、win32 `select`/`getSelectedText` 显式失败、
+  `controlId` 过滤修活、`getWindowList` 会话声明对齐——剩余见「win32 原生消息实现」、
+  「className 动态名」、「枚举被拒静默空列表」三条
   - 计划：`M38-command-matrix.md`
 
 ## 后续任务
@@ -118,45 +121,38 @@
   留下的能力缺口：`chrome.tabs.captureVisibleTab` 只能截可见区，整页要滚动分段拼接、元素要按 rect
   裁剪，都需要在扩展里解码图像（MV3 service worker 无 `Image`/`FileReader`）→ 走 offscreen document
   或 CDP `Page.captureScreenshot(captureBeyondViewport/clip)`；另需处理 sticky/fixed 元素在分段里的重复
-- [ ] **桌面 `screenshot` 的依赖缺口**（`planned`，M38 S2 补靶子时实测；两个后端的正路径现由
-  变体级 `knownGap` 钉成**严格 xfail**，修好就 XPASS 转红）
-  - 现象：`desktop.screenshot` / `desktop.win32.screenshot` 的正路径**必然** `EXECUTOR_FAILED`
-    （`'NoneType' object has no attribute 'save'`）。实现先试 UIA 图像属性（win32 元素没有
-    `iface_*` 属性族、必抛），回落到 pywinauto 的 `window.capture_as_image()`——而后者需要 PIL，
-    而 `pyproject.toml` 的 `dependencies` 里**没有 Pillow**（只有 pydantic / jsonschema /
-    pywinauto）。也就是说这条命令在 catalog 里存在，但**干净安装永远截图不出来**。
-  - 两条出路（二选一，属产品决策）：① 加 `Pillow` 依赖（改运行时依赖面，要评估包体与许可证）；
-    ② 改走 Win32 `BitBlt`/GDI 自己写图（无第三方依赖，但要自己处理位深与 DPI 缩放）。
-- [ ] **桌面 `select` / `getSelectedText` / uia `getText` 的实现缺口**（`planned`，M38 S2 补靶子时
-  实测；`tests/e2e/test_desktop_target_effects.py` 两条 `xfail` 钉住，任务单 §1.5 下半张表）
-  - `desktop.select`（两后端）三个 `selectBy` 分支**静默假成功**：ListBox 的 `iface_selection`
-    是 `IUIAutomationSelectionPattern`，方法面只有 `GetCurrentSelection` /
-    `CurrentCanSelectMultiple` / `CurrentIsSelectionRequired`，**没有 `Select`**；而 `label`/`value`
-    分支把 `GetCurrentSelection()`（= **当前已选中项**）当成「全部选项」遍历。出路：按
-    `SelectionItemPattern` 对列表项调 `Select()`，`label`/`value` 改成枚举全部子项。
-  - `desktop.win32.select` / `getSelectedText` 在 win32 后端**不可能生效**：win32 包装出的元素
-    **没有 `iface_*` 属性族**（实测对窗口里每个子控件取 `iface_selection`/`iface_value`/
-    `iface_invoke` 全部抛异常），两处都被 `except: pass` 吞掉 → `select` 返回 success、
-    `getSelectedText` 恒返回空串。出路：改走 win32 原生接口（如 `SendMessage(CB_SETCURSEL)`），
-    或至少**显式报错**，别静默成功。
-  - uia `desktop.getText` 对 Edit / ListBox 读到**相邻 Label 的文本**（`queryInput` → `'Name'`、
-    `readOnlyNote` → `'Drag'`、`optionsList` → `'Ready'`）：WinForms 的 Edit/ListBox 没有
-    AccessibleName，UIA 按 MSAA 的 labeled-by 规则回落。出路：改走 ValuePattern / TextPattern。
-- [ ] **`desktop.win32` 的 `className` / `controlId` 作为定位字段名不副实**
-  （`planned`，M38 S2 实测）
-  - `control_id` 的过滤**完全不生效**：`descendants(control_id=<任意值>)` 一律返回全部子控件
-    （实测 14/14/14）。于是定位器只给 `controlId` 时必然报 `ELEMENT_AMBIGUOUS`——把「过滤没生效」
-    伪装成「元素不唯一」，**错误码指错了方向**（会把人引去查元素是否重复）。
-  - `className` 是 `WindowsForms10.*.app.0.<哈希>` 这类**动态名**（哈希随编译产物变），且两个
+- [x] **桌面 `screenshot` 的依赖缺口**（`done`，2026-09-23 M38 S2.3 维护者定案**加 Pillow**）——
+  `pyproject.toml` 增 `pillow>=10,<12; sys_platform == 'win32'`；`capture_as_image()` 内部就是 PIL，
+  加依赖即修复，两后端正路径真机落盘 PNG（实测文件头 `\x89PNG`）。曾评估的 BitBlt 方案
+  （零依赖但要自写 GDI 截屏 + PNG 编码）否决。原 `knownGap` 标记已摘除。
+- [x] **桌面 `select` / `getSelectedText` / uia `getText` 的实现缺口**（`done`，2026-09-23 M38 S2.3）
+  ——uia `select` 改按列表项 `SelectionItemPattern.Select()`（label/value 按列表项文本匹配；
+  读侧是 effect details 的 `selectedItem` 读回——**UIA Select 不触发** WinForms 的
+  SelectedIndexChanged，状态回显 Label 不是有效读侧，实测 round5）；uia `getText` 改
+  ValuePattern 优先（comtypes 只有 `CurrentValue` **属性**，`GetCurrentValue()` 方法不存在，
+  实测 AttributeError）；win32 `select`/`getSelectedText` 按「别静默成功」定案改为**显式
+  `EXECUTOR_FAILED`**（details 带 operation）。e2e 两条 xfail 已转正。
+- [ ] **win32 `select` / `getSelectedText` 的原生消息实现**（`planned`，S2.3 定案的能力边界）
+  ——显式失败只是止血；真正的能力要走 `LB_SETCURSEL` / `CB_SETCURSEL` + `LB_GETCURSEL` /
+  `LB_GETTEXT`，缓冲区须放在**控件所在进程**的内存里（VirtualAllocEx + ReadProcessMemory；
+  pywinauto 的 ListBox/ComboBox 包装类已封装 RemoteMemoryBlock 可复用）。注意原生消息同样
+  **不触发** `LBN_SELCHANGE`（与 UIA Select 不触发 SelectedIndexChanged 同理）。
+- [ ] **`desktop.win32` 的 `className` 定位字段名不副实**（`planned`；`controlId` 部分已由
+  M38 S2.3 修复，见下）
+  - ~~`control_id` 的过滤完全不生效~~（**已修**，S2.3：`_find` 拿到 descendants 后按
+    ElementInfo 的 control_id（GetDlgCtrlID）手工补滤——pywinauto 的 children 只读
+    class_name/title/control_type，`control_id` 被静默忽略；且包装元素上的 `control_id`
+    在 0.6.9 是 deprecated **方法**而非属性，必须走 `element_info.control_id`。用例表以
+    「错误 id 排除 title 命中」负路径钉住（id 实测随编译漂移，写不了按值正路径），
+    停用补滤该行即红，负向验证已做）
+  - `className` 仍是 `WindowsForms10.*.app.0.<哈希>` 这类**动态名**（哈希随编译产物变），且两个
     Edit 撞同一个类名——作为用户可见的定位字段同样存疑。
-  - 出路：自己按 `GetDlgCtrlID` / `GetClassNameW` 过滤（不复用 pywinauto 的 kwargs），或把这两个
-    字段从 win32 locator 的可用面里拿掉。**注意**：`title` 是好的（它比的是控件窗口文本，实测
-    `Submit`/`Count`/`note-ready` 都唯一命中），别一起误删。
-- [ ] **`desktop.getWindowList`：声明与实现不一致 + 枚举被拒时静默返回空列表**
-  （`planned`，M38 S2 实测）
-  - 不一致：`execute` 的「无需会话」名单（`_no_session_commands`）含本命令，但会话检查在命令
-    分派**之前**，实际仍需要会话（`setup: session=none` 直接吃 `SESSION_NOT_FOUND`，两后端同款）。
-    要么把检查移到分派之后，要么把它从名单里删掉——**别让两处口径打架**。
+  - 出路：`className` 要么按 `GetClassNameW` 精确化文档口径、要么从 win32 locator 拿掉。
+    **注意**：`title` 是好的（它比的是控件窗口文本，实测 `Submit`/`Count`/`note-ready`
+    都唯一命中），别一起误删。
+- [ ] **`desktop.getWindowList`：枚举被拒时静默返回空列表**
+  （`planned`；「声明与实现不一致」部分已由 M38 S2.3 修复——`getWindowList` 已从
+  `_no_session_commands` 名单移除，声明对齐实现：它需要会话，两后端同改）
   - 静默空列表：本命令走 pywinauto 的 `uia_element_info._get_elements`，那里
     `except (COMError, ValueError): return []`——全桌面枚举被 COM 拒绝时**返回空列表而不是报错**
     （实测的 `0x8001010d` = `RPC_E_CANTCALLOUT_ININPUTSYNCCALL` 就是这条路径，pywinauto 内部吞掉、
@@ -166,7 +162,11 @@
     变成真判据；探针 `.harness/spike/probe_desktop_window_list.py` 连跑 8×2 次枚举**没撞上**
     （本机稳定 11 / 13 项），所以登记的是「路径存在、本轮未复现」。
   - 可选加固（未定）：枚举失败时**区分**「空」与「被拒绝」，或对 COM 拒绝做一次短重试
-    （M7 对同类 `RPC_E_SERVERCALL_RETRYLATER` 已有处置先例）。
+    （M7 对同类 `RPC_E_SERVERCALL_RETRYLATER` 已有处置先例）。**S2.3 追记（2026-09-23）**：
+    四驱动连跑时 uia 侧 `getWindowList` 前两条出现过**一次** `Desktop operation timed out`
+    （15s 默认操作预算被全桌面枚举冷启动吃满；单跑与复跑均过、win32 侧从未红）——
+    候选修法多一条：给 `getWindowList` 的 schema 加 `operationTimeoutMs`（需动契约，与
+    上面的「区分空与被拒」一起做产品决策）。
 - [x] **两个死参数的处置**（`done`，2026-09-22 维护者定案**删除**，M38 S1.1）——删除「声明」
   而非「能力」：两项从未被消费过（`closeTabs` 的路由由会话绑定的浏览器决定、扩展的
   `tabs.waitLoad` 只收 `tabId`/`timeoutMs`），删掉后行为不变、`KNOWN_DEAD_PARAMS` 已清空

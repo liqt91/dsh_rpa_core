@@ -644,7 +644,7 @@
     ]
   },
   "desktop.getText": {
-    "notes": "不断言具体文本值：整个矩阵共用一个靶子进程，前面变体敲进去的字、点过的计数器都会留在控件里，按值断言等于把用例顺序写进期望（那是假红/假绿的混来源）。『读回来的确实是刚敲进去的那句话』在真机 E2E 里验（S2.1 的 readResult == TYPED_TEXT）。 另有一条实测约束（2026-09-22 补靶子时发现）：本命令（uia 侧）用 UIA 的 Name 当文本，而 WinForms 的 Edit / ListBox 没有 AccessibleName，UIA 会按 MSAA 的 labeled-by 规则回落到**相邻 Label 的文本**——实测 queryInput → 'Name'（旁边的 nameLabel）、readOnlyNote → 'Drag'（旁边的 dragHandle）、optionsList → 'Ready'（旁边的 resultText），全是错的。所以本表只用 Label 类元素做正路径（countLabel 的 Name 就是它的文本）。对 Edit 读文本不可靠这一点也由 e2e 的 xfail 钉住。",
+    "notes": "**S2.3 修复后的口径**：有 ValuePattern 的控件（Edit）按 Value 读真实文本，不再串位到相邻 Label（修复前 `readOnlyNote` 读到旁边的 'Drag'、`queryInput` 读到 'Name'——WinForms Edit/ListBox 没有 AccessibleName，UIA 按 MSAA labeled-by 规则回落）；没有 ValuePattern 的控件（Label 等）回落 `window_text()`，Label 的 Name 就是它的文本。注意 comtypes 生成的 ValuePattern 只有 `CurrentValue` **属性**、没有 `GetCurrentValue()` 方法（实测 AttributeError）。`countLabel` 的正路径仍只断形状——矩阵共用靶子进程，它的文本随前面的变体变（非幂等计数器），按值断言等于把用例顺序写进期望；恒定文本的 `readOnlyNote` 才能按值断言。",
     "variants": [
       {
         "name": "reads-the-count-label-by-element-id",
@@ -701,6 +701,27 @@
         },
         "negative": true,
         "notes": "空会话串的实测语义（2026-09-22 执行层首跑校正）：`resolve_session_id` 把空串当「未提供」（`str(requested or '').strip()` 为空即回退），于是命令落到**默认会话**上，并不存在「拿空串去匹配某个会话」这一步——这才是『空串不是通配符』的真实含义。 但本命令还要元素：回退成功之后，失败点变成了那个不存在的元素 id（不是会话）。"
+      },
+      {
+        "name": "reads-the-edit-value-via-the-value-pattern",
+        "inputs": {
+          "sessionId": "{session}",
+          "elementId": "{element:note}",
+          "timeoutMs": 2000
+        },
+        "setup": {
+          "find": {
+            "note": {
+              "automationId": "readOnlyNote"
+            }
+          }
+        },
+        "expect": {
+          "outputs": {
+            "value": "note-ready"
+          },
+          "effect": "read"
+        }
       }
     ]
   },
@@ -1118,11 +1139,10 @@
     ]
   },
   "desktop.screenshot": {
-    "notes": "落盘产物是 PNG（二进制），所以磁盘断言只声明『存在』——`files` 里给文本类断言会去 read_text 而崩（matrix.py 里已按这条加了一行保护）。 **实测（2026-09-22）：正路径当前会红**——实现优先取 UIA 的图像属性，取不到就回落到 `window.capture_as_image()`，而后者需要 PIL，项目依赖里**没有** Pillow（pyproject 的 dependencies 只有 pydantic / jsonschema / pywinauto），于是命令以 EXECUTOR_FAILED 收场（错误消息是 'NoneType' object has no attribute 'save'）。这是**依赖缺口不是用例错**，所以期望按原样留着（正路径就该写出 PNG），把它钉成严格 xfail：缺口一修（加 Pillow 或改走 Win32 BitBlt），这行会 XPASS 转红，逼着回来摘标记。缺口登记在 `.harness/tasks/M38-command-matrix.md` §1.5 的『补靶子时新暴露的实现缺口』表。",
+    "notes": "**S2.3 起依赖已定案**：加 Pillow（pyproject `pillow>=10,<12; sys_platform=='win32'`）——pywinauto 的 `capture_as_image()` 内部就是 PIL，加依赖即修复，两后端正路径真机落盘 PNG （实测文件头 `\\x89PNG`）。曾考虑改走 Win32 BitBlt（零依赖），但要自写 GDI 截屏 + PNG 编码，为省一个通用库背一截图形代码，不划算（决策见 M38 任务单 §1.7）。",
     "variants": [
       {
         "name": "writes-a-png-into-the-variant-temp-dir",
-        "knownGap": "依赖缺口：pywinauto 的截图回退路径需要 PIL，而项目依赖里没有 Pillow，两个后端的 screenshot 正路径都必然 EXECUTOR_FAILED（'NoneType' object has no attribute 'save'）。出路是二选一——加 Pillow 依赖，或改走 Win32 BitBlt（无第三方依赖）。详见 M38 任务单 §1.5 缺口表。",
         "inputs": {
           "sessionId": "{session}",
           "elementId": "{element:label}",
@@ -1181,7 +1201,7 @@
     ]
   },
   "desktop.select": {
-    "notes": "**本表刻意不给正路径**：靶子已经补了 ListBox（optionsList），但实测三个 selectBy 分支全部返回 success 而 listStatus 一步没动——三个分支都坏在实现上：① `selectBy=index` 调 `sel.Select(int)`，而 ListBox 的 `iface_selection` 是 IUIAutomationSelectionPattern，方法面只有 GetCurrentSelection / CurrentCanSelectMultiple / CurrentIsSelectionRequired，**没有 Select**（真正提供 Select 的是列表项上的 SelectionItemPattern）；② `label`/`value` 两个分支拿 `GetCurrentSelection()` 当『全部选项』去遍历，而它返回的是**当前已选中项**——初始无选中就是空列表，循环一次都不进。两条路都被 `except Exception: pass` 吞掉，于是命令报 success。给这种命令写正路径等于在表里种一条假绿灯，所以正路径留空，缺口由 tests/e2e/test_desktop_target_effects.py 的 xfail 钉住（实现修好后会自动变 XPASS）。",
+    "notes": "**正路径（S2.3 修实现后实测打通）**：选中动作在**列表项**的 SelectionItemPattern 上（`iface_selection_item.Select()`），label/value 按列表项文本匹配（WinForms ListItem 的 Value 属性实测恒空——`30006` 返回 `''`——语义上选项的 value 就是它的文本）。**读侧是 `effectDetails.selectedItem`**：UIA 的 Select() 改的是 ListBox 的选中项，但**不触发** WinForms 的 SelectedIndexChanged（实测 round5：选中=beta 而状态回显仍是 'none'），所以靶子的 listStatus 回显对这条命令不是有效读侧；执行器把选中项读回写进 effect details 才能被断言。无匹配项显式报 `ELEMENT_NOT_FOUND`（附 enumerableItems），不再静默 success。",
     "variants": [
       {
         "name": "value-mode-fails-on-an-unknown-element",
@@ -1231,6 +1251,98 @@
         },
         "expect": {
           "errorCode": "SESSION_NOT_FOUND"
+        },
+        "negative": true
+      },
+      {
+        "name": "index-selects-the-matching-option",
+        "inputs": {
+          "sessionId": "{session}",
+          "elementId": "{element:list}",
+          "value": "1",
+          "selectBy": "index"
+        },
+        "setup": {
+          "find": {
+            "list": {
+              "automationId": "optionsList"
+            }
+          }
+        },
+        "expect": {
+          "effect": "unsafe-write",
+          "effectDetails": {
+            "operation": "selectOption",
+            "selectBy": "index",
+            "selectedItem": "beta"
+          }
+        }
+      },
+      {
+        "name": "label-selects-the-matching-option",
+        "inputs": {
+          "sessionId": "{session}",
+          "elementId": "{element:list}",
+          "value": "gamma",
+          "selectBy": "label"
+        },
+        "setup": {
+          "find": {
+            "list": {
+              "automationId": "optionsList"
+            }
+          }
+        },
+        "expect": {
+          "effect": "unsafe-write",
+          "effectDetails": {
+            "operation": "selectOption",
+            "selectBy": "label",
+            "selectedItem": "gamma"
+          }
+        }
+      },
+      {
+        "name": "value-selects-the-matching-option",
+        "inputs": {
+          "sessionId": "{session}",
+          "elementId": "{element:list}",
+          "value": "alpha",
+          "selectBy": "value"
+        },
+        "setup": {
+          "find": {
+            "list": {
+              "automationId": "optionsList"
+            }
+          }
+        },
+        "expect": {
+          "effect": "unsafe-write",
+          "effectDetails": {
+            "operation": "selectOption",
+            "selectBy": "value",
+            "selectedItem": "alpha"
+          }
+        }
+      },
+      {
+        "name": "an-unknown-option-is-element-not-found",
+        "inputs": {
+          "sessionId": "{session}",
+          "elementId": "{element:list}",
+          "value": "delta",
+          "selectBy": "label"
+        },
+        "setup": {
+          "find": {
+            "list": {
+              "automationId": "optionsList"
+            }
+          }
+        },
+        "expect": {
+          "errorCode": "ELEMENT_NOT_FOUND"
         },
         "negative": true
       }

@@ -10,20 +10,21 @@ L1 矩阵一次只跑**一条**命令，它能断言的是命令的返回值面�
 
 `testapps/desktop/Program.cs` 补的四组控件（原生菜单栏 / ListBox / ComboBox / 可拖
 Label）每个都把手上的操作写进一个状态回显 Label（menuStatus / listStatus /
-comboStatus / dragStatus）。**命令返回 success 证明不了操作生效**——`desktop.select`
-的实现把异常吞掉后照样返回 success（实测三个 selectBy 分支都如此）。状态回显才是那个
-能区分「生效」与「静默成功」的读侧探针。
+comboStatus / dragStatus）。**命令返回 success 证明不了操作生效**——S2.3 之前的
+`desktop.select` 把异常吞掉后照样返回 success（实测三个 selectBy 分支都如此）。
+状态回显是那个能区分「生效」与「静默成功」的读侧探针——但对 select 例外，见下。
+
+## 读侧探针的口径
 
 回显一律**用 uia 后端 + automationId 读**（Label 的 UIA Name 就是它的文本，实测可靠；
-Edit/ListBox 不行——见下面第二条 xfail），与被测命令走哪个后端无关。
+Edit/ListBox 不行——但 S2.3 修好了 getText 的 ValuePattern 路径，Edit 现在也能读），
+与被测命令走哪个后端无关。
 
-## 两条 xfail 钉的是**实现缺口**，不是靶子缺口
-
-- `desktop.select`（uia）：三个 selectBy 分支实测全部 success 而选中项一步没动。
-- `desktop.getText`（uia）对 Edit：UIA 的 Name 被 MSAA 的 labeled-by 规则回落到相邻
-  Label 的文本（实测 queryInput → 'Name'、readOnlyNote → 'Drag'、optionsList → 'Ready'）。
-
-写成非 strict 的 xfail：实现修好后会自动转成 XPASS，提示把它改成正向断言。
+**select 的读侧例外**：UIA 的 SelectionItemPattern.Select() 改的是 ListBox 的选中项，
+但**不触发** WinForms 的 SelectedIndexChanged（实测 round5：选中=beta 而状态回显仍是
+'none'）——所以 listStatus 对 UIA Select 不是有效读侧；这条用例的读侧是
+① 执行器 effect details 里的 `selectedItem` 读回 + ② 直接用 UIA SelectionPattern
+读靶子的当前选中项（独立于执行器）。
 """
 
 from __future__ import annotations
@@ -237,22 +238,22 @@ def test_drag_moves_the_target_control(demo_app, backend_name, locator):
     )
 
 
-@pytest.mark.xfail(
-    strict=False,
-    reason=(
-        "desktop.select 的实现用错 UIA pattern：ListBox 的 iface_selection 是 "
-        "SelectionPattern（没有 Select 方法），label/value 分支又拿 GetCurrentSelection() "
-        "当『全部选项』遍历；两处都被 except 吞掉 → 命令返回 success 但选中项不变"
-    ),
-)
 def test_select_changes_the_list_selection(demo_app):
-    """钉住缺口：选中项应当从 none 变成 list:1:beta（实测仍是 none）。"""
+    """select（uia）真的改变了靶子的选中项（S2.3 修实现后转正）。
+
+    双读侧：执行器 effect details 的 selectedItem 读回 + 独立于执行器的 UIA
+    SelectionPattern 读靶子当前选中项——后者防「执行器自己写自己读」的自证。
+    listStatus 回显不参与判据（UIA Select 不触发 SelectedIndexChanged，见模块 docstring）。
+    """
+    import pywinauto.uia_defines as uia_defs
+    from pywinauto import Desktop
+
     from rpa_core.executors import DesktopExecutor
 
-    async def scenario() -> str:
+    async def scenario() -> tuple[str, str]:
         reader, actor = DesktopExecutor(), DesktopExecutor()
         try:
-            reader_session = await _attach(reader, "desktop")
+            await _attach(reader, "desktop")
             actor_session = await _attach(actor, "desktop")
             found = await actor.execute(
                 _invocation(
@@ -278,25 +279,32 @@ def test_select_changes_the_list_selection(demo_app):
                 ),
                 asyncio.Event(),
             )
-            assert result.status == "success"
-            return await _read_label(reader, reader_session, "listStatus")
+            assert result.status == "success", getattr(result.error, "message", "")
+            reported = str(result.effects[0].details["selectedItem"])
+            # 独立读侧：直接用 UIA 读靶子的当前选中项
+            win = Desktop(backend="uia").window(title=desktop_fixture.APP_TITLE)
+            list_el = next(
+                c
+                for c in win.descendants(control_type="List")
+                if c.element_info.automation_id == "optionsList"
+            )
+            sel = uia_defs.get_elem_interface(list_el.element_info.element, "Selection")
+            arr = sel.GetCurrentSelection()
+            independent = arr.GetElement(0).CurrentName if arr.Length else ""
+            return reported, str(independent or "")
         finally:
             await reader.close()
             await actor.close()
 
-    assert asyncio.run(scenario()) == "list:1:beta"
+    reported, independent = asyncio.run(scenario())
+    assert reported == "beta", f"执行器读回 {reported!r}，应为 beta"
+    assert independent == "beta", (
+        f"独立 UIA 读回 {independent!r}，应为 beta——选中态没有真的落到靶子上"
+    )
 
 
-@pytest.mark.xfail(
-    strict=False,
-    reason=(
-        "uia 的 getText 用 UIA Name 当文本，而 WinForms 的 Edit/ListBox 没有 "
-        "AccessibleName，UIA 按 MSAA 的 labeled-by 规则回落到相邻 Label 的文本"
-        "（实测 readOnlyNote → 'Drag'、queryInput → 'Name'）"
-    ),
-)
 def test_get_text_reads_the_edit_value(demo_app):
-    """钉住缺口：只读 Edit 的内容是 'note-ready'，实测读回的是相邻 Label 的 'Drag'。"""
+    """getText（uia）对 Edit 走 ValuePattern 读真实文本（S2.3 修实现后转正）。"""
     from rpa_core.executors import DesktopExecutor
 
     async def scenario() -> str:

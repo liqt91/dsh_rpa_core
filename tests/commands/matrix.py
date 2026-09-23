@@ -21,6 +21,7 @@ outputs/effects/错误码/落盘内容）。差别只在**插桩点**（假扩�
 | `outputPaths` | 指定键的值是**路径**：按 `Path` 比较（分隔符无关；用例表写 `{tmp}/a/b.txt`） |
 | `outputsMatch` | `result.outputs` 指定键的**正则**匹配（时间戳这类形状确定、值不确定的输出） |
 | `effect` | `effects[0].kind` |
+| `effectDetails` | `effects[0].details` 的子集（成功路径的证据断言，如 select 的 selectedItem） |
 | `noEffects` | 断言**没有**任何 effect 记录（pure 命令不需要提交证据——与 `effect` 互斥） |
 | `errorCode` / `errorDetails` | 失败路径：错误码（精确）/ details（子集） |
 | `elapsedAtLeastMs` | 整条命令的墙钟耗时下界（验证 `postDelayMs` 这类「只花时间」的参数） |
@@ -439,6 +440,17 @@ def check_expect(
             problems.append(f"期望 effect={expect['effect']}，但没有任何 effect 记录")
         elif kinds[0] != expect["effect"]:
             problems.append(f"effect：期望 {expect['effect']!r}，实得 {kinds[0]!r}")
+    if "effectDetails" in expect:
+        if not result.effects:
+            problems.append("期望 effectDetails，但没有任何 effect 记录")
+        else:
+            problems.extend(
+                subset_problems(
+                    result.effects[0].details or {},
+                    expect["effectDetails"],
+                    "effectDetails",
+                )
+            )
     if expect.get("noEffects"):
         kinds = [effect.kind.value for effect in result.effects]
         if kinds:

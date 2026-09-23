@@ -481,7 +481,7 @@
     ]
   },
   "desktop.win32.findElement": {
-    "notes": "expect 里的 matchedCount=1 不是猜的：实现只在唯一匹配时成功（歧义另有 ELEMENT_AMBIGUOUS），这个字段目前是常量 1。**判因纠正（2026-09-22 补靶子时实测）**：此前这里写的是『靶子控件的类名是 WinForms 动态生成的、没有稳定 controlId，因此 win32 定位器匹配不到任何控件，只能全走负路径』——实测**不成立**。win32 定位器的 `title` 比的是控件的**窗口文本**，对 Button / Label 这类文本恒定的控件完全可用：`title='Submit'`、`title='Drag'`、`title='note-ready'` 都 uniquely 命中（matchedCount=1）。真正不成立的是另外两条路：`className` 是 WindowsForms10.*.app.0.<哈希> 这类动态名（哈希随编译产物变，且两个 Edit 撞同一个类名），`control_id` 则**过滤根本不生效**——实测 `descendants(control_id=<任一值>)` 一律返回全部 子控件（14/14/14）。controlId 过滤失效是 pywinauto 的行为，登记在任务单。`title='alpha'` 那条钉住另一件事：ListBox 的条目不是子窗口，win32 侧看不到它们。",
+    "notes": "expect 里的 matchedCount=1 不是猜的：实现只在唯一匹配时成功（歧义另有 ELEMENT_AMBIGUOUS），这个字段目前是常量 1。**判因纠正（2026-09-22 补靶子时实测）**：此前这里写的是『靶子控件的类名是 WinForms 动态生成的、没有稳定 controlId，因此 win32 定位器匹配不到任何控件，只能全走负路径』——实测**不成立**。win32 定位器的 `title` 比的是控件的**窗口文本**，对 Button / Label 这类文本恒定的控件完全可用：`title='Submit'`、`title='Drag'`、`title='note-ready'` 都 uniquely 命中（matchedCount=1）。真正不成立的是另外两条路：`className` 是 WindowsForms10.*.app.0.<哈希> 这类动态名（哈希随编译产物变，且两个 Edit 撞同一个类名），`control_id` 则**过滤根本不生效**——实测 `descendants(control_id=<任一值>)` 一律返回全部 子控件（14/14/14）。controlId 过滤失效是 pywinauto 的行为，登记在任务单。`title='alpha'` 那条钉住另一件事：ListBox 的条目不是子窗口，win32 侧看不到它们。 **S2.3 追记（controlId 已修活）**：pywinauto 的 descendants/children 路径不消费 control_id（children 只读 class_name/title/control_type），旧实现等于「声明了但不工作的假开关」；现在 `_find` 拿到列表后按 ElementInfo 的 control_id（GetDlgCtrlID）手工补滤。**没有按值的正路径行**：WinForms 给控件分的 control id 实测**随编译漂移**（同一段代码三次编译三次不同：28901996 / 29295212 / 4064778），写死必炸；用「错误 id 排除 title 命中」这条负路径钉住过滤生效——旧实现下该行会是 matchedCount=1 的成功，新实现才是 ELEMENT_NOT_FOUND。",
     "variants": [
       {
         "name": "a-stable-window-text-resolves-the-button",
@@ -613,11 +613,27 @@
         },
         "negative": true,
         "notes": "空会话串的实测语义（2026-09-22 执行层首跑校正）：`resolve_session_id` 把空串当「未提供」（`str(requested or '').strip()` 为空即回退），于是命令落到**默认会话**上，并不存在「拿空串去匹配某个会话」这一步——这才是『空串不是通配符』的真实含义。 但本命令还要元素：回退成功之后，失败点变成了那个不存在的元素 id（不是会话）。"
+      },
+      {
+        "name": "a-wrong-control-id-excludes-the-title-match",
+        "inputs": {
+          "sessionId": "{session}",
+          "locator": {
+            "backend": "win32",
+            "title": "Submit",
+            "controlId": 2147483647
+          },
+          "timeoutMs": 2000
+        },
+        "expect": {
+          "errorCode": "ELEMENT_NOT_FOUND"
+        },
+        "negative": true
       }
     ]
   },
   "desktop.win32.getSelectedText": {
-    "notes": "**本表刻意不给正路径**（纠正 2026-09-22：此前归因于『靶子控件匹配不到 win32 定位器』）。实现用 `element.iface_value.GetSelection()`，而 win32 后端的元素没有 iface_* 属性族 （同 desktop.win32.select）→ 异常被吞 → 实测对 title=note-ready / Submit / Drag 三个元素都返回 success 且 text 恒为空串。返回 success 证明不了读到过选区，所以不写正路径。",
+    "notes": "**S2.3 定案：win32 后端显式报 `EXECUTOR_FAILED`**——旧实现访问 win32 元素上不存在的 iface_value.GetSelection()，except 后恒返回空串 success（「恒空的成功」比显式失败更坏）。原生消息路径（LB_GETCURSEL + LB_GETTEXT）登记在 BACKLOG。",
     "variants": [
       {
         "name": "unknown-element-id-is-element-not-found",
@@ -652,6 +668,28 @@
         },
         "negative": true,
         "notes": "空会话串的实测语义（2026-09-22 执行层首跑校正）：`resolve_session_id` 把空串当「未提供」（`str(requested or '').strip()` 为空即回退），于是命令落到**默认会话**上，并不存在「拿空串去匹配某个会话」这一步——这才是『空串不是通配符』的真实含义。 但本命令还要元素：回退成功之后，失败点变成了那个不存在的元素 id（不是会话）。"
+      },
+      {
+        "name": "reports-unsupported-backend-explicitly",
+        "inputs": {
+          "sessionId": "{session}",
+          "elementId": "{element:submit}"
+        },
+        "setup": {
+          "find": {
+            "submit": {
+              "backend": "win32",
+              "title": "Submit"
+            }
+          }
+        },
+        "expect": {
+          "errorCode": "EXECUTOR_FAILED",
+          "errorDetails": {
+            "operation": "getSelectedText"
+          }
+        },
+        "negative": true
       }
     ]
   },
@@ -1187,11 +1225,10 @@
     ]
   },
   "desktop.win32.screenshot": {
-    "notes": "**实测（2026-09-22）：连正路径也走不通**——实现先试 `element.iface_value.GetCurrentPropertyValue(30013)`（win32 后端包装出的元素没有 `iface_*` 属性族，必抛），回落到 `window.capture_as_image()`，而后者需要 PIL，项目依赖里没有 Pillow，命令以 EXECUTOR_FAILED 收场（'NoneType' object has no attribute 'save'）。这是依赖缺口，与用例无关；期望按原样留着（正路径就该写出 PNG），钉成严格 xfail（缺口一修就 XPASS 转红，逼着回来摘标记）。修法是独立决策（加 Pillow 或改走 Win32 BitBlt）。",
+    "notes": "**S2.3 起依赖已定案**：加 Pillow（同 uia 侧说明，见 cases/desktop.json 的 `desktop.screenshot`）。win32 侧没有 UIA 图像属性，直接走 `capture_as_image()` 回落路径。",
     "variants": [
       {
         "name": "writes-a-png-into-the-variant-temp-dir",
-        "knownGap": "依赖缺口：win32 侧 `iface_value` 分支必抛（win32 元素没有 iface_* 属性族）后回落到 pywinauto 的 capture_as_image()，而它需要 PIL，项目依赖里没有 Pillow —— 两个后端的 screenshot 正路径都必然 EXECUTOR_FAILED（'NoneType' object has no attribute 'save'）。出路是二选一：加 Pillow 依赖，或改走 Win32 BitBlt（无第三方依赖）。详见 M38 任务单 §1.5 缺口表。",
         "notes": "锚点选只读 Edit（窗口文本恒为 'note-ready'，不被任何命令改写）——与 getText 正路径同一个锚点，理由相同。",
         "setup": {
           "find": {
@@ -1265,7 +1302,7 @@
     ]
   },
   "desktop.win32.select": {
-    "notes": "**本表刻意不给正路径**（纠正 2026-09-22：此前写『靶子上没有下拉控件、也没有可匹配的 win32 定位器』——靶子已补 ListBox/ComboBox，真正的问题在实现）。win32 侧更彻底：实现走 `element.iface_selection` / `iface_value`，而 win32 后端包装出的元素**根本没有 iface_* 这一族属性**（实测对窗口里每个子控件取 iface_selection / iface_value / iface_invoke 全部抛异常），于是整段被 `except Exception: pass` 吞掉、命令照旧返回 success。也就是说 `desktop.win32.select` 在当前实现下**不可能生效**，给它写正路径只会种假绿灯。缺口由 tests/e2e/test_desktop_target_effects.py 的 xfail 钉住。",
+    "notes": "**S2.3 定案：win32 后端显式报 `EXECUTOR_FAILED`**——win32 包装元素没有 UIA 的 iface_* 接口族，旧实现 except 后照样返回 success（三个 selectBy 分支全部静默假成功）。按「别静默成功」原则改为显式失败（details 带 operation/selectBy）；原生消息路径（LB_SETCURSEL / CB_SETCURSEL，需跨进程缓冲区，pywinauto 的 ListBox/ComboBox 包装类已封装）登记在 BACKLOG，实现前本命令在 win32 侧没有正路径——这不是用例缺口，是**已定案的能力边界**。",
     "variants": [
       {
         "name": "value-mode-fails-on-an-unknown-element",
@@ -1315,6 +1352,30 @@
         },
         "expect": {
           "errorCode": "SESSION_NOT_FOUND"
+        },
+        "negative": true
+      },
+      {
+        "name": "reports-unsupported-backend-explicitly",
+        "inputs": {
+          "sessionId": "{session}",
+          "elementId": "{element:submit}",
+          "value": "one",
+          "selectBy": "label"
+        },
+        "setup": {
+          "find": {
+            "submit": {
+              "backend": "win32",
+              "title": "Submit"
+            }
+          }
+        },
+        "expect": {
+          "errorCode": "EXECUTOR_FAILED",
+          "errorDetails": {
+            "operation": "selectOption"
+          }
         },
         "negative": true
       }

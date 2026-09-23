@@ -63,7 +63,9 @@ class DesktopExecutor(CommandExecutor):
             return CommandResult(status="cancelled")
         _no_session_commands = (
             "desktop.attachWindow",
-            "desktop.getWindowList",
+            # getWindowList 曾被声明为免会话，但实现把会话解析放在命令分派之前、
+            # 无会话必报 SESSION_NOT_FOUND（实测见 M38 任务单 §1.5/§1.7）——
+            # S2.3 把声明对齐实现：它和其它命令一样需要会话。
         )
         if invocation.command_id not in _no_session_commands:
             # sessionId 可省略：默认作用于最近激活（或唯一）的桌面会话
@@ -577,7 +579,7 @@ class DesktopExecutor(CommandExecutor):
                     ]
                 )
             if command == "desktop.getText":
-                value = element.window_text()
+                value = self._read_element_text(element)
                 return CommandResult.success(
                     value=value,
                     outputs={"value": value},
@@ -640,22 +642,52 @@ class DesktopExecutor(CommandExecutor):
             if command == "desktop.select":
                 value = str(inputs["value"])
                 select_by = inputs.get("selectBy", "value")
+                # SelectionPattern 自身没有 Select；选中动作在**列表项**的
+                # SelectionItemPattern 上（iface_selection_item.Select()）。
+                # label/value 分支也不能用 GetCurrentSelection()——那返回的是
+                # 「当前已选中项」不是全部选项，旧实现把三个 selectBy 分支都变成
+                # 静默假成功（实测见 M38 任务单 §1.5）。改：枚举 ListItem 子项
+                # 逐个匹配后 Select()；无子项 / 无匹配显式报错，不再吞错。
+                items = element.descendants(control_type="ListItem")
+                target: Any | None = None
+                if select_by == "index":
+                    try:
+                        idx = int(value)
+                    except ValueError:
+                        idx = -1
+                    if 0 <= idx < len(items):
+                        target = items[idx]
+                else:
+                    # label 与 value 都按列表项文本匹配：包装对象没有
+                    # GetCurrentPropertyValue（那是裸 IUIAutomationElement 的方法），
+                    # 而 WinForms ListItem 的 Value 属性实测恒空（30006 = ''），
+                    # 语义上列表项的 value 就是它的文本。
+                    for item in items:
+                        try:
+                            if item.window_text() == value:
+                                target = item
+                                break
+                        except Exception:
+                            continue
+                if target is None:
+                    return CommandResult.failure(
+                        ErrorCode.ELEMENT_NOT_FOUND,
+                        f"no list item matches selectBy={select_by!r}, value={value!r}",
+                        details={
+                            "operation": "selectOption",
+                            "enumerableItems": len(items),
+                        },
+                    )
+                target.iface_selection_item.Select()
+                # 选中态读回（证据面）：UIA 的 Select() 改的是 ListBox 的选中项，
+                # 但**不触发** WinForms 的 SelectedIndexChanged（实测 round5：
+                # 选中=beta 而 listStatus 回显仍是 'none'）——所以状态回显 Label
+                # 不是这条命令的有效读侧；把选中项读回写进 details 才能被断言。
+                selected_name = ""
                 try:
-                    sel = element.iface_selection
-                    if select_by == "index":
-                        sel.Select(int(value))
-                    elif select_by == "label":
-                        items = sel.GetCurrentSelection()
-                        for item in items:
-                            if item.GetCurrentPropertyValue(30005) == value:
-                                item.Select()
-                                break
-                    else:
-                        items = sel.GetCurrentSelection()
-                        for item in items:
-                            if item.GetCurrentPropertyValue(30006) == value:
-                                item.Select()
-                                break
+                    sel_items = element.iface_selection.GetCurrentSelection()
+                    if sel_items is not None and sel_items.Length:
+                        selected_name = str(sel_items.GetElement(0).CurrentName or "")
                 except Exception:
                     pass
                 return CommandResult.success(
@@ -664,7 +696,11 @@ class DesktopExecutor(CommandExecutor):
                             invocation,
                             kind=EffectKind.UNSAFE_WRITE,
                             resource=resource,
-                            details={"operation": "selectOption"},
+                            details={
+                                "operation": "selectOption",
+                                "selectBy": select_by,
+                                "selectedItem": selected_name,
+                            },
                         )
                     ]
                 )
@@ -817,6 +853,22 @@ class DesktopExecutor(CommandExecutor):
                 == locator.automation_id
             ]
         return matches
+
+    @staticmethod
+    def _read_element_text(element: Any) -> str:
+        """读元素文本：有 ValuePattern 时优先走它。
+
+        `window_text()` 对没有 AccessibleName 的 WinForms Edit / ListBox 会按 MSAA
+        的 labeled-by 规则回落到**相邻 Label** 的文本（实测 `queryInput` 读到旁边的
+        `'Name'`、`readOnlyNote` 读到 `'Drag'`，M38 任务单 §1.5）——Edit 的真实文本
+        在 Value 属性里，先问 ValuePattern，不支持该模式的控件（Label 等）再回落。
+        """
+        try:
+            # 注意取 CurrentValue **属性**——comtypes 生成的 IUIAutomationValuePattern
+            # 没有 GetCurrentValue() 方法（实测 AttributeError，M38 任务单 §1.7）。
+            return str(element.iface_value.CurrentValue)
+        except Exception:
+            return element.window_text()
 
     @staticmethod
     def _window_by_handle(handle: int) -> Any | None:
