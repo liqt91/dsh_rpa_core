@@ -814,7 +814,7 @@
     ]
   },
   "desktop.getWindowTitle": {
-    "notes": "窗口身份三项都来自实现（title / className / processId）。title 可以按值断言——装配就是靠这个标题 attach 成功的，两处必须一致，这条同时钉住了『attach 的标题匹配口径』与『读回来的标题』是同一个窗口。className 是 WinForms 动态生成的（WindowsForms10.Window.8.app.0.xxx），不按值断言。",
+    "notes": "窗口身份三项都来自实现（title / className / processId）。title 可以按值断言——装配就是靠这个标题 attach 成功的，两处必须一致，这条同时钉住了『attach 的标题匹配口径』与『读回来的标题』是同一个窗口。className 是 `WindowsForms10.Window.8.app.0.<哈希>` 形式，不按值断言——哈希段实测是**机器 + 运行时级常量**（同机所有 .NET Framework 4.x 程序共享一段，换机器或换 CLR 版本才变），不能硬编码。",
     "variants": [
       {
         "name": "reports-the-fixture-window-identity",

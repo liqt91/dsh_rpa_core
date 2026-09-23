@@ -195,6 +195,38 @@ def _window_handle(title: str) -> str:
     return str(int(handle or 0))
 
 
+def _list_control_class_names(title: str) -> dict[str, str]:
+    """靶子里 ListBox / ComboBox 的**完整类名**（`{listBoxClass}` / `{comboBoxClass}`）。
+
+    为什么非现算不可：这两个控件的窗口文本恒为空（`window_text() == ''`），win32
+    定位器只能按 `className` / `controlId` 认它们，而 `controlId` 实测**每次进程
+    启动都漂**（同一个 exe 连跑三次拿到三个不同值），写进静态表必炸。类名则可注入：
+    它跨重编译、跨源码变更、跨输出路径都恒定（`.harness/spike/probe_win32_classname_*.py`
+    实测），因为哈希段是**机器 + 运行时级常量**——本机所有 .NET Framework 4.x 的
+    WinForms 程序共享 `34f5582_r8_ad1`（换台机器/换 CLR 版本会变，所以不能硬写进仓库）。
+
+    读不到时返回空字典（占位符留在原样，用例会以 ELEMENT_NOT_FOUND 红）——
+    比抛异常好：装配层报错容易被误读成「被测命令有问题」。
+    """
+    try:
+        from pywinauto import Desktop as _Desktop
+        from pywinauto.controls.win32_controls import (
+            ComboBoxWrapper,
+            ListBoxWrapper,
+        )
+
+        window = _Desktop(backend="win32").window(title=title)
+        names: dict[str, str] = {}
+        for child in window.descendants():
+            if isinstance(child, ListBoxWrapper):
+                names.setdefault("listBoxClass", child.class_name())
+            elif isinstance(child, ComboBoxWrapper):
+                names.setdefault("comboBoxClass", child.class_name())
+        return names
+    except Exception:
+        return {}
+
+
 async def _prepare(
     executor: Any,
     setup: dict[str, Any],
@@ -202,6 +234,7 @@ async def _prepare(
     tmp_dir: Path,
     *,
     backend: DesktopBackend,
+    needs_list_classes: bool = False,
 ) -> dict[str, Any]:
     """按变体的 `setup` 现算占位符表（`{session}` / `{element:x}` / `{appTitle}` / `{pid}`）。
 
@@ -212,6 +245,10 @@ async def _prepare(
     `processId` / `targetX` 这些参数在 schema 里就是 integer，而占位符替换出来的字符串
     会让执行器的过滤/比较恒不命中（实测：`{pid}` 存成字符串后 attach 报
     `ELEMENT_NOT_FOUND`，pid 明明是对的）。
+
+    `needs_list_classes` 只在变体真的引用了 `{listBoxClass}` / `{comboBoxClass}` 时打开：
+    它要枚举一次真窗口，而绝大多数变体用不上（92 个 win32 变体里只有 select /
+    getSelectedText 那几条）。
     """
     from tests.commands.matrix import materialize_inputs
 
@@ -223,6 +260,8 @@ async def _prepare(
         "windowCenterX": center[0],
         "windowCenterY": center[1],
     }
+    if needs_list_classes:
+        extra.update(_list_control_class_names(app.title))
     if setup.get("session", "shared") == "none":
         return extra
 
@@ -277,8 +316,17 @@ async def _execute_variant(
 
     executor = backend.factory()
     try:
+        # 只在变体真的引用了列表控件类名占位符时才枚举真窗口（省一次枚举/变体）。
+        blob = f"{variant.get('setup')}{variant.get('inputs')}{variant.get('expect')}"
         extra = await _prepare(
-            executor, variant.get("setup") or {}, app, tmp_dir, backend=backend
+            executor,
+            variant.get("setup") or {},
+            app,
+            tmp_dir,
+            backend=backend,
+            needs_list_classes=(
+                "{listBoxClass}" in blob or "{comboBoxClass}" in blob
+            ),
         )
         inputs = materialize_inputs(variant.get("inputs", {}), tmp_dir, extra)
         started = time.perf_counter()

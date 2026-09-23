@@ -119,7 +119,10 @@ Shadow DOM/动态渲染），用**真实扩展**连通后逐条跑**无副作用
   title/class/controlId，而现有 fixture 的控件是 UIA `AutomationId`，所以要另做一套靶子」——
   **win32 的 `title` 比的是控件窗口文本**，补靶子时实测 `title='Submit'` / `'Count'` /
   `'note-ready'` 都唯一命中（S2 已用它写出 win32 的元素级正路径）。真正不可用的是另两条：
-  `className` 是 `WindowsForms10.*.app.0.<哈希>` 动态名（两个 Edit 还撞同名）与 `controlId`
+  `className` 的哈希段不能硬编码（**2026-09-23 订正**：它不是「随编译产物变」的动态名，
+  而是**机器 + 运行时级常量**——同机所有 .NET Framework 4.x 的 WinForms 程序共享一段，
+  跨重编译/跨源码/跨输出路径都不变，换机器或换 CLR 版本才变；两个 Edit 还撞同名，
+  故测试侧按运行期读回的完整类名注入 `{listBoxClass}` / `{comboBoxClass}`）与 `controlId`
   （pywinauto 的过滤**完全不生效**，恒返回全部子控件）。**S2.1 缺的 win32 真机用例不是「做不了」，
   只是当时没写**——`restore_from_scopes` 的 win32 真机用例仍缺（靶子已够用）。
 

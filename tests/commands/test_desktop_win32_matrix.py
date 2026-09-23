@@ -11,11 +11,17 @@
 只能覆盖负路径」——**这个判因实测不成立**：
 `title` 比的是控件的窗口文本，对文本恒定的控件（Button / Label / 只读 Edit）完全可用，
 元素级正路径早就可以跑（实测 `title='Submit'`、`title='note-ready'` 都唯一命中）。
-真正不成立的是另外两条：`className` 是随编译产物变的动态名（且两个 Edit 撞同名），
-`control_id` 的过滤在 pywinauto 上根本不生效（实测任何取值都返回全部子控件）。
+真正不成立的是另外两条：`className` 的哈希段**不能硬编码**（注意与早期记录的差异：
+实测它不是「随编译产物变」，而是**机器 + 运行时级常量**——同机所有 .NET Framework 4.x
+的 WinForms 程序共享同一段，跨重编译/跨源码/跨输出路径都不变；**换机器会变**，所以测试
+侧改成按运行期读回的完整类名注入 `{listBoxClass}` / `{comboBoxClass}` 占位符），
+且两个 Edit 撞同名；`control_id` 的过滤在 pywinauto 上根本不生效（实测任何取值都返回
+全部子控件，S2.3 已由 `_find` 手工补滤修活）。
 靶子这一轮补了原生菜单栏与 ListBox / ComboBox / 可拖 Label，`menuSelect` 与 `drag`
-因此第一次有了成功路径。当前仍缺的（`select` / `getSelectedText` / `input`）
-是**实现缺口**不是靶子缺口，逐条记在 `.harness/tasks/M38-command-matrix.md` §1.5。
+因此第一次有了成功路径。**`select` / `getSelectedText` 的原生消息实现已落地
+（2026-09-23 BACKLOG 尾巴 #1）**，两条命令第一次有了正路径；仅剩 `input` 仍是
+实现缺口（它需要一个「可写 Edit」的稳定锚点，而可写 Edit 的窗口文本就是它的内容、
+天然当不了锚点，逐条记在 `.harness/tasks/M38-command-matrix.md` §1.5）。
 
 `demo_app`（真靶子）由 `tests/commands/conftest.py` 转出，本文件**不要**自己 import 它——
 理由见该模块里的记录（会让 session 级 fixture 被 setup 两次）。

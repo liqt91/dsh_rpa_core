@@ -29,8 +29,9 @@
   产品侧剩余缺口已逐条转入「后续任务」（`screenshot` 依赖、`select`/`getText` 实现、`className`/
   `controlId`、`getWindowList` 的会话声明与静默空列表）；**S2.3（2026-09-23）清掉其中大半**：
   `screenshot` 加 Pillow、uia `select`/`getText` 修复、win32 `select`/`getSelectedText` 显式失败、
-  `controlId` 过滤修活、`getWindowList` 会话声明对齐——剩余见「win32 原生消息实现」、
-  「className 动态名」、「枚举被拒静默空列表」三条。**S4 L2 真机冒烟已完成
+  `controlId` 过滤修活、`getWindowList` 会话声明对齐；**尾巴 #1（win32 原生消息）同日实现完**。
+  剩余两条：「className 动态名」（**判因已订正**：哈希段实为机器 + 运行时级常量，不是
+  「随编译产物变」；出路待拍板）、「枚举被拒静默空列表」。**S4 L2 真机冒烟已完成
   （2026-09-23，§1.8–§1.12）**：浏览器 32 条命令全部有了 L2 处置——109 个 l2 块
   （`l2` = page/inputs/expect/pre/verify/session），真机 110 passed；过程中修复
   3 个真机才可见的产品 bug（check 三操作反转 / goBack API 不可靠 / timeoutMs
@@ -137,23 +138,52 @@
   ValuePattern 优先（comtypes 只有 `CurrentValue` **属性**，`GetCurrentValue()` 方法不存在，
   实测 AttributeError）；win32 `select`/`getSelectedText` 按「别静默成功」定案改为**显式
   `EXECUTOR_FAILED`**（details 带 operation）。e2e 两条 xfail 已转正。
-- [ ] **win32 `select` / `getSelectedText` 的原生消息实现**（`planned`，S2.3 定案的能力边界）
-  ——显式失败只是止血；真正的能力要走 `LB_SETCURSEL` / `CB_SETCURSEL` + `LB_GETCURSEL` /
-  `LB_GETTEXT`，缓冲区须放在**控件所在进程**的内存里（VirtualAllocEx + ReadProcessMemory；
-  pywinauto 的 ListBox/ComboBox 包装类已封装 RemoteMemoryBlock 可复用）。注意原生消息同样
-  **不触发** `LBN_SELCHANGE`（与 UIA Select 不触发 SelectedIndexChanged 同理）。
+- [x] **win32 `select` / `getSelectedText` 的原生消息实现**（`done`，2026-09-23 M38 尾巴 #1）
+  ——S2.3 的显式失败只是止血；真正的能力走 `LB_SETCURSEL` / `CB_SETCURSEL` +
+  `LB_GETCURSEL` / `LB_GETTEXT`（pywinauto 的 ListBox/ComboBox 包装类已封装
+  RemoteMemoryBlock 跨进程缓冲区，**不用自己写 VirtualAllocEx**）。实施要点：
+  - `_find` 拿到的元素**自动包装**成 `ListBoxWrapper` / `ComboBoxWrapper`（pywinauto 的
+    `windowclasses` 正则里就写着 `WindowsForms\d*\.LISTBOX\..*`），直接
+    `element.select(...)` 即可，不必手工构造包装对象。
+  - **读侧必须显式取索引再判 `>= 0`**：`selected_text()` 内部是
+    `item_texts()[selected_index()]`，无选中时 `CB_GETCURSEL` / `LB_GETCURSEL` 返回 -1，
+    Python 负索引会把它静默变成**最后一项**（实测不加判断时 ComboBox 回 `'three'`、
+    ListBox 回 `'gamma'`，加了才是空串）。
+  - **一处原判断被实测推翻**：旧注释写「原生消息同样**不触发** `LBN_SELCHANGE`」——
+    原生消息本身确实不发通知，但 pywinauto 的 `select()` 在设完 curs 之后会
+    `notify_parent(LBN_SELCHANGE / CBN_SELCHANGE)`（post 一个 WM_COMMAND），
+    所以**走包装类的实现会让 UI 真的反应**：实测 `listStatus` 逐步
+    `none → list:1:beta → list:2:gamma → list:0:alpha`。这比 uia 侧强（那边的
+    `SelectionItemPattern.Select()` 确实不触发 SelectedIndexChanged）。
 - [ ] **`desktop.win32` 的 `className` 定位字段名不副实**（`planned`；`controlId` 部分已由
   M38 S2.3 修复，见下）
   - ~~`control_id` 的过滤完全不生效~~（**已修**，S2.3：`_find` 拿到 descendants 后按
     ElementInfo 的 control_id（GetDlgCtrlID）手工补滤——pywinauto 的 children 只读
     class_name/title/control_type，`control_id` 被静默忽略；且包装元素上的 `control_id`
     在 0.6.9 是 deprecated **方法**而非属性，必须走 `element_info.control_id`。用例表以
-    「错误 id 排除 title 命中」负路径钉住（id 实测随编译漂移，写不了按值正路径），
-    停用补滤该行即红，负向验证已做）
-  - `className` 仍是 `WindowsForms10.*.app.0.<哈希>` 这类**动态名**（哈希随编译产物变），且两个
-    Edit 撞同一个类名——作为用户可见的定位字段同样存疑。
-  - 出路：`className` 要么按 `GetClassNameW` 精确化文档口径、要么从 win32 locator 拿掉。
-    **注意**：`title` 是好的（它比的是控件窗口文本，实测 `Submit`/`Count`/`note-ready`
+    「错误 id 排除 title 命中」负路径钉住，停用补滤该行即红，负向验证已做）
+  - **判因订正（2026-09-23 尾巴 #1 取证时实测）**：本节此前写 `className` 的哈希段
+    「随编译产物变」——**错**。它既不是产物级也不是应用级，而是**机器 + 运行时级常量**：
+    实测同一 exe 连跑 3 次、同路径重编译、不同路径/文件名重编译、纯注释改动、真实 IL
+    改动（改控件文本）——五轴下哈希段全部恒定；另一个**完全不同的** WinForms 程序拿到的
+    也是同一段 `34f5582_r8_ad1`（探针 `.harness/spike/probe_win32_stability.py`、
+    `probe_win32_classname_rebuild.py`、`probe_win32_classname_content.py`、
+    `probe_win32_classname_other_app.py`）。换机器或换 CLR/WinForms 版本会变，所以仍
+    不能硬编码进仓库，但它不是「每次编译都变」。
+  - 另一处相应订正：`control_id` 的漂移粒度是**每次进程启动**（同一个 exe 连跑三次拿到
+    三个不同值），不是「每次编译」。
+  - 真正的麻烦不是「哈希会变」，而是**类的可区分性太粗**：两个 Edit 撞同一个类名，且
+    「无窗口文本」的控件（ListBox / ComboBox）在 win32 侧**只能**靠 className /
+    controlId 定位——这正好把尾巴 #1 的新能力和它绑在一起（不解决本条的**可用性**，
+    尾巴 #1 的能力在实践中够不着）。
+  - 出路（**待维护者拍板**，见任务单 §6）：① `className` 改**子串/包含**匹配
+    （pywinauto 的 `findwindows` 里 `class_name` 是精确等值，但另有现成的
+    `class_name_re` 正则通道）——用户写 `WindowsForms10.LISTBOX` 或 `LISTBOX` 即可稳定
+    命中且跨机器可用；② 按 `GetClassNameW` 精确化文档口径、保持现状（代价：用户必须粘
+    贴含哈希的完整串，跨机器失效）；③ 新增 `classNameRe` 字段（动 manifest 契约）。
+    **测试侧不依赖这个决策**：L1 驱动按运行期读回的完整类名注入 `{listBoxClass}` /
+    `{comboBoxClass}` 占位符，换机器照样跑。
+  - **注意**：`title` 是好的（它比的是控件窗口文本，实测 `Submit`/`Count`/`note-ready`
     都唯一命中），别一起误删。
 - [ ] **`desktop.getWindowList`：枚举被拒时静默返回空列表**
   （`planned`；「声明与实现不一致」部分已由 M38 S2.3 修复——`getWindowList` 已从

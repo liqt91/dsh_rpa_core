@@ -25,6 +25,12 @@ Edit/ListBox 不行——但 S2.3 修好了 getText 的 ValuePattern 路径，Ed
 'none'）——所以 listStatus 对 UIA Select 不是有效读侧；这条用例的读侧是
 ① 执行器 effect details 里的 `selectedItem` 读回 + ② 直接用 UIA SelectionPattern
 读靶子的当前选中项（独立于执行器）。
+
+**但 win32 原生消息那条相反（尾巴 #1 转正时实测）**：pywinauto 的
+`ListBoxWrapper/ComboBoxWrapper.select()` 在原生消息之后会
+`notify_parent(LBN_SELCHANGE / CBN_SELCHANGE)`（post 一个 WM_COMMAND），所以
+SelectedIndexChanged **会**触发、listStatus 会跟着变——`test_select_via_win32_native_messages`
+因此可以把状态回显当独立读侧。两条用例合起来钉住「哪个后端的选中动作会让 UI 反应」。
 """
 
 from __future__ import annotations
@@ -301,6 +307,99 @@ def test_select_changes_the_list_selection(demo_app):
     assert independent == "beta", (
         f"独立 UIA 读回 {independent!r}，应为 beta——选中态没有真的落到靶子上"
     )
+
+
+def test_select_via_win32_native_messages(demo_app):
+    """select（win32 原生消息）真的改变了靶子选中项，且**靶子自己会反应**。
+
+    BACKLOG 尾巴 #1 转正——此前 win32 侧 `select`/`getSelectedText` 是显式
+    `EXECUTOR_FAILED`（S2.3 的止血），现走 LB_SETCURSEL / CB_SETCURSEL。
+
+    两个读侧，第二个是本条独有的价值：
+    ① 执行器 effect details 的 `selectedItem` 读回；
+    ② **状态回显 listStatus**——原生消息经 pywinauto 的
+       `notify_parent(LBN_SELCHANGE)`（post 一个 WM_COMMAND）会触发 WinForms 的
+       `SelectedIndexChanged`，所以这里 listStatus 是**有效**读侧。这与 uia 侧刚好
+       相反（`test_select_changes_the_list_selection` 的注释解释了 uia 那条为什么不
+       能用 listStatus）——两条用例合起来把「哪个后端会让 UI 反应」钉死。
+    最后再走一次 `getSelectedText` 按值读回：先选再读是两步流程，正是 uia 侧 notes
+    里指明「属于流程层、放 tests/e2e」的那条。
+    """
+    from pywinauto import Desktop
+    from pywinauto.controls.win32_controls import ListBoxWrapper
+
+    from rpa_core.executors import DesktopExecutor, Win32DesktopExecutor
+
+    # ListBox 没有窗口文本，win32 定位器只能按 className 认它；类名含机器级哈希段，
+    # 所以运行期现读（与 L1 驱动的 `{listBoxClass}` 同一口径）。
+    list_cls = next(
+        child.class_name()
+        for child in Desktop(backend="win32")
+        .window(title=desktop_fixture.APP_TITLE)
+        .descendants()
+        if isinstance(child, ListBoxWrapper)
+    )
+
+    async def scenario() -> tuple[str, str, str]:
+        reader, actor = DesktopExecutor(), Win32DesktopExecutor()
+        try:
+            reader_session = await _attach(reader, "desktop")
+            actor_session = await _attach(actor, "desktop.win32")
+            desktop_fixture.force_foreground(desktop_fixture.APP_TITLE)
+            found = await actor.execute(
+                _invocation(
+                    "desktop.win32.findElement",
+                    {
+                        "sessionId": actor_session,
+                        "locator": {"backend": "win32", "className": list_cls},
+                        "timeoutMs": 2000,
+                    },
+                ),
+                asyncio.Event(),
+            )
+            assert found.status == "success", (
+                f"ListBox 没找到（className={list_cls!r}）："
+                f"{getattr(found.error, 'code', None)}"
+            )
+            element_id = str(found.outputs["elementId"])
+            selected = await actor.execute(
+                _invocation(
+                    "desktop.win32.select",
+                    {
+                        "sessionId": actor_session,
+                        "elementId": element_id,
+                        "value": "2",
+                        "selectBy": "index",
+                    },
+                ),
+                asyncio.Event(),
+            )
+            assert selected.status == "success", (
+                f"win32 select 失败：{getattr(selected.error, 'code', None)} "
+                f"{getattr(selected.error, 'message', '')}"
+            )
+            reported = str(selected.effects[0].details["selectedItem"])
+            echoed = await _read_label(reader, reader_session, "listStatus")
+            read_back = await actor.execute(
+                _invocation(
+                    "desktop.win32.getSelectedText",
+                    {"sessionId": actor_session, "elementId": element_id},
+                ),
+                asyncio.Event(),
+            )
+            assert read_back.status == "success", getattr(read_back.error, "message", "")
+            return reported, echoed, str(read_back.outputs["text"])
+        finally:
+            await reader.close()
+            await actor.close()
+
+    reported, echoed, read_back = asyncio.run(scenario())
+    assert reported == "gamma", f"执行器读回 {reported!r}，应为 gamma"
+    assert echoed == "list:2:gamma", (
+        f"靶子回显 {echoed!r}，应为 'list:2:gamma'——"
+        "原生消息没有触发 SelectedIndexChanged（UI 没反应）"
+    )
+    assert read_back == "gamma", f"getSelectedText 读回 {read_back!r}，应为 gamma"
 
 
 def test_get_text_reads_the_edit_value(demo_app):

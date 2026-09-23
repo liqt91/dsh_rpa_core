@@ -287,7 +287,7 @@ win32 模块**，所以没有用「大概是环境问题」带过，而是做了
 
 | 旧结论（§1.5 表里的原文） | 实测 | 结论 |
 |---|---|---|
-| 「win32 定位不到靶子控件，所以 win32 侧只能全走负路径」 | win32 定位器的 `title` 比的是控件**窗口文本**：`title='Submit'` / `'Count'` / `'note-ready'` 都唯一命中（`matchedCount=1`） | **判因错**。真正不成立的是另外两条路：`className` 是 `WindowsForms10.*.app.0.<哈希>` 这类动态名（哈希随编译产物变，两个 Edit 还撞同一类名），`control_id` 的过滤**完全不生效**（`descendants(control_id=<任意值>)` 恒返回全部 14 个子控件） |
+| 「win32 定位不到靶子控件，所以 win32 侧只能全走负路径」 | win32 定位器的 `title` 比的是控件**窗口文本**：`title='Submit'` / `'Count'` / `'note-ready'` 都唯一命中（`matchedCount=1`） | **判因错**。真正不成立的是另外两条路：`className` 的哈希段不能硬编码（**2026-09-23 订正**：实测它不是「随编译产物变」，而是机器 + 运行时级常量——同机所有 .NET Framework 4.x 程序共享一段、跨重编译/跨源码/跨输出路径都不变，换机器才变；两个 Edit 还撞同一类名），`control_id` 的过滤**完全不生效**（`descendants(control_id=<任意值>)` 恒返回全部 14 个子控件；S2.3 已由 `_find` 手工补滤修活） |
 | 「靶子无菜单栏 → `menuSelect` 的成功路径无从谈起」，表里那条 `EXECUTOR_FAILED` 是**推断** | 两条正路径真机通过：`["Actions","Increment"]` → `menu:increment`；`["Actions","Nested","Deep"]` → `menu:deep`；不存在的项 → pywinauto `MatchError` → `EXECUTOR_FAILED` | 推断换成了实测 |
 
 顺带把「拖拽能不能真动控件」也钉了：两后端 `dragStatus` 都从 `none` → `up:225,150`。
@@ -417,9 +417,11 @@ win32 模块**，所以没有用「大概是环境问题」带过，而是做了
 `effectDetails.selectedItem`（新增 expect 键 `effectDetails`，`effects[0].details` 的
 子集断言），e2e 用例再叠加**独立于执行器**的 UIA SelectionPattern 读回防自证。
 
-**controlId 的用例表口径**：WinForms 给控件分的 control id 实测**随编译漂移**（同一代码
-三次编译三次不同），没有按值正路径可写；用「错误 id 排除 title 命中」负路径钉住——旧
-实现下它是 `matchedCount=1` 的成功，新实现才是 `ELEMENT_NOT_FOUND`。
+**controlId 的用例表口径**：WinForms 给控件分的 control id 实测**每次进程启动都漂**
+（同一代码三次编译三次不同，同一 exe 连跑三次也三个不同值——**2026-09-23 订正**：
+漂移粒度是「每次启动」而不是「每次编译」），没有按值正路径可写；用「错误 id 排除
+title 命中」负路径钉住——旧实现下它是 `matchedCount=1` 的成功，新实现才是
+`ELEMENT_NOT_FOUND`。
 
 **验证**：真机探针五项全过（`.harness/spike/probe_desktop_s23_fixes.py`，中途经
 round2–round5 四轮深挖定位 `GetCurrentValue` 方法缺失与 Select 不触发事件两处真相）；
@@ -600,6 +602,81 @@ onTimeout 两态的「必然超时」靶子）。
 - **验证**：L2 真机 `110 passed in 38.22s`；L1 回归 180 passed；静态层
   PASSED（l2 块 109 个）。负向验证：waitFor 超时的 errorCode 改错 → 恰好
   该变体红（报文带真实错误消息），逐字节还原。
+
+### 1.13 BACKLOG 桌面三条尾巴：第 1 条实现 + 两处判因订正（2026-09-23）
+
+维护者问「backlog 的尾巴」，逐条取证。**结论先行：三条里第 1 条做完，第 2 条
+的判因被实测推翻（出路待拍板），第 3 条证据不变。**
+
+**尾巴 #1 —— win32 `select` / `getSelectedText` 原生消息实现（`done`）**
+
+S2.3 时两条命令在 win32 侧是显式 `EXECUTOR_FAILED`（止血）。可行性探针
+（`.harness/spike/probe_win32_native_select.py`、`probe_win32_native_select_e2e.py`）
+先跑，四个问题的实测答案：
+
+| 问题 | 实测 |
+| --- | --- |
+| `_find` 拿到的元素是什么 | **自动包装**成 `ListBoxWrapper` / `ComboBoxWrapper`（pywinauto 的 `windowclasses` 里就写着 `WindowsForms\d*\.LISTBOX\..*`），不必手工构造 |
+| 原生 select 能否生效 | 能。三种选择都生效：ListBox `select("beta")`→`[1]`、`select(2)`→`[2]`；ComboBox `select("two")`→`1`、`select(2)`→`2` |
+| 读回面 | ListBox `selected_indices()` + `item_texts()`；ComboBox `selected_index()` + `item_texts()` |
+| 会不会触发 UI 事件 | **会**（见下，推翻了原判断） |
+
+- **读侧陷阱（实现里专门防了）**：`ComboBoxWrapper.selected_text()` 内部是
+  `item_texts()[selected_index()]`，而 `CB_GETCURSEL` / `LB_GETCURSEL` 在**无选中**时
+  返回 -1，Python 负索引把它静默变成**最后一项**。实测量化：不加判断时 ComboBox 回
+  `'three'`、ListBox 回 `'gamma'`；加了 `>= 0` 判断才是空串。落地成
+  `_list_selection()` 助手（select 的读回与 getSelectedText 共用，保证两处口径一致）。
+- **推翻原判断**：旧注释写「原生消息同样**不触发** `LBN_SELCHANGE`（与 UIA Select
+  不触发 SelectedIndexChanged 同理）」。前半句对（原生消息不发通知），但**结论错**：
+  pywinauto 的 `select()` 在设完 curs 之后会 `notify_parent(LBN_SELCHANGE / CBN_SELCHANGE)`
+  ——即 `post_message(WM_COMMAND, MakeLong(msg, control_id))`。逐步隔离验证
+  （`probe_win32_native_select_readside.py`）：`listStatus` 随每次 select 变
+  `none → list:1:beta → list:2:gamma → list:0:alpha`，三次转变各不相同。
+  **净效果：win32 原生路径会让 UI 真的反应，比 uia 侧强。**
+- **契约无需改动**：两条 manifest 的 `errors` 已含 `ELEMENT_NOT_FOUND` /
+  `EXECUTOR_FAILED`；非列表元素仍显式失败（判据从「后端不支持」收窄成「元素不支持」），
+  原 `reports-unsupported-backend-explicitly` 变体因此改名为 `rejects-a-non-list-element`。
+- **测试可行性（尾巴 #1 与 #2 的耦合点）**：ListBox / ComboBox **窗口文本恒空**，
+  win32 侧只能按 `className` / `controlId` 定位；`controlId` 每次进程启动都漂。
+  于 `desktop_harness.py` 加运行期占位符 `{listBoxClass}` / `{comboBoxClass}`
+  （按需计算，只在变体真引用时枚举一次窗口）。
+- **用例**：`select` 5 条按值正路径（ListBox value/label/index + ComboBox value/index，
+  断言 `effects[0].details.selectedItem`）、3 条新负路径（无匹配项 / 索引越界 / 非数字
+  索引，都收敛到 `ELEMENT_NOT_FOUND` + `enumerableItems`）、1 条非列表元素；
+  `getSelectedText` 2 条形状正路径（选中态会被别的变体改动，按值断言等于把顺序写进期望，
+  与 uia 侧口径一致）+ 1 条非列表元素。**win32 桌面矩阵 95 → 105 变体，exit 0。**
+- **e2e 补两步按值**（`tests/e2e/test_desktop_target_effects.py::test_select_via_win32_native_messages`）：
+  先选再读，断言 ① 执行器读回 `gamma` ② **独立读侧 `listStatus == 'list:2:gamma'`**
+  （证明靶子自己反应了）③ `getSelectedText == 'gamma'`。该文件 6 → 7 例，7 passed / exit 0。
+- **负向验证 3 例（两个方向都做了）**：① 期望侧——把 value-mode 的 `selectedItem`
+  改成 `GAMMA-WRONG` → 恰好该变体红（`实得 'beta'`）；② 实现侧——注入
+  `element.select(len(items) - 1)` → 5 条按值变体成片红（`实得 'gamma'` / `'three'`）；
+  ③ 注入链——让 `_list_control_class_names` 返回空 → 装配层显式抛
+  `AssertionError: 装配失败：desktop.win32.findElement(options) → ELEMENT_NOT_FOUND`
+  （失败被正确归因到装配，不是被测命令）。三例均逐字节还原。
+
+**尾巴 #2 —— `className` 的判因订正（`planned`，出路待拍板）**
+
+原记录写哈希段「随编译产物变」。**实测推翻**（四个探针，五轴）：
+
+| 轴 | 结果 |
+| --- | --- |
+| 同一 exe 连跑 3 次 | 类名恒定 |
+| 同路径重编译 | 恒定 |
+| 不同路径 + 不同文件名 | 恒定 |
+| 纯注释改动 / 真实 IL 改动（改控件文本） | 恒定 |
+| **换一个完全不同的 WinForms 程序** | **同一段 `34f5582_r8_ad1`** |
+
+→ 哈希段是**机器 + 运行时级常量**（同机所有 .NET Framework 4.x 程序共享），
+不是产物级也不是应用级；换机器或换 CLR/WinForms 版本才会变。
+另订正：`controlId` 的漂移粒度是**每次进程启动**（同一 exe 连跑三次三个值），
+不是「每次编译」。真正的问题变成**可区分性太粗**（两个 Edit 撞同名）+ 无窗口文本的
+控件只能靠它定位。出路三选一（见 BACKLOG）：子串匹配 / 精确化文档口径 / 新增
+`classNameRe`。**本条不影响已落地的实现**——测试侧走运行期占位符。
+
+**尾巴 #3 —— `getWindowList` 枚举被拒静默空列表**：本轮未新增证据，
+状态与 S2.2 一致（路径存在、8×2 次枚举未复现；另有四驱动连跑时一次 15s 操作预算
+被全桌面枚举冷启动吃满的观测）。仍待与 `operationTimeoutMs` 一并做产品决策。
 
 ## 2. 关键设计决定
 
@@ -797,12 +874,15 @@ S1.2 页签有一条白盒集成用例（`test_panel_streams_jsonl_into_rows`：
   两表 + 两驱动 + 共享装配见 §1.5；`PENDING_NAMESPACES` 已清空（86 条命令全部有表）；
   靶子缺口已补、执行层已首跑并校正（§1.6）。**剩下的都是「产品侧的决策/实现」**，
   不是用例表的事：
-  - `desktop.select`（两后端）与 `desktop.getText`（uia）的实现缺口——出路写在 §1.5 下半张表；
-    e2e 的两条 xfail 会一直亮着，实现修好后它们转 XPASS（同 `knownGap` 的自律方式）；
-  - `desktop.screenshot` 的依赖决策：加 Pillow，或改走 Win32 `BitBlt`（两条正路径现在是
-    `knownGap`，一修就 XPASS 转红，逼着回来摘标记）；
-  - `control_id` 过滤失效与 `getWindowList` 的「声明不需要会话、实现需要」——都是**声明与实现
-    不一致**，要么改实现要么改声明；
+  - ~~`desktop.select`（两后端）与 `desktop.getText`（uia）的实现缺口~~ ——**全部已实现**
+    （uia/win32 的 select 与 getText/getSelectedText，2026-09-23 S2.3 + §1.13），
+    e2e 两条 xfail 已转正；**只剩 `desktop.win32.input` 无稳定锚点**（可写 Edit 的
+    窗口文本就是它的内容），见 `desktop_win32.json` 该命令的 notes；
+  - ~~`desktop.screenshot` 的依赖决策~~ ——**已定案加 Pillow**（S2.3），两条正路径转正；
+  - ~~`control_id` 过滤失效~~ ——**已修活**（S2.3，`_find` 手工补滤）；
+    `getWindowList` 的「声明不需要会话、实现需要」**已对齐**（S2.3）。
+    **剩余**：`className` 的匹配语义（§1.13 尾巴 #2，待拍板）与 `getWindowList`
+    的「区分枚举失败与真没有窗口」+ `operationTimeoutMs`（尾巴 #3，待拍板）；
   - 靶子侧仍未覆盖的两条：`closeSession.forceKill=true` 会结束靶子进程（要独立的靶子实例）、
     `setWindowVisible=false` 需要「一个变体内部完成的显隐对」（属流程层）。
   - **S2 建表时的复用提示**（按「真桌面 fixture」这一定案重写）：桌面通道的可测面是

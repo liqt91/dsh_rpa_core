@@ -614,14 +614,36 @@ class Win32DesktopExecutor(CommandExecutor):
         if command == "desktop.win32.getSelectedText":
             # win32 包装元素没有 UIA 的 iface_* 接口族（对子控件取 iface_value 一律抛
             # 异常），旧实现 except 后静默返回空串——「恒空的成功」比显式失败更坏
-            # （实测见 M38 任务单 §1.5）。原生消息路径（LB_GETCURSEL/LB_GETTEXT，
-            # 跨进程缓冲区）登记在 BACKLOG，实现前这里显式失败。
-            return CommandResult.failure(
-                ErrorCode.EXECUTOR_FAILED,
-                "getSelectedText is not supported on the win32 backend: UIA pattern "
-                "interfaces (iface_*) do not exist on win32 wrappers; the native-message "
-                "path (LB_GETCURSEL/LB_GETTEXT) is registered in BACKLOG but not implemented",
-                details={"operation": "getSelectedText"},
+            # （实测见 M38 任务单 §1.5）。现改走**原生消息**：pywinauto 的
+            # ListBoxWrapper / ComboBoxWrapper 已封装 LB_GETCURSEL / LB_GETTEXT
+            # 与跨进程缓冲区，实测能直接吃 WinForms 的 ListBox / ComboBox
+            # （`.harness/spike/probe_win32_native_select_e2e.py`）。
+            from pywinauto.controls.win32_controls import (
+                ComboBoxWrapper,
+                ListBoxWrapper,
+            )
+
+            if not isinstance(element, (ListBoxWrapper, ComboBoxWrapper)):
+                return CommandResult.failure(
+                    ErrorCode.EXECUTOR_FAILED,
+                    "getSelectedText needs a ListBox or ComboBox on the win32 "
+                    f"backend, got class {element.class_name()!r}",
+                    details={
+                        "operation": "getSelectedText",
+                        "className": element.class_name(),
+                    },
+                )
+            _, text = self._list_selection(element)
+            return CommandResult.success(
+                outputs={"text": text},
+                effects=[
+                    EffectRecord.committed(
+                        invocation,
+                        kind=EffectKind.READ,
+                        resource=resource,
+                        details={"operation": "getSelectedText"},
+                    )
+                ],
             )
         if command == "desktop.win32.screenshot":
             save_path = str(inputs["savePath"])
@@ -653,19 +675,69 @@ class Win32DesktopExecutor(CommandExecutor):
         if command == "desktop.win32.select":
             # 与 getSelectedText 同因：win32 包装元素没有 iface_selection（UIA
             # SelectionPattern），旧实现 except 后照常返回 success——三个 selectBy
-            # 分支全部静默假成功（实测见 M38 任务单 §1.5）。原生消息路径
-            # （LB_SETCURSEL / CB_SETCURSEL，跨进程缓冲区）登记在 BACKLOG，
-            # 实现前这里显式失败，不再让「以为选了、其实没选」发生。
-            return CommandResult.failure(
-                ErrorCode.EXECUTOR_FAILED,
-                "select is not supported on the win32 backend: UIA pattern interfaces "
-                "(iface_*) do not exist on win32 wrappers; the native-message path "
-                "(LB_SETCURSEL/CB_SETCURSEL) is registered in BACKLOG but not implemented",
-                details={
-                    "operation": "selectOption",
-                    "selectBy": inputs.get("selectBy", "value"),
-                    "requestedValue": inputs.get("value"),
-                },
+            # 分支全部静默假成功（实测见 M38 任务单 §1.5）。现走原生消息
+            # LB_SETCURSEL / CB_SETCURSEL（pywinauto 包装类已封装跨进程缓冲区）。
+            #
+            # 与 uia 侧的**一个重要差别**：pywinauto 的 select() 在原生消息之后会
+            # `notify_parent(LBN_SELCHANGE / CBN_SELCHANGE)`（post 一个 WM_COMMAND），
+            # 所以 WinForms 的 SelectedIndexChanged **会**触发、状态回显控件会跟着变
+            # （实测：listStatus 逐步从 none → list:1:beta → list:2:gamma → list:0:alpha）。
+            # uia 那条 SelectionItemPattern.Select() 不触发 SelectedIndexChanged，
+            # 故 uia 侧只能靠 details 读回；两者都写 `selectedItem` 以统一证据面。
+            from pywinauto.controls.win32_controls import (
+                ComboBoxWrapper,
+                ListBoxWrapper,
+            )
+
+            value = str(inputs["value"])
+            select_by = inputs.get("selectBy", "value")
+            if not isinstance(element, (ListBoxWrapper, ComboBoxWrapper)):
+                return CommandResult.failure(
+                    ErrorCode.EXECUTOR_FAILED,
+                    "select needs a ListBox or ComboBox on the win32 backend, got "
+                    f"class {element.class_name()!r}",
+                    details={
+                        "operation": "selectOption",
+                        "selectBy": select_by,
+                        "className": element.class_name(),
+                    },
+                )
+            items = element.item_texts()
+            if select_by == "index":
+                try:
+                    index = int(value)
+                except ValueError:
+                    index = -1
+            else:
+                # label 与 value 同口径：列表项的文本就是它的值（与 uia 侧一致——
+                # WinForms ListItem 的 Value 属性实测恒空）。
+                index = items.index(value) if value in items else -1
+            if not 0 <= index < len(items):
+                return CommandResult.failure(
+                    ErrorCode.ELEMENT_NOT_FOUND,
+                    f"no list item matches selectBy={select_by!r}, value={value!r}",
+                    details={
+                        "operation": "selectOption",
+                        "enumerableItems": len(items),
+                    },
+                )
+            element.select(index)
+            # 选中态读回（证据面）：与 uia 侧同一键名 `selectedItem`，
+            # 断言口径因此可以跨后端复用。
+            _, selected_name = self._list_selection(element)
+            return CommandResult.success(
+                effects=[
+                    EffectRecord.committed(
+                        invocation,
+                        kind=EffectKind.UNSAFE_WRITE,
+                        resource=resource,
+                        details={
+                            "operation": "selectOption",
+                            "selectBy": select_by,
+                            "selectedItem": selected_name,
+                        },
+                    )
+                ],
             )
         if command == "desktop.win32.drag":
             target_x = int(inputs["targetX"])
@@ -742,6 +814,32 @@ class Win32DesktopExecutor(CommandExecutor):
         if found_index is None:
             return matches[0]
         return matches[found_index] if found_index < len(matches) else None
+
+    @staticmethod
+    def _list_selection(element: Any) -> tuple[int, str]:
+        """ListBox / ComboBox 的 `(选中索引, 选中文本)`；无选中或非列表控件 → `(-1, "")`。
+
+        **不直接用 `selected_text()`**：它内部是 `item_texts()[selected_index()]`，
+        而 `CB_GETCURSEL` / `LB_GETCURSEL` 在无选中时返回 -1，Python 的负索引会把
+        它变成**最后一项**（静默错答）。`selected_indices()` 无选中时给 `(-1,)`，
+        同款陷阱。这里显式取索引 + `>= 0` 边界判断。
+        """
+        from pywinauto.controls.win32_controls import (
+            ComboBoxWrapper,
+            ListBoxWrapper,
+        )
+
+        if isinstance(element, ListBoxWrapper):
+            indices = element.selected_indices()
+            index = indices[0] if indices else -1
+        elif isinstance(element, ComboBoxWrapper):
+            index = element.selected_index()
+        else:
+            return (-1, "")
+        items = element.item_texts()
+        if 0 <= index < len(items):
+            return (index, items[index])
+        return (-1, "")
 
     @staticmethod
     def _window_by_handle(handle: int) -> Any | None:

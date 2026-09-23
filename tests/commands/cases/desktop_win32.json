@@ -481,7 +481,7 @@
     ]
   },
   "desktop.win32.findElement": {
-    "notes": "expect 里的 matchedCount=1 不是猜的：实现只在唯一匹配时成功（歧义另有 ELEMENT_AMBIGUOUS），这个字段目前是常量 1。**判因纠正（2026-09-22 补靶子时实测）**：此前这里写的是『靶子控件的类名是 WinForms 动态生成的、没有稳定 controlId，因此 win32 定位器匹配不到任何控件，只能全走负路径』——实测**不成立**。win32 定位器的 `title` 比的是控件的**窗口文本**，对 Button / Label 这类文本恒定的控件完全可用：`title='Submit'`、`title='Drag'`、`title='note-ready'` 都 uniquely 命中（matchedCount=1）。真正不成立的是另外两条路：`className` 是 WindowsForms10.*.app.0.<哈希> 这类动态名（哈希随编译产物变，且两个 Edit 撞同一个类名），`control_id` 则**过滤根本不生效**——实测 `descendants(control_id=<任一值>)` 一律返回全部 子控件（14/14/14）。controlId 过滤失效是 pywinauto 的行为，登记在任务单。`title='alpha'` 那条钉住另一件事：ListBox 的条目不是子窗口，win32 侧看不到它们。 **S2.3 追记（controlId 已修活）**：pywinauto 的 descendants/children 路径不消费 control_id（children 只读 class_name/title/control_type），旧实现等于「声明了但不工作的假开关」；现在 `_find` 拿到列表后按 ElementInfo 的 control_id（GetDlgCtrlID）手工补滤。**没有按值的正路径行**：WinForms 给控件分的 control id 实测**随编译漂移**（同一段代码三次编译三次不同：28901996 / 29295212 / 4064778），写死必炸；用「错误 id 排除 title 命中」这条负路径钉住过滤生效——旧实现下该行会是 matchedCount=1 的成功，新实现才是 ELEMENT_NOT_FOUND。",
+    "notes": "expect 里的 matchedCount=1 不是猜的：实现只在唯一匹配时成功（歧义另有 ELEMENT_AMBIGUOUS），这个字段目前是常量 1。**判因纠正（2026-09-22 补靶子时实测）**：此前这里写的是『靶子控件的类名是 WinForms 动态生成的、没有稳定 controlId，因此 win32 定位器匹配不到任何控件，只能全走负路径』——实测**不成立**。win32 定位器的 `title` 比的是控件的**窗口文本**，对 Button / Label 这类文本恒定的控件完全可用：`title='Submit'`、`title='Drag'`、`title='note-ready'` 都 uniquely 命中（matchedCount=1）。真正不成立的是另外两条路：`className` 是 `WindowsForms10.<TYPE>.app.0.<哈希>` 形式（**2026-09-23 订正**：哈希段实测是机器 + 运行时级常量，**不是**「随编译产物变」——同机所有 .NET Framework 4.x 程序共享一段，跨重编译/跨源码/跨输出路径都不变，换机器才变；两个 Edit 还撞同一个类名），`control_id` 则**过滤根本不生效**——实测 `descendants(control_id=<任一值>)` 一律返回全部 子控件（14/14/14）。controlId 过滤失效是 pywinauto 的行为，登记在任务单。`title='alpha'` 那条钉住另一件事：ListBox 的条目不是子窗口，win32 侧看不到它们。 **S2.3 追记（controlId 已修活）**：pywinauto 的 descendants/children 路径不消费 control_id（children 只读 class_name/title/control_type），旧实现等于「声明了但不工作的假开关」；现在 `_find` 拿到列表后按 ElementInfo 的 control_id（GetDlgCtrlID）手工补滤。**没有按值的正路径行**：WinForms 给控件分的 control id 实测**每次进程启动都漂**（**2026-09-23 订正**漂移粒度：同一 exe 连跑三次拿到三个不同值，不只是「三次编译三次不同」），写死必炸；用「错误 id 排除 title 命中」这条负路径钉住过滤生效——旧实现下该行会是 matchedCount=1 的成功，新实现才是 ELEMENT_NOT_FOUND。",
     "variants": [
       {
         "name": "a-stable-window-text-resolves-the-button",
@@ -633,8 +633,50 @@
     ]
   },
   "desktop.win32.getSelectedText": {
-    "notes": "**S2.3 定案：win32 后端显式报 `EXECUTOR_FAILED`**——旧实现访问 win32 元素上不存在的 iface_value.GetSelection()，except 后恒返回空串 success（「恒空的成功」比显式失败更坏）。原生消息路径（LB_GETCURSEL + LB_GETTEXT）登记在 BACKLOG。",
+    "notes": "**BACKLOG 尾巴 #1 实现后重写（2026-09-23）**：改走 win32 原生消息——pywinauto 的 ListBoxWrapper / ComboBoxWrapper 已封装 LB_GETCURSEL/LB_GETTEXT（CB_ 同款）与跨进程缓冲区，实测能直接吃 WinForms 的 ListBox/ComboBox（`.harness/spike/probe_win32_native_select_e2e.py`）。**读侧必须显式取索引再判 `>= 0`**：`selected_text()` 内部是 `item_texts()[selected_index()]`，而 CB_GETCURSEL/LB_GETCURSEL 在无选中时返回 -1，Python 负索引会把它静默变成**最后一项**（实测不加判断时 ComboBox 回 'three'、ListBox 回 'gamma'，加了才是空串）。**正路径只断形状**（`outputKeys` + `effect`）：本矩阵共用靶子进程，选中态会被 select 的变体改动（非幂等），按值断言等于把用例顺序写进期望；按值的两步走法（先 select 再读）在 tests/e2e/test_desktop_target_effects.py。定位必须按 `{listBoxClass}` / `{comboBoxClass}`（运行期读回的完整类名）：这两个控件窗口文本恒空，`controlId` 又**每次进程启动都漂**。",
     "variants": [
+      {
+        "name": "reads-the-selection-from-the-listbox",
+        "inputs": {
+          "sessionId": "{session}",
+          "elementId": "{element:options}"
+        },
+        "setup": {
+          "find": {
+            "options": {
+              "backend": "win32",
+              "className": "{listBoxClass}"
+            }
+          }
+        },
+        "expect": {
+          "outputKeys": [
+            "text"
+          ],
+          "effect": "read"
+        }
+      },
+      {
+        "name": "reads-the-selection-from-the-combobox",
+        "inputs": {
+          "sessionId": "{session}",
+          "elementId": "{element:options}"
+        },
+        "setup": {
+          "find": {
+            "options": {
+              "backend": "win32",
+              "className": "{comboBoxClass}"
+            }
+          }
+        },
+        "expect": {
+          "outputKeys": [
+            "text"
+          ],
+          "effect": "read"
+        }
+      },
       {
         "name": "unknown-element-id-is-element-not-found",
         "inputs": {
@@ -670,7 +712,7 @@
         "notes": "空会话串的实测语义（2026-09-22 执行层首跑校正）：`resolve_session_id` 把空串当「未提供」（`str(requested or '').strip()` 为空即回退），于是命令落到**默认会话**上，并不存在「拿空串去匹配某个会话」这一步——这才是『空串不是通配符』的真实含义。 但本命令还要元素：回退成功之后，失败点变成了那个不存在的元素 id（不是会话）。"
       },
       {
-        "name": "reports-unsupported-backend-explicitly",
+        "name": "rejects-a-non-list-element",
         "inputs": {
           "sessionId": "{session}",
           "elementId": "{element:submit}"
@@ -689,7 +731,8 @@
             "operation": "getSelectedText"
           }
         },
-        "negative": true
+        "negative": true,
+        "notes": "**S2.3 时这条叫 `reports-unsupported-backend-explicitly`**（钉的是「win32 后端整个不支持」）。原生消息落地后后端本身支持了，但『元素不是列表控件』仍应显式失败而不是返回空串——判据从「后端不支持」收窄成「元素不支持」，所以改名。不按值断言 details.className：它含机器级哈希段。"
       }
     ]
   },
@@ -874,7 +917,7 @@
     ]
   },
   "desktop.win32.getWindowTitle": {
-    "notes": "窗口身份三项来自实现。title 按值断言——attach 就是靠这个标题成功的，两处必须指向同一个窗口。className 是 WinForms 动态生成的，不按值断言。",
+    "notes": "窗口身份三项来自实现。title 按值断言——attach 就是靠这个标题成功的，两处必须指向同一个窗口。className 是 `WindowsForms10.<TYPE>.app.0.<哈希>` 形式、哈希段随机器/CLR 版本变，不按值断言。",
     "variants": [
       {
         "name": "reports-the-fixture-window-identity",
@@ -961,7 +1004,7 @@
     ]
   },
   "desktop.win32.input": {
-    "notes": "**当前只有负路径**。纠正（2026-09-22 补靶子时实测）：此前归因于『靶子控件匹配不到 win32 定位器』不成立——title 锚点是可用的（见 findElement 的 notes）。真正的原因是**本命令需要一个『可写的 Edit』，而 win32 定位器给不出它的稳定锚点**：可写 Edit 的窗口文本就是它的内容（queryInput 初始为空、写过一次就跟着变，两种状态都当不了锚点）；className 是动态名且两个 Edit 撞同名；control_id 过滤实测失效；handle 每次运行都不同、写不进静态表。实测旁证：拿只读 Edit 当锚点时 `mode=automation` 的 `set_edit_text` （走 WM_SETTEXT）**能改写只读框的内容**——内容一变，按 title 的锚点立刻消失，后续按值断言会连带崩，所以也不能拿它凑一条正路径。参数整形（三个 mode / append / keyIntervalMs / clickBeforeInput / postDelayMs）在 uia 侧有同构正路径覆盖。",
+    "notes": "**当前只有负路径**。纠正（2026-09-22 补靶子时实测）：此前归因于『靶子控件匹配不到 win32 定位器』不成立——title 锚点是可用的（见 findElement 的 notes）。真正的原因是**本命令需要一个『可写的 Edit』，而 win32 定位器给不出它的稳定锚点**：可写 Edit 的窗口文本就是它的内容（queryInput 初始为空、写过一次就跟着变，两种状态都当不了锚点）；className 的哈希段随机器变（不能写死）且两个 Edit 撞同名；control_id 的过滤虽已由 S2.3 修活、但取值每次启动都漂，仍写不进静态表；handle 每次运行都不同。实测旁证：拿只读 Edit 当锚点时 `mode=automation` 的 `set_edit_text` （走 WM_SETTEXT）**能改写只读框的内容**——内容一变，按 title 的锚点立刻消失，后续按值断言会连带崩，所以也不能拿它凑一条正路径。参数整形（三个 mode / append / keyIntervalMs / clickBeforeInput / postDelayMs）在 uia 侧有同构正路径覆盖。",
     "variants": [
       {
         "name": "default-values-are-spelled-out",
@@ -1302,8 +1345,211 @@
     ]
   },
   "desktop.win32.select": {
-    "notes": "**S2.3 定案：win32 后端显式报 `EXECUTOR_FAILED`**——win32 包装元素没有 UIA 的 iface_* 接口族，旧实现 except 后照样返回 success（三个 selectBy 分支全部静默假成功）。按「别静默成功」原则改为显式失败（details 带 operation/selectBy）；原生消息路径（LB_SETCURSEL / CB_SETCURSEL，需跨进程缓冲区，pywinauto 的 ListBox/ComboBox 包装类已封装）登记在 BACKLOG，实现前本命令在 win32 侧没有正路径——这不是用例缺口，是**已定案的能力边界**。",
+    "notes": "**BACKLOG 尾巴 #1 实现后重写（2026-09-23）**：改走原生 LB_SETCURSEL / CB_SETCURSEL（pywinauto 包装类已封装跨进程缓冲区），三个 selectBy 分支第一次有了正路径。与 uia 侧的一个重要差别：pywinauto 的 select() 在原生消息之后会 `notify_parent(LBN_SELCHANGE / CBN_SELCHANGE)`（post 一个 WM_COMMAND），所以 WinForms 的 SelectedIndexChanged **会**触发、状态回显控件会跟着变（实测 listStatus 逐步 none → list:1:beta → list:2:gamma → list:0:alpha）——uia 那条 SelectionItemPattern.Select() 不触发，故 uia 侧只能靠 details 读回。两者都写 `selectedItem`，断言口径可跨后端复用。`index` 分支的越界/非数字都收敛到 ELEMENT_NOT_FOUND（三 selectBy 共用同一失败语义）。定位必须按 `{listBoxClass}` / `{comboBoxClass}`：这两个控件窗口文本恒空、`controlId` 每次进程启动都漂。",
     "variants": [
+      {
+        "name": "value-mode-selects-on-the-listbox",
+        "inputs": {
+          "sessionId": "{session}",
+          "elementId": "{element:options}",
+          "value": "beta",
+          "selectBy": "value"
+        },
+        "setup": {
+          "find": {
+            "options": {
+              "backend": "win32",
+              "className": "{listBoxClass}"
+            }
+          }
+        },
+        "expect": {
+          "effect": "unsafe-write",
+          "effectDetails": {
+            "operation": "selectOption",
+            "selectBy": "value",
+            "selectedItem": "beta"
+          }
+        }
+      },
+      {
+        "name": "label-mode-selects-on-the-listbox",
+        "inputs": {
+          "sessionId": "{session}",
+          "elementId": "{element:options}",
+          "value": "gamma",
+          "selectBy": "label"
+        },
+        "setup": {
+          "find": {
+            "options": {
+              "backend": "win32",
+              "className": "{listBoxClass}"
+            }
+          }
+        },
+        "expect": {
+          "effect": "unsafe-write",
+          "effectDetails": {
+            "operation": "selectOption",
+            "selectBy": "label",
+            "selectedItem": "gamma"
+          }
+        }
+      },
+      {
+        "name": "index-mode-selects-on-the-listbox",
+        "inputs": {
+          "sessionId": "{session}",
+          "elementId": "{element:options}",
+          "value": "0",
+          "selectBy": "index"
+        },
+        "setup": {
+          "find": {
+            "options": {
+              "backend": "win32",
+              "className": "{listBoxClass}"
+            }
+          }
+        },
+        "expect": {
+          "effect": "unsafe-write",
+          "effectDetails": {
+            "operation": "selectOption",
+            "selectBy": "index",
+            "selectedItem": "alpha"
+          }
+        }
+      },
+      {
+        "name": "value-mode-selects-on-the-combobox",
+        "inputs": {
+          "sessionId": "{session}",
+          "elementId": "{element:options}",
+          "value": "two",
+          "selectBy": "value"
+        },
+        "setup": {
+          "find": {
+            "options": {
+              "backend": "win32",
+              "className": "{comboBoxClass}"
+            }
+          }
+        },
+        "expect": {
+          "effect": "unsafe-write",
+          "effectDetails": {
+            "operation": "selectOption",
+            "selectBy": "value",
+            "selectedItem": "two"
+          }
+        }
+      },
+      {
+        "name": "index-mode-selects-on-the-combobox",
+        "inputs": {
+          "sessionId": "{session}",
+          "elementId": "{element:options}",
+          "value": "2",
+          "selectBy": "index"
+        },
+        "setup": {
+          "find": {
+            "options": {
+              "backend": "win32",
+              "className": "{comboBoxClass}"
+            }
+          }
+        },
+        "expect": {
+          "effect": "unsafe-write",
+          "effectDetails": {
+            "operation": "selectOption",
+            "selectBy": "index",
+            "selectedItem": "three"
+          }
+        }
+      },
+      {
+        "name": "no-such-item-is-element-not-found",
+        "notes": "列表只有 alpha/beta/gamma 三项；details 里的 enumerableItems 是实现的证据面（与 uia 侧同键名）。",
+        "inputs": {
+          "sessionId": "{session}",
+          "elementId": "{element:options}",
+          "value": "delta",
+          "selectBy": "label"
+        },
+        "setup": {
+          "find": {
+            "options": {
+              "backend": "win32",
+              "className": "{listBoxClass}"
+            }
+          }
+        },
+        "expect": {
+          "errorCode": "ELEMENT_NOT_FOUND",
+          "errorDetails": {
+            "operation": "selectOption",
+            "enumerableItems": 3
+          }
+        },
+        "negative": true
+      },
+      {
+        "name": "index-out-of-range-is-element-not-found",
+        "notes": "越界索引在**选中之前**被拦下（不是把 LB_SETCURSEL 打过去再说）——所以这条同时也是「没有偷偷改状态」的判据。",
+        "inputs": {
+          "sessionId": "{session}",
+          "elementId": "{element:options}",
+          "value": "9",
+          "selectBy": "index"
+        },
+        "setup": {
+          "find": {
+            "options": {
+              "backend": "win32",
+              "className": "{listBoxClass}"
+            }
+          }
+        },
+        "expect": {
+          "errorCode": "ELEMENT_NOT_FOUND",
+          "errorDetails": {
+            "operation": "selectOption",
+            "enumerableItems": 3
+          }
+        },
+        "negative": true
+      },
+      {
+        "name": "non-numeric-index-is-element-not-found",
+        "notes": "selectBy=index 而 value 不是数字：int() 失败收敛成 -1 再走同一越界判断，不抛异常、也不落到 EXECUTOR_FAILED。",
+        "inputs": {
+          "sessionId": "{session}",
+          "elementId": "{element:options}",
+          "value": "not-a-number",
+          "selectBy": "index"
+        },
+        "setup": {
+          "find": {
+            "options": {
+              "backend": "win32",
+              "className": "{listBoxClass}"
+            }
+          }
+        },
+        "expect": {
+          "errorCode": "ELEMENT_NOT_FOUND",
+          "errorDetails": {
+            "operation": "selectOption",
+            "enumerableItems": 3
+          }
+        },
+        "negative": true
+      },
       {
         "name": "value-mode-fails-on-an-unknown-element",
         "inputs": {
@@ -1356,7 +1602,7 @@
         "negative": true
       },
       {
-        "name": "reports-unsupported-backend-explicitly",
+        "name": "rejects-a-non-list-element",
         "inputs": {
           "sessionId": "{session}",
           "elementId": "{element:submit}",
@@ -1374,10 +1620,12 @@
         "expect": {
           "errorCode": "EXECUTOR_FAILED",
           "errorDetails": {
-            "operation": "selectOption"
+            "operation": "selectOption",
+            "selectBy": "label"
           }
         },
-        "negative": true
+        "negative": true,
+        "notes": "**S2.3 时叫 `reports-unsupported-backend-explicitly`**（钉「后端整个不支持」）。原生消息落地后判据收窄成「元素不是列表控件」，故改名；details 里 `selectBy` 回带请求参数，便于定位。"
       }
     ]
   },
