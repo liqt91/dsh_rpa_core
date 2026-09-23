@@ -116,7 +116,33 @@ def test_save_and_verify_element(window):
     assert "browser" in window._element_panel.list.item(0).text()
 
     window._verify_element("searchBox")
-    assert "校验通过" in window.statusBar().currentMessage()
+    message = window.statusBar().currentMessage()
+    assert "结构校验通过" in message
+    # 限定语是判据本身，不是装饰：这个动作**不连接页面**，迁自影刀的用户会把
+    # 裸「校验通过」读成「页面上定位得到」（影刀那侧是真活体校验）。
+    # 状态栏是本动作唯一的反馈面（用户不会为确认口径去悬停按钮）——所以钉在这里。
+    assert "未验证页面命中" in message
+
+
+def test_verify_element_reports_structural_failure(window):
+    """结构校验失败路径也要带「结构」限定语，且给出 path: message。"""
+    window._save_named_flow("e1bad")
+    # css 为空串：模型层过得去（selector 是自由 dict），selector 语义层必须拦下
+    window.save_element_descriptor("bad", {"kind": "browser", "selector": {"css": "  "}})
+    window._verify_element("bad")
+    message = window.statusBar().currentMessage()
+    assert "结构校验未通过" in message
+    assert "selector.css" in message
+
+
+def test_verify_button_is_labelled_as_structural(window):
+    """按钮文案 + tooltip 都与 Web 侧同口径（Web: 按钮 title="结构校验"）。"""
+    window._toggle_elements_dock()
+    button = window._element_panel.verify_button
+    assert button.text() == "结构校验"
+    tooltip = button.toolTip()
+    assert "不连接页面" in tooltip
+    assert "捕获" in tooltip  # 指路：活体验证在捕获时完成
 
 
 def test_save_element_rejects_invalid_document(window):
@@ -310,7 +336,10 @@ def test_element_dialog_preserves_candidates_on_edit(qapp):
     """编辑元素不能抹掉捕获时收集的备选定位。
 
     回归：``result_document`` 曾从头重建 ``selector``，用户在 GUI 里编辑一次就静默
-    丢掉 ``candidates``（以及任何界面上不展示的键）。
+    丢掉 ``candidates``（以及任何界面不暴露为可编辑项的键）。
+
+    注意这条判据**不因「候选现在会展示了」而失效**：展示是只读的（``candidates_label``），
+    写回仍然只覆盖 ``css``/``locator`` 一个键。展示与写回是两条独立的路径。
     """
     from PySide6.QtWidgets import QDialog
 
@@ -327,7 +356,7 @@ def test_element_dialog_preserves_candidates_on_edit(qapp):
         "metadata": {"role": "searchbox", "url": "https://example.com/"},
     }
     dialog = ElementDialog(descriptor, default_name="searchBox")
-    assert dialog.selector_edit.text() == "#sb_form_q"  # 界面只暴露主 css
+    assert dialog.selector_edit.text() == "#sb_form_q"  # selector 编辑框只放主 css
 
     dialog.name_edit.setText("searchBox2")
     dialog.selector_edit.setText("#q")
@@ -336,8 +365,232 @@ def test_element_dialog_preserves_candidates_on_edit(qapp):
     name, document = dialog.result_document()
     assert name == "searchBox2"
     assert document["selector"]["css"] == "#q"  # 用户改的生效
-    assert document["selector"]["candidates"] == candidates  # 未暴露的键原样保留
+    assert document["selector"]["candidates"] == candidates  # 候选原样保留
     assert document["metadata"]["role"] == "searchbox"
+
+
+# ---- 捕获确认对话框：候选与语义特征的只读展示（调研发现「有数据无界面」） ------
+def _captured_browser_descriptor() -> dict:
+    """按 ``content.js buildDescriptor`` 的真实产出形状构造（与契约测试同款）。"""
+    return {
+        "kind": "browser",
+        "selector": {
+            "css": "#sb_form_q",
+            "candidates": [
+                {"kind": "id", "selector": "#sb_form_q", "matchedCount": 1},
+                {
+                    "kind": "attribute",
+                    "selector": 'input[name="q"]',
+                    "matchedCount": 3,
+                },
+            ],
+        },
+        "verifyCount": 1,
+        "metadata": {
+            "tag": "textarea",
+            "id": "sb_form_q",
+            "classes": ["search", "box"],
+            "text": "",
+            "rect": {"x": 10, "y": 20, "width": 300, "height": 40},
+            "role": "searchbox",
+            "accessibleName": "搜索",
+            "placeholder": "请输入搜索内容",
+            "label": "搜索框",
+            "containerText": "主页 搜索 更多",
+            "url": "https://www.bing.com/",
+            "title": "Bing",
+        },
+    }
+
+
+def test_element_dialog_shows_candidates_with_matched_counts(qapp):
+    """候选必须被展示出来（含捕获时命中数）——此前只入库不展示。
+
+    用户此前既不知道自愈能力存在，也无从在命中多个时挑一个更稳的候选。
+    """
+    from rpa_core.gui.element_panel import ElementDialog
+
+    dialog = ElementDialog(_captured_browser_descriptor(), default_name="searchBox")
+    text = dialog.candidates_label.text()
+    assert "备选定位 2 条" in text
+    assert "[id] #sb_form_q" in text
+    assert "命中 1" in text
+    assert '[attribute] input[name="q"]' in text
+    # 候选标签是展示面，不是第二个可编辑的 selector 框
+    assert dialog.candidates_label.isHidden() is False
+
+
+def test_element_dialog_flags_non_unique_candidate(qapp):
+    """``matchedCount > 1`` 的候选要如实标「不唯一」。
+
+    回退到不唯一的候选可能点到别的元素 —— 这正是运行期自愈最危险的一步。
+    标出来让用户自己做判断，而不是替他过滤掉（过滤会隐藏真实的可选项）。
+    """
+    from rpa_core.gui.element_panel import ElementDialog
+
+    dialog = ElementDialog(_captured_browser_descriptor(), default_name="searchBox")
+    lines = dialog.candidates_label.text().splitlines()
+    id_line = next(line for line in lines if "#sb_form_q" in line)
+    attr_line = next(line for line in lines if 'input[name="q"]' in line)
+    assert "命中 1" in id_line
+    assert "不唯一" not in id_line
+    assert "命中 3" in attr_line
+    assert "不唯一" in attr_line
+
+
+def test_element_dialog_shows_semantic_features_and_fingerprint(qapp):
+    """语义特征与页面指纹要展示（它们正是「命中多个时人工消歧」最有用的信息）。"""
+    from rpa_core.gui.element_panel import ElementDialog
+
+    dialog = ElementDialog(_captured_browser_descriptor(), default_name="searchBox")
+    meta = dialog.meta_label.text()
+    for expected in (
+        "role: searchbox",
+        "accessibleName: 搜索",
+        "placeholder: 请输入搜索内容",
+        "label: 搜索框",
+        "containerText: 主页 搜索 更多",
+        "url: https://www.bing.com/",
+        "title: Bing",
+    ):
+        assert expected in meta, expected
+    # 既有行集不能因此丢（tag/id/classes/rect 仍要展示）
+    assert "tag: textarea" in meta
+    assert "rect: 300×40 @ (10,20)" in meta
+
+
+def test_element_dialog_hides_candidates_section_when_absent(qapp):
+    """没有候选时不显示这一节（旧元素文档只有 css，不属于「未展示」）。
+
+    desktop 元素没有候选概念（其回退逻辑不落盘），也必须不显示，
+    否则会误导用户去找一个不存在的东西。
+    """
+    from rpa_core.gui.element_panel import ElementDialog
+
+    plain = ElementDialog(
+        {"kind": "browser", "selector": {"css": "#kw"}, "verifyCount": 1, "metadata": {}},
+        default_name="a",
+    )
+    assert plain.candidates_label.text() == ""
+    assert plain.candidates_label.isHidden()
+
+    desktop = ElementDialog(
+        {
+            "kind": "desktop",
+            "selector": {"locator": {"controlType": "Button"}},
+            "verifyCount": 1,
+            "metadata": {"controlType": "Button"},
+        },
+        default_name="b",
+    )
+    assert desktop.candidates_label.text() == ""
+    assert desktop.candidates_label.isHidden()
+    # desktop 的元数据里不该冒出 browser 的语义特征行
+    assert "role:" not in desktop.meta_label.text()
+    assert "url:" not in desktop.meta_label.text()
+
+
+def _captured_desktop_descriptor() -> dict:
+    """真机捕获产物**原样**抄自探针输出。
+
+    来源：``.harness/spike/probe_element_dialog_display.py``（编译靶子 → 真实控件取点 →
+    ``desktop-capture-agent --point``）。不是照代码想象的形状。
+    """
+    return {
+        "kind": "desktop",
+        "selector": {
+            "locator": {
+                "backend": "uia",
+                "controlType": "Button",
+                "automationId": "submitButton",
+                "name": "Submit",
+            }
+        },
+        "verifyCount": 1,
+        "metadata": {
+            "windowHandle": 6225970,
+            "windowTitle": "RPA Core Desktop Demo",
+            "controlType": "Button",
+            "automationId": "submitButton",
+            "name": "Submit",
+            "className": "WindowsForms10.BUTTON.app.0.34f5582_r8_ad1",
+        },
+    }
+
+
+def test_element_dialog_shows_desktop_class_and_name(qapp):
+    """桌面元数据要展示 className / name。
+
+    探针实测发现：捕获 agent 一直回传 ``className``（win32 侧定位无窗口文本控件的
+    唯一手段，也是 ``classNameRe`` 的输入），但 GUI 从没显示过它。
+    """
+    from rpa_core.gui.element_panel import ElementDialog
+
+    dialog = ElementDialog(_captured_desktop_descriptor(), default_name="submit")
+    meta = dialog.meta_label.text()
+    assert "controlType: Button" in meta
+    assert "automationId: submitButton" in meta
+    assert "name: Submit" in meta
+    assert "className: WindowsForms10.BUTTON.app.0.34f5582_r8_ad1" in meta
+    assert "window: RPA Core Desktop Demo" in meta
+
+
+def test_element_dialog_hides_per_session_desktop_values(qapp):
+    """``windowHandle`` / ``point`` 刻意不展示。
+
+    它们是本次会话的运行期值（句柄每次启动都变、坐标随窗口位置变），摆出来会诱导
+    用户粘进 locator，写出一个下次必定失效的元素。
+    """
+    from rpa_core.gui.element_panel import ElementDialog
+
+    dialog = ElementDialog(_captured_desktop_descriptor(), default_name="submit")
+    meta = dialog.meta_label.text()
+    assert "windowHandle" not in meta
+    assert "6225970" not in meta
+
+
+def test_candidates_text_tolerates_missing_or_bad_counts(qapp):
+    """``matchedCount`` 允许缺席（契约如此）；坏形状不该让 UI 崩。"""
+    from rpa_core.gui.element_panel import candidates_text
+
+    assert candidates_text({"kind": "browser", "selector": {"css": "#a"}}) == ""
+    assert candidates_text(
+        {"kind": "browser", "selector": {"css": "#a", "candidates": []}}
+    ) == ""
+    assert candidates_text(
+        {"kind": "browser", "selector": {"css": "#a", "candidates": "oops"}}
+    ) == ""
+    text = candidates_text(
+        {
+            "kind": "browser",
+            "selector": {
+                "css": "#a",
+                "candidates": [{"kind": "css", "selector": ".x"}, "oops"],
+            },
+        }
+    )
+    assert "备选定位 1 条" in text  # 非 dict 的项被跳过，不计入条数
+    assert "命中未实测" in text
+
+
+def test_semantic_meta_text_is_browser_only(qapp):
+    """desktop 描述符走这条路必须返回空串（语义特征键只属于 browser）。"""
+    from rpa_core.gui.element_panel import semantic_meta_text
+
+    assert semantic_meta_text({"kind": "desktop", "metadata": {"role": "x"}}) == ""
+    assert semantic_meta_text({"kind": "browser", "metadata": {}}) == ""
+
+
+def test_clip_truncates_long_values(qapp):
+    """超长值（URL / 容器文本可达 200 字）要截断，避免撑爆对话框。"""
+    from rpa_core.gui.element_panel import _META_DISPLAY_LIMIT, _clip
+
+    short = "x" * _META_DISPLAY_LIMIT
+    assert _clip(short) == short
+    clipped = _clip("x" * (_META_DISPLAY_LIMIT + 50))
+    assert len(clipped) == _META_DISPLAY_LIMIT + 1
+    assert clipped.endswith("…")
+    assert _clip("a\n  b\tc") == "a b c"  # 压平换行/制表，避免行数被撑开
 
 
 def test_element_dialog_tolerates_non_dict_selector(qapp):

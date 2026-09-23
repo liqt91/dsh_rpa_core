@@ -6,7 +6,10 @@
 
 捕获后的确认对话框（``ElementDialog``）对齐 Web ``openElementDialog``：
 改名 / selector 编辑 / metadata 只读 / 捕获时命中数展示；同名覆盖保护由
-调用方（app）确认。
+调用方（app）确认。此外把捕获侧已经收集、此前**只入库不展示**的两类数据也读出来：
+``selector.candidates``（备选定位 + 捕获时命中数，运行期自愈按序回退）与 browser 的
+语义特征（``role`` / ``accessibleName`` / ``label`` / ``containerText`` / 页面指纹）。
+两者都是只读展示——编辑它们的能力属于元素编辑器，不属于确认框。
 """
 
 from __future__ import annotations
@@ -15,6 +18,7 @@ import json
 from collections.abc import Callable
 from typing import Any
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
@@ -30,7 +34,7 @@ from PySide6.QtWidgets import (
 
 
 class ElementPanel(QWidget):
-    """元素库面板：列表 + 刷新/捕获/校验/删除/插入按钮。"""
+    """元素库面板：列表 + 刷新/捕获/编辑/结构校验/删除/插入按钮。"""
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -47,7 +51,21 @@ class ElementPanel(QWidget):
             "混合捕获：移动鼠标框选（网页走浏览器插件、桌面走 UIA），"
             f"{capture_click_label()} 或右键捕获（桌面也可用 F9），Esc 取消"
         )
-        self.verify_button = QPushButton("校验")
+        # 按钮文案与提示都点明「结构」：这个动作**不连接页面/窗口**，只校验元素文档与
+        # selector 是否合法。对齐 Web 侧（按钮 title="结构校验"，devserver 返回
+        # note「结构校验；活体验证（命中数）需在捕获会话内完成」）。
+        # 影刀那侧是**活体**校验（点一下页面真的高亮闪烁），迁来的用户最易把这里的
+        # 「通过」读成「页面上定位得到」——静默误解正是本项目最要避免的一类错误。
+        self.verify_button = QPushButton("结构校验")
+        self.verify_button.setToolTip(
+            "结构校验：只检查元素文档与 selector 是否合法，不连接页面或窗口。"
+            "活体验证（实际命中数）在捕获时完成，结果显示在捕获确认框里。"
+        )
+        self.edit_button = QPushButton("编辑")
+        self.edit_button.setToolTip(
+            "打开元素编辑器：浏览器元素可把捕获到的备选定位一键设为主定位；"
+            "桌面元素用勾选框改 locator 字段（不用手写 JSON）。保存前就地结构校验。"
+        )
         self.insert_button = QPushButton("插入参数")
         self.insert_button.setToolTip(
             "把选中元素填入画布当前指令的 selector/locator 参数"
@@ -56,6 +74,7 @@ class ElementPanel(QWidget):
         for button in (
             self.refresh_button,
             self.capture_button,
+            self.edit_button,
             self.verify_button,
             self.insert_button,
             self.delete_button,
@@ -104,14 +123,81 @@ def summarize_element(document: dict) -> str:
     return f"desktop · {name}"
 
 
+# 元数据里可能很长的值（页面 URL / 容器文本上限 200 字）截断展示，避免撑爆对话框。
+_META_DISPLAY_LIMIT = 80
+
+
+def _clip(value: Any) -> str:
+    """压平空白并截断到展示上限（末尾带省略号）。"""
+    text = " ".join(str(value).split())
+    if len(text) <= _META_DISPLAY_LIMIT:
+        return text
+    return text[: _META_DISPLAY_LIMIT] + "…"
+
+
+def semantic_meta_text(descriptor: dict[str, Any]) -> str:
+    """browser 元素的语义特征与页面指纹（desktop 没有这些键，返回空串）。
+
+    这些字段是捕获侧为「元素改版后按候选排序 / 命中多个时人工消歧」收集的（见
+    ``ElementDescriptor`` 文档），但此前 GUI 只展示 tag/id/classes/text/rect ——
+    **保住数据做到了、暴露数据没做**：用户既不知道这些信息存在，也无从据它判断
+    「这个元素为什么会被这样定位」。``accessibleName`` / ``label`` 恰恰是消歧最有用
+    的两项。纯展示，不改变任何写回逻辑。
+    """
+    if descriptor.get("kind") != "browser":
+        return ""
+    meta = descriptor.get("metadata") or {}
+    lines = [
+        meta.get("role") and f"role: {meta['role']}",
+        meta.get("accessibleName") and f"accessibleName: {_clip(meta['accessibleName'])}",
+        meta.get("placeholder") and f"placeholder: {_clip(meta['placeholder'])}",
+        meta.get("label") and f"label: {_clip(meta['label'])}",
+        meta.get("containerText") and f"containerText: {_clip(meta['containerText'])}",
+        meta.get("url") and f"url: {_clip(meta['url'])}",
+        meta.get("title") and f"title: {_clip(meta['title'])}",
+    ]
+    return "\n".join(line for line in lines if line)
+
+
+def candidates_text(descriptor: dict[str, Any]) -> str:
+    """备选定位展示文本（无候选返回空串）。
+
+    候选由捕获侧按 ``{kind, selector, matchedCount}`` 收集（browser 专有，见
+    ``_candidate_errors``），运行期主选择器失效时按序回退。``matchedCount > 1`` 的候选
+    本身不唯一 —— 回退到它有可能点到别的元素，这里如实标出「不唯一」而不是替用户
+    过滤掉：选择更稳的候选是用户的判断，不是展示层的判断。
+    """
+    raw = _as_dict(descriptor.get("selector")).get("candidates")
+    if not isinstance(raw, list):
+        return ""
+    items = [item for item in raw if isinstance(item, dict)]
+    if not items:
+        return ""
+    lines = [f"备选定位 {len(items)} 条（主选择器失效时按序回退）"]
+    for index, item in enumerate(items, start=1):
+        matched = item.get("matchedCount")
+        if isinstance(matched, int) and not isinstance(matched, bool):
+            match_text = f"命中 {matched}" + ("（不唯一）" if matched > 1 else "")
+        else:
+            match_text = "命中未实测"
+        kind = item.get("kind") or "?"
+        lines.append(f"  {index}. [{kind}] {item.get('selector') or ''} · {match_text}")
+    return "\n".join(lines)
+
+
 class ElementDialog(QDialog):
     """捕获确认对话框（对齐 Web ``openElementDialog`` 的 confirm 模式）。
 
     - 名称可改（默认名由调用方给；同名覆盖保护在 app 侧确认）；
     - selector 可编辑：browser 为 css 单行，desktop 为 locator JSON；
     - metadata 只读展示（tag/id/classes/text/rect，desktop 另含
-      controlType/automationId/window）；
+      controlType/automationId/window，browser 另含语义特征与页面指纹）；
+    - 备选定位只读展示（``selector.candidates`` + 捕获时命中数，见
+      ``candidates_text``）；
     - 捕获时命中数：1 绿、其他红（对齐 Web dlg-verify ok/bad）。
+
+    只有前三行里的「名称 / selector」是可写的；其余全是**展示**。写回
+    （``result_document``）以原 selector 为基底覆盖单个键，界面不展示的键一律原样保留。
     """
 
     def __init__(
@@ -151,11 +237,28 @@ class ElementDialog(QDialog):
         form.addRow("selector", self.selector_edit)
         layout.addLayout(form)
 
-        # metadata 只读（对齐 Web metaEl 的行集）
+        # metadata 只读（对齐 Web metaEl 的行集；browser 另含语义特征与页面指纹）
         self.meta_label = QLabel(self._metadata_text(descriptor))
         self.meta_label.setWordWrap(True)
         self.meta_label.setStyleSheet("color: #64707d;")
         layout.addWidget(self.meta_label)
+
+        # 备选定位（只读）：捕获侧收集、运行期自愈按序回退。此前完全不展示，
+        # 用户既不知道自愈能力存在，也无法在命中多个时挑一个更稳的候选。
+        # 只读且可选中复制 —— 不做「点选设为主动选择器」，那是元素编辑器的职责。
+        self.candidates_label = QLabel(candidates_text(descriptor))
+        self.candidates_label.setWordWrap(True)
+        self.candidates_label.setStyleSheet("color: #64707d; font-family: monospace;")
+        self.candidates_label.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+        )
+        self.candidates_label.setToolTip(
+            "捕获时额外收集的备选定位，运行期主选择器失效时按序回退（自动自愈）。"
+            "「不唯一」表示该候选本身命中多个元素。"
+        )
+        if not self.candidates_label.text():
+            self.candidates_label.hide()
+        layout.addWidget(self.candidates_label)
 
         # 校验错误提示（对话框内联展示，不弹 QMessageBox，保持可测试性）
         self.error_label = QLabel("")
@@ -190,8 +293,17 @@ class ElementDialog(QDialog):
             rect_text,
             is_desktop and meta.get("controlType") and f"controlType: {meta['controlType']}",
             is_desktop and meta.get("automationId") and f"automationId: {meta['automationId']}",
+            is_desktop and meta.get("name") and f"name: {meta['name']}",
+            # className 是 win32 侧定位**无窗口文本控件**（ListBox/ComboBox）的唯一手段，
+            # 也是 `classNameRe` 正则的输入。捕获 agent 一直带着它回传，GUI 却从没显示过
+            # （2026-09-23 探针 `probe_element_dialog_display.py` 实测发现）。
+            is_desktop and meta.get("className") and f"className: {_clip(meta['className'])}",
             is_desktop and meta.get("windowTitle") and f"window: {meta['windowTitle']}",
+            # browser 的语义特征与页面指纹（见 semantic_meta_text）
+            semantic_meta_text(descriptor),
         ]
+        # 刻意**不展示** windowHandle / point：它们是本次会话的运行期值（句柄每次启动都变），
+        # 摆出来会诱导用户粘进 locator，写出一个下次必定失效的元素。
         return "\n".join(line for line in lines if line) or "(无 metadata)"
 
     def accept(self) -> None:
@@ -239,6 +351,7 @@ def wire_element_panel(
     on_refresh: Callable[[], None],
     on_capture: Callable[[], None],
     on_verify: Callable[[str], None],
+    on_edit: Callable[[str], None],
     on_insert: Callable[[str], None],
     on_delete: Callable[[str], None],
 ) -> None:
@@ -254,5 +367,10 @@ def wire_element_panel(
         return run
 
     panel.verify_button.clicked.connect(with_name(on_verify))
+    panel.edit_button.clicked.connect(with_name(on_edit))
+    # 列表双击也进编辑器：影刀的元素库就是双击打开编辑器，用户有这个肌肉记忆。
+    # 这里直接连 with_name(on_edit)：双击必然有选中项，走同一条路径就不会出现
+    # 「按钮能编辑、双击不能」这种行为分叉。
+    panel.list.itemDoubleClicked.connect(lambda _item: with_name(on_edit)())
     panel.insert_button.clicked.connect(with_name(on_insert))
     panel.delete_button.clicked.connect(with_name(on_delete))

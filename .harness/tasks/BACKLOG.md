@@ -243,6 +243,62 @@
 - [ ] 窗口布局记忆（`planned`——dock 开合/宽度 QSettings 持久化）
 - [ ] 元素捕获后截图缩略图（`blocked`——待捕获链路具自动截屏能力；M19 切 C 同源）
 - [ ] 编辑器元素截图灯箱 + 上传 + 缩略图（`blocked`——待捕获链路具自动截屏能力；M19 切 C 后置项）
+- [x] **元素「校验」按钮语义错位：GUI 侧只做结构校验，文案却像活体验证**（`done`，2026-09-23
+  M39 ① 取处置②「对齐 Web 侧」；元素捕获链路调研发现）
+  - 现状：GUI `app.py:_verify_element` → `model/capture.py:selector_errors()`，只判「browser 有
+    非空 css / desktop 的 locator 是合法 JSON」，**完全不查页面**；状态栏文案「元素 X 校验通过」，
+    按钮 tooltip 无限定语。
+  - 对照：**Web 侧同一能力已澄清**——按钮字符「验」+ `title="结构校验"`，devserver
+    `verify_element` 返回 `note`:「结构校验；活体验证（命中数）需在捕获会话内完成」。
+    → 两形态口径不一致，且 GUI 是弱的那一侧。
+  - 为什么算缺陷：影刀的「校验元素」是**活体**的（点击后页面高亮闪烁、报「没有找到任何元素」/
+    「已经找到元素」）。从影刀迁来的用户点「校验」看到「通过」，会以为元素在当前页面定位得到，
+    实际只证明 JSON 合法——**「以为校验了、其实没校验」正是本项目最在意的静默错误**。
+  - **实装（M39 ①）**：按钮文案 `校验` → `结构校验` + tooltip 写明「不连接页面，活体验证在
+    捕获时完成」；状态栏消息改成「结构校验通过（仅校验结构与 selector，未验证页面命中）」。
+    判据钉在**限定语**上（不只是「包含校验通过」），负向验证 2 处注入各自精确变红。
+  - **处置①（做活体）仍未做**——能力已存在（内容脚本动作路径里就有命中数 + 预检），缺的是
+    通道：`_capture_element` 在对话框弹出前就 `session.close()`。见 `M39-element-editor.md` §5.1。
+- [x] **ElementDialog 不展示已捕获的 candidates 与语义特征（有数据、无界面）**（`done`，2026-09-23
+  M39 ②；元素捕获链路调研发现）
+  - 现状：`content.js:buildDescriptor` 捕获了 `selector.candidates[]`（含每条 `matchedCount`）与
+    `metadata` 的 `role`/`accessibleName`/`placeholder`/`label`/`containerText`/`url`/`title`；
+    而 `gui/element_panel.py:_metadata_text` 只展示 tag/id/classes/text/rect（desktop 另加
+    controlType/automationId/windowTitle），Web 侧同源（`static/app.js` 的 `metaEl`）。
+  - 已确认是**有意**保留不展示（`element_panel.py` 与 `static/app.js` 两处注释都写「selector 里
+    还有界面上不展示的键（捕获时收集的 candidates 备选定位），重建会让用户编辑一次就把它们静默
+    抹掉」）——即**保住数据**解决了、**暴露数据**没做。
+  - 代价：用户不知道自愈能力存在、无法查看/干预候选顺序；`accessibleName`/`label`/`containerText`
+    本是「命中多个时人工消歧」最有用的信息，收集了却看不到。
+  - **实装（M39 ②）**：确认框加只读候选区块（kind + selector + 实测命中数，`>1` 标「不唯一」）
+    与语义特征/页面指纹行；`matchedCount` 缺席如实写「命中未实测」。**同时实测补上一个漏展示**：
+    桌面 metadata 的 `className` / `name`（`className` 是 win32 侧定位无窗口文本控件的唯一手段、
+    也是 `classNameRe` 的输入）。刻意**不展示** `windowHandle`/`point`（运行期值，摆出来会诱导
+    用户粘进 locator）。展示是只读的，写回仍是「以原 selector 为基底覆盖一个键」，candidates 原样保留。
+  - **后续（M39 ③）**：候选从「只能看」变成「可选中提升为主定位」，见
+    `M39-element-editor.md` §2.3。
+- [ ] **`menuPath` 作为 locator 身份字段：声明与实现不一致**（`planned`，2026-09-23 M39 ③ 实测发现）
+  - 事实：`grep -o 'locator\.[a-z_]*'` 逐个核过——**两个执行器都不读 locator 里的 `menuPath`**
+    （`desktop.py::_find` 读 automation_id/control_type/name；`desktop_win32.py::_find` 读
+    title/class_name/class_name_re/control_id/found_index）。`menuPath` 只作为
+    `desktop_win32.menuSelect` 的**命令输入**被读。
+  - 为什么算缺陷：`DesktopLocator.require_identity` 把 `menu_path` 算作 **win32 的合法身份字段**
+    → 可以写出一个「模型校验通过、执行器永远找不到」的 locator，且没有任何地方报错。
+    与 M38 查处的那批「声明与实现不一致」同类。
+  - 处置（未定，二选一）：① 让 win32 `_find` 真的消费它（菜单项按路径查找，语义要额外定）；
+    ② 把它从模型的身份字段清单里去掉（动作小，但要确认没有存量数据依赖它）。
+    ③ 的编辑器已按「不提供没人消费的字段」处理：字段表里没有 `menuPath`，且 locator 里出现它
+    会在界面**如实提示**「当前 backend 不消费，保存会移除」（不静默改用户文件）。
+- [ ] **元素编辑器 ③-2：活体校验 / DOM 节点树**（`planned`，**待维护者拍板**——2026-09-23 M39 ③）
+  - 现状：③-1 的离线编辑器已落地（候选可提升为主定位 / 桌面 locator 字段勾选 / 就地结构校验，
+    见 `M39-element-editor.md` §2.3）。**活体校验（打一次真实命中数）仍未做**。
+  - 关键事实：**能力已经存在**——内容脚本动作路径里本来就有 `document.querySelectorAll(selector).length`
+    与遮挡 / 可见性预检；缺的是**通道**：`app.py::_capture_element` 在 `work()` 的 finally 里
+    `session.close()`（disarm + 关全部 bridge 通道），而对话框在那之后才弹出。
+  - 三个选项与建议见 `M39-element-editor.md` §5.1（建议 A：把会话生命周期延到对话框关闭后，
+    范围限在「捕获确认框内」，先只做「改选择器 → 打一次命中数」）。
+  - 连带项：DOM 节点树（§5.2，建议先不做，要新增 `page.outline` 类 op 并处理深度上限 /
+    跨 iframe / Shadow DOM）；相似元素成组与 AI 修复元素都是**新命令能力**，另立里程碑。
 - [ ] 编辑器多 tab 属性表单（`planned`——单命令 schema 字段显著增多（>~8）时按「常规/参数/…」划分；M19 切 E 留接口）
 - [ ] UI、DSH、MCP、调度器和安装器集成（`planned`）
   - 逐项放行与否以 ADR 0006 结论为准；操控型 HTTP 推迟不变。

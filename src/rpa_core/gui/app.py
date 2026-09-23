@@ -2525,6 +2525,7 @@ class MainWindow(QMainWindow):
                 on_refresh=self._refresh_elements,
                 on_capture=self._capture_element,
                 on_verify=self._verify_element,
+                on_edit=self._edit_element,
                 on_insert=self._insert_element,
                 on_delete=self._delete_element,
             )
@@ -2575,6 +2576,12 @@ class MainWindow(QMainWindow):
         self._element_panel.hint_label.setText(f"{len(entries)} 个元素")
 
     def _verify_element(self, name: str) -> None:
+        """结构校验（**不连接页面/窗口**）。
+
+        与 Web 侧同一口径：按钮文案「结构校验」+ devserver note「活体验证（命中数）
+        需在捕获会话内完成」。状态栏消息自带限定语，因为状态栏是本动作**唯一**的反馈面
+        ——用户不会为了确认「这次校验到底查了什么」去悬停按钮看 tooltip。
+        """
         from rpa_core.model.capture import (
             ElementDocumentError,
             selector_errors,
@@ -2591,9 +2598,39 @@ class MainWindow(QMainWindow):
             errors = [{"path": exc.path, "message": exc.message}]
         if errors:
             detail = "；".join(f"{e['path']}: {e['message']}" for e in errors[:3])
-            self.statusBar().showMessage(f"元素 {name} 校验未通过：{detail}", 6000)
+            self.statusBar().showMessage(
+                f"元素 {name} 结构校验未通过：{detail}", 6000
+            )
         else:
-            self.statusBar().showMessage(f"元素 {name} 校验通过", 4000)
+            self.statusBar().showMessage(
+                f"元素 {name} 结构校验通过（仅校验结构与 selector，未验证页面命中）",
+                6000,
+            )
+
+    def _edit_element(self, name: str) -> None:
+        """打开元素编辑器（离线）：候选可选 / 桌面 locator 字段勾选 / 就地结构校验。
+
+        与捕获确认框的分工：本入口**不改元素名**（身份改名走捕获那条已有的覆盖保护
+        路径，避免第二条语义）；它只改定位方式。
+        """
+        store = self._element_store()
+        if store is None:
+            return
+        try:
+            document = store.read(name)
+        except Exception as exc:  # noqa: BLE001 - 坏文件不该让 GUI 崩
+            self.statusBar().showMessage(f"读取元素失败：{exc}", 5000)
+            return
+        from rpa_core.gui.element_editor import ElementEditorDialog
+
+        dialog = ElementEditorDialog(document, name=name, parent=self)
+        # 与捕获确认框同款置顶：用户在浏览器/目标窗口里刚操作完，本进程是后台应用
+        present_window(dialog, always_on_top=True)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        if self.save_element_descriptor(name, dialog.result_document()):
+            self._refresh_elements()
+            self.statusBar().showMessage(f"已保存元素 {name}", 4000)
 
     def _delete_element(self, name: str) -> None:
         store = self._element_store()

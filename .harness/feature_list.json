@@ -291,6 +291,11 @@
       "id": "host-idle-exit",
       "title": "Extension bridge host idle self-termination: exit when no client connected and idle past threshold (default 30min, disabled via RPA_CORE_HOST_IDLE_EXIT_SECONDS=0)",
       "passes": true
+    },
+    {
+      "id": "element-post-capture-ux",
+      "title": "Element post-capture UX (M39): align the GUI verify button's wording with the Web 'structural check' semantics; surface captured-but-never-shown data (selector.candidates with measured matchedCount, semantic features, page fingerprint, desktop className/name); and an offline element editor (promote a candidate to primary with swap semantics, checkbox the desktop locator fields scoped per backend, in-place structural validation). S1-S3 done.",
+      "passes": true
     }
   ]
 }
