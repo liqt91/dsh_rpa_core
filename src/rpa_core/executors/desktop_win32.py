@@ -1,4 +1,5 @@
 import asyncio
+import re
 import sys
 import time
 import uuid
@@ -6,6 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Any
 
+from pydantic import ValidationError
 from pywinauto import Desktop
 from pywinauto.keyboard import send_keys
 
@@ -116,15 +118,27 @@ class Win32DesktopExecutor(CommandExecutor):
         if command == "desktop.win32.attachWindow":
             title = str(inputs.get("title") or "")
             class_name = inputs.get("className")
+            class_name_re = inputs.get("classNameRe")
             handle = inputs.get("handle")
             process_id = inputs.get("processId")
             match_mode = inputs.get("matchMode", "exact")
-            # 一个筛选条件都不给 = 枚举全桌面，报错会落在 ELEMENT_AMBIGUOUS（原因误导）；
-            # 与 uia 侧同口径，前置报 INVALID_INPUT（见 test_desktop_attach_window.py）
-            if handle is None and not title and not class_name and process_id is None:
+            if class_name and class_name_re:
                 return CommandResult.failure(
                     ErrorCode.INVALID_INPUT,
-                    "title, className, handle or processId is required",
+                    "className and classNameRe are mutually exclusive",
+                )
+            # 一个筛选条件都不给 = 枚举全桌面，报错会落在 ELEMENT_AMBIGUOUS（原因误导）；
+            # 与 uia 侧同口径，前置报 INVALID_INPUT（见 test_desktop_attach_window.py）
+            if (
+                handle is None
+                and not title
+                and not class_name
+                and not class_name_re
+                and process_id is None
+            ):
+                return CommandResult.failure(
+                    ErrorCode.INVALID_INPUT,
+                    "title, className, classNameRe, handle or processId is required",
                 )
             timeout_ms = int(inputs.get("timeoutMs") or 0)
             deadline = time.monotonic() + timeout_ms / 1000.0
@@ -138,6 +152,11 @@ class Win32DesktopExecutor(CommandExecutor):
                     if class_name:
                         all_wins = [
                             w for w in all_wins if w.class_name() == class_name
+                        ]
+                    if class_name_re:
+                        pattern = re.compile(class_name_re)
+                        all_wins = [
+                            w for w in all_wins if pattern.search(w.class_name() or "")
                         ]
                     if process_id is not None:
                         all_wins = [
@@ -219,7 +238,6 @@ class Win32DesktopExecutor(CommandExecutor):
 
         if command == "desktop.win32.getWindowList":
             import ctypes
-            import re
             title_pattern = inputs.get("titlePattern")
             match_mode = inputs.get("matchMode", "contains")
             user32 = ctypes.windll.user32
@@ -421,7 +439,16 @@ class Win32DesktopExecutor(CommandExecutor):
             )
 
         if command == "desktop.win32.findElement":
-            locator = DesktopLocator.model_validate(inputs["locator"])
+            try:
+                locator = DesktopLocator.model_validate(inputs["locator"])
+            except ValidationError as exc:
+                # 模型层把「两个类名字段同时给」等结构错误抛成 ValidationError，
+                # 外层 catch-all 会把它渲染成 EXECUTOR_FAILED（像内部崩了）。
+                # 这是**用户的输入问题**，显式报 INVALID_INPUT，与 attachWindow 的前置检查同口径。
+                return CommandResult.failure(
+                    ErrorCode.INVALID_INPUT,
+                    str(exc.errors()[0].get("msg", exc)) if exc.errors() else str(exc),
+                )
             timeout_ms = int(inputs.get("timeoutMs") or 0)
             deadline = time.monotonic() + timeout_ms / 1000.0
             while True:
@@ -775,7 +802,6 @@ class Win32DesktopExecutor(CommandExecutor):
 
     @staticmethod
     def _filter_windows(windows: list[Any], title: str, match_mode: str) -> list[Any]:
-        import re
         if match_mode == "contains":
             return [w for w in windows if title in (w.window_text() or "")]
         if match_mode == "regex":
@@ -791,6 +817,11 @@ class Win32DesktopExecutor(CommandExecutor):
         if locator.class_name:
             criteria["class_name"] = locator.class_name
         matches = window.descendants(**criteria)
+        if locator.class_name_re:
+            # `descendants(class_name=...)` 只做等值比较，没有正则口子；classNameRe
+            # 自己按完整类名过一遍（与尾巴 #2 的定案一致：新增口子而不削弱等值）。
+            pattern = re.compile(locator.class_name_re)
+            matches = [m for m in matches if pattern.search(m.class_name() or "")]
         if locator.control_id is not None:
             # pywinauto 的 descendants/children 路径**不消费 control_id**
             # （children 只读 class_name/title/control_type，实测任何取值都返回

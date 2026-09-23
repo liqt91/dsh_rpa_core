@@ -7,6 +7,8 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Any
 
+from pydantic import ValidationError
+
 from rpa_core.model.command import (
     WAIT_BUDGET_SLACK_SECONDS,
     CommandInvocation,
@@ -125,10 +127,16 @@ class DesktopExecutor(CommandExecutor):
                 # 口径与 win32 侧一致（见 tests/contract/test_desktop_attach_window.py）。
                 title = str(inputs.get("title") or "")
                 class_name = inputs.get("className")
-                if not title and not class_name:
+                class_name_re = inputs.get("classNameRe")
+                if class_name and class_name_re:
                     return CommandResult.failure(
                         ErrorCode.INVALID_INPUT,
-                        "title or className is required",
+                        "className and classNameRe are mutually exclusive",
+                    )
+                if not title and not class_name and not class_name_re:
+                    return CommandResult.failure(
+                        ErrorCode.INVALID_INPUT,
+                        "title, className or classNameRe is required",
                     )
                 process_id = inputs.get("processId")
                 match_mode = inputs.get("matchMode", "exact")
@@ -136,7 +144,7 @@ class DesktopExecutor(CommandExecutor):
                 deadline = time.monotonic() + timeout_ms / 1000.0
                 while True:
                     windows = self._find_windows_by_title(
-                        title, process_id, match_mode, class_name
+                        title, process_id, match_mode, class_name, class_name_re
                     )
                     if len(windows) == 1:
                         break
@@ -147,6 +155,7 @@ class DesktopExecutor(CommandExecutor):
                             details={
                                 "title": title,
                                 "className": class_name,
+                                "classNameRe": class_name_re,
                                 "matchedCount": len(windows),
                             },
                         )
@@ -157,6 +166,7 @@ class DesktopExecutor(CommandExecutor):
                             details={
                                 "title": title,
                                 "className": class_name,
+                                "classNameRe": class_name_re,
                                 "matchedCount": 0,
                             },
                         )
@@ -385,7 +395,15 @@ class DesktopExecutor(CommandExecutor):
                     ],
                 )
             if command == "desktop.findElement":
-                locator = DesktopLocator.model_validate(inputs["locator"])
+                try:
+                    locator = DesktopLocator.model_validate(inputs["locator"])
+                except ValidationError as exc:
+                    # 结构错误（如 UIA 身份字段一个都不给）是**用户输入问题**，
+                    # 不该被外层 catch-all 渲染成 EXECUTOR_FAILED（像内部崩了）。
+                    return CommandResult.failure(
+                        ErrorCode.INVALID_INPUT,
+                        str(exc.errors()[0].get("msg", exc)) if exc.errors() else str(exc),
+                    )
                 window = self._window_by_handle(session.window_handle)
                 if window is None:
                     return CommandResult.failure(
@@ -746,12 +764,15 @@ class DesktopExecutor(CommandExecutor):
         process_id: int | None,
         match_mode: str,
         class_name: str | None = None,
+        class_name_re: str | None = None,
     ) -> list[Any]:
-        """通过 title / className / processId 查找窗口，优先走 Win32 路径避免全桌面 UIA 枚举。
+        """通过 title / className / classNameRe / processId 查找窗口，优先走 Win32 路径
+        避免全桌面 UIA 枚举。
 
         过滤口径与 `desktop.win32.attachWindow`（`_filter_windows` + className/processId）
         对齐：**无条件等值比较**（className 不支持 contains/regex，`matchMode` 只作用于 title），
-        `title` / `className` / `processId` 之间是 AND。
+        `title` / `className` / `classNameRe` / `processId` 之间是 AND。`classNameRe` 是
+        `search`（非整串锚定），用于跨机器匹配含动态哈希的类名。
 
         exact 模式：FindWindowW（毫秒级）→ UIAWrapper 单窗口构造。
         contains/regex 模式：EnumWindows 枚举句柄 → 逐个 UIAWrapper。
@@ -765,6 +786,9 @@ class DesktopExecutor(CommandExecutor):
         title 为空串时：exact 模式改用 FindWindowW(class_name, None)（按类名找窗口，
         与 win32 侧「只给 className 也能 attach」对齐）；contains/regex 模式下
         「空串 in 标题」恒真，等价于不按标题过滤。
+
+        `classNameRe` 存在时**不走 exact 的 FindWindowW 类名参数**（它只收字面类名），
+        直接走 EnumWindows 逐句柄正则过滤。
         """
         from pywinauto.controls.uiawrapper import UIAWrapper
         from pywinauto.uia_element_info import UIAElementInfo
@@ -772,14 +796,17 @@ class DesktopExecutor(CommandExecutor):
         user32 = ctypes.windll.user32
 
         def _class_matches(hwnd: int) -> bool:
-            """等值比较窗口类名（与 win32 侧的 `w.class_name() == class_name` 同口径）。"""
-            if not class_name:
+            """类名过滤（等值 or 正则 search），与 win32 侧同口径。"""
+            if not class_name and not class_name_re:
                 return True
             buf = ctypes.create_unicode_buffer(256)
             user32.GetClassNameW(hwnd, buf, 256)
+            if class_name_re:
+                import re
+                return bool(re.search(class_name_re, buf.value))
             return buf.value == class_name
 
-        if match_mode == "exact":
+        if match_mode == "exact" and not class_name_re:
             # 类名过滤交给 FindWindowW 的 lpClassName（比事后 GetClassNameW 更省），
             # 但它**不做逐字节等值**：Win32 会按「类名或类名前缀」匹配，且忽略大小写。
             # 因此拿到的句柄还要用 GetClassNameW 复核一次，保证与 win32 侧口径一致。
@@ -798,7 +825,7 @@ class DesktopExecutor(CommandExecutor):
             except Exception:
                 return []
 
-        # contains / regex — EnumWindows 枚举句柄，逐个包装
+        # contains / regex / classNameRe — EnumWindows 枚举句柄，逐个包装
         handles: list[int] = []
 
         def _on_window(hwnd: Any, _lparam: Any) -> bool:
@@ -813,6 +840,13 @@ class DesktopExecutor(CommandExecutor):
             elif match_mode == "regex":
                 import re
                 matched = bool(re.search(title, win_title))
+            else:
+                # exact 落到这条 EnumWindows 路径，只可能是「给了 classNameRe」——
+                # 此时 title（若非空）必须**等值**才算命中；空 title 等价于不按标题过滤
+                # （与 FindWindowW(None, None) 的「不筛」语义对齐）。
+                # 漏掉这一支会让 exact+classNameRe 退化成「标题 contains」，
+                # 标题略有不符（大小写/后缀）就静默匹配不到。
+                matched = not title or title == win_title
             if not matched:
                 return True
             if not _class_matches(hwnd):

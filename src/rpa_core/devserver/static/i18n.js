@@ -192,6 +192,7 @@ window.RPA_I18N = {
     values: "替换值",
     title: "标题",
     className: "类名",
+    classNameRe: "类名（正则）",
     processId: "进程 ID",
     handle: "窗口句柄",
     controlId: "控件 ID",

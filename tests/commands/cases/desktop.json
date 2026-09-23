@@ -164,6 +164,57 @@
           ],
           "effect": "session"
         }
+      },
+      {
+        "name": "class-name-regex-binds-the-window-by-its-dynamic-class",
+        "inputs": {
+          "title": "{appTitle}",
+          "classNameRe": "WindowsForms10\\.Window\\.[0-9]+\\.app",
+          "timeoutMs": 2000
+        },
+        "setup": {
+          "session": "none"
+        },
+        "expect": {
+          "resourceType": "windowHandle"
+        },
+        "notes": "classNameRe 的**正向**路径（uia 侧同款口子，两后端对称）。靶子主窗口类名实测为 `WindowsForms10.Window.8.app.0.34f5582_r8_ad1`（见 .harness/spike/probe_win32_target_classes.py）——主窗口比子控件多一段窗体序号 `.8`，所以正则必须写成 `\\.Window\\.[0-9]+\\.app`。**注意 uia 侧这条不走 exact 的 FindWindowW**——它只收字面类名，正则存在时改走 EnumWindows 逐句柄 GetClassNameW 过滤。不断言具体 handle/pid（每次运行不同）。"
+      },
+      {
+        "name": "class-name-regex-with-no-match-is-element-not-found",
+        "inputs": {
+          "title": "{appTitle}",
+          "classNameRe": "NoSuchWindowClass.*",
+          "timeoutMs": 200
+        },
+        "setup": {
+          "session": "none"
+        },
+        "expect": {
+          "errorCode": "ELEMENT_NOT_FOUND",
+          "errorDetails": {
+            "matchedCount": 0
+          }
+        },
+        "negative": true,
+        "notes": "classNameRe 的**负向**路径。uia 侧 details 带 `{title, className, classNameRe, matchedCount}`（比 win32 侧多两个类名字段）。"
+      },
+      {
+        "name": "class-name-and-class-name-re-are-mutually-exclusive",
+        "inputs": {
+          "title": "{appTitle}",
+          "className": "Whatever",
+          "classNameRe": "What.*",
+          "timeoutMs": 200
+        },
+        "setup": {
+          "session": "none"
+        },
+        "expect": {
+          "errorCode": "INVALID_INPUT"
+        },
+        "negative": true,
+        "notes": "两个类名字段同时给 → 执行器前置拒绝 INVALID_INPUT（与 win32 侧同口径）。"
       }
     ]
   },

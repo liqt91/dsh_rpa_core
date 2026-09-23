@@ -655,7 +655,7 @@ S2.3 时两条命令在 win32 侧是显式 `EXECUTOR_FAILED`（止血）。可�
   `AssertionError: 装配失败：desktop.win32.findElement(options) → ELEMENT_NOT_FOUND`
   （失败被正确归因到装配，不是被测命令）。三例均逐字节还原。
 
-**尾巴 #2 —— `className` 的判因订正（`planned`，出路待拍板）**
+**尾巴 #2 —— `className` 的判因订正 + 出路落地（`done`，2026-09-23 选 ③，见 §1.16）**
 
 原记录写哈希段「随编译产物变」。**实测推翻**（四个探针，五轴）：
 
@@ -672,11 +672,13 @@ S2.3 时两条命令在 win32 侧是显式 `EXECUTOR_FAILED`（止血）。可�
 另订正：`controlId` 的漂移粒度是**每次进程启动**（同一 exe 连跑三次三个值），
 不是「每次编译」。真正的问题变成**可区分性太粗**（两个 Edit 撞同名）+ 无窗口文本的
 控件只能靠它定位。出路三选一（见 BACKLOG）：子串匹配 / 精确化文档口径 / 新增
-`classNameRe`。**本条不影响已落地的实现**——测试侧走运行期占位符。
+`classNameRe`。**维护者拍板选 ③「新增 `classNameRe`」——已实现（§1.16）**；
+`className` 本身语义不改，测试侧仍走运行期占位符。
 
-**尾巴 #3 —— `getWindowList` 枚举被拒静默空列表**：本轮未新增证据，
-状态与 S2.2 一致（路径存在、8×2 次枚举未复现；另有四驱动连跑时一次 15s 操作预算
-被全桌面枚举冷启动吃满的观测）。仍待与 `operationTimeoutMs` 一并做产品决策。
+**尾巴 #3 —— `getWindowList` 枚举被拒静默空列表（`等复现`，2026-09-23 拍板不改代码）**：
+本轮未新增证据，状态与 S2.2 一致（路径存在、8×2 次枚举未复现；另有四驱动连跑时一次 15s
+操作预算被全桌面枚举冷启动吃满的观测）。**维护者拍板「等复现」**——无可复现输入时不预先
+改产品代码（详见 §1.16 末节）。
 
 ### 1.14 桌面变体数三处错账订正 + 页面口径说明（2026-09-23）
 
@@ -797,6 +799,94 @@ ignore 掉**全部** L1 驱动，所以「L1 + L2 一起跑」这条路**根本�
 
 **探针复核**：`.harness/spike/probe_gui_targets.py` 走真实入口，实测三个目标注入互不串味，
 子进程真实持有的开关与上表一致、进度分母 268 / 458 / 377。
+
+### 1.16 尾巴 #2 落地（`classNameRe`）+ 尾巴 #3 记账 + M38 收口（2026-09-23）
+维护者拍板：「**尾巴2③，尾巴3等复现，然后收口**」。本节记落地与收口。
+
+**尾巴 #2 → ③（新增 `classNameRe` 正则字段），`done`**
+
+选 ③ 而非「子串匹配」或「只改文档」的理由：`className` 的可区分性问题（§1.13：两个
+Edit 撞同名 `WindowsForms10.EDIT.app.0.<哈希>_r8_ad1`）本质是**类名里混了动态段**，
+子串匹配治不了「用稳定前缀跨机器筛选」的需求，改文档只是描述现状。正则能表达跨机器的
+稳定前缀，且与等值语义**可以共存**（两字段互斥，各司其职）。
+
+| 落点 | 内容 |
+| --- | --- |
+| `model/desktop.py` | `class_name_re` 字段（alias `classNameRe`，`min_length=1`）+ `require_identity` 互斥校验 |
+| `commands/desktop_win32/{attachWindow,findElement}.json` | 声明 `classNameRe`；`className` description 补「与 classNameRe 互斥」 |
+| `commands/desktop/attachWindow.json` | 同上（uia 侧） |
+| `executors/desktop_win32.py` | 模块级 `import re` + `ValidationError`；`attachWindow` 正则过滤分支、`findElement` 映射 `INVALID_INPUT`、`_find` 正则过滤 |
+| `executors/desktop.py`（uia） | `ValidationError` 映射 `INVALID_INPUT`；`_find_windows_by_title` 加 `class_name_re` 参数、`_class_matches` 支持正则、exact 分支仅在 `not class_name_re` 时走 `FindWindowW` |
+| `devserver/static/i18n.js` | `classNameRe: "类名（正则）"` |
+| `tests/contract/test_desktop_attach_window.py` | 桩签名 + 两条新用例（正则可单独用 / 互斥）+ `shared` 断言加 `classNameRe` |
+| `tests/commands/cases/{desktop_win32,desktop}.json` | 各 +3 变体（正则正向 / 正则负向 / 互斥） |
+
+**三条真实踩坑（都靠实测定性，不是读代码推断）**：
+
+1. **`cannot access local variable 're'`（我自己引入的真 bug）**——`_execute_sync` 里
+   `getWindowList` 分支原有 `import re`，使 `re` 在整个函数作用域被当成**局部名**；
+   模块级加了 `import re` 后，同一函数内**早于**那个局部 `import` 使用 `re` 就炸
+   `UnboundLocalError`。修法：删掉函数内多余的局部 `import re`，统一用模块级。
+   这是新正则分支首跑就炸出来的，读代码时完全没看出来。
+2. **`findElement` 互斥实测回 `EXECUTOR_FAILED` 而非 `INVALID_INPUT`**——
+   `DesktopLocator.model_validate` 抛的 `ValidationError` 被外层 catch-all 吞成
+   `EXECUTOR_FAILED`（像内部崩了）。修法：执行器显式捕获 `ValidationError` 改报
+   `INVALID_INPUT`（用户输入问题），**两后端都加**。用例期望同步按实测校正
+   （初写 `INVALID_INPUT`，首跑得到 `EXECUTOR_FAILED`，改代码后才回 `INVALID_INPUT`，
+   notes 记了这次校正）。
+3. **uia `attachWindow` 的 exact 分支漏了 title 等值支**——`classNameRe` 存在时 exact 不走
+   `FindWindowW`、改走 EnumWindows，但那段 `_on_window` 的 title 匹配只有 `contains` /
+   `regex` 两支，**没有 exact 支**，`matched` 于是恒 `False` → 任何「exact + classNameRe」
+   都匹配不到（实测 `ELEMENT_NOT_FOUND`：`Desktop window did not match`）。
+   修法：补 `else: matched = not title or title == win_title`（空 title 等价于不按标题过滤，
+   与 `FindWindowW(None, None)` 语义对齐）。
+
+**正则判据必须用实测类名写（重要）**：两条 `attachWindow` 正向的原写
+`"WindowsForms10\\.Window\\.app"` **跑不过**——探针实测主窗口类名是
+`WindowsForms10.Window.8.app.0.34f5582_r8_ad1`，**比子控件多一段窗体序号 `.8`**，
+正则得写成 `"WindowsForms10\\.Window\\.[0-9]+\\.app"`。子控件（LISTBOX 等）无该段，
+`"WindowsForms10\\.LISTBOX"` 能直接命中。**判据来源是
+`.harness/spike/probe_win32_target_classes.py`**——又一次印证「用例期望先跑探针实测再写」。
+
+**负向验证（exact 分支修复，两个方向都做了）**：
+
+| 注入 | 结果 |
+|---|---|
+| 删掉 `_on_window` 里新补的 `else` 支（回到无兜底） | **恰好 1 条红**：`desktop.attachWindow::class-name-regex-binds-the-window-by-its-dynamic-class` → `ELEMENT_NOT_FOUND` |
+| 逐字节还原（备份回写 + `md5sum` 复核） | 哈希 `b00ef897e06e753fd7914ab126afe9aa` 与注入前一致 |
+
+**桌面矩阵实测（本轮真值）**：
+
+| 驱动 | 变体 | 结果 |
+| --- | --- | --- |
+| `test_desktop_win32_matrix.py` | **111** | `111 passed`（首跑 110 passed / 1 failed → 校正正则后全绿） |
+| `test_desktop_matrix.py`（uia） | **88** | `88 passed`（首跑 87 passed / 1 failed → 修 exact 分支后全绿） |
+| 桌面合计 | **199** | 均 `RPA_COMMAND_MATRIX=1 RPA_DESKTOP_E2E=1`，`-p no:faulthandler`，exit 0 |
+
+（win32 105→111 = +6、uia 85→88 = +3。win32 的 +6 里有 +3 是新变体、另 +3 是 §1.13
+尾巴 #1 那轮已加但未计入本表的历史值——**以本轮实测 111 为准**。）
+
+**尾巴 #3 → 等复现（不改代码）**：维护者拍板「等复现」。`getWindowList` 枚举被拒静默空列表
+路径存在、8×2 次枚举未复现（与 S2.2 一致）；`operationTimeoutMs` 的 15s 冷启动吃满也只观测到
+一次。**不预先改产品代码**——没有可复现的输入，任何「区分枚举失败与真没有窗口」的实现都
+只能靠猜（改成抛错反而可能把「真没窗口」误判成失败）。记入 BACKLOG 的「等复现」栏，
+保留观测证据，复现后按现场再决策。
+
+**收口门禁（本轮一手实测）**：
+
+- **FULL GATE PASSED / exit 0**：`1113 passed / 21 skipped / 2 xfailed`（`check_all.py` 默认门禁，
+  不含桌面 E2E 与指令矩阵——按需开关）。静态层全过：`ARCHITECTURE CHECK PASSED`（63 py / 86 manifest）、
+  `TASK CHECK PASSED`（58 features / 1 active task）、`PARAM CONSUMPTION CHECK PASSED`
+  （77 checked / 3 exempt / 台账 0）、`ERROR CONTRACT CHECK PASSED`（77 checked / 3 exempt）、
+  `COMMAND MATRIX CHECK PASSED`（86 条命令 / 未建表 0 / 死参数 0 / 实现缺口 0 / l2 块 109）、
+  ruff `All checks passed!`、五个 `.mjs` 切片检查全过。
+- **门禁抓到一处真缺口（如实记）**：首跑 `ERROR CONTRACT CHECK FAILED` 点名
+  `desktop.findElement` / `desktop.win32.findElement` 的 `INVALID_INPUT` 未声明——正是本轮
+  新增的 `ValidationError → INVALID_INPUT` 映射点。补进两处 manifest 的 `errors` 后转 PASSED。
+  **这印证了「新增返回点必须同步 manifest.errors」不是形式要求**：单向门禁在这里真的拦下了
+  「实现能返回、契约没声明」的不一致。
+- 顺带修掉两处 ruff：`desktop_win32.py` 的 import 排序（`pydantic` 应在 `pywinauto` 前）
+  与 `desktop.py` 一处 E501（docstring 折行）。
 
 ## 2. 关键设计决定
 
@@ -993,7 +1083,8 @@ S1.2 页签有一条白盒集成用例（`test_panel_streams_jsonl_into_rows`：
 - **FULL GATE PASSED**（S2 补靶子后：静态层 + 契约测试 + ruff + .mjs 切片检查全过；
   桌面 E2E 与指令矩阵仍按需，见 §1.6.7）。
 - **S2 执行层（2026-09-22 补跑）**：`RPA_COMMAND_MATRIX=1 RPA_DESKTOP_E2E=1 pytest tests/commands`
-  → 四驱动全绿（桌面当时的 172）——**这个 172 已过期，见 §1.13 的订正：当前真值 190**；
+  → 四驱动全绿（桌面当时的 172）——**这个 172 已过期：§1.13 订正为 190，§1.16 尾巴 #2
+  落地后当前真值是 199（win32 111 + uia 88），见 §1.16**；
   六向负向验证见 §1.6.7。
 
 ## 6. 剩余（后续切片）
@@ -1012,8 +1103,9 @@ S1.2 页签有一条白盒集成用例（`test_panel_streams_jsonl_into_rows`：
   - ~~`desktop.screenshot` 的依赖决策~~ ——**已定案加 Pillow**（S2.3），两条正路径转正；
   - ~~`control_id` 过滤失效~~ ——**已修活**（S2.3，`_find` 手工补滤）；
     `getWindowList` 的「声明不需要会话、实现需要」**已对齐**（S2.3）。
-    **剩余**：`className` 的匹配语义（§1.13 尾巴 #2，待拍板）与 `getWindowList`
-    的「区分枚举失败与真没有窗口」+ `operationTimeoutMs`（尾巴 #3，待拍板）；
+    **剩余**：~~`className` 的匹配语义（§1.13 尾巴 #2，待拍板）~~ ——**已落地选 ③
+    新增 `classNameRe`（§1.16）**；`getWindowList` 的「区分枚举失败与真没有窗口」
+    + `operationTimeoutMs`（尾巴 #3）**记为「等复现」，不改代码**（§1.16）；
   - 靶子侧仍未覆盖的两条：`closeSession.forceKill=true` 会结束靶子进程（要独立的靶子实例）、
     `setWindowVisible=false` 需要「一个变体内部完成的显隐对」（属流程层）。
   - **S2 建表时的复用提示**（按「真桌面 fixture」这一定案重写）：桌面通道的可测面是

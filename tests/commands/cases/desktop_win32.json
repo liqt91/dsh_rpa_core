@@ -214,6 +214,57 @@
           }
         },
         "negative": true
+      },
+      {
+        "name": "class-name-regex-binds-the-window-by-its-dynamic-class",
+        "inputs": {
+          "title": "{appTitle}",
+          "classNameRe": "WindowsForms10\\.Window\\.[0-9]+\\.app",
+          "timeoutMs": 2000
+        },
+        "setup": {
+          "session": "none"
+        },
+        "expect": {
+          "resourceType": "windowHandle"
+        },
+        "notes": "classNameRe 的**正向**路径（只按正则筛窗口类名，与 title 是 AND）。靶子主窗口类名实测为 `WindowsForms10.Window.8.app.0.34f5582_r8_ad1`（见 .harness/spike/probe_win32_target_classes.py）——主窗口比子控件多一段窗体序号 `.8`，所以正则必须写成 `\\.Window\\.[0-9]+\\.app` 才能命中；只写 `\\.Window\\.app` 会漏（本用例首跑就是这样失败的）。不断言具体 handle/pid（每次运行不同）。"
+      },
+      {
+        "name": "class-name-regex-with-no-match-is-element-not-found",
+        "inputs": {
+          "title": "{appTitle}",
+          "classNameRe": "NoSuchWindowClass.*",
+          "timeoutMs": 200
+        },
+        "setup": {
+          "session": "none"
+        },
+        "expect": {
+          "errorCode": "ELEMENT_NOT_FOUND",
+          "errorDetails": {
+            "matchedCount": 0
+          }
+        },
+        "negative": true,
+        "notes": "classNameRe 的**负向**路径。details 只带 `{title, matchedCount}`（win32 侧不分类名字段，与 uia 侧不同——那条判因已在等值负路径的 notes 里记过）。"
+      },
+      {
+        "name": "class-name-and-class-name-re-are-mutually-exclusive",
+        "inputs": {
+          "title": "{appTitle}",
+          "className": "Whatever",
+          "classNameRe": "What.*",
+          "timeoutMs": 200
+        },
+        "setup": {
+          "session": "none"
+        },
+        "expect": {
+          "errorCode": "INVALID_INPUT"
+        },
+        "negative": true,
+        "notes": "两个类名字段同时给 → 执行器前置拒绝 INVALID_INPUT（等值 vs 正则语义互斥）。与 uia 侧同口径。"
       }
     ]
   },
@@ -629,6 +680,54 @@
           "errorCode": "ELEMENT_NOT_FOUND"
         },
         "negative": true
+      },
+      {
+        "name": "class-name-regex-matches-the-dynamic-prefix",
+        "inputs": {
+          "sessionId": "{session}",
+          "locator": {
+            "backend": "win32",
+            "classNameRe": "WindowsForms10\\.LISTBOX"
+          },
+          "timeoutMs": 2000
+        },
+        "expect": {
+          "matchedCount": 1
+        },
+        "notes": "classNameRe 的**正向**路径：写 WindowsForms10.LISTBOX 前缀即命中含机器级哈希的完整类名（本机 `WindowsForms10.LISTBOX.app.0.34f5582_r8_ad1`）。这正是尾巴 #2 要解决的问题——等值比较必须粘整串、换机器就失效，正则前缀跨机器可用。**不断言具体 elementId**（每次运行不同），只断言唯一命中。"
+      },
+      {
+        "name": "class-name-regex-with-no-match-is-element-not-found",
+        "inputs": {
+          "sessionId": "{session}",
+          "locator": {
+            "backend": "win32",
+            "classNameRe": "NoSuchControlClass.*"
+          },
+          "timeoutMs": 200
+        },
+        "expect": {
+          "errorCode": "ELEMENT_NOT_FOUND"
+        },
+        "negative": true,
+        "notes": "classNameRe 的**负向**路径。回带 details 形状与等值负路径一致（win32 侧 ELEMENT_NOT_FOUND 只带 `{title, matchedCount}`，不带类名）。"
+      },
+      {
+        "name": "class-name-and-class-name-re-are-mutually-exclusive",
+        "inputs": {
+          "sessionId": "{session}",
+          "locator": {
+            "backend": "win32",
+            "className": "Whatever",
+            "classNameRe": "What.*"
+          },
+          "timeoutMs": 200
+        },
+        "expect": {
+          "errorCode": "INVALID_INPUT"
+        },
+        "negative": true,
+        "notes": "两个类名字段同时给 → 模型层 `model_validator` 拒绝。**实测校正**：首次跑得到 EXECUTOR_FAILED（`ValidationError` 被外层 catch-all 吞成「内部崩了」），那是误导性的——这是用户输入问题。已在执行器里显式捕获 ValidationError 改报 INVALID_INPUT，与 attachWindow 的前置检查同口径。"
       }
     ]
   },

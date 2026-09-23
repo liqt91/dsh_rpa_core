@@ -178,17 +178,26 @@
     「无窗口文本」的控件（ListBox / ComboBox）在 win32 侧**只能**靠 className /
     controlId 定位——这正好把尾巴 #1 的新能力和它绑在一起（不解决本条的**可用性**，
     尾巴 #1 的能力在实践中够不着）。
-  - 出路（**待维护者拍板**，见任务单 §6）：① `className` 改**子串/包含**匹配
-    （pywinauto 的 `findwindows` 里 `class_name` 是精确等值，但另有现成的
-    `class_name_re` 正则通道）——用户写 `WindowsForms10.LISTBOX` 或 `LISTBOX` 即可稳定
-    命中且跨机器可用；② 按 `GetClassNameW` 精确化文档口径、保持现状（代价：用户必须粘
-    贴含哈希的完整串，跨机器失效）；③ 新增 `classNameRe` 字段（动 manifest 契约）。
-    **测试侧不依赖这个决策**：L1 驱动按运行期读回的完整类名注入 `{listBoxClass}` /
-    `{comboBoxClass}` 占位符，换机器照样跑。
+  - 出路（**已拍板：选 ③，2026-09-23，已实现**）：① `className` 改**子串/包含**匹配
+    ——否决（治不了「用稳定前缀跨机器筛选」的需求）；② 按 `GetClassNameW` 精确化文档口径、
+    保持现状（用户必须粘贴含哈希的完整串，跨机器失效）——否决（只是描述现状）；
+    **③ 新增 `classNameRe` 字段（动 manifest 契约）——采用**。
+  - **实现落地（M38 §1.16）**：`classNameRe` 与等值 `className` **互斥**（等值 vs 正则两种
+    语义，同给报 `INVALID_INPUT`），两后端 + 三处 manifest + i18n + 契约测试 + 各 3 条变体。
+    模型层 `DesktopLocator.require_identity` 与执行器前置检查双落地；`ValidationError`
+    显式映射 `INVALID_INPUT`（原会被 catch-all 吞成 `EXECUTOR_FAILED`）。uia 侧 exact +
+    `classNameRe` 走 EnumWindows（`FindWindowW` 只收字面类名）。**该条从「可用性缺口」转正：
+    无窗口文本的控件现在能用稳定前缀定位了。**
+  - **测试侧**：L1 驱动仍按运行期读回的完整类名注入 `{listBoxClass}` / `{comboBoxClass}`
+    占位符（换机器照样跑）；新增的正则变体判据用**实测类名**写——主窗口实测
+    `WindowsForms10.Window.8.app.0.34f5582_r8_ad1`（比子控件**多一段窗体序号 `.8`**），
+    所以正则写 `WindowsForms10\.Window\.[0-9]+\.app`（探针
+    `.harness/spike/probe_win32_target_classes.py`）。
   - **注意**：`title` 是好的（它比的是控件窗口文本，实测 `Submit`/`Count`/`note-ready`
     都唯一命中），别一起误删。
-- [ ] **`desktop.getWindowList`：枚举被拒时静默返回空列表**
-  （`planned`；「声明与实现不一致」部分已由 M38 S2.3 修复——`getWindowList` 已从
+- [ ] **`desktop.getWindowList`：枚举被拒时静默返回空列表**（`等复现`，2026-09-23 维护者
+  拍板**不改代码**——见任务单 §1.16 末节）
+  （「声明与实现不一致」部分已由 M38 S2.3 修复——`getWindowList` 已从
   `_no_session_commands` 名单移除，声明对齐实现：它需要会话，两后端同改）
   - 静默空列表：本命令走 pywinauto 的 `uia_element_info._get_elements`，那里
     `except (COMError, ValueError): return []`——全桌面枚举被 COM 拒绝时**返回空列表而不是报错**
@@ -204,6 +213,10 @@
     （15s 默认操作预算被全桌面枚举冷启动吃满；单跑与复跑均过、win32 侧从未红）——
     候选修法多一条：给 `getWindowList` 的 schema 加 `operationTimeoutMs`（需动契约，与
     上面的「区分空与被拒」一起做产品决策）。
+  - **拍板（2026-09-23，M38 §1.16）：等复现，不改代码。** 维护者定案——无可复现输入时
+    预先改产品代码只能靠猜：把「枚举被拒」改成抛错，反而可能把「本机真没有匹配窗口」
+    误判成失败（两态在实现侧同形）。保留上述观测证据，**复现后按当时的现场再决策**
+    （届时优先做的仍是「区分两态」，`operationTimeoutMs` 作为独立候选）。
 - [x] **两个死参数的处置**（`done`，2026-09-22 维护者定案**删除**，M38 S1.1）——删除「声明」
   而非「能力」：两项从未被消费过（`closeTabs` 的路由由会话绑定的浏览器决定、扩展的
   `tabs.waitLoad` 只收 `tabId`/`timeoutMs`），删掉后行为不变、`KNOWN_DEAD_PARAMS` 已清空

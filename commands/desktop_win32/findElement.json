@@ -8,9 +8,9 @@
   "resources": ["desktop.session", "desktop.element"],
   "stability": "stable",
   "effect": {"kind": "read", "replay": "safe", "idempotency": "none"},
-  "input_schema": {"type": "object", "required": ["locator"], "properties": {"sessionId": {"type": "string", "minLength": 1}, "locator": {"type": "object", "minProperties": 1, "properties": {"backend": {"type": "string", "enum": ["win32"]}, "title": {"type": "string", "minLength": 1}, "className": {"type": "string", "minLength": 1}, "handle": {"type": "integer", "minimum": 1}, "controlId": {"type": "integer", "minimum": 1}, "foundIndex": {"type": "integer", "minimum": 0}, "menuPath": {"type": "array", "items": {"type": "string", "minLength": 1}, "minItems": 1}}, "additionalProperties": false}, "timeoutMs": {"type": "integer", "minimum": 1}}, "additionalProperties": false},
+  "input_schema": {"type": "object", "required": ["locator"], "properties": {"sessionId": {"type": "string", "minLength": 1}, "locator": {"type": "object", "minProperties": 1, "properties": {"backend": {"type": "string", "enum": ["win32"]}, "title": {"type": "string", "minLength": 1}, "className": {"type": "string", "minLength": 1, "description": "控件类型名，等值比较（可选）；与 classNameRe 互斥"}, "classNameRe": {"type": "string", "minLength": 1, "description": "控件类型名的正则（search，非整串锚定），可选；写 WindowsForms10.LISTBOX 即可命中含机器级哈希的完整类名，跨机器可用；与 className 互斥"}, "handle": {"type": "integer", "minimum": 1}, "controlId": {"type": "integer", "minimum": 1}, "foundIndex": {"type": "integer", "minimum": 0}, "menuPath": {"type": "array", "items": {"type": "string", "minLength": 1}, "minItems": 1}}, "additionalProperties": false}, "timeoutMs": {"type": "integer", "minimum": 1}}, "additionalProperties": false},
   "output_schema": {"type": "object", "required": ["elementId", "matchedCount"], "properties": {"elementId": {"type": "string"}, "matchedCount": {"type": "integer", "minimum": 1}}, "additionalProperties": false},
-  "errors": ["ELEMENT_NOT_FOUND", "ELEMENT_AMBIGUOUS", "SESSION_NOT_FOUND", "SESSION_LOST", "TIMEOUT", "CANCELLED", "EXECUTOR_FAILED"],
+  "errors": ["INVALID_INPUT", "ELEMENT_NOT_FOUND", "ELEMENT_AMBIGUOUS", "SESSION_NOT_FOUND", "SESSION_LOST", "TIMEOUT", "CANCELLED", "EXECUTOR_FAILED"],
   "implementation": {"handler": "desktop.win32:find_element"},
   "default_timeout_seconds": 15,
   "retryable": true

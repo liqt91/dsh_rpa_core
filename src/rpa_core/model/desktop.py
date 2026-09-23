@@ -12,6 +12,7 @@ class DesktopLocator(BaseModel):
     name: str | None = Field(default=None, min_length=1)
     title: str | None = Field(default=None, min_length=1)
     class_name: str | None = Field(default=None, alias="className", min_length=1)
+    class_name_re: str | None = Field(default=None, alias="classNameRe", min_length=1)
     handle: int | None = Field(default=None, ge=1)
     control_id: int | None = Field(default=None, alias="controlId", ge=1)
     menu_path: list[str] | None = Field(default=None, alias="menuPath")
@@ -25,8 +26,22 @@ class DesktopLocator(BaseModel):
             if not any((self.automation_id, self.control_type, self.name)):
                 raise ValueError("desktop locator requires at least one UIA identity field")
         else:
-            if not any((self.title, self.class_name, self.handle, self.control_id, self.menu_path)):
+            if not any(
+                (
+                    self.title,
+                    self.class_name,
+                    self.class_name_re,
+                    self.handle,
+                    self.control_id,
+                    self.menu_path,
+                )
+            ):
                 raise ValueError("desktop locator requires at least one Win32 identity field")
+            if self.class_name and self.class_name_re:
+                raise ValueError(
+                    "desktop locator className and classNameRe are mutually exclusive "
+                    "(equality vs regular-expression matching)"
+                )
         if self.menu_path is not None and not self.menu_path:
             raise ValueError("desktop locator menuPath cannot be empty")
         return self

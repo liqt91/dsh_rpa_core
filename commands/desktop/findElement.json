@@ -14,7 +14,7 @@
     "elementId": {"label": "元素ID", "primary": true},
     "matchedCount": {"label": "匹配数量"}
   },
-  "errors": ["ELEMENT_NOT_FOUND", "ELEMENT_AMBIGUOUS", "SESSION_NOT_FOUND", "SESSION_LOST", "TIMEOUT", "CANCELLED", "EXECUTOR_FAILED"],
+  "errors": ["INVALID_INPUT", "ELEMENT_NOT_FOUND", "ELEMENT_AMBIGUOUS", "SESSION_NOT_FOUND", "SESSION_LOST", "TIMEOUT", "CANCELLED", "EXECUTOR_FAILED"],
   "implementation": {"handler": "desktop.uia:find_element"},
   "default_timeout_seconds": 15,
   "retryable": true

@@ -356,8 +356,14 @@ def test_attach_with_class_name_only_is_accepted(monkeypatch):
     executor = DesktopExecutor()
     seen: list[dict] = []
 
-    def fake_find(title, process_id, match_mode, class_name=None) -> list[Any]:
-        seen.append({"title": title, "class": class_name, "pid": process_id, "mode": match_mode})
+    def fake_find(title, process_id, match_mode, class_name=None, class_name_re=None) -> list[Any]:
+        seen.append({
+            "title": title,
+            "class": class_name,
+            "classRe": class_name_re,
+            "pid": process_id,
+            "mode": match_mode,
+        })
         return []
 
     monkeypatch.setattr(executor, "_find_windows_by_title", fake_find)
@@ -365,7 +371,50 @@ def test_attach_with_class_name_only_is_accepted(monkeypatch):
 
     assert result.status == "error"  # 桩恒返回空 → 没找到
     assert result.error.code == "ELEMENT_NOT_FOUND"
-    assert seen == [{"title": "", "class": "Notepad", "pid": None, "mode": "exact"}]
+    assert seen == [
+        {"title": "", "class": "Notepad", "classRe": None, "pid": None, "mode": "exact"}
+    ]
+
+
+@DESKTOP_ONLY
+def test_attach_with_class_name_re_only_is_accepted(monkeypatch):
+    """只给 classNameRe 必须能走到查找（新增的正则口子），不许被前置换行拦下。"""
+    from rpa_core.executors.desktop import DesktopExecutor
+
+    executor = DesktopExecutor()
+    seen: list[dict] = []
+
+    def fake_find(title, process_id, match_mode, class_name=None, class_name_re=None) -> list[Any]:
+        seen.append({"title": title, "class": class_name, "classRe": class_name_re})
+        return []
+
+    monkeypatch.setattr(executor, "_find_windows_by_title", fake_find)
+    result = _execute(
+        executor, "desktop.attachWindow", {"classNameRe": r"WindowsForms10\.LISTBOX"}
+    )
+
+    assert result.status == "error"  # 桩恒返回空 → 没找到
+    assert result.error.code == "ELEMENT_NOT_FOUND"
+    assert seen == [{"title": "", "class": None, "classRe": r"WindowsForms10\.LISTBOX"}]
+
+
+@DESKTOP_ONLY
+def test_class_name_and_class_name_re_are_mutually_exclusive(monkeypatch):
+    """两个类名字段同时给 = INVALID_INPUT（等值 vs 正则，语义互斥）。
+
+    不静默取其一：那会让「我明明写了两条筛选」与「实际只按一条筛」对不上。
+    """
+    from rpa_core.executors.desktop import DesktopExecutor
+
+    executor = DesktopExecutor()
+    monkeypatch.setattr(executor, "_find_windows_by_title", lambda *a, **k: [])
+    result = _execute(
+        executor,
+        "desktop.attachWindow",
+        {"className": "Notepad", "classNameRe": "Notepad"},
+    )
+
+    assert result.error.code == "INVALID_INPUT"
 
 
 @DESKTOP_ONLY
@@ -422,7 +471,7 @@ def test_two_backends_agree_on_the_attach_contract(catalog):
     assert only_uia == set(), f"未登记的 uia 独有参数：{only_uia}"
 
     shared = set(uia["properties"]) & set(win32["properties"])
-    assert {"title", "className", "processId", "matchMode", "timeoutMs"} <= shared
+    assert {"title", "className", "classNameRe", "processId", "matchMode", "timeoutMs"} <= shared
     # 共享参数的说明必须一致（含 className 的「等值比较」措辞）。
     # 只比 description：有些字段（title/processId）本来就没写说明，缺省即两边都缺省。
     for field in sorted(shared):
