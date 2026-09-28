@@ -126,6 +126,12 @@ async function connect() {
     port.onDisconnect.addListener(() => {
       lastBridgeError = chrome.runtime.lastError ? chrome.runtime.lastError.message : "";
       port = null;
+      // host 断开 ⇒ 捕获会话必然已经结束（会话由 host 单方发起）。**必须自行撤防**：
+      // 推送模型没有心跳，capture_disarm 只能由 host 下发，通道一断就再也送不出去了
+      // ——页面会永久停在「捕获态」：红框跟着鼠标走，而怎么点都捕获不到
+      // （M42 维护者报障「捕获元素后网页上红框还在」）。arm 状态同理要落盘置假，
+      // 否则之后新开的页面查态会查到一个永远为真的 armed。
+      disarmCapture();
       scheduleReconnect();
     });
     lastBridgeError = "";
@@ -173,15 +179,15 @@ function onHostMessage(msg) {
       break;
     case "capture_arm":
       captureSessionId = msg.sessionId || null;
-      setCaptureArmed(true);
-      broadcast(true);
+      // **先落盘捕获态再广播**：补注入的脚本启动时会查 storage.session 拿当前态，
+      // 先广播后落盘会让它在窗口期内读到 false——arm 在这一页丢失，用户侧又是
+      // 「已经打开的网页上不生效」。
+      setCaptureArmed(true).then(() => broadcast(true));
       // ack：让发起方确认 arm 已到达扩展（诊断用，host 会广播给客户端）
       post({ type: "capture_armed", sessionId: captureSessionId });
       break;
     case "capture_disarm":
-      captureSessionId = null;
-      setCaptureArmed(false);
-      broadcast(false);
+      disarmCapture();
       post({ type: "capture_disarmed", sessionId: null });
       break;
     case "cancel":
@@ -196,13 +202,53 @@ function onHostMessage(msg) {
 }
 
 // ---------------------------------------------------------------- 捕获通道
+// content script 启动时查询当前捕获态（新页面/新标签页无需等下一轮广播）。
+// 返回是否送达——失败有两种成因，**都不该被静默吞掉**：① 受保护页面（chrome:// 等）
+// 本来就没有脚本，无需处理；② **扩展装载/重载之前就已打开的标签页**，它要么没有脚本、
+// 要么只剩一个与扩展断链的僵尸脚本（见 content.js 的接管守卫），必须补注入才能让这一页
+// 可用（M42 维护者报障「不会在已经打开的网页上生效」）。
+async function armTab(tabId, armed) {
+  try {
+    await chrome.tabs.sendMessage(tabId, { type: "rpa-capture-arm", armed });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// 补注入 content script。声明式 content_scripts **只在页面加载时**注入，所以对
+// 「已经打开的标签页」而言这是唯一手段。幂等由 content.js 的实例守卫保证：活实例被拦下，
+// 僵尸实例先被拆干净再接管。
+async function ensureContentScript(tab) {
+  if (!tab || tab.id == null) return false;
+  if (!/^(https?|file):\/\//i.test(tab.url || "")) return false;   // 受保护页面注入必失败
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId: tab.id, allFrames: false },
+      files: ["content.js"],
+    });
+    return true;
+  } catch {
+    return false;   // 页面已卸载等：这一页不需要脚本
+  }
+}
+
 async function broadcast(armed) {
   const tabs = await chrome.tabs.query({});
   for (const tab of tabs) {
-    try {
-      await chrome.tabs.sendMessage(tab.id, { type: "rpa-capture-arm", armed });
-    } catch { /* 页面无 content script（chrome:// 等），忽略 */ }
+    if (await armTab(tab.id, armed)) continue;
+    // 撤防不补注入：新注入的脚本默认就是未 arm，为撤防塞一遍脚本毫无收益
+    // （捕获态由 arm 建立，能收到 arm 的页面必然也能收到撤防）。
+    if (!armed || !(await ensureContentScript(tab))) continue;
+    await armTab(tab.id, armed);   // 补注入成功：把这次 arm 送给刚接管的新脚本
   }
+}
+
+// 统一撤防：清会话 id + 落盘捕获态 + 广播到全部标签页。
+// 「落盘」供新页面/补注入脚本查态，「广播」是已打开页面的出路——两者都要做。
+function disarmCapture() {
+  captureSessionId = null;
+  setCaptureArmed(false).then(() => broadcast(false));
 }
 
 function sendCapture(descriptor) {
@@ -211,16 +257,7 @@ function sendCapture(descriptor) {
     sessionId: captureSessionId,
     ...descriptor,
   });
-  captureSessionId = null;
-  setCaptureArmed(false);
-  broadcast(false);
-}
-
-// content script 启动时查询当前捕获态（新页面/新标签页无需等下一轮广播）
-async function armTab(tabId, armed) {
-  try {
-    await chrome.tabs.sendMessage(tabId, { type: "rpa-capture-arm", armed });
-  } catch { /* 页面无 content script（chrome:// 等），忽略 */ }
+  disarmCapture();
 }
 
 // 页面加载完成时补发 arm：推送模型下新页面不会自动收到此前的广播

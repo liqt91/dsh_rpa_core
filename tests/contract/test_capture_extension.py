@@ -265,14 +265,16 @@ def test_capture_click_label_follows_platform(monkeypatch, platform, expected):
 def test_browser_capture_hint_uses_platform_gesture_label():
     """扩展侧捕获提示不能写死 Ctrl+Click（否则 Mac 用户被指引到无效手势）。
 
-    content.js 的手势判定（isCaptureModifier/isSecondaryClick）由
-    scripts/check_capture_helpers.mjs 覆盖；此处保证**用户可见文案**与之一致。
+    这里只钉**用户可见文案**与两条路径的**接线**。手势判定本身（三种手势真的能触发
+    捕获、普通单击不触发、Mac UA 下提示条用 ⌘）是**只在浏览器里跑的语义**，已由
+    ``scripts/check_capture_lifecycle.mjs`` 用桩事件真求值（S6–S10）；本文件不再重复
+    断言其行为——读源码只能证明「写了这行字」。
     """
     content = (ROOT / "extension" / "content.js").read_text(encoding="utf-8")
     assert "isCaptureModifier" in content and "isSecondaryClick" in content, (
         "content.js 必须同时接受修饰键点击与次要点击"
     )
-    assert 'addEventListener("contextmenu", onSecondary' in content, (
+    assert 'on(document, "contextmenu", onSecondary' in content, (
         "必须挂 contextmenu：macOS 的 Ctrl+Click 只走这条路径"
     )
-    assert 'addEventListener("mousedown", onSecondary' in content
+    assert 'on(document, "mousedown", onSecondary' in content

@@ -2,7 +2,7 @@
   "project": "rpa_core",
   "phase": "command-parity-extension-editor",
   "status": "active",
-  "completed_milestone": "M41-capture-affordance-and-startup",
+  "completed_milestone": "M42-capture-extension-lifecycle",
   "active_milestone": null,
   "active_plan": null,
   "active_feature": null,

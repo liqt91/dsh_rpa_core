@@ -133,6 +133,33 @@
     改进（框线不再压指针、不吃元素内容），本轮**保留**；若维护者不要这个视觉变化，改动隔离在
     `overlay_bounds` / `overlayBoxRect` 两处，可单独回退。
 
+- [x] **M42 网页捕获：已打开页面不生效 / 捕获后红框残留**（`done`，2026-09-28）
+  - 计划：`M42-capture-extension-lifecycle.md`
+  - 触发：维护者「捕获网页元素时，不会在已经打开的网页上生效，捕获网页元素后，网页上红框还在」。
+  - 同源根因：**声明式 content_scripts 只在页面加载时注入**。扩展（重新）加载之后，已经打开的
+    标签页要么没有捕获脚本、要么只剩一个**僵尸**脚本（`chrome.runtime.id` 已消失、
+    `sendMessage` 抛 `Extension context invalidated`）。`broadcast()` 此前**只发消息并把失败静默
+    吞掉**（注释只提「chrome:// 等受保护页面」），于是 `capture_arm` 永远送不到这些页面 = 「不生效」；
+    僵尸仍按自己那份 `armed` 画框，却收不到 `capture_disarm`，而 `capture()` 失败路径又**刻意
+    不清框**（只在提示条上说一句）⇒ 红框永久赖在页面上 = 「红框还在」。
+  - 修法必须**成对**（只做一侧都无效）：`background.js` 对 `sendMessage` 失败的标签页
+    **补注入** `content.js`（仅 http(s)/file、**仅 arm 时**）后重发；`content.js` 的守卫由
+    「装过就一律拒绝」换成**实例注册表** `{alive, teardown}`（活实例拦人 / 僵尸先拆干净再接管），
+    并加 `onMove` 自愈（上下文没了就不再画框）与失败路径收框（`hideBox` + 保留提示条）。
+    顺带堵同族两条：**host 断开兜底撤防**（推送模型没有心跳，丢一次 `capture_disarm` 即永久
+    停在捕获态）、**`capture_arm` 先落盘再广播**（补注入的脚本启动时查 `storage.session`）。
+  - 判据：新增两条 node 门禁进 `check_all.py`——`check_capture_lifecycle.mjs`（28 项，桩环境整文件
+    求值 content.js）+ `check_capture_broadcast.mjs`（23 项，切片 + 送达模型：只有页面有可用脚本
+    时 `sendMessage` 才成功）。**顺带把一条弱断言搬了家**：`test_capture_extension.py` 里那两条
+    `addEventListener(...)` 源码断言在注册改走 `on(...)` 辅助函数后当场变红——它只能证明「写了
+    这行字」，现已由 node 门禁用桩事件真求值（S6–S10）覆盖，Python 侧只留接线。
+  - 负向验证 **13/13**（`.harness/spike/probe_m42_negative.py`，content 5 + background 8），
+    四条防假绿灯齐备（对照跑 / 失败类型判定**排除脚本自崩的假红** / 挂住判定 / 逐字节还原核 md5）。
+  - 残留（登记不修）：**维护者需要重新加载扩展**（版本 `0.4.0` → `0.4.1`）才生效；
+    **跨 isolated world 的僵尸脚本拆不掉**（两种 world 模型下行为都正确，但不同 world 时旧实例
+    的框要等页面重载才消失，本轮无条件实测 world 归属）；`_BROWSER_CONTENT_CLASSES` 只有
+    `Chrome_RenderWidgetHostHWND`，Firefox 的 `MozillaWindowClass` 在 hybrid 下不让位（与本条无关）。
+
 ## 后续任务
 
 - [ ] **`classify_offline_reason` 的 `host-not-reachable` 判据与注释不符**（`planned`，2026-09-28

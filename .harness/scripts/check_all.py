@@ -40,6 +40,13 @@ PURE_FUNCTION_SCRIPTS = (
     # ±2px 热区（M41「框要躲着鼠标」）。同样是「只在浏览器里跑」的几何——Python
     # 侧读源码只能证明写了 `left - OVERLAY_OUTSET`，证明不了算出来的带落在哪。
     "check_capture_overlay_geometry.mjs",
+    # 捕获脚本的**实例生命周期**（content.js，M42）：可接管守卫（活实例拦人、僵尸实例
+    # 先拆干净再接管）、僵尸在 mousemove 下不再留框、失败路径只收框不留残影。
+    # 这几个语义只在浏览器里跑：Python 读源码最多证明「写了 if (previous.alive())」。
+    "check_capture_lifecycle.mjs",
+    # 捕获通道的**可达性**（background.js，M42）：已打开标签页补注入、撤防不补注入、
+    # 注入失败不阻断、统一撤防（落盘 + 广播）、host 断开必须撤防、arm 先落盘再广播。
+    "check_capture_broadcast.mjs",
     "check_input_helpers.mjs",
     "check_precheck_helpers.mjs",
     "check_click_helpers.mjs",

@@ -20,14 +20,42 @@
 // role 归一化与可访问名的取法参照 browser-use/jev-ultrafast 的 snapshot.js（MIT）——
 // 该实现把"可访问名算法放在快照侧、不交给模型"当作硬原则；此处沿用同一优先级链。
 (() => {
-  if (window.__rpaCaptureInstalled) return;
-  window.__rpaCaptureInstalled = true;
+  // ---- 实例接管守卫（M42）----------------------------------------------------
+  // 声明式 content_scripts **只在页面加载时**注入：扩展装载/重载后，已经打开的标签页
+  // 拿不到新脚本，页面里那个旧脚本与扩展的通道也已断开（`sendMessage` 抛
+  // 「Extension context invalidated」）。维护者 2026-09-28 报障的两个现象**同源于此**：
+  //   「不会在已经打开的网页上生效」—— arm 广播送不进这个页面（background 侧现在会对
+  //   这类标签页补注入本脚本，见 background.js::ensureContentScript）；
+  //   「捕获后网页上红框还在」—— 旧脚本收不到 capture_disarm，而它的失败分支原先是
+  //   「保留红框 + 提示」（见 capture），于是红框永久赖在页面上。
+  // 所以守卫不能是「装过就一律拒绝」：**只有活着的实例才拦人**（同一上下文里重复注入
+  // 必须幂等——补注入会与 onUpdated 的补发、以及后续多次 arm 撞车），僵尸实例必须先
+  // 拆干净（含它留在页面上的红框与监听器）再让新实例接管。
+  const INSTANCE_KEY = "__rpaCaptureInstance";
+  const previous = window[INSTANCE_KEY];
+  if (previous) {
+    if (previous.alive()) return;
+    try {
+      previous.teardown();
+    } catch { /* 僵尸实例拆不动（上下文已失效）：继续接管，至少新实例能工作 */ }
+  }
 
   let armed = false;
   let box = null;
   let hint = null;
   let current = null;
   let lastCaptureAt = 0;   // 同一次手势的事件去重（见 capture）
+  let live = true;         // 本实例是否仍连着当前扩展（见 isAlive）
+  const bound = [];        // 可回收监听器 [target, type, handler, options]，teardown 用
+
+  /** 本实例是否仍连着**当前**扩展：扩展重载后 chrome.runtime.id 会消失。 */
+  const isAlive = () => live && Boolean(chrome.runtime && chrome.runtime.id);
+
+  /** 注册**可回收**监听器：僵尸实例不能留下监听器继续画框/抢手势。 */
+  const on = (target, type, handler, options) => {
+    target.addEventListener(type, handler, options);
+    bound.push([target, type, handler, options]);
+  };
 
   // 平台判定**只影响提示文案**（macOS 上手势是 ⌘ 而不是 Ctrl，理由见 onContextMenu）。
   // 刻意放在纯函数区之外：该区会被 scripts/check_capture_helpers.mjs 整段求值，不该碰 navigator。
@@ -241,9 +269,31 @@
     tip.style.top = (r.top >= 26 ? r.top - 24 : r.top + r.height + 4) + "px";
   };
 
+  /** 只收红框、保留提示条：失败路径用（用户要看得到原因，但红框不能赖着不走）。 */
+  const hideBox = () => { if (box) { box.remove(); box = null; } };
+
   const hideOverlay = () => {
-    if (box) { box.remove(); box = null; }
+    hideBox();
     if (hint) { hint.remove(); hint = null; }
+  };
+
+  // 收摊：清覆盖层 + 摘掉全部监听 + 让出实例位（补注入的新实例据此接管）。
+  // 由两条路径调用：① 新实例发现本实例已是僵尸（见文件顶部守卫）；② 本实例自己发现
+  // 上下文失效（见 onMove）。`instance` / `onRuntimeMessage` 定义在下方，teardown 只在
+  // 接管或事件里求值，那时两者都已初始化。
+  const teardown = () => {
+    if (!live) return;
+    live = false;
+    hideOverlay();
+    for (const [target, type, handler, options] of bound.splice(0)) {
+      try {
+        target.removeEventListener(type, handler, options);
+      } catch { /* 页面已卸载：摘不掉也无所谓 */ }
+    }
+    try {
+      chrome.runtime.onMessage.removeListener(onRuntimeMessage);
+    } catch { /* 上下文已失效：监听器随上下文一起废弃 */ }
+    if (window[INSTANCE_KEY] === instance) delete window[INSTANCE_KEY];
   };
 
   // 命中元素：跳过我们自己的两个覆盖层（它们已是 pointer-events:none，此处再兜一层）
@@ -252,6 +302,9 @@
 
   const onMove = (e) => {
     if (!armed) return;
+    // 扩展重载后本实例已是僵尸：画了框也捕获不到，只会留下清不掉的残留（M42 报障
+    // 「捕获后网页上红框还在」就是这个形状）。不再画，等补注入的新实例接管。
+    if (!isAlive()) { hideOverlay(); return; }
     const el = topElementAt(e.clientX, e.clientY);
     if (el) { current = el; show(el); }
   };
@@ -298,7 +351,10 @@
     e.stopPropagation();
     if (!chrome.runtime || !chrome.runtime.id) {
       // 扩展重载后，已打开页面里的旧脚本与扩展的通道已断，再点也发不出去。
-      // 明确提示要刷新页面，而不是静默失败。
+      // **红框必须收掉**：它不会再有 disarm 来清（通道断了），留着就是永久残留，
+      // 用户会以为还在捕获态（M42 报障「捕获后网页上红框还在」）。提示条留着说明
+      // 原因——下次 arm 广播时 background 会补注入新脚本接管本页，用户无需做任何事。
+      hideBox();
       setHint("扩展已重载 · 请刷新本页（⌘/Ctrl+R）后重新捕获");
       return;
     }
@@ -308,7 +364,9 @@
         descriptor: buildDescriptor(el),
       });
     } catch (err) {
-      // 通道失效等异常：保留红框与提示，用户可再试；不要静默吞掉
+      // 通道失效等异常：同上下——红框不能赖着不走（它已经不会被任何人清掉），
+      // 提示条保留原因，用户可再试；不要静默吞掉
+      hideBox();
       setHint("捕获失败：" + ((err && err.message) || err));
       return;
     }
@@ -347,25 +405,31 @@
 
   // 鼠标离开网页区域/窗口失焦/滚动时清掉高亮框（否则红框残留在屏幕上）
   const onLeave = () => { if (armed) hideOverlay(); };
-  document.documentElement.addEventListener("mouseleave", onLeave, true);
-  window.addEventListener("blur", onLeave);
-  window.addEventListener("scroll", onLeave, true);
+  on(document.documentElement, "mouseleave", onLeave, true);
+  on(window, "blur", onLeave);
+  on(window, "scroll", onLeave, true);
 
-  chrome.runtime.onMessage.addListener((msg) => {
+  const onRuntimeMessage = (msg) => {
     if (msg && msg.type === "rpa-capture-arm") {
       armed = msg.armed === true;
       if (armed) setHint(CAPTURE_HINT); else hideOverlay();
     }
-  });
+  };
+  chrome.runtime.onMessage.addListener(onRuntimeMessage);
 
-  document.addEventListener("mousemove", onMove, true);
-  document.addEventListener("click", onClick, true);
-  document.addEventListener("mousedown", onSecondary, true);
-  document.addEventListener("contextmenu", onSecondary, true);
-  document.addEventListener("keydown", onKey, true);
+  on(document, "mousemove", onMove, true);
+  on(document, "click", onClick, true);
+  on(document, "mousedown", onSecondary, true);
+  on(document, "contextmenu", onSecondary, true);
+  on(document, "keydown", onKey, true);
+
+  // 登记本实例：补注入的新脚本据此判断「拦下还是接管」（见文件顶部守卫）。
+  const instance = { alive: isAlive, teardown };
+  window[INSTANCE_KEY] = instance;
 
   // 启动即同步当前捕获态：推送模型下新页面/新标签页不会自动收到此前的 arm 广播
-  // （旧 HTTP 模型每 5s 重复广播，天然覆盖新页面）。
+  // （旧 HTTP 模型每 5s 重复广播，天然覆盖新页面）。补注入的脚本也靠这一步立刻
+  // 跟上「此刻是否在捕获态」，不必等下一次 arm。
   try {
     chrome.runtime.sendMessage({ type: "rpa-capture-state" })
       .then((reply) => { if (reply && reply.armed) armed = true; })
