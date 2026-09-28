@@ -53,8 +53,12 @@ class FakeDesktopSession:
 
     def pick(self, timeout_seconds=90):
         self.pick_calls += 1
-        if self.pick_delay:
-            time.sleep(self.pick_delay)
+        # 可中断的延迟：真 agent 被 cancel() 时是**进程被终止**（pick 立即返回），
+        # 假实现里睡死的 sleep 会让 join 白等到最后（M43 的取消用例就要在这个窗口里
+        # 断言「不等另一条腿」）。语义不变，只是把上界变成可缩短的。
+        deadline = time.monotonic() + self.pick_delay
+        while time.monotonic() < deadline and not self.cancelled:
+            time.sleep(0.01)
         return dict(self.result)
 
     def cancel(self):
@@ -76,16 +80,22 @@ class FakeBridge:
     ``send_ack=False`` 模拟**残留 host**：端点连得上、``capture_arm`` 也收得到，
     但没有扩展在听——既不发 ``capture_armed``（ack），也不发任何结果。这正是
     维护者 2026-09-28 那个现场的形状（端点在线 ⇒ 判「扩展在线」⇒ 静默等满超时）。
+
+    ``cancel_result=True`` 模拟**网页侧按 Esc**：``content.js`` 的 onKey 发
+    ``rpa-capture-cancelled`` → ``background.js`` 的 ``sendCapture({cancelled: true})``，
+    即回一条带 ``cancelled`` 的 ``capture_result``（不带 descriptor）。
     """
 
     def __init__(self, *, delay: float | None = 0.1,
                  browser: str = "msedge", instance_id: str = "hyb1",
-                 send_ack: bool = True):
+                 send_ack: bool = True, cancel_result: bool = False):
         self.name = endpoint_name(browser, instance_id)
         self.delay = delay
         self.send_ack = send_ack
+        self.cancel_result = cancel_result
         self.server = lt.LocalEndpointServer(self.name)
         self.armed = 0
+        self.disarmed = 0
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._loop, daemon=True)
         self._thread.start()
@@ -109,6 +119,9 @@ class FakeBridge:
                     return
                 if message is None:
                     return
+                if message.get("type") == "capture_disarm":
+                    self.disarmed += 1
+                    continue
                 if message.get("type") == "capture_arm":
                     self.armed += 1
                     if self.send_ack:
@@ -127,7 +140,11 @@ class FakeBridge:
                         {
                             "type": "capture_result",
                             "sessionId": message.get("sessionId"),
-                            "descriptor": _BROWSER_DESCRIPTOR,
+                            **(
+                                {"cancelled": True}
+                                if self.cancel_result
+                                else {"descriptor": _BROWSER_DESCRIPTOR}
+                            ),
                         }
                     )
         finally:
@@ -461,6 +478,115 @@ def test_hybrid_extension_ack_keeps_leg_alive(isolated_endpoints):
             result = session.pick(timeout_seconds=1)
             assert result.get("timeout") is True, result
             assert session.extension_unresponsive is False
+        finally:
+            session.close()
+    finally:
+        fake.close()
+
+
+# ---- 用户取消是**会话级**信号（M43；维护者 2026-09-28 报障） -------------------
+def test_hybrid_desktop_esc_cancels_whole_session(isolated_endpoints):
+    """桌面 hover 里按 Esc（桌面腿回 ``cancelled``）⇒ 整个会话立即收场。
+
+    回归（维护者报障「捕获元素时，在桌面按 esc，只不显示红框，但还是在捕获模式中」）：
+    旧实现把 ``cancelled`` 记成**腿失败**（``desktop_failure``），而 ``_exhausted()``
+    要求两条腿都出局才收场——扩展腿（端点在线）一直活着，加上宿主传的
+    ``timeout_seconds=inf``（M41 S5 的 ``CAPTURE_TIMEOUT_SECONDS``）⇒ 会话**永不结束**：
+    桌面红框随 agent 的 ``overlay.destroy()`` 消失，但主窗仍最小化、扩展仍 arm、
+    「再点捕获元素」仍报「已有捕获任务进行中」。
+
+    **断言必须全部落在 ``session.close()`` 之前**：``close()`` 自己就会
+    ``cancel()``→撤防扩展、回收桌面腿，先关再断言等于用收尾兜底掩盖「收场时没做」这个
+    缺口（M43 负向验证的 x4/x5 两处注入就是这么被放过去的——判据自己成了假绿灯）。
+    """
+    from rpa_core.capture.extension import ExtensionCaptureSession
+
+    fake = FakeBridge(delay=None)  # 扩展腿在线且永不回结果：另一条腿活着才是常态
+    try:
+        FakeDesktopSession.instances = []
+        session = HybridCaptureSession(
+            desktop_factory=FakeDesktopSession,
+            extension_session=ExtensionCaptureSession(),
+        )
+        try:
+            session.start()
+            assert not session.extension_offline
+            session._desktop.result = {"cancelled": True}  # agent 的 Esc 出口
+            started = time.monotonic()
+            result = session.pick(timeout_seconds=float("inf"))
+            elapsed = time.monotonic() - started
+
+            assert result == {"cancelled": True}, f"桌面 Esc 必须收掉会话：{result}"
+            assert elapsed < 1, f"取消必须立即收场，实耗 {elapsed:.1f}s（旧实现挂到永久）"
+            assert session._desktop.cancelled, "桌面腿必须被回收"
+            # disarm 是「发出去」即返回，假端点要经自己的读线程才记数
+            # （与 bridge.armed 同款等待）
+            deadline = time.monotonic() + 3
+            while time.monotonic() < deadline and fake.disarmed == 0:
+                time.sleep(0.05)
+            assert fake.disarmed >= 1, "扩展腿必须被撤防（否则网页里的红框留在场上）"
+        finally:
+            session.close()
+    finally:
+        fake.close()
+
+
+def test_hybrid_extension_esc_cancels_whole_session(isolated_endpoints):
+    """网页里按 Esc（扩展腿回 ``cancelled``）⇒ 同样立即收场，不等桌面腿。
+
+    对称面：hybrid 下桌面 agent 一直在跑（Esc 由它轮询全局按键），「另一条腿还活着」
+    是常态，取消必须由**被按的那条腿**自己收场。现场形状：``content.js`` onKey →
+    ``rpa-capture-cancelled`` → ``background.js`` 的 ``sendCapture({cancelled: true})``。
+    """
+    from rpa_core.capture.extension import ExtensionCaptureSession
+
+    fake = FakeBridge(delay=0.0, cancel_result=True)
+    try:
+        FakeDesktopSession.instances = []
+        session = HybridCaptureSession(
+            desktop_factory=FakeDesktopSession,
+            extension_session=ExtensionCaptureSession(),
+        )
+        try:
+            session.start()
+            session._desktop.pick_delay = 5.0  # 用户正在桌面找元素，腿还在跑
+            started = time.monotonic()
+            result = session.pick(timeout_seconds=float("inf"))
+            elapsed = time.monotonic() - started
+
+            # 同 test_hybrid_desktop_esc_*：断言必须在 close() 之前（close 会自己回收桌面腿）
+            assert result == {"cancelled": True}, f"网页 Esc 必须收掉会话：{result}"
+            assert elapsed < 2, f"取消必须立即收场，实耗 {elapsed:.1f}s"
+            assert session._desktop.cancelled, "桌面 agent 必须被回收（否则它还在轮询按键）"
+        finally:
+            session.close()
+    finally:
+        fake.close()
+
+
+def test_hybrid_leg_failure_is_not_a_cancel(isolated_endpoints):
+    """腿的**失败**结果（无 ``kind``、也无 ``cancelled``）不得收掉会话。
+
+    与上面两条成对的判据：取消与失败都不带 ``kind``，只有 ``cancelled`` 才是会话级
+    信号。少了这条，「任一腿出非描述符结果就收场」这种过度泛化改法不会被拦下。
+    """
+    from rpa_core.capture.extension import ExtensionCaptureSession
+
+    fake = FakeBridge(delay=None)
+    try:
+        FakeDesktopSession.instances = []
+        session = HybridCaptureSession(
+            desktop_factory=FakeDesktopSession,
+            extension_session=ExtensionCaptureSession(),
+        )
+        try:
+            session.start()
+            # 扩展腿产出「无 kind 无 cancelled」的失败结果（通道断开/无描述符同形态）
+            session.submit({})
+            result = session.pick(timeout_seconds=10)
+            # `.get` 而非 `[...]`：泛化改法会把这里变成 KeyError（也是红，但报错形状
+            # 分不清「判据拦住」与「用例自己崩」）
+            assert result.get("kind") == "desktop", f"腿失败不是取消，桌面腿仍应胜出：{result}"
         finally:
             session.close()
     finally:

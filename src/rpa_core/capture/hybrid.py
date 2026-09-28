@@ -9,7 +9,7 @@
   Windows-only，非 Windows 上 ``available`` 报 False，该腿不参与竞速
 
 **「先回传者胜」只对「有效捕获描述符」成立**（见 ``_is_capture_result``）：腿的
-失败形态（``unavailable`` / ``error`` / ``timeout`` / ``cancelled`` / agent 崩溃）
+失败形态（``unavailable`` / ``error`` / ``timeout`` / agent 崩溃）
 都不带 ``kind``，绝不能当成「用户捕获了这条腿上的元素」。早期实现直接比对
 「哪条腿先有产出」，于是在非 Windows 上桌面腿 49ms 返回 ``desktop capture
 requires Windows`` 就把仍在线的扩展腿掐掉（``close()`` → disarm），用户侧表现为
@@ -23,6 +23,17 @@ requires Windows`` 就把仍在线的扩展腿掐掉（``close()`` → disarm）
 crash log 里扩展腿读线程活着 ⇒ ``offline is False`` ⇒ 不弹离线确认、不降级）。
 现在扩展腿在 ``ARM_ACK_TIMEOUT_SECONDS`` 内未回 ack 即判死（见 ``_arm_deadline``），
 并把等待预算收窄到 ``DEGRADED_TIMEOUT_SECONDS``。
+
+**「用户取消」是会话级信号，不是单腿失败**（2026-09-28 修）：``cancelled`` 只可能由
+用户的显式手势产生（桌面 hover 里按 Esc → ``desktop_agent._hover_capture``；
+网页里按 Esc → ``content.js`` 的 ``rpa-capture-cancelled``），意图是「我不捕获了」，
+不是「这条通道坏了」。旧实现把它记成腿失败、继续等另一条腿——hybrid 下另一条腿
+（桌面 agent）本来一直在跑，要等用户再操作或等满超时；而 M41 S5 之后宿主传的
+``timeout_seconds`` 是 ``inf``（``CAPTURE_TIMEOUT_SECONDS``）⇒ **永久**停在捕获态：
+桌面红框随 agent 的 ``overlay.destroy()`` 消失，但主窗仍最小化、扩展仍 arm、
+``_capture_session`` 仍非 None（维护者 2026-09-28 报障「捕获元素时，在桌面按 esc，
+只不显示红框，但还是在捕获模式中」）。现在任一腿报 ``cancelled`` 即调
+``_finish_cancelled`` 收场：disarm 另一条腿并返回 ``{"cancelled": True}``。
 """
 
 import threading
@@ -48,6 +59,16 @@ _ARM_ACK_ERROR = (
 def _is_capture_result(payload: Any) -> bool:
     """该腿是否产出了一个**有效的捕获描述符**（判别字段 ``kind``）。"""
     return isinstance(payload, dict) and payload.get("kind") in _CAPTURE_KINDS
+
+
+def _is_cancelled(payload: Any) -> bool:
+    """该腿的结果是否表示**用户主动取消**（而非通道失败）。
+
+    与「失败」必须分开：取消是**会话级**意图（Esc 只有一次），失败只是这条腿出局。
+    两者都不带 ``kind``，直接按 ``_is_capture_result`` 的否定分支处理会把取消降格成
+    「腿失败，继续等另一条腿」，于是会话永远不结束（见模块 docstring）。
+    """
+    return isinstance(payload, dict) and payload.get("cancelled") is True
 
 
 class HybridCaptureSession:
@@ -171,7 +192,10 @@ class HybridCaptureSession:
                     self._extension.close()
                     self._cancel_desktop(thread)
                     return result
-                # 腿失败（cancelled / 连接断开 / 无 kind）：记下原因，继续等桌面腿
+                if _is_cancelled(result):
+                    # 用户按 Esc（网页侧）收掉整个会话——桌面 agent 也一并回收
+                    return self._finish_cancelled(thread)
+                # 腿失败（连接断开 / 无 kind）：记下原因，继续等桌面腿
                 extension_failure = result if isinstance(result, dict) else {}
 
             # ② 桌面腿
@@ -181,6 +205,10 @@ class HybridCaptureSession:
                     self._pending = False
                     self._extension.close()  # 桌面先赢：撤防扩展
                     return result
+                if _is_cancelled(result):
+                    # 用户按 Esc（桌面 hover）——这正是「只不显示红框」那一刻：
+                    # agent 的 finally 已经 destroy 掉 overlay，此处必须收掉会话本身
+                    return self._finish_cancelled(thread)
                 desktop_failure = result if isinstance(result, dict) else {}
 
             # ③ 两条腿都已出局 → 立即收场，不干等满超时
@@ -233,6 +261,18 @@ class HybridCaptureSession:
         if thread is not None:
             thread.join(timeout=3)
 
+    def _finish_cancelled(self, thread: threading.Thread | None) -> dict[str, Any]:
+        """用户取消的统一收场：disarm 另一条腿 + 返回 ``cancelled``。
+
+        ``cancelled`` 是**会话级**信号（见模块 docstring），所以这里必须把另一条腿也
+        收掉——否则它的红框/子进程会留在场上（hybrid 下桌面 agent 一直在轮询全局按键，
+        不收它就永远活着；扩展不收它就永远停在 arm 态）。
+        """
+        self._pending = False
+        self._extension.close()  # 撤防扩展：网页里的红框随 capture_disarm 下线
+        self._cancel_desktop(thread)
+        return {"cancelled": True}
+
     def _exhausted(
         self,
         extension_failure: dict[str, Any] | None,
@@ -248,10 +288,14 @@ class HybridCaptureSession:
         extension_failure: dict[str, Any] | None,
         desktop_failure: dict[str, Any] | None,
     ) -> dict[str, Any]:
-        """无可用通道时的收场结果：区分「用户主动取消」与「无腿可用」。"""
-        # 用户按 Esc 取消（扩展腿回 cancelled）优先呈现为取消
-        if extension_failure and extension_failure.get("cancelled"):
-            return {"cancelled": True}
+        """无可用通道时的收场结果：给出「为什么两条腿都产不出东西」。
+
+        这里**不再**判 ``cancelled``：用户取消已在 ``pick`` 的两条腿分支里被
+        ``_is_cancelled`` 拦下并走 ``_finish_cancelled``（会话级收场），走不到这条
+        路径——留着那个分支就是一段永远不执行的代码，后来人会为它写一条永远打不中
+        的用例。回归由 ``test_hybrid_esc_*`` 钉住（它们要求取消**立即**收场，而不是
+        等另一条腿也出局）。
+        """
         if desktop_failure is not None and desktop_failure.get("timeout") \
                 and extension_failure is not None and extension_failure.get("timeout"):
             return {"timeout": True}
