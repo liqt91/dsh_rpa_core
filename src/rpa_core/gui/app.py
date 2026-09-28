@@ -358,10 +358,17 @@ class _CaptureBridge(QObject):
     finished = Signal(dict)
 
 
-# 捕获预算（秒）：无手势时的等待上限——**兜底**，不是给用户看的时限。
-# 唯一读者是会话层（`_capture_element` 传给 `pick` 的 deadline）；浮窗自 M41 S4 起
-# 不再显示倒计时，改这个数字不会再让第二处文案跟着漂。
-CAPTURE_TIMEOUT_SECONDS = 90.0
+# 捕获等待上限：**无上限**（`float("inf")`）——GUI 不替用户放弃（M41 S5）。
+# 维护者 2026-09-28 拍板：90 秒自动收场会把「认真挑元素超过 90 秒」的用户已经挑好的
+# 元素**静默丢掉**（`pick` 返回 `{"timeout": True}`，没有 descriptor，状态栏只说「请重试」），
+# 是净负面的——正常态下打断用户，而它想兜的「用户走开」本来就有显式出口。
+# 收场出口本就完备：① 捕获到结果 ② 两条腿都出局时 `_exhausted` **立即**收场（不等 deadline）
+# ③ 用户取消（浮窗按钮 / 再点「捕获元素」/ Esc，取消时 `ExtensionCaptureSession.cancel()`
+# 无条件置位事件 ⇒ 实测 ≤1 秒收场）。三层循环都是 `time.monotonic() < deadline` 的形式，
+# `inf` 天然成立（父端 `min(0.5, inf)` 仍是 0.5）；agent 的 `--timeout` 走
+# `argparse type=float`，也认 `"inf"`。
+# 唯一读者是会话层（`_capture_element` 传给构造函数与 `pick`）；浮窗自 M41 S4 起不显示倒计时。
+CAPTURE_TIMEOUT_SECONDS = float("inf")
 
 
 def capture_web_status(session) -> tuple[str, bool]:
@@ -2966,8 +2973,11 @@ class MainWindow(QMainWindow):
         # activateWindow() 会被 macOS 忽略（见 present_window 文档）。
         present_window(self)
         if result.get("timeout"):
-            # 秒数不给用户看（M41 S4）：超时没有惩罚（重点一次即可），说清「下一步」
-            # 比报「等了多久」有用。
+            # GUI 侧已不设等待上限（M41 S5：`CAPTURE_TIMEOUT_SECONDS` 是 `inf`），所以这条
+            # 只在**会话层自己**给出 timeout 时触发（如两条腿都报 timeout）。**保留不删**：
+            # 删了会落到下面的「已取消捕获」分支，把会话层的超时误显示成用户主动取消。
+            # 秒数不给用户看（M41 S4）：超时没有惩罚（重点一次即可），
+            # 说清「下一步」比报「等了多久」有用。
             self.statusBar().showMessage("捕获超时：一直没有检测到手势，请重试", 5000)
             return
         if not result.get("kind") and (result.get("unavailable") or result.get("error")):

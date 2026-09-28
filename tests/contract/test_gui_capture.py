@@ -12,6 +12,7 @@ HybridCaptureSession 以假实现替换（不拉起真实 desktop_agent 子进�
 
 from __future__ import annotations
 
+import math
 import os
 import threading
 import time
@@ -83,6 +84,7 @@ class FakeHybridSession:
         self.started = False
         self.closed = False
         self.cancelled = False
+        self.pick_timeout = None  # pick 收到的等待上限（供 M41 S5「无上限」判据核对）
         self.result: dict | None = dict(_BROWSER_DESCRIPTOR)
         self._gate = threading.Event()
         FakeHybridSession.instances.append(self)
@@ -103,6 +105,7 @@ class FakeHybridSession:
         return False
 
     def pick(self, timeout_seconds=90):
+        self.pick_timeout = timeout_seconds  # 供「无上限」判据核对真正传下来的值
         self._gate.wait(timeout=10)
         # 读 `self.fail_with`（而非 type(self).fail_with）：用例按实例赋值，读类属性
         # 会拿到 None、让「本该抛异常」的路径悄悄走成成功捕获——那会弹真模态对话框，
@@ -630,6 +633,37 @@ def test_capture_float_never_shows_a_countdown(window, fake_capture):
     assert "timeout_seconds" not in inspect.signature(
         cf.CaptureFloatWindow.show_capture
     ).parameters
+
+    fake.result = None
+    _release_and_finish(fake, window)
+
+
+def test_capture_never_gives_up_on_its_own(window, fake_capture):
+    """GUI 不自动放弃捕获（M41 S5）：等多久由用户决定。
+
+    维护者 2026-09-28 拍板去掉 90 秒自动收场——它唯一的作用是「替用户放弃」，代价却是
+    把**认真挑元素超过 90 秒**的用户已经挑好的元素静默丢掉（`pick` 返回 `{"timeout": True}`，
+    没有 descriptor，状态栏只说一句「请重试」）。收场出口本就完备：捕获到结果 / 两条腿都
+    出局（`_exhausted` **立即**收场，不等 deadline）/ 用户取消（浮窗按钮 · 再点捕获 · Esc）。
+
+    判据钉**三处**：常量本身、构造会话时传下去的值、`pick` 实际收到的值。只钉常量会漏掉
+    「常量是 inf 但没传下去」这一类（本仓反复踩到「纯函数/常量正确 ≠ 真的用上了」）。
+    """
+    from rpa_core.gui import app as gui_app
+
+    assert math.isinf(gui_app.CAPTURE_TIMEOUT_SECONDS), (
+        "捕获等待必须无上限（不再自动放弃）；若要改回有限值，先回答"
+        "「超时把用户已挑好的元素丢掉」怎么处理"
+    )
+    window._save_named_flow("cap3g")
+    window._capture_element()
+    fake = fake_capture.instances[-1]
+    assert math.isinf(fake.kwargs.get("timeout_seconds", 0)), (
+        f"构造会话时必须把无上限传下去，实际：{fake.kwargs.get('timeout_seconds')!r}"
+    )
+    assert math.isinf(fake.pick_timeout), (
+        f"pick 必须用同一个无上限值，实际：{fake.pick_timeout!r}"
+    )
 
     fake.result = None
     _release_and_finish(fake, window)
