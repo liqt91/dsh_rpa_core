@@ -79,6 +79,25 @@ def test_list_runs_limit_and_empty_root(tmp_path):
     assert list_runs(tmp_path / "missing") == []
 
 
+def test_iter_run_summaries_plus_sort_runs_match_list_runs(tmp_path):
+    """分片产出 + 排序必须与 `list_runs` **逐字段**一致。
+
+    GUI 启动路径改用分片扫描（`iter_run_summaries` 每轮取一条），若两边口径漂了，
+    用户看到的运行历史就会与同步刷新/CLI 输出不一致——而且是**半天后才对不上**的那
+    种漂移。这里把「同源」钉成契约：`list_runs` 就是本生成器 + `sort_runs`。
+    """
+    from rpa_core.run_history import iter_run_summaries, sort_runs
+
+    _write_run(tmp_path, "old", ended="2026-09-20T09:00:00+00:00")
+    _write_run(tmp_path, "new", ended="2026-09-20T12:00:00+00:00", status="failed")
+    _write_run(tmp_path, "mid", ended="2026-09-20T10:30:00+00:00", checkpoint={"a": 1})
+    (tmp_path / "not-a-run").mkdir()  # 无证据文件：两边都不该收录
+
+    sliced = sort_runs(list(iter_run_summaries(tmp_path)))
+    assert sliced == list_runs(tmp_path, limit=0)
+    assert [item["runId"] for item in sliced] == ["new", "mid", "old"]
+
+
 def test_list_runs_tolerates_corrupt_and_ignores_non_runs(tmp_path):
     """损坏的 result.json 不炸整体（status=unknown）；非运行目录被忽略。"""
     _write_run(tmp_path, "good")

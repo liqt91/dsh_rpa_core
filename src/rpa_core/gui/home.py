@@ -12,10 +12,12 @@
 
 from __future__ import annotations
 
+import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
@@ -35,7 +37,12 @@ from PySide6.QtWidgets import (
 
 from rpa_core.devserver.store import WorkflowDirStore
 from rpa_core.gui.command_matrix import CommandMatrixPanel
-from rpa_core.run_history import list_runs, purge_runs
+from rpa_core.run_history import iter_run_summaries, list_runs, purge_runs, sort_runs
+
+# 分片扫描的单轮预算（秒）。整段扫 `run_artifacts` 在本机 157 条记录时约 93 ms（冷盘更久），
+# 一次性压在 `show()` 之后的那一轮里，用户的第一下点击就会被排在后面（三臂实测被推迟
+# 202 ms）。分片后每轮只处理到预算用完为止，事件循环在两轮之间照常派发输入事件。
+RUN_SCAN_SLICE_SECONDS = 0.006
 
 _STATUS_LABELS = {
     "succeeded": "成功",
@@ -73,6 +80,13 @@ class HomeWindow(QMainWindow):
         self._open_editor_hook = open_editor
         self._flows: list[dict[str, Any]] = []
         self._runs: list[dict[str, Any]] = []
+        # 分片扫描状态（start_refresh 用）：迭代器 + 已收摘要 + 驱动定时器
+        self._scan_iter = None
+        self._scan_buffer: list[dict[str, Any]] = []
+        self._scan_timer: QTimer | None = None
+        self._scanning = False
+        # 单轮预算可注入，便于门禁用「预算=0 ⇒ 每轮恰好 1 条」钉住分片语义
+        self.scan_slice_seconds = RUN_SCAN_SLICE_SECONDS
         # 运行入口（M27 S4）：工作台只发起 + 看状态，控制权在编辑器（ADR 0017 决策 3）
         self._run_manager: Any | None = None
         self._run_timer: Any | None = None
@@ -226,7 +240,11 @@ class HomeWindow(QMainWindow):
         `runs` 非空时**直接复用**，不再扫一遍 `run_artifacts`：两个页签读的是同一份
         运行记录，此前各扫一次（每次全量读 150+ 个 `result.json`），是启动路径上最重
         的一笔重复开销。
+
+        这是**同步**版本（一次占满当前这一轮事件循环）；启动路径用分片的
+        `start_refresh()`，见其注释。进行中的分片扫描会被这里取代。
         """
+        self._abort_run_scan()
         if runs is None:
             runs = list_runs(self._artifacts_root(), limit=0)
         latest: dict[str, dict[str, Any]] = {}
@@ -235,7 +253,65 @@ class HomeWindow(QMainWindow):
             if workflow_id and workflow_id not in latest:
                 latest[workflow_id] = run  # list_runs 已按时间倒序，首次即最新
 
-        self._flows = []
+        self._flows = self._collect_flows(latest)
+        self._render()
+        self.refresh_history(runs)
+
+    # ---- 分片刷新（启动路径，M40） -----------------------------------------
+    def start_refresh(self) -> None:
+        """窗口显示后的**分片**刷新：先立刻填流程库，再把运行历史分多轮扫完。
+
+        为什么不是一句 `refresh_flows()`：整段扫描（本机 157 条 ≈ 93 ms，冷盘更久）
+        占满调用它的那一轮事件循环，用户在这期间的第一下点击要排队等它跑完——三臂
+        探针实测「本该 show+60 ms 受理的第一下点页签，实际 262 ms 才轮到」（推迟
+        202 ms）。分片后每轮只占 `scan_slice_seconds`，输入在两轮之间照常被派发。
+
+        扫描未完成期间运行相关列显示 `…` 而不是「未运行」——「还没读到」与「确实没有
+        运行记录」是两件事，把前者显示成后者就是静默错误。
+        """
+        self._abort_run_scan()
+        self._scanning = True
+        self._flows = self._collect_flows(latest={})
+        self._render()
+        self._render_runs()
+        self._scan_iter = iter_run_summaries(self._artifacts_root())
+        self._arm_scan_timer()
+
+    def _arm_scan_timer(self) -> None:
+        if self._scan_timer is None:
+            timer = QTimer(self)
+            timer.setInterval(0)  # 零延时：两轮之间让事件循环派发输入与重绘
+            timer.timeout.connect(self._step_run_scan)
+            self._scan_timer = timer
+        self._scan_timer.start()
+
+    def _step_run_scan(self) -> None:
+        """推进一片扫描；预算用尽就返回，定时器留到下一轮继续（**每轮至少推进一条**）。"""
+        if self._scan_iter is None:
+            return
+        deadline = time.perf_counter() + self.scan_slice_seconds
+        while True:
+            try:
+                self._scan_buffer.append(next(self._scan_iter))
+            except StopIteration:
+                runs = sort_runs(self._scan_buffer)
+                self._abort_run_scan()
+                self.refresh_flows(runs)
+                return
+            if time.perf_counter() >= deadline:
+                return
+
+    def _abort_run_scan(self) -> None:
+        """停掉进行中的分片扫描（同步刷新取代它，避免旧扫描后到覆盖新结果）。"""
+        if self._scan_timer is not None:
+            self._scan_timer.stop()
+        self._scan_iter = None
+        self._scan_buffer = []
+        self._scanning = False
+
+    def _collect_flows(self, latest: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
+        """流程库 → 表格行数据；`latest` 给出每个流程最近一次运行（缺省表示尚未读到）。"""
+        flows: list[dict[str, Any]] = []
         for name in self._store.list():
             try:
                 document = self._store.read(name)
@@ -243,7 +319,7 @@ class HomeWindow(QMainWindow):
                 continue
             flow_id = document.get("id") or name
             run = latest.get(flow_id) or {}
-            self._flows.append(
+            flows.append(
                 {
                     "name": name,
                     "workflowId": flow_id,
@@ -253,11 +329,10 @@ class HomeWindow(QMainWindow):
                     "mtime": self._mtime(name),
                 }
             )
-        self._flows.sort(
+        flows.sort(
             key=lambda item: (item["lastRunAt"] or "", item["mtime"] or 0), reverse=True
         )
-        self._render()
-        self.refresh_history(runs)
+        return flows
 
     def _element_count(self, name: str) -> int:
         elements_dir = self._store.root / name / "elements"
@@ -278,10 +353,9 @@ class HomeWindow(QMainWindow):
         try:
             self.table.setRowCount(len(self._flows))
             for row, flow in enumerate(self._flows):
-                status = flow.get("status")
                 values = [
                     flow["name"],
-                    _STATUS_LABELS.get(status, "未运行" if not status else str(status)),
+                    self._status_text(flow.get("status")),
                     self._format_time(flow.get("lastRunAt")),
                     str(flow.get("elements") or 0),
                     self._format_time_from_epoch(flow.get("mtime")),
@@ -290,18 +364,30 @@ class HomeWindow(QMainWindow):
                     self.table.setItem(row, column, QTableWidgetItem(value))
         finally:
             self.table.setUpdatesEnabled(True)
-        if self._flows:
+        if self._scanning:
+            self.hint.setText(f"共 {len(self._flows)} 个流程；正在读取运行历史…")
+        elif self._flows:
             self.hint.setText(f"共 {len(self._flows)} 个流程；双击打开编辑器。")
         else:
             self.hint.setText(
                 f"流程库还是空的（{self._store.root}）；点「新建流程」创建第一个流程。"
             )
 
+    def _status_text(self, status: Any) -> str:
+        """流程「最近运行」列文案。分片扫描未完成时是 `…`——「还没读到」不等于「未运行」。"""
+        if status:
+            return _STATUS_LABELS.get(status, str(status))
+        return "…" if self._scanning else "未运行"
+
     def refresh_history(self, runs: list[dict[str, Any]] | None = None) -> None:
         """重扫运行历史（全局）并刷新流程筛选下拉（保留当前选择）。
 
         `runs` 非空时复用调用方已扫到的记录（见 `refresh_flows`）。
+
+        同样要取代进行中的分片扫描：历史页签的「刷新」也是同步路径，若不取代，先前那次
+        分片扫描收尾时会用**更早**的一份结果覆盖用户刚刷出来的（同类静默覆盖，另一条入口）。
         """
+        self._abort_run_scan()
         self._runs = list_runs(self._artifacts_root(), limit=0) if runs is None else runs
         current = self.history_filter.currentData() if self.history_filter.count() else None
         self.history_filter.blockSignals(True)
@@ -350,7 +436,11 @@ class HomeWindow(QMainWindow):
                 f"共 {len(runs)} 条运行记录；双击在编辑器里打开该流程并查看时间线。"
             )
         else:
-            self.history_hint.setText("暂无运行记录（运行一次流程后会出现在这里）。")
+            self.history_hint.setText(
+                "正在读取运行历史…"
+                if self._scanning
+                else "暂无运行记录（运行一次流程后会出现在这里）。"
+            )
 
     @staticmethod
     def _format_time(value) -> str:
@@ -738,6 +828,8 @@ class HomeWindow(QMainWindow):
 
     def closeEvent(self, event) -> None:  # noqa: N802 (Qt naming)
         self._shutdown_run_manager()
+        # 分片扫描随窗口关闭停止：关窗后没人看这些数据，不必再占主线程
+        self._abort_run_scan()
         # 指令测试页签可能正跑着矩阵子进程：不 kill 会留下一个还在跑的孤儿 Python
         self.matrix_panel.shutdown()
         super().closeEvent(event)

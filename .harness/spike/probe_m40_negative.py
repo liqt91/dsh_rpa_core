@@ -1,6 +1,6 @@
 """M40 负向验证探针：逐处注入、确认对应判据**真的红**、再逐字节还原。
 
-判据必须能失败才叫判据。这里针对 M40 的 8 处新增/修改判据，一路注入破坏，
+判据必须能失败才叫判据。这里针对 M40 的 15 处新增/修改判据，一路注入破坏，
 跑**指定**的用例（不是整个文件），要求「精确命中」而不是「顺带崩一堆」。
 
 三条防止「假绿灯机」的设计（本片真吃过亏，见下）：
@@ -13,27 +13,38 @@
 3. **超时按挂住处理**：判据被破坏后若走进真模态对话框就会永久阻塞（offscreen），
    那既不是「红」也不是「绿」，必须单独报出来修判据而不是硬等 600 秒。
 
-还原安全网：注入前把原文另存到系统临时目录（``<tmp>/rpa_core_m40_originals/``，**不往仓库里塞源码副本**），
-并注册 atexit 还原——探针被**硬杀**（Stop-Process）时 finally 不会执行，靠这两条兜底。
+还原安全网：注入时在改动处**留一个哨兵**（``# [M40-NEGATIVE-INJECTED] idx=N``），起手先
+按哨兵自愈——文件里带哨兵就按记录的 (原文, 注入后) 对反推还原。
+
+上一版按「备份目录里有这个文件」还原，**真出过事故**（2026-09-28）：备份是上一轮留下的，
+于是把这一轮已经改好的 `app.py` / `home.py` 盖回了旧版本，本轮改动全丢。判据是「这份文件
+此刻是不是注入态」，只有哨兵能回答；「备份目录里有没有它」回答的是另一件事。
 
 跑法：``uv run python .harness/spike/probe_m40_negative.py``
-退出码 0 = 8 处全部「对照绿 → 注入精确红 → 逐字节还原」。
+退出码 0 = 15 处全部「对照绿 → 注入精确红 → 逐字节还原」。
+
+两条**注入自身**的坑（都真吃过，已加前置检查兜住）：
+
+- **锚点别取行首前缀**：注入串要与哨兵拼接，若 `new` 不以换行结尾，拼接会把**原行的剩余
+  部分**顶到下一行，产出一个语法坏掉的注入（#15 的 `new` 只取到 `self._runs = list_runs`，
+  后半截表达式被挤走）。现在起手就检查 `new.endswith("\\n")`，报 `[SETUP-FAIL]`。
+- **判据要看「中间态」**：#12 摘掉 `refresh_flows()` 入口的 `_abort_run_scan()` 后用例仍绿
+  ——因为 `refresh_flows()` 结尾无条件调 `refresh_history(runs)`，后者的 abort 顺手兜住了。
+  判据随之改为「取代必须发生在新的一次同步读**开始之前**」（spy 记下 `list_runs` 被调用时
+  旧分片是否已死），注入才精确变红。
 """
 
 from __future__ import annotations
 
-import atexit
 import hashlib
 import re
-import shutil
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-BACKUP_DIR = Path(tempfile.gettempdir()) / "rpa_core_m40_originals"
 REPORT = ROOT / "_m40_negative_report.txt"
+_SENTINEL = "# [M40-NEGATIVE-INJECTED]"
 
 # (文件, 原文, 注入后, 期望变红的 nodeid, 说明)
 #
@@ -115,6 +126,58 @@ INJECTIONS: list[tuple[str, str, str, str, str]] = [
         "tests/contract/test_gui_home.py::test_home_refresh_scans_artifacts_once",
         "两页签各扫一遍 → 启动路径重复全量读 result.json",
     ),
+    # ---- 第二轮（同日追加报障：第一次点页签/第一次开元素库卡） ---------------
+    (
+        "src/rpa_core/run_history.py",
+        "    return sorted(runs, key=sort_key, reverse=True)\n",
+        "    return sorted(runs, key=sort_key)\n",
+        "tests/unit/test_run_history.py::test_iter_run_summaries_plus_sort_runs_match_list_runs",
+        "分片与同步的排序口径漂了 → 界面/CLI 看到的运行历史顺序不一致",
+    ),
+    (
+        "src/rpa_core/gui/home.py",
+        "            if time.perf_counter() >= deadline:\n                return\n",
+        "            if False:\n                return\n",
+        "tests/contract/test_gui_home.py::test_home_incremental_refresh_matches_sync_refresh",
+        "分片退化成一轮扫完 → 响应性修复名存实亡（结果还是对的，所以别的用例拦不住）",
+    ),
+    (
+        "src/rpa_core/gui/home.py",
+        '        return "…" if self._scanning else "未运行"\n',
+        '        return "未运行"\n',
+        "tests/contract/test_gui_home.py::test_home_scan_pending_does_not_claim_unrun",
+        "扫描未完成时写「未运行」→ 把「还没读到」当成「确实没有」",
+    ),
+    (
+        "src/rpa_core/gui/home.py",
+        "        self._abort_run_scan()\n        if runs is None:\n",
+        "        if runs is None:\n",
+        "tests/contract/test_gui_home.py::test_home_sync_refresh_supersedes_pending_scan",
+        "流程库「刷新」入口不取代分片（新同步读开始时旧分片还活着——判据必须看中间态，"
+        "只看「函数返回时已被取代」会被 refresh_history 的兜底掩盖）",
+    ),
+    (
+        "src/rpa_core/gui/app.py",
+        "QTimer.singleShot(0, window.start_refresh)",
+        "QTimer.singleShot(0, window.refresh_flows)",
+        "tests/contract/test_gui_home.py::test_run_gui_wires_sliced_refresh_on_workbench",
+        "接线回退到同步版 → 分片实现了但启动路径没用上",
+    ),
+    (
+        "src/rpa_core/gui/app.py",
+        "        QTimer.singleShot(0, self._prewarm_elements_dock)\n",
+        "",
+        "tests/contract/test_gui_panels.py::test_editor_show_prewarms_elements_dock_hidden",
+        "首显不预热 → 首次点元素库的那 65 ms 还是用户自己付",
+    ),
+    (
+        "src/rpa_core/gui/home.py",
+        "        self._abort_run_scan()\n"
+        "        self._runs = list_runs(self._artifacts_root(), limit=0) if runs is None else runs\n",
+        "        self._runs = list_runs(self._artifacts_root(), limit=0) if runs is None else runs\n",
+        "tests/contract/test_gui_home.py::test_home_sync_refresh_supersedes_pending_scan",
+        "历史页签「刷新」不取代分片扫描 → 同类静默覆盖的另一条入口",
+    ),
 ]
 
 _FAILED_RE = re.compile(r"\b\d+ failed\b")
@@ -126,14 +189,44 @@ def _md5(path: Path) -> str:
     return hashlib.md5(path.read_bytes()).hexdigest()
 
 
-def _restore_tree() -> None:
-    """把备份目录里的原文全部写回（硬杀后的安全网）。"""
-    if not BACKUP_DIR.is_dir():
-        return
-    for backup in BACKUP_DIR.glob("*.py"):
-        target = ROOT / backup.name.replace("__", "/")
-        if target.exists() and target.read_bytes() != backup.read_bytes():
-            target.write_bytes(backup.read_bytes())
+def _injected_text(original: str, index: int, old: str, new: str) -> str:
+    """注入：替换锚点并在改动处留下可反推的哨兵。"""
+    return original.replace(old, new + f"{_SENTINEL} idx={index}\n", 1)
+
+
+def _anchor_ends_at_line_end(text: str, old: str) -> bool:
+    """锚点在文件里的末端是否正好落在行尾（其后是换行或文件结束）。
+
+    哨兵拼在替换串**后面**，所以锚点末端的边界决定它会不会插进一行中间。纯删除型
+    （``new == ""``）与整行型（锚点自带换行）天然满足；「从一行中间切一刀」才踩坑。
+    """
+    pos = text.find(old)
+    if pos < 0:
+        return False
+    end = pos + len(old)
+    return end >= len(text) or text[end] == "\n"
+
+
+def _heal() -> list[str]:
+    """起手自愈：把「上次被硬杀」留在注入态的文件按哨兵还原，返回处理过的文件。
+
+    凭证是**文件里的哨兵**而不是「备份目录里有这个文件」——后者会把陈旧备份盖到
+    新源码上（本文件头记录的那次事故）。
+    """
+    healed: list[str] = []
+    for index, (path_text, old, new, _nodeid, _note) in enumerate(INJECTIONS):
+        path = ROOT / path_text
+        if not path.is_file():
+            continue
+        text = path.read_text(encoding="utf-8")
+        marker = f"{_SENTINEL} idx={index}\n"
+        injected = new + marker
+        if injected not in text:
+            continue
+        recovered = text.replace(injected, old, 1)
+        path.write_text(recovered, encoding="utf-8", newline="\n")
+        healed.append(f"{path_text} (idx={index}, 锚点已复原: {old in recovered})")
+    return healed
 
 
 def _run(nodeid: str) -> tuple[int, str, bool]:
@@ -157,23 +250,34 @@ def main() -> int:
     lines: list[str] = []
     failures: list[str] = []
 
-    # 起手先做一次「上次被硬杀」的自愈
-    _restore_tree()
-    BACKUP_DIR.mkdir(parents=True, exist_ok=True)
-
-    # 备份（每次运行覆盖，代表「本次认为的原文」）
-    for path_text, *_ in INJECTIONS:
-        path = ROOT / path_text
-        shutil.copyfile(path, BACKUP_DIR / path_text.replace("/", "__"))
-    atexit.register(_restore_tree)
+    # 起手先做一次「上次被硬杀」的自愈（只看哨兵，不碰干净文件）
+    healed = _heal()
+    if healed:
+        lines.append("[HEALED] 上次留下注入态，已按哨兵还原还原：" + "；".join(healed))
+        lines.append("")
 
     # 起手前置检查：注入锚点必须唯一；缺失说明文件已经被注入过或已被重构
-    for path_text, old, _new, _nodeid, note in INJECTIONS:
+    for path_text, old, new, _nodeid, note in INJECTIONS:
         path = ROOT / path_text
-        count = path.read_text(encoding="utf-8").count(old)
+        text = path.read_text(encoding="utf-8")
+        count = text.count(old)
         if count != 1:
             msg = f"[SETUP-FAIL] {path_text}: 注入锚点出现 {count} 次（应为 1）— {note}"
             lines.append(msg)
+            failures.append(path_text)
+        if new and not new.endswith("\n") and not _anchor_ends_at_line_end(text, old):
+            # 哨兵必须**独占一行**：找不到行尾的锚点被替换后，拼接会把原行剩余部分挤到下一行，
+            # 产出一个语法坏掉的注入。本轮 #15 正是如此（`new` 只取到 `self._runs = list_runs`，
+            # 后半截 `(...) if runs is None else runs` 被顶到下一行）——SYNTAX-FAIL 抓到了，
+            # 但报错写着「验证没打到判据」，离现场很远。
+            # 判据是**锚点末端落在行尾**：删除型（`new == ""`）与行尾型（`old`/`new` 自带换行）
+            # 天然满足；只有「从行中间切一刀」才会踩到。
+            lines.append(
+                f"[SETUP-FAIL] {path_text}: 锚点末端不在行尾，哨兵会插进一行中间 — {note}"
+            )
+            failures.append(path_text)
+        if _SENTINEL in text:
+            lines.append(f"[SETUP-FAIL] {path_text}: 仍带注入哨兵（自愈没还原干净）")
             failures.append(path_text)
     if failures:
         lines.append("")
@@ -181,7 +285,7 @@ def main() -> int:
         _emit(lines)
         return 1
 
-    for path_text, old, new, nodeid, note in INJECTIONS:
+    for index, (path_text, old, new, nodeid, note) in enumerate(INJECTIONS):
         path = ROOT / path_text
         original = path.read_bytes()
         before = _md5(path)
@@ -202,7 +306,7 @@ def main() -> int:
 
         # ---- 2) 注入 ----
         text = original.decode("utf-8")
-        path.write_text(text.replace(old, new, 1), encoding="utf-8", newline="\n")
+        path.write_text(_injected_text(text, index, old, new), encoding="utf-8", newline="\n")
         syntax_ok = True
         try:
             compile(path.read_text(encoding="utf-8"), str(path), "exec")

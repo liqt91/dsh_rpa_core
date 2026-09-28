@@ -418,6 +418,8 @@ class MainWindow(QMainWindow):
         self._ext_badge_probe_running = False
         # 运行时悬浮窗（影刀式）：运行期间右下置顶，成功自动还原/失败停留
         self._run_float = None
+        # 元素库 dock 是否已预热（showEvent 里空闲建一次，见 _prewarm_elements_dock）
+        self._elements_prewarmed = False
         self._events_seen = 0
         self._cancel_requested = False
         self._pause_requested = False
@@ -619,6 +621,17 @@ class MainWindow(QMainWindow):
         scroll.setWidget(ParamForm(manifest.input_schema, {}, manifest=manifest))
         scroll.ensurePolished()
         scroll.deleteLater()
+
+    def _prewarm_elements_dock(self) -> None:
+        """预热元素库 dock：把「第一次点元素库卡一下」的一次性开销提前消化。
+
+        首开要付：惰性 import + `ElementPanel` 构造 + `addDockWidget` 触发整窗重排 +
+        首次绘制（本机实测整条路径 65 ms，其中二次开已缓存仍要 20 ms）；维护者读作
+        「第一次卡一下，关掉重开就好多了」。这里在窗口首次显示后的空闲时机先把它建好
+        （建好即 `hide()`），可见性与布局跟懒创建路径一致，`_toggle_elements_dock()`
+        的语义不变。由 `showEvent` 调度，工作台打开与 `--workflow` 直开两条入口都覆盖。
+        """
+        self._elements_dock()
 
     def _build_toolbar(self) -> None:
         """顶部工具栏：新建 / 打开 / 保存 / 删除节点。"""
@@ -3475,6 +3488,21 @@ class MainWindow(QMainWindow):
 
     # Qt 覆写要求保留驼峰方法名，故豁免 N802（行尾不能写中文括号，
     # 否则 ruff 会把说明当成 noqa code 列表的一部分而报 Invalid noqa directive）
+    def showEvent(self, event) -> None:  # noqa: N802
+        """首次显示：空闲时机预热元素库 dock（见 `_prewarm_elements_dock`）。
+
+        挂在这里而不是 `open_editor_window()`：工作台「打开」与 `--workflow` 直开两条
+        入口都走 showEvent，不必各自接线；也不用给 `open_editor_window` 的替身加方法。
+        """
+        super().showEvent(event)
+        if self._elements_prewarmed:
+            return
+        self._elements_prewarmed = True
+        # 零延时定时器而不是直接调：预热不该占「窗口刚出现」那一轮（那时用户正看界面）
+        from PySide6.QtCore import QTimer
+
+        QTimer.singleShot(0, self._prewarm_elements_dock)
+
     def closeEvent(self, event) -> None:  # noqa: N802
         """有未保存修改时询问：保存 / 不保存 / 取消。"""
         if not self._dirty:
@@ -4145,7 +4173,8 @@ def run_gui(
         # 提前消化首次复杂表单布局的一次性开销，避免用户第一次点节点时卡顿。
         QTimer.singleShot(0, window._prewarm_param_panel)
     else:
-        # 工作台：产物扫描推到窗口显示之后（见 HomeWindow.defer_refresh 的注释）。
-        # 同步扫 150+ 个 result.json 会让窗口迟迟不出现，且期间点页签毫无响应。
-        QTimer.singleShot(0, window.refresh_flows)
+        # 工作台：产物扫描推到窗口显示之后，并且**分片**跑（见 HomeWindow.start_refresh）。
+        # 整段同步扫 150+ 个 result.json 时窗口迟迟不出现，且 show() 之后紧接着跑完整
+        # 段会把用户的第一下点击排在扫描后面（三臂实测推迟 202 ms）。
+        QTimer.singleShot(0, window.start_refresh)
     return app.exec()

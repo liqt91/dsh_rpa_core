@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Iterator
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -103,12 +104,20 @@ def _summarize(run_dir: Path) -> dict[str, Any]:
     return summary
 
 
-def list_runs(artifacts_root: Path, *, limit: int = DEFAULT_LIMIT) -> list[dict[str, Any]]:
-    """列出历史运行摘要，按时间倒序（结束时间优先，缺省回退目录 mtime）。
+def iter_run_summaries(artifacts_root: Path) -> Iterator[dict[str, Any]]:
+    """**逐条**产出运行摘要（不排序），供需要把扫描分片的调用方使用。
 
-    `limit<=0` 表示不限制（调用方自行控制展示）。
+    与 `list_runs` 同源（`list_runs` = 本生成器 + `sort_runs`），两边结果必然一致
+    （有契约测试钉住）。分片的意义是**把单轮主线程占用切成小片**：整段扫描在本机
+    157 条记录时约 93 ms（冷盘更久），整段压在 `show()` 之后会让用户的第一下点击
+    排队等它跑完（M40 实测被推迟 124 ms）。
     """
-    runs = [_summarize(run_dir) for run_dir in _run_dirs(artifacts_root)]
+    for run_dir in _run_dirs(artifacts_root):
+        yield _summarize(run_dir)
+
+
+def sort_runs(runs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """按时间倒序（结束时间优先，缺省回退目录 mtime）。"""
 
     def sort_key(item: dict[str, Any]) -> float:
         ended = item.get("endedAt")
@@ -119,7 +128,15 @@ def list_runs(artifacts_root: Path, *, limit: int = DEFAULT_LIMIT) -> list[dict[
                 pass
         return float(item.get("mtime") or 0.0)
 
-    runs.sort(key=sort_key, reverse=True)
+    return sorted(runs, key=sort_key, reverse=True)
+
+
+def list_runs(artifacts_root: Path, *, limit: int = DEFAULT_LIMIT) -> list[dict[str, Any]]:
+    """列出历史运行摘要，按时间倒序（结束时间优先，缺省回退目录 mtime）。
+
+    `limit<=0` 表示不限制（调用方自行控制展示）。
+    """
+    runs = sort_runs(list(iter_run_summaries(artifacts_root)))
     if limit and limit > 0:
         return runs[:limit]
     return runs

@@ -1,10 +1,17 @@
 # M40 GUI 响应性：启动阻塞 / 切页无响应 / 捕获静默等待
 
-状态：`done`
+状态：`active`
+
+（第二轮，2026-09-28 追加报障；见 §10。第一轮曾判 `done` 并提交，第二轮实测发现其修复把阻塞
+**搬了位置**而非消除，故重开。）
 
 由来：维护者 2026-09-28 报障三句——「冷启动很慢，启动后，内部切换标签也很慢，捕获元素第一次
 点击没有红框出现，但再次点击提示已有捕获任务进行中」。本任务单把三句拆成**可归因的三条**，
 每一条都有一手实测或现场日志支撑，不做推测性归因。
+
+第二轮（同日）：维护者指认「内部标签」就是工作台三页签，并追加「第一次点击很明显 / 第一次开
+元素库会卡 / 重启再测就不卡了」。实测发现第一轮的修复把阻塞**搬了位置**而非消除，故重开
+（§10）。
 
 ## 0. 一句话结论
 
@@ -146,10 +153,14 @@ host 侧 `ext_bridge` 对非 `result` 消息一律 `_broadcast`（`capture_armed
 - 残留 `rpa-core-ext-host.exe` 占着端点（M34 的空闲自杀阈值 30 分钟）：ack 判活后**用户体验已
   不受影响**（会被判死并提示），进程侧靠既有 M34 机制收敛 → 只登记。
 
-## 5. 待维护者澄清
+## 5. 待维护者澄清 → 已结案（2026-09-28 第二轮）
 
-- 「内部切换标签」若指的不是工作台三个页签（实测 5–15 ms），请指认具体界面（编辑器内？dock？
-  浏览器标签？）——本片按「启动期主线程阻塞」处理，未擅自改 QTabWidget。
+- 问的是：「内部切换标签」若指的不是工作台三个页签（实测 5–15 ms），请指认具体界面。
+- **维护者答**：就是内部标签切换，第一次点击很明显；另外点元素库第一次也会卡一下、关掉重开就
+  好多了；且重启 `uv run rpa-core gui` 再测就不卡。
+- 代码侧复核：`grep -rn QTabWidget src/` **全仓只有一处** → `HomeWindow` 三页签，确认所指。
+  「元素库」不在工作台，是**编辑器**（`MainWindow`）的 dock（入口：工具栏 action「元素库」/ 切 G）。
+- 该报障的根因与修法见 §10（**不是** QTabWidget 本身）。
 
 ## 6. 验收结果（一手实测）
 
@@ -161,7 +172,7 @@ host 侧 `ext_bridge` 对非 `result` 消息一律 `_broadcast`（`capture_armed
 | 负向验证 | **8 处注入全部「对照绿 → 注入精确红 → 逐字节还原」**（见 §7） |
 | FULL GATE | `check_all.py` 见 §9 |
 
-## 7. 负向验证（8 处，探针 `.harness/spike/probe_m40_negative.py`）
+## 7. 负向验证（15 处，探针 `.harness/spike/probe_m40_negative.py`）
 
 探针有四条**防假绿灯**设计，缺一条就可能是假的：
 
@@ -183,6 +194,34 @@ host 侧 `ext_bridge` 对非 `result` 消息一律 `_broadcast`（`capture_armed
 | 6 | `app.py` 不拦迟到结果 | `test_capture_late_result_from_replaced_session_is_ignored` |
 | 7 | `home.py` `defer_refresh` 失效（恒同步扫） | `test_home_defer_refresh_skips_artifact_scan_at_construction` |
 | 8 | `home.py` 两页签各扫一遍 | `test_home_refresh_scans_artifacts_once` |
+
+第二轮新增（#9–#15）：
+
+| # | 注入（破坏点） | 期望变红的 nodeid |
+|---|---|---|
+| 9 | `run_history.py` `sort_runs` 去掉 `reverse=True` | `test_iter_run_summaries_plus_sort_runs_match_list_runs` |
+| 10 | `home.py` 分片预算失效（一轮扫完） | `test_home_incremental_refresh_matches_sync_refresh` |
+| 11 | `home.py` 待读占位符改回「未运行」 | `test_home_scan_pending_does_not_claim_unrun` |
+| 12 | `home.py` 同步刷新不取代分片扫描（`refresh_flows`） | `test_home_sync_refresh_supersedes_pending_scan` |
+| 13 | `app.py` 接线回退到同步版 `refresh_flows` | `test_run_gui_wires_sliced_refresh_on_workbench` |
+| 14 | `app.py` 首显不预热元素库 dock | `test_editor_show_prewarms_elements_dock_hidden` |
+| 15 | `home.py` 历史页签「刷新」不取代分片扫描（`refresh_history`） | `test_home_sync_refresh_supersedes_pending_scan` |
+
+> #12 与 #15 打在**同一段逻辑的两条入口**上、期望**同一个** nodeid：该用例的循环体已
+> 覆盖两条同步入口，任一条丢掉 `_abort_run_scan()` 都应让它红。#15 是第二轮收尾时补的
+> ——最初只改了 `refresh_flows`，「历史」页签的「刷新」按钮是同类的第二条静默覆盖入口
+> （旧分片收尾会用更早的结果盖掉用户刚刷出来的）。
+
+### 7.3 事故与加固：陈旧备份把新源码盖回去了（第二轮）
+
+探针第一版的「起手自愈」是按**备份目录里有这个文件**还原，于是第二轮跑的时候，它把**上一轮留下的
+陈旧备份**盖到了这一轮已经改好的源码上——`app.py` / `home.py` 被退回 HEAD 状态，本轮改动全丢
+（靠会话里逐条 Edit 的原文重放恢复，`ast.parse` ＋ grep ＋ ruff 复核）。
+
+反思：还原的判据必须是「**这份文件此刻是不是注入态**」，而「备份目录里有没有它」回答的是另一个问题。
+改法：注入时在改动处留哨兵（`# [M40-NEGATIVE-INJECTED] idx=N`），自愈只认哨兵、按记录的
+(原文, 注入后) 对反推还原——干净源码永远不会被误还原。**该自愈机制本身也做了实测**：手动注入
+（模拟被硬杀）→ 确认哨兵在场、锚点已破坏 → `_heal()` → md5 逐字节一致。
 
 ### 7.1 过程中抓到的两处「我自己的判据缺陷」（本片最有价值的产出）
 
@@ -206,6 +245,26 @@ host 侧 `ext_bridge` 对非 `result` 消息一律 `_broadcast`（`capture_armed
 记录的原文恢复并 `ast.parse` + `grep` 复核；探针据此加了三道安全网：**起手锚点自检**（锚点不唯一即
 中止）、**备份到系统临时目录**、**atexit 还原**。
 
+### 7.4 收尾重跑抓到的两处「注入本身」的缺陷（第二轮）
+
+把注入表从 14 扩到 15（补 `refresh_history` 那条入口）后重跑，**没全绿**——两处问题都在注入侧，
+不在实现侧。两条都已加进探针的前置检查。
+
+- **判据只看了终态，被兜底掩盖（#12 假绿灯）**：摘掉 `refresh_flows()` 入口的 `_abort_run_scan()`
+  后用例照样绿。根因：`refresh_flows()` 结尾**无条件**调 `refresh_history(runs)`，而 `refresh_history`
+  自己也有 abort——于是「函数返回时扫描已停」这个终态被别处兜住了。这跟 M38 S1.2 那条
+  「收尾还会兜底做一次，所以必须有中间态断言」是同一个坑，只是这次由**调用链**而不是 `_on_finished` 兜底。
+  → 判据改为**中间态**：用 spy 包住 `list_runs`，记下「这一次同步读**开始时**旧分片是否已经死了」；
+  取代必须发生在新的一次同步读**之前**，`assert reads[mark:]` 全为真。改后 #12 精确变红。
+- **锚点从一行中间切一刀 → 注入后语法不合法（#15 `SYNTAX-FAIL`）**：`old` 只取到
+  `self._runs = list_runs`，哨兵拼在替换串后面，于是原行剩余部分
+  （`(self._artifacts_root(), limit=0) if runs is None else runs`）被顶到下一行、缩进全乱。
+  探针报了 `[SYNTAX-FAIL]`，但文案写着「验证没打到判据」，离现场很远。
+  → 锚点整行/整块地取（`new` 自带换行）；并加前置检查 `_anchor_ends_at_line_end`——锚点末端必须落在
+  行尾（纯删除型 `new == ""` 与整行型天然满足，只有「中间切一刀」会踩）。第一次写检查时误把
+  「`new` 不以换行结尾」当判据，把 7 处合法的删除型/行尾型注入一起判失败，当场改成边界判据。
+
+
 ## 8. 落地清单
 
 | 文件 | 改动 |
@@ -219,9 +278,120 @@ host 侧 `ext_bridge` 对非 `result` 消息一律 `_broadcast`（`capture_armed
 | `tests/contract/test_capture_hybrid.py` | +2（`isolated_endpoints` fixture 隔离真实端点前缀） |
 | `tests/contract/test_gui_home.py` | +2（`list_runs` 计数桩） |
 | `.harness/spike/probe_gui_startup_real.py` 等 3 个探针 | 启动/切页分段实测（真机，非 offscreen） |
-| `.harness/spike/probe_m40_negative.py` | 8 处注入的负向验证探针 |
+| `.harness/spike/probe_m40_negative.py` | 15 处注入的负向验证探针（哨兵式自愈） |
+
+第二轮新增/改动：
+
+| 文件 | 改动 |
+|---|---|
+| `src/rpa_core/run_history.py` | `iter_run_summaries()` / `sort_runs()` 抽出，`list_runs` 改为同源组合 |
+| `src/rpa_core/gui/home.py` | `start_refresh()` 分片刷新 ＋ `_arm_scan_timer` / `_step_run_scan` / `_abort_run_scan` / `_collect_flows` / `_status_text`；`refresh_flows()` 入口取代进行中的分片；待读期间显示 `…`；`closeEvent` 停表 |
+| `src/rpa_core/gui/app.py` | `MainWindow.showEvent` 首显预热元素库 dock（`_prewarm_elements_dock` ＋ `_elements_prewarmed`）；`run_gui` 工作台分支改调 `start_refresh` |
+| `tests/contract/test_gui_home.py` | +4（分片结果一致 / 待读占位 / 同步取代分片 / 启动路径接线） |
+| `tests/contract/test_gui_panels.py` | +1（预热建好即隐藏、不改变开关语义） |
+| `tests/unit/test_run_history.py` | +1（分片与同步同源、逐字段一致） |
+| `.harness/spike/probe_m40_first_click.py` | **新建**：三臂 A/B 首点延迟探针（`none`/`block`/`slice`） |
 
 ## 9. FULL GATE
 
-见 `.harness/PROGRESS.md` 的 M40 条目（本轮实测数字以该条为准）。
+第二轮收尾复跑（2026-09-28，改动 `home.py::refresh_history` + 判据强化之后）：**`check_all.py` exit 0 /
+末行 `FULL GATE PASSED`**。
+
+| 检查 | 结果 |
+|---|---|
+| pytest | `1174 passed, 21 skipped, 2 xfailed in 240.29s` |
+| ruff | `All checks passed!` |
+| architecture | `ARCHITECTURE CHECK PASSED (65 python files, 86 manifests)` |
+| tasks | `TASK CHECK PASSED (60 features, 1 active task)` |
+| param consumption | `PARAM CONSUMPTION CHECK PASSED (77 checked / 3 exempt / 0 skipped = 80 条命令)` |
+| error contract | `ERROR CONTRACT CHECK PASSED (77 checked / 3 exempt / 0 skipped = 80 条命令)` |
+| command matrix | `COMMAND MATRIX CHECK PASSED（86 条命令；死参数台账 0 项，实现缺口 0 条，l2 块 109 个）` |
+
+> 第一轮的实测数字见 `.harness/PROGRESS.md` 的 M40 条目（历史条目刻意保留原值）。
+
+## 10. 第二轮（2026-09-28 追加报障）：第一次点击明显 / 第一次开元素库卡
+
+维护者原话：
+
+```text
+1，内部标签切换，第一次点击的时候很明显。以及点击元素库时，第一次也会卡一下，关闭元素库重开
+就好多了。不过重新运行 uv run rpa-core gui，再测试就不卡了，不知道是否跟你的修复有关
+```
+
+### 10.1 归因：第一轮把阻塞**搬了位置**，没有消除
+
+三臂 A/B（`.harness/spike/probe_m40_first_click.py`；每臂**各自一个进程**，否则第二臂会吃到
+第一臂刚读热的文件缓存，比较就偏了）。判据用**用户体感口径**：一个本该在 `show()+T ms` 被受理的
+输入，实际什么时候才轮到；`none` 臂什么都不做，给出「窗口首帧」的地板价。
+
+| 臂 | 50 ms 该触发的输入 | 第一下**点页签**被推迟 | 运行历史填好 |
+|---|---|---|---|
+| `none`（地板） | 80.0 ms（+30.0） | −1.4 ms | 6.3 ms |
+| `block`（旧：整段 `refresh_flows`） | 285.8 ms（**+235.8**） | **+202.3 ms** | 264.4 ms |
+| `slice`（新：分片 `start_refresh`） | 100.2 ms（+50.2） | **+8.9 ms** | 301.7 ms |
+
+第一轮的修复（`defer_refresh` ＋ `show()` 后 `singleShot`）把扫描从「窗口出现**之前**」挪到了
+「窗口刚出现**之后**」：原来用户点不到（窗口还没出现，感觉是「启动慢」），现在窗口先出现、紧接着
+那一轮被占住，**阻塞正好压在用户第一下手的位置**。同一个阻塞，换了位置。
+
+四条候选机制在同一份数据里逐条排除：
+
+| 候选 | 实测 | 结论 |
+|---|---|---|
+| 惰性 import（`element_panel` / `capture` 边际成本） | 2.6 ms / 4.4 ms | 否 |
+| 页签首次布局＋绘制 | 0.1–3.0 ms（安静事件队列下） | 否 |
+| 冷磁盘读 | 进程内 `list_runs` 冷/热只差 1 ms（93.5 / 92.2） | 否 |
+| `show()` 之后的阻塞段 | 第一下点击被推迟 202 ms | **是** |
+
+### 10.2 「重新运行就不卡了」＝ OS 文件缓存（与第一轮修复无关）
+
+`list_runs` 在本机 157 条运行 / 464 个文件下：
+
+```text
+冷（进程内首读）: 400.2 ms | 文本读 314 次 / open 自耗时 274.9 ms
+热（进程内复用）: 128.2 ms | 文本读 314 次 / open 自耗时  52.1 ms
+```
+
+同一进程内的冷→热对（400.2 → 128.2）说明差异来自**文件读取**而非解析。第一轮修的是
+「阻塞放在哪一轮」，**没有减少读取量**，所以它与「重启就不卡」无关；后者是第二次启动时
+文件已在 OS 缓存里。（未取得管理员权限清空系统文件缓存，故冷盘数字只作为**量级**证据，不做
+稳定复现承诺。）
+
+### 10.3 修法
+
+1. `run_history.py`：把 `list_runs` 拆成**同源**两半——`iter_run_summaries()`（逐条产出、不排序）
+   ＋ `sort_runs()`；`list_runs = sort_runs(list(iter_run_summaries(...)))`。同源而不是各写一遍，
+   否则界面与 CLI 的运行历史顺序会慢慢漂开；契约用例钉住两边**逐字段一致**。
+2. `home.py::start_refresh()`：先**立刻**用流程库填表（本地读取，很便宜），再用零延时 `QTimer`
+   链分片扫运行历史，每轮预算 `RUN_SCAN_SLICE_SECONDS = 6 ms`（**每轮至少推进一条**，保证有界
+   推进，预算注入为 0 时退化成「每轮一条」——门禁据此钉住分片语义）。
+3. 扫描未完成期间运行列显示 `…`，提示「正在读取运行历史…」：**「还没读到」与「确实没有运行
+   记录」是两件事**；分片把这段时间拉长了（本机约 0.3 s），沿用旧文案就是把未知当已知。
+4. **两条同步入口都要取代进行中的分片**：`home.py::refresh_flows()`（流程库「刷新」）与
+   `home.py::refresh_history()`（历史页签「刷新」）入口都先 `_abort_run_scan()`。否则旧分片
+   收尾时用**更早**的一份结果覆盖刚刷出来的新结果（「点了刷新，数字变回旧的」——比慢更坏）。
+   两条入口是同一类静默覆盖，只改一条等于留一半；契约用例把两条**循环**跑（注入 #12/#15
+   分别打这两条）。
+5. `app.py::run_gui` 的工作台分支改调 `window.start_refresh`。
+6. 编辑器 `MainWindow.showEvent` 首次显示时空闲预热元素库 dock（`_prewarm_elements_dock`），
+   把首开开销从「用户第一次点元素库」挪到「编辑器刚打开」。实测 **首开 65.2 ms / 二次开
+   20.3 ms**（§1.3 那次量的 26.4/0.5 ms 是因为当时没打开流程、元素库读的是空集）。
+   挂 `showEvent` 而不是 `open_editor_window()`：工作台打开与 `--workflow` 直开两条入口都覆盖，
+   也不用给 `open_editor_window` 的测试替身加方法。
+
+### 10.4 验收结果（第二轮）
+
+| 口径 | 结果 |
+|---|---|
+| 三臂 A/B | 第一下点页签被推迟 **202.3 ms → 8.9 ms**（`none` 地板 −1.4 ms）；运行历史填好 264.4 → 301.7 ms（分片的代价：整体晚 ~37 ms 填满，换来输入不被推迟） |
+| 契约用例 | `test_gui_home.py` 13（+4：分片结果一致/待读占位/同步取代分片/接线）、`test_gui_panels.py` 末条 +1（预热建好即隐藏）、`tests/unit/test_run_history.py` +1（分片与同步同源） |
+| 负向验证 | 15 处注入（第二轮新增 7 处，见 §7）全部「对照绿 → 注入精确红 → 逐字节还原」；过程中两处**注入侧**缺陷（#12 假绿灯 / #15 锚点切断行）已修，见 §7.4 |
+| FULL GATE | `check_all.py` **exit 0 / `FULL GATE PASSED`**；`1174 passed / 21 skipped / 2 xfailed`（见 §9） |
+
+### 10.5 残留（登记，不修）
+
+- 页签**首帧本身**约 22.6 ms（`none` 臂的「切换本身」）：157 行 `QTableWidget` 的首次布局＋绘制，
+  不是本次报障的承重项（分片前它被 202 ms 的阻塞盖住了），未做手术。
+- 元素库**每次**打开仍有约 20 ms（dock 已缓存也要 relayout ＋ 重读元素列表）。
+- 探针事故与加固：见 §7.3。
 

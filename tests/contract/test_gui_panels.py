@@ -608,3 +608,29 @@ def test_element_dialog_tolerates_non_dict_selector(qapp):
     assert dialog.result() == QDialog.DialogCode.Accepted
     _, document = dialog.result_document()
     assert document["selector"] == {"css": "#a"}
+
+
+# ---- 元素库 dock 预热（M40 追加报障：第一次点元素库卡一下） --------------------
+def test_editor_show_prewarms_elements_dock_hidden(window, qapp):
+    """窗口首次显示后自动预热元素库 dock：建好但**保持隐藏**，开关语义不变。
+
+    维护者 2026-09-28 报障「点击元素库时第一次也会卡一下，关闭元素库重开就好多了」：
+    首开整条路径 65 ms（惰性 import + `ElementPanel` 构造 + `addDockWidget` 触发整窗
+    重排 + 首帧），dock 缓存后二次开 20 ms。预热把这笔一次性开销挪到编辑器刚打开的空闲
+    时机，跟 `_prewarm_param_panel` 同一思路。
+    """
+    assert getattr(window, "_elements_dock_widget", None) is None, (
+        "构造期不该已经建好 dock（否则预热无从谈「提前」）"
+    )
+
+    window.show()
+    qapp.processEvents()  # 让 showEvent 里排的零延时预热跑起来
+
+    dock = getattr(window, "_elements_dock_widget", None)
+    assert dock is not None, "窗口显示后应已预热元素库 dock"
+    # offscreen 下 isVisible() 恒 False（连该显示的也是），可见性要问 isVisibleTo
+    assert not dock.isVisibleTo(window), "预热必须保持隐藏，不能自己弹出来"
+
+    window._toggle_elements_dock()
+    assert dock.isVisibleTo(window), "预热不许改变 _toggle_elements_dock 的开关语义"
+    assert window._elements_dock() is dock, "预热过的 dock 要被复用，不是又建一个"
