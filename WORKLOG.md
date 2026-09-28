@@ -1,5 +1,13 @@
 # 工作日志
 
+## 2026-09-28
+
+- **M44「P1 一整片：捕获即编辑」落地并提交（`848d4e5`，19 文件 +1762/−220）**——对齐影刀元素编辑界面的第一步，不动执行器契约。
+  - **content.js**：`cssSelectorFor` 重构为 `pathFor(el)` 逐级片段（`selector.path` 祖先链随捕获回传，逐字节产出不变）；捕获时按住 Ctrl/⌘ 鼠标变蓝（`#2F6BFF` SVG 光标，松开/Esc/撤防/完成/接管僵尸实例全部还原）。
+  - **GUI**：编辑逻辑抽成 `ElementEditorForm`（确认框与元素库编辑器同一份实现，27 项既有判据零改动）；`ElementDialog` 内嵌编辑器（browser 勾候选提升 / desktop 勾 locator 字段，不再让用户看 JSON）；三出口 保存 / 保存并继续 / 重新捕获，后两者关框即重启捕获；Web 节点树按层级勾选拼回主 css（建树时按后缀反推勾选态，末级不可取消）。
+  - **判据与负向验证**：模型 path 校验 11 项、节点树 5 项、三出口 3 项、旧接口判据改写 9 条、node 门禁 lifecycle S11/S12 与 helpers +21 项；负向验证 10/10（对照绿 → 字节级注入 → 干净 `N failed` → md5 逐字节还原）。
+  - **门禁（如实记）**：pytest 1226 passed / 2 failed——红的两条 QProcess 用例归因钉死：宿主沙箱把 Qt CreateProcess 通道挡死（QProcess 起 `cmd.exe` 都 `FailedToStart` 立即失败，环境级回归，与仓库无关，不许换 subprocess 消红）；其余七组（ruff / architecture / tasks / param / error / matrix / 11 个 mjs）逐条取证全绿。环境恢复后补跑取 FULL GATE PASSED。
+
 ## 2026-09-22
 
 - **cua 评估 + computer use × RPA 结合策略（调研，未改码）**——产出两份新文档
