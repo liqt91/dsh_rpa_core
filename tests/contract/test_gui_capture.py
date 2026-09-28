@@ -591,3 +591,45 @@ def test_capture_float_avoidance_is_wired_into_the_capture_flow(window, fake_cap
     fake.result = None
     _release_and_finish(fake, window)
     assert window._capture_avoid_timer is None, "收尾要停表并清空避让计时器"
+
+
+def test_capture_float_never_shows_a_countdown(window, fake_capture):
+    """浮窗不显示倒计时（M41 S4）：上限是兜底，不是用户要管的时限。
+
+    判据打在**浮窗真实文案**上，而不是「`CaptureFloatWindow` 没有 `tick` 方法」——
+    形状断言换个方法名就绕过了。文案也不只扫构造那一刻：倒计时是**定时器周期性刷新**
+    的（500ms 节拍），所以先让节拍真的跑一轮再扫。
+    """
+    import inspect
+    import re
+
+    from PySide6.QtWidgets import QApplication, QLabel
+
+    from rpa_core.gui import capture_float as cf
+
+    window._save_named_flow("cap3f")
+    window._capture_element()
+    fake = fake_capture.instances[-1]
+    float_window = window._capture_float
+    assert float_window is not None
+    assert window._capture_timer is not None and window._capture_timer.isActive()
+
+    # 让 500ms 的状态节拍至少跑一轮：倒计时若被加回来，是由它周期刷新的
+    deadline = time.monotonic() + 0.7
+    while time.monotonic() < deadline:
+        QApplication.processEvents()
+        time.sleep(0.02)
+
+    texts = " | ".join(label.text() for label in float_window.findChildren(QLabel))
+    assert "剩余" not in texts, f"浮窗不该显示倒计时，实际文案：{texts}"
+    assert "倒计时" not in texts, f"浮窗不该显示倒计时，实际文案：{texts}"
+    # 更粗的形状：任何「N 秒」都不该出现在浮窗上（换个字面量也绕不过）
+    assert not re.search(r"\d+\s*秒", texts), f"浮窗不该出现秒数：{texts}"
+    # 缺口要清干净：不留「有方法/参数但没人用」的形状
+    assert not hasattr(cf.CaptureFloatWindow, "tick")
+    assert "timeout_seconds" not in inspect.signature(
+        cf.CaptureFloatWindow.show_capture
+    ).parameters
+
+    fake.result = None
+    _release_and_finish(fake, window)

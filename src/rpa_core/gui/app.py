@@ -358,7 +358,9 @@ class _CaptureBridge(QObject):
     finished = Signal(dict)
 
 
-# 捕获预算（秒）：无手势时的等待上限。会话层与浮窗倒计时共用同一数字，避免两处口径。
+# 捕获预算（秒）：无手势时的等待上限——**兜底**，不是给用户看的时限。
+# 唯一读者是会话层（`_capture_element` 传给 `pick` 的 deadline）；浮窗自 M41 S4 起
+# 不再显示倒计时，改这个数字不会再让第二处文案跟着漂。
 CAPTURE_TIMEOUT_SECONDS = 90.0
 
 
@@ -438,12 +440,10 @@ class MainWindow(QMainWindow):
         self._history_cursor_node: str | None = None
         # 进行中的元素捕获会话（混合捕获，窗口关闭时取消）
         self._capture_session = None
-        # 捕获悬浮窗与倒计时节拍（懒创建；捕获期间主窗最小化，浮窗是唯一反馈面）
+        # 捕获悬浮窗与状态节拍（懒创建；捕获期间主窗最小化，浮窗是唯一反馈面）
         self._capture_float = None
         self._capture_timer = None
         self._capture_avoid_timer = None
-        self._capture_started_at = 0.0
-        self._capture_budget = CAPTURE_TIMEOUT_SECONDS
         self.setWindowTitle("RPA Core 编辑器")
         self.resize(1280, 800)
 
@@ -2848,7 +2848,6 @@ class MainWindow(QMainWindow):
             gesture=gesture,
             web=web_text,
             desktop=desktop_text,
-            timeout_seconds=self._capture_budget,
             web_ok=web_ok,
             desktop_ok=desktop_ok,
         )
@@ -2857,9 +2856,9 @@ class MainWindow(QMainWindow):
         # 初始定位就带鼠标：若用户此刻已在右下角，浮窗直接去左上（M41 S3）
         window.avoid_cursor(QCursor.pos())
         present_window(window)  # 主窗刚最小化：浮窗必须自己浮到最前
-        self._capture_started_at = time.monotonic()
         from PySide6.QtCore import QTimer
 
+        # 状态节拍：腿状态实时刷新（M41 S4 起不再驱动倒计时——上限留在后台）
         timer = QTimer(self)
         timer.setInterval(500)
         timer.timeout.connect(self._tick_capture_float)
@@ -2874,12 +2873,10 @@ class MainWindow(QMainWindow):
         self._capture_avoid_timer = avoid_timer
 
     def _tick_capture_float(self) -> None:
-        """倒计时 + 腿状态实时刷新（扩展腿判死后用户要知道网页里为什么没红框）。"""
+        """腿状态实时刷新（扩展腿判死后用户要知道网页里为什么没红框）。"""
         window = self._capture_float
         if window is None:
             return
-        remaining = self._capture_budget - (time.monotonic() - self._capture_started_at)
-        window.tick(remaining)
         session = self._capture_session
         if session is None:
             return
@@ -2969,7 +2966,9 @@ class MainWindow(QMainWindow):
         # activateWindow() 会被 macOS 忽略（见 present_window 文档）。
         present_window(self)
         if result.get("timeout"):
-            self.statusBar().showMessage("捕获超时（90 秒无手势）", 5000)
+            # 秒数不给用户看（M41 S4）：超时没有惩罚（重点一次即可），说清「下一步」
+            # 比报「等了多久」有用。
+            self.statusBar().showMessage("捕获超时：一直没有检测到手势，请重试", 5000)
             return
         if not result.get("kind") and (result.get("unavailable") or result.get("error")):
             # 无可用腿：透出真实原因。早期实现落到下面的「已取消捕获」分支，

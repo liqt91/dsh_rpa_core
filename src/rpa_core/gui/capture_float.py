@@ -1,4 +1,4 @@
-"""捕获悬浮窗（M40）：捕获期间右下角置顶，显示通道状态 + 剩余时间 + 取消入口。
+"""捕获悬浮窗（M40）：捕获期间右下角置顶，显示通道状态 + 操作手势 + 取消入口。
 
 为什么需要它：捕获开始时主窗 `showMinimized()`（不遮挡目标窗口），而**状态栏是捕获
 唯一的反馈面**——窗口一最小化，用户就再也看不到「捕获中 / 失败 / 该怎么操作」。维护者
@@ -11,7 +11,12 @@
   鼠标靠近默认位置时自动翻到左上角躲开（见 ``capture_float_origin``）；
 - 两条腿的**真实状态**各自一行（网页通道 / 桌面通道），不合并成一句——用户要据此
   决定「该去网页里点还是去桌面应用上按 F9」；
-- 「取消捕获」按钮是捕获期唯一的确定性出口（不依赖任何一条腿响应键盘）。
+- 「取消捕获」按钮是捕获期唯一的确定性出口（不依赖任何一条腿响应键盘）；
+- **不显示倒计时**（M41 S4，维护者 2026-09-28）：「90 秒」是**兜底**（两条腿都卡死时
+  的唯一出路，见 `app.CAPTURE_TIMEOUT_SECONDS`），不是用户要管的时限——正常捕获几秒
+  就结束，这个数字从头到尾读不完，却把「等待上限」表达成「限时任务」（而超时**没有
+  任何惩罚**，重点一次即可）。用户需要的是「去哪操作」（两条腿的真实状态）与「怎么
+  退出」；上限本身留在后台。
 
 观感与 `run_float.py` 保持一致（无边框 + 自绘卡片底），两者是同一类「主窗收起时的
 在场小窗」。
@@ -74,7 +79,7 @@ def capture_float_origin(
 
 
 class CaptureFloatWindow(QWidget):
-    """捕获悬浮窗：标题 + 手势提示 + 两腿状态 + 倒计时 + 取消按钮。"""
+    """捕获悬浮窗：标题 + 手势提示 + 两腿状态 + 取消按钮。"""
 
     cancel_requested = Signal()
 
@@ -103,11 +108,8 @@ class CaptureFloatWindow(QWidget):
         self.dot_label.setStyleSheet(f"color: {_NEUTRAL};")
         self.title_label = QLabel("正在捕获元素…")
         self.title_label.setStyleSheet("font-weight: 600;")
-        self.time_label = QLabel("")
-        self.time_label.setStyleSheet(f"color: {_NEUTRAL};")
         header.addWidget(self.dot_label)
         header.addWidget(self.title_label, 1)
-        header.addWidget(self.time_label)
         layout.addLayout(header)
 
         self.gesture_label = QLabel("")
@@ -139,11 +141,10 @@ class CaptureFloatWindow(QWidget):
         gesture: str,
         web: str,
         desktop: str,
-        timeout_seconds: float,
         web_ok: bool = True,
         desktop_ok: bool = True,
     ) -> None:
-        """填入本次捕获的实况（手势 / 两腿状态 / 预算）并置顶显示。"""
+        """填入本次捕获的实况（手势 / 两腿状态）并置顶显示。"""
         self.cancelling = False
         self.cancel_button.setEnabled(True)
         self.cancel_button.setText("取消捕获")
@@ -151,7 +152,6 @@ class CaptureFloatWindow(QWidget):
         self.title_label.setText("正在捕获元素…")
         self.gesture_label.setText(gesture)
         self.set_channels(web=web, desktop=desktop, web_ok=web_ok, desktop_ok=desktop_ok)
-        self.tick(timeout_seconds)
 
     def set_channels(
         self, *, web: str, desktop: str, web_ok: bool = True, desktop_ok: bool = True
@@ -163,11 +163,6 @@ class CaptureFloatWindow(QWidget):
         self.desktop_label.setStyleSheet(
             f"color: {_ONLINE if desktop_ok else _OFFLINE};"
         )
-
-    def tick(self, remaining_seconds: float) -> None:
-        """更新倒计时（调用方按固定节拍驱动）。"""
-        remaining = max(0, int(round(remaining_seconds)))
-        self.time_label.setText(f"剩余 {remaining} 秒")
 
     def mark_cancelling(self) -> None:
         """已请求取消（等会话真正收场，浮窗由调用方关闭）。"""
