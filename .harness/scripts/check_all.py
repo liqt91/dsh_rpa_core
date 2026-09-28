@@ -36,6 +36,10 @@ PURE_FUNCTION_SCRIPTS = (
     "check_param_groups.mjs",
     "check_retry_policy.mjs",
     "check_capture_helpers.mjs",
+    # 捕获高亮框几何（content.js）：框线带必须整条落在元素**之外**、且碰不到指针
+    # ±2px 热区（M41「框要躲着鼠标」）。同样是「只在浏览器里跑」的几何——Python
+    # 侧读源码只能证明写了 `left - OVERLAY_OUTSET`，证明不了算出来的带落在哪。
+    "check_capture_overlay_geometry.mjs",
     "check_input_helpers.mjs",
     "check_precheck_helpers.mjs",
     "check_click_helpers.mjs",

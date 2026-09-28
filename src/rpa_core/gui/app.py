@@ -4139,42 +4139,52 @@ def run_gui(
 
     install_window_show_watch(app)
     global _EDITOR_WINDOW
-    catalog = load_catalog(Path(commands_root))
-    root = Path(workflows_root) if workflows_root else Path("workflows")
-    # 编辑器窗口单例：工作台反复双击不叠窗（ADR 0017 决策 2）
-    _EDITOR_WINDOW = None
-    open_editor = lambda name, run_id=None: open_editor_window(  # noqa: E731 - 注入用闭包
-        name, catalog=catalog, workflows_root=root, history_run_id=run_id
-    )
-
     from PySide6.QtCore import QTimer
 
-    if flow_path:
-        workflow = Workflow.model_validate_json(
-            Path(flow_path).read_text(encoding="utf-8")
-        )
-        window = MainWindow(
-            catalog, workflow=workflow, flow_path=flow_path,
-            workflows_root=root,
-        )
-        _EDITOR_WINDOW = window
-    else:
-        from rpa_core.devserver.store import WorkflowDirStore
-        from rpa_core.gui.home import HomeWindow
+    # 冷启动实测「窗口出现前」≈ 976 ms（load_catalog 首跑 420 ms + Qt 初始化 276 ms
+    # + 窗口构造 68 ms + 首帧 211 ms，分段见 gui/splash.py docstring）：这段白等必须有
+    # 反馈，否则用户以为命令没生效（维护者 2026-09-28 要求加载提示）。
+    # splash 从 load_catalog **之前**起在场，直到主窗口真的画出来才撤。
+    from rpa_core.gui.splash import startup_splash
 
-        window = HomeWindow(
-            WorkflowDirStore(root), catalog, open_editor=open_editor,
-            defer_refresh=True,
+    with startup_splash(app):
+        catalog = load_catalog(Path(commands_root))
+        root = Path(workflows_root) if workflows_root else Path("workflows")
+        # 编辑器窗口单例：工作台反复双击不叠窗（ADR 0017 决策 2）
+        _EDITOR_WINDOW = None
+        open_editor = lambda name, run_id=None: open_editor_window(  # noqa: E731
+            name, catalog=catalog, workflows_root=root, history_run_id=run_id
         )
-        globals()["_HOME_WINDOW"] = window  # 编辑器关闭后回来（ADR 0017）
-    window.show()
-    if isinstance(window, MainWindow):
-        # 窗口显示后在空闲时机预热参数面板（详见 _prewarm_param_panel 注释）：
-        # 提前消化首次复杂表单布局的一次性开销，避免用户第一次点节点时卡顿。
-        QTimer.singleShot(0, window._prewarm_param_panel)
-    else:
-        # 工作台：产物扫描推到窗口显示之后，并且**分片**跑（见 HomeWindow.start_refresh）。
-        # 整段同步扫 150+ 个 result.json 时窗口迟迟不出现，且 show() 之后紧接着跑完整
-        # 段会把用户的第一下点击排在扫描后面（三臂实测推迟 202 ms）。
-        QTimer.singleShot(0, window.start_refresh)
+
+        if flow_path:
+            workflow = Workflow.model_validate_json(
+                Path(flow_path).read_text(encoding="utf-8")
+            )
+            window = MainWindow(
+                catalog, workflow=workflow, flow_path=flow_path,
+                workflows_root=root,
+            )
+            _EDITOR_WINDOW = window
+        else:
+            from rpa_core.devserver.store import WorkflowDirStore
+            from rpa_core.gui.home import HomeWindow
+
+            window = HomeWindow(
+                WorkflowDirStore(root), catalog, open_editor=open_editor,
+                defer_refresh=True,
+            )
+            globals()["_HOME_WINDOW"] = window  # 编辑器关闭后回来（ADR 0017）
+        window.show()
+        if isinstance(window, MainWindow):
+            # 窗口显示后在空闲时机预热参数面板（详见 _prewarm_param_panel 注释）：
+            # 提前消化首次复杂表单布局的一次性开销，避免用户第一次点节点时卡顿。
+            QTimer.singleShot(0, window._prewarm_param_panel)
+        else:
+            # 工作台：产物扫描推到窗口显示之后，并且**分片**跑（见 HomeWindow.start_refresh）。
+            # 整段同步扫 150+ 个 result.json 时窗口迟迟不出现，且 show() 之后紧接着跑完整
+            # 段会把用户的第一下点击排在扫描后面（三臂实测推迟 202 ms）。
+            QTimer.singleShot(0, window.start_refresh)
+        # 主窗首帧 + 上面两个 singleShot(0)（预热 / 分片首轮）都在这里消化——
+        # **趁 splash 还在场**，用户看不到这段开销（首帧本身实测 211 ms）。
+        app.processEvents()
     return app.exec()

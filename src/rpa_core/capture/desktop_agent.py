@@ -34,10 +34,38 @@ def _hotkey_pressed(vk: int) -> bool:
     return bool(ctypes.windll.user32.GetAsyncKeyState(vk) & 0x8000)
 
 
-class _HoverOverlay:
-    """悬浮高亮框：无边框顶层点击穿透窗口，窗口 region 裁剪成 3px 边框。"""
+# 高亮框几何（M41）：框线**完全落在元素之外**，并给鼠标指针留出热区。
+# 维护者 2026-09-28 报：「捕获元素的框跟影刀的一样，躲着鼠标，否则影响其他元素的捕捉」。
+# 一手实测（.harness/spike/probe_m41_hover_overlay.py §7，13 个采样点，真机像素判定）：
+#   框线带占元素**最外 3px**（旧实现）→ 6/13 个点位的指针 ±2px 内有红色框线像素（最近距离 0）；
+#   外移 3px → 2/13；外移 5px → 0/13（最近 4px）；外移 8px → 0/13（最近 7px）。
+# 取 5 = BORDER(3) + 指针热区(2)：框线带占元素外 [2,5)，元素内**任意位置**的指针
+# ±2px 都碰不到它，同时框仍紧贴元素（不是「飘在外面」）。
+OVERLAY_BORDER = 3
+OVERLAY_OUTSET = 5
 
-    BORDER = 3
+
+def overlay_bounds(
+    left: int, top: int, right: int, bottom: int, *, outset: int = OVERLAY_OUTSET
+) -> tuple[int, int, int, int]:
+    """元素 rect → 高亮窗口 bounds（外扩 ``outset``）。
+
+    「躲着鼠标」的全部实现就在这里：窗口 region 只保留 ``OVERLAY_BORDER`` 宽的边框带
+    （见 ``_HoverOverlay.show_rect``），带的位置完全由 bounds 决定——bounds 外扩 5px
+    后，带落在元素外 [2,5)，于是**元素内容与鼠标指针都不再被框线覆盖**。
+    不做内缩：内缩会让框线吃掉元素最外 3px，指针贴边时正好压在框线上（旧行为）。
+    """
+    return left - outset, top - outset, right + outset, bottom + outset
+
+
+class _HoverOverlay:
+    """悬浮高亮框：无边框顶层点击穿透窗口，窗口 region 裁剪成 3px 边框。
+
+    边框带落在**元素之外** [``OUTSET - BORDER``, ``OUTSET``)（见 ``overlay_bounds``）：
+    既不吃掉元素内容，也不压住鼠标指针。
+    """
+
+    BORDER = OVERLAY_BORDER
     COLOR = (255, 59, 48)
 
     def __init__(self):
@@ -83,10 +111,13 @@ class _HoverOverlay:
     def show_rect(self, left: int, top: int, right: int, bottom: int) -> None:
         win32gui = self._win32gui
         win32con = self._win32con
-        bounds = (left, top, right, bottom)
+        # 先外扩再建 region：region 的挖空区因此 = 元素本身，3px 框线带完整落在
+        # 元素之外（见 overlay_bounds）——这是「躲着鼠标」的落点。
+        bounds = overlay_bounds(left, top, right, bottom)
         if bounds == getattr(self, "_last_bounds", None):
             return  # rect 未变：跳过 region 重建与 SetWindowPos（每帧 GDI 开销）
         self._last_bounds = bounds
+        left, top, right, bottom = bounds
         width = right - left
         height = bottom - top
         # region 函数走 gdi32（pywin32 不暴露 CreateRectRgn/CombineRgn）

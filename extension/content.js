@@ -180,6 +180,27 @@
   // 所以判定以事件类型为准，不看 button。
   const isCaptureModifier = (e) => Boolean(e.ctrlKey || e.metaKey);
   const isSecondaryClick = (e) => e.type === "contextmenu" || e.button === 2;
+
+  // [capture-overlay-geometry:start]
+  // 捕获高亮框几何（M41）：框线躲开鼠标指针。
+  // 维护者 2026-09-28：「捕获元素的框跟影刀的一样，躲着鼠标，否则影响其他元素的捕捉」。
+  // 旧实现是 border:2px 紧贴元素 + 12% 红填充——框线落在元素边界上、填充又把元素内容
+  // 整片染红；桌面侧同款几何实测 6/13 个采样点的指针被框线像素覆盖（最近距离 0）。
+  // 现行几何：**框线带完全位于元素之外** [OUTSET-BORDER, OUTSET) = [2,5)，元素内容与
+  // 鼠标指针都不再被覆盖，且去掉填充。两个通道几何一致（桌面 overlay_bounds 同款）。
+  // 本区由 scripts/check_capture_overlay_geometry.mjs 按锚点切片求值校验。
+  const OVERLAY_BORDER = 3;
+  const OVERLAY_OUTSET = 5;
+
+  // 元素 rect → 高亮框的 CSS 盒（border-box）：外扩 OUTSET 后 3px 边框带恰好落在
+  // 元素外 [2,5)，指针贴边时与框线仍隔 2px（= 指针热区）。
+  const overlayBoxRect = (r) => ({
+    left: r.left - OVERLAY_OUTSET,
+    top: r.top - OVERLAY_OUTSET,
+    width: r.width + OVERLAY_OUTSET * 2,
+    height: r.height + OVERLAY_OUTSET * 2,
+  });
+  // [capture-overlay-geometry:end]
   // ---- 纯函数区结束 ----
 
   const ensureHint = () => {
@@ -202,15 +223,19 @@
   const show = (el) => {
     if (!box) {
       box = document.createElement("div");
+      // 只画框线、不填充（M41）：填充会把元素内容整片染红，指针下的东西看不真切。
       box.style.cssText = "position:fixed;z-index:2147483647;pointer-events:none;"
-        + "border:2px solid #ff3b30;background:rgba(255,59,48,.12)";
+        + `box-sizing:border-box;border:${OVERLAY_BORDER}px solid #ff3b30`;
       document.documentElement.appendChild(box);
     }
     const r = el.getBoundingClientRect();
-    box.style.left = r.left + "px";
-    box.style.top = r.top + "px";
-    box.style.width = r.width + "px";
-    box.style.height = r.height + "px";
+    const frame = overlayBoxRect(r);   // 外扩：框线带落在元素之外，不压指针
+    box.style.left = frame.left + "px";
+    box.style.top = frame.top + "px";
+    box.style.width = frame.width + "px";
+    box.style.height = frame.height + "px";
+    // 提示条留在元素**外侧**（上方 24px，顶不下时翻到下方）：指针在元素内时它天然
+    // 压不到指针，因此不参与「躲鼠标」的外扩（只跟随元素，不跟随鼠标）。
     const tip = ensureHint();
     tip.style.left = Math.max(0, Math.min(r.left, window.innerWidth - 260)) + "px";
     tip.style.top = (r.top >= 26 ? r.top - 24 : r.top + r.height + 4) + "px";
