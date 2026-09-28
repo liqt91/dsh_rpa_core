@@ -4,21 +4,23 @@
 （``<flow>/elements/<name>.json``，ElementDescriptor 文档）。
 面板只做展示与动作入口，存储/校验/捕获逻辑由 app 接线。
 
-捕获后的确认对话框（``ElementDialog``）对齐 Web ``openElementDialog``：
-改名 / selector 编辑 / metadata 只读 / 捕获时命中数展示；同名覆盖保护由
-调用方（app）确认。此外把捕获侧已经收集、此前**只入库不展示**的两类数据也读出来：
-``selector.candidates``（备选定位 + 捕获时命中数，运行期自愈按序回退）与 browser 的
-语义特征（``role`` / ``accessibleName`` / ``label`` / ``containerText`` / 页面指纹）。
-两者都是只读展示——编辑它们的能力属于元素编辑器，不属于确认框。
+捕获后的确认对话框（``ElementDialog``）对齐 Web ``openElementDialog``，自 M44 起是
+**捕获即编辑**（对齐影刀「元素编辑器」那一屏）：改名 / 就地编辑定位（browser 主 css 与
+候选提升、desktop 勾 locator 字段）/ metadata 只读 / 捕获时命中数展示；同名覆盖保护由
+调用方（app）确认。编辑区复用 ``ElementEditorForm``，因此与元素库编辑器**同一份实现、
+同一套模型判据**——不是两处口径。
+
+此外把捕获侧已经收集、此前**只入库不展示**的数据也读出来：``selector.candidates``
+（备选定位 + 捕获时命中数，运行期自愈按序回退，现已可一键提升为主定位）与 browser 的
+语义特征（``role`` / ``accessibleName`` / ``label`` / ``containerText`` / 页面指纹，
+仍为只读展示——它们是「为什么这样定位」的依据，不是可编辑的定位本身）。
 """
 
 from __future__ import annotations
 
-import json
 from collections.abc import Callable
 from typing import Any
 
-from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
@@ -31,6 +33,8 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+
+from rpa_core.gui.element_editor import ElementEditorForm
 
 
 class ElementPanel(QWidget):
@@ -186,18 +190,22 @@ def candidates_text(descriptor: dict[str, Any]) -> str:
 
 
 class ElementDialog(QDialog):
-    """捕获确认对话框（对齐 Web ``openElementDialog`` 的 confirm 模式）。
+    """捕获确认对话框 —— **捕获即编辑**（对齐影刀「元素编辑器」那一屏）。
 
     - 名称可改（默认名由调用方给；同名覆盖保护在 app 侧确认）；
-    - selector 可编辑：browser 为 css 单行，desktop 为 locator JSON；
+    - **编辑区复用 `ElementEditorForm`**：browser 可就地改主 css / 点一下把某个候选
+      设为主定位；desktop 直接勾 locator 字段（不再让用户对着
+      `{"backend": "win32", "controlId": 3}` 想办法）。就地结构校验来自同一套模型
+      判据，与元素库编辑器**行为一致**；
     - metadata 只读展示（tag/id/classes/text/rect，desktop 另含
       controlType/automationId/window，browser 另含语义特征与页面指纹）；
-    - 备选定位只读展示（``selector.candidates`` + 捕获时命中数，见
-      ``candidates_text``）；
-    - 捕获时命中数：1 绿、其他红（对齐 Web dlg-verify ok/bad）。
+    - 捕获时命中数：1 绿、其他红（对齐 Web dlg-verify ok/bad）；
+    - **三个出口**（影刀同款）：「保存」/「保存并继续」/「重新捕获」，外加取消。
+      前两个都过同一套校验（都落盘），「重新捕获」不校验（本次丢弃）；
+      调用方用 `intent()` 区分，取消则看 `exec()` 的返回值。
 
-    只有前三行里的「名称 / selector」是可写的；其余全是**展示**。写回
-    （``result_document``）以原 selector 为基底覆盖单个键，界面不展示的键一律原样保留。
+    写回（``result_document``）由编辑区产出、以原 selector 为基底覆盖被编辑的键，
+    界面上不暴露的键一律原样保留。
     """
 
     def __init__(
@@ -209,6 +217,8 @@ class ElementDialog(QDialog):
     ) -> None:
         super().__init__(parent)
         self._descriptor = descriptor
+        # 出口意图。默认 "save"：用户直接按「保存」/回车/双击标题栏关闭都走它。
+        self._intent = "save"
         self.setWindowTitle("捕获确认")
         self.setMinimumWidth(420)
         layout = QVBoxLayout(self)
@@ -226,16 +236,13 @@ class ElementDialog(QDialog):
         form = QFormLayout()
         self.name_edit = QLineEdit(default_name)
         form.addRow("元素名", self.name_edit)
-        selector = _as_dict(descriptor.get("selector"))
-        if descriptor.get("kind") == "browser":
-            selector_text = str(selector.get("css") or "")
-        else:
-            selector_text = json.dumps(
-                _as_dict(selector.get("locator")), ensure_ascii=False
-            )
-        self.selector_edit = QLineEdit(selector_text)
-        form.addRow("selector", self.selector_edit)
         layout.addLayout(form)
+
+        # 编辑区：与元素库编辑器**同一份**实现（可就地改主 css / 提升候选 / 勾 locator
+        # 字段），就地结构校验也来自同一套模型判据。此前这里是一个 selector 文本框——
+        # 桌面元素就是一行 locator JSON，用户要勾字段得先保存、再去元素库点「编辑」。
+        self.form = ElementEditorForm(descriptor, parent=self)
+        layout.addWidget(self.form)
 
         # metadata 只读（对齐 Web metaEl 的行集；browser 另含语义特征与页面指纹）
         self.meta_label = QLabel(self._metadata_text(descriptor))
@@ -243,22 +250,10 @@ class ElementDialog(QDialog):
         self.meta_label.setStyleSheet("color: #64707d;")
         layout.addWidget(self.meta_label)
 
-        # 备选定位（只读）：捕获侧收集、运行期自愈按序回退。此前完全不展示，
-        # 用户既不知道自愈能力存在，也无法在命中多个时挑一个更稳的候选。
-        # 只读且可选中复制 —— 不做「点选设为主动选择器」，那是元素编辑器的职责。
-        self.candidates_label = QLabel(candidates_text(descriptor))
-        self.candidates_label.setWordWrap(True)
-        self.candidates_label.setStyleSheet("color: #64707d; font-family: monospace;")
-        self.candidates_label.setTextInteractionFlags(
-            Qt.TextInteractionFlag.TextSelectableByMouse
-        )
-        self.candidates_label.setToolTip(
-            "捕获时额外收集的备选定位，运行期主选择器失效时按序回退（自动自愈）。"
-            "「不唯一」表示该候选本身命中多个元素。"
-        )
-        if not self.candidates_label.text():
-            self.candidates_label.hide()
-        layout.addWidget(self.candidates_label)
+        # 备选定位不再是只读标签：它归编辑区管（`ElementEditorForm` 的候选列表，
+        # 点一下即设为主定位）。只读展示与可编辑列表摆在同一屏是重复信息，
+        # 而「只读」正是确认框此前做不到「捕获即编辑」的一部分。
+        # （`candidates_text` 保留：它是 Web 侧 `elementCandidateLines` 的对等物。）
 
         # 校验错误提示（对话框内联展示，不弹 QMessageBox，保持可测试性）
         self.error_label = QLabel("")
@@ -269,8 +264,30 @@ class ElementDialog(QDialog):
             QDialogButtonBox.StandardButton.Save
             | QDialogButtonBox.StandardButton.Cancel
         )
+        # 留引用：`buttonRole()` 在 PySide6 里是**实例方法**（C++ 侧是 static），
+        # 想核对「这两个出口是不是 ActionRole」就必须拿得到按钮盒本身。
+        self.button_box = buttons
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
+        # 影刀那一屏的另两个出口（M44 S4）。用 ActionRole 是**故意的**：
+        # QDialogButtonBox 只把 AcceptRole/RejectRole 自动接到 accepted/rejected，
+        # 一旦自动连接，「重新捕获」就会被当成「确定」而去校验元素名与定位——
+        # 而它本来就要丢弃本次结果，校验毫无意义且会把用户困在对话框里。
+        # 所以两个出口各自决定关窗方式（见 `_close_with`）。
+        self.continue_button = buttons.addButton(
+            "保存并继续", QDialogButtonBox.ButtonRole.ActionRole
+        )
+        self.continue_button.setToolTip(
+            "保存当前元素，并立即开始捕获下一个（连续采集时不用每次都回元素库）"
+        )
+        self.continue_button.clicked.connect(self._accept_and_continue)
+        self.recapture_button = buttons.addButton(
+            "重新捕获", QDialogButtonBox.ButtonRole.ActionRole
+        )
+        self.recapture_button.setToolTip(
+            "丢弃本次捕获结果，回到捕获状态重新框选（不必关窗再点「捕获元素」）"
+        )
+        self.recapture_button.clicked.connect(self._request_recapture)
         layout.addWidget(buttons)
 
     @staticmethod
@@ -306,43 +323,61 @@ class ElementDialog(QDialog):
         # 摆出来会诱导用户粘进 locator，写出一个下次必定失效的元素。
         return "\n".join(line for line in lines if line) or "(无 metadata)"
 
-    def accept(self) -> None:
-        """保存前校验：名称/selector 非空；desktop locator 必须是合法 JSON 对象。"""
+    def _validate_or_report(self) -> bool:
+        """保存前校验：元素名非空 + 编辑区无结构错误。通过返回 True。
+
+        「selector 是否合法」**不在这里判**：它由 `ElementEditorForm` 拿模型判据判
+        （`css_problems` / `locator_problems`）并就地展示。确认框自己再判一遍等于立
+        第二套规则——两套规则必然漂移，而漂移的表现是「确认框放行的东西，执行器读不了」。
+        （此前这里手写 `json.loads`，正是那第二套规则：它只验「是不是合法 JSON 对象」，
+        验不出「uia locator 一个身份字段都没有」。）
+        """
         if not self.name_edit.text().strip():
             self.error_label.setText("元素名不能为空")
-            return
-        if not self.selector_edit.text().strip():
-            self.error_label.setText("selector 不能为空")
-            return
-        if self._descriptor.get("kind") != "browser":
-            try:
-                locator = json.loads(self.selector_edit.text().strip())
-            except json.JSONDecodeError:
-                self.error_label.setText("desktop locator 不是合法 JSON")
-                return
-            if not isinstance(locator, dict):
-                self.error_label.setText("desktop locator 必须是 JSON 对象")
-                return
+            return False
+        self.form.revalidate()
+        if self.form.blocked:
+            return False  # 错误已就地展示在编辑区，保持对话框打开让用户改
+        return True
+
+    def _close_with(self, intent: str) -> None:
+        """按意图关窗（``super().accept()``：不再走校验，校验由调用方先行）。
+
+        意图与关窗**分开**是有必要的：QDialogButtonBox 的 accepted 信号不带来源，
+        三个出口若都靠 `accept()` 收尾，调用方就分不清用户按的是哪个。
+        """
+        self._intent = intent
         super().accept()
 
+    def accept(self) -> None:
+        """「保存」出口：校验通过才关窗。"""
+        if self._validate_or_report():
+            self._close_with("save")
+
+    def _accept_and_continue(self) -> None:
+        """「保存并继续」出口：同样要过校验（它**真的会落盘**），再回捕获态。"""
+        if self._validate_or_report():
+            self._close_with("save_and_continue")
+
+    def _request_recapture(self) -> None:
+        """「重新捕获」出口：丢弃本次结果，**不校验**——本次不落盘，校验没有对象。"""
+        self._close_with("recapture")
+
+    def intent(self) -> str:
+        """用户按的是哪个出口：``save`` / ``save_and_continue`` / ``recapture``。
+
+        取消与关闭窗口**不在这里**（``exec()`` 返回 Rejected），调用方先看 exec 结果，
+        再看本方法，顺序不能反：Rejected 时 `_intent` 还是默认的 `save`。
+        """
+        return self._intent
+
     def result_document(self) -> tuple[str, dict[str, Any]]:
-        """编辑结果：（元素名, ElementDescriptor 形状 dict）。仅在 Accepted 后调用。"""
-        name = self.name_edit.text().strip()
-        # 以原 selector 为基底再覆盖界面暴露的那一个键。**不能从头重建**：
-        # selector 里还有界面上不展示的键（捕获时收集的 candidates 备选定位），
-        # 重建会让用户编辑一次就把它们静默抹掉。
-        raw_selector = _as_dict(self._descriptor.get("selector"))
-        selector: dict[str, Any] = dict(raw_selector)
-        if self._descriptor.get("kind") == "browser":
-            selector["css"] = self.selector_edit.text().strip()
-        else:
-            selector["locator"] = json.loads(self.selector_edit.text().strip())
-        return name, {
-            "kind": self._descriptor.get("kind"),
-            "selector": selector,
-            "verifyCount": self._descriptor.get("verifyCount") or 0,
-            "metadata": self._descriptor.get("metadata") or {},
-        }
+        """编辑结果：（元素名, ElementDescriptor 形状 dict）。仅在 Accepted 后调用。
+
+        文档由编辑区产出（`ElementEditorForm.result_document`）——它以原 selector
+        为基底覆盖被编辑的键，界面上不暴露的键（如捕获时收集的 candidates）原样保留。
+        """
+        return self.name_edit.text().strip(), self.form.result_document()
 
 
 def wire_element_panel(

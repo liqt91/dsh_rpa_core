@@ -8,9 +8,14 @@ class ElementDescriptor(BaseModel):
     """捕获产物：可回验命中的元素描述符（M10 元素库契约）。
 
     selector 语义按 kind 区分：
-    - browser: ``{"css": "<css selector>", "candidates": [...] | 缺省}``
+    - browser: ``{"css": "<css selector>", "candidates": [...] | 缺省,
+      "path": [...] | 缺省}``
       ``css`` 必填且是第一顺位，语义与升级前**完全一致**；``candidates`` 可选，
-      是捕获时额外收集的备选定位 ``[{"kind", "selector", "matchedCount"}]``。
+      是捕获时额外收集的备选定位 ``[{"kind", "selector", "matchedCount"}]``；
+      ``path`` 可选，是从根到目标的**祖先链**
+      ``[{"tag", "id", "classes", "nthOfType", "fragment"}]``——元素编辑器据它画节点树，
+      用户勾选层级后按 ``fragment`` 重组主 css。它与 ``css`` 出自**同一个**片段生成处
+      （``content.js::pathFor``），所以树上的路径与真正下发执行的选择器必然是同一条。
     - desktop: ``{"locator": <DesktopLocator 文档>}``
 
     browser 的 ``metadata`` 另可携带语义特征（``role`` / ``accessibleName`` /
@@ -95,10 +100,36 @@ def _candidate_errors(element: ElementDescriptor) -> list[dict]:
     return errors
 
 
+def _path_errors(element: ElementDescriptor) -> list[dict]:
+    """``selector.path`` 可选；一旦出现就按「每级需非空 tag 与 fragment」校验。
+
+    path 是捕获时回传的**祖先链**（每级 ``{tag, id, classes, nthOfType, fragment}``），
+    元素编辑器据此画节点树、用户勾选层级后按 fragment 重组主 css。与 ``candidates``
+    同款**加法兼容**：缺省完全不校验——既有元素文档只有 ``css``，必须继续合法。
+    """
+    errors: list[dict] = []
+    raw = element.selector.get("path")
+    if raw is None:
+        return errors
+    if not isinstance(raw, list):
+        return [{"path": "selector.path", "message": "path 需要数组"}]
+    for index, item in enumerate(raw):
+        path = f"selector.path[{index}]"
+        if not isinstance(item, dict):
+            errors.append({"path": path, "message": "path 每级需要对象"})
+            continue
+        for key in ("tag", "fragment"):
+            value = item.get(key)
+            if not isinstance(value, str) or not value.strip():
+                errors.append({"path": f"{path}.{key}", "message": f"path 每级需要非空 {key}"})
+    return errors
+
+
 def selector_errors(element: ElementDescriptor) -> list[dict]:
     """selector 语义结构校验：browser 需非空 css；desktop 需合法 DesktopLocator。
 
-    browser 另校验可选的 ``candidates``（见 ``_candidate_errors``）。
+    browser 另校验可选的 ``candidates``（见 ``_candidate_errors``）与 ``path``
+    （见 ``_path_errors``）。
     """
     errors: list[dict] = []
     if element.kind == "browser":
@@ -106,6 +137,7 @@ def selector_errors(element: ElementDescriptor) -> list[dict]:
         if not isinstance(css, str) or not css.strip():
             errors.append({"path": "selector.css", "message": "browser 元素需要非空 css selector"})
         errors.extend(_candidate_errors(element))
+        errors.extend(_path_errors(element))
     elif element.kind == "desktop":
         locator = element.selector.get("locator")
         if not isinstance(locator, dict):

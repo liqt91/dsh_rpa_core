@@ -137,3 +137,70 @@ def test_desktop_selector_ignores_candidates_validation():
         }
     )
     assert selector_errors(element) == []
+
+
+# ---- selector.path（M44 S1）：祖先链可选，出现即须结构正确 -------------------
+def _entry(**overrides) -> dict:
+    entry = {"tag": "div", "id": None, "classes": ["wrap"], "nthOfType": 1,
+             "fragment": "div.wrap"}
+    entry.update(overrides)
+    return entry
+
+
+def test_valid_path_passes_validation():
+    element = validate_element_document(
+        _browser_document(
+            selector={
+                "css": "body > div.wrap",
+                "path": [
+                    _entry(tag="body", classes=[], nthOfType=None, fragment="body"),
+                    _entry(),
+                ],
+            }
+        )
+    )
+    assert selector_errors(element) == []
+
+
+def test_path_absent_stays_valid():
+    """path 可选：老元素文档（只有 css）不被新字段牵连。"""
+    element = validate_element_document(_browser_document())
+    assert selector_errors(element) == []
+
+
+def test_desktop_ignores_path_validation():
+    """path 是 browser 专属数据：desktop 文档里出现也不按 browser 规则报。"""
+    element = validate_element_document(
+        {
+            "kind": "desktop",
+            "selector": {"locator": {"backend": "uia", "controlType": "Button"},
+                          "path": "not-a-list"},
+            "verifyCount": 0,
+            "metadata": {},
+        }
+    )
+    assert selector_errors(element) == []
+
+
+@pytest.mark.parametrize(
+    ("path", "expected_substring"),
+    [
+        ("not-a-list", "selector.path"),
+        ([42], "selector.path[0]"),
+        ([{}], "selector.path[0].tag"),
+        ([_entry(tag="   ")], "selector.path[0].tag"),
+        ([_entry(fragment=None)], "selector.path[0].fragment"),
+        ([_entry(), _entry(tag="")], "selector.path[1].tag"),
+    ],
+)
+def test_malformed_path_is_reported(path, expected_substring):
+    """节点树靠 path 逐级勾选拼 css：某级缺 tag/fragment，树就会拼出错的定位。
+
+    与 candidates 同口径——不是拦截保存（GUI 仍可保存），而是 ``elements verify``
+    与模型校验如实报出来。
+    """
+    element = validate_element_document(
+        _browser_document(selector={"css": "#a", "path": path})
+    )
+    paths = [error["path"] for error in selector_errors(element)]
+    assert any(expected_substring in item for item in paths)

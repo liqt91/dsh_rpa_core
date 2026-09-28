@@ -2991,20 +2991,40 @@ class MainWindow(QMainWindow):
         if result.get("cancelled") or not result.get("kind"):
             self.statusBar().showMessage("已取消捕获", 4000)
             return
-        confirmed = self._confirm_element_save(result)
-        if confirmed is None:
+        intent, payload = self._confirm_element_save(result)
+        if intent is None:
             return
-        name, document = confirmed
-        saved = self.save_element_descriptor(name, document)
-        if saved:
-            self._refresh_elements()
-            self.statusBar().showMessage(f"已保存元素 {name}", 4000)
+        if intent == "recapture":
+            # 「重新捕获」= 立刻开下一轮，用户不必关窗再点「捕获元素」。
+            # 此刻 `_capture_session` 已被上面复位成 None，所以不会撞上
+            # `_capture_element` 的「已有捕获 → 取消」分支。
+            self.statusBar().showMessage("重新捕获：移动鼠标框选", 6000)
+            self._capture_element()
+            return
+        name, document = payload
+        if not self.save_element_descriptor(name, document):
+            return
+        self._refresh_elements()
+        if intent == "save_and_continue":
+            # 「保存并继续」：落盘 + 刷新元素库后立刻再捕获一个（连续采集的常见节奏）。
+            self.statusBar().showMessage(f"已保存元素 {name}，继续捕获…", 5000)
+            self._capture_element()
+            return
+        self.statusBar().showMessage(f"已保存元素 {name}", 4000)
 
-    def _confirm_element_save(self, descriptor: dict) -> tuple[str, dict] | None:
-        """捕获确认对话框（改名/selector 编辑/命中数）+ 同名覆盖保护。
+    def _confirm_element_save(
+        self, descriptor: dict
+    ) -> tuple[str | None, tuple[str, dict] | None]:
+        """捕获确认对话框：返回 ``(意图, 载荷)``。
 
-        对齐 Web ``openElementDialog``（confirm 模式）+ 同名 confirm；返回
-        ``(名称, ElementDescriptor 文档)``，用户取消返回 None。
+        意图 ∈ ``save`` / ``save_and_continue`` / ``recapture``；用户取消或直接关闭
+        窗口返回 ``(None, None)``。载荷是 ``(名称, ElementDescriptor 文档)``，
+        仅在前两个意图下非空（``recapture`` 意味着本次结果被丢弃）。
+
+        返回值为什么要带上意图（M44 S4）：**三个出口里有两个都会产出文档**
+        （「保存」与「保存并继续」），只回文档的话调用方分不清「存完收工」还是
+        「存完再来一个」——而后者要重启捕获。以 ``(意图, 载荷)`` 表达后，
+        「取消/重新捕获」对调用方仍是同一件事（都不落盘、都要收场），不会写岔。
         """
         from rpa_core.gui.element_panel import ElementDialog
 
@@ -3018,7 +3038,12 @@ class MainWindow(QMainWindow):
         # 停在浏览器后面，用户得先点一次 Dock 才看得见（真机实测）。
         present_window(dialog, always_on_top=True)
         if dialog.exec() != QDialog.DialogCode.Accepted:
-            return None
+            return None, None
+        # 先看 exec 结果、再看 intent：Rejected（取消/关窗）时 intent 仍是默认的
+        # "save"，顺序反了会把「取消」读成「保存」。
+        intent = dialog.intent()
+        if intent == "recapture":
+            return intent, None
         name, document = dialog.result_document()
         store = self._element_store()
         if store is not None and name in store.list():
@@ -3030,8 +3055,8 @@ class MainWindow(QMainWindow):
                 QMessageBox.StandardButton.No,
             )
             if answer != QMessageBox.StandardButton.Yes:
-                return None
-        return name, document
+                return None, None
+        return intent, (name, document)
 
     def save_element_descriptor(self, name: str, descriptor: dict) -> bool:
         """元素入库（校验 ElementDescriptor 契约）；失败状态栏提示并返回 False。"""

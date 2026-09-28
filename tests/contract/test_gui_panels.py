@@ -254,6 +254,7 @@ def test_register_bridge_hosts_per_browser_tolerance(window, monkeypatch):
 
 # ---- 捕获确认对话框（M23 G1 剩余：对齐 Web openElementDialog） --------------
 def test_element_dialog_browser_defaults_and_result(qapp):
+    """捕获确认框 = **捕获即编辑**：就地改主 css，产出仍是 ElementDescriptor 文档。"""
     from PySide6.QtWidgets import QDialog
 
     from rpa_core.gui.element_panel import ElementDialog
@@ -261,12 +262,12 @@ def test_element_dialog_browser_defaults_and_result(qapp):
     dialog = ElementDialog(_browser_element(), default_name="el_input")
     assert dialog.windowTitle() == "捕获确认"
     assert dialog.name_edit.text() == "el_input"
-    assert dialog.selector_edit.text() == "#kw"
+    assert dialog.form.css_edit.text() == "#kw"  # 编辑区预填当前主 css
     assert "命中 1 个" in dialog.verify_label.text()
     assert "#1a7f37" in dialog.verify_label.styleSheet()  # 命中 1 = 绿
 
     dialog.name_edit.setText("searchBox")
-    dialog.selector_edit.setText("#q")
+    dialog.form.css_edit.setText("#q")
     dialog.accept()
     assert dialog.result() == QDialog.DialogCode.Accepted
     name, document = dialog.result_document()
@@ -276,45 +277,57 @@ def test_element_dialog_browser_defaults_and_result(qapp):
     assert document["metadata"]["url"] == "https://example.com"
 
 
-def test_element_dialog_desktop_locator_json_validation(qapp):
+def test_element_dialog_desktop_edits_locator_by_fields_not_json(qapp):
+    """桌面元素在确认框里直接勾 locator 字段——不再让用户写/看一行 JSON。
+
+    这一条刻意**断言旧的 JSON 文本框已不存在**：它正是「确认框只能改一行 JSON」的
+    遗迹，留着就等于两套编辑面（两套必然漂移）。旧的 `json.loads` 校验也只验得出
+    「是不是合法 JSON 对象」，验不出「uia locator 一个身份字段都没有」——那是模型
+    判据的活。
+    """
     from PySide6.QtWidgets import QDialog
 
     from rpa_core.gui.element_panel import ElementDialog
 
     descriptor = {
         "kind": "desktop",
-        "selector": {"locator": {"controlType": "Button", "name": "确定"}},
+        "selector": {"locator": {"backend": "uia", "controlType": "Button", "name": "确定"}},
         "verifyCount": 3,
         "metadata": {"controlType": "Button", "automationId": "okBtn",
-                     "windowTitle": "记事本"},
+                     "windowTitle": "记事本", "name": "确定"},
     }
     dialog = ElementDialog(descriptor, default_name="el_Button")
-    assert "确定" in dialog.selector_edit.text()  # locator JSON 预填
+    assert not hasattr(dialog, "selector_edit"), "确认框不该再有手写 locator 的文本框"
+    assert dialog.form.backend_combo.currentText() == "uia"
+    assert dialog.form.field_boxes["controlType"].isChecked()
+    assert dialog.form.field_edits["name"].text() == "确定"
     assert "命中 3 个" in dialog.verify_label.text()
     assert "#cf222e" in dialog.verify_label.styleSheet()  # 命中非 1 = 红
     assert "controlType: Button" in dialog.meta_label.text()
     assert "window: 记事本" in dialog.meta_label.text()
 
-    # 非法 JSON：拒绝关闭并给出内联错误
-    dialog.selector_edit.setText("{not json")
+    # 取消全部身份字段 → 结构校验拦住保存（旧的手写 JSON 校验查不出这一条）
+    dialog.form.field_boxes["controlType"].setChecked(False)
+    dialog.form.field_boxes["name"].setChecked(False)
     dialog.accept()
     assert dialog.result() != QDialog.DialogCode.Accepted
-    assert "JSON" in dialog.error_label.text()
+    assert "身份字段" in dialog.form.info_label.text()
 
-    # 非对象 JSON（数组）：同样拒绝
-    dialog.selector_edit.setText("[1, 2]")
-    dialog.accept()
-    assert dialog.result() != QDialog.DialogCode.Accepted
-
-    # 改回合法对象：通过且回写 locator
-    dialog.selector_edit.setText('{"controlType": "Edit"}')
+    # 勾回一个身份字段：通过且回写 locator
+    dialog.form.field_boxes["automationId"].setChecked(True)
     dialog.accept()
     assert dialog.result() == QDialog.DialogCode.Accepted
     _, document = dialog.result_document()
-    assert document["selector"] == {"locator": {"controlType": "Edit"}}
+    assert document["selector"]["locator"]["backend"] == "uia"
+    assert document["selector"]["locator"]["automationId"] == "okBtn"
 
 
-def test_element_dialog_rejects_empty_name_or_selector(qapp):
+def test_element_dialog_rejects_empty_name_or_blank_css(qapp):
+    """两道拦截各归其位：元素名归确认框，selector 合法性归编辑区的模型判据。
+
+    分工的理由是「判据的权威唯一」：确认框自己再判一遍 selector 等于立第二套规则，
+    而两套规则必然漂移（漂移的表现是「确认框放行的东西，执行器读不了」）。
+    """
     from PySide6.QtWidgets import QDialog
 
     from rpa_core.gui.element_panel import ElementDialog
@@ -326,10 +339,79 @@ def test_element_dialog_rejects_empty_name_or_selector(qapp):
     assert "元素名" in dialog.error_label.text()
 
     dialog.name_edit.setText("ok")
-    dialog.selector_edit.setText("")
+    dialog.form.css_edit.setText("")
     dialog.accept()
     assert dialog.result() != QDialog.DialogCode.Accepted
-    assert "selector" in dialog.error_label.text()
+    assert "不能为空" in dialog.form.info_label.text()
+
+
+def test_element_dialog_reports_which_exit_was_used(qapp):
+    """三个出口靠 `intent()` 区分——``QDialogButtonBox`` 的 accepted 信号**不带来源**。
+
+    这不是「多写一个 getter」：三个出口里有两个都产出同一份文档，调用方只能靠意图
+    决定后续动作（「保存」收工 / 「保存并继续」重启捕获 / 「重新捕获」丢弃重来）。
+    取消与关闭窗口走 Rejected、**不进** `intent()` —— 调用方先看 exec 结果。
+    """
+    from PySide6.QtWidgets import QDialog, QDialogButtonBox
+
+    from rpa_core.gui.element_panel import ElementDialog
+
+    dialog = ElementDialog(_browser_element(), default_name="a")
+    assert dialog.intent() == "save", "什么都没按过时，默认意图就是保存"
+
+    dialog.continue_button.click()
+    assert dialog.result() == QDialog.DialogCode.Accepted
+    assert dialog.intent() == "save_and_continue"
+
+    recapture = ElementDialog(_browser_element(), default_name="b")
+    recapture.recapture_button.click()
+    assert recapture.result() == QDialog.DialogCode.Accepted
+    assert recapture.intent() == "recapture"
+
+    # 两个新出口必须留在 ActionRole。AcceptRole 会被 QDialogButtonBox **自动**
+    # 接到 accepted → `accept()`，于是「重新捕获」也去校验元素名与定位——
+    # 一次毫无意义、还会把用户困在对话框里的校验。这条钉的是那个自动连接本身。
+    # （`buttonRole()` 在 PySide6 里是**实例方法**，得从**该按钮所属的**按钮盒上问：
+    #  拿另一个对话框的盒子查，返回的是 InvalidRole，看着像「角色接错了」。）
+    pairs = ((dialog, dialog.continue_button), (recapture, recapture.recapture_button))
+    for owner, button in pairs:
+        role = owner.button_box.buttonRole(button)
+        assert role == QDialogButtonBox.ButtonRole.ActionRole
+
+
+def test_element_dialog_save_and_continue_is_validated_like_save(qapp):
+    """「保存并继续」**真的会落盘** → 与「保存」走同一套校验；不过关不许关窗。"""
+    from PySide6.QtWidgets import QDialog
+
+    from rpa_core.gui.element_panel import ElementDialog
+
+    dialog = ElementDialog(_browser_element(), default_name="")
+    dialog.continue_button.click()
+    assert dialog.result() != QDialog.DialogCode.Accepted, "空元素名不该放行"
+    assert "元素名" in dialog.error_label.text()
+    assert dialog.intent() == "save", "窗口没关，就不该记下出口意图"
+
+    dialog.name_edit.setText("ok")
+    dialog.continue_button.click()
+    assert dialog.result() == QDialog.DialogCode.Accepted
+    assert dialog.intent() == "save_and_continue"
+
+
+def test_element_dialog_recapture_discards_without_validation(qapp):
+    """「重新捕获」必须**不校验**：本次结果当场丢弃，校验没有对象。
+
+    连空元素名都要放行——用户此刻就是还没定名字，而这个名字根本不会落盘。
+    若这里被校验拦住，「重新捕获」就退化成「必须先把元素起好名才能重来」。
+    """
+    from PySide6.QtWidgets import QDialog
+
+    from rpa_core.gui.element_panel import ElementDialog
+
+    dialog = ElementDialog(_browser_element(), default_name="")
+    dialog.recapture_button.click()
+    assert dialog.result() == QDialog.DialogCode.Accepted
+    assert dialog.intent() == "recapture"
+    assert dialog.error_label.text() == "", "重新捕获不该报元素名错误"
 
 
 def test_element_dialog_preserves_candidates_on_edit(qapp):
@@ -338,8 +420,8 @@ def test_element_dialog_preserves_candidates_on_edit(qapp):
     回归：``result_document`` 曾从头重建 ``selector``，用户在 GUI 里编辑一次就静默
     丢掉 ``candidates``（以及任何界面不暴露为可编辑项的键）。
 
-    注意这条判据**不因「候选现在会展示了」而失效**：展示是只读的（``candidates_label``），
-    写回仍然只覆盖 ``css``/``locator`` 一个键。展示与写回是两条独立的路径。
+    注意这条判据**不因「候选现在可编辑了」而失效**：写回仍然以原 selector 为基底、
+    只覆盖被编辑的键（现在由 ``ElementEditorForm.result_document`` 保证）。
     """
     from PySide6.QtWidgets import QDialog
 
@@ -356,10 +438,10 @@ def test_element_dialog_preserves_candidates_on_edit(qapp):
         "metadata": {"role": "searchbox", "url": "https://example.com/"},
     }
     dialog = ElementDialog(descriptor, default_name="searchBox")
-    assert dialog.selector_edit.text() == "#sb_form_q"  # selector 编辑框只放主 css
+    assert dialog.form.css_edit.text() == "#sb_form_q"  # 编辑区只放主 css
 
     dialog.name_edit.setText("searchBox2")
-    dialog.selector_edit.setText("#q")
+    dialog.form.css_edit.setText("#q")
     dialog.accept()
     assert dialog.result() == QDialog.DialogCode.Accepted
     name, document = dialog.result_document()
@@ -407,17 +489,20 @@ def test_element_dialog_shows_candidates_with_matched_counts(qapp):
     """候选必须被展示出来（含捕获时命中数）——此前只入库不展示。
 
     用户此前既不知道自愈能力存在，也无从在命中多个时挑一个更稳的候选。
+    现在它们就在确认框的编辑区里（比只读展示更进一步：点一下即设为主定位）。
     """
     from rpa_core.gui.element_panel import ElementDialog
 
     dialog = ElementDialog(_captured_browser_descriptor(), default_name="searchBox")
-    text = dialog.candidates_label.text()
-    assert "备选定位 2 条" in text
-    assert "[id] #sb_form_q" in text
-    assert "命中 1" in text
-    assert '[attribute] input[name="q"]' in text
-    # 候选标签是展示面，不是第二个可编辑的 selector 框
-    assert dialog.candidates_label.isHidden() is False
+    items = [
+        dialog.form.candidate_list.item(index).text()
+        for index in range(dialog.form.candidate_list.count())
+    ]
+    assert len(items) == 2
+    assert "备选定位 2 条" in dialog.form.candidates_label.text()
+    assert "[id] #sb_form_q" in items[0]
+    assert "命中 1" in items[0]
+    assert 'input[name="q"]' in items[1]
 
 
 def test_element_dialog_flags_non_unique_candidate(qapp):
@@ -429,9 +514,14 @@ def test_element_dialog_flags_non_unique_candidate(qapp):
     from rpa_core.gui.element_panel import ElementDialog
 
     dialog = ElementDialog(_captured_browser_descriptor(), default_name="searchBox")
-    lines = dialog.candidates_label.text().splitlines()
-    id_line = next(line for line in lines if "#sb_form_q" in line)
-    attr_line = next(line for line in lines if 'input[name="q"]' in line)
+    # 候选现在归编辑区（`ElementEditorForm` 的候选列表，点一下即设为主定位），
+    # 不再是确认框里的只读文本块 —— 判据跟着读列表项。
+    items = [
+        dialog.form.candidate_list.item(index).text()
+        for index in range(dialog.form.candidate_list.count())
+    ]
+    id_line = next(line for line in items if "#sb_form_q" in line)
+    attr_line = next(line for line in items if 'input[name="q"]' in line)
     assert "命中 1" in id_line
     assert "不唯一" not in id_line
     assert "命中 3" in attr_line
@@ -459,11 +549,17 @@ def test_element_dialog_shows_semantic_features_and_fingerprint(qapp):
     assert "rect: 300×40 @ (10,20)" in meta
 
 
-def test_element_dialog_hides_candidates_section_when_absent(qapp):
-    """没有候选时不显示这一节（旧元素文档只有 css，不属于「未展示」）。
+def test_element_dialog_candidates_section_is_browser_only(qapp):
+    """候选列表是 browser 专属节：「收集到 0 条」与「没有这个概念」不能混成一件事。
 
-    desktop 元素没有候选概念（其回退逻辑不落盘），也必须不显示，
-    否则会误导用户去找一个不存在的东西。
+    - browser 收集 0 条 —— 编辑区仍要**明说**「没有收集到备选定位」。候选是运行期
+      自愈的依据（主选择器失效后按序回退），「一条都没有」本身是有意义的信息，
+      静默留白会让人以为界面没显示出来。
+    - desktop 没有候选概念（其回退逻辑不落盘）—— 这一节**整节不存在**（属性都没有），
+      否则会误导用户去找一个不存在的东西。
+
+    此前这两件事被同一个「隐藏」表达盖住；改成读控件本身后，口径反而更硬：
+    桌面侧不是「标签为空」，而是「连控件都没建」。
     """
     from rpa_core.gui.element_panel import ElementDialog
 
@@ -471,8 +567,8 @@ def test_element_dialog_hides_candidates_section_when_absent(qapp):
         {"kind": "browser", "selector": {"css": "#kw"}, "verifyCount": 1, "metadata": {}},
         default_name="a",
     )
-    assert plain.candidates_label.text() == ""
-    assert plain.candidates_label.isHidden()
+    assert plain.form.candidate_list.count() == 0
+    assert "没有收集到备选定位" in plain.form.candidates_label.text()
 
     desktop = ElementDialog(
         {
@@ -483,8 +579,8 @@ def test_element_dialog_hides_candidates_section_when_absent(qapp):
         },
         default_name="b",
     )
-    assert desktop.candidates_label.text() == ""
-    assert desktop.candidates_label.isHidden()
+    assert not hasattr(desktop.form, "candidate_list")
+    assert not hasattr(desktop.form, "candidates_label")
     # desktop 的元数据里不该冒出 browser 的语义特征行
     assert "role:" not in desktop.meta_label.text()
     assert "url:" not in desktop.meta_label.text()
@@ -603,7 +699,7 @@ def test_element_dialog_tolerates_non_dict_selector(qapp):
         {"kind": "browser", "selector": "oops", "verifyCount": 1, "metadata": {}},
         default_name="el_x",
     )
-    dialog.selector_edit.setText("#a")
+    dialog.form.css_edit.setText("#a")
     dialog.accept()
     assert dialog.result() == QDialog.DialogCode.Accepted
     _, document = dialog.result_document()

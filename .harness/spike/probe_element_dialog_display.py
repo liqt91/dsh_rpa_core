@@ -41,20 +41,34 @@ SEP = "=" * 72
 
 
 def render(descriptor: dict) -> None:
-    """走真实对话框渲染并打印全部展示面。"""
+    """走真实对话框渲染并打印全部展示面。
+
+    确认框自 M44 起是「**捕获即编辑**」：编辑区就是元素库编辑器那一份
+    （``ElementEditorForm``），所以这里按 backend 分别读它真正的编辑面 ——
+    browser 读主 css 与候选列表，desktop 读 locator 勾选字段。
+    """
     from rpa_core.gui.element_panel import ElementDialog
 
     dialog = ElementDialog(descriptor, default_name="probe_el")
+    form = dialog.form
     print(f"  元素名    : {dialog.name_edit.text()}")
-    print(f"  selector  : {dialog.selector_edit.text()}")
+    if hasattr(form, "css_edit"):
+        print(f"  主 css    : {form.css_edit.text()!r}")
+    else:
+        checked = [key for key, box in form.field_boxes.items() if box.isChecked()]
+        print(f"  locator 勾选字段: {checked}")
     print(f"  命中数    : {dialog.verify_label.text()!r}")
     print("  metadata  :")
     for line in dialog.meta_label.text().splitlines() or ["(空)"]:
         print(f"      {line}")
-    candidates = dialog.candidates_label.text()
-    print(f"  候选（hidden={dialog.candidates_label.isHidden()}）:")
-    for line in candidates.splitlines() or ["(无候选，本节隐藏)"]:
-        print(f"      {line}")
+    if hasattr(form, "candidate_list"):
+        print(f"  候选（{form.candidate_list.count()} 条）:")
+        print(f"      {form.candidates_label.text()}")
+        for index in range(form.candidate_list.count()):
+            print(f"      {form.candidate_list.item(index).text()}")
+    else:
+        print("  候选：本节不存在（desktop 无候选概念）")
+    print(f"  就地校验  : {form.info_label.text()!r}（blocked={form.blocked}）")
     _name, document = dialog.result_document()
     print(f"  写回后 selector: {json.dumps(document['selector'], ensure_ascii=False)}")
 

@@ -372,6 +372,112 @@ def test_editor_browser_promotes_candidate(qapp):
     assert not dialog.promote_button.isEnabled()
 
 
+# ---- 节点树（M44 S5）：勾层级 → 按 fragment 拼回主选择器 ----------------------
+def _path_document() -> dict:
+    """带祖先链的浏览器元素：path 形状与 content.js ``pathFor`` 的产出一致。"""
+    return {
+        "kind": "browser",
+        "selector": {
+            "css": "body > div.wrap > button.ok:nth-of-type(2)",
+            "path": [
+                {"tag": "body", "id": None, "classes": [],
+                 "nthOfType": None, "fragment": "body"},
+                {"tag": "div", "id": None, "classes": ["wrap"],
+                 "nthOfType": 1, "fragment": "div.wrap"},
+                {"tag": "button", "id": None, "classes": ["ok"],
+                 "nthOfType": 2, "fragment": "button.ok:nth-of-type(2)"},
+            ],
+        },
+        "verifyCount": 1,
+        "metadata": {"tag": "button"},
+    }
+
+
+def test_path_tree_composes_css_from_checked_levels(qapp):
+    """勾选层级决定主选择器：取消祖先 → css 变成剩余层级的 join。
+
+    影刀节点树的用途正在这里：6 级全路径脆，截短成末两级往往更稳 —— 但此前
+    用户只能对着 `css` 一行文本手写，捕获到的层级信息**有数据没入口**。
+    """
+    from PySide6.QtCore import Qt
+
+    from rpa_core.gui.element_editor import ElementEditorForm
+
+    form = ElementEditorForm(_path_document())
+    assert form.path_list.count() == 3
+    assert all(
+        form.path_list.item(i).checkState() == Qt.CheckState.Checked
+        for i in range(3)
+    ), "css 是全路径 → 建树时应当全勾"
+
+    form.path_list.item(0).setCheckState(Qt.CheckState.Unchecked)
+    assert form.css_edit.text() == "div.wrap > button.ok:nth-of-type(2)"
+    assert not form.blocked
+
+
+def test_path_tree_leaf_cannot_be_unchecked(qapp):
+    """末级（目标本身）取消勾选会被勾回——「不指向目标的定位方案」不成立。"""
+    from PySide6.QtCore import Qt
+
+    from rpa_core.gui.element_editor import ElementEditorForm
+
+    form = ElementEditorForm(_path_document())
+    form.path_list.item(2).setCheckState(Qt.CheckState.Unchecked)
+    assert form.path_list.item(2).checkState() == Qt.CheckState.Checked
+    assert form.css_edit.text() == "body > div.wrap > button.ok:nth-of-type(2)"
+
+
+def test_path_tree_derives_checks_from_shortened_css(qapp):
+    """重开元素时按 css 反推勾选态（css 是路径后缀 → 只勾后缀）。
+
+    不做双向同步（css 解析回层级不可靠），但**建树这一次**必须让勾选态与
+    落盘的 css 一致：否则用户上轮截短的祖先，这轮随便点一下就被全路径覆盖。
+    """
+    from PySide6.QtCore import Qt
+
+    from rpa_core.gui.element_editor import ElementEditorForm
+
+    doc = _path_document()
+    doc["selector"]["css"] = "div.wrap > button.ok:nth-of-type(2)"
+    form = ElementEditorForm(doc)
+    assert form.path_list.item(0).checkState() == Qt.CheckState.Unchecked
+    assert form.path_list.item(1).checkState() == Qt.CheckState.Checked
+    assert form.path_list.item(2).checkState() == Qt.CheckState.Checked
+
+    # css 不出自这条路径（如候选提升来的）：回退全勾，下次勾选才重写
+    doc["selector"]["css"] = 'input[name="q"]'
+    form = ElementEditorForm(doc)
+    assert all(
+        form.path_list.item(i).checkState() == Qt.CheckState.Checked
+        for i in range(3)
+    )
+
+
+def test_path_tree_absent_without_path(qapp):
+    """老元素没有 path：不建树也不摆空壳（树是加分项，不是门槛）。"""
+    from rpa_core.gui.element_editor import ElementEditorForm
+
+    form = ElementEditorForm(_browser_document())
+    assert not hasattr(form, "path_list")
+    assert not hasattr(form, "path_label")
+
+
+def test_path_survives_edit_roundtrip(qapp):
+    """编辑（含勾层级重写 css）不得抹掉 `selector.path` —— 它是树的原料。
+
+    回归口径同 candidates：``result_document`` 以原 selector 为基底覆盖被编辑的键，
+    界面上没有直接编辑 path 的地方，写回必须原样保留。
+    """
+
+    from rpa_core.gui.element_editor import ElementEditorForm
+
+    form = ElementEditorForm(_path_document())
+    form.css_edit.setText("button.ok:nth-of-type(2)")
+    selector = form.result_document()["selector"]
+    assert selector["css"] == "button.ok:nth-of-type(2)"
+    assert selector["path"] == _path_document()["selector"]["path"]
+
+
 def test_editor_browser_blocks_blank_css(qapp):
     from PySide6.QtWidgets import QDialog
 

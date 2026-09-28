@@ -2,7 +2,7 @@
   "project": "rpa_core",
   "phase": "command-parity-extension-editor",
   "status": "active",
-  "completed_milestone": "M43-capture-esc-cancel",
+  "completed_milestone": "M44-capture-edit-in-place",
   "active_milestone": null,
   "active_plan": null,
   "active_feature": null,

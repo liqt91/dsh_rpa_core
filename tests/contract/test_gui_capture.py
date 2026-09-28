@@ -160,11 +160,13 @@ def test_capture_uses_hybrid_session_and_saves_browser_element(
     window, fake_capture, monkeypatch
 ):
     window._save_named_flow("cap1")
-    # 捕获确认对话框由 app._confirm_element_save 承担（ElementDialog 另行单测）
+    # 捕获确认对话框由 app._confirm_element_save 承担（ElementDialog 另行单测）。
+    # 返回形状自 M44 S4 起是 (意图, 载荷)——三个出口里两个都产出文档，
+    # 只回文档就分不清「保存完收工」还是「保存完继续捕获」。
     monkeypatch.setattr(
         type(window),
         "_confirm_element_save",
-        lambda self, result: ("searchBox", result),
+        lambda self, result: ("save", ("searchBox", result)),
     )
 
     window._capture_element()
@@ -180,6 +182,10 @@ def test_capture_uses_hybrid_session_and_saves_browser_element(
     assert "searchBox" in store.list()
     assert store.read("searchBox")["kind"] == "browser"
     assert fake.closed
+    # 「保存」= 收工，**不是**「保存并继续」：不能多开一轮捕获。
+    # 这一条是与 test_capture_save_and_continue_restarts_capture 成对的另一半——
+    # 只测「保存并继续会重启」的话，一个「永远重启」的实现照样全绿。
+    assert len(fake_capture.instances) == 1, "「保存」多开了一轮捕获"
 
 
 def test_capture_confirm_dialog_cancel_saves_nothing(
@@ -188,12 +194,81 @@ def test_capture_confirm_dialog_cancel_saves_nothing(
     """确认对话框取消：不入库、不置脏元素列表。"""
     window._save_named_flow("cap1c")
     monkeypatch.setattr(
-        type(window), "_confirm_element_save", lambda self, result: None
+        type(window), "_confirm_element_save", lambda self, result: (None, None)
     )
     window._capture_element()
     fake = fake_capture.instances[-1]
     _release_and_finish(fake, window)
     assert window._element_store().list() == []
+
+
+def test_capture_save_and_continue_restarts_capture(
+    window, fake_capture, monkeypatch
+):
+    """「保存并继续」：落盘 + 刷新元素库后**立刻开下一轮**，不必回元素库再点。
+
+    桩要有状态（第一轮返回 save_and_continue、第二轮返回 save）：桩若恒返回
+    save_and_continue，每轮结束都会再开一轮——测试自己就成了死循环。
+    """
+    window._save_named_flow("cap5")
+    calls: list[str] = []
+
+    def confirm(self, result):
+        calls.append("x")
+        if len(calls) == 1:
+            return "save_and_continue", ("el_a", result)
+        return "save", ("el_b", result)
+
+    monkeypatch.setattr(type(window), "_confirm_element_save", confirm)
+
+    window._capture_element()
+    first = fake_capture.instances[-1]
+    first._gate.set()
+    assert _pump_until(
+        lambda: len(fake_capture.instances) >= 2
+    ), "「保存并继续」没有重启捕获"
+    second = fake_capture.instances[-1]
+    assert second is not first and second.started, "第二轮没有真的 arm 扩展腿"
+    assert window._capture_session is second
+    assert "el_a" in window._element_store().list()
+    # 不断言「继续捕获」那句话：新一轮 `_capture_element` 会立刻用「捕获中…」
+    # 把它覆盖掉（被覆盖本身就是重启生效的表现）。
+
+    # 第二轮按「保存」→ 正常收场，不再重启
+    second._gate.set()
+    assert _pump_until(lambda: window._capture_session is None)
+    assert "el_b" in window._element_store().list()
+    assert len(fake_capture.instances) == 2, "「保存」不该再开一轮"
+
+
+def test_capture_recapture_discards_and_restarts(
+    window, fake_capture, monkeypatch
+):
+    """「重新捕获」：本次结果**不落盘**，直接回到捕获态重新框选。"""
+    window._save_named_flow("cap6")
+    calls: list[dict] = []
+
+    def confirm(self, result):
+        calls.append(result)
+        if len(calls) == 1:
+            return "recapture", None
+        return "save", ("el_b", result)
+
+    monkeypatch.setattr(type(window), "_confirm_element_save", confirm)
+
+    window._capture_element()
+    first = fake_capture.instances[-1]
+    first._gate.set()
+    assert _pump_until(lambda: len(fake_capture.instances) >= 2)
+    assert window._element_store().list() == [], "「重新捕获」把上次结果落盘了"
+    second = fake_capture.instances[-1]
+    assert second is not first and second.started
+    assert window._capture_session is second
+
+    # 第二轮按「保存」→ 落盘收场；第一轮被丢弃的东西不能混进来
+    second._gate.set()
+    assert _pump_until(lambda: window._capture_session is None)
+    assert window._element_store().list() == ["el_b"]
 
 
 def test_capture_overwrite_same_name_needs_confirm(window, monkeypatch):
@@ -225,6 +300,10 @@ def test_capture_overwrite_same_name_needs_confirm(window, monkeypatch):
         def exec(self):
             return QDialog.DialogCode.Accepted
 
+        def intent(self):
+            """走「保存」出口（另两个出口由 test_gui_panels 单测覆盖）。"""
+            return "save"
+
         def result_document(self):
             return "dup", {
                 "kind": "browser",
@@ -235,28 +314,29 @@ def test_capture_overwrite_same_name_needs_confirm(window, monkeypatch):
 
     monkeypatch.setattr(element_panel, "ElementDialog", FakeDialog)
 
-    # 选择「不覆盖」→ 返回 None，原元素不变
+    # 选择「不覆盖」→ 意图为 None（等同取消），原元素不变
     monkeypatch.setattr(
         QMessageBox,
         "question",
         staticmethod(lambda *a, **k: QMessageBox.StandardButton.No),
     )
-    assert window._confirm_element_save(original) is None
+    assert window._confirm_element_save(original) == (None, None)
     assert window._element_store().read("dup")["selector"]["css"] == "#old"
     # 命名对话框必须被置顶：捕获时用户在浏览器里操作，本进程是后台应用，
     # macOS 会忽略自激活请求，不置顶的话对话框停在浏览器后面、用户得先点一次
     # Dock 才看得见（真机 2026-09-19 实测）。
     assert created[0].windowFlags() & Qt.WindowType.WindowStaysOnTopHint
 
-    # 选择「覆盖」→ 返回新文档
+    # 选择「覆盖」→ 返回新文档（意图仍是 save）
     monkeypatch.setattr(
         QMessageBox,
         "question",
         staticmethod(lambda *a, **k: QMessageBox.StandardButton.Yes),
     )
-    confirmed = window._confirm_element_save(original)
-    assert confirmed is not None
-    assert confirmed[0] == "dup" and confirmed[1]["selector"]["css"] == "#new"
+    intent, payload = window._confirm_element_save(original)
+    assert intent == "save"
+    assert payload is not None
+    assert payload[0] == "dup" and payload[1]["selector"]["css"] == "#new"
 
 
 def test_capture_extension_offline_hint(window, fake_capture, monkeypatch):
@@ -369,7 +449,7 @@ def test_capture_late_result_from_replaced_session_is_ignored(
     的就不是「干净变红」而是「挂住」。桩成「用户取消」后，破坏表现为干净的断言失败。
     """
     monkeypatch.setattr(
-        type(window), "_confirm_element_save", lambda self, result: None
+        type(window), "_confirm_element_save", lambda self, result: (None, None)
     )
     window._save_named_flow("cap9")
     window._capture_element()

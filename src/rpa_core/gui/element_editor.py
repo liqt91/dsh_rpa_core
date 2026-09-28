@@ -45,11 +45,14 @@ handle               ✗                 ✗
   一条会多出一份语义要同步。
 - **``handle``**：运行期值（每次启动都变），摆出来只会诱导用户写出下次必定失效的 locator
   （同确认框不展示 ``windowHandle``）。
-- **DOM 节点树 / 活体校验**：见 ③-2。**注意**：活体校验的能力其实已经存在——内容脚本的
+- **活体校验**：见 ③-2。**注意**：活体校验的能力其实已经存在——内容脚本的
   动作路径里就有 ``document.querySelectorAll(selector).length`` 与遮挡/可见性预检，
   缺的不是能力而是**通道**：GUI 的 ``_capture_element`` 在 ``work()`` 的 finally 里
   ``session.close()``，即对话框弹出前捕获会话已撤防并关掉 bridge 通道。所以 ③-2 的
   第一件事是定「会话在对话框期间保持 arm」的生命周期改造，不是写查询代码。
+- **DOM 节点树**：曾列在这里，M44 S5 起有了**离线版**——基于捕获回传的
+  ``selector.path``（祖先链）逐级勾选、按 ``fragment`` join 拼回主 css。它与影刀的
+  差距只剩「实时页面树」（重开页面再扫一遍 DOM），勾选-重拼这一步不再缺。
 """
 
 from __future__ import annotations
@@ -57,6 +60,7 @@ from __future__ import annotations
 from typing import Any
 
 from pydantic import ValidationError
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -67,6 +71,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QListWidget,
+    QListWidgetItem,
     QPushButton,
     QVBoxLayout,
     QWidget,
@@ -317,21 +322,23 @@ def _candidate_label(candidate: dict[str, Any]) -> str:
     return f"[{kind}] {candidate.get('selector') or ''} · {count_text}"
 
 
-class ElementEditorDialog(QDialog):
-    """元素编辑器：浏览器走「主选择器 + 候选可选」，桌面走「locator 字段勾选」。
+class ElementEditorForm(QWidget):
+    """元素定位的编辑区：浏览器（主 css + 候选提升）/ 桌面（locator 字段勾选）。
 
-    判据：``result_document()`` 产出的文档必须能被 ``validate_element_document`` +
-    ``selector_errors`` 接受——保存按钮的启用/拒绝状态**由同一套校验决定**，
-    编辑器不承诺任何自己校验不出的东西。
+    **抽成独立控件，是为了让「捕获确认框」与「元素库编辑器」复用同一份编辑逻辑**——
+    影刀的「捕获即编辑」意味着这两者本是同一屏；我们此前是两步（确认框 → 另开编辑器）。
+    合并时若各写一套，结果必然是「同一件事两处口径」，而它迟早漂移成
+    「确认框里改得动的东西，编辑器里报错」。只放**编辑与校验**；「展示什么」
+    （只读 metadata 行集）留在 ``element_panel``。
+
+    校验的权威始终是**模型**（``locator_problems`` / ``css_problems``）：界面不另立
+    一套规则，所以这里报的错与执行器、``selector_errors`` 完全同源。
     """
 
-    def __init__(
-        self,
-        document: dict[str, Any],
-        *,
-        name: str,
-        parent: QWidget | None = None,
-    ) -> None:
+    #: 任一编辑动作后触发（值已变化）。外壳用它决定「确定」是否可用。
+    changed = Signal()
+
+    def __init__(self, document: dict[str, Any], parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._document = document
         self._kind = document.get("kind")
@@ -347,14 +354,19 @@ class ElementEditorDialog(QDialog):
             for item in raw_selector.get("candidates") or []
             if isinstance(item, dict)
         ]
-        self.setWindowTitle(f"编辑元素 · {name}")
-        self.setMinimumWidth(520)
+        # 节点树原料：捕获回传的祖先链（每级 {tag, id, classes, nthOfType, fragment}）。
+        # 只认「有非空 fragment」的级——老元素没有 path、手工文档可能形状不齐，缺了
+        # 就不建树（树是加分项，不是门槛）。
+        self._path: list[dict[str, Any]] = [
+            dict(entry)
+            for entry in raw_selector.get("path") or []
+            if isinstance(entry, dict)
+            and isinstance(entry.get("fragment"), str)
+            and entry["fragment"]
+        ]
 
         layout = QVBoxLayout(self)
-        header = "浏览器元素" if self._kind == "browser" else "桌面元素"
-        title = QLabel(f"{name}（{header}）")
-        title.setStyleSheet("font-weight: bold;")
-        layout.addWidget(title)
+        layout.setContentsMargins(0, 0, 0, 0)
 
         # 就地校验的展示面。**必须在建行之前创建**：建表过程末尾就会触发一次校验
         # （桌面表按 backend 决定显示哪些行），那时 label 还不存在就是一个 AttributeError。
@@ -369,16 +381,7 @@ class ElementEditorDialog(QDialog):
             self._build_desktop(layout, raw_selector)
 
         layout.addWidget(self.info_label)
-
-        buttons = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Save
-            | QDialogButtonBox.StandardButton.Cancel
-        )
-        buttons.accepted.connect(self.accept)
-        buttons.rejected.connect(self.reject)
-        layout.addWidget(buttons)
-
-        self._revalidate()
+        self.revalidate()
 
     # -- 浏览器 --------------------------------------------------------------
 
@@ -386,7 +389,7 @@ class ElementEditorDialog(QDialog):
         selector = _dict_or_empty(self._document.get("selector"))
         form = QFormLayout()
         self.css_edit = QLineEdit(str(selector.get("css") or ""))
-        self.css_edit.textChanged.connect(self._revalidate)
+        self.css_edit.textChanged.connect(self.revalidate)
         form.addRow("主选择器（css）", self.css_edit)
         layout.addLayout(form)
 
@@ -414,6 +417,94 @@ class ElementEditorDialog(QDialog):
         promote_row.addStretch(1)
         layout.addLayout(promote_row)
         self._sync_promote()
+        self._build_path_tree(layout)
+
+    # -- 浏览器：节点树（勾层级 → 拼回主选择器） -----------------------------
+
+    def _build_path_tree(self, layout: QVBoxLayout) -> None:
+        """节点树：按捕获回传的祖先链（``selector.path``）逐级勾选。
+
+        **单向**（树 → 主选择器）。``css_edit`` 是唯一落盘口径；树是「从捕获路径
+        重新拼选择器」的入口。不做双向同步是有意的：把 css 解析回层级不可靠
+        （手改的 css / 候选提升后的 css 都不出自这条路径），硬做双向就是立第二套
+        口径、迟早互相改写。所以树只承诺一件事——**再次勾选，就按所选层级重写
+        主选择器**；两个入口写同一个字段，后动手的赢。
+        """
+        if not self._path:
+            return  # 老元素没有 path：不建树也不摆一个空壳
+        self.path_label = QLabel(
+            "节点路径（勾选参与定位的层级；勾选会重写主选择器）"
+        )
+        self.path_label.setStyleSheet("color: #64707d;")
+        layout.addWidget(self.path_label)
+
+        self.path_list = QListWidget()
+        self._composing_path = False
+        for index, entry in enumerate(self._path):
+            item = QListWidgetItem(str(entry["fragment"]))
+            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            item.setCheckState(Qt.CheckState.Checked)
+            extra = entry.get("id") or (entry.get("classes") or "")
+            item.setToolTip(
+                f"层级 {index + 1}/{len(self._path)} · tag={entry.get('tag') or '?'}"
+                + (f" · {extra}" if extra else "")
+            )
+            self.path_list.addItem(item)
+        self.path_list.itemChanged.connect(self._on_path_item_changed)
+        layout.addWidget(self.path_list)
+        self._sync_path_checks_from_css()
+
+    def _sync_path_checks_from_css(self) -> None:
+        """按当前主 css 反推勾选态（只在建树时做一次）。
+
+        用户对路径的典型操作是**截短祖先**（css 是路径的后缀），所以从最短后缀
+        找起：css = 全路径 → 全勾；css = 末两级 → 只勾末两级。匹配不到（css 不出自
+        这条路径，比如候选提升来的）就保持全勾——树退回「完整路径」视角，
+        下一次勾选才重写。
+        """
+        if not hasattr(self, "path_list"):
+            return
+        fragments = [str(entry["fragment"]) for entry in self._path]
+        css = self.css_edit.text().strip()
+        start = next(
+            (
+                k
+                for k in range(len(fragments))
+                if " > ".join(fragments[k:]) == css
+            ),
+            0,
+        )
+        self._composing_path = True
+        try:
+            for index in range(self.path_list.count()):
+                state = (
+                    Qt.CheckState.Checked if index >= start else Qt.CheckState.Unchecked
+                )
+                self.path_list.item(index).setCheckState(state)
+        finally:
+            self._composing_path = False
+
+    def _on_path_item_changed(self, _item: QListWidgetItem) -> None:
+        if getattr(self, "_composing_path", False):
+            return
+        last_row = self.path_list.count() - 1
+        # 末级是目标本身：不勾它，选择器就不再指向捕获的那个元素。
+        # 这里替用户勾回去不是越权——「不指向目标的定位方案」不成立，没得选。
+        if self.path_list.item(last_row).checkState() != Qt.CheckState.Checked:
+            self._composing_path = True
+            try:
+                self.path_list.item(last_row).setCheckState(Qt.CheckState.Checked)
+            finally:
+                self._composing_path = False
+        fragments = [
+            str(entry["fragment"])
+            for index, entry in enumerate(self._path)
+            if self.path_list.item(index).checkState() == Qt.CheckState.Checked
+            or index == last_row
+        ]
+        css = " > ".join(fragments)
+        if css != self.css_edit.text().strip():
+            self.css_edit.setText(css)
 
     def _sync_promote(self) -> None:
         row = self.candidate_list.currentRow()
@@ -453,7 +544,7 @@ class ElementEditorDialog(QDialog):
             if self._candidates
             else "捕获时没有收集到备选定位"
         )
-        self._revalidate(notice=note)
+        self.revalidate(notice=note)
 
     # -- 桌面 ----------------------------------------------------------------
 
@@ -498,8 +589,8 @@ class ElementEditorDialog(QDialog):
             edit.textChanged.connect(
                 lambda text, target=box: target.setChecked(bool(text.strip()))
             )
-            box.toggled.connect(self._revalidate)
-            edit.textChanged.connect(self._revalidate)
+            box.toggled.connect(self.revalidate)
+            edit.textChanged.connect(self.revalidate)
             self.field_boxes[key] = box
             self.field_edits[key] = edit
             self.field_rows[key] = [box, edit]
@@ -539,7 +630,7 @@ class ElementEditorDialog(QDialog):
             )
         else:
             self.field_hint.setText("")
-        self._revalidate()
+        self.revalidate()
 
     def _desktop_values(self) -> dict[str, str]:
         """只取**当前 backend** 的已勾字段——跨后端字段一律不组装。"""
@@ -555,7 +646,8 @@ class ElementEditorDialog(QDialog):
     def _compose(self) -> dict[str, Any]:
         return compose_locator(self.backend_combo.currentText(), self._desktop_values())
 
-    def _problems(self) -> list[str]:
+    def problems(self) -> list[str]:
+        """当前编辑结果的结构问题（空列表 = 可保存）。"""
         if self._kind == "browser":
             return css_problems(self.css_edit.text())
         try:
@@ -564,10 +656,13 @@ class ElementEditorDialog(QDialog):
             return [str(exc)]
         return locator_problems(locator)
 
-    def _revalidate(self, *args: Any, notice: str | None = None) -> None:
+    #: 「确定」是否应被拦住（有问题才算；提示 notice 不算问题）。
+    blocked: bool = False
+
+    def revalidate(self, *args: Any, notice: str | None = None) -> None:
         """每次改动都重判一次；问题就地显示（不弹窗），与确认框同风格。"""
         del args
-        problems = self._problems()
+        problems = self.problems()
         parts = list(problems)
         if notice:
             parts.append(notice)
@@ -575,14 +670,8 @@ class ElementEditorDialog(QDialog):
         self.info_label.setStyleSheet(
             "color: #cf222e;" if problems else "color: #9a6700;"
         )
-        # 提示（notice）不算问题，不该拦保存；问题才算
-        self._blocked = bool(problems)
-
-    def accept(self) -> None:
-        self._revalidate()
-        if getattr(self, "_blocked", False):
-            return  # 错误已就地展示，保持对话框打开让用户改
-        super().accept()
+        self.blocked = bool(problems)
+        self.changed.emit()
 
     def result_document(self) -> dict[str, Any]:
         """编辑结果（ElementDescriptor 形状）。仅在 Accepted 后调用。"""
@@ -599,3 +688,60 @@ class ElementEditorDialog(QDialog):
             "verifyCount": self._verify_count,
             "metadata": self._document.get("metadata") or {},
         }
+
+
+class ElementEditorDialog(QDialog):
+    """元素编辑器对话框（元素库的「编辑」入口）。
+
+    编辑能力全部在 :class:`ElementEditorForm` 里；本类只提供外壳（标题 + 编辑区 +
+    保存/取消）与一条判定：**有结构错误就不许保存**。
+
+    ``__getattr__`` 把对编辑控件的访问转发给 form：调用方（与判据）关心的是
+    「编辑器能改什么」，不是「控件挂在哪个对象上」。这样「确认框」与「编辑器」
+    共用一份编辑逻辑时，两边的用法不会因为控件搬了家而分叉。
+    """
+
+    def __init__(
+        self,
+        document: dict[str, Any],
+        *,
+        name: str,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.setWindowTitle(f"编辑元素 · {name}")
+        self.setMinimumWidth(520)
+
+        layout = QVBoxLayout(self)
+        header = "浏览器元素" if document.get("kind") == "browser" else "桌面元素"
+        title = QLabel(f"{name}（{header}）")
+        title.setStyleSheet("font-weight: bold;")
+        layout.addWidget(title)
+
+        self.form = ElementEditorForm(document, parent=self)
+        layout.addWidget(self.form)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Save
+            | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def __getattr__(self, name: str) -> Any:
+        """编辑控件与编辑逻辑都住在 form 里（见类 docstring）。"""
+        form = self.__dict__.get("form")
+        if form is not None and hasattr(form, name):
+            return getattr(form, name)
+        raise AttributeError(name)
+
+    def accept(self) -> None:
+        self.form.revalidate()
+        if self.form.blocked:
+            return  # 错误已就地展示，保持对话框打开让用户改
+        super().accept()
+
+    def result_document(self) -> dict[str, Any]:
+        """编辑结果（ElementDescriptor 形状）。仅在 Accepted 后调用。"""
+        return self.form.result_document()

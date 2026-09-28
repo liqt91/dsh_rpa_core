@@ -124,27 +124,55 @@
     return (el.getAttribute("title") || el.getAttribute("placeholder") || "").trim();
   };
 
-  const cssSelectorFor = (el) => {
-    if (el.id) return "#" + CSS.escape(el.id);
-    const parts = [];
-    let node = el;
-    while (node && node.nodeType === 1 && parts.length < 6) {
-      let part = node.tagName.toLowerCase();
-      if (node.id) { parts.unshift("#" + CSS.escape(node.id)); break; }
-      if (node.className && typeof node.className === "string") {
-        const cls = node.className.trim().split(/\s+/).filter(Boolean)[0];
-        if (cls) part += "." + CSS.escape(cls);
-      }
+  // 祖先链深度上限：与升级前的 cssSelectorFor 一致（超过就不再上溯）。
+  const MAX_PATH_DEPTH = 6;
+
+  /** 单级定位片段：给一个节点，返回它在选择器里怎么写 + 供节点树展示的原始属性。
+   *
+   * 这是**唯一**的片段生成处——主选择器（cssSelectorFor）与节点树（selector.path）
+   * 都从这里取。两处各写一遍必然漂移，而漂移的后果是「节点树高亮的路径与真正
+   * 下发执行的选择器不是同一条」。
+   */
+  const pathEntryFor = (node) => {
+    const id = node.id || "";
+    const classes = typeof node.className === "string"
+      ? node.className.trim().split(/\s+/).filter(Boolean)
+      : [];
+    let nthOfType = null;
+    let fragment;
+    if (id) {
+      // 带 id 即终止上溯（唯一标识，再往上写路径只会变脆）——与升级前同口径
+      fragment = "#" + CSS.escape(id);
+    } else {
+      fragment = node.tagName.toLowerCase();
+      if (classes.length) fragment += "." + CSS.escape(classes[0]);
       const parent = node.parentElement;
       if (parent) {
         const same = Array.from(parent.children).filter((c) => c.tagName === node.tagName);
-        if (same.length > 1) part += ":nth-of-type(" + (same.indexOf(node) + 1) + ")";
+        if (same.length > 1) {
+          nthOfType = same.indexOf(node) + 1;
+          fragment += ":nth-of-type(" + nthOfType + ")";
+        }
       }
-      parts.unshift(part);
-      node = parent;
     }
-    return parts.join(" > ");
+    return { tag: node.tagName.toLowerCase(), id: id || null, classes, nthOfType, fragment };
   };
+
+  /** 根 → 目标的祖先链（每级一个 pathEntryFor 结果）。节点树用它，勾选后拼回主选择器。 */
+  const pathFor = (el) => {
+    if (el.id) return [pathEntryFor(el)];
+    const parts = [];
+    let node = el;
+    while (node && node.nodeType === 1 && parts.length < MAX_PATH_DEPTH) {
+      const entry = pathEntryFor(node);
+      parts.unshift(entry);
+      if (entry.id) break;
+      node = node.parentElement;
+    }
+    return parts;
+  };
+
+  const cssSelectorFor = (el) => pathFor(el).map((entry) => entry.fragment).join(" > ");
 
   // CSS 属性选择器的值需要转义 \ 与 "（否则含引号的 aria-label 会拼出非法选择器）。
   const attrValue = (value) => String(value).replace(/\\/g, "\\\\").replace(/"/g, '\\"');
@@ -208,6 +236,24 @@
   // 所以判定以事件类型为准，不看 button。
   const isCaptureModifier = (e) => Boolean(e.ctrlKey || e.metaKey);
   const isSecondaryClick = (e) => e.type === "contextmenu" || e.button === 2;
+
+  // ---- 捕获光标：按下修饰键（Ctrl/⌘）但**尚未点击**时的「就绪」视觉反馈 ----
+  /** 光标样式的元素 id：既做自己的引用键，也让接管僵尸实例时能按 id 清掉残留。 */
+  const CURSOR_STYLE_ID = "rpa-capture-cursor";
+  /** 蓝色箭头（与手势同色系）：viewBox 24×24，热点取箭头尖 (4,2)。 */
+  const CAPTURE_CURSOR_SVG = '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24"'
+    + ' viewBox="0 0 24 24"><path d="M5 2 L5 19 L9.5 14.8 L12.3 21.5 L14.8 20.4 L12 13.9 L18 13.6 Z"'
+    + ' fill="%232F6BFF" stroke="%23ffffff" stroke-width="1.2" stroke-linejoin="round"/></svg>';
+  /** 该按键是否代表「捕获修饰键已按下」——与 isCaptureModifier 同口径（Ctrl 或 ⌘）。 */
+  const cursorKeyOf = (e) => {
+    const key = e && e.key;
+    if (key === "Control") return "ctrl";
+    if (key === "Meta") return "meta";
+    return null;
+  };
+  /** 光标样式文本。`!important` 压过站点自己的 cursor 规则（含 `*` 兜底）。 */
+  const cursorStyleText = () => "* { cursor: url('data:image/svg+xml,"
+    + CAPTURE_CURSOR_SVG + "') 4 2, auto !important; }";
 
   // [capture-overlay-geometry:start]
   // 捕获高亮框几何（M41）：框线躲开鼠标指针。
@@ -277,6 +323,27 @@
     if (hint) { hint.remove(); hint = null; }
   };
 
+  // 捕获光标：armed 期间按下 Ctrl/⌘ 就变蓝，松开/撤防/收摊即还原。
+  // **不写进页面自己的样式**（只加一个 <style> 元素），移除即完全还原——页面站的 cursor
+  // 规则一条都不动。三个出口收口在这里，别处只管调。
+  let cursorStyle = null;
+  const showCaptureCursor = () => {
+    if (cursorStyle || !isAlive()) return;
+    const node = document.createElement("style");
+    node.id = CURSOR_STYLE_ID;
+    node.textContent = cursorStyleText();
+    document.documentElement.appendChild(node);
+    cursorStyle = node;
+  };
+  const clearCaptureCursor = () => {
+    // 先用**自己的引用**移除（与 hideBox 同款）：不能只靠 getElementById——那一步
+    // 一旦不可用（桩环境/异常时机），引用被清空而节点留在页面上，光标就赖着不走了。
+    if (cursorStyle) { cursorStyle.remove(); cursorStyle = null; }
+    // 再按 id 兜一次：接管僵尸实例时，旧实例留下的那个 <style> 引用已不可达
+    const stale = document.getElementById(CURSOR_STYLE_ID);
+    if (stale) stale.remove();
+  };
+
   // 收摊：清覆盖层 + 摘掉全部监听 + 让出实例位（补注入的新实例据此接管）。
   // 由两条路径调用：① 新实例发现本实例已是僵尸（见文件顶部守卫）；② 本实例自己发现
   // 上下文失效（见 onMove）。`instance` / `onRuntimeMessage` 定义在下方，teardown 只在
@@ -285,6 +352,7 @@
     if (!live) return;
     live = false;
     hideOverlay();
+    clearCaptureCursor();
     for (const [target, type, handler, options] of bound.splice(0)) {
       try {
         target.removeEventListener(type, handler, options);
@@ -314,7 +382,10 @@
     const r = el.getBoundingClientRect();
     return {
       kind: "browser",
-      selector: { css, candidates: candidatesFor(el, css) },
+      // path = 祖先链（每级 {tag, id, classes, nthOfType, fragment}）：元素编辑器据它画
+      // 节点树，用户勾选层级后按 fragment join(" > ") 拼回 css。与 css **同源**
+      // （都出自 pathFor），所以树上高亮的路径与真正下发执行的选择器必然是同一条。
+      selector: { css, path: pathFor(el), candidates: candidatesFor(el, css) },
       verifyCount: document.querySelectorAll(css).length,
       metadata: {
         tag: el.tagName.toLowerCase(),
@@ -372,6 +443,7 @@
     }
     lastCaptureAt = now;
     hideOverlay();
+    clearCaptureCursor();   // 已捕获：不再处于「就绪待点」状态
   };
 
   const onClick = (e) => {
@@ -393,14 +465,23 @@
   };
 
   const onKey = (e) => {
+    // 按下 Ctrl/⌘（尚未点击）→ 光标变蓝：这是「现在点下去就捕获」的就绪反馈。
+    if (armed && cursorKeyOf(e)) showCaptureCursor();
     if (e.key === "Escape" && armed) {
       hideOverlay();   // 先收覆盖层：掉线时 sendMessage 会抛，否则红框会卡在屏幕上
+      clearCaptureCursor();
       try {
         chrome.runtime.sendMessage({ type: "rpa-capture-cancelled" });
       } catch {
         /* 扩展重载后旧脚本孤立：本地已收场，无需上报 */
       }
     }
+  };
+
+  // 松开修饰键即还原光标。**无条件清**（不判 armed）：arm 在按着键的过程中被撤掉时，
+  // keyup 是最后一个能把光标收回去的时机。
+  const onKeyUp = (e) => {
+    if (cursorKeyOf(e)) clearCaptureCursor();
   };
 
   // 鼠标离开网页区域/窗口失焦/滚动时清掉高亮框（否则红框残留在屏幕上）
@@ -412,7 +493,12 @@
   const onRuntimeMessage = (msg) => {
     if (msg && msg.type === "rpa-capture-arm") {
       armed = msg.armed === true;
-      if (armed) setHint(CAPTURE_HINT); else hideOverlay();
+      if (armed) {
+        setHint(CAPTURE_HINT);
+      } else {
+        hideOverlay();
+        clearCaptureCursor();   // 撤防：就绪光标必须跟着走，否则它会赖在整个页面上
+      }
     }
   };
   chrome.runtime.onMessage.addListener(onRuntimeMessage);
@@ -422,6 +508,7 @@
   on(document, "mousedown", onSecondary, true);
   on(document, "contextmenu", onSecondary, true);
   on(document, "keydown", onKey, true);
+  on(document, "keyup", onKeyUp, true);
 
   // 登记本实例：补注入的新脚本据此判断「拦下还是接管」（见文件顶部守卫）。
   const instance = { alive: isAlive, teardown };

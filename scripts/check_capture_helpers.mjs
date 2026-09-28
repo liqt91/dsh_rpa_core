@@ -90,11 +90,11 @@ const parentOf = (parent, children) => {
 };
 
 const {
-  roleOf, accessibleName, cssSelectorFor, candidatesFor, labelTextOf, containerTextOf,
-  isCaptureModifier, isSecondaryClick,
+  roleOf, accessibleName, cssSelectorFor, pathFor, candidatesFor, labelTextOf, containerTextOf,
+  isCaptureModifier, isSecondaryClick, cursorKeyOf, cursorStyleText,
 } = new Function("document", "CSS", `${slice}
-return { roleOf, accessibleName, cssSelectorFor, candidatesFor, labelTextOf, containerTextOf,
-  isCaptureModifier, isSecondaryClick };`)(
+return { roleOf, accessibleName, cssSelectorFor, pathFor, candidatesFor, labelTextOf,
+  containerTextOf, isCaptureModifier, isSecondaryClick, cursorKeyOf, cursorStyleText };`)(
   document, CSS,
 );
 
@@ -160,6 +160,30 @@ parentOf(root, [mid]);
 parentOf(mid, [leaf, makeEl({ tag: "DIV", classes: ["sibling"] })]);
 check("无 id → 逐级路径带 :nth-of-type",
   cssSelectorFor(leaf), "#nav > div.position-relative > div.d-flex:nth-of-type(1)");
+
+// 祖先链（节点树的原料）：pathFor 是**唯一**的片段生成处，cssSelectorFor 由它 join 而来，
+// 所以「树上显示的路径」与「真正下发执行的选择器」不可能漂移——这条断言就是那句保证。
+check("有 id → 祖先链只有一级（带 id 即终止上溯）",
+  pathFor(makeEl({ tag: "INPUT", id: "kw" })).map((e) => e.fragment), ["#kw"]);
+check("pathFor 与 cssSelectorFor 同源（fragment join 即主 css）",
+  pathFor(leaf).map((e) => e.fragment).join(" > "), cssSelectorFor(leaf));
+check("祖先链每级可展示（tag / id / classes / nthOfType）",
+  pathFor(leaf).map((e) => [e.tag, e.id, e.classes.join("."), e.nthOfType]),
+  [["div", "nav", "", null], ["div", null, "position-relative", null],
+    ["div", null, "d-flex", 1]]);
+check("祖先链根 → 目标（顺序不能反）",
+  pathFor(leaf).map((e) => e.tag), ["div", "div", "div"]);
+
+// 捕获光标（按下 Ctrl/⌘ 未点击时的就绪反馈）：纯函数层只判「哪个键算修饰键」与样式文本，
+// 真正的 DOM 开关在 check_capture_lifecycle.mjs 里用桩真求值。
+check("cursorKeyOf 只认 Control / Meta（与捕获手势同口径）",
+  [cursorKeyOf({ key: "Control" }), cursorKeyOf({ key: "Meta" }),
+    cursorKeyOf({ key: "Shift" }), cursorKeyOf({}), cursorKeyOf(null)],
+  ["ctrl", "meta", null, null, null]);
+check("光标样式：蓝色箭头 + !important + * 兜底（压过站点自己的 cursor）",
+  [/2F6BFF/.test(cursorStyleText()), /\* \{ cursor:/.test(cursorStyleText()),
+    /!important/.test(cursorStyleText()), /svg/.test(cursorStyleText())],
+  [true, true, true, true]);
 
 // 备选候选
 page = [];

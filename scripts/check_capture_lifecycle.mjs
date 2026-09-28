@@ -18,6 +18,8 @@ const here = dirname(fileURLToPath(import.meta.url));
 const source = readFileSync(join(here, "..", "extension", "content.js"), "utf8");
 
 const INSTANCE_KEY = "__rpaCaptureInstance";
+// 期望值**独立写死**（不从被测源码里读）：判据若从被测代码取常量，改错了也照样绿。
+const CURSOR_STYLE_ID = "rpa-capture-cursor";
 
 let failed = 0;
 const check = (label, got, expected) => {
@@ -76,6 +78,9 @@ const makeWorld = () => {
   };
 
   const hoverTarget = {
+    // nodeType 必须有：pathFor / cssSelectorFor 的上溯循环判 `node.nodeType === 1`，
+    // 缺了它循环一次都不跑、直接返回空（此前没断言过 css 内容，所以一直没暴露）。
+    nodeType: 1,
     tagName: "BUTTON",
     id: "",
     className: "",
@@ -117,6 +122,12 @@ const makeWorld = () => {
     documentEmitter,
     // 「页面上还剩几个覆盖层节点」：box 与 hint 都挂在 documentElement 下
     overlays: () => html.children.length,
+    // 捕获光标样式节点（按下 Ctrl/⌘ 时注入的 <style>）：是否残留、是否叠加看它
+    cursorStyles: () => html.children.filter((n) => n.id === CURSOR_STYLE_ID).length,
+    cursorStyleText: () => {
+      const node = html.children.find((n) => n.id === CURSOR_STYLE_ID);
+      return node ? node.textContent : "";
+    },
     // 净监听器数（注册 - 摘除），teardown 是否真的拆干净看它
     listeners: () => emitters.reduce(
       (sum, e) => sum + [...e.handlers.values()].reduce((n, s) => n + s.size, 0), 0,
@@ -183,12 +194,19 @@ const aliveOf = (world) => Boolean(
   world.window[INSTANCE_KEY] && world.window[INSTANCE_KEY].alive(),
 );
 
+// 单实例应有的净监听器总数。**三处断言共用它**：新增一个监听只需改这里一处，
+// 而「接管后不叠加」仍然被钉住（数字自身不漂）。
+// 组成：3 × onLeave（mouseleave / blur / scroll）+ 5 × 手势
+//（mousemove / click / mousedown / contextmenu / keydown）+ 1 × keyup（光标还原）。
+const EXPECTED_LISTENERS = 9;
+
 // ---------------------------------------------------------------- 场景 1：首次安装
 {
   const world = makeWorld();
   const state = makeChrome();
   install(world, state);
-  check("S1 首次安装：净监听器就位（3 × onLeave + 5 × 手势）", world.listeners(), 8);
+  check("S1 首次安装：净监听器就位（3 × onLeave + 5 × 手势 + 1 × keyup）",
+    world.listeners(), EXPECTED_LISTENERS);
   check("S1 首次安装：runtime.onMessage 监听就位", state.messageListeners.size, 1);
   check("S1 首次安装：登记本实例", typeof world.window[INSTANCE_KEY], "object");
   check("S1 首次安装：登记时是活的", aliveOf(world), true);
@@ -205,7 +223,8 @@ const aliveOf = (world) => Boolean(
   install(world, state);
   const first = world.window[INSTANCE_KEY];
   install(world, state);
-  check("S2 重复注入（同上下文）：不重装，监听器数不变", world.listeners(), 8);
+  check("S2 重复注入（同上下文）：不重装，监听器数不变",
+    world.listeners(), EXPECTED_LISTENERS);
   check("S2 重复注入（同上下文）：实例对象未被替换", world.window[INSTANCE_KEY] === first, true);
   check("S2 重复注入（同上下文）：runtime 监听未叠加", state.messageListeners.size, 1);
 }
@@ -240,7 +259,7 @@ const aliveOf = (world) => Boolean(
   dead.chrome.runtime.id = undefined;   // 旧实例变成僵尸
   const fresh = makeChrome();
   install(world, fresh);                // background 补注入
-  check("S4 接管：旧监听器被摘干净（不叠加）", world.listeners(), 8);
+  check("S4 接管：旧监听器被摘干净（不叠加）", world.listeners(), EXPECTED_LISTENERS);
   check("S4 接管：旧红框被清掉", world.overlays(), 0);
   check("S4 接管：新实例已登记且是活的", aliveOf(world), true);
   check("S4 接管：新实例查了一次捕获态", fresh.sent, [{ type: "rpa-capture-state" }]);
@@ -332,4 +351,102 @@ const aliveOf = (world) => Boolean(
 }
 
 console.log(failed ? `\n${failed} 项失败` : "\n全部通过");
+// --------------------------------------------- 场景 11：捕获光标（按 Ctrl 未点击即变蓝）
+// 语义只在浏览器里成立（改的是页面的 cursor），Python 读源码只能证明「写了这行字」。
+// 要点是**可逆**与**不叠加**：残留一个 <style> 会让光标赖在整个站点的每个元素上。
+{
+  const world = makeWorld();
+  const state = makeChrome();
+  install(world, state);
+  arm(state, true);
+  check("S11 未按修饰键：没有光标样式", world.cursorStyles(), 0);
+  world.fire(world.documentEmitter, "keydown", { key: "Control" });
+  check("S11 按下 Ctrl：注入光标样式", world.cursorStyles(), 1);
+  const css = world.cursorStyleText();
+  check("S11 光标是蓝色箭头", css.includes("2F6BFF"), true);
+  check("S11 带 !important 压过站点自己的 cursor 规则",
+    css.includes("!important") && css.includes("* { cursor:"), true);
+  world.fire(world.documentEmitter, "keydown", { key: "Control" });
+  check("S11 按住 Ctrl 连发 keydown：不叠加", world.cursorStyles(), 1);
+  world.fire(world.documentEmitter, "keyup", { key: "Control" });
+  check("S11 松开 Ctrl：光标还原", world.cursorStyles(), 0);
+}
+{
+  const world = makeWorld();
+  const state = makeChrome();
+  install(world, state);
+  world.fire(world.documentEmitter, "keydown", { key: "Control" });
+  check("S11 非捕获态按 Ctrl：不注入（不打扰正常浏览）", world.cursorStyles(), 0);
+}
+{
+  const world = makeWorld();
+  const state = makeChrome();
+  install(world, state);
+  arm(state, true);
+  world.fire(world.documentEmitter, "keydown", { key: "Meta" });
+  check("S11 macOS ⌘ 与 Ctrl 同口径（也变蓝）", world.cursorStyles(), 1);
+}
+{
+  const world = makeWorld();
+  const state = makeChrome();
+  install(world, state);
+  arm(state, true);
+  world.fire(world.documentEmitter, "keydown", { key: "Control" });
+  arm(state, false);
+  check("S11 按住 Ctrl 时撤防：光标跟着走（不赖在页面上）", world.cursorStyles(), 0);
+}
+{
+  const world = makeWorld();
+  const state = makeChrome();
+  install(world, state);
+  arm(state, true);
+  world.fire(world.documentEmitter, "keydown", { key: "Control" });
+  world.fire(world.documentEmitter, "keydown", { key: "Escape" });
+  check("S11 按住 Ctrl 时按 Esc：光标还原", world.cursorStyles(), 0);
+}
+{
+  const world = makeWorld();
+  const state = makeChrome();
+  install(world, state);
+  arm(state, true);
+  world.fire(world.documentEmitter, "keydown", { key: "Control" });
+  gesture(world, "click", { ctrlKey: true, metaKey: false });
+  check("S11 按住 Ctrl 完成捕获：光标还原", world.cursorStyles(), 0);
+}
+{
+  // 僵尸接管：旧实例若把 <style> 留在页面上，新实例的接管路径必须把它清掉。
+  // （接管只调得到 teardown，不是新实例自己重扫一遍页面。）
+  const world = makeWorld();
+  const state = makeChrome();
+  install(world, state);
+  arm(state, true);
+  world.fire(world.documentEmitter, "keydown", { key: "Control" });
+  state.chrome.runtime.id = "";
+  install(world, state);
+  check("S11 接管僵尸实例：残留光标被清掉", world.cursorStyles(), 0);
+}
+
+// --------------------------------------------- 场景 12：祖先链回传（节点树的原料）
+// 影刀的节点树就是「根 → 目标」的逐级路径。我们的 css 本来就走这条链，但从没回传过
+// —— 用户看不到路径、也没法逐级增删。pathFor 是唯一的片段生成处，css 由它 join 而来，
+// 所以两者**必然同源**：树上显示的路径与真正下发执行的选择器是同一条。
+{
+  const world = makeWorld();
+  const state = makeChrome();
+  install(world, state);
+  arm(state, true);
+  gesture(world, "click", { ctrlKey: true, metaKey: false });
+  const msg = state.sent.find((m) => m.type === "rpa-capture-result");
+  const selector = (msg && msg.descriptor && msg.descriptor.selector) || {};
+  const path = selector.path;
+  check("S12 捕获回传 selector.path（祖先链）",
+    Array.isArray(path) && path.length >= 1, true);
+  check("S12 path 每级带 tag 与 fragment",
+    Array.isArray(path)
+      && path.every((e) => typeof e.tag === "string" && typeof e.fragment === "string"), true);
+  check("S12 path 末级 fragment 与主 css 同源",
+    Array.isArray(path) && path.length > 0
+      && path[path.length - 1].fragment === selector.css, true);
+}
+
 process.exit(failed ? 1 : 0);
