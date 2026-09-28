@@ -20,6 +20,7 @@ import copy
 import json
 import sys
 import threading
+import time
 from pathlib import Path
 
 # Qt 绑定在模块顶层导入：本模块本身已被 CLI 延迟导入，未装 extra 时不会触达。
@@ -357,6 +358,30 @@ class _CaptureBridge(QObject):
     finished = Signal(dict)
 
 
+# 捕获预算（秒）：无手势时的等待上限。会话层与浮窗倒计时共用同一数字，避免两处口径。
+CAPTURE_TIMEOUT_SECONDS = 90.0
+
+
+def capture_web_status(session) -> tuple[str, bool]:
+    """网页捕获通道的（一行文案, 是否可用）。
+
+    三种形态要分开说，因为它们对用户意味着不同的下一步：插件**离线**（去装插件）、
+    插件**未响应**（重开浏览器/重装插件）、**就绪**（去页面里框选）。
+    """
+    if getattr(session, "extension_offline", False):
+        return "网页捕获：插件离线（工具栏「插件」按钮查看安装引导）", False
+    if getattr(session, "extension_unresponsive", False):
+        return "网页捕获：插件未响应（bridge 端点在，但扩展没确认捕获请求）", False
+    return "网页捕获：就绪（在页面里移动鼠标会出现红框）", True
+
+
+def capture_desktop_status(session) -> tuple[str, bool]:
+    """桌面捕获通道的（一行文案, 是否可用）。"""
+    if getattr(session, "desktop_offline", False):
+        return "桌面捕获：本平台不可用（仅支持 Windows）", False
+    return "桌面捕获：就绪（F9 或 Ctrl+右键捕获）", True
+
+
 class MainWindow(QMainWindow):
     """编辑器主窗口：左指令树（真实 catalog）+ 中流程卡片画布 + 右参数表单。"""
 
@@ -411,6 +436,11 @@ class MainWindow(QMainWindow):
         self._history_cursor_node: str | None = None
         # 进行中的元素捕获会话（混合捕获，窗口关闭时取消）
         self._capture_session = None
+        # 捕获悬浮窗与倒计时节拍（懒创建；捕获期间主窗最小化，浮窗是唯一反馈面）
+        self._capture_float = None
+        self._capture_timer = None
+        self._capture_started_at = 0.0
+        self._capture_budget = CAPTURE_TIMEOUT_SECONDS
         self.setWindowTitle("RPA Core 编辑器")
         self.resize(1280, 800)
 
@@ -2022,8 +2052,6 @@ class MainWindow(QMainWindow):
 
     def _format_event(self, event: dict) -> str:
         """把运行事件格式化为可读日志行（对齐 Web 事件展示 + 耗时/输出预览）。"""
-        import time
-
         etype = event.get("type", "")
         node_id = event.get("node_id", "")
         payload = event.get("payload") or {}
@@ -2695,14 +2723,18 @@ class MainWindow(QMainWindow):
         """混合捕获：网页正文走扩展、桌面走 UIA hover，先回传者胜。
 
         影刀式单入口——用户无需先判断目标是网页还是桌面。捕获期间主窗
-        最小化（不遮挡目标），结束还原；插件离线时显式提示网页区域不可
-        捕获（UIA 兜底已证伪，不静默捕获渲染层）。
+        最小化（不遮挡目标），结束还原；**捕获期的反馈与取消由悬浮窗承担**
+        ——焦点一离开主窗，状态栏就不再是用户能看到的界面。
+
+        **第二次点击 = 取消进行中的捕获**（不再只是回一句「进行中」）：捕获期唯一
+        的确定性出口不能是「等满超时」，那正是维护者报障「再点只提示已有捕获任务
+        进行中」时被困住的形状。
         """
         if self._element_store() is None:
             self.statusBar().showMessage("先把流程保存到流程库，再捕获元素", 5000)
             return
         if self._capture_session is not None:
-            self.statusBar().showMessage("已有捕获会话进行中（Esc 取消）", 4000)
+            self._cancel_capture()
             return
         # 延迟导入对齐 CLI（capture 包洁净无 pywinauto，但保持单一惯例）
         from rpa_core.capture import (
@@ -2714,7 +2746,7 @@ class MainWindow(QMainWindow):
         session = HybridCaptureSession(
             desktop_factory=DesktopCaptureSession,
             hover=True,
-            timeout_seconds=90,
+            timeout_seconds=CAPTURE_TIMEOUT_SECONDS,
         )
         session.start()  # arm 扩展腿；桌面腿（agent 子进程）构造时已起
         desktop_offline = session.desktop_offline
@@ -2746,22 +2778,122 @@ class MainWindow(QMainWindow):
         if session.extension_offline:
             hint = "浏览器插件离线：网页区域无法捕获（桌面不受影响）。" + hint
         self.statusBar().showMessage(hint, 9000)
-        self._capture_bridge = _CaptureBridge(self)
-        self._capture_bridge.finished.connect(self._on_element_captured)
+        # 桥与会话**一对一**：emit 只投到本会话自己的桥。
+        # 曾经 work() 走 `self._capture_bridge`，而「取消后立刻重开」会让两个会话
+        # 短暂并存——旧会话的迟到结果会投到新桥上，把新会话的状态提前复位掉。
+        bridge = _CaptureBridge(self)
+        bridge.finished.connect(
+            lambda result, sess=session: self._on_element_captured(result, sess)
+        )
+        self._capture_bridge = bridge  # 保持引用，防 GC 后信号丢失
         self.showMinimized()  # 不遮挡捕获目标（ADR 0010 的原始动机）
+        self._show_capture_float(session)
 
         def work() -> None:
             try:
-                result = session.pick(timeout_seconds=90)
+                result = session.pick(timeout_seconds=CAPTURE_TIMEOUT_SECONDS)
+            except Exception as exc:  # noqa: BLE001 - 会话异常也必须收场
+                # 少了这一步，finished 永不 emit → `_capture_session` 永不复位、主窗
+                # 永不还原：用户看到「点了没反应，再点说进行中」，只能重启进程。
+                result = {"error": f"捕获会话异常：{exc}"}
             finally:
-                session.close()
+                try:
+                    session.close()
+                except Exception:  # noqa: BLE001 - 收场路径尽力而为
+                    pass
             # 捕获期间窗口可能已被关闭：先验桥对象存活再 emit，避免野指针
             import shiboken6
 
-            if shiboken6.isValid(self._capture_bridge):
-                self._capture_bridge.finished.emit(result)
+            if shiboken6.isValid(bridge):
+                bridge.finished.emit(result)
 
         threading.Thread(target=work, daemon=True).start()
+
+    # ---- 捕获悬浮窗（M40）：最小化期间的唯一反馈面 + 取消出口 ----------------
+    def _capture_float_window(self):
+        """懒建捕获悬浮窗（每次捕获用新建的一扇，避免跨会话残留状态）。"""
+        if self._capture_float is None:
+            from rpa_core.gui.capture_float import CaptureFloatWindow
+
+            window = CaptureFloatWindow()
+            window.cancel_requested.connect(self._cancel_capture)
+            self._capture_float = window
+        return self._capture_float
+
+    def _show_capture_float(self, session) -> None:
+        """显示捕获悬浮窗：手势提示 + 两条腿的真实状态 + 倒计时 + 取消按钮。"""
+        from rpa_core.capture import capture_click_label
+
+        window = self._capture_float_window()
+        web_text, web_ok = capture_web_status(session)
+        desktop_text, desktop_ok = capture_desktop_status(session)
+        gesture = f"移动鼠标框选，{capture_click_label()} 或右键捕获"
+        if desktop_ok:
+            gesture += "（桌面也可用 F9）"
+        window.show_capture(
+            gesture=gesture,
+            web=web_text,
+            desktop=desktop_text,
+            timeout_seconds=self._capture_budget,
+            web_ok=web_ok,
+            desktop_ok=desktop_ok,
+        )
+        window.place_bottom_right()
+        present_window(window)  # 主窗刚最小化：浮窗必须自己浮到最前
+        self._capture_started_at = time.monotonic()
+        from PySide6.QtCore import QTimer
+
+        timer = QTimer(self)
+        timer.setInterval(500)
+        timer.timeout.connect(self._tick_capture_float)
+        timer.start()
+        self._capture_timer = timer
+
+    def _tick_capture_float(self) -> None:
+        """倒计时 + 腿状态实时刷新（扩展腿判死后用户要知道网页里为什么没红框）。"""
+        window = self._capture_float
+        if window is None:
+            return
+        remaining = self._capture_budget - (time.monotonic() - self._capture_started_at)
+        window.tick(remaining)
+        session = self._capture_session
+        if session is None:
+            return
+        if getattr(session, "extension_unresponsive", False):
+            web_text, web_ok = capture_web_status(session)
+            desktop_text, desktop_ok = capture_desktop_status(session)
+            window.set_channels(
+                web=web_text, desktop=desktop_text, web_ok=web_ok, desktop_ok=desktop_ok
+            )
+
+    def _close_capture_float(self) -> None:
+        if self._capture_timer is not None:
+            self._capture_timer.stop()
+            self._capture_timer = None
+        window = self._capture_float
+        self._capture_float = None
+        if window is not None:
+            window.close()
+            window.deleteLater()
+
+    def _cancel_capture(self) -> None:
+        """取消进行中的捕获（浮窗按钮 / 第二次点捕获 / 关闭窗口共用三条入口）。
+
+        只 `cancel()` 会话、不在这里清 `_capture_session`：让 pick 自然收场并由
+        `_on_element_captured` 统一复位（那条路径会还原主窗、给状态栏消息）。
+        立即清空反而危险——后台 work() 还没回来，用户若随即重开捕获，旧线程的
+        收尾会把**新会话**的状态一起清掉。
+        """
+        session = self._capture_session
+        self._close_capture_float()
+        if session is None:
+            return
+        try:
+            session.cancel()
+        except Exception:  # noqa: BLE001 - 取消尽力而为，超时兜底仍在
+            pass
+        self.statusBar().showMessage("已取消捕获，可再次点击「捕获元素」重试", 5000)
+
 
     def _confirm_capture_offline(self) -> bool:
         """扩展腿离线时的显式确认：继续（仅桌面捕获）还是取消去装插件。
@@ -2780,9 +2912,22 @@ class MainWindow(QMainWindow):
         )
         return choice == QMessageBox.StandardButton.Yes
 
-    def _on_element_captured(self, result: dict) -> None:
-        """捕获结束：还原主窗口 → 命名 → 入库（ElementDescriptor 契约校验）。"""
+    def _on_element_captured(self, result: dict, session=None) -> None:
+        """捕获结束：还原主窗口 → 命名 → 入库（ElementDescriptor 契约校验）。
+
+        `session` 是产出本结果的会话（由 work() 那条一对一的桥绑定）。**迟到结果必须
+        丢弃**：「取消后立刻重开」会让两个会话短暂并存，旧会话的收尾不得复位新会话的
+        状态、也不得关掉新会话的浮窗。`session is None` 时按「就是当前会话」处理
+        （直接调用路径，行为与改动前一致）。
+        """
+        if (
+            session is not None
+            and self._capture_session is not None
+            and session is not self._capture_session
+        ):
+            return
         self._capture_session = None
+        self._close_capture_float()
         self.showNormal()
         # 捕获期间用户在浏览器里操作 → 本进程是后台应用，单纯 raise()/
         # activateWindow() 会被 macOS 忽略（见 present_window 文档）。
@@ -3386,6 +3531,7 @@ class MainWindow(QMainWindow):
             except Exception:  # noqa: BLE001 - 关闭路径尽力而为
                 pass
             self._capture_session = None
+        self._close_capture_float()
         # 悬浮窗是无父顶层窗口（最小化主窗时不随隐），关闭主窗需显式带走
         if self._run_float is not None:
             self._run_float.close()
@@ -3988,11 +4134,18 @@ def run_gui(
         from rpa_core.devserver.store import WorkflowDirStore
         from rpa_core.gui.home import HomeWindow
 
-        window = HomeWindow(WorkflowDirStore(root), catalog, open_editor=open_editor)
+        window = HomeWindow(
+            WorkflowDirStore(root), catalog, open_editor=open_editor,
+            defer_refresh=True,
+        )
         globals()["_HOME_WINDOW"] = window  # 编辑器关闭后回来（ADR 0017）
     window.show()
     if isinstance(window, MainWindow):
         # 窗口显示后在空闲时机预热参数面板（详见 _prewarm_param_panel 注释）：
         # 提前消化首次复杂表单布局的一次性开销，避免用户第一次点节点时卡顿。
         QTimer.singleShot(0, window._prewarm_param_panel)
+    else:
+        # 工作台：产物扫描推到窗口显示之后（见 HomeWindow.defer_refresh 的注释）。
+        # 同步扫 150+ 个 result.json 会让窗口迟迟不出现，且期间点页签毫无响应。
+        QTimer.singleShot(0, window.refresh_flows)
     return app.exec()

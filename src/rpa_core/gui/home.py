@@ -65,6 +65,7 @@ class HomeWindow(QMainWindow):
         *,
         open_editor: OpenEditor | None = None,
         parent: QWidget | None = None,
+        defer_refresh: bool = False,
     ) -> None:
         super().__init__(parent)
         self._store = store
@@ -94,7 +95,15 @@ class HomeWindow(QMainWindow):
         self.tabs = tabs
         self.setCentralWidget(tabs)
 
-        self.refresh_flows()
+        if defer_refresh:
+            # 产物扫描（run_artifacts 全量读 result.json）是启动路径上最重的同步段，
+            # 窗口要等它扫完才出现、期间主线程不响应输入。defer_refresh=True 把它推到
+            # 窗口显示之后（调用方在 show() 后用 QTimer.singleShot 触发 refresh_flows），
+            # 用户先看到窗口、数据随后填——同 _prewarm_param_panel 的思路。
+            self.hint.setText("正在读取流程与运行历史…")
+            self.history_hint.setText("正在读取运行历史…")
+        else:
+            self.refresh_flows()
 
     # ---- 流程库页签 -------------------------------------------------------
     def _build_flows_tab(self) -> QWidget:
@@ -122,7 +131,7 @@ class HomeWindow(QMainWindow):
         self.export_button.setToolTip("把流程（含元素/数据表格）导出到指定目录")
         self.export_button.clicked.connect(self._export_flow)
         self.refresh_button = QPushButton("刷新")
-        self.refresh_button.clicked.connect(self.refresh_flows)
+        self.refresh_button.clicked.connect(lambda: self.refresh_flows())
         self.run_button = QPushButton("运行")
         self.run_button.setToolTip(
             "对选中流程发起运行并查看状态；暂停/继续/单步请在编辑器中操作（ADR 0017）"
@@ -175,7 +184,7 @@ class HomeWindow(QMainWindow):
         self.history_filter.currentIndexChanged.connect(lambda *_: self._render_runs())
         controls.addWidget(self.history_filter)
         refresh = QPushButton("刷新")
-        refresh.clicked.connect(self.refresh_history)
+        refresh.clicked.connect(lambda: self.refresh_history())
         controls.addWidget(refresh)
         open_button = QPushButton("打开时间线")
         open_button.clicked.connect(self._open_selected_run)
@@ -211,10 +220,17 @@ class HomeWindow(QMainWindow):
     def _artifacts_root(self) -> Path:
         return self._store.root.parent / "run_artifacts"
 
-    def refresh_flows(self) -> None:
-        """重扫流程库 + 运行历史，填表（最近运行时间倒序，未运行过的排后面）。"""
+    def refresh_flows(self, runs: list[dict[str, Any]] | None = None) -> None:
+        """重扫流程库 + 运行历史，填表（最近运行时间倒序，未运行过的排后面）。
+
+        `runs` 非空时**直接复用**，不再扫一遍 `run_artifacts`：两个页签读的是同一份
+        运行记录，此前各扫一次（每次全量读 150+ 个 `result.json`），是启动路径上最重
+        的一笔重复开销。
+        """
+        if runs is None:
+            runs = list_runs(self._artifacts_root(), limit=0)
         latest: dict[str, dict[str, Any]] = {}
-        for run in list_runs(self._artifacts_root(), limit=0):
+        for run in runs:
             workflow_id = run.get("workflowId")
             if workflow_id and workflow_id not in latest:
                 latest[workflow_id] = run  # list_runs 已按时间倒序，首次即最新
@@ -241,7 +257,7 @@ class HomeWindow(QMainWindow):
             key=lambda item: (item["lastRunAt"] or "", item["mtime"] or 0), reverse=True
         )
         self._render()
-        self.refresh_history()
+        self.refresh_history(runs)
 
     def _element_count(self, name: str) -> int:
         elements_dir = self._store.root / name / "elements"
@@ -257,18 +273,23 @@ class HomeWindow(QMainWindow):
             return 0.0
 
     def _render(self) -> None:
-        self.table.setRowCount(len(self._flows))
-        for row, flow in enumerate(self._flows):
-            status = flow.get("status")
-            values = [
-                flow["name"],
-                _STATUS_LABELS.get(status, "未运行" if not status else str(status)),
-                self._format_time(flow.get("lastRunAt")),
-                str(flow.get("elements") or 0),
-                self._format_time_from_epoch(flow.get("mtime")),
-            ]
-            for column, value in enumerate(values):
-                self.table.setItem(row, column, QTableWidgetItem(value))
+        # 逐格 setItem 会触发逐格重绘：几百行时是可见的一次性开销，先冻住视图
+        self.table.setUpdatesEnabled(False)
+        try:
+            self.table.setRowCount(len(self._flows))
+            for row, flow in enumerate(self._flows):
+                status = flow.get("status")
+                values = [
+                    flow["name"],
+                    _STATUS_LABELS.get(status, "未运行" if not status else str(status)),
+                    self._format_time(flow.get("lastRunAt")),
+                    str(flow.get("elements") or 0),
+                    self._format_time_from_epoch(flow.get("mtime")),
+                ]
+                for column, value in enumerate(values):
+                    self.table.setItem(row, column, QTableWidgetItem(value))
+        finally:
+            self.table.setUpdatesEnabled(True)
         if self._flows:
             self.hint.setText(f"共 {len(self._flows)} 个流程；双击打开编辑器。")
         else:
@@ -276,9 +297,12 @@ class HomeWindow(QMainWindow):
                 f"流程库还是空的（{self._store.root}）；点「新建流程」创建第一个流程。"
             )
 
-    def refresh_history(self) -> None:
-        """重扫运行历史（全局）并刷新流程筛选下拉（保留当前选择）。"""
-        self._runs = list_runs(self._artifacts_root(), limit=0)
+    def refresh_history(self, runs: list[dict[str, Any]] | None = None) -> None:
+        """重扫运行历史（全局）并刷新流程筛选下拉（保留当前选择）。
+
+        `runs` 非空时复用调用方已扫到的记录（见 `refresh_flows`）。
+        """
+        self._runs = list_runs(self._artifacts_root(), limit=0) if runs is None else runs
         current = self.history_filter.currentData() if self.history_filter.count() else None
         self.history_filter.blockSignals(True)
         self.history_filter.clear()
@@ -305,18 +329,22 @@ class HomeWindow(QMainWindow):
 
     def _render_runs(self) -> None:
         runs = self._visible_runs()
-        self.history_table.setRowCount(len(runs))
-        for row, run in enumerate(runs):
-            duration = run.get("durationMs")
-            values = [
-                self._format_time(run.get("endedAt") or run.get("startedAt")),
-                self._run_flow_name(run),
-                _STATUS_LABELS.get(run.get("status"), str(run.get("status") or "unknown")),
-                f"{duration / 1000:.1f}s" if isinstance(duration, int) else "—",
-                str(run.get("errorCode") or ""),
-            ]
-            for column, value in enumerate(values):
-                self.history_table.setItem(row, column, QTableWidgetItem(value))
+        self.history_table.setUpdatesEnabled(False)
+        try:
+            self.history_table.setRowCount(len(runs))
+            for row, run in enumerate(runs):
+                duration = run.get("durationMs")
+                values = [
+                    self._format_time(run.get("endedAt") or run.get("startedAt")),
+                    self._run_flow_name(run),
+                    _STATUS_LABELS.get(run.get("status"), str(run.get("status") or "unknown")),
+                    f"{duration / 1000:.1f}s" if isinstance(duration, int) else "—",
+                    str(run.get("errorCode") or ""),
+                ]
+                for column, value in enumerate(values):
+                    self.history_table.setItem(row, column, QTableWidgetItem(value))
+        finally:
+            self.history_table.setUpdatesEnabled(True)
         if runs:
             self.history_hint.setText(
                 f"共 {len(runs)} 条运行记录；双击在编辑器里打开该流程并查看时间线。"

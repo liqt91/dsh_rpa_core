@@ -229,3 +229,59 @@ def test_home_open_run_without_flow_reports_hint(catalog, tmp_path):
     home._open_selected_run()
     assert opened == []
     assert "找不到" in home.history_hint.text()
+
+
+# ---- 启动路径（M40）：产物扫描不在构造期同步跑 --------------------------------
+def _counting_list_runs(monkeypatch):
+    """把 home 模块里的 list_runs 换成计数版，返回计数字典。"""
+    from rpa_core.gui import home as home_mod
+
+    calls = {"count": 0}
+    original = home_mod.list_runs
+
+    def _counting(*args, **kwargs):
+        calls["count"] += 1
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(home_mod, "list_runs", _counting)
+    return calls
+
+
+def test_home_refresh_scans_artifacts_once(catalog, tmp_path, monkeypatch):
+    """同步构造也只扫一次产物：两个页签读的是同一份运行记录。
+
+    回归（M40）：此前 `refresh_flows()` 扫一遍、`refresh_history()` 又扫一遍，
+    每次都要全量读 `run_artifacts` 下每个 `result.json`。
+    """
+    from rpa_core.gui.home import HomeWindow
+
+    calls = _counting_list_runs(monkeypatch)
+    store = _store(tmp_path)
+    _write_run(store, "run-b", workflow_id="flow-b")
+
+    home = HomeWindow(store, catalog)
+    assert calls["count"] == 1, "构造期只该扫一次产物（流程列表与运行历史共用）"
+    home.close()
+
+
+def test_home_defer_refresh_skips_artifact_scan_at_construction(catalog, tmp_path, monkeypatch):
+    """`defer_refresh=True`：构造期**不**扫产物，窗口可以先出现。
+
+    回归（维护者 2026-09-28 报障「冷启动很慢，启动后内部切换标签也很慢」）：产物
+    扫描是启动路径上唯一的重量级同步段，窗口要等它跑完才出现、期间点页签毫无响应。
+    defer 之后由调用方（`run_gui`）在 `show()` 之后用零延时定时器触发。
+    """
+    from rpa_core.gui.home import HomeWindow
+
+    calls = _counting_list_runs(monkeypatch)
+    store = _store(tmp_path)
+    _write_run(store, "run-a", workflow_id="flow-a")
+
+    home = HomeWindow(store, catalog, defer_refresh=True)
+    assert calls["count"] == 0, "defer_refresh=True 时构造期不该扫产物"
+    assert "正在读取" in home.hint.text(), "延迟期间要有加载提示，不能让用户看到空表"
+
+    home.refresh_flows()  # 调用方在 show() 之后触发的那一步
+    assert calls["count"] == 1
+    assert home.history_table.rowCount() == 1, "刷新后运行历史要真的填上（不是只算了账）"
+    home.close()

@@ -14,6 +14,15 @@
 「哪条腿先有产出」，于是在非 Windows 上桌面腿 49ms 返回 ``desktop capture
 requires Windows`` 就把仍在线的扩展腿掐掉（``close()`` → disarm），用户侧表现为
 「点了捕获元素，窗口闪一下就弹回，网页里 Ctrl+Click 毫无反应」。
+
+**「扩展在线」要 ack 才成立**（2026-09-28 修）：``offline`` 只看端点能否连上，
+而端点由 host 持有——host 还在、扩展已断（或 host 是残留进程）时它照样可连接，
+此时扩展收不到 ``capture_arm``、页面里永远不会出现高亮框，而桌面腿又在浏览器
+内容区让位（hybrid）→ **两条腿都产不出东西，用户静默等满 90 秒**（维护者报障
+「第一次点击没有红框，再次点击提示已有捕获任务进行中」的现场就是这种形状：
+crash log 里扩展腿读线程活着 ⇒ ``offline is False`` ⇒ 不弹离线确认、不降级）。
+现在扩展腿在 ``ARM_ACK_TIMEOUT_SECONDS`` 内未回 ack 即判死（见 ``_arm_deadline``），
+并把等待预算收窄到 ``DEGRADED_TIMEOUT_SECONDS``。
 """
 
 import threading
@@ -24,6 +33,16 @@ from .extension import ExtensionCaptureSession
 
 # ElementDescriptor 的判别字段取值（capture/__init__ 与 GUI/devserver 同源）
 _CAPTURE_KINDS = ("desktop", "browser")
+
+# arm 宽限：host 冷启动 + 扩展广播的往返余量。扩展正常时 ack 在毫秒级到达，
+# 只有「端点在线但扩展没在听」才会耗满它。
+ARM_ACK_TIMEOUT_SECONDS = 3.0
+# 扩展腿判死后的剩余等待预算：主要通道（网页捕获）已不可用，不必让用户干等满超时。
+DEGRADED_TIMEOUT_SECONDS = 30.0
+_ARM_ACK_ERROR = (
+    "浏览器插件未响应：bridge 端点已连接，但扩展未确认 capture_arm"
+    "（端点可能来自残留 host 进程；重开浏览器或重装插件后重试）"
+)
 
 
 def _is_capture_result(payload: Any) -> bool:
@@ -42,6 +61,8 @@ class HybridCaptureSession:
         *,
         desktop_factory,
         extension_session: ExtensionCaptureSession | None = None,
+        arm_ack_timeout: float = ARM_ACK_TIMEOUT_SECONDS,
+        degraded_timeout: float = DEGRADED_TIMEOUT_SECONDS,
         **desktop_kwargs: Any,
     ):
         # 让位标志必须随桌面腿下发：agent 在浏览器内容区抑制高亮/忽略手势，
@@ -53,11 +74,20 @@ class HybridCaptureSession:
         self._desktop_offline = False
         self._pending = True
         self._closed = False
+        # arm ack 宽限与降级预算（可注入以便测试；见模块 docstring）
+        self._arm_ack_timeout = arm_ack_timeout
+        self._degraded_timeout = degraded_timeout
+        self._arm_deadline: float | None = None
+        # 扩展腿是否因「未 ack」被判死（宿主据此在浮窗上显示真实通道状态）
+        self._extension_unresponsive = False
 
     def start(self) -> list[str]:
         self._extension.start()
         # 扩展腿离线（无 bridge 端点）时退化为纯桌面 hover：pick 不再等扩展腿
         self._ext_offline = bool(getattr(self._extension, "offline", False))
+        if not self._ext_offline:
+            # 端点连上了才开始计时 ack 宽限——没连上（offline）就没有「等 ack」可言
+            self._arm_deadline = time.monotonic() + self._arm_ack_timeout
         # 桌面腿不可用（非 Windows：agent 是 UIA 实现）时退化为纯扩展捕获。
         # 鸭子类型：假实现没有 available 属性，默认按可用处理。
         self._desktop_offline = not bool(getattr(self._desktop, "available", True))
@@ -80,6 +110,15 @@ class HybridCaptureSession:
         return self._desktop_offline
 
     @property
+    def extension_unresponsive(self) -> bool:
+        """扩展腿是否因「端点在线但未确认 arm」被判死（pick 期间有效）。
+
+        与 ``extension_offline`` 的区别：那个是「根本没端点」，这个是「端点在、
+        扩展没在听」——两者的用户处置完全不同（前者去装插件，后者重开浏览器）。
+        """
+        return self._extension_unresponsive
+
+    @property
     def pending(self) -> bool:
         return self._pending and not self._extension.result_event.is_set()
 
@@ -100,8 +139,26 @@ class HybridCaptureSession:
         extension_failure: dict[str, Any] | None = None
         desktop_failure: dict[str, Any] | None = None
         deadline = time.monotonic() + timeout_seconds
+        degraded = False
 
         while time.monotonic() < deadline:
+            # ⓪ 扩展腿「假在线」判死：端点连上了，但扩展超期没确认 arm。
+            #    这一步是「静默等满 90 秒」的解药——端点可连接只证明 host 活着。
+            if (
+                not self._ext_offline
+                and extension_failure is None
+                and self._arm_deadline is not None
+                and time.monotonic() > self._arm_deadline
+                and not self._extension_armed()
+            ):
+                extension_failure = {"error": _ARM_ACK_ERROR}
+                self._extension_unresponsive = True
+                if not degraded:
+                    # 主通道（网页捕获）已不可用：不让用户干等满超时，收窄剩余预算。
+                    # 只收窄一次——桌面腿还在跑，用户可能正在桌面应用上找元素。
+                    degraded = True
+                    deadline = min(deadline, time.monotonic() + self._degraded_timeout)
+
             # ① 扩展腿：仅在尚未出局时参选
             if (
                 not self._ext_offline
@@ -159,6 +216,14 @@ class HybridCaptureSession:
             pass
 
     # -- 内部 ----------------------------------------------------------------
+
+    def _extension_armed(self) -> bool:
+        """扩展是否已确认 arm（鸭子类型：假实现没有 ``armed`` 时按「已确认」处理）。
+
+        默认 True 是刻意的：本判定只用于抓「真实的假在线」，不该让没有 ack 概念的
+        替身会话被判死（既有契约测试的假扩展就是这种形状）。
+        """
+        return bool(getattr(self._extension, "armed", True))
 
     def _cancel_desktop(self, thread: threading.Thread | None) -> None:
         try:

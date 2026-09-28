@@ -4,6 +4,8 @@
 script 里（用户真实浏览器的所有页面）。会话自己经**本地端点**与 bridge host 通信：
 
 - ``start()`` 连端点并下发 ``capture_arm``（host 转发扩展 → 扩展广播到全部标签页）
+- 扩展收到 arm 后回 ``capture_armed``（ack），本会话据此判定「扩展真的在响应」——
+  端点可连接只证明 **host** 活着，不证明扩展活着（残留 host 占着端点就是这种情形）
 - 扩展侧捕获手势（⌘/Ctrl+Click、右键）→ 经 host 回传 ``capture_result`` →
   本会话的读线程接收并唤醒 pick
 - ``cancel``/``close`` 下发 ``capture_disarm`` 并关闭连接
@@ -55,6 +57,9 @@ class ExtensionCaptureSession:
         self._live_lock = threading.Lock()
         self._session_id = f"cap-{uuid.uuid4().hex[:8]}"
         self._offline = False
+        # arm ack：扩展收到 capture_arm 后回 capture_armed。端点可连接 ≠ 扩展在响应，
+        # 这个事件是「扩展腿真的活着」的唯一证据（见 armed 属性）。
+        self._armed = threading.Event()
 
     # -- 生命周期 ------------------------------------------------------------
 
@@ -94,6 +99,17 @@ class ExtensionCaptureSession:
     def offline(self) -> bool:
         """扩展腿是否离线（未连上任何 bridge 端点：扩展未装/浏览器未起）。"""
         return self._offline
+
+    @property
+    def armed(self) -> bool:
+        """扩展是否已确认收到 ``capture_arm``（ack 已到）。
+
+        **这是「扩展腿真的在响应」的唯一证据**：``offline`` 只看端点能否连上，
+        而端点由 host 持有——host 还在、扩展已断（或 host 是残留进程）时端点照样
+        可连接，此时 ``offline is False`` 但 ``armed`` 永远不为真。宿主据此把这类
+        「假在线」的腿判死，而不是静默等到超时。
+        """
+        return self._armed.is_set()
 
     @property
     def pending(self) -> bool:
@@ -153,11 +169,16 @@ class ExtensionCaptureSession:
                     break
                 if not isinstance(message, dict):
                     continue
-                if message.get("type") != "capture_result":
-                    continue  # 忽略 focus 等广播
+                message_type = message.get("type")
                 session = message.get("sessionId")
                 if session and session != self._session_id:
                     continue
+                if message_type == "capture_armed":
+                    # ack：扩展真的收到了本会话的 arm（见 armed 属性）
+                    self._armed.set()
+                    continue
+                if message_type != "capture_result":
+                    continue  # 忽略 focus 等广播
                 if message.get("cancelled"):
                     self.submit({"cancelled": True})
                 else:

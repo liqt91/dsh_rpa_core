@@ -75,6 +75,8 @@ class FakeHybridSession:
     instances: list = []
     offline = False
     desktop_unavailable = False
+    # 非 None 时 pick 抛该异常（验「会话异常也必须收场」）
+    fail_with: BaseException | None = None
 
     def __init__(self, *, desktop_factory, **kwargs):
         self.kwargs = kwargs
@@ -96,12 +98,24 @@ class FakeHybridSession:
     def desktop_offline(self) -> bool:
         return type(self).desktop_unavailable
 
+    @property
+    def extension_unresponsive(self) -> bool:
+        return False
+
     def pick(self, timeout_seconds=90):
         self._gate.wait(timeout=10)
+        # 读 `self.fail_with`（而非 type(self).fail_with）：用例按实例赋值，读类属性
+        # 会拿到 None、让「本该抛异常」的路径悄悄走成成功捕获——那会弹真模态对话框，
+        # offscreen 下永久阻塞（本片真踩过，整轮测试卡 9 分钟）。
+        if self.fail_with is not None:
+            raise self.fail_with
         return dict(self.result) if self.result is not None else {"cancelled": True}
 
     def cancel(self):
+        # 真会话 cancel 后 pick 拿到的是 {"cancelled": True}：替身要同形，
+        # 否则「取消」会被下游当成一次成功捕获（弹出命名对话框）。
         self.cancelled = True
+        self.result = None
         self._gate.set()
 
     def close(self):
@@ -116,6 +130,7 @@ def fake_capture(monkeypatch):
     FakeHybridSession.instances = []
     FakeHybridSession.offline = False
     FakeHybridSession.desktop_unavailable = False
+    FakeHybridSession.fail_with = None
     monkeypatch.setattr(capture_mod, "HybridCaptureSession", FakeHybridSession)
     return FakeHybridSession
 
@@ -271,15 +286,125 @@ def test_capture_extension_offline_cancel(window, fake_capture, monkeypatch):
     assert "已取消" in window.statusBar().currentMessage()
 
 
-def test_capture_reentrant_guard(window, fake_capture):
+def test_capture_second_click_cancels_running_session(window, fake_capture):
+    """第二次点「捕获元素」= **取消**进行中的捕获，不是只回一句「进行中」。
+
+    回归（维护者 2026-09-28 报障「再次点击提示已有捕获任务进行中」）：旧行为只拒绝，
+    用户被锁到超时——捕获期唯一的确定性出口不能是「等 90 秒」。取消后必须：会话真的
+    收到 cancel（桌面 agent 子进程要回收）、主窗还原、浮窗关闭、状态复位。
+    """
     window._save_named_flow("cap3")
     window._capture_element()
-    window._capture_element()  # 第二次点击被拦截
-    assert len(fake_capture.instances) == 1
-    assert "进行中" in window.statusBar().currentMessage()
     fake = fake_capture.instances[-1]
+    assert window._capture_float is not None, "捕获期间必须有浮窗（主窗已最小化）"
+
+    window._capture_element()  # 第二次点击 = 取消
+    assert len(fake_capture.instances) == 1, "第二次点击不该另起会话"
+    assert fake.cancelled, "第二次点击必须真的取消会话（回收桌面 agent）"
+    assert "已取消" in window.statusBar().currentMessage()
+    assert _pump_until(lambda: window._capture_session is None)
+    assert not window.isMinimized(), "取消后主窗要还原"
+    assert window._capture_float is None, "取消后浮窗要关闭"
+
+
+def test_capture_float_reports_both_legs(window, fake_capture):
+    """浮窗把两条腿的状态**分列**（用户据此决定去网页里点还是去桌面按 F9）。"""
+    window._save_named_flow("cap3b")
+    window._capture_element()
+    float_window = window._capture_float
+    assert float_window is not None
+    assert "就绪" in float_window.web_label.text()
+    assert "就绪" in float_window.desktop_label.text()
+    assert "F9" in float_window.gesture_label.text()
+    fake = fake_capture.instances[-1]
+    assert _pump_until(lambda: float_window.isVisible())
     fake.result = None
     _release_and_finish(fake, window)
+
+
+def test_capture_float_cancel_button_cancels_session(window, fake_capture):
+    """浮窗的「取消捕获」是捕获期唯一的确定性出口（不依赖任何一条腿响应键盘）。"""
+    window._save_named_flow("cap3c")
+    window._capture_element()
+    float_window = window._capture_float
+    fake = fake_capture.instances[-1]
+    float_window.cancel_button.click()
+    assert fake.cancelled
+    assert float_window.cancelling, "按下后按钮要变成「正在取消…」，避免重复点击"
+    assert _pump_until(lambda: window._capture_session is None)
+    assert window._capture_float is None
+
+
+def test_capture_pick_exception_still_resets_and_restores(window, fake_capture):
+    """pick 抛异常也必须收场：复位会话 + 还原主窗。
+
+    没有这层保护时 `finished` 永不 emit → `_capture_session` 永不复位、主窗永不还原，
+    用户侧就是「点了没反应，再点说进行中」，只能重启进程。
+    """
+    window._save_named_flow("cap8")
+    window._capture_element()
+    fake = fake_capture.instances[-1]
+    fake.result = None  # 双保险：即使异常没抛出来也不该走到命名对话框
+    fake.fail_with = RuntimeError("boom")
+    fake._gate.set()
+    assert _pump_until(lambda: window._capture_session is None)
+    assert not window.isMinimized(), "异常后主窗必须还原"
+    assert window._capture_float is None
+    assert "捕获失败" in window.statusBar().currentMessage()
+
+
+def test_capture_late_result_from_replaced_session_is_ignored(
+    window, fake_capture, monkeypatch
+):
+    """已被替换的旧会话的迟到结果不得影响当前会话（取消后立刻重开的竞态）。
+
+    「第二次点击 = 取消」之后用户可以马上再点一次重开捕获，两个 work() 线程会短暂
+    并存：旧线程收尾时若照旧复位状态，就会把**新会话**的会话与窗口状态一并清掉。
+
+    这里必须桩掉确认对话框：判据一旦被破坏（守卫被摘），这条迟到结果会一路走到
+    `_confirm_element_save` → 真模态对话框 → offscreen 下**永久阻塞**，负向验证拿到
+    的就不是「干净变红」而是「挂住」。桩成「用户取消」后，破坏表现为干净的断言失败。
+    """
+    monkeypatch.setattr(
+        type(window), "_confirm_element_save", lambda self, result: None
+    )
+    window._save_named_flow("cap9")
+    window._capture_element()
+    old_session = fake_capture.instances[-1]
+    # 模拟「取消中」：当前会话换成另一个对象（用户已重开），此时旧会话回报结果
+    new_session = object()
+    window._capture_session = new_session
+    window._on_element_captured(dict(_BROWSER_DESCRIPTOR), old_session)
+    assert window._capture_session is new_session, "旧会话的迟到结果把新会话清掉了"
+    assert "已保存元素" not in window.statusBar().currentMessage()
+    # 收掉后台仍在等的那条 work() 线程：result=None → 返回 cancelled，不会弹对话框
+    old_session.result = None
+    old_session._gate.set()
+    window._capture_session = None
+
+
+def test_capture_channel_status_texts_split_three_states():
+    """通道文案三态分离：离线（去装插件）/ 未响应（重开浏览器）/ 就绪，不能合并。"""
+    from rpa_core.gui.app import capture_desktop_status, capture_web_status
+
+    class _Session:
+        def __init__(self, offline=False, unresponsive=False, desktop_offline=False):
+            self.extension_offline = offline
+            self.extension_unresponsive = unresponsive
+            self.desktop_offline = desktop_offline
+
+    offline_text, offline_ok = capture_web_status(_Session(offline=True))
+    unresponsive_text, unresponsive_ok = capture_web_status(_Session(unresponsive=True))
+    ready_text, ready_ok = capture_web_status(_Session())
+    assert not offline_ok and "离线" in offline_text
+    assert not unresponsive_ok and "未响应" in unresponsive_text
+    assert ready_ok and "就绪" in ready_text
+    # 三种形态的文案两两不同：合并成一句会让用户分不清该去装插件还是重开浏览器
+    assert len({offline_text, unresponsive_text, ready_text}) == 3
+
+    desktop_text, desktop_ok = capture_desktop_status(_Session(desktop_offline=True))
+    assert not desktop_ok and "Windows" in desktop_text
+    assert capture_desktop_status(_Session())[1] is True
 
 
 def test_capture_desktop_offline_hint(window, fake_capture, monkeypatch):

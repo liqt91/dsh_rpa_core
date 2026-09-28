@@ -71,12 +71,19 @@ class UnavailableDesktopSession(FakeDesktopSession):
 
 
 class FakeBridge:
-    """扮演 bridge host 的扩展腿；``delay=None`` 表示永不回结果（桌面先赢用）。"""
+    """扮演 bridge host 的扩展腿；``delay=None`` 表示永不回结果（桌面先赢用）。
+
+    ``send_ack=False`` 模拟**残留 host**：端点连得上、``capture_arm`` 也收得到，
+    但没有扩展在听——既不发 ``capture_armed``（ack），也不发任何结果。这正是
+    维护者 2026-09-28 那个现场的形状（端点在线 ⇒ 判「扩展在线」⇒ 静默等满超时）。
+    """
 
     def __init__(self, *, delay: float | None = 0.1,
-                 browser: str = "msedge", instance_id: str = "hyb1"):
+                 browser: str = "msedge", instance_id: str = "hyb1",
+                 send_ack: bool = True):
         self.name = endpoint_name(browser, instance_id)
         self.delay = delay
+        self.send_ack = send_ack
         self.server = lt.LocalEndpointServer(self.name)
         self.armed = 0
         self._stop = threading.Event()
@@ -104,6 +111,15 @@ class FakeBridge:
                     return
                 if message.get("type") == "capture_arm":
                     self.armed += 1
+                    if self.send_ack:
+                        # 真实扩展收到 arm 就回 capture_armed（见 extension/background.js）；
+                        # 父端用它判「扩展真的在响应」而不是「端点在」
+                        channel.send(
+                            {
+                                "type": "capture_armed",
+                                "sessionId": message.get("sessionId"),
+                            }
+                        )
                     if self.delay is None:
                         continue
                     time.sleep(self.delay)
@@ -382,3 +398,70 @@ def test_hybrid_desktop_offline_skips_spawning_desktop_pick():
             "不可用的桌面腿不该被 pick 唤醒"
     finally:
         session.close()
+
+
+# ---- 扩展腿 ack 判活（M40：端点在线 ≠ 扩展在响应） --------------------------
+@pytest.fixture()
+def isolated_endpoints(monkeypatch):
+    """把端点前缀换成测试专用值。
+
+    不隔离的话 ``ExtensionCaptureSession()`` 会连上**开发机真实的**扩展 host
+    （本机实测常年有残留 host 端点），用例就变成依赖机器状态了。
+    """
+    monkeypatch.setenv("RPA_EXT_ENDPOINT_PREFIX", "rpa_core_ext_ack_probe_")
+
+
+def test_hybrid_extension_without_ack_is_marked_dead(isolated_endpoints):
+    """端点连得上但扩展从不确认 arm → 判死并立即收场，不等满超时。
+
+    回归（维护者 2026-09-28 报障「第一次点击没有红框出现，但再次点击提示已有捕获
+    任务进行中」）：判活曾经只看「端点能不能连上」，而端点是 host 持有的——残留 host
+    照样连得上，但扩展收不到 arm、页面里永远不会出现高亮框；桌面腿又在浏览器内容区
+    让位（hybrid），两条腿都产不出东西，用户静默等满 90 秒。
+    """
+    from rpa_core.capture.extension import ExtensionCaptureSession
+
+    fake = FakeBridge(delay=None, send_ack=False)  # 残留 host 的形状
+    try:
+        session = HybridCaptureSession(
+            desktop_factory=UnavailableDesktopSession,
+            extension_session=ExtensionCaptureSession(),
+            arm_ack_timeout=0.3,
+        )
+        try:
+            session.start()
+            assert not session.extension_offline, "端点连上了，腿不该被判「离线」"
+            started = time.monotonic()
+            result = session.pick(timeout_seconds=30)
+            elapsed = time.monotonic() - started
+            assert result.get("unavailable") is True, result
+            assert session.extension_unresponsive is True
+            assert "未响应" in result["error"]
+            assert fake.armed == 1, "判死的前提是 arm 真的发出去了"
+            assert elapsed < 5, f"ack 宽限后必须立即收场，实耗 {elapsed:.1f}s"
+        finally:
+            session.close()
+    finally:
+        fake.close()
+
+
+def test_hybrid_extension_ack_keeps_leg_alive(isolated_endpoints):
+    """扩展确认了 arm → 腿照旧存活（正常路径零影响：ack 毫秒级到达）。"""
+    from rpa_core.capture.extension import ExtensionCaptureSession
+
+    fake = FakeBridge(delay=None, send_ack=True)
+    try:
+        session = HybridCaptureSession(
+            desktop_factory=UnavailableDesktopSession,
+            extension_session=ExtensionCaptureSession(),
+            arm_ack_timeout=0.3,
+        )
+        try:
+            session.start()
+            result = session.pick(timeout_seconds=1)
+            assert result.get("timeout") is True, result
+            assert session.extension_unresponsive is False
+        finally:
+            session.close()
+    finally:
+        fake.close()

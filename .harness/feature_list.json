@@ -296,6 +296,11 @@
       "id": "element-post-capture-ux",
       "title": "Element post-capture UX (M39): align the GUI verify button's wording with the Web 'structural check' semantics; surface captured-but-never-shown data (selector.candidates with measured matchedCount, semantic features, page fingerprint, desktop className/name); and an offline element editor (promote a candidate to primary with swap semantics, checkbox the desktop locator fields scoped per backend, in-place structural validation). S1-S3 done.",
       "passes": true
+    },
+    {
+      "id": "gui-responsiveness",
+      "title": "GUI responsiveness (M40): stop scanning run artifacts on the startup critical path (reuse one list_runs for both flow library and run history; defer_refresh so the window paints before data loads), detect a connected-but-unresponsive extension leg via the capture_armed ack (3s grace, 30s degraded budget, real reason surfaced instead of a silent 90s wait), and give capture a visible face plus an exit (always-on-top capture float with per-leg status and a cancel button; second click on Capture cancels the running session; work() always emits so an exception can no longer wedge the session; late results from a replaced session are dropped).",
+      "passes": true
     }
   ]
 }
