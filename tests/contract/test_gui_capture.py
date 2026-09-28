@@ -503,3 +503,91 @@ def test_present_window_only_forces_top_for_short_lived_dialogs(qapp):
 
     dialog.close()
     persistent.close()
+
+
+def test_capture_float_dodges_the_cursor(window, fake_capture):
+    """浮窗躲开鼠标路径（M41 S3）：鼠标靠近默认位置时翻到另一侧。
+
+    回归（维护者 2026-09-28 报「鼠标即将移动到悬浮框的时候，悬浮框移动到屏幕
+    另一侧，避免挡住实际需要捕获的元素」）：浮窗是**真实窗口**（不吃点击穿透），
+    压在鼠标路径上会同时挡住视觉与点击——用户会「点不中」它下方的元素。
+    """
+    from PySide6.QtCore import QPoint
+
+    window._save_named_flow("cap3d")
+    window._capture_element()
+    float_window = window._capture_float
+    assert float_window is not None
+
+    float_window.avoid_cursor(None)  # 不避让 → 默认位置
+    home = QPoint(float_window.x(), float_window.y())
+
+    float_window.avoid_cursor(QPoint(home.x() + 10, home.y() + 10))  # 鼠标压上来
+    dodged = QPoint(float_window.x(), float_window.y())
+    assert dodged != home, "鼠标压上来时必须让开"
+    assert dodged.x() < home.x() and dodged.y() < home.y(), "要让到另一侧（左上）"
+
+    float_window.avoid_cursor(QPoint(0, 0))  # 鼠标走开 → 回默认位置
+    assert QPoint(float_window.x(), float_window.y()) == home, "不能一去不返"
+
+    fake = fake_capture.instances[-1]
+    fake.result = None
+    _release_and_finish(fake, window)
+
+
+def test_capture_float_keeps_place_once_the_user_moves_it(window):
+    """用户手动拖过之后不再自动避让（把位置决定权还给用户）。"""
+    import inspect
+
+    from PySide6.QtCore import QPoint
+
+    from rpa_core.gui import capture_float as cf
+
+    float_window = window._capture_float_window()
+    float_window.avoid_cursor(None)
+    home = QPoint(float_window.x(), float_window.y())
+
+    # 拖动入口必须**自己**置位（不是靠调用方补设）——接一半就会「拖完又被自动挪走」
+    assert "user_positioned = True" in inspect.getsource(
+        cf.CaptureFloatWindow.mouseMoveEvent
+    )
+
+    float_window.user_positioned = True
+    float_window.avoid_cursor(QPoint(home.x() + 10, home.y() + 10))
+    assert QPoint(float_window.x(), float_window.y()) == home, "拖过后不得再自动挪"
+
+
+def test_capture_float_avoidance_is_wired_into_the_capture_flow(window, fake_capture):
+    """四处接线各钉一条（摘任一处都是静默退化，行为判据未必看得见）。"""
+    import inspect
+
+    from rpa_core.gui import app as app_module
+    from rpa_core.gui import capture_float as cf
+
+    # ① 初始定位就带鼠标（否则浮窗打开的一瞬间就压在鼠标下）
+    assert "avoid_cursor(" in inspect.getsource(
+        app_module.MainWindow._show_capture_float
+    )
+    # ② 避让节拍真的在跑（只有初始定位 = 鼠标追上来后就不再让）
+    assert "avoid_cursor(" in inspect.getsource(
+        app_module.MainWindow._tick_capture_avoid
+    )
+    # ③ 会话结束必须停表（否则浮窗拆除后定时器还在空打）
+    assert "_capture_avoid_timer" in inspect.getsource(
+        app_module.MainWindow._close_capture_float
+    )
+    # ④ 定位真的走纯函数（否则几何判据是一纸空文）
+    assert "capture_float_origin(" in inspect.getsource(
+        cf.CaptureFloatWindow.avoid_cursor
+    )
+
+    window._save_named_flow("cap3e")
+    window._capture_element()
+    timer = window._capture_avoid_timer
+    assert timer is not None, "避让节拍必须启动"
+    assert timer.isActive()
+    assert timer.interval() <= 50, "节拍要快于鼠标移动，否则「即将」来不及"
+    fake = fake_capture.instances[-1]
+    fake.result = None
+    _release_and_finish(fake, window)
+    assert window._capture_avoid_timer is None, "收尾要停表并清空避让计时器"

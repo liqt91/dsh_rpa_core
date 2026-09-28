@@ -86,6 +86,53 @@
     锚点改整行取，并加前置检查 `_anchor_ends_at_line_end`（第一次误用「`new` 不以换行结尾」，把 7 处
     合法的删除型/行尾型注入一起判失败，当场改成边界判据）。
 
+- [x] **M41 捕获高亮「躲着鼠标」/ 启动加载提示**（`done`，2026-09-28）
+  - 计划：`M41-capture-affordance-and-startup.md`
+  - 触发：维护者两条体验要求「捕获元素的框跟影刀的一样，躲着鼠标，否则影响其他元素的捕捉」＋
+    「启动前如果要初始化，可以有个加载提示」。两条都**不是**崩溃类缺陷，是观感与反馈。
+    **第二轮澄清**（同日）：第一句的真意是「捕获期的**桌面悬浮窗**在鼠标即将移到它上面时翻到屏幕
+    另一侧」，而不是「框线压住指针像素」——故切片是三条（S1 字面理解 / S2 启动卡片 / S3 澄清落点）。
+  - ①（S1）红框压鼠标（**纯视觉，不影响命中**）：`_HoverOverlay` 的 region 挖空区是元素 rect 的**内缩**版，
+    3px 框线带因此占住元素最外 3px——指针贴边（小元素/格子/窗口边）时框线正好压在指针上。真机取证：
+    §3 A/B 证 overlay **不参与** UIA 命中（13 个采样点差异 0/13，先排掉功能面）；§6 把真实指针移到
+    采样点上截图判定，改前 **6/13** 点的指针 ±2px 内有红色框线像素（最近距离 0）→ 改后 **0/13**。
+    修法：框线带整条移到元素**之外** [2,5)——外移量 = 框线宽 3 + 指针热区 2 = 5（§7 净外移扫描
+    0/3/5/8 → 压线 6/2/0/0，精确命中解析解）；浏览器页内框同款几何并**去掉 12% 红填充**
+    （填充把元素内容整片染色）。两通道几何完全一致。
+  - ②（S2）冷启动「窗口出现前」约 1 秒无任何反馈：分段**首次**采样 ≈976 ms（`load_catalog` 420.5 ms 含
+    惰性 import + `build_application` 275.8 ms + 窗口构造 68.5 ms + 首帧 211.3 ms）。**注：3 次取中位
+    只有 60.6 ms，据此会得出「提示会闪、没必要」的错误结论**（一次性成本要看首次）。
+    修法：新建 `gui/splash.py`（卡片无边框/置顶/**不收焦点**）+ `startup_splash()` contextmanager
+    （异常路径也撤卡），`run_gui` 用 `with` 包住 load_catalog → 窗口构造 → `show()`，并把
+    `singleShot(0)` 的预热/分片首轮挪到 `app.processEvents()` 之前——首帧与预热都在卡片在场时消化。
+  - ③（S3，第二轮澄清的落点）**捕获悬浮窗挡住鼠标路径**：先定性——`CaptureFloatWindow` 是
+    `Qt.Tool|WindowStaysOnTop|Frameless` 的**真实窗口**（无 `WS_EX_TRANSPARENT`、不吃穿透），压在
+    鼠标路径上时**同时挡住视觉与点击**（用户会「点不中」它下方的元素）；而高亮红框必须框住元素、
+    几何上**不可能**「移到另一侧」——澄清的落点只能是这个浮窗。修法：新增**纯函数**
+    `capture_float_origin(area, size, cursor)`（默认贴右下角，鼠标落入「默认位置矩形外扩
+    `AVOID_PAD=80`」即翻到左上角）；**判定基准恒为默认位置**、与浮窗当前所在处无关 ⇒ 无状态、
+    不抖动，「走开自动回位」天然成立；`avoid_cursor()` 取代 `place_bottom_right()`，新增
+    `user_positioned`（用户拖过就不再自动挪）；`app.py` 用 **40ms（≈25Hz）** 避让节拍——比 500ms 的
+    状态节拍快得多，否则快速甩动的鼠标会追上浮窗（`AVOID_PAD=80` 取「~1500 px/s × 40ms ≈ 60px」下限）。
+  - 门禁：**负向验证 12/12（S1+S2）＋ 11/11（S3）**（探针 `.harness/spike/probe_m41_negative.py` 与
+    `probe_m41b_negative.py`，支持 pytest 与 node 两类判据的判绿/判红口径）。新判据：
+    `tests/unit/test_desktop_overlay_geometry.py`(10) + `tests/contract/test_gui_splash.py`(6) +
+    `scripts/check_capture_overlay_geometry.mjs`(27 项，已进 `PURE_FUNCTION_SCRIPTS`)、
+    `tests/unit/test_capture_float_geometry.py`(11) + `tests/contract/test_gui_capture.py` 新增 3 项
+    （行为 / 用户接管 / 四处接线）。**首轮即抓到 2 处判据缺口**（都是我自己的）：`show_rect` 没有任何
+    判据钉住（纯函数全绿也拦不住「执行器没用上」）→ 补接线判据；「泵没泵事件」offscreen 下不可观测
+    → 补 monkeypatch 记录器判据。S3 同理：`avoid_cursor` 是否真被节拍与初始定位调用，只能用
+    `inspect.getsource` 断言（纯函数正确 ≠ 接上了）。
+  - 实测纠正两处想当然：PySide6 `Qt.WindowType.SplashScreen` 枚举**不含** `WindowDoesNotAcceptFocus`
+    （契约测试首跑即红）；overlay **不参与** UIA 命中（曾以为会被命中）。
+  - 残留（登记不修）：**元素命中粒度**——鼠标贴窗口边界时命中退化为「窗口本身」、框会铺满整窗
+    （那是命中语义问题，改框治不了）；页内提示条仍跟元素不跟鼠标（在元素外侧，压不到指针）；
+    **`RunFloatWindow`（运行浮窗）不避让**（同样是右下角真实窗口，本轮只做捕获链路）；
+    **避让只按主屏几何**（多显示器下即便浮窗被拖到副屏仍按主屏算）；**避让是「翻到对角」而非连续跟随**。
+  - **S1 如实交代**：它是第一句话的**字面理解**产物，不是第二轮澄清要的东西。它是探针实测支持的
+    改进（框线不再压指针、不吃元素内容），本轮**保留**；若维护者不要这个视觉变化，改动隔离在
+    `overlay_bounds` / `overlayBoxRect` 两处，可单独回退。
+
 ## 后续任务
 
 - [ ] **`classify_offline_reason` 的 `host-not-reachable` 判据与注释不符**（`planned`，2026-09-28
@@ -96,34 +143,6 @@
   - 为什么没顺手改：它不是本次报障的现场（M40 已用 ack 判活把用户侧体验与它解耦），而改它要同时
     动判据、文案与既有断言，属独立小片。
   - 证据：M40 任务单 §1.2（本机通道实测 `endpoints:[...]` 存在 + `reason: host-not-reachable`）。
-
-- [ ] **M41 捕获高亮「躲着鼠标」/ 启动加载提示**（`active`，2026-09-28）
-  - 计划：`M41-capture-affordance-and-startup.md`
-  - 触发：维护者两条体验要求「捕获元素的框跟影刀的一样，躲着鼠标，否则影响其他元素的捕捉」＋
-    「启动前如果要初始化，可以有个加载提示」。两条都**不是**崩溃类缺陷，是观感与反馈。
-  - ① 红框压鼠标（**纯视觉，不影响命中**）：`_HoverOverlay` 的 region 挖空区是元素 rect 的**内缩**版，
-    3px 框线带因此占住元素最外 3px——指针贴边（小元素/格子/窗口边）时框线正好压在指针上。真机取证：
-    §3 A/B 证 overlay **不参与** UIA 命中（13 个采样点差异 0/13，先排掉功能面）；§6 把真实指针移到
-    采样点上截图判定，改前 **6/13** 点的指针 ±2px 内有红色框线像素（最近距离 0）→ 改后 **0/13**。
-    修法：框线带整条移到元素**之外** [2,5)——外移量 = 框线宽 3 + 指针热区 2 = 5（§7 净外移扫描
-    0/3/5/8 → 压线 6/2/0/0，精确命中解析解）；浏览器页内框同款几何并**去掉 12% 红填充**
-    （填充把元素内容整片染色）。两通道几何完全一致。
-  - ② 冷启动「窗口出现前」约 1 秒无任何反馈：分段**首次**采样 ≈976 ms（`load_catalog` 420.5 ms 含
-    惰性 import + `build_application` 275.8 ms + 窗口构造 68.5 ms + 首帧 211.3 ms）。**注：3 次取中位
-    只有 60.6 ms，据此会得出「提示会闪、没必要」的错误结论**（一次性成本要看首次）。
-    修法：新建 `gui/splash.py`（卡片无边框/置顶/**不收焦点**）+ `startup_splash()` contextmanager
-    （异常路径也撤卡），`run_gui` 用 `with` 包住 load_catalog → 窗口构造 → `show()`，并把
-    `singleShot(0)` 的预热/分片首轮挪到 `app.processEvents()` 之前——首帧与预热都在卡片在场时消化。
-  - 门禁：**负向验证 12/12**（探针 `.harness/spike/probe_m41_negative.py`，新增支持 pytest 与 node
-    两类判据的判绿/判红口径）；新判据 `tests/unit/test_desktop_overlay_geometry.py`(10) +
-    `tests/contract/test_gui_splash.py`(6) + `scripts/check_capture_overlay_geometry.mjs`(27 项，已进
-    `PURE_FUNCTION_SCRIPTS`)。**首轮即抓到 2 处判据缺口**（都是我自己的）：`show_rect` 没有任何判据
-    钉住（纯函数全绿也拦不住「执行器没用上」）→ 补接线判据；「泵没泵事件」offscreen 下不可观测
-    → 补 monkeypatch 记录器判据。
-  - 实测纠正两处想当然：PySide6 `Qt.WindowType.SplashScreen` 枚举**不含** `WindowDoesNotAcceptFocus`
-    （契约测试首跑即红）；overlay **不参与** UIA 命中（曾以为会被命中）。
-  - 残留（登记不修）：**元素命中粒度**——鼠标贴窗口边界时命中退化为「窗口本身」、框会铺满整窗
-    （那是命中语义问题，改框治不了）；页内提示条仍跟元素不跟鼠标（在元素外侧，压不到指针）。
 
 - [ ] **残留 `rpa-core-ext-host.exe` 占着端点**（`planned`，2026-09-28 M40 §4 自挖）
   - 实测 2026-09-28：两个残留 host 进程（8:53 起）持续占着 `rpa_core_ext_*` 端点，导致「端点存在
@@ -329,6 +348,22 @@
 - [ ] **技术路线（ADR 0016）**：GUI 为唯一主力形态——新增能力优先落 GUI；Web 编辑器（devserver）
   `devserver/static/` 冻结演进（不删除、不再补齐 GUI 已有能力）
 - [ ] UI、DSH、MCP、调度器和安装器集成（`planned`）——见远期任务
+
+- [ ] **QProcess 型 GUI 用例在机器高负载下会 30s 超时**（`planned`，2026-09-28 M41 收口实测）
+  - 现场：`tests/contract/test_gui_command_matrix.py::test_panel_streams_jsonl_into_rows` 与
+    `::test_shutdown_kills_running_child`，两条各有 **30s 固定超时**（分别等「子进程出第一行结果」
+    与「子进程起来」）。机器被占住时子进程 30s 内起不来 → `2 failed`（整文件跑 68–72s）；
+    机器空闲时整文件 **22 passed / 4.5–6.2s**（连跑 3 次全绿）。
+  - **不是 M41 改动引入**（对照实验）：把 `app.py` / `capture_float.py` 还原到 HEAD 再跑同组合
+    → 同样 `2 failed, 111 passed in 94.14s`。
+  - **排查留证（避免后人重走）**：已排除并发、`%TEMP%` 累积、随机顺序插件（未安装）、pytest 版本；
+    六轮二分一度指向 `test_browser_precheck.py`，但**它本身只花 1.12s**（同一份会话里当过 64s 的
+    「受害者」，不是元凶）；**`PYTHONPATH` 与 `tests.commands.desktop_harness` 的 import 也都被怀疑过，
+    加对照后又都被推翻**——同一条命令几分钟内 `62s 全红` → `1s 全绿`，且单跑那两个用例（`-k` 过滤）
+    恒绿 ⇒ **结论是负载型瞬态，触发条件不在测试内容里**。
+  - 候选做法：把「等子进程起来」与「计时」分开（先等起来再开始计时）；或按机器负载放宽/自适应超时；
+    或让子进程改用更轻的宿主（现在用的就是 `sys.executable`，瓶颈在**进程创建延迟**不在命令本身）。
+  - 证据：M41 任务单 §5.2。
 
 ## 远期任务
 

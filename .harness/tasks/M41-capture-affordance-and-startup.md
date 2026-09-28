@@ -1,15 +1,21 @@
 # M41 捕获高亮「躲着鼠标」/ 启动加载提示
 
-状态：`active`
+状态：`done`
 
 由来：维护者 2026-09-28（M40 第二轮收口后）提两条体验要求——
 
 > 捕获元素的框跟影刀的一样，躲着鼠标，否则影响其他元素的捕捉。
 > 另外，启动前如果要初始化，可以有个加载提示。
 
-两条都不是崩溃类缺陷，而是**观感与反馈**：①捕获红框压在鼠标指针上；②冷启动约一秒的
-空白等待。沿用本仓纪律——先一手实测归因（探针可复现），再改实现，最后逐条负向验证 +
-全门禁。两条各自独立成切片，互不依赖。
+**第二轮澄清（同日）**——第一句的真意不是「框线压住指针像素」，而是**悬浮窗要躲开鼠标**：
+
+> 我的意思是，捕捉元素的桌面悬浮框，在鼠标即将移动到悬浮框的时候，悬浮框移动到
+> 屏幕另一侧，避免挡住实际需要捕获的元素。
+
+⇒ 切片因此是三条：**S1** 按第一句的字面（框线别压住指针像素，**实测支持的改进**）、
+**S2** 启动加载卡片、**S3** 按澄清做的**捕获悬浮窗避让**（见 §0.3）。三条都不是崩溃类
+缺陷，而是**观感与反馈**。沿用本仓纪律——先一手实测归因（探针可复现），再改实现，
+最后逐条负向验证 + 全门禁。切片各自独立。
 
 ## 0. 一句话结论
 
@@ -22,6 +28,11 @@
    + `build_application`（275.8ms，QApplication 与 Qt 平台插件）+ 窗口构造（68.5ms）
    + 首帧（211.3ms）≈ **976ms** 同步阻塞，屏幕上什么都没有，用户会以为命令没生效。
    加一张在场约一秒的加载卡片（`gui/splash.py`），把这段变成「有反馈的等待」。
+3. **捕获悬浮窗压在鼠标路径上**（第二轮澄清的那一条）：捕获期右下角的状态浮窗是
+   **真实窗口**（无 `WS_EX_TRANSPARENT`、不吃点击穿透），压在鼠标路径上时同时挡住视觉
+   与**点击**——用户会「点不中」它下方的元素。改成「鼠标临近默认位置时翻到左上角、
+   走开再回右下角」：判据落在纯函数 `capture_float_origin`，判定基准恒为**默认位置**
+   那一个矩形（与浮窗当前所在处无关）⇒ 无状态、不抖动。
 
 ## 1. 证据（一手，可复现）
 
@@ -100,6 +111,29 @@
 **实测纠正一处想当然**：PySide6 的 `Qt.WindowType.SplashScreen` 枚举值里**并不含**
 `WindowDoesNotAcceptFocus`（契约测试首跑即红）。不抢焦点必须显式声明，已加并有用例钉住。
 
+### S3 捕获悬浮窗躲开鼠标（第二轮澄清）
+
+**先定性**：悬浮窗是 `Qt.Tool | WindowStaysOnTopHint | FramelessWindowHint` 的**真实
+窗口**（对比 `_HoverOverlay` 带 `WS_EX_TRANSPARENT`），既不透明也不穿透——所以它同时挡住
+**视觉**与**点击**，这正是「影响其他元素的捕捉」的实义。而高亮红框必须框住元素、**不可能**
+「移到屏幕另一侧」，故澄清后的落点只能是这个浮窗（排查路径：`capture/` 与 `gui/` 全部
+浮层类只有 `_HoverOverlay` / `CaptureFloatWindow` / `RunFloatWindow` 三个，前者的 docstring
+虽叫「悬浮高亮框」，几何上排除）。
+
+| 文件 | 改动 |
+|---|---|
+| `gui/capture_float.py` | 新增**纯函数** `capture_float_origin(area, size, cursor, …)`（默认贴右下角；鼠标落入「默认位置矩形外扩 `AVOID_PAD = 80`」即翻到左上角）+ 公开常量 `AVOID_PAD`；`place_bottom_right()` 换成 `avoid_cursor(cursor)`（`cursor=None` = 不避让）；新增 `user_positioned`——用户拖动过就不再自动挪 |
+| `gui/app.py` | `_show_capture_float` 初始定位改 `window.avoid_cursor(QCursor.pos())`（鼠标此刻已在右下角就直接去左上）；新增避让节拍 `_capture_avoid_timer`（**40ms**，比 500ms 的状态节拍快得多——否则浮窗会被快速移动的鼠标追上，「即将移动到」来不及）；`_close_capture_float` 停表 |
+
+**为什么判定基准是「默认位置」而不是浮窗当前位置**：基准若跟着浮窗走，翻到左上之后
+鼠标仍在右下、判定继续成立 → 结果依赖调用次数（来回抖）。固定基准后，鼠标在右下角区域
+⇔ 浮窗在左上角，鼠标一走开自动回位——**双向避让天然成立且无状态**。
+
+**一处如实交代**：S1（框线整条外移到元素外 `[2,5)`）是我对第一句的**字面理解**产物，
+不是第二轮澄清要的东西。它是探针实测支持的改进（框线不再压指针、不吃元素内容），
+本轮**保留**；若维护者不要这个视觉变化，改动隔离在 `overlay_bounds` / `overlayBoxRect`
+两处，可单独回退。
+
 ## 3. 验收
 
 | 口径 | 结果 |
@@ -108,6 +142,8 @@
 | 桌面几何单测 | `tests/unit/test_desktop_overlay_geometry.py` **10 passed**（含「旧几何确实压线」的反证项） |
 | 页内几何门禁 | `scripts/check_capture_overlay_geometry.mjs` **27 项全过**（4 种 rect × 4 条带 + 元素内逐点热区 + 无填充） |
 | splash 契约 | `tests/contract/test_gui_splash.py` **6 passed**（可见→关闭 / 异常路径 / 不抢焦点 / 幂等 / 泵事件 / 接线顺序） |
+| 浮窗避让几何 | `tests/unit/test_capture_float_geometry.py` **11 passed**（翻转 / 提前量 4 档 / 走开回位 / 无状态 / pad 下限） |
+| 浮窗避让接线 | `tests/contract/test_gui_capture.py` 新增 3 项（行为：翻转与回位 / 用户拖过不再自动挪 / 四处接线各钉一条） |
 | 真机截图 | `.harness/spike/_m41_hover_shots/*.png`（13 张，指针位置画十字）、`_m41_splash_shot.png` |
 
 ## 4. 负向验证
@@ -130,6 +166,25 @@
 | 11 | `app.py` `run_gui` 把 `load_catalog` 移出 `with` 块 | `test_run_gui_wraps_initialization_in_startup_splash` |
 | 12 | `app.py` `run_gui` 把 `app.processEvents()` 挪到 `show()` 之前 | 同上 |
 
+**S3（浮窗避让）另做 11 处**，探针 `.harness/spike/probe_m41b_negative.py`：
+
+| # | 注入（破坏点） | 期望变红的判据 |
+|---|---|---|
+| 1 | `capture_float_origin` 摘掉翻转分支 | `test_cursor_on_the_window_flips_it_to_the_other_side` |
+| 2 | 避让余量归零（判定式里 `avoid_pad` → `0`） | `test_cursor_about_to_reach_the_window_moves_it_early` |
+| 3 | `AVOID_PAD` 80 → 10 | `test_avoid_pad_covers_a_fast_flick_between_refresh_ticks` |
+| 4 | 判定改成恒真（一去不返） | `test_decision_does_not_depend_on_where_the_window_currently_is` |
+| 5 | `avoid_cursor` 不理 `user_positioned` | `test_capture_float_keeps_place_once_the_user_moves_it` |
+| 6 | `mouseMoveEvent` 忘了置位 | 同上 |
+| 7 | `_show_capture_float` 初始定位不避让 | wiring |
+| 8 | `_tick_capture_avoid` 空转 | wiring |
+| 9 | 避让节拍 40ms → 500ms | wiring |
+| 10 | `_close_capture_float` 不停表 | wiring |
+| 11 | `avoid_cursor` 自己算位置、不走纯函数 | wiring |
+
+（wiring = `test_capture_float_avoidance_is_wired_into_the_capture_flow`。#9 特意打「节拍
+必须 ≤50ms」这条——它没有对应的行为判据，若不做源码断言，把 40 改成 500 会静默通过。）
+
 ### 4.1 已知覆盖缺口（登记，不掩盖）
 
 **#10「`open_startup_splash` 是否泵了事件」契约测试证明不了**：offscreen 下 `show()` 之后
@@ -139,7 +194,9 @@
 
 ## 5. FULL GATE
 
-`uv run python .harness/scripts/check_all.py` → **exit 0 / 末行 `FULL GATE PASSED`**（报告 `_m41_gate2.txt`）：
+### 5.1 S1+S2 收口（2026-09-28，已完成）
+
+`uv run python .harness/scripts/check_all.py` → **exit 0 / 末行 `FULL GATE PASSED`**：
 
 | 检查 | 结果 |
 |---|---|
@@ -150,11 +207,59 @@
 | 参数消费门禁 | `PARAM CONSUMPTION CHECK PASSED (77 checked / 3 exempt / 0 skipped = 80 条命令)` |
 | 错误契约门禁 | `ERROR CONTRACT CHECK PASSED (77 checked / 3 exempt / 0 skipped = 80 条命令)` |
 | 命令矩阵门禁 | `COMMAND MATRIX CHECK PASSED（86 条命令 / 死参数台账 0 / 实现缺口 0 / l2 块 109 个）` |
-| 纯函数门禁（node） | 含新增 `check_capture_overlay_geometry.mjs`（27 项）在内全部「全部通过」 |
+| 纯函数门禁（node） | 含新增 `check_capture_overlay_geometry.mjs`（27 项）在内全部通过 |
 
-首跑（`_m41_gate1.txt`）曾因 `check_tasks` 在中途中止（M40 仍挂 `active`，见 §4 后的收口记录），
-修正台账后重跑得上述结果。报告里另有 `SystemExit: 1` 一行——是 pytest `atexit` 批量删除回调的
-已知噪声（M40 已实测：**atexit 里抛 SystemExit 不改进程退出码**），判门禁看**末行 + 退出码**。
+首跑曾因 `check_tasks` 中途中止（M40 仍挂 `active`），修正台账后重跑得上述结果。
+
+### 5.2 S3 收口（2026-09-28）——**全门禁未 PASSED，如实记**
+
+`check_all.py` 连跑 3 次，pytest **稳定 2 failed**（304.5s / 316.4s / 329.8s）：
+
+| 检查 | 结果 |
+|---|---|
+| pytest（默认套件） | **2 failed / 1202 passed / 21 skipped / 2 xfailed** |
+| ruff / 架构 / 任务 / 参数消费 / 错误契约 / 命令矩阵 / 9 个 node 纯函数门禁 | **全部通过** |
+
+（`check_all.py` 在首个失败即 `raise SystemExit`，故上表第二行是本轮**单独逐条**跑出来的真值：
+ruff `All checks passed!`；`ARCHITECTURE CHECK PASSED (66 python files, 86 manifests)`；
+`TASK CHECK PASSED (61 features, 0 active task)`；param consumption 与 error contract 各
+`77 checked / 3 exempt / 0 skipped`；`COMMAND MATRIX CHECK PASSED（86 条 / 死参数台账 0 /
+实现缺口 0 / l2 块 109）`；9 个 `scripts/check_*.mjs` 全 OK。）
+
+**1202 = 1190 + 14**：本轮新增的 14 条判据（unit 11 + contract 3）**全部通过**；红的**只有**两条既有用例。
+
+**与本次改动无关（对照实验）**：把 `app.py` / `capture_float.py` 还原到 HEAD 再跑同一组合
+→ **同样 `2 failed, 111 passed in 94.14s`**。
+
+**这两条用例本身没坏**：`-k "streams_jsonl or shutdown_kills"` 单跑恒绿
+（`2 passed in 1.17s`，多次复现）；整文件单跑也曾 3 连绿（`22 passed in 4.5–6.2s`）。
+
+**失败形态**：两条各有 **30s 固定预算**，超时点分别是「子进程还在跑，结果行却没实时出现——
+轮询没接上」与「子进程没起来」——即**子进程在 30s 内没有产出**。
+
+**触发面在环境里，不在仓库里**（已确证的两段）：本机 python 走沙箱 shim
+`…\WorkBuddy\resources\app.asar.unpacked\cli\vendor\shim\sitecustomize.py`——它把
+`os.remove` / `shutil.rmtree` 全部改道回收站，**每一次**删除都
+`subprocess.run([node, guard, "check", "--target", …])` 起一个 Node 守卫进程（timeout 10s）；
+当「本 turn 累计删除数」超过阈值 50 时它直接
+`[SAFE_DELETE_BULK_CONFIRM_REQUIRED] → raise SystemExit(1)`——本轮实测该计数已到 **2248**，而
+pytest 自己的临时目录清理正是往这个计数器里加数。全量套件删除密集 ⇒ 每次删除付一次 Node 激活
+⇒ 全量套件从上午的 177s 变成 300s+，两条 30s 预算的用例被顶穿；单跑时计数低、不触发 ⇒ 恒绿。
+**（机制为高度疑似，未坐实最后一跳）**：已确证的是「守卫每次删除起 Node 进程」与「阈值 50 /
+本 turn 2248 时抛 SystemExit」这两段代码，以及门禁报告里那段 `sitecustomize.py` 栈；
+**未确证**的是这两条用例被顶穿的具体那一步。
+
+**排查中被打掉的三个假设（留证，免得后人重走）**：
+① 一度指向 `tests/contract/test_browser_precheck.py`（六轮二分：`[1-6]+[29]` 红 → `[1-3]+[29]`
+绿 → `[4-6]+[29]` 红 → `[6]+[29]` 红），但**它自己单跑只花 0.41–1.12s**——同一份会话里它当过
+64s 的「受害者」，不是元凶；
+② 曾指向 `tests.commands.desktop_harness` 的 import（用 `-p` 引导插件实测「只 import 它就 2 failed」）
+→ 补一个只 `import json` 的**空对照插件**同样 2 failed ⇒ 被对照否定；
+③ 曾指向 `PYTHONPATH=.`（`2 failed`）→ 几分钟后同一条命令 `1s 全绿` ⇒ 也被否定。
+三条的共同教训：**这条抖动随时间开合，任何「单次实验的相关性」都不成立，必须带对照。**
+
+已按上述结论登记 BACKLOG「QProcess 型 GUI 用例在机器高负载下会 30s 超时」，
+**不通过改断言/放宽超时来消红**（那会把真实缺陷一起放掉）。
 
 ## 6. 登记不做 / 残留
 
@@ -164,3 +269,13 @@
 - **页内提示条跟随鼠标**：现行提示条跟元素、不跟鼠标（在元素外侧，压不到指针）。
   影刀式「跟鼠标并翻边」是另一种观感，本轮不改，理由见 §2 S1。
 - **splash 的可取消性**：初始化约 1 秒，未提供「取消启动」入口（收益低）。
+- **运行浮窗（`RunFloatWindow`）不避让**：它同样是右下角的真实窗口，运行期间也可能挡住
+  右下角元素。本轮只做捕获链路（维护者报的是捕获场景），未扩大范围。
+- **避让只按主屏几何**：`QGuiApplication.primaryScreen()`——多显示器下即便浮窗被拖到副屏，
+  避让仍按主屏算（沿用既有定位口径，未扩大范围）。
+- **避让是「翻到对角」而不是「连续跟随」**：鼠标缓慢逼近时浮窗一次性翻到左上，不做位移
+  动画（收益低；动画期间浮窗反而更容易与鼠标重叠）。
+- **全门禁那 2 条红是既有环境抖动，不在本里程碑范围内**：`test_gui_command_matrix.py` 的
+  `test_panel_streams_jsonl_into_rows` / `test_shutdown_kills_running_child`（各 30s 预算）在
+  全量套件里被顶穿——HEAD 对照同样失败、单跑恒绿、触发面在沙箱删除守卫而不在仓库（详见 §5.2）。
+  已登记 BACKLOG「QProcess 型 GUI 用例在机器高负载下会 30s 超时」，**不在本轮改测试**。

@@ -7,7 +7,8 @@
 
 行为约定：
 
-- 置顶小窗（右下角、可拖动），捕获期间持续在场；结束由调用方关闭；
+- 置顶小窗（默认右下角、可拖动），捕获期间持续在场；结束由调用方关闭；
+  鼠标靠近默认位置时自动翻到左上角躲开（见 ``capture_float_origin``）；
 - 两条腿的**真实状态**各自一行（网页通道 / 桌面通道），不合并成一句——用户要据此
   决定「该去网页里点还是去桌面应用上按 F9」；
 - 「取消捕获」按钮是捕获期唯一的确定性出口（不依赖任何一条腿响应键盘）。
@@ -30,6 +31,47 @@ _ONLINE = "#1a7f37"
 _OFFLINE = "#cf222e"
 _NEUTRAL = "#57606a"
 
+# 鼠标预判避让（M41 S3）：浮窗是**真实窗口**（无 WS_EX_TRANSPARENT，不吃穿透），
+# 压在鼠标路径上时同时挡住视觉与点击——用户会「点不中」它下方的元素。维护者
+# 2026-09-28 报：「捕捉元素的桌面悬浮框，在鼠标即将移动到悬浮框的时候，悬浮框
+# 移动到屏幕另一侧，避免挡住实际需要捕获的元素」。
+# 判定基准恒为**默认位置**（右下角）那一个矩形，与浮窗当前所在处无关 → 无状态、
+# 不抖动：鼠标在右下角区域时给左上角，离开后自动回右下角。
+AVOID_PAD = 80
+
+
+def capture_float_origin(
+    area: tuple[int, int, int, int],
+    size: tuple[int, int],
+    cursor: tuple[int, int] | None,
+    *,
+    margin: int = _MARGIN,
+    avoid_pad: int = AVOID_PAD,
+) -> tuple[int, int]:
+    """浮窗左上角坐标：默认贴右下角，鼠标靠近时翻到对侧（左上角）。
+
+    - ``area``：屏幕可用区域 ``(x, y, w, h)``
+    - ``size``：浮窗尺寸 ``(w, h)``
+    - ``cursor``：鼠标屏幕坐标 ``(x, y)``；``None`` 表示不做避让
+
+    鼠标落入「默认位置矩形外扩 ``avoid_pad``」即翻到左上角，否则回右下角。
+    返回的是坐标而非是否翻转——调用方据此 ``move``，纯函数好测。
+    """
+    ax, ay, aw, ah = area
+    ww, wh = size
+    default_x = ax + aw - ww - margin
+    default_y = ay + ah - wh - margin
+    if cursor is None:
+        return default_x, default_y
+    cx, cy = cursor
+    near_default = (
+        default_x - avoid_pad <= cx <= default_x + ww + avoid_pad
+        and default_y - avoid_pad <= cy <= default_y + wh + avoid_pad
+    )
+    if near_default:
+        return ax + margin, ay + margin
+    return default_x, default_y
+
 
 class CaptureFloatWindow(QWidget):
     """捕获悬浮窗：标题 + 手势提示 + 两腿状态 + 倒计时 + 取消按钮。"""
@@ -50,6 +92,8 @@ class CaptureFloatWindow(QWidget):
         self.setFixedSize(_WIDTH, _HEIGHT)
         self._drag_pos: QPoint | None = None
         self.cancelling = False
+        # 用户手动拖动过 → 尊重其选择，不再自动避让（见 avoid_cursor）
+        self.user_positioned = False
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(14, 12, 14, 12)
@@ -139,18 +183,29 @@ class CaptureFloatWindow(QWidget):
         self.cancel_requested.emit()
 
     # ---- 定位与拖动 ---------------------------------------------------------
-    def place_bottom_right(self) -> None:
-        """贴到主屏幕可用区域右下角。"""
+    def avoid_cursor(self, cursor: QPoint | None) -> None:
+        """按鼠标位置定位：默认贴右下角，鼠标靠近时翻到对侧（左上角）。
+
+        ``cursor=None`` 表示不避让（直接贴右下角）；用户手动拖过则本方法不再动作。
+        由调用方按节拍驱动（``app.py`` 的避让定时器）——鼠标「即将移动到浮窗」
+        时浮窗已在另一侧，而不是等压上来才让开。
+        """
+        if self.user_positioned:
+            return
         from PySide6.QtGui import QGuiApplication
 
         screen = QGuiApplication.primaryScreen()
         if screen is None:
             return
         area = screen.availableGeometry()
-        self.move(
-            area.right() - _WIDTH - _MARGIN,
-            area.bottom() - _HEIGHT - _MARGIN,
+        point = (cursor.x(), cursor.y()) if cursor is not None else None
+        x, y = capture_float_origin(
+            (area.x(), area.y(), area.width(), area.height()),
+            (_WIDTH, _HEIGHT),
+            point,
         )
+        if self.x() != x or self.y() != y:
+            self.move(x, y)
 
     def paintEvent(self, event) -> None:  # noqa: N802 - Qt 覆写
         # 无边框窗口自绘卡片底（白底圆角 + 边框），与 run_float 一致
@@ -169,6 +224,7 @@ class CaptureFloatWindow(QWidget):
 
     def mouseMoveEvent(self, event: QMouseEvent) -> None:  # noqa: N802
         if self._drag_pos is not None and event.buttons() & Qt.MouseButton.LeftButton:
+            self.user_positioned = True  # 用户接管位置：停止自动避让
             self.move(event.globalPosition().toPoint() - self._drag_pos)
         super().mouseMoveEvent(event)
 

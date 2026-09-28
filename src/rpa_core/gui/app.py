@@ -441,6 +441,7 @@ class MainWindow(QMainWindow):
         # 捕获悬浮窗与倒计时节拍（懒创建；捕获期间主窗最小化，浮窗是唯一反馈面）
         self._capture_float = None
         self._capture_timer = None
+        self._capture_avoid_timer = None
         self._capture_started_at = 0.0
         self._capture_budget = CAPTURE_TIMEOUT_SECONDS
         self.setWindowTitle("RPA Core 编辑器")
@@ -2851,7 +2852,10 @@ class MainWindow(QMainWindow):
             web_ok=web_ok,
             desktop_ok=desktop_ok,
         )
-        window.place_bottom_right()
+        from PySide6.QtGui import QCursor
+
+        # 初始定位就带鼠标：若用户此刻已在右下角，浮窗直接去左上（M41 S3）
+        window.avoid_cursor(QCursor.pos())
         present_window(window)  # 主窗刚最小化：浮窗必须自己浮到最前
         self._capture_started_at = time.monotonic()
         from PySide6.QtCore import QTimer
@@ -2861,6 +2865,13 @@ class MainWindow(QMainWindow):
         timer.timeout.connect(self._tick_capture_float)
         timer.start()
         self._capture_timer = timer
+        # 避让节拍（M41 S3）：鼠标要「即将移动到浮窗」时它就翻边，故比状态刷新快
+        # 得多（40ms ≈ 25Hz）——500ms 的节拍下浮窗会被快速移动的鼠标追上。
+        avoid_timer = QTimer(self)
+        avoid_timer.setInterval(40)
+        avoid_timer.timeout.connect(self._tick_capture_avoid)
+        avoid_timer.start()
+        self._capture_avoid_timer = avoid_timer
 
     def _tick_capture_float(self) -> None:
         """倒计时 + 腿状态实时刷新（扩展腿判死后用户要知道网页里为什么没红框）。"""
@@ -2879,10 +2890,22 @@ class MainWindow(QMainWindow):
                 web=web_text, desktop=desktop_text, web_ok=web_ok, desktop_ok=desktop_ok
             )
 
+    def _tick_capture_avoid(self) -> None:
+        """按鼠标位置刷新浮窗（躲开鼠标路径，避免挡住下方元素；M41 S3）。"""
+        window = self._capture_float
+        if window is None:
+            return
+        from PySide6.QtGui import QCursor
+
+        window.avoid_cursor(QCursor.pos())
+
     def _close_capture_float(self) -> None:
         if self._capture_timer is not None:
             self._capture_timer.stop()
             self._capture_timer = None
+        if self._capture_avoid_timer is not None:
+            self._capture_avoid_timer.stop()
+            self._capture_avoid_timer = None
         window = self._capture_float
         self._capture_float = None
         if window is not None:
