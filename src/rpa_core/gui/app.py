@@ -2730,6 +2730,9 @@ class MainWindow(QMainWindow):
         holder.args[key] = value
         if holder.raw is not None:
             holder.raw.setdefault("with", {})[key] = value
+            # 元素引用（M46/B1）：节点同时记「引用」与「值快照」——运行期按引用
+            # 从元素库取最新值（改主定位后已插入指令自动生效），快照仅作缺元素回落。
+            holder.raw.setdefault("elementRefs", {})[key] = name
         item.setData(summarize_args(holder.args), ROLE_ARGS_SUMMARY)
         self._end_edit()
         self._set_dirty(True)
@@ -3791,9 +3794,23 @@ class MainWindow(QMainWindow):
                     self._undo_stack.pop()
                 self.statusBar().showMessage("该节点没有可编辑的参数", 4000)
                 return
+            previous_args = dict(holder.args)
             holder.args = dict(values)
             if holder.raw is not None:
                 holder.raw["with"] = dict(values)
+                # 元素引用对账（M46/B1）：手工改值/删键 = 用户接管该参数，
+                # 摘掉引用（否则运行期元素库值会盖掉手工输入）；值没动则保留引用。
+                refs = holder.raw.get("elementRefs")
+                if isinstance(refs, dict) and refs:
+                    stale = [
+                        key
+                        for key in refs
+                        if key not in values or values[key] != previous_args.get(key)
+                    ]
+                    for key in stale:
+                        refs.pop(key, None)
+                    if not refs:
+                        holder.raw.pop("elementRefs", None)
                 modes = form.expr_modes()
                 if modes:
                     holder.raw["_exprModes"] = modes

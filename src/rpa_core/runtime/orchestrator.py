@@ -37,6 +37,7 @@ from rpa_core.model.workflow import (
     TryNode,
     WorkflowNode,
 )
+from rpa_core.runtime.element_refs import make_element_reader, resolve_element_refs
 
 from .checkpoint import (
     CheckpointError,
@@ -197,6 +198,8 @@ class Orchestrator:
         # 流程目录（workflow.json 所在目录）：供 data.table.* 等命令按 manifest
         # x-runtime.inject 声明注入到 command_inputs
         self._flow_dir = flow_dir
+        # 元素引用读取器（M46/B1）：按 flow_dir/elements 惰性建一次，整个 run 复用
+        self._element_reader_cache = None
 
     def resume(
         self,
@@ -661,6 +664,12 @@ class Orchestrator:
                 raise RpaError(ErrorCode.INVALID_REFERENCE, str(exc)) from exc
             raise WorkflowReturn(value)
 
+    def _element_reader(self):
+        """元素文档读取器（惰性建、整个 run 复用）；flow_dir 为空时恒 None。"""
+        if self._element_reader_cache is None:
+            self._element_reader_cache = make_element_reader(self._flow_dir)
+        return self._element_reader_cache
+
     async def _evaluate_python_fields(
         self,
         fields: dict[str, str],
@@ -758,6 +767,23 @@ class Orchestrator:
                 python_fields, scopes, run_id, node.id, cancellation, manifest.input_schema
             )
             command_inputs.update(evaluated)
+
+        # 元素引用解析（M46/B1）：引用键在 schema 校验前换入元素库最新值——
+        # 这是「元素库里改主定位，已插入指令跟着生效」的兑现点。缺元素回落
+        # 节点快照并落事件（可观测的回落，不是自愈候选那种静默失效）。
+        if node.element_refs:
+            resolution = resolve_element_refs(
+                command_inputs, node.element_refs, self._element_reader()
+            )
+            if resolution.missing:
+                await events.append(
+                    "elementRefFallback",
+                    node_id=node.id,
+                    payload={
+                        "missing": sorted(set(resolution.missing)),
+                        "resolved": sorted(set(resolution.resolved)),
+                    },
+                )
 
         # 运行时注入：按 manifest x-runtime.inject 声明，把 flowDir 等运行时量注入 input
         # （必须在 schema 校验前，否则 additionalProperties:false 会拒绝注入字段）

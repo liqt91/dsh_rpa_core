@@ -764,3 +764,68 @@ def test_element_panel_search_filters_display_only(qapp):
     assert panel.list.count() == 3
     panel.list.setCurrentRow(0)
     assert panel.current_name() == "searchBox"
+
+
+# ---- 元素引用（M46/B1 引用模型：GUI 侧写入口径） --------------------------------
+def test_insert_element_writes_element_ref(window):
+    """插入 = 双写：值快照进 with，引用进 elementRefs（运行期按引用取最新值）。"""
+    window._save_named_flow("eref1")
+    window.save_element_descriptor("searchBox", _browser_element())
+    item = window.flow_model.find_by_id("read")
+    window.canvas_view.setCurrentIndex(window.flow_model.indexFromItem(item))
+    window._insert_element("searchBox")
+
+    from rpa_core.gui.flow_model import ROLE_ARGS_RAW
+
+    holder = item.data(ROLE_ARGS_RAW)
+    assert holder.raw["with"]["selector"] == "#kw"
+    assert holder.raw["elementRefs"] == {"selector": "searchBox"}
+    # 落盘链路过得去校验（elementRefs 是声明过的模型字段）
+    document = window._build_document()
+
+    def _find(nodes, node_id):
+        for child in nodes:
+            if child.get("id") == node_id:
+                return child
+            for key in ("children", "then", "else"):
+                hit = _find(child.get(key) or [], node_id)
+                if hit is not None:
+                    return hit
+        return None
+
+    node = _find(document["root"].get("children") or [], "read")
+    assert node is not None
+    assert node["elementRefs"] == {"selector": "searchBox"}
+
+
+def test_manual_param_edit_takes_over_and_drops_element_ref(window):
+    """手工改引用参数 = 用户接管：引用摘除（否则运行期元素库值盖掉手工输入）；
+    值没动的提交保留引用。"""
+    window._save_named_flow("eref2")
+    window.save_element_descriptor("searchBox", _browser_element())
+    item = window.flow_model.find_by_id("read")
+    window.canvas_view.setCurrentIndex(window.flow_model.indexFromItem(item))
+    window._insert_element("searchBox")
+
+    from PySide6.QtWidgets import QPushButton
+
+    from rpa_core.gui.flow_model import ROLE_ARGS_RAW
+    from rpa_core.gui.param_form import ParamForm
+
+    holder = item.data(ROLE_ARGS_RAW)
+    assert holder.raw["elementRefs"] == {"selector": "searchBox"}
+
+    # 不改值直接应用 → 引用保留（如改别的字段）
+    apply_button = window.param_holder.findChild(QPushButton)
+    apply_button.click()
+    assert holder.raw["elementRefs"] == {"selector": "searchBox"}
+
+    # 改 selector 值再应用 → 引用被摘除
+    form = window.param_holder.findChild(ParamForm)
+    selector_edit = next(
+        widget for field, _kind, widget in form._fields if field == "selector"
+    )
+    selector_edit.setText("#hand-tuned")
+    apply_button.click()
+    assert holder.raw["with"]["selector"] == "#hand-tuned"
+    assert "elementRefs" not in holder.raw

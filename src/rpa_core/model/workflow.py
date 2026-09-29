@@ -26,6 +26,14 @@ class ActionNode(NodeBase):
         alias="_exprModes",
         description="字段表达式模式：fx=变量引用, python=Python表达式",
     )
+    element_refs: dict[str, str] | None = Field(
+        default=None,
+        alias="elementRefs",
+        description=(
+            "元素引用（M46/B1 引用模型，与影刀同构）：参数键 → 元素库元素名。"
+            "运行期从流程 elements/ 目录解析最新定位值；元素缺失回落 with 快照并落事件"
+        ),
+    )
 
 
 class SequenceNode(NodeBase):
