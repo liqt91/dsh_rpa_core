@@ -3063,8 +3063,18 @@ class MainWindow(QMainWindow):
         existing = list(store.list()) if store is not None else []
         from rpa_core.gui.element_editor import suggest_element_name
 
+        # 活体校验（M47）：browser 元素给「校验元素」按钮接上按需校验通道；
+        # desktop 元素不接（桌面腿活体查找未实现，按钮永远转圈不如不摆）。
+        verify_css = None
+        if descriptor.get("kind") == "browser":
+            from rpa_core.capture.verify import ElementVerifier
+
+            verify_css = ElementVerifier().verify
         dialog = ElementDialog(
-            descriptor, default_name=suggest_element_name(existing, hint), parent=self
+            descriptor,
+            default_name=suggest_element_name(existing, hint),
+            verify_css=verify_css,
+            parent=self,
         )
         # 此刻用户在浏览器里刚完成捕获，我们是后台应用：不置顶的话对话框会
         # 停在浏览器后面，用户得先点一次 Dock 才看得见（真机实测）。

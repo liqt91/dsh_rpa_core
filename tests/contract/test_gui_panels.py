@@ -829,3 +829,70 @@ def test_manual_param_edit_takes_over_and_drops_element_ref(window):
     apply_button.click()
     assert holder.raw["with"]["selector"] == "#hand-tuned"
     assert "elementRefs" not in holder.raw
+
+
+# ---- 活体校验（M47 S1）：确认框里的「校验元素」按钮 -----------------------------
+def _pump_until_gui(predicate, timeout_ms: int = 5000) -> bool:
+    """泵事件循环直到谓词为真（跨线程信号是队列投递，必须泵才送达）。"""
+    import time
+
+    from PySide6.QtWidgets import QApplication
+
+    deadline = time.monotonic() + timeout_ms / 1000
+    while time.monotonic() < deadline:
+        QApplication.processEvents()
+        if predicate():
+            return True
+        time.sleep(0.02)
+    return False
+
+
+def test_element_dialog_live_verify_reports_count(qapp):
+    """校验按钮：工作线程跑注入的回调，命中数回显到标签（替换捕获时旧值）。"""
+    from rpa_core.gui.element_panel import ElementDialog
+
+    seen: list[str] = []
+
+    def fake_verify(css: str) -> dict:
+        seen.append(css)
+        return {"count": 2}
+
+    dialog = ElementDialog(
+        _browser_element(), default_name="x", verify_css=fake_verify
+    )
+    assert dialog.verify_button is not None
+    dialog.verify_button.click()
+    assert dialog.verify_button.isEnabled() is False  # 校验中禁用（防连点）
+    assert _pump_until_gui(
+        lambda: dialog.verify_label.text().startswith("当前命中 2")
+    )
+    assert seen == ["#kw"]  # 用的是编辑区**当前**的 css
+    assert dialog.verify_button.isEnabled()
+
+
+def test_element_dialog_live_verify_error_is_inline(qapp):
+    """通道故障是**就地**结构化报错，不弹窗、不抛异常。"""
+    from rpa_core.gui.element_panel import ElementDialog
+
+    dialog = ElementDialog(
+        _browser_element(),
+        default_name="x",
+        verify_css=lambda css: {"error": "extension-offline"},
+    )
+    dialog.verify_button.click()
+    assert _pump_until_gui(lambda: "校验失败" in dialog.error_label.text())
+    assert "extension-offline" in dialog.error_label.text()
+    assert dialog.verify_button.isEnabled()
+
+
+def test_element_dialog_without_verify_callback_has_no_button(qapp):
+    """desktop 元素 / 未注入回调：不摆「校验元素」按钮（永远转圈的按钮不如不摆）。"""
+    from rpa_core.gui.element_panel import ElementDialog
+
+    desktop = {
+        "kind": "desktop",
+        "selector": {"locator": {"backend": "win32", "controlType": "Button"}},
+        "metadata": {"controlType": "Button"},
+    }
+    dialog = ElementDialog(desktop, default_name="y")
+    assert dialog.verify_button is None

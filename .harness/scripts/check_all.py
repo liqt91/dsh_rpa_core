@@ -62,6 +62,9 @@ PURE_FUNCTION_SCRIPTS = (
     # （tests/contract/data/element_name_cases.json）切片求值——两份实现
     # （零构建双端）输出分叉时至少一侧红。
     "check_element_name.mjs",
+    # 活体校验（M47）：content.js verify-helpers 纯求值 + background runVerify
+    # 调用矩阵（只发活跃页/补注入重试/结构化报错）+ content 应答接线断言。
+    "check_verify.mjs",
 )
 node = shutil.which("node")
 if node:

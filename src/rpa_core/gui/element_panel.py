@@ -18,9 +18,11 @@
 
 from __future__ import annotations
 
+import threading
 from collections.abc import Callable
 from typing import Any
 
+from PySide6.QtCore import QObject, Signal
 from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
@@ -206,6 +208,12 @@ def candidates_text(descriptor: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+class _VerifyDone(QObject):
+    """校验结果跨线程回传：工作线程 emit，对话框线程收（Qt 队列连接保证）。"""
+
+    done = Signal(dict)
+
+
 class ElementDialog(QDialog):
     """捕获确认对话框 —— **捕获即编辑**（对齐影刀「元素编辑器」那一屏）。
 
@@ -230,6 +238,7 @@ class ElementDialog(QDialog):
         descriptor: dict[str, Any],
         *,
         default_name: str,
+        verify_css: Callable[[str], dict] | None = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -305,6 +314,22 @@ class ElementDialog(QDialog):
             "丢弃本次捕获结果，回到捕获状态重新框选（不必关窗再点「捕获元素」）"
         )
         self.recapture_button.clicked.connect(self._request_recapture)
+        # 活体校验（M47）：browser 元素才有意义（桌面腿的活体查找是另一条通道，
+        # 未实现前不摆一个永远转圈的按钮）。回调由调用方注入（app 侧绑定校验通道），
+        # 注入 None = 无按钮——offscreen 测试与桌面元素都走这个形状。
+        self._verify_css = verify_css
+        self._verify_signal = _VerifyDone()
+        self._verify_signal.done.connect(self._on_verify_done)
+        self.verify_button: QPushButton | None = None
+        if verify_css is not None:
+            self.verify_button = buttons.addButton(
+                "校验元素", QDialogButtonBox.ButtonRole.ActionRole
+            )
+            self.verify_button.setToolTip(
+                "在当前活动标签页现场查找主选择器并黄框闪烁，回显最新命中数"
+                "（不是捕获时的旧值）"
+            )
+            self.verify_button.clicked.connect(self._run_verify)
         layout.addWidget(buttons)
 
     @staticmethod
@@ -379,6 +404,50 @@ class ElementDialog(QDialog):
     def _request_recapture(self) -> None:
         """「重新捕获」出口：丢弃本次结果，**不校验**——本次不落盘，校验没有对象。"""
         self._close_with("recapture")
+
+    # ---- 活体校验（M47 S1）--------------------------------------------------
+
+    def _run_verify(self) -> None:
+        """按下「校验元素」：取编辑区**当前** css，经注入的回调活体查找。
+
+        网络往返在工作线程（对话框是模态 exec，阻塞主线程 = 界面冻结）；
+        结果经 Qt 信号回对话框线程更新标签。
+        """
+        if self._verify_css is None or self.verify_button is None:
+            return
+        css = self.form.css_edit.text().strip()
+        if not css:
+            self.error_label.setText("先填写主选择器再校验")
+            return
+        self.error_label.setText("")
+        self.verify_button.setEnabled(False)
+        self.verify_button.setText("校验中…")
+
+        def work() -> None:
+            try:
+                result = dict(self._verify_css(css))
+            except Exception as exc:  # noqa: BLE001 - 通道故障也要落到标签上
+                result = {"error": f"校验通道异常：{exc}"}
+            try:
+                self._verify_signal.done.emit(result)
+            except RuntimeError:
+                # 对话框在校验期间被关掉：无处展示，静默结束（daemon 线程自灭）
+                pass
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _on_verify_done(self, result: dict) -> None:
+        """校验结果回显：命中数换掉「捕获时命中」的旧值；错误就地展示。"""
+        if self.verify_button is not None:
+            self.verify_button.setEnabled(True)
+            self.verify_button.setText("校验元素")
+        if result.get("error"):
+            self.error_label.setText(f"校验失败：{result['error']}")
+            return
+        count = result.get("count")
+        color = "#1a7f37" if count == 1 else "#cf222e"
+        self.verify_label.setText(f"当前命中 {count} 个（页面上已黄框闪烁）")
+        self.verify_label.setStyleSheet(f"color: {color}; font-weight: bold;")
 
     def intent(self) -> str:
         """用户按的是哪个出口：``save`` / ``save_and_continue`` / ``recapture``。

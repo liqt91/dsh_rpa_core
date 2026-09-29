@@ -197,6 +197,11 @@ function onHostMessage(msg) {
       disarmCapture();
       post({ type: "capture_disarmed", sessionId: null });
       break;
+    case "capture_verify":
+      // 活体校验（M47）：独立于捕获会话的按需请求——host 的校验通道只等
+      // capture_verify_result（按 requestId 配对），与本会话的 arm/disarm 互不干扰。
+      runVerify(msg);
+      break;
     case "cancel":
       // 宿主已按超时返回调用方；迟到结果会被 host 丢弃，这里无需额外处理
       break;
@@ -292,6 +297,51 @@ function sendCapture(descriptor) {
     ...descriptor,
   });
   disarmCapture();
+}
+
+// 活体校验（M47）：在**用户眼前的活跃标签页**上查找 css 并让 content script 黄框闪烁。
+// 只发活跃页是有意的：校验的对象是「刚捕获元素的那一页」，广播到全部标签页既慢
+// 又可能命中别的页面上的同名结构，给出误导性的计数。页面没有脚本（或只剩僵尸）时
+// 补注入一次再试——与 arm 广播同款语义。结果按 requestId 回传，host 侧据此配对。
+async function runVerify(msg) {
+  const reply = {
+    type: "capture_verify_result",
+    sessionId: msg.sessionId || null,
+    requestId: msg.requestId || null,
+    extBuild: EXT_BUILD,
+  };
+  try {
+    let tabs = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+    if (!tabs.length) tabs = await chrome.tabs.query({ active: true });
+    const tab = tabs[0] || null;
+    if (!tab || tab.id == null) {
+      post({ ...reply, error: "no-active-tab" });
+      return;
+    }
+    let resp = null;
+    try {
+      resp = await chrome.tabs.sendMessage(
+        tab.id, { type: "rpa-capture-verify", css: String(msg.css || "") }
+      );
+    } catch {
+      // 没脚本 / 僵尸脚本：补注入后重试一次
+      if (!(await ensureContentScript(tab))) {
+        post({ ...reply, error: "inject-failed", url: tab.url || "" });
+        return;
+      }
+      try {
+        resp = await chrome.tabs.sendMessage(
+          tab.id, { type: "rpa-capture-verify", css: String(msg.css || "") }
+        );
+      } catch {
+        post({ ...reply, error: "no-response", url: tab.url || "" });
+        return;
+      }
+    }
+    post({ ...reply, ...(resp || {}), url: tab.url || "" });
+  } catch (err) {
+    post({ ...reply, error: String((err && err.message) || err) });
+  }
 }
 
 // 页面加载完成时补发 arm：推送模型下新页面不会自动收到此前的广播

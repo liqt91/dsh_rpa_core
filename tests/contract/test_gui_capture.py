@@ -340,7 +340,7 @@ def test_capture_overwrite_same_name_needs_confirm(window, monkeypatch):
         """真 QDialog 子类：_confirm_element_save 会调 present_window()，
         它需要 setWindowFlag/show/raise_/activateWindow 全套 QWidget 契约。"""
 
-        def __init__(self, descriptor, *, default_name, parent=None):
+        def __init__(self, descriptor, *, default_name, verify_css=None, parent=None):
             super().__init__(parent)
             created.append(self)
 

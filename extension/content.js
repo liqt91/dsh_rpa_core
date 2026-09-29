@@ -280,6 +280,23 @@
     height: r.height + OVERLAY_OUTSET * 2,
   });
   // [capture-overlay-geometry:end]
+  // [verify-helpers:start]
+  // 活体校验（M47）的纯求值部分：拿文档与 css 算出「命中几个、该闪几个」。
+  // 校验**不依赖 armed 态**——捕获完成后页面已撤防，而校验只需要 content script 可达。
+  const VERIFY_FLASH_LIMIT = 20;
+  const matchCountFor = (doc, css) => {
+    try {
+      return { count: doc.querySelectorAll(css).length };
+    } catch {
+      return { error: "invalid-selector" };
+    }
+  };
+  const verifyReplyFor = (doc, css) => {
+    const result = matchCountFor(doc, css);
+    if (result.error) return result;
+    return { ...result, flash: Math.min(result.count, VERIFY_FLASH_LIMIT) };
+  };
+  // [verify-helpers:end]
   // ---- 纯函数区结束 ----
 
   const ensureHint = () => {
@@ -496,7 +513,46 @@
   on(window, "blur", onLeave);
   on(window, "scroll", onLeave, true);
 
-  const onRuntimeMessage = (msg) => {
+  // 活体校验（M47）：按 css 现场查找并**黄框**闪烁命中元素（与捕获红框区分：
+  // 黄色 + 更低 z-index，捕获态的红框永远压在校验框上面）。独立于 armed 态、
+  // 独立于捕获覆盖层（自己的元素数组 + 自己的清除），超时自动消失。
+  let verifyBoxes = [];
+  const clearVerifyFlash = () => {
+    for (const node of verifyBoxes) {
+      try { node.remove(); } catch { /* 页面已卸载 */ }
+    }
+    verifyBoxes = [];
+  };
+  const flashElements = (els) => {
+    clearVerifyFlash();
+    for (const el of els) {
+      const node = document.createElement("div");
+      node.style.cssText = "position:fixed;z-index:2147483646;pointer-events:none;"
+        + "box-sizing:border-box;border:3px solid #d4a017;background:rgba(255,215,0,.15)";
+      const r = el.getBoundingClientRect();
+      node.style.left = (r.left - 2) + "px";
+      node.style.top = (r.top - 2) + "px";
+      node.style.width = (r.width + 4) + "px";
+      node.style.height = (r.height + 4) + "px";
+      document.documentElement.appendChild(node);
+      verifyBoxes.push(node);
+    }
+    setTimeout(clearVerifyFlash, 1600);
+  };
+  const runVerify = (css) => {
+    const reply = verifyReplyFor(document, css);
+    if (!reply.error && reply.count > 0) {
+      flashElements(Array.from(document.querySelectorAll(css)).slice(0, VERIFY_FLASH_LIMIT));
+    }
+    return reply;
+  };
+
+  const onRuntimeMessage = (msg, _sender, sendResponse) => {
+    if (msg && msg.type === "rpa-capture-verify") {
+      // 同步应答：querySelectorAll 是同步的，无需 return true（那是异步应答的写法）
+      sendResponse({ contentBuild: EXT_BUILD, ...runVerify(String(msg.css || "")) });
+      return false;
+    }
     if (msg && msg.type === "rpa-capture-arm") {
       armed = msg.armed === true;
       if (armed) {
