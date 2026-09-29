@@ -667,7 +667,10 @@ def _fake_editor(result_document: dict | None):
     class FakeEditor(QDialog):
         seen: list[tuple[str, dict]] = []
 
-        def __init__(self, document, *, name, parent=None):
+        def __init__(
+            self, document, *, name,
+            preview_css=None, clear_preview_css=None, parent=None,
+        ):
             super().__init__(parent)
             type(self).seen.append((name, document))
 
@@ -934,3 +937,140 @@ def test_attr_table_follows_tree_selection(qapp):
     assert form.css_edit.text() == (
         'body > div[class*="wrap"] > button.ok:nth-of-type(2)'
     )
+
+
+# ---- M48：编辑中预览（通道回调注入式） ---------------------------------------
+
+def _preview_stub_log():
+    """可观察的预览/清场替身：记录调用，返回结构化结果（同通道形状）。"""
+    log = {"preview": [], "clear": [], "result": {"count": 1}}
+
+    def preview(css):
+        log["preview"].append(css)
+        return dict(log["result"])
+
+    def clear():
+        log["clear"].append(True)
+        return {"count": 0}
+
+    return log, preview, clear
+
+
+def _drain_qt_events(qtbot_like_wait=0.05):
+    """给工作线程留出 emit 窗口后泵一次事件循环（offscreen 无 app.processEvents 桩）。"""
+    import time
+
+    from PySide6.QtCore import QCoreApplication
+
+    time.sleep(qtbot_like_wait)
+    QCoreApplication.processEvents()
+
+
+def test_form_live_preview_dispatch_and_label(qapp):
+    """css 改动 → 防抖到期后在工作线程调 preview 回调，标签回显命中。"""
+    from rpa_core.gui.element_editor import ElementEditorForm
+
+    log, preview, clear = _preview_stub_log()
+    form = ElementEditorForm(_browser_document())
+    form.enable_live_preview(preview, clear)
+    assert not form.preview_label.isHidden()  # 注入即显示，桌面表单才整个没有
+
+    form.css_edit.setText("#sb_form_q2")  # 触发 textChanged → 防抖重启
+    assert form._preview_timer.isActive()  # 只排程，未到期不打通道
+    assert log["preview"] == []
+
+    form._preview_timer.stop()
+    form._run_preview()  # 直接驱动到期分支（不等真实 500ms）
+    _drain_qt_events()
+    assert log["preview"] == ["#sb_form_q2"]
+    assert "命中 1 个" in form.preview_label.text()
+    assert log["clear"] == []  # 正常预览不清场
+
+
+def test_form_preview_empty_css_clears_instead_of_querying(qapp):
+    """css 清空：不发查找、就地清场——旧框不能赖着冒充新选择器的命中。"""
+    from rpa_core.gui.element_editor import ElementEditorForm
+
+    log, preview, clear = _preview_stub_log()
+    form = ElementEditorForm(_browser_document())
+    form.enable_live_preview(preview, clear)
+
+    form.css_edit.setText("   ")
+    form._preview_timer.stop()
+    form._run_preview()
+    _drain_qt_events()
+    assert log["preview"] == []
+    assert log["clear"] == [True]
+    assert form.preview_label.text() == ""
+
+
+def test_form_preview_error_shows_inline(qapp):
+    """通道故障落到预览标签（结构化 error 与异常都要可见，不静默）。"""
+    from rpa_core.gui.element_editor import ElementEditorForm
+
+    def boom(_css):
+        raise RuntimeError("channel down")
+
+    log, _preview, clear = _preview_stub_log()
+    form = ElementEditorForm(_browser_document())
+    form.enable_live_preview(boom, clear)
+    form._preview_timer.stop()
+    form._run_preview()
+    _drain_qt_events()
+    assert "预览失败" in form.preview_label.text()
+    assert "channel down" in form.preview_label.text()
+
+
+def test_form_stale_preview_result_is_discarded(qapp):
+    """防抖后再来一轮时，上一轮的迟到结果不得覆盖显示（seq 配对）。"""
+    from rpa_core.gui.element_editor import ElementEditorForm
+
+    form = ElementEditorForm(_browser_document())
+    log, preview, clear = _preview_stub_log()
+    form.enable_live_preview(preview, clear)
+    form._preview_timer.stop()
+    form._run_preview()  # seq=1 在途
+    form._run_preview()  # seq=2：模拟用户又改了一轮
+    form._on_preview_done({"kind": "preview", "seq": 1, "count": 7})
+    assert "预览中…" in form.preview_label.text() or "7" not in form.preview_label.text()
+    form._on_preview_done({"kind": "preview", "seq": 2, "count": 7})
+    assert "命中 7 个" in form.preview_label.text()
+
+
+def test_desktop_form_has_no_preview_surface(qapp):
+    """桌面元素没有「页面」可高亮：enable_live_preview 必须整体无效。"""
+    from rpa_core.gui.element_editor import ElementEditorForm
+
+    log, preview, clear = _preview_stub_log()
+    form = ElementEditorForm(_desktop_document())
+    form.enable_live_preview(preview, clear)
+    assert not hasattr(form, "preview_label") or form.preview_label.isHidden()
+    form._run_preview() if hasattr(form, "_preview_timer") else None
+    _drain_qt_events()
+    assert log["preview"] == [] and log["clear"] == []
+
+
+def test_dialog_close_sends_clear_preview(qapp):
+    """关窗收场：ElementEditorDialog finished → shutdown_preview 发 clear。"""
+    from rpa_core.gui.element_editor import ElementEditorDialog
+
+    log, preview, clear = _preview_stub_log()
+    dialog = ElementEditorDialog(
+        _browser_document(), name="el_x", preview_css=preview, clear_preview_css=clear
+    )
+    dialog.form._preview_timer.stop()
+    dialog.finished.emit(0)  # 不 exec（模态会挂测试），直接驱动 finished 接线
+    _drain_qt_events()
+    assert log["clear"] == [True]
+
+
+def test_dialog_without_preview_callback_has_no_preview(qapp):
+    """未注入回调（如 desktop / 测试注入 None）：不启用预览、关窗也不发 clear。"""
+    from rpa_core.gui.element_editor import ElementEditorDialog
+
+    log, preview, clear = _preview_stub_log()
+    dialog = ElementEditorDialog(_browser_document(), name="el_y")
+    dialog.form._preview_timer.stop()
+    dialog.finished.emit(0)
+    _drain_qt_events()
+    assert log["preview"] == [] and log["clear"] == []

@@ -33,6 +33,18 @@ EXPECTED_ID = "mhiiampbndgpcpcdnilnkbnkafeofcem"
 
 
 @cache
+def expected_extension_version() -> str:
+    """扩展版本从 manifest.json **动态**读取（单一事实源）。
+
+    此前这里硬编码 "0.4.1"，M47 bump 到 0.5.0 时两个用例静默变红、欠了两轮——
+    版本号是**被测实现的产物**，断言它就必须跟着同一处事实源走，而不是手抄一份
+    等着漂移。
+    """
+    manifest = json.loads((ROOT / "extension" / "manifest.json").read_text("utf-8"))
+    return manifest["version"]
+
+
+@cache
 def _pem(name: str) -> str:
     """惰性读取私钥夹具（每进程只读一次）。
 
@@ -331,7 +343,7 @@ def test_cli_registry_flag_writes_external_registry(_fake_registry, monkeypatch,
     for root in BROWSER_EXTERNAL_ROOTS.values():
         entry = _fake_registry.stores[f"{root}\\{EXPECTED_ID}"]
         assert entry["path"][0].endswith("extension.crx")
-        assert entry["version"] == ("0.4.1", 1)
+        assert entry["version"] == (expected_extension_version(), 1)
     assert all(FORCELIST_KEY not in path for path in _fake_registry.stores)
     # 三条安装路线都要注册 native host（ADR 0015）：CRX 用 pem 派生 ID、Load unpacked 用
     # 路径派生 ID，二者不同 → manifest 必须同时放行，否则换路线即 connectNative forbidden
@@ -509,7 +521,7 @@ def test_update_manifest_served_with_crx_codebase(packed_server):
     text = body.decode("utf-8")
     assert f'appid="{EXPECTED_ID}"' in text
     assert f'codebase="{base}/api/extension/crx"' in text
-    assert 'version="0.4.1"' in text
+    assert f'version="{expected_extension_version()}"' in text
 
 
 def test_crx_served_with_chrome_extension_content_type(packed_server):

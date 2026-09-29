@@ -336,6 +336,11 @@
       "id": "element-verify-live",
       "title": "M47 S1: live element verification (C2 on an on-demand channel). The capture-confirm dialog gains a Verify button for browser elements that sends capture_verify over a short-lived dedicated bridge connection (independent sessionId/requestId, no capture-session keep-alive: the page is already disarmed after capture and verification only needs a reachable content script plus the scripting API - the on-demand channel avoids the session-ownership, late-result and timeout lifecycle rework entirely). Background forwards to the focused active tab only (the page the element came from), injects content.js first when missing, and replies capture_verify_result paired by requestId; the content script runs querySelectorAll, flashes yellow boxes (z-index below the capture red frame, auto-cleared after 1600ms) and answers with contentBuild for stale-extension reconciliation. ElementVerifier pairs replies by requestId, times out hard (verify-timeout, never hangs - the M40 lesson) and returns structured errors (extension-offline / bad-reply / passthrough) that the dialog shows inline. Every failure mode is observable, none silent.",
       "passes": true
+    },
+    {
+      "id": "live-preview",
+      "title": "M47.1: live preview highlight (C3 on the M47 on-demand channel). The capture_verify envelope gains a mode field (flash/preview/clear); content.js turns flashing highlights into persistent boxes for preview (always clearing the previous round first, including when count=0 - a stale box impersonating a hit is the most dangerous silent mislead) and clear removes them. ElementEditorForm (shared by the capture-confirm dialog and the library editor) gains an injectable live-preview callback: css edits debounce 500ms then run the channel on a worker thread, showing the live hit count inline; stale replies are dropped by sequence pairing; empty css clears instead of querying; dialogs emit finished -> clear so no yellow box outlives the editor; entering capture mode also sweeps leftover preview boxes. EXT_BUILD 0.5.0 -> 0.6.0.",
+      "passes": true
     }
   ]
 }

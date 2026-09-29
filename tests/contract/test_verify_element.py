@@ -152,3 +152,48 @@ def test_verify_bad_count_shape_is_error(verify_env):
 
     threading.Thread(target=delayed_reply, daemon=True).start()
     assert ElementVerifier(timeout=3.0).verify("#x") == {"error": "bad-reply"}
+
+
+# ---- M48：同一通道三个 mode --------------------------------------------------
+
+
+def _reply_with_count(channel: FakeChannel, count: int) -> None:
+    def delayed_reply():
+        time.sleep(0.05)
+        rid = channel.sent[0]["requestId"]
+        channel.outbox.append(
+            {"type": "capture_verify_result", "requestId": rid, "count": count}
+        )
+
+    threading.Thread(target=delayed_reply, daemon=True).start()
+
+
+def test_preview_sends_preview_mode(verify_env):
+    """preview() 与 verify() 同通道，但信封必须带 mode="preview"。"""
+    _channels, set_endpoints = verify_env
+    channel = FakeChannel()
+    set_endpoints(["a"], {"a": channel})
+    _reply_with_count(channel, 2)
+    assert ElementVerifier(timeout=3.0).preview("#kw") == {"count": 2}
+    assert channel.sent[0]["mode"] == "preview"
+
+
+def test_verify_sends_flash_mode(verify_env):
+    """verify() 显式带 flash（content 侧对缺省信封的兜底不能掩盖显式语义）。"""
+    _channels, set_endpoints = verify_env
+    channel = FakeChannel()
+    set_endpoints(["a"], {"a": channel})
+    _reply_with_count(channel, 1)
+    assert ElementVerifier(timeout=3.0).verify("#kw") == {"count": 1}
+    assert channel.sent[0]["mode"] == "flash"
+
+
+def test_clear_preview_sends_clear_mode_and_empty_css(verify_env):
+    """clear_preview() 只为清场：mode="clear" 且 css 为空（content 侧不查找）。"""
+    _channels, set_endpoints = verify_env
+    channel = FakeChannel()
+    set_endpoints(["a"], {"a": channel})
+    _reply_with_count(channel, 0)
+    assert ElementVerifier(timeout=3.0).clear_preview() == {"count": 0}
+    assert channel.sent[0]["mode"] == "clear"
+    assert channel.sent[0]["css"] == ""

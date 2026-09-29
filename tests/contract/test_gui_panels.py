@@ -896,3 +896,36 @@ def test_element_dialog_without_verify_callback_has_no_button(qapp):
     }
     dialog = ElementDialog(desktop, default_name="y")
     assert dialog.verify_button is None
+
+
+# ---- 编辑中预览（M48）：确认框把预览通道转发给编辑区 ---------------------------
+def test_element_dialog_forwards_preview_channel_to_form(qapp):
+    """注入 preview/clear → 编辑区启用预览（标签可见、防抖计时器就位）；
+    关窗 finished → 编辑区发 clear（收场不留黄框）。"""
+    from rpa_core.gui.element_panel import ElementDialog
+
+    seen: dict[str, list] = {"preview": [], "clear": []}
+    dialog = ElementDialog(
+        _browser_element(),
+        default_name="x",
+        preview_css=lambda css: seen["preview"].append(css) or {"count": 1},
+        clear_preview_css=lambda: seen["clear"].append(True) or {"count": 0},
+    )
+    assert not dialog.form.preview_label.isHidden()
+    assert dialog.form._preview_css is not None
+    dialog.form._preview_timer.stop()
+    dialog.form._run_preview()
+    assert _pump_until_gui(lambda: seen["preview"] == ["#kw"])
+    dialog.finished.emit(0)
+    assert _pump_until_gui(lambda: seen["clear"] == [True])
+
+
+def test_element_dialog_without_preview_callbacks_leaves_form_inert(qapp):
+    """未注入预览回调（desktop / 测试）：编辑区不启用预览，关窗不发 clear。"""
+    from rpa_core.gui.element_panel import ElementDialog
+
+    dialog = ElementDialog(_browser_element(), default_name="x")
+    assert dialog.form._preview_css is None
+    dialog.form._preview_timer.stop() if hasattr(dialog.form, "_preview_timer") else None
+    dialog.finished.emit(0)
+    assert dialog.form.preview_label.isHidden()

@@ -239,6 +239,8 @@ class ElementDialog(QDialog):
         *,
         default_name: str,
         verify_css: Callable[[str], dict] | None = None,
+        preview_css: Callable[[str], dict] | None = None,
+        clear_preview_css: Callable[[], dict] | None = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -269,6 +271,11 @@ class ElementDialog(QDialog):
         # 桌面元素就是一行 locator JSON，用户要勾字段得先保存、再去元素库点「编辑」。
         self.form = ElementEditorForm(descriptor, parent=self)
         layout.addWidget(self.form)
+        # 编辑中预览（M48）：挂在**编辑区**（与元素库编辑器同一份实现），确认框只做
+        # 接线；关窗（含「重新捕获」）一律清场——预览框不能留在页面上陪用户捕获。
+        if descriptor.get("kind") == "browser" and preview_css is not None:
+            self.form.enable_live_preview(preview_css, clear_preview_css)
+            self.finished.connect(self.form.shutdown_preview)
 
         # metadata 只读（对齐 Web metaEl 的行集；browser 另含语义特征与页面指纹）
         self.meta_label = QLabel(self._metadata_text(descriptor))

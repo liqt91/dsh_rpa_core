@@ -23,7 +23,15 @@ from rpa_core.capture._trace import trace as _trace
 
 
 class ElementVerifier:
-    """按需校验通道：一次 ``verify(css)`` = 连接、请求、配对、断开。"""
+    """按需校验通道：一次 ``verify(css)`` = 连接、请求、配对、断开。
+
+    同一条通道三个 mode（M48）：
+
+    - ``verify``（``mode="flash"``）：黄框闪 1.6s——「点一下看看现在命中几个」；
+    - ``preview``（``mode="preview"``）：黄框**驻留**——编辑器里改 css 时即时高亮，
+      每次预览先清上一轮；
+    - ``clear_preview``（``mode="clear"``）：只清场——编辑器关掉时收走黄框。
+    """
 
     def __init__(self, *, endpoint: str | None = None, timeout: float = 5.0):
         # 指定 endpoint 时只连它（测试注入）；默认连**全部**在线端点（多浏览器并存时
@@ -32,7 +40,19 @@ class ElementVerifier:
         self._timeout = timeout
 
     def verify(self, css: str) -> dict[str, Any]:
-        """活体查找 ``css``，返回 ``{"count": N}`` 或 ``{"error": 原因}``。
+        """活体查找 ``css``（黄框闪烁），返回 ``{"count": N}`` 或 ``{"error": 原因}``。"""
+        return self._exchange(css, "flash")
+
+    def preview(self, css: str) -> dict[str, Any]:
+        """驻留高亮 ``css`` 命中的元素（编辑中即时预览），回传形状同 :meth:`verify`。"""
+        return self._exchange(css, "preview")
+
+    def clear_preview(self) -> dict[str, Any]:
+        """清掉页面上的预览黄框（fire-and-forget 语义也走同一条结构化通道）。"""
+        return self._exchange("", "clear")
+
+    def _exchange(self, css: str, mode: str) -> dict[str, Any]:
+        """连接、下发（带 mode）、按 requestId 配对、断开。
 
         任何失败都是**结构化报错**而不是异常：GUI 侧把 ``error`` 直接展示给用户，
         不让通道故障表现为「按钮点了没反应」。
@@ -90,6 +110,7 @@ class ElementVerifier:
                     "sessionId": session_id,
                     "requestId": request_id,
                     "css": css,
+                    "mode": mode,
                 }
             )
             threading.Thread(target=read_loop, args=(channel,), daemon=True).start()
@@ -108,5 +129,5 @@ class ElementVerifier:
         count = reply.get("count")
         if not isinstance(count, int) or isinstance(count, bool) or count < 0:
             return {"error": "bad-reply"}
-        _trace("verify", "done", count=count, url=reply.get("url"))
+        _trace("verify", "done", mode=mode, count=count, url=reply.get("url"))
         return {"count": count}

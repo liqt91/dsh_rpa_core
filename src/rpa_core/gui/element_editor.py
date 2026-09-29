@@ -58,11 +58,12 @@ handle               ✗                 ✗
 from __future__ import annotations
 
 import re
-from collections.abc import Iterable
+import threading
+from collections.abc import Callable, Iterable
 from typing import Any
 
 from pydantic import ValidationError
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QObject, Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -465,6 +466,13 @@ def _candidate_label(candidate: dict[str, Any]) -> str:
     return f"[{kind}] {candidate.get('selector') or ''} · {count_text}"
 
 
+class _PreviewDone(QObject):
+    """预览结果跨线程回传：工作线程 emit，对话框线程收（Qt 队列连接保证）。"""
+
+    # object 载荷：{"kind": "preview"|"clear", "seq": N, ...通道结果}
+    done = Signal(object)
+
+
 class ElementEditorForm(QWidget):
     """元素定位的编辑区：浏览器（主 css + 候选提升）/ 桌面（locator 字段勾选）。
 
@@ -535,6 +543,24 @@ class ElementEditorForm(QWidget):
         self.css_edit.textChanged.connect(self.revalidate)
         form.addRow("主选择器（css）", self.css_edit)
         layout.addLayout(form)
+
+        # 编辑中预览（M48/C3）：改动 css 后 500ms 防抖，页面上驻留高亮当前命中。
+        # 通道回调由调用方注入（`enable_live_preview`，app 侧只对 browser 元素接）；
+        # 未注入时标签隐藏、计时器永不启动——桌面元素没有「页面」可高亮。
+        self.preview_label = QLabel("")
+        self.preview_label.setStyleSheet("color: #64707d;")
+        self.preview_label.hide()
+        layout.addWidget(self.preview_label)
+        self._preview_css: Callable[[str], dict] | None = None
+        self._clear_preview_css: Callable[[], dict] | None = None
+        self._preview_seq = 0
+        self._preview_signal = _PreviewDone()
+        self._preview_signal.done.connect(self._on_preview_done)
+        self._preview_timer = QTimer(self)
+        self._preview_timer.setSingleShot(True)
+        self._preview_timer.setInterval(500)
+        self._preview_timer.timeout.connect(self._run_preview)
+        self.css_edit.textChanged.connect(lambda _text: self._on_css_changed())
 
         self.candidates_label = QLabel(
             f"捕获时的备选定位 {len(self._candidates)} 条"
@@ -803,6 +829,93 @@ class ElementEditorForm(QWidget):
         )
         self.revalidate(notice=note)
 
+    # -- 浏览器：编辑中预览（M48/C3，通道回调注入式） -------------------------
+
+    def enable_live_preview(
+        self,
+        preview: Callable[[str], dict],
+        clear: Callable[[], dict],
+    ) -> None:
+        """接上预览通道：css 每次改动后防抖驻留高亮，收场清场由 ``shutdown_preview``。
+
+        桌面元素没有「页面」可高亮，不注入回调即整体不生效（标签都不出现）。
+        """
+        if not hasattr(self, "css_edit"):
+            return  # 桌面表单没有主 css 行，预览无从谈起
+        self._preview_css = preview
+        self._clear_preview_css = clear
+        self.preview_label.show()
+        # 打开编辑器就先预跑一轮：用户还没动键盘也能立刻看到「这条 css 现在命中几个」
+        self._preview_timer.start()
+
+    def shutdown_preview(self) -> None:
+        """收场清场（对话框 finished 时调用）：停表 + 发 ``mode="clear"`` 收走黄框。
+
+        预览框不能陪用户关掉编辑器后赖在页面上。清场是 fire-and-forget（工作线程），
+        迟到结果由 ``_preview_seq`` 作废。
+        """
+        self._preview_timer.stop()
+        if self._clear_preview_css is None:
+            return
+        self._preview_seq += 1
+        self._dispatch(self._clear_preview_css, ())
+
+    def _on_css_changed(self) -> None:
+        if self._preview_css is None:
+            return
+        # 防抖重启：连续键入只打最后一轮，不把每敲一个字符都变成一次页面往返
+        self._preview_timer.start()
+
+    def _run_preview(self) -> None:
+        css = self.css_edit.text().strip()
+        if not css:
+            # 空选择器没有可预览的对象：就地清场（旧框不能赖着冒充命中）
+            self.preview_label.setText("")
+            if self._clear_preview_css is not None:
+                self._preview_seq += 1
+                self._dispatch(self._clear_preview_css, ())
+            return
+        self.preview_label.setText("预览中…")
+        self._preview_seq += 1
+        self._dispatch(self._preview_css, (css,))
+
+    def _dispatch(self, callback: Callable[..., dict], args: tuple) -> None:
+        seq = self._preview_seq
+
+        def work() -> None:
+            try:
+                result = dict(callback(*args))
+            except Exception as exc:  # noqa: BLE001 - 通道故障也要落到标签上
+                result = {"error": f"预览通道异常：{exc}"}
+            kind = "clear" if callback is self._clear_preview_css else "preview"
+            payload = {"kind": kind, "seq": seq, **result}
+            try:
+                self._preview_signal.done.emit(payload)
+            except RuntimeError:
+                pass  # 表单已随对话框销毁：无处展示，daemon 线程自灭
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _on_preview_done(self, payload: object) -> None:
+        data = payload if isinstance(payload, dict) else {}
+        if data.get("kind") == "clear":
+            return  # 清场无观感，静默即可
+        if data.get("seq") != self._preview_seq:
+            return  # 陈旧结果：用户已改了下一轮，覆盖反而回退显示
+        if data.get("error"):
+            self.preview_label.setText(f"预览失败：{data['error']}")
+            self.preview_label.setStyleSheet("color: #cf222e;")
+            return
+        count = data.get("count")
+        if count == 1:
+            text, color = "预览：命中 1 个（页面上已黄框高亮）", "#1a7f37"
+        elif isinstance(count, int) and not isinstance(count, bool) and count > 1:
+            text, color = f"预览：命中 {count} 个（超过 1 个不唯一）", "#cf222e"
+        else:
+            text, color = "预览：命中 0 个（页面上找不到该选择器）", "#cf222e"
+        self.preview_label.setText(text)
+        self.preview_label.setStyleSheet(f"color: {color};")
+
     # -- 桌面 ----------------------------------------------------------------
 
     def _build_desktop(self, layout: QVBoxLayout, raw_selector: dict) -> None:
@@ -963,6 +1076,8 @@ class ElementEditorDialog(QDialog):
         document: dict[str, Any],
         *,
         name: str,
+        preview_css: Callable[[str], dict] | None = None,
+        clear_preview_css: Callable[[], dict] | None = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -977,6 +1092,11 @@ class ElementEditorDialog(QDialog):
 
         self.form = ElementEditorForm(document, parent=self)
         layout.addWidget(self.form)
+        # 编辑中预览（M48）：browser 元素且调用方注入了通道才启用；关窗（含取消）
+        # 一律发 clear 收走页面上的黄框——预览框不能陪对话框一起「留在页面上」。
+        if document.get("kind") == "browser" and preview_css is not None:
+            self.form.enable_live_preview(preview_css, clear_preview_css)
+            self.finished.connect(self.form.shutdown_preview)
 
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Save

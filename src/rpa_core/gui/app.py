@@ -2672,7 +2672,21 @@ class MainWindow(QMainWindow):
             return
         from rpa_core.gui.element_editor import ElementEditorDialog
 
-        dialog = ElementEditorDialog(document, name=name, parent=self)
+        # 编辑中预览（M48）：browser 元素接上按需通道（同 M47 校验的实例语义）
+        preview_css = clear_preview_css = None
+        if document.get("kind") == "browser":
+            from rpa_core.capture.verify import ElementVerifier
+
+            verifier = ElementVerifier()
+            preview_css = verifier.preview
+            clear_preview_css = verifier.clear_preview
+        dialog = ElementEditorDialog(
+            document,
+            name=name,
+            preview_css=preview_css,
+            clear_preview_css=clear_preview_css,
+            parent=self,
+        )
         # 与捕获确认框同款置顶：用户在浏览器/目标窗口里刚操作完，本进程是后台应用
         present_window(dialog, always_on_top=True)
         if dialog.exec() != QDialog.DialogCode.Accepted:
@@ -3063,17 +3077,22 @@ class MainWindow(QMainWindow):
         existing = list(store.list()) if store is not None else []
         from rpa_core.gui.element_editor import suggest_element_name
 
-        # 活体校验（M47）：browser 元素给「校验元素」按钮接上按需校验通道；
+        # 活体校验（M47）+ 编辑中预览（M48）：browser 元素接上按需校验通道；
         # desktop 元素不接（桌面腿活体查找未实现，按钮永远转圈不如不摆）。
-        verify_css = None
+        verify_css = preview_css = clear_preview_css = None
         if descriptor.get("kind") == "browser":
             from rpa_core.capture.verify import ElementVerifier
 
-            verify_css = ElementVerifier().verify
+            verifier = ElementVerifier()
+            verify_css = verifier.verify
+            preview_css = verifier.preview
+            clear_preview_css = verifier.clear_preview
         dialog = ElementDialog(
             descriptor,
             default_name=suggest_element_name(existing, hint),
             verify_css=verify_css,
+            preview_css=preview_css,
+            clear_preview_css=clear_preview_css,
             parent=self,
         )
         # 此刻用户在浏览器里刚完成捕获，我们是后台应用：不置顶的话对话框会

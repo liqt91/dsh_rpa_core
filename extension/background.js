@@ -15,7 +15,7 @@ const HOST_NAME = "com.rpa_core.ext_bridge";
 // 快照（2026-09-29 真机排障：仓库已修好「已开网页无红框」，但浏览器还跑着旧 background，
 // 表现成「修复无效」）。把标识随 ack/进度/结果回传，host 侧对账即可判「扩展过期」，
 // 不用再靠症状猜。
-const EXT_BUILD = "0.5.0";
+const EXT_BUILD = "0.6.0";
 const RECONNECT_MS = 3000;      // 断开后的重连退避
 const ALARM_NAME = "rpa-bridge-reconnect";  // SW 被回收时的兜底拉起（MV3 alarm 最小 30s）
 const PERMISSION_KEY = "rpaExecPermission";
@@ -299,11 +299,14 @@ function sendCapture(descriptor) {
   disarmCapture();
 }
 
-// 活体校验（M47）：在**用户眼前的活跃标签页**上查找 css 并让 content script 黄框闪烁。
+// 活体校验（M47）/ 编辑预览（M48）：在**用户眼前的活跃标签页**上查找 css 并让
+// content script 黄框闪烁（flash）或驻留高亮（preview）或清场（clear）——mode 由
+// host 信封携带，原样透传给 content script，语义收口在那里。
 // 只发活跃页是有意的：校验的对象是「刚捕获元素的那一页」，广播到全部标签页既慢
 // 又可能命中别的页面上的同名结构，给出误导性的计数。页面没有脚本（或只剩僵尸）时
 // 补注入一次再试——与 arm 广播同款语义。结果按 requestId 回传，host 侧据此配对。
 async function runVerify(msg) {
+  const mode = String(msg.mode || "flash");
   const reply = {
     type: "capture_verify_result",
     sessionId: msg.sessionId || null,
@@ -321,7 +324,7 @@ async function runVerify(msg) {
     let resp = null;
     try {
       resp = await chrome.tabs.sendMessage(
-        tab.id, { type: "rpa-capture-verify", css: String(msg.css || "") }
+        tab.id, { type: "rpa-capture-verify", css: String(msg.css || ""), mode }
       );
     } catch {
       // 没脚本 / 僵尸脚本：补注入后重试一次
@@ -331,7 +334,7 @@ async function runVerify(msg) {
       }
       try {
         resp = await chrome.tabs.sendMessage(
-          tab.id, { type: "rpa-capture-verify", css: String(msg.css || "") }
+          tab.id, { type: "rpa-capture-verify", css: String(msg.css || ""), mode }
         );
       } catch {
         post({ ...reply, error: "no-response", url: tab.url || "" });

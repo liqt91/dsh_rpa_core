@@ -33,7 +33,7 @@ if (pureStart < 0 || pureEnd <= pureStart) {
 }
 const pureSlice = content.slice(pureStart, pureEnd);
 const helpers = new Function(
-  `${pureSlice}\nreturn { VERIFY_FLASH_LIMIT, matchCountFor, verifyReplyFor };`,
+  `${pureSlice}\nreturn { VERIFY_FLASH_LIMIT, matchCountFor, verifyReplyFor, normalizeVerifyMode };`,
 )();
 const makeDoc = (matches, invalid = false) => ({
   querySelectorAll: (css) => {
@@ -55,6 +55,23 @@ check("V3 无效选择器 → 结构化报错（不是异常）",
 check("V4 闪烁上限封顶（25 命中只闪 20）",
   helpers.verifyReplyFor(makeDoc(Array.from({ length: 25 }, el)), "div"),
   { count: 25, flash: helpers.VERIFY_FLASH_LIMIT });
+
+// ---- A2. mode 矩阵（M48：同一通道 flash/preview/clear 三语义） ---------------
+check("M1 preview：只回 count（无 flash 键——驻留不该有闪烁上限的概念）",
+  helpers.verifyReplyFor(makeDoc([el(), el(), el()]), "div.ok", "preview"),
+  { count: 3 });
+check("M2 preview 命中 0 也只回 count（清场责任在 runVerify，不在纯函数）",
+  helpers.verifyReplyFor(makeDoc([]), "div.ok", "preview"),
+  { count: 0 });
+check("M3 clear：无讨论直接 {count:0}（css 可空，不查找）",
+  helpers.verifyReplyFor(makeDoc([el(), el()]), "", "clear"),
+  { count: 0 });
+check("M4 未知 mode 归一为 flash（旧信封/坏值不得炸成异常）",
+  helpers.verifyReplyFor(makeDoc([el()]), "div", "wat"),
+  { count: 1, flash: 1 });
+check("M5 normalizeVerifyMode 是守门入口（缺省信封也走它）",
+  [helpers.normalizeVerifyMode(undefined), helpers.normalizeVerifyMode("preview")],
+  ["flash", "preview"]);
 
 // ---- B. background.js runVerify 矩阵 ---------------------------------------
 const bgStart = background.indexOf("// ---------------------------------------------------------------- 捕获通道");
@@ -121,8 +138,9 @@ const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
   await buildBg(chrome, log).runVerify({ sessionId: "ver-1", requestId: "rq-1", css: "#kw" });
   await settle();
   check("W1 只发聚焦窗口的活跃页", log.sent.map((s) => s.tabId), [1]);
-  check("W1 页面消息类型与 css", log.sent[0] && log.sent[0].msg,
-    { type: "rpa-capture-verify", css: "#kw" });
+  check("W1 页面消息类型与 css（缺省信封归一为 flash）",
+    log.sent[0] && log.sent[0].msg,
+    { type: "rpa-capture-verify", css: "#kw", mode: "flash" });
   const reply = log.posted[0] || {};
   check("W1 回传类型/配对/构建/命中",
     [reply.type, reply.requestId, reply.extBuild, reply.count],
@@ -163,15 +181,36 @@ const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
   check("W4 无活跃页 → no-active-tab", log.posted[0] && log.posted[0].error, "no-active-tab");
 }
 
+// W5 mode 透传（M48）：host 信封的 preview 必须原样到达 content script——
+// 通道语义收口在 content，background 只当邮差；漏传 = 预览永远表现为闪烁。
+{
+  const { chrome, log } = makeChrome({
+    tabs: [{ id: 9, url: "https://p.test/", active: true, focused: true }],
+  });
+  await buildBg(chrome, log).runVerify({ requestId: "rq-5", css: "#x", mode: "preview" });
+  await settle();
+  check("W5 preview mode 原样透传 content", log.sent[0] && log.sent[0].msg.mode, "preview");
+}
+
 // ---- C. content 接线断言 ----------------------------------------------------
 check("C1 content 监听器带 sendResponse 形参（无回包 = host 永远等超时）",
   /onRuntimeMessage = \(msg, _sender, sendResponse\)/.test(content), true);
 check("C1 rpa-capture-verify 分支存在",
   /msg\.type === "rpa-capture-verify"/.test(content), true);
 check("C1 校验应答带 contentBuild（页面脚本新旧可对账）",
-  /contentBuild: EXT_BUILD, \.\.\.runVerify/.test(content), true);
+  /contentBuild: EXT_BUILD,\s*\n\s*\.\.\.runVerify/.test(content), true);
 check("C1 闪烁自动清理（定时器兜底，不留黄框赖在页面）",
   /setTimeout\(clearVerifyFlash, 1600\)/.test(content), true);
+check("C2 闪烁定时器由 persist 短路（preview 驻留 = 不排程自动清理）",
+  /if \(!persist\) setTimeout\(clearVerifyFlash, 1600\);/.test(content), true);
+check("C2 runVerify 收 mode 参数并归一（语义收口在 content）",
+  /runVerify = \(css, mode\) => \{\s*\n\s*mode = normalizeVerifyMode\(mode\);/.test(content), true);
+check("C2 preview 恒先清场（count=0 也要清——旧框冒充命中是预览最危险的误导）",
+  /if \(mode === "preview"\) clearVerifyFlash\(\);/.test(content), true);
+check("C2 应答透传 msg.mode（host 侧/诊断要能知道这轮是什么语义）",
+  /runVerify\(String\(msg\.css \|\| ""\), msg\.mode\)/.test(content), true);
+check("C2 进捕获态先清预览框（捕获红框不能压着上一轮的黄框）",
+  /if \(armed\) \{(?:\s*\n\s*\/\/[^\n]*)*\s*\n\s*clearVerifyFlash\(\);/.test(content), true);
 check("C1 校验黄框 z-index 低于捕获红框（捕获态永远压在校验框上）",
   Number(content.match(/z-index:(\d+);pointer-events:none;"\s*\n\s*\+ "box-sizing:border-box;border:3px solid #d4a017/)
     ?. [1] ?? 0)

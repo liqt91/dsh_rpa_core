@@ -23,7 +23,7 @@
   // 构建标识：与 background.js 的 EXT_BUILD、manifest.json 的 version 三方一致（契约测试钉住）。
   // 随捕获结果回传——诊断「页面里跑的脚本是哪个年代的」（Load unpacked 不自动重载，
   // 补注入前已开页面里的可能还是旧快照；见 background.js 顶部的完整说明）。
-  const EXT_BUILD = "0.5.0";
+  const EXT_BUILD = "0.6.0";
 
   // ---- 实例接管守卫（M42）----------------------------------------------------
   // 声明式 content_scripts **只在页面加载时**注入：扩展装载/重载后，已经打开的标签页
@@ -281,9 +281,13 @@
   });
   // [capture-overlay-geometry:end]
   // [verify-helpers:start]
-  // 活体校验（M47）的纯求值部分：拿文档与 css 算出「命中几个、该闪几个」。
-  // 校验**不依赖 armed 态**——捕获完成后页面已撤防，而校验只需要 content script 可达。
+  // 活体校验（M47）与编辑预览（M48）的纯求值部分：拿文档与 css 算出「命中几个、
+  // 该闪几个 / 该驻留几个」。校验**不依赖 armed 态**——捕获完成后页面已撤防，
+  // 而校验只需要 content script 可达。mode：flash（默认）/ preview / clear。
   const VERIFY_FLASH_LIMIT = 20;
+  const VERIFY_MODES = ["flash", "preview", "clear"];
+  const normalizeVerifyMode = (mode) =>
+    VERIFY_MODES.includes(mode) ? mode : "flash";
   const matchCountFor = (doc, css) => {
     try {
       return { count: doc.querySelectorAll(css).length };
@@ -291,9 +295,12 @@
       return { error: "invalid-selector" };
     }
   };
-  const verifyReplyFor = (doc, css) => {
+  const verifyReplyFor = (doc, css, mode) => {
+    mode = normalizeVerifyMode(mode);
+    if (mode === "clear") return { count: 0 };
     const result = matchCountFor(doc, css);
     if (result.error) return result;
+    if (mode === "preview") return result;
     return { ...result, flash: Math.min(result.count, VERIFY_FLASH_LIMIT) };
   };
   // [verify-helpers:end]
@@ -523,7 +530,7 @@
     }
     verifyBoxes = [];
   };
-  const flashElements = (els) => {
+  const flashElements = (els, persist) => {
     clearVerifyFlash();
     for (const el of els) {
       const node = document.createElement("div");
@@ -537,12 +544,24 @@
       document.documentElement.appendChild(node);
       verifyBoxes.push(node);
     }
-    setTimeout(clearVerifyFlash, 1600);
+    if (!persist) setTimeout(clearVerifyFlash, 1600);
   };
-  const runVerify = (css) => {
-    const reply = verifyReplyFor(document, css);
+  // M48：mode 决定高亮的「寿命」。flash 闪 1.6s 自清；preview 驻留（persist），
+  // **count=0 也必须先清场**——选择器改到不再命中的瞬间，上一轮的黄框若还赖着，
+  // 用户会把「旧框」读成「新选择器命中了」，这是预览最危险的静默误导；clear 只清场。
+  const runVerify = (css, mode) => {
+    mode = normalizeVerifyMode(mode);
+    const reply = verifyReplyFor(document, css, mode);
+    if (mode === "clear") {
+      clearVerifyFlash();
+      return reply;
+    }
+    if (mode === "preview") clearVerifyFlash();
     if (!reply.error && reply.count > 0) {
-      flashElements(Array.from(document.querySelectorAll(css)).slice(0, VERIFY_FLASH_LIMIT));
+      flashElements(
+        Array.from(document.querySelectorAll(css)).slice(0, VERIFY_FLASH_LIMIT),
+        mode === "preview"
+      );
     }
     return reply;
   };
@@ -550,12 +569,18 @@
   const onRuntimeMessage = (msg, _sender, sendResponse) => {
     if (msg && msg.type === "rpa-capture-verify") {
       // 同步应答：querySelectorAll 是同步的，无需 return true（那是异步应答的写法）
-      sendResponse({ contentBuild: EXT_BUILD, ...runVerify(String(msg.css || "")) });
+      sendResponse({
+        contentBuild: EXT_BUILD,
+        ...runVerify(String(msg.css || ""), msg.mode),
+      });
       return false;
     }
     if (msg && msg.type === "rpa-capture-arm") {
       armed = msg.armed === true;
       if (armed) {
+        // 进捕获态先清掉遗留的预览黄框：捕获红框下面压着上一轮的黄框，
+        // 用户分不清哪些框是「这次框选的」哪些是「刚才预览剩的」。
+        clearVerifyFlash();
         setHint(CAPTURE_HINT);
       } else {
         hideOverlay();
