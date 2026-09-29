@@ -197,3 +197,27 @@ def test_clear_preview_sends_clear_mode_and_empty_css(verify_env):
     assert ElementVerifier(timeout=3.0).clear_preview() == {"count": 0}
     assert channel.sent[0]["mode"] == "clear"
     assert channel.sent[0]["css"] == ""
+
+
+def test_bridge_error_reply_fails_fast(verify_env):
+    """bridge 拒绝（白名单漏项等）是**对本次请求的应答**：立即透出为 bridge-error，
+    不许干等超时——那会把「通道配置错了」伪装成「扩展没响应」（M47.2 真机踩过）。"""
+    _channels, set_endpoints = verify_env
+    channel = FakeChannel(
+        outbox=[
+            {
+                "type": "error",
+                "error": {
+                    "code": "INVALID_INPUT",
+                    "message": "unsupported message type: 'capture_verify'",
+                },
+            }
+        ],
+    )
+    set_endpoints(["a"], {"a": channel})
+
+    started = time.perf_counter()
+    result = ElementVerifier(timeout=5.0).verify("#x")
+    elapsed = time.perf_counter() - started
+    assert result["error"] == "bridge-error: unsupported message type: 'capture_verify'"
+    assert elapsed < 2.0  # 立即返回，而不是 5s 超时

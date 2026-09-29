@@ -18,7 +18,8 @@ Messaging 帧（4 字节小端长度前缀 + JSON，与 ``local_transport`` 同�
 客户端 → host（端点）：
 - ``submit``：下发命令（host 负责超时；超时回 ``TIMEOUT``）
 - ``status``：查询宿主身份
-- ``capture_arm`` / ``capture_disarm`` / ``capture_result`` / ``cancel``：透传扩展
+- ``capture_arm`` / ``capture_disarm`` / ``capture_verify`` / ``capture_result``：
+  透传扩展
 
 host → 扩展：``ready`` / ``command`` / ``cancel`` / ``capture_*``
 """
@@ -45,7 +46,13 @@ from rpa_core.local_transport import (
 )
 
 _DEBUG = bool(os.environ.get("RPA_EXT_BRIDGE_DEBUG"))
-_PASSTHROUGH_TO_EXTENSION = {"capture_arm", "capture_disarm", "capture_result", "cancel"}
+_PASSTHROUGH_TO_EXTENSION = {
+    "capture_arm",
+    "capture_disarm",
+    "capture_result",
+    "capture_verify",
+    "cancel",
+}
 
 # 诊断日志文件：显式路径可覆盖（测试隔离本机 ~/.rpa-core）
 _LOG_ENV = "RPA_EXT_BRIDGE_LOG"

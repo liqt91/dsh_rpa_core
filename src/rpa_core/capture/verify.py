@@ -88,12 +88,19 @@ class ElementVerifier:
                         break
                     if message is None:
                         break
+                    if not isinstance(message, dict) or "reply" in box:
+                        continue
                     if (
-                        isinstance(message, dict)
-                        and message.get("type") == "capture_verify_result"
+                        message.get("type") == "capture_verify_result"
                         and message.get("requestId") == request_id
-                        and "reply" not in box
                     ):
+                        box["reply"] = message
+                        done.set()
+                        return
+                    if message.get("type") == "error":
+                        # bridge 对不认识的消息类型的拒绝（白名单漏项等）：它是**对本
+                        # 客户端本次请求**的应答，立即透出，不能干等 5s 超时——那会把
+                        # 「通道配置错了」伪装成「扩展没响应」（M47.2 真机踩过）。
                         box["reply"] = message
                         done.set()
                         return
@@ -123,7 +130,19 @@ class ElementVerifier:
             except Exception:  # noqa: BLE001 - 收尾尽力而为
                 pass
         if reply is None:
+            # 超时必须留痕：这条路径在真机上排查过一轮（M47.2 bridge 白名单漏
+            # capture_verify，trace 里却无痕，只能翻 ext-host.log 才实锤）
+            _trace(
+                "verify",
+                "timeout",
+                mode=mode,
+                endpoints=[c for c in candidates if c],
+                timeout=self._timeout,
+            )
             return {"error": "verify-timeout"}
+        if reply.get("type") == "error":
+            detail = str((reply.get("error") or {}).get("message") or reply.get("error"))
+            return {"error": f"bridge-error: {detail}"}
         if reply.get("error"):
             return {"error": str(reply["error"])}
         count = reply.get("count")

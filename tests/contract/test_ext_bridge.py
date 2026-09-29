@@ -714,3 +714,38 @@ def test_idle_exit_suppressed_while_extension_messages_flow(tmp_path: Path) -> N
             host.proc.kill()
         host.close()
     assert rc is None, f"扩展活跃却自杀了：{log[-800:]}"
+
+
+def test_capture_verify_is_passthrough(host):
+    """M47.2 真机修复：capture_verify 必须透传扩展——bridge 白名单漏了它时，
+    请求被兜底拒成 error，用户看到的是 5s verify-timeout（现场丢失）。"""
+    host.handshake()
+    with host.connect() as client:
+        client.send(
+            {"type": "capture_verify", "sessionId": "ver-x", "requestId": "rq", "css": "#a"}
+        )
+        forwarded = host.from_extension(timeout=15.0)
+    assert forwarded["type"] == "capture_verify"
+    assert forwarded["requestId"] == "rq"
+
+
+def test_every_host_message_case_background_handles_is_passthrough_or_command():
+    """跨端对账（防再漏）：background.js ``onHostMessage`` 处理的每个 host 消息类型，
+    要么是 bridge 的透传类型，要么是 bridge 自己实现的协议（command/ready/ping）。
+    「bridge 加新扩展信封、忘改白名单」这一类故障（M47.2 verify-timeout）由此判据断根。
+    """
+    import re
+
+    root = Path(__file__).resolve().parents[2]
+    bg = (root / "extension" / "background.js").read_text(encoding="utf-8")
+    start = bg.index("function onHostMessage")
+    end = bg.index("\nfunction ", start + 1)  # 函数体到下一个顶层 function 截断
+    on_host = bg[start:end]
+    handled = set(re.findall(r'case "([a-z_]+)":', on_host))
+    assert {"capture_arm", "capture_disarm", "capture_verify"} <= handled  # 防提取失真
+
+    from rpa_core.workers.ext_bridge import _PASSTHROUGH_TO_EXTENSION
+
+    bridge_owned = {"command", "ready", "ping"}  # submit→command / 握手 / 保活，不经透传
+    missing = handled - bridge_owned - _PASSTHROUGH_TO_EXTENSION
+    assert not missing, f"background 处理但 bridge 不透传的消息类型: {sorted(missing)}"
