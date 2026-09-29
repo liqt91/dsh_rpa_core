@@ -797,3 +797,55 @@ def test_capture_never_gives_up_on_its_own(window, fake_capture):
 
     fake.result = None
     _release_and_finish(fake, window)
+
+
+# ---- M47.5：离线确认框按「缺哪一环」分支文案（维护者 2026-09-29 反馈） ----------
+
+def _patch_diag(monkeypatch, diag):
+    import rpa_core.extension_installer as installer
+
+    monkeypatch.setattr(installer, "channel_diagnostics", lambda *a, **k: diag)
+
+
+def test_offline_message_browser_not_running_says_open_browser(window, monkeypatch):
+    """插件已装、浏览器没开：提示「打开浏览器即可」，**不得**再让用户去装插件——
+    「没开浏览器」被误读成「插件没装」是本次报障的核心。"""
+    _patch_diag(
+        monkeypatch,
+        {"reason": "browser-not-running", "summary": "静态体检通过", "browsers": {}},
+    )
+    msg = window._capture_offline_message()
+    assert "已安装" in msg
+    assert "没有正在运行的浏览器" in msg
+    assert "打开 Chrome/Edge" in msg
+    assert "装入目标浏览器" not in msg  # 旧的「去装插件」指令不得出现
+
+
+def test_offline_message_other_reasons_show_diagnosis(window, monkeypatch):
+    """其他原因（如运行中但未加载插件）：给出一行诊断 + 处置建议，不再是含糊的
+    「未检测到连接」。"""
+    _patch_diag(
+        monkeypatch,
+        {
+            "reason": "browser-running-without-extension",
+            "summary": "bridge 已注册；插件已安装",
+            "browsers": {},
+        },
+    )
+    msg = window._capture_offline_message()
+    assert "诊断：" in msg
+    assert "bridge 已注册" in msg
+    assert "完全退出浏览器" in msg  # offline_hint 的处置建议要在场
+
+
+def test_offline_message_diag_failure_falls_back(window, monkeypatch):
+    """诊断自身失败（异常）：退回原文案，确认框不能因此炸掉。"""
+    import rpa_core.extension_installer as installer
+
+    def boom(*a, **k):
+        raise RuntimeError("diag down")
+
+    monkeypatch.setattr(installer, "channel_diagnostics", boom)
+    msg = window._capture_offline_message()
+    assert "未检测到浏览器插件连接" in msg
+    assert "装入目标浏览器" in msg

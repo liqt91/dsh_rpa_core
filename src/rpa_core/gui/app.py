@@ -2959,6 +2959,52 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage("已取消捕获，可再次点击「捕获元素」重试", 5000)
 
 
+    def _capture_offline_message(self) -> str:
+        """离线确认框正文：按诊断出的「缺哪一环」给对应处置，不再一刀切让用户去装插件。
+
+        「插件已装、只是浏览器没开」是最常见的场景（2026-09-29 维护者反馈：
+        没开浏览器也提示「未检测到插件连接」，让人以为要重装）——此时该说的是
+        「打开浏览器即可」。诊断只读且带 TTL 缓存，对话框时点同步调一次可接受。
+        """
+        base = "网页内捕获不可用（桌面捕获不受影响）。"
+        diag = None
+        try:
+            from rpa_core.extension_installer import channel_diagnostics
+
+            diag = channel_diagnostics()
+        except Exception:  # noqa: BLE001 - 诊断失败退回原文案
+            diag = None
+        if diag is not None:
+            from rpa_core.extension_installer import (
+                OFFLINE_BROWSER_NOT_RUNNING,
+                offline_hint,
+            )
+
+            reason = str(diag.get("reason") or "")
+            if reason == OFFLINE_BROWSER_NOT_RUNNING:
+                return (
+                    "浏览器插件已安装，但当前没有正在运行的浏览器："
+                    + base
+                    + "\n\n请打开 Chrome/Edge（插件会自动连接），"
+                    "或现在继续仅桌面捕获。"
+                )
+            summary = str(diag.get("summary") or "")
+            hint = offline_hint(reason)
+            detail = "；".join(part for part in (summary, hint) if part)
+            if detail:
+                return (
+                    "未检测到浏览器插件连接："
+                    + base
+                    + f"\n\n诊断：{detail}\n\n"
+                    "若目标是网页，请用工具栏「插件」按钮查看安装引导。"
+                )
+        return (
+            "未检测到浏览器插件连接："
+            + base
+            + "\n\n若目标是网页，请先用工具栏「插件」按钮把扩展装入目标浏览器"
+            "（Chrome/Edge），或改用已装扩展的浏览器后重试。"
+        )
+
     def _confirm_capture_offline(self) -> bool:
         """扩展腿离线时的显式确认：继续（仅桌面捕获）还是取消去装插件。
 
@@ -2967,10 +3013,7 @@ class MainWindow(QMainWindow):
         choice = QMessageBox.warning(
             self,
             "浏览器插件离线",
-            "未检测到浏览器插件连接：网页内捕获不可用（桌面捕获不受影响）。\n\n"
-            "若目标是网页，请先用工具栏「插件」按钮把扩展装入目标浏览器"
-            "（Chrome/Edge），或改用已装扩展的浏览器后重试。\n\n"
-            "仍要继续仅桌面捕获吗？",
+            self._capture_offline_message() + "\n\n仍要继续仅桌面捕获吗？",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
         )
