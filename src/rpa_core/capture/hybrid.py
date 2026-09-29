@@ -163,6 +163,15 @@ class HybridCaptureSession:
         degraded = False
 
         while time.monotonic() < deadline:
+            # ⓪' 离线起步的扩展腿中途复活（M47.6）：浏览器是捕获开始后才打开的，
+            #    扩展腿的补 arm 守望收编了新端点（offline 翻 False）——重新参选，
+            #    并从现在起计 ack 宽限（复活的腿同样可能是「端点在、扩展死」的假在线）。
+            #    鸭子类型与 start() 同款：假腿的 offline 属性不变就不会误翻转。
+            if self._ext_offline and not bool(
+                getattr(self._extension, "offline", False)
+            ):
+                self._ext_offline = False
+                self._arm_deadline = time.monotonic() + self._arm_ack_timeout
             # ⓪ 扩展腿「假在线」判死：端点连上了，但扩展超期没确认 arm。
             #    这一步是「静默等满 90 秒」的解药——端点可连接只证明 host 活着。
             if (

@@ -63,6 +63,7 @@ class ExtensionCaptureSession:
         *,
         transport: str = "extension",
         endpoint: str | None = None,
+        rearm_poll: float = 1.5,
         **_ignored: Any,
     ):
         self.transport = transport
@@ -78,6 +79,11 @@ class ExtensionCaptureSession:
         # arm ack：扩展收到 capture_arm 后回 capture_armed。端点可连接 ≠ 扩展在响应，
         # 这个事件是「扩展腿真的活着」的唯一证据（见 armed 属性）。
         self._armed = threading.Event()
+        # 离线起步的补 arm 守望（M47.6）：捕获开始时浏览器没开 → arm 广播无人接收，
+        # 捕获中途打开浏览器后扩展上线也永远收不到 arm，网页里不会出现红框。
+        # 守望线程轮询新端点并收编补 arm；cancel/close 置停。
+        self._rearm_closed = threading.Event()
+        self._rearm_poll = rearm_poll
 
     # -- 生命周期 ------------------------------------------------------------
 
@@ -103,6 +109,7 @@ class ExtensionCaptureSession:
             self._offline = True
             self._event.set()
             _trace("extension", "offline")
+            self._start_rearm_watch()
             return ["*"]
         self._endpoint = self._channels[0][0]
         with self._live_lock:
@@ -165,6 +172,7 @@ class ExtensionCaptureSession:
         return self._result
 
     def cancel(self) -> None:
+        self._rearm_closed.set()  # 会话收场：补 arm 守望即刻退出
         self._disarm()
         if self._result is None:
             self._result = {"cancelled": True}
@@ -174,6 +182,69 @@ class ExtensionCaptureSession:
         self.cancel()
 
     # -- 内部 ----------------------------------------------------------------
+
+    def _start_rearm_watch(self) -> None:
+        """离线起步的补 arm 守望：会话存续期间新端点上线即收编补 arm。
+
+        现场（2026-09-29 维护者反馈）：捕获开始时没开浏览器 → arm 广播无人接收；
+        捕获中途打开浏览器网页 → 扩展上线但永远错过了 arm，页面不出现红框。
+        守望轮询在线端点，把「起步后新出现的」连接进来补发 ``capture_arm`` 并复活
+        本腿（清 offline / 清 result 事件，重新参与 pick 双等）。
+        """
+        from rpa_core.extension_exec import list_extension_endpoints
+
+        def watch() -> None:
+            while not self._rearm_closed.is_set():
+                try:
+                    # 与 start() 同款候选逻辑：注入 endpoint 时只守望它
+                    # （测试/单端点场景不得收编真机上的其他在线端点）
+                    candidates = (
+                        [self._endpoint] if self._endpoint else list_extension_endpoints()
+                    )
+                except Exception:  # noqa: BLE001 - 轮询失败下轮再试
+                    candidates = []
+                for name in candidates:
+                    if not name:
+                        continue
+                    if self._rearm_closed.is_set():
+                        return
+                    if any(n == name for n, _ in tuple(self._channels)):
+                        continue
+                    self._adopt_endpoint(name)
+                self._rearm_closed.wait(self._rearm_poll)
+
+        threading.Thread(target=watch, daemon=True).start()
+
+    def _adopt_endpoint(self, name: str) -> None:
+        """把起步后新上线的端点收编进本会话：连接 + 补发 arm + 复活扩展腿。
+
+        顺序敏感：先清 result 事件、再清 offline——若反过来，hybrid 会在「offline
+        已 False 但事件还 set 着（result 为 None）」的窗口里把这条腿记成失败出局。
+        """
+        try:
+            channel = local_transport.connect(name, timeout=2.0)
+        except local_transport.LocalTransportError:
+            return  # 端点刚上线又掉了：下轮轮询再试
+        if self._rearm_closed.is_set():
+            try:
+                channel.close()
+            except Exception:  # noqa: BLE001
+                pass
+            return
+        self._channels.append((name, channel))
+        self._event.clear()  # 复活：腿重新参与等待（offline 起步时事件已置位）
+        self._offline = False
+        with self._live_lock:
+            self._live += 1
+        self._endpoint = self._channels[0][0]
+        try:
+            channel.send({"type": "capture_arm", "sessionId": self._session_id})
+        except Exception:  # noqa: BLE001 - 发送失败：读循环随断开自然收场
+            return
+        _trace("extension", "rearm_adopted", endpoint=name)
+        threading.Thread(
+            target=self._read_loop, args=(channel,), daemon=True
+        ).start()
 
     def _read_loop(self, channel) -> None:
         """单条通道的读循环：任一通道回传 capture_result 即唤醒 pick（先回传者胜）。"""

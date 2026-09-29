@@ -126,27 +126,36 @@ class FakeBridge:
                     self.armed += 1
                     if self.send_ack:
                         # 真实扩展收到 arm 就回 capture_armed（见 extension/background.js）；
-                        # 父端用它判「扩展真的在响应」而不是「端点在」
-                        channel.send(
-                            {
-                                "type": "capture_armed",
-                                "sessionId": message.get("sessionId"),
-                            }
-                        )
+                        # 父端用它判「扩展真的在响应」而不是「端点在」。
+                        # 会话侧可能已经收场（桌面 Esc 立即取消，管道正在关闭）——
+                        # ack 写失败不许弄死本线程：后面的 disarm 还要在这里计数
+                        # （偶现 flake：线程死于 ack 写入 ⇒ disarmed 恒 0）。
+                        try:
+                            channel.send(
+                                {
+                                    "type": "capture_armed",
+                                    "sessionId": message.get("sessionId"),
+                                }
+                            )
+                        except lt.LocalTransportError:
+                            pass
                     if self.delay is None:
                         continue
                     time.sleep(self.delay)
-                    channel.send(
-                        {
-                            "type": "capture_result",
-                            "sessionId": message.get("sessionId"),
-                            **(
-                                {"cancelled": True}
-                                if self.cancel_result
-                                else {"descriptor": _BROWSER_DESCRIPTOR}
-                            ),
-                        }
-                    )
+                    try:
+                        channel.send(
+                            {
+                                "type": "capture_result",
+                                "sessionId": message.get("sessionId"),
+                                **(
+                                    {"cancelled": True}
+                                    if self.cancel_result
+                                    else {"descriptor": _BROWSER_DESCRIPTOR}
+                                ),
+                            }
+                        )
+                    except lt.LocalTransportError:
+                        pass  # 同上：会话侧已收场，结果无人接收是正常竞态
         finally:
             channel.close()
 
@@ -591,3 +600,66 @@ def test_hybrid_leg_failure_is_not_a_cancel(isolated_endpoints):
             session.close()
     finally:
         fake.close()
+
+
+# ---- M47.6：捕获中途打开浏览器 → 补 arm 守望复活扩展腿 ------------------------
+
+def test_extension_rearm_adopts_late_endpoint_and_wins(monkeypatch):
+    """离线起步 + 端点中途上线：守望收编补 arm，扩展结果正常胜出。
+
+    现场（维护者 2026-09-29）：捕获开始时浏览器没开（arm 广播无人接收），捕获
+    中途打开浏览器网页——旧实现里扩展永远错过了 arm，页面不出现红框，用户只能
+    在网页里白点。
+    """
+    import rpa_core.extension_exec as ext_exec
+    from rpa_core.capture.extension import ExtensionCaptureSession
+
+    FakeDesktopSession.instances = []
+    ext = ExtensionCaptureSession(rearm_poll=0.1)
+    session = HybridCaptureSession(
+        desktop_factory=FakeDesktopSession, extension_session=ext
+    )
+    holder: list = []  # bridge 建好后名字才可见 = 「浏览器中途上线」
+    monkeypatch.setattr(
+        ext_exec,
+        "list_extension_endpoints",
+        lambda: [] if not holder else [holder[-1].name],
+    )
+    bridge = None
+    try:
+        session.start()
+        assert session.extension_offline
+        FakeDesktopSession.instances[-1].pick_delay = 20.0  # 桌面慢，让扩展先赢
+        bridge = FakeBridge(delay=0.1)  # 「捕获中途」浏览器上线
+        holder.append(bridge)
+        result = session.pick(timeout_seconds=8)
+        assert bridge.armed >= 1, "守望必须把后上线的端点收编并补 arm"
+        assert result["kind"] == "browser"
+        assert result["selector"]["css"] == "#go"
+    finally:
+        if bridge is not None:
+            bridge.close()
+        session.close()
+
+
+def test_extension_rearm_watch_stops_on_close():
+    """会话收场后守望必须退出：之后再上线的端点不得被 arm——
+    否则已撤防的会话被重新 arm，网页里出现「幽灵红框」，点了也没人收结果。"""
+    from rpa_core.capture.extension import ExtensionCaptureSession
+
+    ext = ExtensionCaptureSession(
+        endpoint="rpa_core_ext_test_no_such_endpoint", rearm_poll=0.1
+    )
+    session = HybridCaptureSession(
+        desktop_factory=FakeDesktopSession, extension_session=ext
+    )
+    session.start()
+    session.close()
+    bridge = FakeBridge(delay=None)
+    try:
+        deadline = time.monotonic() + 1.0
+        while time.monotonic() < deadline and bridge.armed > 0:
+            time.sleep(0.05)
+        assert bridge.armed == 0, "收场后的守望若还活着，会把已撤防的会话重新 arm"
+    finally:
+        bridge.close()
