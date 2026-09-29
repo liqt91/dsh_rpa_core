@@ -12,8 +12,9 @@
 import argparse
 import ctypes
 import json
+import os
+import subprocess
 import sys
-import threading
 import time
 from ctypes import wintypes
 
@@ -21,6 +22,20 @@ from rpa_core.capture._trace import trace as _trace
 
 VK_F9 = 0x78
 VK_ESCAPE = 0x1B
+
+if sys.platform == "win32":
+    # 64 位陷阱：句柄 API 不设 restype/argtypes 会按 32 位截断（DefWindowProcW 教训）
+    user32 = ctypes.windll.user32
+    kernel32 = ctypes.windll.kernel32
+    kernel32.CreateEventW.argtypes = [
+        wintypes.LPVOID, wintypes.BOOL, wintypes.BOOL, wintypes.LPCWSTR,
+    ]
+    kernel32.CreateEventW.restype = wintypes.HANDLE
+    kernel32.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+    kernel32.WaitForSingleObject.restype = wintypes.DWORD
+    kernel32.ResetEvent.argtypes = [wintypes.HANDLE]
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+
 VK_CONTROL = 0x11
 VK_LBUTTON = 0x01
 GA_ROOT = 2
@@ -571,140 +586,72 @@ def _window_class_at(x: int, y: int) -> str:
     return _class_name_of(hwnd)
 
 
-# ---- Ctrl+Click 穿透拦截（WH_MOUSE_LL）--------------------------------------
+# ---- Ctrl+Click 穿透拦截（专职钩子子进程）------------------------------------
 # 维护者 2026-09-29 报障：「捕获时 Ctrl+Click 会触发实际的 click」。此前 agent 只是
 # 轮询 GetAsyncKeyState **观察**手势（观察不改输入流），点会原样穿透到目标应用——
-# 影刀式捕获手势必须吞掉这一次点击。低级鼠标钩子返回 1 = 事件不派发。两个例外/配套：
-# ① 浏览器内容区**不吞**（hybrid 让位语义）：那里的 Ctrl+Click 是扩展页内捕获的手势，
-#   页面必须收到真点击；② 吞掉的点击同时置 capture_click 兜底触发位——被低级钩子
-#   吞掉的事件在 GetAsyncKeyState 里是否仍可见，官方口径不明确，两路都接才稳。
-WH_MOUSE_LL = 14
-WM_LBUTTONDOWN = 0x0201
-WM_LBUTTONUP = 0x0202
+# 影刀式捕获手势必须吞掉这一次点击。钩子放在**专职子进程**（desktop_click_hook）：
+# ① 低级钩子回调需要 GIL，而本进程的 UIA 工作（comtypes 冷启动真机实测 6~16s，
+#   沙箱 0.3s）又重又慢——回调一旦被拖住，系统原始输入线程串行等钩子，全系统鼠标
+#   跟着卡（2026-09-30 维护者报「开启捕获后鼠标移动特别卡」）。零 UIA 依赖的子进程
+#   里回调永远及时，鼠标输入与本进程的任何 Python 重活彻底解耦。
+# ② 浏览器内容区**不吞**（hybrid 让位语义，子进程自行判定窗口类名）。
+# ③ 吞掉的 DOWN 经命名事件 SetEvent 通知本进程作兜底触发（被吞事件在
+#   GetAsyncKeyState 里是否可见官方口径不明，轮询与事件两路都接）。
+
+_click_hook_state = {"proc": None, "event": None}
 
 
-class _MSLLHOOKSTRUCT(ctypes.Structure):
-    _fields_ = [
-        ("pt", wintypes.POINT),
-        ("mouseData", wintypes.DWORD),
-        ("flags", wintypes.DWORD),
-        ("time", wintypes.DWORD),
-        ("dwExtraInfo", ctypes.c_size_t),
-    ]
-
-
-if sys.platform == "win32":
-    _MOUSEHOOKPROC = ctypes.WINFUNCTYPE(
-        ctypes.c_ssize_t, ctypes.c_int, wintypes.WPARAM, wintypes.LPARAM
-    )
-    # 热路径预绑定：ctypes.windll.user32 每次属性访问都新建 WinDLL 对象，
-    # 而钩子回调对**每一个**鼠标事件（含海量的 move）都会进来一次——
-    # 2026-09-30 维护者报「开启捕获后鼠标移动特别卡」，事件成本必须压到常数。
-    user32 = ctypes.windll.user32
-    kernel32 = ctypes.windll.kernel32
-    _call_next_hook = user32.CallNextHookEx
-    _get_async_key_state = user32.GetAsyncKeyState
-    _BUTTON_EVENTS = (WM_LBUTTONDOWN, WM_LBUTTONUP)
-else:   # 非 Windows 仅 import/单测替身用，永不安装
-    _MOUSEHOOKPROC = None
-
-# 回调必须持有模块级引用：ctypes 回调被 GC 会直接进程崩溃
-_suppress_state = {
-    "handle": None,
-    "callback": None,
-    "respect_browser_content": False,
-    "swallow_pair": False,   # DOWN 被吞后配对的 UP 也吞，否则应用收到孤儿 UP
-    "capture_click": False,  # 兜底触发位（见上）
-}
-
-
-def _suppress_proc(n_code, w_param, l_param):
-    try:
-        # 热路径（move 占绝大多数）只做两次整数比较就走 CallNextHookEx。
-        if n_code >= 0 and w_param in _BUTTON_EVENTS:
-            info = ctypes.cast(l_param, ctypes.POINTER(_MSLLHOOKSTRUCT)).contents
-            # 先问便宜的键态，再问贵的窗口类名（普通点击 ctrl=False 时免查窗口）
-            ctrl = bool(_get_async_key_state(VK_CONTROL) & 0x8000)
-            over_browser = (
-                ctrl
-                and _suppress_state["respect_browser_content"]
-                and _window_class_at(info.pt.x, info.pt.y) in _BROWSER_CONTENT_CLASSES
-            )
-            if ctrl and not over_browser:
-                if w_param == WM_LBUTTONDOWN:
-                    _suppress_state["swallow_pair"] = True
-                    _suppress_state["capture_click"] = True
-                    if not _suppress_state.get("decide_traced"):
-                        _suppress_state["decide_traced"] = True
-                        _trace("agent", "hook_down_decide", swallow=True)
-                    return 1
-                if _suppress_state["swallow_pair"]:
-                    return 1
-    except Exception:
-        pass  # 钩子回调绝不能抛（异常会令钩子失效）
-    return _call_next_hook(None, n_code, w_param, l_param)
-
-
-def _install_click_suppressor(*, respect_browser_content: bool) -> None:
-    if _MOUSEHOOKPROC is None:
+def _start_click_hook(respect_browser_content: bool) -> None:
+    if sys.platform != "win32":
         return
-    _suppress_state["respect_browser_content"] = respect_browser_content
-    _suppress_state["swallow_pair"] = False
-    _suppress_state["capture_click"] = False
-    callback = _MOUSEHOOKPROC(_suppress_proc)
-    _suppress_state["callback"] = callback
-    # 钩子必须装在**专职泵线程**上：低级钩子回调在安装线程泵消息时被调用，
-    # 线程不泵（如 hover 首次 UIA 初始化阻塞数秒）系统会在超时后**旁路钩子**放行
-    # 事件——2026-09-29 探针实测：主线程被 UIA 首调卡住时点击原样穿透。
-    # 泵必须用**阻塞 GetMessageW**：回调只在泵消息时被系统调用，Peek+sleep 轮询
-    # 会让每个鼠标事件干等最多一个 sleep 间隔才被处理——125Hz 鼠标叠 0~5ms 延迟
-    # 就是肉眼可见的卡（2026-09-30 维护者报「开启捕获后鼠标移动特别卡」）。
-    # 停机不再轮询标志位，改走 PostThreadMessageW(WM_QUIT) 唤醒阻塞的 GetMessage。
-    ready = threading.Event()
-
-    def _hook_thread():
-        h = int(user32.SetWindowsHookExW(WH_MOUSE_LL, callback, None, 0))
-        _suppress_state["handle"] = h
-        _suppress_state["thread_id"] = kernel32.GetCurrentThreadId()
-        ready.set()
-        msg = wintypes.MSG()
-        while user32.GetMessageW(ctypes.byref(msg), None, 0, 0) > 0:
-            user32.TranslateMessage(ctypes.byref(msg))
-            user32.DispatchMessageW(ctypes.byref(msg))
-        # 正常只有卸载路径会到这；handle 若还在（异常退出），兜底卸钩
-        leftover = _suppress_state["handle"]
-        if leftover:
-            user32.UnhookWindowsHookEx(leftover)
-            _suppress_state["handle"] = None
-
-    thread = threading.Thread(target=_hook_thread, daemon=True)
-    thread.start()
-    _suppress_state["thread"] = thread
-    ready.wait(timeout=5.0)
+    name = f"Local\\rpa-capture-click-{os.getpid()}-{time.monotonic_ns()}"
+    handle = kernel32.CreateEventW(None, True, False, name)
+    argv = [
+        sys.executable, "-m", "rpa_core.capture.desktop_click_hook",
+        "--event", name,
+        "--parent-pid", str(os.getpid()),
+        "--timeout", "600",
+    ]
+    if respect_browser_content:
+        argv.append("--respect-browser-content")
+    try:
+        proc = subprocess.Popen(
+            argv, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+        )
+    except OSError as exc:
+        # 起不来不致命：捕获轮询仍在，只是 Ctrl+Click 会穿透（装钩子前的行为）
+        _trace("agent", "click_hook_spawn_failed", error=str(exc))
+        if handle:
+            kernel32.CloseHandle(handle)
+        return
+    _click_hook_state["proc"] = proc
+    _click_hook_state["event"] = handle
     _trace(
-        "agent", "click_suppressor_installed",
+        "agent", "click_hook_spawned", pid=proc.pid,
         respect_browser_content=respect_browser_content,
-        handle_ok=bool(_suppress_state["handle"]),
+        event_ok=bool(handle),
     )
 
 
-def _uninstall_click_suppressor() -> None:
-    handle = _suppress_state["handle"]
-    thread_id = _suppress_state.get("thread_id")
+def _poll_click_hook_event() -> bool:
+    """读兜底触发事件（manual-reset：读到即复位）。"""
+    handle = _click_hook_state["event"]
+    if handle and kernel32.WaitForSingleObject(handle, 0) == 0:
+        kernel32.ResetEvent(handle)
+        _trace("agent", "hook_click_seen")
+        return True
+    return False
+
+
+def _stop_click_hook() -> None:
+    proc = _click_hook_state["proc"]
+    if proc is not None:
+        proc.terminate()
+        _click_hook_state["proc"] = None
+    handle = _click_hook_state["event"]
     if handle:
-        # 先卸钩再退线程：卸钩后事件不再进回调；WM_QUIT 唤醒阻塞中的 GetMessage
-        user32.UnhookWindowsHookEx(handle)
-        if thread_id:
-            user32.PostThreadMessageW(thread_id, 0x0012, 0, 0)  # WM_QUIT
-    thread = _suppress_state.get("thread")
-    if thread is not None:
-        thread.join(timeout=2.0)
-    _suppress_state["handle"] = None
-    _suppress_state["callback"] = None
-    _suppress_state["thread"] = None
-    _suppress_state["thread_id"] = None
-    _suppress_state["swallow_pair"] = False
-    _suppress_state["capture_click"] = False
+        kernel32.CloseHandle(handle)
+        _click_hook_state["event"] = None
 
 
 def _hover_capture(hotkey_vk: int, timeout: float, hybrid: bool = False) -> dict:
@@ -716,7 +663,7 @@ def _hover_capture(hotkey_vk: int, timeout: float, hybrid: bool = False) -> dict
     """
     overlay = _HoverOverlay()
     _trace("agent", "overlay_created", hybrid=hybrid)
-    _install_click_suppressor(respect_browser_content=hybrid)
+    _start_click_hook(hybrid)
     deadline = time.monotonic() + timeout
     last_pos = (-1, -1)
     last_hit = 0.0
@@ -731,11 +678,19 @@ def _hover_capture(hotkey_vk: int, timeout: float, hybrid: bool = False) -> dict
             x, y = _cursor_pos()
             in_browser_content = hybrid and _window_class_at(x, y) in _BROWSER_CONTENT_CLASSES
             moved = abs(x - last_pos[0]) > 3 or abs(y - last_pos[1]) > 3
+            # 命中测试是每移动最大的开销（ElementFromPoint+下钻，全是跨进程 COM；
+            # 真机 comtypes 慢一个量级 ⇒ 30ms 连发即「红框追着爬 + CPU 打满」）：
+            # 光标仍在当前 rect 内（本次移动大概率命中的还是它）降到 100ms 一测，
+            # 跨界（换元素）才全速 30ms。
+            inside_last = last_rect is not None and _rect_contains(last_rect, x, y)
             if in_browser_content:
                 overlay.hide()
                 last_leaf = None
                 last_rect = None
-            elif moved and time.monotonic() - last_hit > 0.03:
+            elif moved and time.monotonic() - last_hit > (
+                0.10 if inside_last else 0.03
+            ):
+                t_hit = time.perf_counter()
                 last_hit = time.monotonic()
                 last_pos = (x, y)
                 # 粗命中（大 rect）时才允许 DFS，且节流 150ms（DFS ~50ms 不能每帧跑）
@@ -743,6 +698,11 @@ def _hover_capture(hotkey_vk: int, timeout: float, hybrid: bool = False) -> dict
                 rect, root, leaf, scoped_ran = _hover_hit(
                     x, y, overlay.hwnd, allow_scoped=allow_scoped
                 )
+                hit_ms = (time.perf_counter() - t_hit) * 1000
+                if hit_ms > 100:
+                    # 慢命中取证：真机若仍卡，日志直接给出每次命中耗时
+                    _trace("agent", "hover_hit_slow", ms=round(hit_ms, 1),
+                           scoped=scoped_ran)
                 if scoped_ran:
                     last_scoped = time.monotonic()
                 if rect is not None:
@@ -757,9 +717,9 @@ def _hover_capture(hotkey_vk: int, timeout: float, hybrid: bool = False) -> dict
             hotkey_now = _hotkey_pressed(hotkey_vk)
             lbutton_now = _hotkey_pressed(VK_LBUTTON)
             escape_now = _hotkey_pressed(VK_ESCAPE)
-            # 吞掉的 Ctrl+Click 置位的兜底触发（见 _suppress_state 注释）：读了即清
-            hook_click = _suppress_state["capture_click"]
-            _suppress_state["capture_click"] = False
+            # 吞掉的 Ctrl+Click 经命名事件兜底触发（见 _start_click_hook 注释）：
+            # manual-reset，读到即复位
+            hook_click = _poll_click_hook_event()
             capture_triggered = (hotkey_now and not hotkey_was) or (
                 lbutton_now and not lbutton_was and _hotkey_pressed(VK_CONTROL)
             ) or hook_click
@@ -785,7 +745,7 @@ def _hover_capture(hotkey_vk: int, timeout: float, hybrid: bool = False) -> dict
             time.sleep(0.015)
         return {"timeout": True}
     finally:
-        _uninstall_click_suppressor()
+        _stop_click_hook()
         overlay.destroy()
 
 
