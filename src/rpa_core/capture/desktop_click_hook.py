@@ -95,6 +95,21 @@ def _window_class_at(x: int, y: int) -> str:
     return _class_name_of(hwnd)
 
 
+def _swallow_decision(
+    ctrl: bool, over_browser: bool, is_down: bool, swallow_pair: bool
+) -> tuple[bool, bool]:
+    """纯判定：返回 ``(swallow, new_swallow_pair)``。
+
+    Ctrl+左键且不在浏览器内容区 → 吞；DOWN 起吞（并置成对标记），UP 依标记
+    续吞（防孤儿 UP 落到目标应用，产生「半次点击」）。
+    """
+    if not ctrl or over_browser:
+        return False, swallow_pair
+    if is_down:
+        return True, True
+    return swallow_pair, swallow_pair
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(prog="desktop-click-hook")
     parser.add_argument("--event", required=True,
@@ -132,38 +147,47 @@ def main() -> int:
     decisions = {"n": 0}
 
     def _proc(n_code, w_param, l_param):
+        # 结构铁律（M47.3 真机实锤）：「判定」与「取证」分两段 try，且
+        # ``if swallow: return 1`` 在**任何** bookkeeping 之后无条件执行——
+        # 真机出现过 DOWN 透传到桌面应用、UP 却被吞的组合，唯一自洽解释是
+        # DOWN 在判定之后、return 之前出了异常，被 except 吞掉后落到
+        # CallNextHookEx 放行。本结构从机制上封死该洞：swallow 一旦为 True，
+        # 无论取证段发生什么，事件必被吞。
+        swallow = False
+        ctrl = False
+        over_browser = False
+        is_down = w_param == WM_LBUTTONDOWN
         try:
             if n_code >= 0 and w_param in (WM_LBUTTONDOWN, WM_LBUTTONUP):
                 info = ctypes.cast(
                     l_param, ctypes.POINTER(_MSLLHOOKSTRUCT)
                 ).contents
                 ctrl = bool(user32.GetAsyncKeyState(VK_CONTROL) & 0x8000)
-                over_browser = (
+                over_browser = bool(
                     ctrl
                     and state["respect_browser_content"]
                     and _window_class_at(info.pt.x, info.pt.y)
                     in _BROWSER_CONTENT_CLASSES
                 )
-                swallow = False
-                if ctrl and not over_browser:
-                    if w_param == WM_LBUTTONDOWN:
-                        state["swallow_pair"] = True
-                        if event:
-                            user32.SetEvent(event)
-                        swallow = True
-                    elif state["swallow_pair"]:
-                        swallow = True
-                # 前 10 个按键事件逐条取证（吞没吞、判据是什么）——真机排障铁证
-                if decisions["n"] < 10:
-                    decisions["n"] += 1
-                    _trace(
-                        "hook", "button", down=(w_param == WM_LBUTTONDOWN),
-                        ctrl=ctrl, over_browser=over_browser, swallowed=swallow,
-                    )
-                if swallow:
-                    return 1
-        except Exception:
-            pass  # 钩子回调绝不能抛（异常会令钩子失效）
+                swallow, state["swallow_pair"] = _swallow_decision(
+                    ctrl, over_browser, is_down, state["swallow_pair"]
+                )
+                if swallow and is_down and event:
+                    user32.SetEvent(event)
+        except Exception as exc:
+            _trace("hook", "callback_error", error=str(exc), stage="decide")
+        # 取证段独立 try：前 10 个按键事件逐条取证（吞没吞、判据是什么）
+        if decisions["n"] < 10:
+            decisions["n"] += 1
+            try:
+                _trace(
+                    "hook", "button", down=is_down,
+                    ctrl=ctrl, over_browser=over_browser, swallowed=swallow,
+                )
+            except Exception as exc:  # pragma: no cover - _trace 自身已兜底，双保险
+                _trace("hook", "callback_error", error=str(exc), stage="trace")
+        if swallow:
+            return 1
         return user32.CallNextHookEx(None, n_code, w_param, l_param)
 
     callback = _MOUSEHOOKPROC(_proc)

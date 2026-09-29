@@ -248,7 +248,8 @@ class ElementDialog(QDialog):
         # 出口意图。默认 "save"：用户直接按「保存」/回车/双击标题栏关闭都走它。
         self._intent = "save"
         self.setWindowTitle("捕获确认")
-        self.setMinimumWidth(420)
+        self.setMinimumWidth(480)
+        self.resize(560, 640)
         layout = QVBoxLayout(self)
 
         # 捕获时命中数（1=绿 ok，其他=红 bad，对齐 Web dlg-verify）

@@ -211,6 +211,13 @@ check("C2 应答透传 msg.mode（host 侧/诊断要能知道这轮是什么语�
   /runVerify\(String\(msg\.css \|\| ""\), msg\.mode\)/.test(content), true);
 check("C2 进捕获态先清预览框（捕获红框不能压着上一轮的黄框）",
   /if \(armed\) \{(?:\s*\n\s*\/\/[^\n]*)*\s*\n\s*clearVerifyFlash\(\);/.test(content), true);
+check("C3 校验黄框用 absolute+文档坐标（fixed 钉在视口上，滚动不跟随）",
+  /position:absolute;z-index:2147483646/.test(content)
+    && /r\.left \+ sx - 2/.test(content)
+    && /r\.top \+ sy - 2/.test(content), true);
+check("C3 黄框坐标带滚动偏移兜底（scrollX/pageXOffset 双路取）",
+  /window\.scrollX \|\| window\.pageXOffset \|\| 0/.test(content)
+    && /window\.scrollY \|\| window\.pageYOffset \|\| 0/.test(content), true);
 check("C1 校验黄框 z-index 低于捕获红框（捕获态永远压在校验框上）",
   Number(content.match(/z-index:(\d+);pointer-events:none;"\s*\n\s*\+ "box-sizing:border-box;border:3px solid #d4a017/)
     ?. [1] ?? 0)

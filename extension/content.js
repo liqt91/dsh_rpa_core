@@ -23,7 +23,7 @@
   // 构建标识：与 background.js 的 EXT_BUILD、manifest.json 的 version 三方一致（契约测试钉住）。
   // 随捕获结果回传——诊断「页面里跑的脚本是哪个年代的」（Load unpacked 不自动重载，
   // 补注入前已开页面里的可能还是旧快照；见 background.js 顶部的完整说明）。
-  const EXT_BUILD = "0.6.0";
+  const EXT_BUILD = "0.6.1";
 
   // ---- 实例接管守卫（M42）----------------------------------------------------
   // 声明式 content_scripts **只在页面加载时**注入：扩展装载/重载后，已经打开的标签页
@@ -532,13 +532,18 @@
   };
   const flashElements = (els, persist) => {
     clearVerifyFlash();
+    // absolute + 文档坐标（视口坐标 + 滚动偏移）：滚动/滚轮时黄框跟着内容走。
+    // 旧实现 position:fixed + 视口坐标，滚动后框钉在屏幕上、元素却滚走了
+    // （维护者实测「网页滚动时黄框不跟随」，很别扭）。
+    const sx = window.scrollX || window.pageXOffset || 0;
+    const sy = window.scrollY || window.pageYOffset || 0;
     for (const el of els) {
       const node = document.createElement("div");
-      node.style.cssText = "position:fixed;z-index:2147483646;pointer-events:none;"
+      node.style.cssText = "position:absolute;z-index:2147483646;pointer-events:none;"
         + "box-sizing:border-box;border:3px solid #d4a017;background:rgba(255,215,0,.15)";
       const r = el.getBoundingClientRect();
-      node.style.left = (r.left - 2) + "px";
-      node.style.top = (r.top - 2) + "px";
+      node.style.left = (r.left + sx - 2) + "px";
+      node.style.top = (r.top + sy - 2) + "px";
       node.style.width = (r.width + 4) + "px";
       node.style.height = (r.height + 4) + "px";
       document.documentElement.appendChild(node);

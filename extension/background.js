@@ -15,7 +15,7 @@ const HOST_NAME = "com.rpa_core.ext_bridge";
 // 快照（2026-09-29 真机排障：仓库已修好「已开网页无红框」，但浏览器还跑着旧 background，
 // 表现成「修复无效」）。把标识随 ack/进度/结果回传，host 侧对账即可判「扩展过期」，
 // 不用再靠症状猜。
-const EXT_BUILD = "0.6.0";
+const EXT_BUILD = "0.6.1";
 const RECONNECT_MS = 3000;      // 断开后的重连退避
 const ALARM_NAME = "rpa-bridge-reconnect";  // SW 被回收时的兜底拉起（MV3 alarm 最小 30s）
 const PERMISSION_KEY = "rpaExecPermission";

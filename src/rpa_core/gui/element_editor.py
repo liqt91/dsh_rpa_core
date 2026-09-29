@@ -77,6 +77,7 @@ from PySide6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QPushButton,
+    QSizePolicy,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -608,6 +609,7 @@ class ElementEditorForm(QWidget):
         layout.addWidget(self.path_label)
 
         self.path_list = QListWidget()
+        self.path_list.setMinimumHeight(150)
         self._composing_path = False
         for index, entry in enumerate(self._path):
             item = QListWidgetItem(str(entry["fragment"]))
@@ -650,6 +652,8 @@ class ElementEditorForm(QWidget):
         self.attr_table = QTableWidget(0, 4)
         self.attr_table.setHorizontalHeaderLabels(["参与", "属性", "匹配方式", "值"])
         self.attr_table.verticalHeader().setVisible(False)
+        self.attr_table.verticalHeader().setDefaultSectionSize(30)
+        self.attr_table.setAlternatingRowColors(True)
         self.attr_table.horizontalHeader().setSectionResizeMode(
             0, QHeaderView.ResizeMode.ResizeToContents
         )
@@ -660,7 +664,12 @@ class ElementEditorForm(QWidget):
             2, QHeaderView.ResizeMode.ResizeToContents
         )
         self.attr_table.horizontalHeader().setStretchLastSection(True)
-        self.attr_table.setMaximumHeight(160)
+        # 维护者实测：160px 上限只装得下 3~4 行，「不方便查看选择」。改成
+        # 最小高度 + Expanding——表格随对话框变大而变大，窄内容列不抢宽度。
+        self.attr_table.setMinimumHeight(220)
+        self.attr_table.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
+        )
         layout.addWidget(self.attr_table)
         self.path_list.currentRowChanged.connect(
             lambda _row: self._rebuild_attr_table()
@@ -1082,7 +1091,9 @@ class ElementEditorDialog(QDialog):
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle(f"编辑元素 · {name}")
-        self.setMinimumWidth(520)
+        self.setMinimumWidth(560)
+        # 默认开大一点：节点树 + 属性表是主工作区，窄窗会把表格压成三行
+        self.resize(680, 720)
 
         layout = QVBoxLayout(self)
         header = "浏览器元素" if document.get("kind") == "browser" else "桌面元素"

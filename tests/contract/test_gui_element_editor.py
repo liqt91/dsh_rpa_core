@@ -1074,3 +1074,29 @@ def test_dialog_without_preview_callback_has_no_preview(qapp):
     dialog.finished.emit(0)
     _drain_qt_events()
     assert log["preview"] == [] and log["clear"] == []
+
+
+# ---- M47.3：编辑区空间放开（维护者实测「列表空间小，不方便查看选择」） ----------
+
+def test_attr_table_and_path_list_have_room(qapp):
+    """属性表不得再有 160px 上限（只装 3~4 行）；表格与节点树给足最小高度，
+    且表格随对话框拉伸（Expanding）——列表是编辑区主工作区。"""
+    from rpa_core.gui.element_editor import ElementEditorForm
+
+    form = ElementEditorForm(_path_document())  # 有 path 才会建节点树与属性表
+    assert form.attr_table.minimumHeight() >= 220
+    assert form.attr_table.maximumHeight() >= 2000  # 无 160px 类上限
+    assert (
+        form.attr_table.sizePolicy().verticalPolicy()
+        == __import__("PySide6.QtWidgets", fromlist=["QSizePolicy"]).QSizePolicy.Policy.Expanding
+    )
+    assert form.path_list.minimumHeight() >= 140
+
+
+def test_editor_dialog_opens_roomy(qapp):
+    """编辑对话框默认尺寸要配得上主工作区（680x720 起步），窄窗压表是旧账。"""
+    from rpa_core.gui.element_editor import ElementEditorDialog
+
+    dialog = ElementEditorDialog(_browser_document(), name="el_size")
+    assert dialog.width() >= 680
+    assert dialog.height() >= 700
