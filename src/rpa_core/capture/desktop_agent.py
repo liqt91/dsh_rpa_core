@@ -597,6 +597,14 @@ if sys.platform == "win32":
     _MOUSEHOOKPROC = ctypes.WINFUNCTYPE(
         ctypes.c_ssize_t, ctypes.c_int, wintypes.WPARAM, wintypes.LPARAM
     )
+    # 热路径预绑定：ctypes.windll.user32 每次属性访问都新建 WinDLL 对象，
+    # 而钩子回调对**每一个**鼠标事件（含海量的 move）都会进来一次——
+    # 2026-09-30 维护者报「开启捕获后鼠标移动特别卡」，事件成本必须压到常数。
+    user32 = ctypes.windll.user32
+    kernel32 = ctypes.windll.kernel32
+    _call_next_hook = user32.CallNextHookEx
+    _get_async_key_state = user32.GetAsyncKeyState
+    _BUTTON_EVENTS = (WM_LBUTTONDOWN, WM_LBUTTONUP)
 else:   # 非 Windows 仅 import/单测替身用，永不安装
     _MOUSEHOOKPROC = None
 
@@ -612,11 +620,14 @@ _suppress_state = {
 
 def _suppress_proc(n_code, w_param, l_param):
     try:
-        if n_code >= 0 and w_param in (WM_LBUTTONDOWN, WM_LBUTTONUP):
+        # 热路径（move 占绝大多数）只做两次整数比较就走 CallNextHookEx。
+        if n_code >= 0 and w_param in _BUTTON_EVENTS:
             info = ctypes.cast(l_param, ctypes.POINTER(_MSLLHOOKSTRUCT)).contents
-            ctrl = bool(ctypes.windll.user32.GetAsyncKeyState(VK_CONTROL) & 0x8000)
+            # 先问便宜的键态，再问贵的窗口类名（普通点击 ctrl=False 时免查窗口）
+            ctrl = bool(_get_async_key_state(VK_CONTROL) & 0x8000)
             over_browser = (
-                _suppress_state["respect_browser_content"]
+                ctrl
+                and _suppress_state["respect_browser_content"]
                 and _window_class_at(info.pt.x, info.pt.y) in _BROWSER_CONTENT_CLASSES
             )
             if ctrl and not over_browser:
@@ -631,7 +642,7 @@ def _suppress_proc(n_code, w_param, l_param):
                     return 1
     except Exception:
         pass  # 钩子回调绝不能抛（异常会令钩子失效）
-    return ctypes.windll.user32.CallNextHookEx(None, n_code, w_param, l_param)
+    return _call_next_hook(None, n_code, w_param, l_param)
 
 
 def _install_click_suppressor(*, respect_browser_content: bool) -> None:
@@ -644,31 +655,31 @@ def _install_click_suppressor(*, respect_browser_content: bool) -> None:
     _suppress_state["callback"] = callback
     # 钩子必须装在**专职泵线程**上：低级钩子回调在安装线程泵消息时被调用，
     # 线程不泵（如 hover 首次 UIA 初始化阻塞数秒）系统会在超时后**旁路钩子**放行
-    # 事件——2026-09-29 探针实测：主线程被 UIA 首调卡住时点击原样穿透。专职线程
-    # 只做 GetMessageW 泵，钩子回调永远及时。
+    # 事件——2026-09-29 探针实测：主线程被 UIA 首调卡住时点击原样穿透。
+    # 泵必须用**阻塞 GetMessageW**：回调只在泵消息时被系统调用，Peek+sleep 轮询
+    # 会让每个鼠标事件干等最多一个 sleep 间隔才被处理——125Hz 鼠标叠 0~5ms 延迟
+    # 就是肉眼可见的卡（2026-09-30 维护者报「开启捕获后鼠标移动特别卡」）。
+    # 停机不再轮询标志位，改走 PostThreadMessageW(WM_QUIT) 唤醒阻塞的 GetMessage。
     ready = threading.Event()
-    quit_flag = {"stop": False}
 
     def _hook_thread():
-        user32 = ctypes.windll.user32
-        h = int(
-            user32.SetWindowsHookExW(WH_MOUSE_LL, callback, None, 0)
-        )
+        h = int(user32.SetWindowsHookExW(WH_MOUSE_LL, callback, None, 0))
         _suppress_state["handle"] = h
+        _suppress_state["thread_id"] = kernel32.GetCurrentThreadId()
         ready.set()
         msg = wintypes.MSG()
-        while not quit_flag["stop"]:
-            # PeekMessage 轮询而非 GetMessage 阻塞：停机标志才能被及时看到
-            if user32.PeekMessageW(ctypes.byref(msg), None, 0, 0, 1):
-                user32.TranslateMessage(ctypes.byref(msg))
-                user32.DispatchMessageW(ctypes.byref(msg))
-            else:
-                time.sleep(0.005)
+        while user32.GetMessageW(ctypes.byref(msg), None, 0, 0) > 0:
+            user32.TranslateMessage(ctypes.byref(msg))
+            user32.DispatchMessageW(ctypes.byref(msg))
+        # 正常只有卸载路径会到这；handle 若还在（异常退出），兜底卸钩
+        leftover = _suppress_state["handle"]
+        if leftover:
+            user32.UnhookWindowsHookEx(leftover)
+            _suppress_state["handle"] = None
 
     thread = threading.Thread(target=_hook_thread, daemon=True)
     thread.start()
     _suppress_state["thread"] = thread
-    _suppress_state["quit_flag"] = quit_flag
     ready.wait(timeout=5.0)
     _trace(
         "agent", "click_suppressor_installed",
@@ -678,19 +689,20 @@ def _install_click_suppressor(*, respect_browser_content: bool) -> None:
 
 
 def _uninstall_click_suppressor() -> None:
-    quit_flag = _suppress_state.get("quit_flag")
-    if quit_flag is not None:
-        quit_flag["stop"] = True
     handle = _suppress_state["handle"]
+    thread_id = _suppress_state.get("thread_id")
     if handle:
-        ctypes.windll.user32.UnhookWindowsHookEx(handle)
+        # 先卸钩再退线程：卸钩后事件不再进回调；WM_QUIT 唤醒阻塞中的 GetMessage
+        user32.UnhookWindowsHookEx(handle)
+        if thread_id:
+            user32.PostThreadMessageW(thread_id, 0x0012, 0, 0)  # WM_QUIT
     thread = _suppress_state.get("thread")
     if thread is not None:
         thread.join(timeout=2.0)
     _suppress_state["handle"] = None
     _suppress_state["callback"] = None
     _suppress_state["thread"] = None
-    _suppress_state["quit_flag"] = None
+    _suppress_state["thread_id"] = None
     _suppress_state["swallow_pair"] = False
     _suppress_state["capture_click"] = False
 
