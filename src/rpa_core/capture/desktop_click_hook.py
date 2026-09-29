@@ -173,7 +173,10 @@ def main() -> int:
                     ctrl, over_browser, is_down, state["swallow_pair"]
                 )
                 if swallow and is_down and event:
-                    user32.SetEvent(event)
+                    # SetEvent 属 kernel32（写成 user32 会 AttributeError：
+                    # 「function 'SetEvent' not found」，M47.4 真机踩过——
+                    # 点击被吞但 agent 收不到通知，桌面捕获整体失效）
+                    kernel32.SetEvent(event)
         except Exception as exc:
             _trace("hook", "callback_error", error=str(exc), stage="decide")
         # 取证段独立 try：前 10 个按键事件逐条取证（吞没吞、判据是什么）

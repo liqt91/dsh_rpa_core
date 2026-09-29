@@ -76,3 +76,29 @@ def test_callback_guarantees_swallow_return() -> None:
         isinstance(proc.body[0], ast.Try)
         and any(_returns_one(n) for n in ast.walk(proc.body[0]))
     ), "不得回潮为整体大 try（异常会落到 CallNextHookEx 放行已吞事件）"
+
+
+def test_setevent_calls_target_kernel32() -> None:
+    """M47.4 真机实锤：``user32.SetEvent`` 不存在（SetEvent 属 kernel32），
+    吞钩子抛 AttributeError 被兜底吞掉 → 点击吞了但 agent 收不到通知，
+    桌面捕获整体失效。AST 断言：本模块每一处 ``<obj>.SetEvent(...)`` 的
+    接收者都必须是 ``kernel32``——「DLL 归属写错」这一类故障由此断根。
+    """
+    src = (ROOT / "src" / "rpa_core" / "capture" / "desktop_click_hook.py").read_text(
+        encoding="utf-8"
+    )
+    tree = ast.parse(src)
+    calls = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "SetEvent"
+    ]
+    assert calls, "应存在 SetEvent 调用（吞事件通知 agent 的主通道）"
+    bad = [
+        c
+        for c in calls
+        if not (isinstance(c.func.value, ast.Name) and c.func.value.id == "kernel32")
+    ]
+    assert not bad, "SetEvent 只能调 kernel32.SetEvent，错写 user32/其他在真机必炸"
