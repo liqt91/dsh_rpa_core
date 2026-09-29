@@ -2758,6 +2758,9 @@ class MainWindow(QMainWindow):
             self._cancel_capture()
             return
         # 延迟导入对齐 CLI（capture 包洁净无 pywinauto，但保持单一惯例）
+        from rpa_core.capture._trace import trace as _capture_trace
+
+        _capture_trace("gui", "capture_clicked")
         from rpa_core.capture import (
             DesktopCaptureSession,
             HybridCaptureSession,
@@ -2769,7 +2772,9 @@ class MainWindow(QMainWindow):
             hover=True,
             timeout_seconds=CAPTURE_TIMEOUT_SECONDS,
         )
+        _capture_trace("gui", "session_constructed")
         session.start()  # arm 扩展腿；桌面腿（agent 子进程）构造时已起
+        _capture_trace("gui", "session_started")
         desktop_offline = session.desktop_offline
         if session.extension_offline and desktop_offline:
             # 两条腿都不可用：没有「退化为仅桌面/仅网页」可言，直接收场。
@@ -2809,6 +2814,7 @@ class MainWindow(QMainWindow):
         self._capture_bridge = bridge  # 保持引用，防 GC 后信号丢失
         self.showMinimized()  # 不遮挡捕获目标（ADR 0010 的原始动机）
         self._show_capture_float(session)
+        _capture_trace("gui", "float_shown")
 
         def work() -> None:
             try:
@@ -2822,6 +2828,7 @@ class MainWindow(QMainWindow):
                     session.close()
                 except Exception:  # noqa: BLE001 - 收场路径尽力而为
                     pass
+            _capture_trace("gui", "pick_returned")
             # 捕获期间窗口可能已被关闭：先验桥对象存活再 emit，避免野指针
             import shiboken6
 

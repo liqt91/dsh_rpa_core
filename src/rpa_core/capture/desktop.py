@@ -18,6 +18,8 @@ import threading
 import time
 from typing import Any
 
+from rpa_core.capture._trace import trace as _trace
+
 # agent 的 UIA hit-test 依赖 pywinauto/win32gui，仅 Windows 可跑
 _PLATFORM_SUPPORTED = sys.platform == "win32"
 _UNAVAILABLE_PAYLOAD: dict[str, Any] = {
@@ -69,6 +71,7 @@ class DesktopCaptureSession:
             args += ["--hover"]
         if hybrid:
             args += ["--hybrid"]
+        _trace("desktop", "agent_spawn_start")
         self._proc = subprocess.Popen(
             args,
             stdout=subprocess.PIPE,
@@ -77,6 +80,7 @@ class DesktopCaptureSession:
             encoding="utf-8",
             errors="replace",
         )
+        _trace("desktop", "agent_spawn_returned")
         self._reader = threading.Thread(target=self._read_stdout, daemon=True)
         self._reader.start()
 

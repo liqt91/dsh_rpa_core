@@ -21,6 +21,7 @@ import uuid
 from typing import Any
 
 from rpa_core import local_transport
+from rpa_core.capture._trace import trace as _trace
 
 
 def capture_click_label() -> str:
@@ -84,12 +85,14 @@ class ExtensionCaptureSession:
         if not self._channels:
             self._offline = True
             self._event.set()
+            _trace("extension", "offline")
             return ["*"]
         self._endpoint = self._channels[0][0]
         with self._live_lock:
             self._live = len(self._channels)
         for _name, channel in self._channels:
             channel.send({"type": "capture_arm", "sessionId": self._session_id})
+            _trace("extension", "arm_sent", channels=len(self._channels))
             threading.Thread(
                 target=self._read_loop, args=(channel,), daemon=True
             ).start()
@@ -176,6 +179,7 @@ class ExtensionCaptureSession:
                 if message_type == "capture_armed":
                     # ack：扩展真的收到了本会话的 arm（见 armed 属性）
                     self._armed.set()
+                    _trace("extension", "arm_acked")
                     continue
                 if message_type != "capture_result":
                     continue  # 忽略 focus 等广播

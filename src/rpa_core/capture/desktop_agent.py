@@ -16,6 +16,8 @@ import sys
 import time
 from ctypes import wintypes
 
+from rpa_core.capture._trace import trace as _trace
+
 VK_F9 = 0x78
 VK_ESCAPE = 0x1B
 VK_CONTROL = 0x11
@@ -111,6 +113,10 @@ class _HoverOverlay:
     def show_rect(self, left: int, top: int, right: int, bottom: int) -> None:
         win32gui = self._win32gui
         win32con = self._win32con
+        # 冷启动归因埋点：首次真正画框 = 用户看见红框的时刻（见 _trace.py）
+        if not getattr(self, "_first_show_traced", False):
+            self._first_show_traced = True
+            _trace("agent", "overlay_first_show")
         # 先外扩再建 region：region 的挖空区因此 = 元素本身，3px 框线带完整落在
         # 元素之外（见 overlay_bounds）——这是「躲着鼠标」的落点。
         bounds = overlay_bounds(left, top, right, bottom)
@@ -152,12 +158,20 @@ class _HoverOverlay:
 
 
 def _element_from_point(x: int, y: int):
+    # 冷启动归因埋点：首次 UIA 调用 = pywinauto/comtypes 懒导入 + IUIA 接口生成
+    # + ElementFromPoint 的合计成本（2026-09-29，见 _trace.py docstring）
+    first = not getattr(_element_from_point, "_traced", False)
+    if first:
+        _element_from_point._traced = True  # type: ignore[attr-defined]
+        _trace("agent", "uia_first_call_start")
     from pywinauto.uia_defines import IUIA
 
     point = wintypes.POINT(x, y)
     element = IUIA().iuia.ElementFromPoint(point)
     from pywinauto.uia_element_info import UIAElementInfo
 
+    if first:
+        _trace("agent", "uia_first_call_done")
     return UIAElementInfo(element)
 
 
@@ -564,6 +578,7 @@ def _hover_capture(hotkey_vk: int, timeout: float, hybrid: bool = False) -> dict
     让位给浏览器扩展的页内捕获（没装扩展时该区域 UIA 捕获本来就不可用，行为不变）。
     """
     overlay = _HoverOverlay()
+    _trace("agent", "overlay_created", hybrid=hybrid)
     deadline = time.monotonic() + timeout
     last_pos = (-1, -1)
     last_hit = 0.0
@@ -646,6 +661,8 @@ def main() -> int:
     parser.add_argument("--hybrid", action="store_true",
                         help="混合捕获：浏览器网页内容区让位给扩展页内捕获（仅配合 --hover）")
     args = parser.parse_args()
+    mode = "hover" if args.hover else ("point" if args.point is not None else "hotkey")
+    _trace("agent", "main_enter", mode=mode)
 
     if sys.platform != "win32":
         print(json.dumps({"error": "desktop capture requires Windows"}))
@@ -653,7 +670,9 @@ def main() -> int:
 
     import pythoncom
 
+    _trace("agent", "pythoncom_imported")
     pythoncom.CoInitialize()
+    _trace("agent", "com_initialized")
     try:
         keys = {"F9": 0x78, "F8": 0x77, "F10": 0x79}
         hotkey = keys.get(args.hotkey.upper(), VK_F9)
@@ -677,6 +696,14 @@ def main() -> int:
                     break
                 pressed_before = pressed
                 time.sleep(POLL_INTERVAL)
+        _trace(
+            "agent", "result_emitted",
+            outcome=(
+                "cancelled" if result.get("cancelled")
+                else "timeout" if result.get("timeout")
+                else "descriptor"
+            ),
+        )
         print(json.dumps(result, ensure_ascii=False))
     finally:
         pythoncom.CoUninitialize()
