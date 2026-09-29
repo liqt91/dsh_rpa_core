@@ -46,7 +46,14 @@ if (start < 0 || end <= start) {
 }
 // `captureSessionId` 在文件顶部声明、本区里读且写：补一份同名的区内声明，
 // 让切片可独立求值（Function 作用域里不冲突），并用 getter 观察它。
-const slice = `let captureSessionId = null;\n${source.slice(start, end)}`;
+// `EXT_BUILD` 同理（构建标识，2026-09-29 加）：值从源文件顶部解析后带进切片，
+// 求值环境用的是**文件里的真值**，不是门禁自己编的。
+const extBuild = source.match(/const EXT_BUILD = "([^"]+)"/)?.[1];
+if (!extBuild) {
+  console.error("FAIL: 未找到 EXT_BUILD 常量（构建标识必须存在，host 靠它判扩展过期）");
+  process.exit(1);
+}
+const slice = `let captureSessionId = null;\nconst EXT_BUILD = ${JSON.stringify(extBuild)};\n${source.slice(start, end)}`;
 
 // ---- chrome 替身 -----------------------------------------------------------
 // 送达模型贴近真机：`sendMessage` 只在页面里**有可用脚本**时才成功
@@ -181,6 +188,8 @@ const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
   check("S7 捕获结果经 port 回传", hooks.posted[0].type, "capture_result");
   check("S7 回传用的会话 id 是本次会话",
     hooks.posted[0].sessionId, "cap-abc");
+  check("S7 回传带构建标识（host 靠它对账扩展新旧）",
+    hooks.posted[0].extBuild, extBuild);
   check("S7 回传后立刻撤防（否则页面停在捕获态）",
     hooks.armedWrites, [false]);
   check("S7 撤防广播到页面", log.sent.map((s) => s.msg.armed), [false]);
@@ -223,6 +232,7 @@ const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
     progress && [progress.sessionId, progress.armed, progress.tabs,
       progress.armedCount, progress.injected, progress.failed],
     ["cap-xyz", true, 3, 2, 1, 1]);
+  check("S9 播报带构建标识", progress.extBuild, extBuild);
 }
 
 // ---------------------------------------------------------------- 接线断言

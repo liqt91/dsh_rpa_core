@@ -15,13 +15,30 @@ script 里（用户真实浏览器的所有页面）。会话自己经**本地�
 
 from __future__ import annotations
 
+import re
 import sys
 import threading
 import uuid
+from pathlib import Path
 from typing import Any
 
 from rpa_core import local_transport
 from rpa_core.capture._trace import trace as _trace
+
+
+def expected_extension_build() -> str | None:
+    """仓库源码里扩展的当前构建标识（EXT_BUILD 常量，与 manifest version 一致）。
+
+    Load unpacked 的扩展**不会**因源码文件更新而自动重载：浏览器里跑的是加载那一刻的
+    快照。拿扩展回传的 ``extBuild`` 与这里的期望值对账即可判「扩展过期」，不用靠症状猜。
+    仅源码检出形态可定位（src 布局向上三级到仓库根）；打包安装后返回 None，不判过期。
+    """
+    try:
+        source = Path(__file__).resolve().parents[3] / "extension" / "background.js"
+        match = re.search(r'const EXT_BUILD = "([^"]+)"', source.read_text(encoding="utf-8"))
+    except OSError:
+        return None
+    return match.group(1) if match else None
 
 
 def capture_click_label() -> str:
@@ -177,9 +194,20 @@ class ExtensionCaptureSession:
                 if session and session != self._session_id:
                     continue
                 if message_type == "capture_armed":
-                    # ack：扩展真的收到了本会话的 arm（见 armed 属性）
+                    # ack：扩展真的收到了本会话的 arm（见 armed 属性）。
+                    # extBuild 对账：不一致 = 浏览器里跑的是旧快照（Load unpacked 不自动
+                    # 重载），任何「已开网页不生效」类症状先查这里。
+                    build = message.get("extBuild")
+                    expected = expected_extension_build()
+                    _trace(
+                        "extension", "arm_acked",
+                        build=build,
+                        expected=expected,
+                        stale=None not in (build, expected) and build != expected,
+                    )
+                    if build and expected and build != expected:
+                        _trace("extension", "arm_stale", build=build, expected=expected)
                     self._armed.set()
-                    _trace("extension", "arm_acked")
                     continue
                 if message_type == "capture_arm_progress":
                     # background 广播完成后的现场取证（冷启动归因 2026-09-29）：
@@ -187,6 +215,7 @@ class ExtensionCaptureSession:
                     # content script——这几个数就是「送达/补注入/失败」的分解。
                     _trace(
                         "extension", "arm_progress",
+                        build=message.get("extBuild"),
                         armed=message.get("armed"),
                         tabs=message.get("tabs"),
                         armed_count=message.get("armedCount"),
@@ -199,6 +228,12 @@ class ExtensionCaptureSession:
                 if message.get("cancelled"):
                     self.submit({"cancelled": True})
                 else:
+                    # contentBuild：页面里 content script 自己报的构建（background 新
+                    # ≠ 页面里的脚本新，见 background.js 的 rpa-capture-result 转发）
+                    _trace(
+                        "extension", "result_received",
+                        content_build=message.get("contentBuild"),
+                    )
                     descriptor = message.get("descriptor")
                     self.submit(descriptor if isinstance(descriptor, dict) else message)
                 return

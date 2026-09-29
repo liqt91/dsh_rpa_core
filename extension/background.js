@@ -10,6 +10,12 @@
 // 权限：默认「整个浏览器」（全部窗口/标签页/Cookie）；可用 chrome.storage.local 的
 //      rpaExecPermission 收窄为 {mode:"tabs",tabIds:[...]} 或 {mode:"origins",allow:[...]}。
 const HOST_NAME = "com.rpa_core.ext_bridge";
+// 构建标识：与 manifest.json 的 version 保持一致（契约测试钉三方相等）。
+// **Load unpacked 的扩展不会因源码文件更新而自动重载**——浏览器里跑的永远是加载那一刻的
+// 快照（2026-09-29 真机排障：仓库已修好「已开网页无红框」，但浏览器还跑着旧 background，
+// 表现成「修复无效」）。把标识随 ack/进度/结果回传，host 侧对账即可判「扩展过期」，
+// 不用再靠症状猜。
+const EXT_BUILD = "0.5.0";
 const RECONNECT_MS = 3000;      // 断开后的重连退避
 const ALARM_NAME = "rpa-bridge-reconnect";  // SW 被回收时的兜底拉起（MV3 alarm 最小 30s）
 const PERMISSION_KEY = "rpaExecPermission";
@@ -183,8 +189,9 @@ function onHostMessage(msg) {
       // 先广播后落盘会让它在窗口期内读到 false——arm 在这一页丢失，用户侧又是
       // 「已经打开的网页上不生效」。
       setCaptureArmed(true).then(() => broadcast(true));
-      // ack：让发起方确认 arm 已到达扩展（诊断用，host 会广播给客户端）
-      post({ type: "capture_armed", sessionId: captureSessionId });
+      // ack：让发起方确认 arm 已到达扩展（诊断用，host 会广播给客户端）；
+      // extBuild 供 host 对账「浏览器里跑的扩展是不是当前构建」
+      post({ type: "capture_armed", sessionId: captureSessionId, extBuild: EXT_BUILD });
       break;
     case "capture_disarm":
       disarmCapture();
@@ -265,6 +272,7 @@ async function broadcast(armed) {
     type: "capture_arm_progress",
     sessionId: captureSessionId,
     armed,
+    extBuild: EXT_BUILD,
     ...progress,
   });
 }
@@ -280,6 +288,7 @@ function sendCapture(descriptor) {
   post({
     type: "capture_result",
     sessionId: captureSessionId,
+    extBuild: EXT_BUILD,
     ...descriptor,
   });
   disarmCapture();
@@ -297,7 +306,9 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     return true;   // 异步应答
   }
   if (msg && msg.type === "rpa-capture-result") {
-    sendCapture({ descriptor: msg.descriptor });
+    // contentBuild：页面里 content script 自己报的构建标识——background 是新的不代表
+    // 页面里的脚本是新的（补注入前的那份可能还是扩展上次加载时的快照）
+    sendCapture({ descriptor: msg.descriptor, contentBuild: msg.contentBuild });
     sendResponse({ ok: true });
     return true;
   }

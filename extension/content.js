@@ -20,6 +20,11 @@
 // role 归一化与可访问名的取法参照 browser-use/jev-ultrafast 的 snapshot.js（MIT）——
 // 该实现把"可访问名算法放在快照侧、不交给模型"当作硬原则；此处沿用同一优先级链。
 (() => {
+  // 构建标识：与 background.js 的 EXT_BUILD、manifest.json 的 version 三方一致（契约测试钉住）。
+  // 随捕获结果回传——诊断「页面里跑的脚本是哪个年代的」（Load unpacked 不自动重载，
+  // 补注入前已开页面里的可能还是旧快照；见 background.js 顶部的完整说明）。
+  const EXT_BUILD = "0.5.0";
+
   // ---- 实例接管守卫（M42）----------------------------------------------------
   // 声明式 content_scripts **只在页面加载时**注入：扩展装载/重载后，已经打开的标签页
   // 拿不到新脚本，页面里那个旧脚本与扩展的通道也已断开（`sendMessage` 抛
@@ -433,6 +438,7 @@
       chrome.runtime.sendMessage({
         type: "rpa-capture-result",
         descriptor: buildDescriptor(el),
+        contentBuild: EXT_BUILD,
       });
     } catch (err) {
       // 通道失效等异常：同上下——红框不能赖着不走（它已经不会被任何人清掉），

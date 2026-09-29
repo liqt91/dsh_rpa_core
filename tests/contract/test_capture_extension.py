@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sys
 import threading
 import time
@@ -278,3 +279,57 @@ def test_browser_capture_hint_uses_platform_gesture_label():
         "必须挂 contextmenu：macOS 的 Ctrl+Click 只走这条路径"
     )
     assert 'on(document, "mousedown", onSecondary' in content
+
+
+# ---------------------------------------------------------------- 构建标识（扩展过期对账）
+# Load unpacked 的扩展是「载入即快照」：源码更新后浏览器里跑的仍是加载那一刻的旧代码，
+# 不会自动重载——2026-09-29 真机排障：仓库早已修好「已开网页无红框」，但浏览器还跑着
+# 旧 background，表现成「修复无效」。EXT_BUILD 随 ack/进度/结果回传，host 对账判过期，
+# 这组测试钉「标识存在、三方一致、四条信封都带、host 真对账」四个环节。
+
+
+def _extension_source(name: str) -> str:
+    return (ROOT / "extension" / name).read_text(encoding="utf-8")
+
+
+def test_ext_build_marker_matches_manifest_version():
+    """EXT_BUILD 必须在 background/content 两文件声明且与 manifest version 三方一致。"""
+    match_bg = re.search(r'const EXT_BUILD = "([^"]+)"', _extension_source("background.js"))
+    match_ct = re.search(r'const EXT_BUILD = "([^"]+)"', _extension_source("content.js"))
+    assert match_bg and match_ct, "两个 JS 文件都必须声明 EXT_BUILD 常量"
+    manifest = json.loads(_extension_source("manifest.json"))
+    assert match_bg.group(1) == match_ct.group(1) == manifest["version"], (
+        "构建标识三方不一致：host 的过期对账会误报/漏报"
+    )
+
+
+def test_build_marker_wired_into_all_return_envelopes():
+    """ack / 广播进度 / 捕获结果 / content 结果消息四条回传信封都必须携带构建标识。"""
+    bg = _extension_source("background.js")
+    assert re.search(
+        r'type: "capture_armed",\s*sessionId: captureSessionId,\s*extBuild: EXT_BUILD', bg
+    ), "capture_armed ack 必须携带 extBuild（host 靠它判扩展过期）"
+    assert re.search(
+        r'type: "capture_arm_progress",\s*sessionId: captureSessionId,'
+        r'\s*armed,\s*extBuild: EXT_BUILD',
+        bg,
+    ), "capture_arm_progress 必须携带 extBuild"
+    assert re.search(
+        r'type: "capture_result",\s*sessionId: captureSessionId,\s*extBuild: EXT_BUILD', bg
+    ), "capture_result 信封必须携带 extBuild"
+    assert re.search(
+        r'type: "rpa-capture-result",\s*descriptor: buildDescriptor\(el\),'
+        r'\s*contentBuild: EXT_BUILD',
+        _extension_source("content.js"),
+    ), "content 结果消息必须携带 contentBuild（background 新 ≠ 页面里的脚本新）"
+
+
+def test_host_traces_reported_build_and_flags_stale():
+    """host 侧必须对账 extBuild 与仓库期望值：落 arm_acked(build/expected/stale) + arm_stale。"""
+    src = (ROOT / "src" / "rpa_core" / "capture" / "extension.py").read_text(encoding="utf-8")
+    assert "def expected_extension_build" in src, "缺少期望构建的解析函数"
+    assert '_trace("extension", "arm_stale"' in src, "对账不一致必须落 arm_stale 标记"
+    assert 'build=message.get("extBuild")' in src, "ack 对账必须记录扩展报告的构建"
+    assert 'content_build=message.get("contentBuild")' in src, (
+        "捕获结果必须记录页面脚本的构建"
+    )
