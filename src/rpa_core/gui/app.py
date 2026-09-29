@@ -2793,6 +2793,7 @@ class MainWindow(QMainWindow):
         session.start()  # arm 扩展腿；桌面腿（agent 子进程）构造时已起
         _capture_trace("gui", "session_started")
         desktop_offline = session.desktop_offline
+        benign_offline = self._extension_offline_benign() if session.extension_offline else False
         if session.extension_offline and desktop_offline:
             # 两条腿都不可用：没有「退化为仅桌面/仅网页」可言，直接收场。
             # 早期实现会弹「仍要继续仅桌面捕获吗」——在 macOS 上是个假选项
@@ -2803,9 +2804,15 @@ class MainWindow(QMainWindow):
                 "且浏览器插件离线（工具栏「插件」按钮可查看安装引导）", 9000
             )
             return
-        if session.extension_offline and not self._confirm_capture_offline():
+        if (
+            session.extension_offline
+            and not benign_offline
+            and not self._confirm_capture_offline()
+        ):
             # 扩展腿离线时网页区域无法捕获（UIA 兜底已证伪）；状态栏提示在窗口最小化
             # 后不可见，必须显式确认——否则用户体验是「网页里怎么点都没反应」。
+            # 例外：插件已装、只是浏览器没开（benign）——桌面捕获完全不受影响，
+            # 弹「仍要继续仅桌面捕获吗」是假问题（2026-09-29 维护者反馈），静默继续。
             session.close()
             self.statusBar().showMessage(
                 "已取消捕获：浏览器插件离线（「插件」按钮可查看安装引导）", 6000
@@ -2819,7 +2826,11 @@ class MainWindow(QMainWindow):
         else:
             hint = f"捕获中：移动鼠标框选，{click} 或右键捕获（桌面也可用 F9），Esc 取消"
         if session.extension_offline:
-            hint = "浏览器插件离线：网页区域无法捕获（桌面不受影响）。" + hint
+            hint = (
+                "浏览器未运行：本次只能捕获桌面元素（打开浏览器后可同时捕获网页）。"
+                if benign_offline
+                else "浏览器插件离线：网页区域无法捕获（桌面不受影响）。"
+            ) + hint
         self.statusBar().showMessage(hint, 9000)
         # 桥与会话**一对一**：emit 只投到本会话自己的桥。
         # 曾经 work() 走 `self._capture_bridge`，而「取消后立刻重开」会让两个会话
@@ -2958,6 +2969,25 @@ class MainWindow(QMainWindow):
             pass
         self.statusBar().showMessage("已取消捕获，可再次点击「捕获元素」重试", 5000)
 
+
+    def _extension_offline_benign(self) -> bool:
+        """扩展腿离线但**无需打扰用户**：插件已装、只是浏览器没开。
+
+        这种场景桌面捕获完全不受影响，弹「仍要继续仅桌面捕获吗」是假问题
+        （2026-09-29 维护者反馈：不该提示）。诊断失败时按「需要确认」处理——
+        宁可多问一句，也不在原因不明时静默降级。
+        """
+        try:
+            from rpa_core.extension_installer import (
+                OFFLINE_BROWSER_NOT_RUNNING,
+                channel_diagnostics,
+            )
+
+            return (
+                channel_diagnostics().get("reason") == OFFLINE_BROWSER_NOT_RUNNING
+            )
+        except Exception:  # noqa: BLE001 - 诊断失败不静默放行
+            return False
 
     def _capture_offline_message(self) -> str:
         """离线确认框正文：按诊断出的「缺哪一环」给对应处置，不再一刀切让用户去装插件。

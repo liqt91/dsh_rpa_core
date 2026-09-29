@@ -390,6 +390,10 @@ def test_capture_overwrite_same_name_needs_confirm(window, monkeypatch):
 
 
 def test_capture_extension_offline_hint(window, fake_capture, monkeypatch):
+    _patch_diag(
+        monkeypatch,
+        {"reason": "extension-not-installed", "summary": "插件未安装", "browsers": {}},
+    )  # 非良性离线（browser-not-running 会静默放行，见 M47.5 后续判据）
     window._save_named_flow("cap2")
     fake_capture.offline = True  # 插件离线：状态栏显式提示网页区域不可捕获
     # 离线确认框：选择「继续（仅桌面捕获）」——offscreen 不能弹真 QMessageBox
@@ -406,6 +410,10 @@ def test_capture_extension_offline_hint(window, fake_capture, monkeypatch):
 def test_capture_extension_offline_cancel(window, fake_capture, monkeypatch):
     """扩展离线 + 用户选择「取消」：会话立即关闭（回收桌面 agent），不最小化、
     不进入捕获等待——否则用户会在网页里白点 90 秒直到超时。"""
+    _patch_diag(
+        monkeypatch,
+        {"reason": "extension-not-installed", "summary": "插件未安装", "browsers": {}},
+    )
     window._save_named_flow("cap2b")
     fake_capture.offline = True
     monkeypatch.setattr(
@@ -849,3 +857,54 @@ def test_offline_message_diag_failure_falls_back(window, monkeypatch):
     msg = window._capture_offline_message()
     assert "未检测到浏览器插件连接" in msg
     assert "装入目标浏览器" in msg
+
+
+def test_capture_offline_browser_not_running_skips_confirm(window, fake_capture, monkeypatch):
+    """插件已装、浏览器没开：**不弹确认框**直接进入桌面捕获——弹「仍要继续仅
+    桌面捕获吗」是假问题（维护者 2026-09-29 反馈），只允许状态栏一句话提示。"""
+    _patch_diag(
+        monkeypatch,
+        {"reason": "browser-not-running", "summary": "静态体检通过", "browsers": {}},
+    )
+    called = []
+    monkeypatch.setattr(
+        type(window),
+        "_confirm_capture_offline",
+        lambda self: called.append(True) or False,
+    )
+    window._save_named_flow("cap2c")
+    fake_capture.offline = True
+    window._capture_element()
+    assert not called, "browser-not-running 是良性离线，绝不能弹确认框"
+    fake = fake_capture.instances[-1]
+    assert window._capture_session is not None, "必须照常进入捕获会话"
+    assert "浏览器未运行" in window.statusBar().currentMessage()
+    assert "本次只能捕获桌面元素" in window.statusBar().currentMessage()
+    fake.result = None
+    _release_and_finish(fake, window)
+
+
+def test_capture_offline_other_reasons_still_confirm(window, fake_capture, monkeypatch):
+    """其他离线原因（如运行中但未加载插件）：维持显式确认，不得静默降级——
+    那些场景用户需要知道「网页为什么点不动」。"""
+    _patch_diag(
+        monkeypatch,
+        {
+            "reason": "browser-running-without-extension",
+            "summary": "bridge 已注册；插件已安装",
+            "browsers": {},
+        },
+    )
+    called = []
+    monkeypatch.setattr(
+        type(window),
+        "_confirm_capture_offline",
+        lambda self: called.append(True) or False,
+    )
+    window._save_named_flow("cap2d")
+    fake_capture.offline = True
+    window._capture_element()
+    assert called, "非良性离线必须仍走确认框"
+    fake = fake_capture.instances[-1]
+    fake.result = None
+    _release_and_finish(fake, window)
