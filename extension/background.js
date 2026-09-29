@@ -235,13 +235,38 @@ async function ensureContentScript(tab) {
 
 async function broadcast(armed) {
   const tabs = await chrome.tabs.query({});
-  for (const tab of tabs) {
-    if (await armTab(tab.id, armed)) continue;
+  // **活跃标签页优先**：用户眼前这页（每个窗口的 active tab）先送。标签页多时
+  // 逐页「送一次失败→补注入→再送」是串行的，可能要数秒才轮到后排——不能让
+  // 眼前这页排在队尾（2026-09-29 维护者复现「已经打开的网页没有红框，必须刷新」）。
+  const active = tabs.filter((tab) => tab.active);
+  const rest = tabs.filter((tab) => !tab.active);
+  const progress = { tabs: tabs.length, armedCount: 0, injected: 0, failed: 0 };
+  const armOne = async (tab) => {
+    if (await armTab(tab.id, armed)) {
+      progress.armedCount += 1;
+      return;
+    }
     // 撤防不补注入：新注入的脚本默认就是未 arm，为撤防塞一遍脚本毫无收益
     // （捕获态由 arm 建立，能收到 arm 的页面必然也能收到撤防）。
-    if (!armed || !(await ensureContentScript(tab))) continue;
-    await armTab(tab.id, armed);   // 补注入成功：把这次 arm 送给刚接管的新脚本
-  }
+    if (!armed) return;
+    if (!(await ensureContentScript(tab))) {
+      progress.failed += 1;
+      return;
+    }
+    progress.injected += 1;
+    if (await armTab(tab.id, armed)) progress.armedCount += 1;
+    else progress.failed += 1;
+  };
+  for (const tab of active) await armOne(tab);
+  for (const tab of rest) await armOne(tab);
+  // 现场取证：广播结果回传 host（客户端侧落进计时日志）。真机再报「某页无红框」时
+  // 按这几个数就能定位是「送达了但脚本没接住」还是「注入没发生」，不用再猜。
+  post({
+    type: "capture_arm_progress",
+    sessionId: captureSessionId,
+    armed,
+    ...progress,
+  });
 }
 
 // 统一撤防：清会话 id + 落盘捕获态 + 广播到全部标签页。

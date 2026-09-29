@@ -181,6 +181,19 @@ class ExtensionCaptureSession:
                     self._armed.set()
                     _trace("extension", "arm_acked")
                     continue
+                if message_type == "capture_arm_progress":
+                    # background 广播完成后的现场取证（冷启动归因 2026-09-29）：
+                    # ack 只证明 background 收到 arm，不证明 arm 送达了标签页里的
+                    # content script——这几个数就是「送达/补注入/失败」的分解。
+                    _trace(
+                        "extension", "arm_progress",
+                        armed=message.get("armed"),
+                        tabs=message.get("tabs"),
+                        armed_count=message.get("armedCount"),
+                        injected=message.get("injected"),
+                        failed=message.get("failed"),
+                    )
+                    continue
                 if message_type != "capture_result":
                     continue  # 忽略 focus 等广播
                 if message.get("cancelled"):

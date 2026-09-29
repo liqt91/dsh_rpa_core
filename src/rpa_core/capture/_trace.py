@@ -25,6 +25,10 @@ _MAX_BYTES = 5 * 1024 * 1024
 
 def trace(side: str, mark: str, **extra: object) -> None:
     """追加一条计时记录。"""
+    # pytest 会成批制造会话（契约测试一次跑几十个），把现场日志冲成噪声——
+    # 2026-09-29 实测：一次测试运行污染了维护者的真机日志。测试期一律不写。
+    if os.environ.get("PYTEST_CURRENT_TEST"):
+        return
     try:
         if os.path.exists(TRACE_PATH) and os.path.getsize(TRACE_PATH) > _MAX_BYTES:
             os.truncate(TRACE_PATH, 0)

@@ -178,12 +178,51 @@ const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
   api.setSessionId("cap-abc");
   api.sendCapture({ descriptor: { kind: "browser" } });
   await settle();
-  check("S7 捕获结果经 port 回传", hooks.posted.map((p) => p.type), ["capture_result"]);
+  check("S7 捕获结果经 port 回传", hooks.posted[0].type, "capture_result");
   check("S7 回传用的会话 id 是本次会话",
     hooks.posted[0].sessionId, "cap-abc");
   check("S7 回传后立刻撤防（否则页面停在捕获态）",
     hooks.armedWrites, [false]);
   check("S7 撤防广播到页面", log.sent.map((s) => s.msg.armed), [false]);
+}
+
+// ---------------------------------------------------------------- 场景 8：活跃页优先
+// 标签页多时逐页「送→失败→补注入→再送」是串行的，可能数秒才轮到后排；用户眼前
+// 这页（每个窗口的 active tab）必须先送（2026-09-29「已打开网页没有红框」复现后加）。
+{
+  const { chrome, log } = makeChrome({
+    tabs: [
+      { id: 2, url: "https://bg.test/", hasScript: true },
+      { id: 1, url: "https://front.test/", hasScript: false, active: true },
+    ],
+  });
+  const api = build(chrome, { posted: [], armedWrites: [] });
+  await api.broadcast(true);
+  check("S8 活跃页先于后台页获得 arm（替身只记成功送达，次序即优先级）",
+    log.sent.map((s) => s.tabId), [1, 2]);
+}
+
+// ---------------------------------------------------------------- 场景 9：广播取证回传
+// ack 只证明 background 收到 arm，不证明 arm 送达了标签页里的脚本。广播完成后把
+// 「送达/补注入/失败」分解回传 host（客户端落计时日志），真机复现时不用再猜。
+{
+  const hooks = { posted: [], armedWrites: [] };
+  const { chrome, log } = makeChrome({
+    tabs: [
+      { id: 1, url: "https://a.test/", hasScript: true, active: true },
+      { id: 2, url: "https://b.test/" },      // 无脚本 → 补注入
+      { id: 3, url: "chrome://x/" },          // 受保护 → failed
+    ],
+  });
+  const api = build(chrome, hooks);
+  api.setSessionId("cap-xyz");
+  await api.broadcast(true);
+  const progress = hooks.posted.find((p) => p.type === "capture_arm_progress");
+  check("S9 广播完成后回传播报", !!progress, true);
+  check("S9 播报带会话 id 与三计数分解",
+    progress && [progress.sessionId, progress.armed, progress.tabs,
+      progress.armedCount, progress.injected, progress.failed],
+    ["cap-xyz", true, 3, 2, 1, 1]);
 }
 
 // ---------------------------------------------------------------- 接线断言

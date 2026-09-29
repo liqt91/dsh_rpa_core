@@ -13,6 +13,7 @@ import argparse
 import ctypes
 import json
 import sys
+import threading
 import time
 from ctypes import wintypes
 
@@ -570,6 +571,130 @@ def _window_class_at(x: int, y: int) -> str:
     return _class_name_of(hwnd)
 
 
+# ---- Ctrl+Click 穿透拦截（WH_MOUSE_LL）--------------------------------------
+# 维护者 2026-09-29 报障：「捕获时 Ctrl+Click 会触发实际的 click」。此前 agent 只是
+# 轮询 GetAsyncKeyState **观察**手势（观察不改输入流），点会原样穿透到目标应用——
+# 影刀式捕获手势必须吞掉这一次点击。低级鼠标钩子返回 1 = 事件不派发。两个例外/配套：
+# ① 浏览器内容区**不吞**（hybrid 让位语义）：那里的 Ctrl+Click 是扩展页内捕获的手势，
+#   页面必须收到真点击；② 吞掉的点击同时置 capture_click 兜底触发位——被低级钩子
+#   吞掉的事件在 GetAsyncKeyState 里是否仍可见，官方口径不明确，两路都接才稳。
+WH_MOUSE_LL = 14
+WM_LBUTTONDOWN = 0x0201
+WM_LBUTTONUP = 0x0202
+
+
+class _MSLLHOOKSTRUCT(ctypes.Structure):
+    _fields_ = [
+        ("pt", wintypes.POINT),
+        ("mouseData", wintypes.DWORD),
+        ("flags", wintypes.DWORD),
+        ("time", wintypes.DWORD),
+        ("dwExtraInfo", ctypes.c_size_t),
+    ]
+
+
+if sys.platform == "win32":
+    _MOUSEHOOKPROC = ctypes.WINFUNCTYPE(
+        ctypes.c_ssize_t, ctypes.c_int, wintypes.WPARAM, wintypes.LPARAM
+    )
+else:   # 非 Windows 仅 import/单测替身用，永不安装
+    _MOUSEHOOKPROC = None
+
+# 回调必须持有模块级引用：ctypes 回调被 GC 会直接进程崩溃
+_suppress_state = {
+    "handle": None,
+    "callback": None,
+    "respect_browser_content": False,
+    "swallow_pair": False,   # DOWN 被吞后配对的 UP 也吞，否则应用收到孤儿 UP
+    "capture_click": False,  # 兜底触发位（见上）
+}
+
+
+def _suppress_proc(n_code, w_param, l_param):
+    try:
+        if n_code >= 0 and w_param in (WM_LBUTTONDOWN, WM_LBUTTONUP):
+            info = ctypes.cast(l_param, ctypes.POINTER(_MSLLHOOKSTRUCT)).contents
+            ctrl = bool(ctypes.windll.user32.GetAsyncKeyState(VK_CONTROL) & 0x8000)
+            over_browser = (
+                _suppress_state["respect_browser_content"]
+                and _window_class_at(info.pt.x, info.pt.y) in _BROWSER_CONTENT_CLASSES
+            )
+            if ctrl and not over_browser:
+                if w_param == WM_LBUTTONDOWN:
+                    _suppress_state["swallow_pair"] = True
+                    _suppress_state["capture_click"] = True
+                    if not _suppress_state.get("decide_traced"):
+                        _suppress_state["decide_traced"] = True
+                        _trace("agent", "hook_down_decide", swallow=True)
+                    return 1
+                if _suppress_state["swallow_pair"]:
+                    return 1
+    except Exception:
+        pass  # 钩子回调绝不能抛（异常会令钩子失效）
+    return ctypes.windll.user32.CallNextHookEx(None, n_code, w_param, l_param)
+
+
+def _install_click_suppressor(*, respect_browser_content: bool) -> None:
+    if _MOUSEHOOKPROC is None:
+        return
+    _suppress_state["respect_browser_content"] = respect_browser_content
+    _suppress_state["swallow_pair"] = False
+    _suppress_state["capture_click"] = False
+    callback = _MOUSEHOOKPROC(_suppress_proc)
+    _suppress_state["callback"] = callback
+    # 钩子必须装在**专职泵线程**上：低级钩子回调在安装线程泵消息时被调用，
+    # 线程不泵（如 hover 首次 UIA 初始化阻塞数秒）系统会在超时后**旁路钩子**放行
+    # 事件——2026-09-29 探针实测：主线程被 UIA 首调卡住时点击原样穿透。专职线程
+    # 只做 GetMessageW 泵，钩子回调永远及时。
+    ready = threading.Event()
+    quit_flag = {"stop": False}
+
+    def _hook_thread():
+        user32 = ctypes.windll.user32
+        h = int(
+            user32.SetWindowsHookExW(WH_MOUSE_LL, callback, None, 0)
+        )
+        _suppress_state["handle"] = h
+        ready.set()
+        msg = wintypes.MSG()
+        while not quit_flag["stop"]:
+            # PeekMessage 轮询而非 GetMessage 阻塞：停机标志才能被及时看到
+            if user32.PeekMessageW(ctypes.byref(msg), None, 0, 0, 1):
+                user32.TranslateMessage(ctypes.byref(msg))
+                user32.DispatchMessageW(ctypes.byref(msg))
+            else:
+                time.sleep(0.005)
+
+    thread = threading.Thread(target=_hook_thread, daemon=True)
+    thread.start()
+    _suppress_state["thread"] = thread
+    _suppress_state["quit_flag"] = quit_flag
+    ready.wait(timeout=5.0)
+    _trace(
+        "agent", "click_suppressor_installed",
+        respect_browser_content=respect_browser_content,
+        handle_ok=bool(_suppress_state["handle"]),
+    )
+
+
+def _uninstall_click_suppressor() -> None:
+    quit_flag = _suppress_state.get("quit_flag")
+    if quit_flag is not None:
+        quit_flag["stop"] = True
+    handle = _suppress_state["handle"]
+    if handle:
+        ctypes.windll.user32.UnhookWindowsHookEx(handle)
+    thread = _suppress_state.get("thread")
+    if thread is not None:
+        thread.join(timeout=2.0)
+    _suppress_state["handle"] = None
+    _suppress_state["callback"] = None
+    _suppress_state["thread"] = None
+    _suppress_state["quit_flag"] = None
+    _suppress_state["swallow_pair"] = False
+    _suppress_state["capture_click"] = False
+
+
 def _hover_capture(hotkey_vk: int, timeout: float, hybrid: bool = False) -> dict:
     """hover 模式：鼠标移动实时高亮命中元素；热键或 Ctrl+Click 捕获；Esc 取消。
 
@@ -579,6 +704,7 @@ def _hover_capture(hotkey_vk: int, timeout: float, hybrid: bool = False) -> dict
     """
     overlay = _HoverOverlay()
     _trace("agent", "overlay_created", hybrid=hybrid)
+    _install_click_suppressor(respect_browser_content=hybrid)
     deadline = time.monotonic() + timeout
     last_pos = (-1, -1)
     last_hit = 0.0
@@ -619,9 +745,12 @@ def _hover_capture(hotkey_vk: int, timeout: float, hybrid: bool = False) -> dict
             hotkey_now = _hotkey_pressed(hotkey_vk)
             lbutton_now = _hotkey_pressed(VK_LBUTTON)
             escape_now = _hotkey_pressed(VK_ESCAPE)
+            # 吞掉的 Ctrl+Click 置位的兜底触发（见 _suppress_state 注释）：读了即清
+            hook_click = _suppress_state["capture_click"]
+            _suppress_state["capture_click"] = False
             capture_triggered = (hotkey_now and not hotkey_was) or (
                 lbutton_now and not lbutton_was and _hotkey_pressed(VK_CONTROL)
-            )
+            ) or hook_click
             hotkey_was = hotkey_now
             lbutton_was = lbutton_now
 
@@ -644,6 +773,7 @@ def _hover_capture(hotkey_vk: int, timeout: float, hybrid: bool = False) -> dict
             time.sleep(0.015)
         return {"timeout": True}
     finally:
+        _uninstall_click_suppressor()
         overlay.destroy()
 
 
