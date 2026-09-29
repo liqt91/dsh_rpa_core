@@ -271,6 +271,53 @@ def test_capture_recapture_discards_and_restarts(
     assert window._element_store().list() == ["el_b"]
 
 
+def test_capture_restart_paths_never_restore_main_window(
+    window, fake_capture, monkeypatch
+):
+    """R1（M44 残留）：连续采集的两个出口**不得还原主窗**——还原完又被
+    `_capture_element` 的 showMinimized 压回去，用户看到的就是一次闪烁。
+
+    断言的是**次序**而不是终态：重启路径最终也会 minimized（重启自己做的），
+    只看终态的话「先还原再最小化」的旧实现照样绿——闪烁发生在中间态，
+    所以记录 showNormal 的调用时刻，重启完成前必须一次都没出现。
+    """
+    window._save_named_flow("cap7r1")
+    calls: list[str] = []
+    shown: list[str] = []
+
+    def confirm(self, result):
+        calls.append("x")
+        if len(calls) == 1:
+            return "recapture", None
+        if len(calls) == 2:
+            return "save_and_continue", ("el_a", result)
+        return "save", ("el_b", result)
+
+    monkeypatch.setattr(type(window), "_confirm_element_save", confirm)
+    monkeypatch.setattr(
+        type(window), "showNormal", lambda self: shown.append("showNormal")
+    )
+
+    window._capture_element()
+    first = fake_capture.instances[-1]
+
+    # ① 重新捕获：重启完成（第二轮已在跑）之前不得 showNormal
+    first._gate.set()
+    assert _pump_until(lambda: len(fake_capture.instances) >= 2)
+    assert shown == [], "「重新捕获」路径还原了主窗（闪烁的根源）"
+
+    # ② 保存并继续：同样不得还原
+    fake_capture.instances[-1]._gate.set()
+    assert _pump_until(lambda: len(fake_capture.instances) >= 3)
+    assert shown == [], "「保存并继续」路径还原了主窗（闪烁的根源）"
+
+    # ③ 保存收工：**要**还原（对照组——防止判据过泛化成「永远不许还原」）
+    fake_capture.instances[-1]._gate.set()
+    assert _pump_until(lambda: window._capture_session is None)
+    assert shown == ["showNormal"], "保存收工路径没有还原主窗"
+    assert "el_b" in window._element_store().list()
+
+
 def test_capture_overwrite_same_name_needs_confirm(window, monkeypatch):
     """同名覆盖保护：确认框选「否」则不落库（对齐 Web 的 confirm 语义）。"""
     from PySide6.QtCore import Qt

@@ -91,14 +91,31 @@ class ElementPanel(QWidget):
         self.hint_label.setStyleSheet("color: #64707d;")
         layout.addWidget(self.hint_label)
 
+        # 搜索/过滤（A4，对齐影刀元素库面板）：按名称或摘要（含定位串）过滤列表。
+        # 过滤只影响**显示**，不动元素资产本身。
+        self.search_edit = QLineEdit()
+        self.search_edit.setPlaceholderText("搜索元素（名称 / 定位摘要）…")
+        self.search_edit.setClearButtonEnabled(True)
+        self.search_edit.textChanged.connect(lambda _text: self._render())
+        layout.addWidget(self.search_edit)
+
         self.list = QListWidget()
         layout.addWidget(self.list, 1)
+        self._entries: list[dict[str, Any]] = []
 
     def set_elements(self, entries: list[dict[str, Any]]) -> None:
-        """刷新列表；entries 为 {name, summary} dict。"""
+        """刷新列表；entries 为 {name, summary} dict。过滤框保持原值。"""
+        self._entries = list(entries)
+        self._render()
+
+    def _render(self) -> None:
+        text = self.search_edit.text().strip().lower()
         self.list.clear()
-        for entry in entries:
-            self.list.addItem(f"{entry['name']}    {entry.get('summary', '')}")
+        for entry in self._entries:
+            line = f"{entry['name']}    {entry.get('summary', '')}"
+            if text and text not in line.lower():
+                continue
+            self.list.addItem(line)
 
     def current_name(self) -> str | None:
         item = self.list.currentItem()

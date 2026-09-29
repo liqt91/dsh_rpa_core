@@ -57,6 +57,8 @@ handle               ✗                 ✗
 
 from __future__ import annotations
 
+import re
+from collections.abc import Iterable
 from typing import Any
 
 from pydantic import ValidationError
@@ -68,11 +70,14 @@ from PySide6.QtWidgets import (
     QDialogButtonBox,
     QFormLayout,
     QHBoxLayout,
+    QHeaderView,
     QLabel,
     QLineEdit,
     QListWidget,
     QListWidgetItem,
     QPushButton,
+    QTableWidget,
+    QTableWidgetItem,
     QVBoxLayout,
     QWidget,
 )
@@ -311,6 +316,144 @@ def promote_candidate(
     ), note
 
 
+# ---------------------------------------------------------------------------
+# 默认元素名（A3：三端一致生成器）
+# ---------------------------------------------------------------------------
+
+_NON_NAME_CHARS = re.compile(r"[^a-z0-9_]")
+
+
+def normalize_element_hint(hint: str | None) -> str:
+    """把「元素种类提示」规整成可拼进名字的词干。
+
+    - 小写化；去掉结尾的 ``control``（UIA 的 CurrentControlType 形如
+      ``ButtonControl``，而界面上按钮的真实种类是 ``Button``）；
+    - 只留 ``[a-z0-9_]``（tag / controlType 里可能出现 ``-`` 等 css 友好但
+      名字不友好的字符）；空了退回 ``element``。
+    """
+    cleaned = re.sub(r"control$", "", str(hint or "").lower())
+    cleaned = _NON_NAME_CHARS.sub("", cleaned)
+    return cleaned or "element"
+
+
+def suggest_element_name(existing: Iterable[str], hint: str | None = None) -> str:
+    """给一个未被占用的默认元素名：``el_{种类}``，撞了就 ``_2``、``_3``…。
+
+    GUI（``app.py``）与 Web（``app.js`` 的 ``suggestElementName``）共用同一套
+    **方案**（本体是零构建双端，没法真共享代码）——两侧实现由同一份用例表钉住：
+    ``tests/contract/data/element_name_cases.json``，Python 侧本文件、JS 侧
+    ``scripts/check_element_name.mjs`` 各自跑一遍。改这里必须同步改 JS，反之亦然
+    （改完跑两侧判据，不一致会红）。
+    """
+    taken = set(existing)
+    base = f"el_{normalize_element_hint(hint)}"
+    if base not in taken:
+        return base
+    ordinal = 2
+    while f"{base}_{ordinal}" in taken:
+        ordinal += 1
+    return f"{base}_{ordinal}"
+
+
+# ---------------------------------------------------------------------------
+# Web 属性表（A1）：逐属性勾选 + 等于/包含，编译回一层 fragment
+# ---------------------------------------------------------------------------
+
+ATTR_EQUALS = "equals"
+ATTR_CONTAINS = "contains"
+
+
+def _escape_css_attr(value: str) -> str:
+    """CSS 属性选择器值的转义（与 content.js 的 cssEscapeAttr 同口径）。"""
+    return value.replace("\\", "\\\\").replace('"', '\\"')
+
+
+def attribute_rows(entry: dict[str, Any], fragment: str) -> list[dict[str, Any]]:
+    """把一层的捕获属性展开成属性表行，初态按**当前 fragment** 反推。
+
+    行形状：``{attr, value, mode, checked, locked}``。
+    - ``tag`` 行：locked（不勾 tag 的层不指向任何东西），无匹配方式；
+    - ``id`` 行：捕获片段以 ``#id`` 代表该层（content.js 口径：带 id 即终止上溯），
+      所以 checked = ``#id`` 出现在 fragment 里；
+    - 每个 class 一行：捕获只取**首类**进 fragment，其余类默认不勾——这正是
+      属性表相对节点树新增的颗粒度（影刀：class 可逐个勾、可改「包含」）；
+    - ``nth-of-type`` 行：位置信息，无匹配方式，勾选 = 保留。
+
+    匹配方式初值恒为「等于」（与捕获口径一致），「包含」是用户显式选择的产物。
+    """
+    rows: list[dict[str, Any]] = [
+        {
+            "attr": "tag",
+            "value": str(entry.get("tag") or ""),
+            "mode": None,
+            "checked": True,
+            "locked": True,
+        }
+    ]
+    entry_id = entry.get("id")
+    if entry_id:
+        rows.append(
+            {
+                "attr": "id",
+                "value": str(entry_id),
+                "mode": ATTR_EQUALS,
+                "checked": f"#{entry_id}" in fragment,
+                "locked": False,
+            }
+        )
+    for cls in entry.get("classes") or []:
+        rows.append(
+            {
+                "attr": "class",
+                "value": str(cls),
+                "mode": ATTR_EQUALS,
+                "checked": f".{cls}" in fragment,
+                "locked": False,
+            }
+        )
+    nth = entry.get("nthOfType")
+    if isinstance(nth, int) and not isinstance(nth, bool) and nth >= 1:
+        rows.append(
+            {
+                "attr": "nth-of-type",
+                "value": str(nth),
+                "mode": None,
+                "checked": f":nth-of-type({nth})" in fragment,
+                "locked": False,
+            }
+        )
+    return rows
+
+
+def compile_fragment(entry: dict[str, Any], rows: list[dict[str, Any]]) -> str:
+    """按属性表的勾选与匹配方式，把一层重新拼成 fragment。
+
+    编译规则（与捕获口径兼容，css 消费方照旧是 ``querySelectorAll``）：
+    - id 勾选且「等于」→ 整层就是 ``#id``（等值 id 本身唯一，tag/class/nth
+      不再参与——沿用 content.js「带 id 即终止上溯」的口径）；
+    - 其余情况 tag 恒在：id 勾选且「包含」→ ``[id*="…"]``；class 勾选 →
+      「等于」``.cls`` / 「包含」``[class*="…"]``；nth 勾选 → ``:nth-of-type(n)``。
+    """
+    id_row = next((row for row in rows if row["attr"] == "id"), None)
+    if id_row and id_row["checked"] and id_row.get("mode") == ATTR_EQUALS:
+        return "#" + str(id_row["value"])
+    out = str(entry.get("tag") or "")
+    if id_row and id_row["checked"]:
+        out += f'[id*="{_escape_css_attr(str(id_row["value"]))}"]'
+    for row in rows:
+        if row["attr"] != "class" or not row["checked"]:
+            continue
+        value = str(row["value"])
+        if row.get("mode") == ATTR_CONTAINS:
+            out += f'[class*="{_escape_css_attr(value)}"]'
+        else:
+            out += "." + value
+    nth_row = next((row for row in rows if row["attr"] == "nth-of-type"), None)
+    if nth_row and nth_row["checked"]:
+        out += f":nth-of-type({nth_row['value']})"
+    return out
+
+
 def _candidate_label(candidate: dict[str, Any]) -> str:
     """候选列表行：``[kind] selector · 命中 N``（不唯一要标出来）。"""
     matched = candidate.get("matchedCount")
@@ -452,7 +595,117 @@ class ElementEditorForm(QWidget):
             self.path_list.addItem(item)
         self.path_list.itemChanged.connect(self._on_path_item_changed)
         layout.addWidget(self.path_list)
+        self._build_attr_table(layout)
         self._sync_path_checks_from_css()
+        # 默认选中目标所在层（末级）：属性表打开即有内容可看
+        self.path_list.setCurrentRow(len(self._path) - 1)
+
+    # -- 浏览器：属性表（A1，勾属性/改匹配方式 → 重写该层 fragment） ----------
+
+    def _build_attr_table(self, layout: QVBoxLayout) -> None:
+        """属性表：对**树中选中的一层**逐属性勾选、改匹配方式。
+
+        节点树回答「参与定位的是哪几级」，属性表回答「这一级里哪些属性参与、
+        精确还是模糊」——影刀编辑器右侧三列表（属性名 | 匹配方式 | 属性值）
+        的离线版。「包含」编译成 CSS 属性选择器（``[class*="…"]``），
+        消费方照旧是执行器的 ``querySelectorAll``，不需要动执行器。
+        落盘口径仍唯一：所有编辑最终都只是重写 ``css_edit``（经
+        ``_on_path_item_changed`` 的同一条组装路径）。
+        """
+        self._composing_table = False
+        self._attr_rows: list[dict[str, Any]] = []
+        self.attr_label = QLabel(
+            "属性（勾选参与定位；匹配方式「包含」= 属性值出现即可，"
+            "改动会重写主选择器）"
+        )
+        self.attr_label.setStyleSheet("color: #64707d;")
+        layout.addWidget(self.attr_label)
+
+        self.attr_table = QTableWidget(0, 4)
+        self.attr_table.setHorizontalHeaderLabels(["参与", "属性", "匹配方式", "值"])
+        self.attr_table.verticalHeader().setVisible(False)
+        self.attr_table.horizontalHeader().setSectionResizeMode(
+            0, QHeaderView.ResizeMode.ResizeToContents
+        )
+        self.attr_table.horizontalHeader().setSectionResizeMode(
+            1, QHeaderView.ResizeMode.ResizeToContents
+        )
+        self.attr_table.horizontalHeader().setSectionResizeMode(
+            2, QHeaderView.ResizeMode.ResizeToContents
+        )
+        self.attr_table.horizontalHeader().setStretchLastSection(True)
+        self.attr_table.setMaximumHeight(160)
+        layout.addWidget(self.attr_table)
+        self.path_list.currentRowChanged.connect(
+            lambda _row: self._rebuild_attr_table()
+        )
+        self._rebuild_attr_table()
+
+    def _rebuild_attr_table(self) -> None:
+        """按树中当前选中的一层重建属性表（勾选态从该层 fragment 反推）。"""
+        row = self.path_list.currentRow()
+        self._composing_table = True
+        try:
+            self.attr_table.setRowCount(0)
+            if not (0 <= row < len(self._path)):
+                return
+            entry = self._path[row]
+            self._attr_rows = attribute_rows(entry, str(entry["fragment"]))
+            self.attr_table.setRowCount(len(self._attr_rows))
+            for index, spec in enumerate(self._attr_rows):
+                box = QCheckBox()
+                box.setChecked(spec["checked"])
+                box.setEnabled(not spec["locked"])
+                box.toggled.connect(self._on_attr_edited)
+                self.attr_table.setCellWidget(index, 0, box)
+                name_item = QTableWidgetItem(spec["attr"])
+                name_item.setFlags(name_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                self.attr_table.setItem(index, 1, name_item)
+                if spec["mode"] is not None:
+                    combo = QComboBox()
+                    combo.addItems(["等于", "包含"])
+                    combo.setCurrentIndex(
+                        0 if spec["mode"] == ATTR_EQUALS else 1
+                    )
+                    combo.currentIndexChanged.connect(self._on_attr_edited)
+                    self.attr_table.setCellWidget(index, 2, combo)
+                else:
+                    dash = QTableWidgetItem("—")
+                    dash.setFlags(dash.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                    dash.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                    self.attr_table.setItem(index, 2, dash)
+                value_item = QTableWidgetItem(spec["value"])
+                value_item.setFlags(value_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                self.attr_table.setItem(index, 3, value_item)
+        finally:
+            self._composing_table = False
+
+    def _on_attr_edited(self, *_args: Any) -> None:
+        """属性表任何改动：重编译该层 fragment → 更新树行文本 →
+        经 ``itemChanged`` 走既有的「勾选层级拼回 css」路径重写主选择器。"""
+        if getattr(self, "_composing_table", False):
+            return
+        row = self.path_list.currentRow()
+        if not (0 <= row < len(self._path)):
+            return
+        rows: list[dict[str, Any]] = []
+        for index, spec in enumerate(self._attr_rows):
+            current = dict(spec)
+            box = self.attr_table.cellWidget(index, 0)
+            combo = self.attr_table.cellWidget(index, 2)
+            if box is not None:
+                current["checked"] = box.isChecked()
+            if combo is not None:
+                current["mode"] = (
+                    ATTR_EQUALS if combo.currentIndex() == 0 else ATTR_CONTAINS
+                )
+            rows.append(current)
+        self._attr_rows = rows
+        fragment = compile_fragment(self._path[row], rows)
+        self._path[row]["fragment"] = fragment
+        # 树行文本即 fragment：更新它会触发 itemChanged → _on_path_item_changed
+        # （同一条组装路径，css 与树不可能漂移）
+        self.path_list.item(row).setText(fragment)
 
     def _sync_path_checks_from_css(self) -> None:
         """按当前主 css 反推勾选态（只在建树时做一次）。
@@ -534,6 +787,10 @@ class ElementEditorForm(QWidget):
         self._candidates = kept
         self._verify_count = count
         self.css_edit.setText(css)
+        # R2（M44 残留）：提升会改主 css，树的勾选态必须**立刻**按新 css 回读——
+        # 此前只在建树时做一次，提升后树还停在旧勾选，下一次勾选才会重写，
+        # 中间态里「树显示的层级」与「主选择器实际是哪条」是两回事。
+        self._sync_path_checks_from_css()
         self.candidate_list.clear()
         self.candidate_list.addItems(
             [_candidate_label(item) for item in self._candidates]

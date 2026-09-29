@@ -58,6 +58,10 @@ PURE_FUNCTION_SCRIPTS = (
     # 如实渲染出来。这一段**只在浏览器里跑**——Python 侧读源码只能证明「写了这行字」，
     # 证明不了「渲染出哪几行」，而它的唯一职责就是渲染对。
     "check_element_display_helpers.mjs",
+    # 默认元素名生成器（A3，app.js）：与 Python 侧同一份用例表
+    # （tests/contract/data/element_name_cases.json）切片求值——两份实现
+    # （零构建双端）输出分叉时至少一侧红。
+    "check_element_name.mjs",
 )
 node = shutil.which("node")
 if node:

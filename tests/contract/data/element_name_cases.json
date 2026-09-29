@@ -1,0 +1,19 @@
+{
+  "_comment": "默认元素名生成器的共享用例表（A3）：Python 侧 tests/contract/test_element_naming.py 与 JS 侧 scripts/check_element_name.mjs 跑同一份数据，两侧实现必须对每个用例给出相同输出。改方案/改实现时先在这里补用例。",
+  "cases": [
+    { "existing": [], "hint": "button", "expected": "el_button" },
+    { "existing": ["el_button"], "hint": "button", "expected": "el_button_2" },
+    { "existing": ["el_button", "el_button_2"], "hint": "button", "expected": "el_button_3" },
+    { "existing": [], "hint": null, "expected": "el_element" },
+    { "existing": [], "hint": "", "expected": "el_element" },
+    { "existing": [], "hint": "ButtonControl", "expected": "el_button" },
+    { "existing": [], "hint": "EditControl", "expected": "el_edit" },
+    { "existing": [], "hint": "搜索框", "expected": "el_element" },
+    { "existing": ["el_element"], "hint": "搜索框", "expected": "el_element_2" },
+    { "existing": ["el_button"], "hint": "BUTTON", "expected": "el_button_2" },
+    { "existing": [], "hint": "div-1", "expected": "el_div1" },
+    { "existing": ["el_input"], "hint": "input", "expected": "el_input_2" },
+    { "existing": ["el_web"], "hint": "web", "expected": "el_web_2" },
+    { "existing": ["el_button", "el_button_2", "el_button_3"], "hint": "button", "expected": "el_button_4" }
+  ]
+}

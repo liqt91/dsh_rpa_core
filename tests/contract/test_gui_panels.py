@@ -730,3 +730,37 @@ def test_editor_show_prewarms_elements_dock_hidden(window, qapp):
     window._toggle_elements_dock()
     assert dock.isVisibleTo(window), "预热不许改变 _toggle_elements_dock 的开关语义"
     assert window._elements_dock() is dock, "预热过的 dock 要被复用，不是又建一个"
+
+# ---- 元素库搜索/过滤（A4，对齐影刀元素库面板） --------------------------------
+def test_element_panel_search_filters_display_only(qapp):
+    """搜索框按名称/摘要过滤**显示**；清空恢复全部；不动元素资产本身。"""
+    from rpa_core.gui.element_panel import ElementPanel
+
+    panel = ElementPanel()
+    panel.set_elements(
+        [
+            {"name": "searchBox", "summary": "browser · css #sb_form_q"},
+            {"name": "okButton", "summary": "browser · css button.ok"},
+            {"name": "记事本", "summary": "desktop · win32 title=记事本"},
+        ]
+    )
+    assert panel.list.count() == 3
+
+    panel.search_edit.setText("button")
+    assert panel.list.count() == 1
+    assert panel.list.item(0).text().startswith("okButton")
+
+    # 摘要也能搜（用定位串找元素是高频动作）
+    panel.search_edit.setText("#sb_form_q")
+    assert panel.list.count() == 1
+    assert panel.list.item(0).text().startswith("searchBox")
+
+    # 大小写不敏感
+    panel.search_edit.setText("SB_FORM")
+    assert panel.list.count() == 1
+
+    # 清空恢复全部；current_name 始终读可见项的首列
+    panel.search_edit.setText("")
+    assert panel.list.count() == 3
+    panel.list.setCurrentRow(0)
+    assert panel.current_name() == "searchBox"

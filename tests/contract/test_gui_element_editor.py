@@ -750,3 +750,187 @@ def test_edit_element_tolerates_broken_document(window):
     (store.root / "broken.json").write_text("{not json", encoding="utf-8")
     window._edit_element("broken")
     assert "读取元素失败" in window.statusBar().currentMessage()
+
+
+# ---- R2（M44 残留）：候选提升后树的勾选态必须立刻回读 ------------------------
+def _path_document_with_candidates() -> dict:
+    doc = _path_document()
+    doc["selector"]["candidates"] = [
+        {
+            "kind": "css",
+            "selector": "div.wrap > button.ok:nth-of-type(2)",
+            "matchedCount": 2,
+        },
+        {"kind": "css", "selector": "button.ok", "matchedCount": 3},
+    ]
+    return doc
+
+
+def test_path_tree_resyncs_checks_after_candidate_promotion(qapp):
+    """提升候选会改主 css，树的勾选态必须**跟着**回读。
+
+    M44 残留 R2：勾选态反推只在建树时做一次——提升后树停在旧勾选，中间态里
+    「树显示的层级」与「主选择器实际是哪条」是两回事，下一次勾选才会被重写。
+    """
+    from PySide6.QtCore import Qt
+
+    from rpa_core.gui.element_editor import ElementEditorForm
+
+    form = ElementEditorForm(_path_document_with_candidates())
+    assert form.css_edit.text() == "body > div.wrap > button.ok:nth-of-type(2)"
+    assert all(
+        form.path_list.item(i).checkState() == Qt.CheckState.Checked
+        for i in range(3)
+    )
+
+    # 截短祖先 → 勾选态与 css 一致（末两级）
+    form.path_list.item(0).setCheckState(Qt.CheckState.Unchecked)
+    assert form.css_edit.text() == "div.wrap > button.ok:nth-of-type(2)"
+
+    # 提升的候选恰是路径后缀：回读后勾选态维持「末两级」
+    form.candidate_list.setCurrentRow(0)
+    form._promote()
+    assert form.css_edit.text() == "div.wrap > button.ok:nth-of-type(2)"
+    assert form.path_list.item(0).checkState() == Qt.CheckState.Unchecked
+    assert form.path_list.item(1).checkState() == Qt.CheckState.Checked
+    assert form.path_list.item(2).checkState() == Qt.CheckState.Checked
+
+    # 提升的候选**不**出自路径：回读后回退「完整路径视角」（全勾）
+    form.candidate_list.setCurrentRow(0)
+    form._promote()
+    assert form.css_edit.text() == "button.ok"
+    assert all(
+        form.path_list.item(i).checkState() == Qt.CheckState.Checked
+        for i in range(3)
+    ), "提升出不属于路径的 css 后，树应回退全勾而不是停在旧勾选"
+
+
+# ---- Web 属性表（A1）：逐属性勾选 + 等于/包含编译回 fragment ------------------
+def test_attribute_rows_initial_state_derived_from_fragment(qapp):
+    """初态从**当前 fragment** 反推：捕获用了哪些属性就勾哪些。
+
+    content.js 口径：带 id 的层 fragment 就是 `#id`（tag 不出现）；无 id 层只取
+    **首类** + 同名兄弟时补 :nth-of-type —— 所以首类勾、次类不勾是「如实还原」，
+    次类的勾选权正是属性表相对节点树新增的颗粒度。
+    """
+    from rpa_core.gui.element_editor import attribute_rows
+
+    # 无 id 层：tag + 首类 + nth 都在 fragment 里
+    entry = {
+        "tag": "button", "id": None, "classes": ["ok", "btn-primary"],
+        "nthOfType": 2, "fragment": "button.ok:nth-of-type(2)",
+    }
+    rows = attribute_rows(entry, "button.ok:nth-of-type(2)")
+    assert [(r["attr"], r["value"], r["checked"], r["locked"]) for r in rows] == [
+        ("tag", "button", True, True),
+        ("class", "ok", True, False),
+        ("class", "btn-primary", False, False),
+        ("nth-of-type", "2", True, False),
+    ]
+
+    # 带 id 层：id 勾、类不勾（fragment 是 #id，tag 不参与）
+    entry2 = {
+        "tag": "div", "id": "main", "classes": ["a", "b"],
+        "nthOfType": None, "fragment": "#main",
+    }
+    rows2 = attribute_rows(entry2, "#main")
+    assert [(r["attr"], r["checked"]) for r in rows2] == [
+        ("tag", True), ("id", True), ("class", False), ("class", False),
+    ]
+
+
+def test_compile_fragment_match_modes(qapp):
+    from rpa_core.gui.element_editor import (
+        ATTR_CONTAINS,
+        ATTR_EQUALS,
+        compile_fragment,
+    )
+
+    entry = {"tag": "div", "id": "main", "classes": ["wrap"], "nthOfType": 3}
+
+    def rows(**kw):
+        return [
+            {"attr": "tag", "value": "div", "mode": None, "checked": True,
+             "locked": True},
+            {"attr": "id", "value": "main",
+             "mode": kw.get("id_mode", ATTR_EQUALS),
+             "checked": kw.get("id", False), "locked": False},
+            {"attr": "class", "value": "wrap", "mode": kw.get("mode", ATTR_EQUALS),
+             "checked": kw.get("cls", True), "locked": False},
+            {"attr": "nth-of-type", "value": "3", "mode": None,
+             "checked": kw.get("nth", True), "locked": False},
+        ]
+
+    # id 等于：整层 = #id（捕获口径：等值 id 本身唯一，其余属性不参与）
+    assert compile_fragment(entry, rows(id=True)) == "#main"
+    # id 勾「包含」：不能再用 #id 简写 → [id*=…]；class/nth 照常参与
+    # （只有 id「等于」才整层接管——等值 id 本身唯一）
+    assert compile_fragment(entry, rows(id=True, id_mode=ATTR_CONTAINS)) == (
+        'div[id*="main"].wrap:nth-of-type(3)'
+    )
+    # 取消 class、勾 id 包含
+    assert compile_fragment(
+        entry, rows(cls=False, nth=False, id=True, id_mode=ATTR_CONTAINS)
+    ) == 'div[id*="main"]'
+    # class 等于 / 包含
+    assert compile_fragment(entry, rows()) == "div.wrap:nth-of-type(3)"
+    assert compile_fragment(entry, rows(mode=ATTR_CONTAINS)) == (
+        'div[class*="wrap"]:nth-of-type(3)'
+    )
+    # 取消 nth
+    assert compile_fragment(entry, rows(nth=False)) == "div.wrap"
+    # 值含引号：包含编译必须转义（否则拼出非法选择器）
+    quote_entry = {"tag": "div", "id": None, "classes": ['a"b'], "nthOfType": None}
+    quote_rows = [
+        {"attr": "tag", "value": "div", "mode": None, "checked": True,
+         "locked": True},
+        {"attr": "class", "value": 'a"b', "mode": ATTR_CONTAINS,
+         "checked": True, "locked": False},
+    ]
+    assert compile_fragment(quote_entry, quote_rows) == 'div[class*="a\\"b"]'
+
+
+def test_attr_table_rewrites_css_with_match_mode(qapp):
+    """表单级：改匹配方式/勾选 → 该层 fragment 重写 → 主选择器跟着重写。"""
+    from rpa_core.gui.element_editor import ElementEditorForm
+
+    form = ElementEditorForm(_path_document())
+    # 默认选中末级（目标层）：button.ok:nth-of-type(2) → 行 = tag/class/nth
+    assert form.path_list.currentRow() == 2
+    assert form.attr_table.rowCount() == 3
+
+    # class 行（第 1 行）改「包含」→ 该层变 [class*="ok"]，主选择器重写
+    combo = form.attr_table.cellWidget(1, 2)
+    assert combo is not None
+    combo.setCurrentIndex(1)
+    assert form.css_edit.text() == (
+        'body > div.wrap > button[class*="ok"]:nth-of-type(2)'
+    )
+    assert not form.blocked
+
+    # 取消 nth（第 2 行勾选框）→ fragment 去掉 :nth-of-type
+    nth_box = form.attr_table.cellWidget(2, 0)
+    nth_box.setChecked(False)
+    assert form.css_edit.text() == 'body > div.wrap > button[class*="ok"]'
+
+    # 树行文本与 fragment 同步（树的下一轮勾选拼回的也是新 fragment）
+    assert form.path_list.item(2).text() == 'button[class*="ok"]'
+
+    # tag 行的勾选框锁定（不勾 tag 的层不指向任何东西）
+    assert not form.attr_table.cellWidget(0, 0).isEnabled()
+
+
+def test_attr_table_follows_tree_selection(qapp):
+    """属性表随树选中行切换：切到中间层（div.wrap）显示该层的属性。"""
+    from rpa_core.gui.element_editor import ElementEditorForm
+
+    form = ElementEditorForm(_path_document())
+    form.path_list.setCurrentRow(1)  # div.wrap：tag + class + nth
+    assert form.attr_table.rowCount() == 3
+    assert form.attr_table.item(1, 1).text() == "class"
+    assert form.attr_table.item(1, 3).text() == "wrap"
+    # 该层 class 改「包含」只影响中间层，末级不受牵连
+    form.attr_table.cellWidget(1, 2).setCurrentIndex(1)
+    assert form.css_edit.text() == (
+        'body > div[class*="wrap"] > button.ok:nth-of-type(2)'
+    )

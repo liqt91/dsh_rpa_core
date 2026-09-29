@@ -2975,48 +2975,62 @@ class MainWindow(QMainWindow):
             return
         self._capture_session = None
         self._close_capture_float()
-        self.showNormal()
-        # 捕获期间用户在浏览器里操作 → 本进程是后台应用，单纯 raise()/
-        # activateWindow() 会被 macOS 忽略（见 present_window 文档）。
-        present_window(self)
+
+        def restore_main() -> None:
+            self.showNormal()
+            # 捕获期间用户在浏览器里操作 → 本进程是后台应用，单纯 raise()/
+            # activateWindow() 会被 macOS 忽略（见 present_window 文档）。
+            present_window(self)
+
         if result.get("timeout"):
             # GUI 侧已不设等待上限（M41 S5：`CAPTURE_TIMEOUT_SECONDS` 是 `inf`），所以这条
             # 只在**会话层自己**给出 timeout 时触发（如两条腿都报 timeout）。**保留不删**：
             # 删了会落到下面的「已取消捕获」分支，把会话层的超时误显示成用户主动取消。
             # 秒数不给用户看（M41 S4）：超时没有惩罚（重点一次即可），
             # 说清「下一步」比报「等了多久」有用。
+            restore_main()
             self.statusBar().showMessage("捕获超时：一直没有检测到手势，请重试", 5000)
             return
         if not result.get("kind") and (result.get("unavailable") or result.get("error")):
             # 无可用腿：透出真实原因。早期实现落到下面的「已取消捕获」分支，
             # 于是 macOS 上「桌面腿 49ms 返回不支持」被显示成用户主动取消，
             # 真相（本平台桌面捕获不可用）被完全掩盖。
+            restore_main()
             self.statusBar().showMessage(
                 f"捕获失败：{result.get('error') or '无可用捕获通道'}", 9000
             )
             return
         if result.get("cancelled") or not result.get("kind"):
+            restore_main()
             self.statusBar().showMessage("已取消捕获", 4000)
             return
         intent, payload = self._confirm_element_save(result)
-        if intent is None:
-            return
-        if intent == "recapture":
-            # 「重新捕获」= 立刻开下一轮，用户不必关窗再点「捕获元素」。
-            # 此刻 `_capture_session` 已被上面复位成 None，所以不会撞上
-            # `_capture_element` 的「已有捕获 → 取消」分支。
-            self.statusBar().showMessage("重新捕获：移动鼠标框选", 6000)
+        if intent in ("recapture", "save_and_continue"):
+            # 连续采集的两个出口：**主窗保持最小化**（R1）。此前无条件先还原主窗
+            # 再弹确认框，重启捕获时 `_capture_element` 又把它最小化回去——用户
+            # 看到主窗闪一下。确认框本就 always-on-top 展示（不依赖主窗还原），
+            # 这里不还原就没有闪烁；收场路径（保存收工/取消）照旧还原。
+            if intent == "recapture":
+                # 此刻 `_capture_session` 已被上面复位成 None，所以不会撞上
+                # `_capture_element` 的「已有捕获 → 取消」分支。
+                self.statusBar().showMessage("重新捕获：移动鼠标框选", 6000)
+                self._capture_element()
+                return
+            name, document = payload
+            if not self.save_element_descriptor(name, document):
+                restore_main()
+                return
+            self._refresh_elements()
+            self.statusBar().showMessage(f"已保存元素 {name}，继续捕获…", 5000)
             self._capture_element()
+            return
+        restore_main()
+        if intent is None:
             return
         name, document = payload
         if not self.save_element_descriptor(name, document):
             return
         self._refresh_elements()
-        if intent == "save_and_continue":
-            # 「保存并继续」：落盘 + 刷新元素库后立刻再捕获一个（连续采集的常见节奏）。
-            self.statusBar().showMessage(f"已保存元素 {name}，继续捕获…", 5000)
-            self._capture_element()
-            return
         self.statusBar().showMessage(f"已保存元素 {name}", 4000)
 
     def _confirm_element_save(
@@ -3037,10 +3051,18 @@ class MainWindow(QMainWindow):
 
         metadata = descriptor.get("metadata") or {}
         if descriptor.get("kind") == "browser":
-            suffix = metadata.get("tag") or "web"
+            hint = str(metadata.get("tag") or "web")
         else:
-            suffix = metadata.get("controlType") or "x"
-        dialog = ElementDialog(descriptor, default_name=f"el_{suffix}", parent=self)
+            hint = str(metadata.get("controlType") or "")
+        # 默认名与 Web 端同一生成器（A3）：el_{种类}，撞了加序号——而不是
+        # 恒为 el_{suffix}（同名覆盖弹窗会反复打断连续采集）
+        store = self._element_store()
+        existing = list(store.list()) if store is not None else []
+        from rpa_core.gui.element_editor import suggest_element_name
+
+        dialog = ElementDialog(
+            descriptor, default_name=suggest_element_name(existing, hint), parent=self
+        )
         # 此刻用户在浏览器里刚完成捕获，我们是后台应用：不置顶的话对话框会
         # 停在浏览器后面，用户得先点一次 Dock 才看得见（真机实测）。
         present_window(dialog, always_on_top=True)

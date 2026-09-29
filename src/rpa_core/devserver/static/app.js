@@ -2739,6 +2739,28 @@ async function deleteElement(name) {
 // 元素编辑确认对话框（捕获后确认入库 / 元素库面板点元素名编辑）
 // ---------------------------------------------------------------------------
 
+// [element-name-helpers:start]
+// 默认元素名生成器（A3 三端一致）：与 Python 侧 element_editor.py 的
+// suggest_element_name 是同一套方案的**两份实现**（零构建双端没法真共享代码），
+// 由同一份用例表 tests/contract/data/element_name_cases.json 钉住——Python 侧
+// tests/contract/test_element_naming.py 跑一遍，本文件由 scripts/check_element_name.mjs
+// 切片求值再跑一遍。改任何一侧都必须同步另一侧并补用例，两侧判据都会红。
+function normalizeElementHint(hint) {
+  let cleaned = String(hint || "").toLowerCase().replace(/control$/, "");
+  cleaned = cleaned.replace(/[^a-z0-9_]/g, "");
+  return cleaned || "element";
+}
+
+function suggestElementName(existing, hint) {
+  const taken = new Set(existing || []);
+  const base = "el_" + normalizeElementHint(hint);
+  if (!taken.has(base)) return base;
+  let ordinal = 2;
+  while (taken.has(base + "_" + ordinal)) ordinal += 1;
+  return base + "_" + ordinal;
+}
+// [element-name-helpers:end]
+
 function openElementDialog({ mode, flow, descriptor, existingName }) {
   // mode: "confirm"（捕获后确认） | "edit"（元素库编辑）
   return new Promise((resolve) => {
@@ -2750,8 +2772,13 @@ function openElementDialog({ mode, flow, descriptor, existingName }) {
     const titleEl = $("element-dialog-title");
 
     titleEl.textContent = mode === "edit" ? "编辑元素" : "捕获确认";
-    const defaultName = existingName
-      || `${descriptor.metadata?.tag || "element"}_${Date.now() % 100000}`;
+    // 默认名与 GUI 同一口径：el_{种类}，撞了加序号（A3 前是 tag_时间戳——
+    // 不可读也不可复现，desktop 元素还会退化成 element_12345）
+    const hint = descriptor.metadata?.tag
+      || (descriptor.kind === "browser" ? "web" : descriptor.metadata?.controlType)
+      || "";
+    const existingNames = state.elementsSeen ? [...state.elementsSeen] : [];
+    const defaultName = existingName || suggestElementName(existingNames, hint);
     nameInput.value = defaultName;
     selectorInput.value = descriptor.selector?.css
       || JSON.stringify(descriptor.selector?.locator || descriptor.selector || "");
