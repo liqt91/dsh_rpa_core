@@ -84,6 +84,14 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from rpa_core.gui.persist import load_size, save_size
+from rpa_core.gui.theme import (
+    DANGER,
+    SUCCESS,
+    TEXT_SECONDARY,
+    WARNING,
+)
+
 # 每个 backend **真正被消费**的 locator 字段：``(键, 值类型, 说明)``。
 # 值类型只有 "text" / "int"；顺序即界面顺序。
 LOCATOR_FIELDS_BY_BACKEND: dict[str, tuple[tuple[str, str, str], ...]] = {
@@ -206,6 +214,10 @@ def split_locator(locator: dict[str, Any]) -> dict[str, str]:
         values[key] = str(locator[key])
     return values
 
+
+# 元素编辑对话框尺寸：默认够宽（节点树 + 属性表），用户调过则沿用（M49 P1-1）
+_DIALOG_SIZE_KEY = "elementEditor/size"
+_DIALOG_DEFAULT_SIZE = (680, 720)
 
 # 模型报错 → 界面中文。**键是模型原文的稳定子串**；`test_gui_element_editor.py` 会逐条
 # 触发这些规则并断言译文命中，所以模型改了措辞就会红（不会静默退回英文原文）。
@@ -525,7 +537,7 @@ class ElementEditorForm(QWidget):
         # 创建早、加进布局晚——位置仍在校验区。
         self.info_label = QLabel("")
         self.info_label.setWordWrap(True)
-        self.info_label.setStyleSheet("color: #cf222e;")
+        self.info_label.setStyleSheet(f"color: {DANGER};")
 
         if self._kind == "browser":
             self._build_browser(layout)
@@ -549,7 +561,7 @@ class ElementEditorForm(QWidget):
         # 通道回调由调用方注入（`enable_live_preview`，app 侧只对 browser 元素接）；
         # 未注入时标签隐藏、计时器永不启动——桌面元素没有「页面」可高亮。
         self.preview_label = QLabel("")
-        self.preview_label.setStyleSheet("color: #64707d;")
+        self.preview_label.setStyleSheet(f"color: {TEXT_SECONDARY};")
         self.preview_label.hide()
         layout.addWidget(self.preview_label)
         self._preview_css: Callable[[str], dict] | None = None
@@ -569,7 +581,7 @@ class ElementEditorForm(QWidget):
             if self._candidates
             else "捕获时没有收集到备选定位"
         )
-        self.candidates_label.setStyleSheet("color: #64707d;")
+        self.candidates_label.setStyleSheet(f"color: {TEXT_SECONDARY};")
         layout.addWidget(self.candidates_label)
 
         self.candidate_list = QListWidget()
@@ -605,7 +617,7 @@ class ElementEditorForm(QWidget):
         self.path_label = QLabel(
             "节点路径（勾选参与定位的层级；勾选会重写主选择器）"
         )
-        self.path_label.setStyleSheet("color: #64707d;")
+        self.path_label.setStyleSheet(f"color: {TEXT_SECONDARY};")
         layout.addWidget(self.path_label)
 
         self.path_list = QListWidget()
@@ -646,7 +658,7 @@ class ElementEditorForm(QWidget):
             "属性（勾选参与定位；匹配方式「包含」= 属性值出现即可，"
             "改动会重写主选择器）"
         )
-        self.attr_label.setStyleSheet("color: #64707d;")
+        self.attr_label.setStyleSheet(f"color: {TEXT_SECONDARY};")
         layout.addWidget(self.attr_label)
 
         self.attr_table = QTableWidget(0, 4)
@@ -913,15 +925,15 @@ class ElementEditorForm(QWidget):
             return  # 陈旧结果：用户已改了下一轮，覆盖反而回退显示
         if data.get("error"):
             self.preview_label.setText(f"预览失败：{data['error']}")
-            self.preview_label.setStyleSheet("color: #cf222e;")
+            self.preview_label.setStyleSheet(f"color: {DANGER};")
             return
         count = data.get("count")
         if count == 1:
-            text, color = "预览：命中 1 个（页面上已黄框高亮）", "#1a7f37"
+            text, color = "预览：命中 1 个（页面上已黄框高亮）", SUCCESS
         elif isinstance(count, int) and not isinstance(count, bool) and count > 1:
-            text, color = f"预览：命中 {count} 个（超过 1 个不唯一）", "#cf222e"
+            text, color = f"预览：命中 {count} 个（超过 1 个不唯一）", DANGER
         else:
-            text, color = "预览：命中 0 个（页面上找不到该选择器）", "#cf222e"
+            text, color = "预览：命中 0 个（页面上找不到该选择器）", DANGER
         self.preview_label.setText(text)
         self.preview_label.setStyleSheet(f"color: {color};")
 
@@ -982,7 +994,7 @@ class ElementEditorForm(QWidget):
 
         self.field_hint = QLabel("")
         self.field_hint.setWordWrap(True)
-        self.field_hint.setStyleSheet("color: #64707d;")
+        self.field_hint.setStyleSheet(f"color: {TEXT_SECONDARY};")
         layout.addWidget(self.field_hint)
 
         hint = QLabel(
@@ -991,7 +1003,7 @@ class ElementEditorForm(QWidget):
             "提供对面后端的字段只会产出「写了没人读」的死字段。"
         )
         hint.setWordWrap(True)
-        hint.setStyleSheet("color: #64707d;")
+        hint.setStyleSheet(f"color: {TEXT_SECONDARY};")
         layout.addWidget(hint)
         self._on_backend_changed(self.backend_combo.currentText())
 
@@ -1047,7 +1059,7 @@ class ElementEditorForm(QWidget):
             parts.append(notice)
         self.info_label.setText("\n".join(parts))
         self.info_label.setStyleSheet(
-            "color: #cf222e;" if problems else "color: #9a6700;"
+            f"color: {DANGER};" if problems else f"color: {WARNING};"
         )
         self.blocked = bool(problems)
         self.changed.emit()
@@ -1092,8 +1104,9 @@ class ElementEditorDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle(f"编辑元素 · {name}")
         self.setMinimumWidth(560)
-        # 默认开大一点：节点树 + 属性表是主工作区，窄窗会把表格压成三行
-        self.resize(680, 720)
+        # 默认开大一点：节点树 + 属性表是主工作区，窄窗会把表格压成三行；
+        # 用户调过的尺寸下次沿用（M49 P1-1，键见 persist 模块）。
+        self.resize(*(load_size(_DIALOG_SIZE_KEY) or _DIALOG_DEFAULT_SIZE))
 
         layout = QVBoxLayout(self)
         header = "浏览器元素" if document.get("kind") == "browser" else "桌面元素"
@@ -1123,6 +1136,11 @@ class ElementEditorDialog(QDialog):
         if form is not None and hasattr(form, name):
             return getattr(form, name)
         raise AttributeError(name)
+
+    def done(self, result: int) -> None:  # noqa: N802 (Qt naming)
+        """关窗（保存/取消/点 X 都走这里）时记住用户调过的尺寸。"""
+        save_size(_DIALOG_SIZE_KEY, (self.width(), self.height()))
+        super().done(result)
 
     def accept(self) -> None:
         self.form.revalidate()

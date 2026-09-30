@@ -35,9 +35,16 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QPainter, QPen
 from PySide6.QtWidgets import QApplication, QLabel, QVBoxLayout, QWidget
 
+from rpa_core.gui import fonts
+from rpa_core.gui.theme import (
+    BORDER,
+    SURFACE,
+    TEXT_MUTED,
+)
+
 _WIDTH = 320
 _HEIGHT = 128
-_NEUTRAL = "#57606a"
+_NEUTRAL = TEXT_MUTED
 
 
 class StartupSplash(QWidget):
@@ -59,7 +66,7 @@ class StartupSplash(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 18, 20, 18)
         title = QLabel("rpa-core")
-        title.setStyleSheet("font-size: 15px; font-weight: 600;")
+        title.setStyleSheet(f"font-size: {fonts.TITLE_PX}px; font-weight: 600;")
         subtitle = QLabel("正在初始化…")
         subtitle.setStyleSheet(f"color: {_NEUTRAL};")
         layout.addStretch(1)
@@ -83,8 +90,8 @@ class StartupSplash(QWidget):
     def paintEvent(self, event) -> None:  # noqa: N802 - Qt 覆写
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        painter.setPen(QPen(QColor("#c0c4c8")))
-        painter.setBrush(QColor("#ffffff"))
+        painter.setPen(QPen(QColor(BORDER)))
+        painter.setBrush(QColor(SURFACE))
         painter.drawRoundedRect(self.rect().adjusted(0, 0, -1, -1), 8, 8)
         painter.end()
         super().paintEvent(event)

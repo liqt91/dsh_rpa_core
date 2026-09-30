@@ -44,6 +44,10 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from rpa_core.gui.theme import (
+    DANGER,
+    TEXT_SECONDARY,
+)
 from rpa_core.model.inputs import (
     INPUT_NAME_PATTERN,
     InputDeclarationError,
@@ -78,7 +82,7 @@ class FlowInputsDialog(QDialog):
             "默认值为 JSON（留空表示 null）。"
         )
         hint.setWordWrap(True)
-        hint.setStyleSheet("color: #64707d;")
+        hint.setStyleSheet(f"color: {TEXT_SECONDARY};")
         layout.addWidget(hint)
 
         toolbar = QHBoxLayout()
@@ -102,7 +106,7 @@ class FlowInputsDialog(QDialog):
 
         self.error_label = QLabel("")
         self.error_label.setWordWrap(True)
-        self.error_label.setStyleSheet("color: #cf222e;")
+        self.error_label.setStyleSheet(f"color: {DANGER};")
         self.error_label.hide()
         layout.addWidget(self.error_label)
 

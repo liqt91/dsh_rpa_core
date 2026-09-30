@@ -36,6 +36,15 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from rpa_core.gui.theme import (
+    DANGER,
+    SUCCESS,
+    SURFACE_HIGHLIGHT,
+    TEXT_FAINT,
+    TEXT_HEADING,
+    TEXT_SECONDARY,
+)
+
 # 字段条目类型标记（决定 values() 如何从控件取值）
 _KIND_ENUM = "enum"
 _KIND_TEXT = "text"
@@ -74,11 +83,11 @@ class _CollapsibleSection(QWidget):
         header_layout.addWidget(self._caret)
 
         title_label = QLabel(title)
-        title_label.setStyleSheet("font-weight: bold; color: #4d5564;")
+        title_label.setStyleSheet(f"font-weight: bold; color: {TEXT_HEADING};")
         header_layout.addWidget(title_label, 1)
 
         count_label = QLabel(str(field_count))
-        count_label.setStyleSheet("color: #8b929e;")
+        count_label.setStyleSheet(f"color: {TEXT_FAINT};")
         header_layout.addWidget(count_label)
 
         header_layout.addStretch()
@@ -234,7 +243,7 @@ class ParamForm(QWidget):
         if not visible:
             return
         header = QLabel("输出参数（保存到变量，供后续指令引用）")
-        header.setStyleSheet("font-weight: bold; color: #4d5564; padding-top: 8px;")
+        header.setStyleSheet(f"font-weight: bold; color: {TEXT_HEADING}; padding-top: 8px;")
         self._form.addRow(header)
         for field, meta in visible:
             label_text = (meta.get("label") if isinstance(meta, dict) else None) or field
@@ -249,7 +258,7 @@ class ParamForm(QWidget):
         """别名内容不合法时红框提示（对齐 Web 别名校验）。"""
         text = edit.text().strip()
         if text and not self._alias_validator.match(text):
-            edit.setStyleSheet("QLineEdit { border: 1px solid #cf222e; }")
+            edit.setStyleSheet(f"QLineEdit {{ border: 1px solid {DANGER}; }}")
         else:
             edit.setStyleSheet("")
 
@@ -275,7 +284,7 @@ class ParamForm(QWidget):
         # 超时（秒）：命令自带 timeoutMs 时隐藏引擎级超时，避免两个「超时」
         if not has_own_timeout:
             header = QLabel("运行设置")
-            header.setStyleSheet("font-weight: bold; color: #4d5564; padding-top: 8px;")
+            header.setStyleSheet(f"font-weight: bold; color: {TEXT_HEADING}; padding-top: 8px;")
             self._form.addRow(header)
             self._timeout_field = QLineEdit()
             self._timeout_field.setValidator(QDoubleValidator(0, 86400, 1))
@@ -295,7 +304,7 @@ class ParamForm(QWidget):
             if not has_own_timeout and self._timeout_field is None:
                 # 如果超时字段还没加 header，这里补一个
                 header = QLabel("运行设置")
-                header.setStyleSheet("font-weight: bold; color: #4d5564; padding-top: 8px;")
+                header.setStyleSheet(f"font-weight: bold; color: {TEXT_HEADING}; padding-top: 8px;")
                 self._form.addRow(header)
             self._retry_field = QLineEdit()
             self._retry_field.setValidator(QIntValidator(0, 100))
@@ -308,7 +317,7 @@ class ParamForm(QWidget):
             # 不支持重试但 raw 有遗留值 → 警告 + 清除按钮
             if not has_own_timeout and self._timeout_field is None:
                 header = QLabel("运行设置")
-                header.setStyleSheet("font-weight: bold; color: #4d5564; padding-top: 8px;")
+                header.setStyleSheet(f"font-weight: bold; color: {TEXT_HEADING}; padding-top: 8px;")
                 self._form.addRow(header)
             warn = QLabel(
                 "⚠ 该指令不支持重试（"
@@ -316,7 +325,7 @@ class ParamForm(QWidget):
                 + f"），当前值 {current_retry} 不会生效"
             )
             warn.setWordWrap(True)
-            warn.setStyleSheet("color: #cf222e;")
+            warn.setStyleSheet(f"color: {DANGER};")
             clear_btn = QToolButton()
             clear_btn.setText("清除重试次数")
             clear_btn.clicked.connect(lambda: self._clear_retry_count())
@@ -335,7 +344,7 @@ class ParamForm(QWidget):
             for child in self._retry_field.findChildren(QLabel):
                 if "⚠" in (child.text() or ""):
                     child.setText("已清除重试次数")
-                    child.setStyleSheet("color: #1a7f37;")
+                    child.setStyleSheet(f"color: {SUCCESS};")
                     break
 
     def retry_timeout_values(self) -> dict[str, Any]:
@@ -520,12 +529,12 @@ class ParamForm(QWidget):
             var_button.setVisible(checked)
             # 视觉提示：fx 模式浅蓝底，与 Web 编辑器的 chip 态对应
             editor.setStyleSheet(
-                "QLineEdit { background: #eef5ff; }" if checked else ""
+                f"QLineEdit {{ background: {SURFACE_HIGHLIGHT}; }}" if checked else ""
             )
 
         var_button.setVisible(fx_button.isChecked())
         if fx_button.isChecked():
-            editor.setStyleSheet("QLineEdit { background: #eef5ff; }")
+            editor.setStyleSheet(f"QLineEdit {{ background: {SURFACE_HIGHLIGHT}; }}")
         fx_button.toggled.connect(toggle)
         var_button.clicked.connect(show_variable_menu)
 
@@ -534,7 +543,7 @@ class ParamForm(QWidget):
         # 可见性初始化放在加入布局之后（此时必有父级），杜绝顶层窗口闪现
         var_button.setVisible(fx_button.isChecked())
         if fx_button.isChecked():
-            editor.setStyleSheet("QLineEdit { background: #eef5ff; }")
+            editor.setStyleSheet(f"QLineEdit {{ background: {SURFACE_HIGHLIGHT}; }}")
         self._fx_buttons[name] = (fx_button, var_button)
         return row
 
@@ -716,13 +725,13 @@ class ControlNodeForm(QWidget):
 
             hint = QLabel("return 节点会终止整个工作流并返回该值。")
             hint.setWordWrap(True)
-            hint.setStyleSheet("color: #64707d;")
+            hint.setStyleSheet(f"color: {TEXT_SECONDARY};")
             self._form.addRow(hint)
 
         elif node_type == "sequence":
             hint = QLabel("顺序容器：子节点按顺序执行。")
             hint.setWordWrap(True)
-            hint.setStyleSheet("color: #64707d;")
+            hint.setStyleSheet(f"color: {TEXT_SECONDARY};")
             self._form.addRow(hint)
 
     @staticmethod

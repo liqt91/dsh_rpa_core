@@ -146,6 +146,19 @@ def test_home_new_flow_rejects_empty_and_invalid_name(catalog, tmp_path, monkeyp
     home._create_flow()
     assert store.list() == []
     assert opened == []
+    # 空名是知会型（无需决策）⇒ 页面内提示，不弹模态（M49 P1-3）
+    assert "不能为空" in home.hint.text()
+    assert warnings == []
+
+    monkeypatch.setattr(
+        home_module.QInputDialog,
+        "getText",
+        staticmethod(lambda *a, **k: ("bad/../escape", True)),
+    )
+    home._create_flow()
+    assert store.list() == []
+    assert opened == []
+    # 非法名仍由 store 校验并把原因弹出来（属于「操作失败」，要看得见）
     assert warnings
 
     monkeypatch.setattr(

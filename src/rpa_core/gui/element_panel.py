@@ -37,6 +37,11 @@ from PySide6.QtWidgets import (
 )
 
 from rpa_core.gui.element_editor import ElementEditorForm
+from rpa_core.gui.theme import (
+    DANGER,
+    SUCCESS,
+    TEXT_SECONDARY,
+)
 
 
 class ElementPanel(QWidget):
@@ -90,7 +95,7 @@ class ElementPanel(QWidget):
         layout.addLayout(toolbar)
 
         self.hint_label = QLabel("")
-        self.hint_label.setStyleSheet("color: #64707d;")
+        self.hint_label.setStyleSheet(f"color: {TEXT_SECONDARY};")
         layout.addWidget(self.hint_label)
 
         # 搜索/过滤（A4，对齐影刀元素库面板）：按名称或摘要（含定位串）过滤列表。
@@ -258,7 +263,7 @@ class ElementDialog(QDialog):
             "" if verify is None else f"捕获时命中 {verify} 个"
         )
         if verify is not None:
-            color = "#1a7f37" if verify == 1 else "#cf222e"
+            color = SUCCESS if verify == 1 else DANGER
             self.verify_label.setStyleSheet(f"color: {color}; font-weight: bold;")
         layout.addWidget(self.verify_label)
 
@@ -281,7 +286,7 @@ class ElementDialog(QDialog):
         # metadata 只读（对齐 Web metaEl 的行集；browser 另含语义特征与页面指纹）
         self.meta_label = QLabel(self._metadata_text(descriptor))
         self.meta_label.setWordWrap(True)
-        self.meta_label.setStyleSheet("color: #64707d;")
+        self.meta_label.setStyleSheet(f"color: {TEXT_SECONDARY};")
         layout.addWidget(self.meta_label)
 
         # 备选定位不再是只读标签：它归编辑区管（`ElementEditorForm` 的候选列表，
@@ -291,7 +296,7 @@ class ElementDialog(QDialog):
 
         # 校验错误提示（对话框内联展示，不弹 QMessageBox，保持可测试性）
         self.error_label = QLabel("")
-        self.error_label.setStyleSheet("color: #cf222e;")
+        self.error_label.setStyleSheet(f"color: {DANGER};")
         layout.addWidget(self.error_label)
 
         buttons = QDialogButtonBox(
@@ -453,7 +458,7 @@ class ElementDialog(QDialog):
             self.error_label.setText(f"校验失败：{result['error']}")
             return
         count = result.get("count")
-        color = "#1a7f37" if count == 1 else "#cf222e"
+        color = SUCCESS if count == 1 else DANGER
         self.verify_label.setText(f"当前命中 {count} 个（页面上已黄框闪烁）")
         self.verify_label.setStyleSheet(f"color: {color}; font-weight: bold;")
 

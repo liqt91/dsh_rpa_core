@@ -33,6 +33,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from rpa_core.gui import fonts
 from rpa_core.gui.flow_model import (
     _ELSE_BRANCH_TYPE,
     _END_BRACKET_TYPE,
@@ -48,26 +49,46 @@ from rpa_core.gui.flow_model import (
     ROLE_RUN_STATE,
     FlowTreeModel,
 )
+from rpa_core.gui.theme import (
+    BORDER,
+    BORDER_SOFT,
+    DANGER,
+    DEPTH_COLORS,
+    GRIP,
+    INFO,
+    NEUTRAL,
+    OVERLAY_BORDER,
+    OVERLAY_SHADOW,
+    SUCCESS,
+    SURFACE,
+    SURFACE_GROUP,
+    SURFACE_GROUP_HOVER,
+    SURFACE_SELECTED,
+    SURFACE_SUNKEN,
+    TEXT,
+    TEXT_MUTED,
+    TEXT_SECONDARY,
+)
 
-# 深度色线（Web 端 depth-0..5 同谱系的饱和色）
-_DEPTH_COLORS = ["#0969da", "#1a7f37", "#9a6700", "#8250df", "#bc4c00", "#0598bc"]
+# 深度色线（Web 端 depth-0..5 同谱系的饱和色，取值见 theme.DEPTH_COLORS）
+_DEPTH_COLORS = list(DEPTH_COLORS)
 
-# 浅色卡片调色板（与 QDarkStyle LightPalette 协调：底 #FAFAFA / 边 #C0C4C8）
-_CARD = "#ffffff"
-_CARD_SELECTED = "#daedff"
-_BORDER = QColor("#c0c4c8")
-_BORDER_HOVER = QColor(25, 35, 45, 70)
-_SHADOW = QColor(25, 35, 45, 28)
-_CMD_TEXT = "#19232d"
-_ARGS_TEXT = "#64707d"
-_GRIP = "#9da9b5"
+# 浅色卡片调色板（与 QDarkStyle LightPalette 协调，全部取自 theme token）
+_CARD = SURFACE
+_CARD_SELECTED = SURFACE_SELECTED
+_BORDER = QColor(BORDER)
+_BORDER_HOVER = QColor(*OVERLAY_BORDER)
+_SHADOW = QColor(*OVERLAY_SHADOW)
+_CMD_TEXT = TEXT
+_ARGS_TEXT = TEXT_SECONDARY
+_GRIP = GRIP
 
 _ROW_HEIGHT = 46
 _CARD_RADIUS = 6
 _BAR_WIDTH = 4
 # 树缩进步长：结束行 / 否则行按"减一级缩进"与父容器卡片对齐
 _INDENT = 22
-_GROUP_BG = "#eef1f4"
+_GROUP_BG = SURFACE_GROUP
 
 # 卡片尾删除按钮（文字胶囊）：固定尺寸，paint 与 mouseReleaseEvent 热区共用
 _DELETE_BTN_W = 36
@@ -620,10 +641,10 @@ class FlowTreeView(QTreeView):
         rect = self.viewport().rect()
         y = target["indicator_y"]
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor("#0969da"))
+        painter.setBrush(QColor(INFO))
         painter.drawRect(rect.left() + 8, y - 2, rect.width() - 16, 4)
         # 指示条两侧加小圆点，让 Above/Below/OnItem 更易辨认
-        painter.setBrush(QColor("#0969da"))
+        painter.setBrush(QColor(INFO))
         painter.drawEllipse(rect.left() + 8 - 3, y - 3, 6, 6)
         painter.drawEllipse(rect.right() - 8 - 3, y - 3, 6, 6)
         painter.end()
@@ -682,10 +703,10 @@ class CardDelegate(QStyledItemDelegate):
         # 最近一次的运行状态直接给行号着色：running 蓝 / succeeded 绿 / failed 红。
         run_state = index.data(ROLE_RUN_STATE)
         number_color = {
-            "running": "#0969da",
-            "succeeded": "#1a7f37",
-            "failed": "#cf222e",
-        }.get(run_state, "#8c959f")
+            "running": INFO,
+            "succeeded": SUCCESS,
+            "failed": DANGER,
+        }.get(run_state, NEUTRAL)
         painter.setPen(QPen(QColor(number_color)))
         painter.setFont(option.font)
         number_rect = QRect(_GUTTER_NUMBER_X0, rect.top(), _GUTTER_NUMBER_W, rect.height())
@@ -699,7 +720,7 @@ class CardDelegate(QStyledItemDelegate):
         if index.data(ROLE_BREAKPOINT):
             center_y = rect.center().y()
             painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(QColor("#cf222e"))
+            painter.setBrush(QColor(DANGER))
             painter.drawEllipse(
                 _GUTTER_BREAKPOINT_X - _BREAKPOINT_RADIUS,
                 center_y - _BREAKPOINT_RADIUS,
@@ -712,14 +733,14 @@ class CardDelegate(QStyledItemDelegate):
             radius = 5
             center_y = rect.center().y()
             painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(QColor("#cf222e"))
+            painter.setBrush(QColor(DANGER))
             painter.drawEllipse(
                 _GUTTER_ERROR_X - radius, center_y - radius, radius * 2, radius * 2
             )
             font = QFont(option.font)
             font.setBold(True)
             painter.setFont(font)
-            painter.setPen(QPen(QColor("#ffffff")))
+            painter.setPen(QPen(QColor(SURFACE)))
             painter.drawText(
                 QRect(_GUTTER_ERROR_X - radius, center_y - radius,
                       radius * 2, radius * 2),
@@ -731,9 +752,9 @@ class CardDelegate(QStyledItemDelegate):
         if index.model().hasChildren(index):
             btn = collapse_button_rect(rect)
             painter.setPen(QPen(_BORDER, 1))
-            painter.setBrush(QColor("#ffffff"))
+            painter.setBrush(QColor(SURFACE))
             painter.drawRoundedRect(btn, 3, 3)
-            painter.setPen(QPen(QColor("#57606a")))
+            painter.setPen(QPen(QColor(TEXT_MUTED)))
             painter.setFont(option.font)
             view = option.widget
             expanded = bool(view and view.isExpanded(index))
@@ -799,7 +820,7 @@ class CardDelegate(QStyledItemDelegate):
         adjusted_rect, _ = self._marker_rect(option, index)
 
         # 虚线连接：从行左侧延伸到文字前
-        dash_pen = QPen(QColor("#d0d7de"))
+        dash_pen = QPen(QColor(BORDER_SOFT))
         dash_pen.setStyle(Qt.PenStyle.DashLine)
         dash_pen.setWidth(1)
         painter.setPen(dash_pen)
@@ -809,9 +830,8 @@ class CardDelegate(QStyledItemDelegate):
         )
 
         # 灰色斜体文字
-        painter.setPen(QPen(QColor("#8c959f")))
-        font = QFont(option.font)
-        font.setPointSizeF(max(7.0, option.font.pointSizeF() - 0.5))
+        painter.setPen(QPen(QColor(NEUTRAL)))
+        font = fonts.scaled(option.font, delta=-1)  # 像素口径，见 fonts.py
         font.setItalic(True)
         painter.setFont(font)
         text_rect = QRect(adjusted_rect.left() + 34, adjusted_rect.top(),
@@ -831,7 +851,7 @@ class CardDelegate(QStyledItemDelegate):
         depth = _index_depth(index)
         painter.setBrush(QColor(_DEPTH_COLORS[depth % len(_DEPTH_COLORS)]))
         painter.drawRoundedRect(QRect(rect.left() + 2, rect.top() + 2, 3, rect.height() - 4), 1, 1)
-        painter.setPen(QPen(QColor("#57606a")))
+        painter.setPen(QPen(QColor(TEXT_MUTED)))
         font = QFont(option.font)
         font.setBold(True)
         painter.setFont(font)
@@ -867,7 +887,7 @@ class CardDelegate(QStyledItemDelegate):
         painter.drawText(QRect(rect.left() + 12, rect.top(), 16, rect.height()),
                          Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, "≡")
 
-        painter.setPen(QPen(QColor("#57606a")))
+        painter.setPen(QPen(QColor(TEXT_MUTED)))
         font = QFont(option.font)
         font.setBold(True)
         painter.setFont(font)
@@ -949,9 +969,7 @@ class CardDelegate(QStyledItemDelegate):
         if not suppress_summary:
             summary = index.data(ROLE_ARGS_SUMMARY) or ""
             if summary:
-                mono = QFont("Consolas")
-                mono.setPointSizeF(max(7.5, option.font.pointSizeF() - 1.5))
-                painter.setFont(mono)
+                painter.setFont(fonts.mono_font(option.font))
                 painter.setPen(QPen(QColor(_ARGS_TEXT)))
                 summary_x = x + min(name_w, title_rect.width() - 60)
                 summary_rect = QRect(summary_x, content.top(),
@@ -970,11 +988,11 @@ class CardDelegate(QStyledItemDelegate):
     def _paint_delete_button(painter: QPainter, btn: QRect, option) -> None:
         """在按钮区域内绘制文字删除按钮：浅灰圆角胶囊 + 红色「删除」文字。"""
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor("#eaeef2"))
+        painter.setBrush(QColor(SURFACE_GROUP_HOVER))
         painter.drawRoundedRect(btn, btn.height() // 2, btn.height() // 2)
         font = QFont(option.font)
         painter.setFont(font)
-        painter.setPen(QPen(QColor("#cf222e")))
+        painter.setPen(QPen(QColor(DANGER)))
         painter.drawText(btn, Qt.AlignmentFlag.AlignCenter, "删除")
 
 
@@ -1002,9 +1020,9 @@ def build_canvas(
     tree.setSelectionMode(QTreeView.SelectionMode.ExtendedSelection)
     tree.setMouseTracking(True)
     tree.setStyleSheet(
-        "QTreeView { background:#f6f8fa; border:none; }"
-        "QTreeView::item { background:transparent; }"
-        "QTreeView::branch { background:transparent; }"
+        f"QTreeView {{ background:{SURFACE_SUNKEN}; border:none; }}"
+        f"QTreeView::item {{ background:transparent; }}"
+        f"QTreeView::branch {{ background:transparent; }}"
     )
     tree.expandAll()
 

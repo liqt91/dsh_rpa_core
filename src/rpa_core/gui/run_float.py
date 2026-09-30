@@ -13,18 +13,30 @@ from PySide6.QtCore import QPoint, Qt
 from PySide6.QtGui import QColor, QMouseEvent, QPainter, QPen
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
+from rpa_core.gui.theme import (
+    ACCENT,
+    BORDER,
+    CAUTION,
+    DANGER,
+    INFO,
+    SUCCESS,
+    SURFACE,
+    TEXT_MUTED,
+    WARNING,
+)
+
 _WIDTH = 320
 _HEIGHT = 150
 _MARGIN = 16  # 距屏幕右下角的边距
 
 _STATE_COLORS = {
-    "running": "#0969da",
-    "succeeded": "#1a7f37",
-    "failed": "#cf222e",
-    "cancelled": "#9a6700",
-    "paused": "#bf8700",
-    "recovery_required": "#8250df",
-    "indeterminate": "#8250df",
+    "running": INFO,
+    "succeeded": SUCCESS,
+    "failed": DANGER,
+    "cancelled": WARNING,
+    "paused": CAUTION,
+    "recovery_required": ACCENT,
+    "indeterminate": ACCENT,
 }
 
 # 不是「跑完」而是「等人工接手」的终态：浮窗要给出「继续」入口
@@ -130,7 +142,7 @@ class RunFloatWindow(QWidget):
         """终态：succeeded / failed / cancelled / paused / 需确认恢复的两种 + 详情行。"""
         self.state = status
         self._pause_pending = False
-        color = _STATE_COLORS.get(status, "#57606a")
+        color = _STATE_COLORS.get(status, TEXT_MUTED)
         self.dot_label.setStyleSheet(f"color: {color};")
         title = {
             "succeeded": "运行成功",
@@ -171,8 +183,8 @@ class RunFloatWindow(QWidget):
         # 无边框窗口自绘卡片底（白底圆角 + 边框），避免裸控件悬浮感
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        painter.setPen(QPen(QColor("#c0c4c8")))
-        painter.setBrush(QColor("#ffffff"))
+        painter.setPen(QPen(QColor(BORDER)))
+        painter.setBrush(QColor(SURFACE))
         painter.drawRoundedRect(self.rect().adjusted(0, 0, -1, -1), 8, 8)
         painter.end()
         super().paintEvent(event)

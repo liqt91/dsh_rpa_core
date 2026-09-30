@@ -51,6 +51,18 @@ from PySide6.QtWidgets import (
 
 from rpa_core.catalog import CommandCatalog, load_catalog
 from rpa_core.devserver.store import WorkflowDirStore
+from rpa_core.gui import fonts
+from rpa_core.gui.motion import fade_widget, fade_window
+from rpa_core.gui.persist import gui_settings, load_sizes, save_sizes
+from rpa_core.gui.theme import (
+    DANGER,
+    FONT_MONO,
+    NEUTRAL,
+    SUCCESS,
+    TEXT_MUTED,
+    TEXT_SECONDARY,
+    WARNING,
+)
 
 from .command_palette import (
     ROLE_COMMAND_ID,  # noqa: F401  # re-export：既有测试从 app 导入
@@ -58,6 +70,7 @@ from .command_palette import (
     load_command_display_names,
 )
 from .flow_model import _MIME_COMMAND
+from .palette import KIND_COMMAND, KIND_NODE, PaletteEntry, palette_prompt
 
 
 class _CommandTree(QTreeWidget):
@@ -100,6 +113,35 @@ NAMESPACE_ORDER = ["browser", "data", "workflow", "desktop"]
 # 「否则」是 if 的**可选**分支指令（影刀同款）：默认不加，需要时从这里双击添加。
 CONTROL_GROUP_LABEL = "流程控制"
 ELSE_COMMAND_ID = "@else"
+# 窗口状态（几何 + 三栏比例）在 QSettings 里的键前缀（M49 P1-1）
+_WINDOW_STATE_PREFIX = "mainWindow"
+# 三栏出厂比例：初始布局与「恢复默认布局」共用一份，避免两处各写一遍而漂移
+DEFAULT_SPLITTER_SIZES = (280, 700, 300)
+# 视图菜单管理的 Dock：(菜单文字, 取 Dock 的方法名, 展开时要刷新的方法名)
+_VIEW_DOCKS: tuple[tuple[str, str, str | None], ...] = (
+    ("元素库", "_elements_dock", "_refresh_elements"),
+    ("运行", "_run_dock", None),
+    ("运行历史", "_history_dock", "_refresh_history"),
+    ("数据表格", "_table_dock", "_refresh_table"),
+    ("变量面板", "_variables_dock", "_refresh_variables"),
+)
+# 「快捷键一览」对话框的内容（模块级单一来源：新增快捷键时，判据能直接比对这张表，
+# 不用去驱动一个模态对话框读它的行；也让「忘记同步一览」在测试里现形）。
+SHORTCUTS_HELP: tuple[tuple[str, str], ...] = (
+    ("Ctrl+N", "新建"),
+    ("Ctrl+O", "打开"),
+    ("Ctrl+S", "保存"),
+    ("Ctrl+Z", "撤销"),
+    ("Ctrl+Y", "重做"),
+    ("Ctrl+C", "复制"),
+    ("Ctrl+V", "粘贴"),
+    ("Delete", "删除节点"),
+    ("Ctrl+F", "画布查找"),
+    ("Ctrl+P", "命令面板"),
+    ("F9", "捕获桌面元素"),
+    ("Esc", "关闭搜索 / 取消捕获"),
+)
+
 # 控制流节点用 node_type（而非 command_id）作为左树叶子的标识，
 # add_command 里据此分支调 insert_node。_CONTROL_COMMANDS 里 command_id 字段
 # 存两种标识：以 @ 开头表示"这是控制指令"（@else / @return），
@@ -153,13 +195,12 @@ def apply_theme(app: QApplication) -> None:
     """
     if getattr(app, "_rpa_theme_applied", False):
         return
-    from PySide6.QtGui import QFont, QFontDatabase
+    from PySide6.QtGui import QFontDatabase
 
     for family in ("Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC",
                    "Source Han Sans SC", "SimHei"):
         if QFontDatabase.hasFamily(family):
-            font = QFont(family, 9)
-            app.setFont(font)
+            app.setFont(fonts.base_font(family))  # 像素口径（见 fonts.py）
             break
     app._rpa_theme_applied = True  # type: ignore[attr-defined]
     try:
@@ -320,6 +361,18 @@ def _apply_filter(tree: QTreeWidget, keyword: str) -> None:
             visible += matched
         group.setHidden(visible == 0)
         group.setExpanded(visible > 0)
+
+
+def _set_ext_dot(dot: object, color: str, tooltip: str) -> None:
+    """写状态点：只改颜色与 tooltip，字形/尺寸恒定（状态栏不会因文案长短抖动）。
+
+    模块级纯函数（同 ``_ext_badge_tooltip``）：测试用假 self 驱动 ``_on_ext_badge``
+    时不必造出整个 MainWindow。``dot`` 为 None（非 GUI 场景）时静默跳过。
+    """
+    if dot is None:
+        return
+    dot.setStyleSheet(f"color: {color};")
+    dot.setToolTip(tooltip)
 
 
 def _ext_badge_tooltip(diag: dict) -> str:
@@ -503,8 +556,11 @@ class MainWindow(QMainWindow):
         splitter.setStretchFactor(0, 0)
         splitter.setStretchFactor(1, 1)
         splitter.setStretchFactor(2, 0)
-        splitter.setSizes([280, 700, 300])
+        splitter.setSizes(list(DEFAULT_SPLITTER_SIZES))
+        self._splitter = splitter
         self.setCentralWidget(splitter)
+        # 用户拖过的窗口尺寸与三栏比例下次启动还原（没有记录则保持上面的默认值）
+        self._restore_window_state()
 
         self.statusBar().showMessage(
             f"已加载 {len(catalog)} 条指令 · catalog {catalog.digest[:10]}"
@@ -512,9 +568,14 @@ class MainWindow(QMainWindow):
 
         # 扩展通道状态徽标（状态栏常驻）：在线 = 存在扩展 bridge 端点（ADR 0015，
         # 浏览器按需拉起 host，无 8765 常驻服务、无心跳窗口）。
+        # 拆成「状态点 + 文字」两部分：点负责一眼可辨（绿=在线 / 红=有问题 /
+        # 灰=良性离线），文字保留 2026-09-20 维护者要求的「缺哪一环」诊断。
         if self._store is not None:
             from PySide6.QtCore import QTimer
 
+            self._ext_dot = QLabel("●")
+            self._ext_dot.setStyleSheet(f"color: {NEUTRAL};")
+            self.statusBar().addPermanentWidget(self._ext_dot)
             self._ext_badge = QLabel("")
             self.statusBar().addPermanentWidget(self._ext_badge)
             self._ext_badge_timer = QTimer(self)
@@ -522,6 +583,26 @@ class MainWindow(QMainWindow):
             self._ext_badge_timer.timeout.connect(self._refresh_ext_badge)
             self._ext_badge_timer.start()
             self._refresh_ext_badge()
+
+    def _restore_window_state(self) -> None:
+        """还原上次的窗口几何与三栏比例（M49 P1-1）。
+
+        坏值/缺省一律回落构造时的默认值（见 persist.parse_sizes）——宁可界面回到
+        出厂布局，也不要因为一份坏配置打不开窗口。
+        """
+        settings = gui_settings()
+        geometry = settings.value(f"{_WINDOW_STATE_PREFIX}/geometry")
+        if geometry is not None:
+            self.restoreGeometry(geometry)
+        sizes = load_sizes(f"{_WINDOW_STATE_PREFIX}/splitter", expected=3)
+        if sizes is not None:
+            self._splitter.setSizes(sizes)
+
+    def _save_window_state(self) -> None:
+        """记住窗口几何与三栏比例（关窗时调用）。"""
+        settings = gui_settings()
+        settings.setValue(f"{_WINDOW_STATE_PREFIX}/geometry", self.saveGeometry())
+        save_sizes(f"{_WINDOW_STATE_PREFIX}/splitter", self._splitter.sizes())
 
     def _refresh_ext_badge(self) -> None:
         """后台线程探测 bridge 端点在线状态；线程只写纯 Python 结果，绝不触碰 Qt 对象。
@@ -589,22 +670,34 @@ class MainWindow(QMainWindow):
     def _on_ext_badge(self, online: bool, hosts: list, diag: object = None) -> None:
         if online:
             joined = ", ".join(sorted({str(h) for h in hosts}))
-            self._ext_badge.setText(f"插件通道：在线（{joined}）")
-            self._ext_badge.setStyleSheet("color: #1a7f37;")
+            _set_ext_dot(self._ext_dot, SUCCESS, f"插件通道在线（{joined}）")
+            text = f"插件通道：在线（{joined}）"
+            if self._ext_badge.text() != text:  # 同状态不重设，避免无谓重排
+                self._ext_badge.setText(text)
+            self._ext_badge.setStyleSheet(f"color: {SUCCESS};")
             self._ext_badge.setToolTip("")
             return
         # 离线时把「缺哪一环」直接写在状态栏上：bridge 注册 / 插件安装 / 浏览器运行
         # 三态是只读探测出来的，不需要把浏览器开起来（2026-09-20 维护者需求）。
         summary = ""
         tooltip = "浏览器指令不可用，详见「插件」"
+        reason = ""
         if isinstance(diag, dict):
             summary = str(diag.get("summary") or "")
+            reason = str(diag.get("reason") or "")
             tooltip = _ext_badge_tooltip(diag) or tooltip
+        # 良性离线（浏览器只是没开，M47.5b 同款判据）：灰点，不摆红色报警；
+        # 真问题（bridge 未注册 / 浏览器开着但插件没注入）才用红点。
+        from rpa_core.extension_installer import OFFLINE_BROWSER_NOT_RUNNING
+
+        benign = reason == OFFLINE_BROWSER_NOT_RUNNING
+        _set_ext_dot(self._ext_dot, NEUTRAL if benign else DANGER, tooltip)
         text = "插件通道：离线"
         text += f" · {summary}" if summary else "（浏览器指令不可用，详见「插件」）"
-        self._ext_badge.setText(text)
+        if self._ext_badge.text() != text:
+            self._ext_badge.setText(text)
         self._ext_badge.setToolTip(tooltip)
-        self._ext_badge.setStyleSheet("color: #cf222e;")
+        self._ext_badge.setStyleSheet(f"color: {DANGER if not benign else TEXT_MUTED};")
 
     def _prewarm_param_panel(self) -> None:
         """预热参数面板：把「首次复杂表单塞进 QScrollArea」的一次性开销提前消化。
@@ -677,6 +770,15 @@ class MainWindow(QMainWindow):
         save_action.triggered.connect(self._save_action)
         toolbar.addAction(save_action)
         self._save_action_ref = save_action
+
+        # 返回流程列表（M49 P2）：从工作台进来的编辑器才显示。原先「回工作台」只能靠
+        # 关窗，而关窗对话框写的是「是否退出」，用户会以为要退出整个程序（ADR 0017
+        # 是两段式：工作台只是收起）。给一个明确入口，并把关窗文案按场景分叉。
+        self._back_action = QAction("← 返回流程列表", self)
+        self._back_action.setToolTip("回到流程列表（工作台），编辑器保持单窗口复用")
+        self._back_action.triggered.connect(self._back_to_home)
+        toolbar.addAction(self._back_action)
+        self._back_action.setVisible(_HOME_WINDOW is not None)
 
         # 撤销/重做/复制/粘贴：窗口级快捷键，焦点在文本控件时暂停（不吞编辑键）
         self.undo_action = QAction("撤销", self)
@@ -808,6 +910,20 @@ class MainWindow(QMainWindow):
         self.find_action.triggered.connect(self._show_canvas_search)
         toolbar.addAction(self.find_action)
 
+        # 命令面板（M49 P3）：Ctrl+P 唤起。与「查找」的区别是**跨来源**——查找只搜画布
+        # 已有的节点，命令面板还能搜未插入的指令（回车即插入）。不放工具栏：工具栏已经有
+        # 二十来个按钮，再塞一个会稀释常用项；靠菜单 + 快捷键两个入口就够（快捷键由下面
+        # 的 self.addAction 注册，菜单里同时显示键位）。
+        self.palette_action = QAction("命令面板", self)
+        self.palette_action.setObjectName("paletteAction")
+        self.palette_action.setShortcut("Ctrl+P")
+        self.palette_action.setShortcutContext(Qt.ShortcutContext.WindowShortcut)
+        self.palette_action.setToolTip(
+            "命令面板：搜指令（回车插入）或搜节点（回车跳转）（Ctrl+P）"
+        )
+        self.palette_action.triggered.connect(self._show_command_palette)
+        self.addAction(self.palette_action)
+
     def _build_menu_bar(self) -> None:
         """菜单栏：文件/编辑/运行/帮助，复用工具栏 QAction。"""
         menu_bar = self.menuBar()
@@ -830,17 +946,11 @@ class MainWindow(QMainWindow):
         edit_menu.addAction(self.delete_action)
         edit_menu.addSeparator()
         edit_menu.addAction(self.find_action)
-        edit_menu.addSeparator()
-        self._toggle_variables_action = QAction("变量面板", self)
-        self._toggle_variables_action.setCheckable(True)
+        edit_menu.addAction(self.palette_action)
 
-        def _toggle_variables(on: bool) -> None:
-            self._variables_dock().setVisible(on)
-            if on:
-                self._refresh_variables()
-
-        self._toggle_variables_action.toggled.connect(_toggle_variables)
-        edit_menu.addAction(self._toggle_variables_action)
+        # 视图（M49 P1-2）：Dock 的统一入口。此前每个面板只在自己的操作路径上露面，
+        # 用户找不到「打开元素库」这种入口；Dock 本身仍是懒创建（触发菜单项才建）。
+        self._build_view_menu(menu_bar)
 
         # 运行
         run_menu = menu_bar.addMenu("运行")
@@ -857,6 +967,70 @@ class MainWindow(QMainWindow):
         shortcuts_action.triggered.connect(self._show_shortcuts_dialog)
         help_menu.addAction(shortcuts_action)
 
+    def _build_view_menu(self, menu_bar) -> None:
+        """「视图」菜单：五个懒加载 Dock 的统一入口 + 恢复默认布局（M49 P1-2）。
+
+        为什么值得单独立菜单：Dock 原先只在自己的操作路径上被动露面（元素库要点
+        「元素库」按钮、运行面板要跑一次），用户没有「我现在想看看数据表格」的入口，
+        也没有一键回到出厂布局的手段。Dock 的懒创建语义保持不变——菜单项被点中才建，
+        所以启动成本与内存占用不受影响。
+        """
+        view_menu = menu_bar.addMenu("视图")
+        self._view_dock_actions: dict[str, QAction] = {}
+        self._view_dock_wired: set[object] = set()
+        self._view_dock_faded: set[object] = set()
+        for label, getter, refresher in _VIEW_DOCKS:
+            action = QAction(label, self)
+            action.setCheckable(True)
+            action.setObjectName(f"viewDock::{getter}")
+            action.toggled.connect(
+                lambda visible, g=getter, r=refresher: self._set_dock_visible(g, r, visible)
+            )
+            view_menu.addAction(action)
+            self._view_dock_actions[getter] = action
+        view_menu.addSeparator()
+        reset_action = QAction("恢复默认布局", self)
+        reset_action.setObjectName("viewResetLayout")
+        reset_action.triggered.connect(self._reset_layout)
+        view_menu.addAction(reset_action)
+
+    def _set_dock_visible(self, getter: str, refresher: str | None, visible: bool) -> None:
+        """菜单项 → Dock 显隐；Dock 自己关掉时把勾选态同步回来（单一事实来源）。"""
+        dock = getattr(self, getter)()
+        if dock not in self._view_dock_wired:
+            dock.visibilityChanged.connect(
+                lambda shown, g=getter: self._sync_dock_action(g, shown)
+            )
+            self._view_dock_wired.add(dock)
+        if visible:
+            dock.show()
+            dock.raise_()
+            if dock not in self._view_dock_faded:
+                # 只在**首次**出现时淡入：反复开关每次都动画会显得闪
+                self._view_dock_faded.add(dock)
+                fade_widget(dock)
+            if refresher:
+                getattr(self, refresher)()
+        else:
+            dock.hide()
+
+    def _sync_dock_action(self, getter: str, visible: bool) -> None:
+        action = self._view_dock_actions.get(getter)
+        if action is None:
+            return
+        action.blockSignals(True)  # 同步勾选态，避免与 toggled 形成回环
+        action.setChecked(visible)
+        action.blockSignals(False)
+
+    def _reset_layout(self) -> None:
+        """恢复默认布局：关掉所有 Dock + 三栏比例回到出厂值（并落盘）。"""
+        from PySide6.QtWidgets import QDockWidget
+
+        for dock in self.findChildren(QDockWidget):
+            dock.hide()
+        self._splitter.setSizes(list(DEFAULT_SPLITTER_SIZES))
+        self._save_window_state()
+
     def _show_shortcuts_dialog(self) -> None:
         """显示快捷键一览对话框。"""
         from PySide6.QtWidgets import QDialog, QDialogButtonBox, QFormLayout, QLabel
@@ -867,22 +1041,12 @@ class MainWindow(QMainWindow):
         layout = QFormLayout(dialog)
         layout.setContentsMargins(16, 12, 16, 12)
 
-        shortcuts = [
-            ("Ctrl+N", "新建"),
-            ("Ctrl+O", "打开"),
-            ("Ctrl+S", "保存"),
-            ("Ctrl+Z", "撤销"),
-            ("Ctrl+Y", "重做"),
-            ("Ctrl+C", "复制"),
-            ("Ctrl+V", "粘贴"),
-            ("Delete", "删除节点"),
-            ("Ctrl+F", "画布查找"),
-            ("F9", "捕获桌面元素"),
-            ("Esc", "关闭搜索 / 取消捕获"),
-        ]
-        for key, desc in shortcuts:
+        for key, desc in SHORTCUTS_HELP:
             key_label = QLabel(key)
-            key_label.setStyleSheet("font-family: Consolas, monospace; font-weight: bold;")
+            key_label.setStyleSheet(
+                f"font-family: {FONT_MONO}; font-weight: bold;"
+                f" font-size: {fonts.MONO_PX}px;"
+            )
             layout.addRow(key_label, QLabel(desc))
 
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
@@ -1000,19 +1164,85 @@ class MainWindow(QMainWindow):
         if not matches:
             return
         self._canvas_search_pos = (self._canvas_search_pos + 1) % len(matches)
-        item = matches[self._canvas_search_pos]
-        index = item.index()
+        self._reveal_canvas_item(matches[self._canvas_search_pos])
+        total = len(matches)
+        self.statusBar().showMessage(
+            f"匹配 {self._canvas_search_pos + 1}/{total}（Enter 下一个，Esc 关闭）", 4000
+        )
+
+    def _reveal_canvas_item(self, item) -> None:
+        """把画布节点送到用户眼前：展开祖先 + 选中 + 滚动居中。
+
+        抽出来是因为有两条通路要它：画布内查找（Ctrl+F 循环定位）与命令面板
+        （Ctrl+P 选节点跳转）。两处各写一遍，将来只改一处就会出现「Ctrl+F 能滚到
+        中间、从面板跳过去却停在视口外」这种不对称。
+        """
         view = self.canvas_view
+        index = item.index()
         parent = index.parent()
         while parent.isValid():
             view.expand(parent)
             parent = parent.parent()
         view.setCurrentIndex(index)
         view.scrollTo(index, view.ScrollHint.PositionAtCenter)
-        total = len(matches)
-        self.statusBar().showMessage(
-            f"匹配 {self._canvas_search_pos + 1}/{total}（Enter 下一个，Esc 关闭）", 4000
-        )
+
+    # ---- 命令面板（M49 P3） -----------------------------------------------
+
+    def _show_command_palette(self) -> None:
+        """Ctrl+P：弹出命令面板，选中后按条目类型分派（插入指令 / 跳转节点）。"""
+        entry = palette_prompt(self._palette_entries(), self)
+        if entry is not None:
+            self._apply_palette_entry(entry)
+
+    def _palette_entries(self) -> list[PaletteEntry]:
+        """面板条目 = 控制指令 + catalog 指令（可插入）+ 画布现有节点（可跳转）。
+
+        两类同列一表：用户打「打开网页」时既可能想插入一条新指令，也可能想跳到流程里
+        已经有的那一条；让他在同一个框里看到两种结果、由条目类型决定回车干什么，比先逼他
+        「想清楚是要插入还是跳转，再选对应命令」要顺。
+        """
+        from rpa_core.gui.flow_model import ROLE_NODE_ID
+
+        entries: list[PaletteEntry] = []
+        for command_id, label, _tip in _CONTROL_COMMANDS:
+            entries.append(PaletteEntry(KIND_COMMAND, label, "控制指令", command_id))
+        names = load_command_display_names()
+        for command_id in sorted(self.catalog):
+            manifest = self.catalog[command_id]
+            entries.append(
+                PaletteEntry(
+                    KIND_COMMAND,
+                    names.get(command_id, command_id),
+                    f"{command_id} · {manifest.executor}",
+                    command_id,
+                )
+            )
+        for item in self._iter_canvas_items():
+            node_id = str(item.data(ROLE_NODE_ID) or "")
+            if node_id:
+                entries.append(
+                    PaletteEntry(KIND_NODE, str(item.text() or node_id), node_id, node_id)
+                )
+        return entries
+
+    def _apply_palette_entry(self, entry: PaletteEntry) -> None:
+        """执行面板条目：指令走 ``add_command``（与左树双击同一条路），节点走定位。"""
+        if entry.kind == KIND_COMMAND:
+            self.add_command(entry.payload)
+            return
+        self._reveal_canvas_node(entry.payload)
+
+    def _reveal_canvas_node(self, node_id: str) -> bool:
+        """按节点 id 定位；节点已被删掉时只在状态栏说明（不静默失败）。"""
+        from rpa_core.gui.flow_model import ROLE_NODE_ID
+
+        for item in self._iter_canvas_items():
+            if str(item.data(ROLE_NODE_ID) or "") == node_id:
+                self._reveal_canvas_item(item)
+                self.statusBar().showMessage(f"已定位节点：{node_id}", 3000)
+                return True
+        self.statusBar().showMessage(f"节点已不存在：{node_id}", 3000)
+        return False
 
     # ---- 右键菜单（M23 G2） -----------------------------------------------
 
@@ -1902,13 +2132,17 @@ class MainWindow(QMainWindow):
             err_layout.setContentsMargins(8, 6, 8, 6)
             err_layout.setSpacing(2)
             self._run_error_code = QLabel()
-            self._run_error_code.setStyleSheet("font-weight: bold; font-size: 13px;")
+            self._run_error_code.setStyleSheet(
+                f"font-weight: bold; font-size: {fonts.CODE_PX}px;"
+            )
             self._run_error_node = QLabel()
             self._run_error_msg = QLabel()
             self._run_error_msg.setWordWrap(True)
             self._run_error_detail = QLabel()
             self._run_error_detail.setWordWrap(True)
-            self._run_error_detail.setStyleSheet("color: #64707d; font-size: 12px;")
+            self._run_error_detail.setStyleSheet(
+                f"color: {TEXT_SECONDARY}; font-size: {fonts.BASE_PX}px;"
+            )
             err_layout.addWidget(self._run_error_code)
             err_layout.addWidget(self._run_error_node)
             err_layout.addWidget(self._run_error_msg)
@@ -2506,9 +2740,9 @@ class MainWindow(QMainWindow):
         details = error.get("details") or {}
 
         self._run_error_code.setText(f"失败：{code}")
-        color = "#cf222e"
+        color = DANGER
         self._run_error_code.setStyleSheet(
-            f"font-weight: bold; font-size: 13px; color: {color};"
+            f"font-weight: bold; font-size: {fonts.CODE_PX}px; color: {color};"
         )
         if node_id:
             self._run_error_node.setText(f"节点：{node_id}")
@@ -3562,7 +3796,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(host_label)
         hub_label = QLabel(self._ext_hub_text())
         hub_label.setWordWrap(True)
-        hub_label.setStyleSheet("color: #9a6700;")
+        hub_label.setStyleSheet(f"color: {WARNING};")
         layout.addWidget(hub_label)
         guide = QLabel(
             "安装步骤：\n"
@@ -3694,16 +3928,31 @@ class MainWindow(QMainWindow):
 
         QTimer.singleShot(0, self._prewarm_elements_dock)
 
+    def _back_to_home(self) -> None:
+        """回到工作台（流程列表）：走正常关窗流程，工作台由 _shutdown_run_manager 唤回。
+
+        **只问一次**：脏数据的确认交给 closeEvent 的「是否保存后返回流程列表？」——
+        若这里先问一次「是否放弃」，用户确认后关窗又会再问一次，两次弹框还各说各话。
+        """
+        self.close()
+
+    def _has_workbench(self) -> bool:
+        """是否存在工作台（决定「关窗」语义是「回工作台」还是「退出程序」）。"""
+        return _HOME_WINDOW is not None
+
     def closeEvent(self, event) -> None:  # noqa: N802
-        """有未保存修改时询问：保存 / 不保存 / 取消。"""
+        """有未保存修改时询问；文案按「回工作台」或「退出」分场景（M49 P2）。"""
+        # 无论用户最后选哪一步，窗口尺寸与分栏比例都该记住（下次开在同一个位置）
+        self._save_window_state()
         if not self._dirty:
             self._shutdown_run_manager()
             event.accept()
             return
+        leaving = "返回流程列表" if self._has_workbench() else "退出"
         answer = QMessageBox.question(
             self,
             "未保存的修改",
-            "当前流程有未保存的修改，是否保存后退出？",
+            f"当前流程有未保存的修改，是否保存后{leaving}？",
             QMessageBox.StandardButton.Save
             | QMessageBox.StandardButton.Discard
             | QMessageBox.StandardButton.Cancel,
@@ -3730,6 +3979,7 @@ class MainWindow(QMainWindow):
             try:
                 home.show()
                 home.raise_()
+                fade_window(home)
             except RuntimeError:
                 pass  # 工作台已被销毁：忽略
         if self._run_timer is not None:
@@ -3778,7 +4028,7 @@ class MainWindow(QMainWindow):
         label = QLabel(text)
         label.setWordWrap(True)
         label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        label.setStyleSheet("color: #64707d; padding: 16px;")
+        label.setStyleSheet(f"color: {TEXT_SECONDARY}; padding: 16px;")
         self.param_layout.addWidget(label)
 
     def _on_canvas_selection(self, current, previous) -> None:
@@ -4313,10 +4563,14 @@ def open_editor_window(
         catalog = load_catalog(_commands_root())
     if workflows_root is None:
         workflows_root = Path("workflows")
+    created = False
     if _EDITOR_WINDOW is None:
         _EDITOR_WINDOW = MainWindow(catalog, workflows_root=workflows_root)
+        created = True
     _EDITOR_WINDOW.showMaximized()
     _EDITOR_WINDOW.raise_()
+    if created:  # 只在窗口首次出现时淡入；反复切流程不闪（M49 P2）
+        fade_window(_EDITOR_WINDOW)
     _EDITOR_WINDOW._open_named_flow(flow_name)
     if history_run_id:
         _EDITOR_WINDOW.show_history_run(history_run_id)

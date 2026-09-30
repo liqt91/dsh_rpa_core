@@ -50,6 +50,14 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from rpa_core.gui import fonts
+from rpa_core.gui.theme import (
+    DANGER,
+    SUCCESS,
+    TEXT_MUTED,
+    WARNING,
+)
+
 # 与 tests/commands/conftest.py 的开关/报告环境变量同名——两边是一份约定，改一处要改两处。
 # `_HINT` 是给提示文案用的 `名字=值` 拼法（与 conftest 的 `MATRIX_ENV_HINT` 同形）。
 MATRIX_ENV = "RPA_COMMAND_MATRIX"
@@ -123,12 +131,12 @@ _OUTCOME_LABELS = {
     "skipped": "跳过",
 }
 _OUTCOME_COLORS = {
-    "passed": "#1a7f37",
-    "failed": "#cf222e",
-    "error": "#cf222e",
-    "skipped": "#9a6700",
+    "passed": SUCCESS,
+    "failed": DANGER,
+    "error": DANGER,
+    "skipped": WARNING,
 }
-_NEUTRAL = "#57606a"
+_NEUTRAL = TEXT_MUTED
 # 日志面板留最后多少行（矩阵一跑就是几百行，全留着没意义还占内存）
 _LOG_MAX_LINES = 2000
 
@@ -417,7 +425,7 @@ class CommandMatrixPanel(QWidget):
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
         header = QLabel("指令测试")
-        header.setStyleSheet("font-weight: bold; font-size: 14px;")
+        header.setStyleSheet(f"font-weight: bold; font-size: {fonts.HEADING_PX}px;")
         layout.addWidget(header)
 
         self.scope_label = QLabel(self._scope_text())

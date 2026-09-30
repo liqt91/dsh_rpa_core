@@ -226,7 +226,11 @@ def test_home_rename_and_copy_actions(catalog, tmp_path, monkeypatch):
 
 
 def test_home_refuses_management_while_editing(catalog, tmp_path, monkeypatch):
-    """流程正在编辑器里打开：重命名/删除被拒绝并给出原因。"""
+    """流程正在编辑器里打开：重命名/删除被拒绝，理由走页面内提示（M49 P1-3 起不弹框）。
+
+    拒绝理由一句话说得清、且用户无需做选择（去编辑器处理即可）⇒ 知会型提示，
+    不该用模态框打断。这里同时钉住「确实没弹框」与「提示真的写出来了」。
+    """
     store = _store(tmp_path)
     _write_flow(store, "alpha")
     import rpa_core.gui.home as home_module
@@ -248,10 +252,11 @@ def test_home_refuses_management_while_editing(catalog, tmp_path, monkeypatch):
         raising=False,
     )
     home._rename_flow()
+    assert "正在编辑器里打开" in home.hint.text()
     home._delete_flow()
+    assert "正在编辑器里打开" in home.hint.text()
     assert store.list() == ["alpha"]  # 未被动过
-    assert len(warnings) == 2
-    assert "正在编辑器里打开" in str(warnings[0][2])
+    assert warnings == [], "知会型拒绝不该弹模态框"
 
 
 # ---- S4 运行入口 -----------------------------------------------------------

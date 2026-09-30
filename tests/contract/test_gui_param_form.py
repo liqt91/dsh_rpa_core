@@ -1313,16 +1313,22 @@ def test_variables_dock_has_refresh_button(catalog):
 
 
 def test_variables_toggle_action_in_menu(catalog):
-    """编辑菜单有变量面板开关。"""
+    """变量面板开关在「视图」菜单（M49 P1-2：Dock 入口统一收敛到视图菜单）。
+
+    判定同时钉住「入口存在」与「点开真的会把面板建出来」——只钉前者的话，
+    把 action 挂上去但不接 Dock 也能绿。
+    """
     import copy
 
     from rpa_core.gui.app import SAMPLE_WORKFLOW, MainWindow
 
     win = MainWindow(catalog, copy.deepcopy(SAMPLE_WORKFLOW))
-    # 编辑菜单中应有变量面板 action
-    edit_menu = [a.menu() for a in win.menuBar().actions() if a.text() == "编辑"][0]
-    actions = [a.text() for a in edit_menu.actions()]
-    assert "变量面板" in actions
+    view_menu = [a.menu() for a in win.menuBar().actions() if a.text() == "视图"][0]
+    action = next(a for a in view_menu.actions() if a.text() == "变量面板")
+    assert action.isCheckable()
+    assert getattr(win, "_variables_dock_widget", None) is None, "点之前不该建 Dock（懒创建）"
+    action.setChecked(True)
+    assert win._variables_dock_widget is not None, "点开变量面板应把 Dock 建出来"
     win.close()
 
 def test_apply_repaints_canvas_so_required_badge_clears(window):

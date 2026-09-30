@@ -18,6 +18,23 @@ from PySide6.QtCore import QRect, QSize, Qt
 from PySide6.QtGui import QColor, QFont, QPainter, QPen
 from PySide6.QtWidgets import QStyle, QStyledItemDelegate, QStyleOptionViewItem
 
+from rpa_core.gui import fonts
+from rpa_core.gui.theme import (
+    ACCENT,
+    BORDER,
+    BORDER_HOVER,
+    CYAN,
+    FALLBACK,
+    INFO,
+    SUCCESS,
+    SURFACE,
+    SURFACE_HOVER,
+    SURFACE_SELECTED,
+    TEXT,
+    TEXT_SECONDARY,
+    WARNING,
+)
+
 # 树 item 上携带完整命令 id 的自定义数据角色（组节点不携带）。
 # 历史定义在 app.py，为让 delegate 独立可用迁到本模块；app.py 仍 re-export。
 ROLE_COMMAND_ID = Qt.ItemDataRole.UserRole + 1
@@ -42,13 +59,13 @@ def load_command_display_names() -> dict[str, str]:
 
 # 命名空间 → 图标底色（与画布深度线同谱系；按前缀匹配，desktop.win32 归 desktop）
 _NAMESPACE_COLORS = (
-    ("browser", QColor("#0969da")),
-    ("data", QColor("#1a7f37")),
-    ("desktop", QColor("#8250df")),
-    ("workflow", QColor("#9a6700")),
+    ("browser", QColor(INFO)),
+    ("data", QColor(SUCCESS)),
+    ("desktop", QColor(ACCENT)),
+    ("workflow", QColor(WARNING)),
 )
-_CONTROL_COLOR = QColor("#0a7ea4")  # 流程控制（catalog 之外的内置指令）
-_FALLBACK_COLOR = QColor("#6e7781")
+_CONTROL_COLOR = QColor(CYAN)  # 流程控制（catalog 之外的内置指令）
+_FALLBACK_COLOR = QColor(FALLBACK)
 
 
 def _namespace_color(command_id: str) -> QColor:
@@ -60,14 +77,14 @@ def _namespace_color(command_id: str) -> QColor:
 
 
 # 与画布卡片同调色板（canvas.py：_CARD/_CARD_SELECTED/_BORDER）
-_CARD = QColor("#ffffff")
-_CARD_HOVER = QColor("#f3f6f9")
-_CARD_SELECTED = QColor("#daedff")
-_BORDER = QColor("#c0c4c8")
-_BORDER_HOVER = QColor("#8b959e")
-_BORDER_SELECTED = QColor("#0969da")
-_TEXT = QColor("#19232d")
-_SUB_TEXT = QColor("#64707d")
+_CARD = QColor(SURFACE)
+_CARD_HOVER = QColor(SURFACE_HOVER)
+_CARD_SELECTED = QColor(SURFACE_SELECTED)
+_BORDER = QColor(BORDER)
+_BORDER_HOVER = QColor(BORDER_HOVER)
+_BORDER_SELECTED = QColor(INFO)
+_TEXT = QColor(TEXT)
+_SUB_TEXT = QColor(TEXT_SECONDARY)
 
 
 class CommandCardDelegate(QStyledItemDelegate):
@@ -128,7 +145,7 @@ class CommandCardDelegate(QStyledItemDelegate):
         glyph_font = QFont(option.font)
         glyph_font.setBold(True)
         painter.setFont(glyph_font)
-        painter.setPen(QColor("#ffffff"))
+        painter.setPen(QColor(SURFACE))
         painter.drawText(
             icon_rect, Qt.AlignmentFlag.AlignCenter, (name.strip() or command_id)[:1]
         )
@@ -150,9 +167,7 @@ class CommandCardDelegate(QStyledItemDelegate):
                     name, Qt.TextElideMode.ElideRight, text_width
                 ),
             )
-            sub_font = QFont(option.font)
-            if sub_font.pointSizeF() > 0:
-                sub_font.setPointSizeF(sub_font.pointSizeF() - 1.5)
+            sub_font = fonts.scaled(option.font, delta=-2)  # 像素口径，见 fonts.py
             id_rect = QRect(text_left, rect.top() + 24, text_width, 14)
             painter.setFont(sub_font)
             painter.setPen(_SUB_TEXT)

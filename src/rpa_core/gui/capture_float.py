@@ -28,13 +28,21 @@ from PySide6.QtCore import QPoint, Qt, Signal
 from PySide6.QtGui import QColor, QMouseEvent, QPainter, QPen
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
+from rpa_core.gui.theme import (
+    BORDER,
+    DANGER,
+    SUCCESS,
+    SURFACE,
+    TEXT_MUTED,
+)
+
 _WIDTH = 380
 _HEIGHT = 158
 _MARGIN = 16  # 距屏幕右下角的边距
 
-_ONLINE = "#1a7f37"
-_OFFLINE = "#cf222e"
-_NEUTRAL = "#57606a"
+_ONLINE = SUCCESS
+_OFFLINE = DANGER
+_NEUTRAL = TEXT_MUTED
 
 # 鼠标预判避让（M41 S3）：浮窗是**真实窗口**（无 WS_EX_TRANSPARENT，不吃穿透），
 # 压在鼠标路径上时同时挡住视觉与点击——用户会「点不中」它下方的元素。维护者
@@ -206,8 +214,8 @@ class CaptureFloatWindow(QWidget):
         # 无边框窗口自绘卡片底（白底圆角 + 边框），与 run_float 一致
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        painter.setPen(QPen(QColor("#c0c4c8")))
-        painter.setBrush(QColor("#ffffff"))
+        painter.setPen(QPen(QColor(BORDER)))
+        painter.setBrush(QColor(SURFACE))
         painter.drawRoundedRect(self.rect().adjusted(0, 0, -1, -1), 8, 8)
         painter.end()
         super().paintEvent(event)

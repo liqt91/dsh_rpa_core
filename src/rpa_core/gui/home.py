@@ -36,7 +36,12 @@ from PySide6.QtWidgets import (
 )
 
 from rpa_core.devserver.store import WorkflowDirStore
+from rpa_core.gui import fonts
 from rpa_core.gui.command_matrix import CommandMatrixPanel
+from rpa_core.gui.theme import (
+    INFO,
+    TEXT_MUTED,
+)
 from rpa_core.run_history import iter_run_summaries, list_runs, purge_runs, sort_runs
 
 # 分片扫描的单轮预算（秒）。整段扫 `run_artifacts` 在本机 157 条记录时约 93 ms（冷盘更久），
@@ -124,7 +129,7 @@ class HomeWindow(QMainWindow):
         page = QWidget()
         layout = QVBoxLayout(page)
         header = QLabel("流程库")
-        header.setStyleSheet("font-weight: bold; font-size: 14px;")
+        header.setStyleSheet(f"font-weight: bold; font-size: {fonts.HEADING_PX}px;")
         layout.addWidget(header)
 
         buttons = QHBoxLayout()
@@ -162,7 +167,7 @@ class HomeWindow(QMainWindow):
 
         self.run_status = QLabel("")
         self.run_status.setWordWrap(True)
-        self.run_status.setStyleSheet("color: #0969da;")
+        self.run_status.setStyleSheet(f"color: {INFO};")
         layout.addWidget(self.run_status)
 
         self.table = QTableWidget(0, 5)
@@ -179,7 +184,7 @@ class HomeWindow(QMainWindow):
 
         self.hint = QLabel("")
         self.hint.setWordWrap(True)
-        self.hint.setStyleSheet("color: #57606a;")
+        self.hint.setStyleSheet(f"color: {TEXT_MUTED};")
         layout.addWidget(self.hint)
         return page
 
@@ -188,7 +193,7 @@ class HomeWindow(QMainWindow):
         page = QWidget()
         layout = QVBoxLayout(page)
         header = QLabel("运行历史（全部流程）")
-        header.setStyleSheet("font-weight: bold; font-size: 14px;")
+        header.setStyleSheet(f"font-weight: bold; font-size: {fonts.HEADING_PX}px;")
         layout.addWidget(header)
 
         controls = QHBoxLayout()
@@ -226,7 +231,7 @@ class HomeWindow(QMainWindow):
 
         self.history_hint = QLabel("")
         self.history_hint.setWordWrap(True)
-        self.history_hint.setStyleSheet("color: #57606a;")
+        self.history_hint.setStyleSheet(f"color: {TEXT_MUTED};")
         layout.addWidget(self.history_hint)
         return page
 
@@ -510,13 +515,18 @@ class HomeWindow(QMainWindow):
         self._open_editor_hook(name, run_id=run_id)
 
     def _create_flow(self) -> None:
-        """新建流程：命名（复用 store 的名称校验）→ 建空流程 → 打开编辑器。"""
+        """新建流程：命名（复用 store 的名称校验）→ 建空流程 → 打开编辑器。
+
+        空名不再弹模态警告（M49 P1-3）：用户点了确定却没填名字，属于「一句话就能说清」
+        的知会，走页面内提示（本页已有 hint 通道）即可——模态框在这里既打断，又没有
+        任何需要用户决策的内容。非法名（含分隔符等）仍由 store 校验并在下方给出提示。
+        """
         name, accepted = QInputDialog.getText(self, "新建流程", "流程名称：")
         if not accepted:
             return
         name = (name or "").strip()
         if not name:
-            QMessageBox.warning(self, "新建流程", "流程名称不能为空。")
+            self.hint.setText("流程名称不能为空，未新建。")
             return
         document = {
             "schema_version": "1.0",
@@ -558,9 +568,10 @@ class HomeWindow(QMainWindow):
             self.hint.setText("先在上表选中一个流程。")
             return
         if self._is_editing(flow["name"]):
-            QMessageBox.warning(
-                self, "重命名流程",
-                f"流程 {flow['name']} 正在编辑器里打开；请先在编辑器中保存并关闭/切换后再重命名。",
+            # 被拒的原因一句话说得清且无需决策 → 页面内提示，不弹模态（M49 P1-3）
+            self.hint.setText(
+                f"流程 {flow['name']} 正在编辑器里打开；"
+                "请先在编辑器中保存并关闭/切换后再重命名。"
             )
             return
         new_name, accepted = QInputDialog.getText(
@@ -583,9 +594,9 @@ class HomeWindow(QMainWindow):
             self.hint.setText("先在上表选中一个流程。")
             return
         if self._is_editing(flow["name"]):
-            QMessageBox.warning(
-                self, "删除流程",
-                f"流程 {flow['name']} 正在编辑器里打开；请先保存并关闭/切换后再删除。",
+            # 同上：一句话说清的拒绝理由走页面内提示，不弹模态（M49 P1-3）
+            self.hint.setText(
+                f"流程 {flow['name']} 正在编辑器里打开；请先保存并关闭/切换后再删除。"
             )
             return
         runs = [run for run in self._runs if run.get("workflowId") == flow["workflowId"]]

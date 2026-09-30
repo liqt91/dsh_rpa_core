@@ -24,6 +24,10 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from rpa_core.gui.theme import (
+    TEXT_SECONDARY,
+)
+
 COLUMN_TYPES = ["text", "number", "boolean"]
 
 
@@ -50,7 +54,7 @@ class TablePanel(QWidget):
             toolbar.addWidget(button)
         toolbar.addStretch(1)
         self.hint_label = QLabel("")
-        self.hint_label.setStyleSheet("color: #64707d;")
+        self.hint_label.setStyleSheet(f"color: {TEXT_SECONDARY};")
         toolbar.addWidget(self.hint_label)
         layout.addLayout(toolbar)
 
