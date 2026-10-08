@@ -1,10 +1,17 @@
-"""负向验证：「校验元素」取页口径修复（2026-10-08 真机实锤的计数抖动）。
+"""负向验证：「校验元素」取页口径 + 双浏览器「都闪框」修复（2026-10-08）。
 
-背景：真机 trace 抓到同一条 css 的回复一拨来自 explore 页（count 0）、一拨来自
-search_result_ai 页（count 1）——计数抖动其实是**打到了哪一页**在抖。根因是
-``runVerify`` 用 ``tabs.query({active:true, lastFocusedWindow:true})`` 取页，而
-``lastFocusedWindow`` 是**窗口**级的「最近聚焦」记忆，在 GUI 抢焦点 / 多窗口下会失准。
-修法：新增可切片的纯函数 ``pickVerifyTab()``，真前台窗口优先 → 最近聚焦兜底 → 任一活跃页。
+**问题一（取页口径）**：真机 trace 抓到同一条 css 的回复一拨来自 explore 页
+（count 0）、一拨来自 search_result_ai 页（count 1）——计数抖动其实是**打到了
+哪一页**在抖。根因是 ``runVerify`` 用
+``tabs.query({active:true, lastFocusedWindow:true})`` 取页，而 ``lastFocusedWindow``
+是**窗口**级的「最近聚焦」记忆，在 GUI 抢焦点 / 多窗口下会失准。修法：新增可切片
+的纯函数 ``pickVerifyTab()``，真前台窗口优先 → 最近聚焦兜底 → 任一活跃页。
+
+**问题二（双浏览器都闪框）**：维护者报「Chrome 与 Edge 同开同样页面，校验时两个
+页面都闪黄框，虽然命中数只算 1 个」。根因是 host 侧 ``ElementVerifier._exchange``
+把 ``capture_verify`` 广播给**全部在线端点**（本机实测 chrome + msedge 两个）。修法：
+扩展自判「本浏览器是否 OS 级前台」——非前台则不闪框（``silent``）且延后 120ms 应答，
+把「首个应答」让给前台那个（host 认首个回传）。
 
 本探针按仓库负向验证四条规矩办：
   ① 每处注入前先确认**原始文件绿**（跑一次对照）；
@@ -13,6 +20,9 @@ search_result_ai 页（count 1）——计数抖动其实是**打到了哪一页
   ④ 逐字节还原核 md5。
 且每处注入的期望**必须落在具体的断言上**（nodeid / 断言文本），不能只判「退出码非 0」
 ——那等于一台「无论跑什么都报红」的假绿灯机（M40 首版探针的教训）。
+
+**注意**：node 门禁的失败判据以**退出码 + 期望文本**为准，不只看汇总行——注入把
+切片打成语法错误时门禁会 ``process.exit(1)`` 却**不打印**「N 项失败」（首版探针栽过）。
 
 用法：
     ./.venv/Scripts/python.exe .harness/spike/probe_verify_target_negative.py
@@ -36,6 +46,7 @@ SENTINEL_JS = "// [VERIFY-TARGET-NEGATIVE-INJECTED]"
 SENTINEL_PY = "# [VERIFY-TARGET-NEGATIVE-INJECTED]"
 
 BG = REPO / "extension" / "background.js"
+CT = REPO / "extension" / "content.js"
 CHK = REPO / "scripts" / "check_verify.mjs"
 MANIFEST = REPO / "extension" / "manifest.json"
 
@@ -156,6 +167,25 @@ add(
     "pytest",
     "构建标识三方不一致",
 )
+# ---- 双浏览器「都闪框」修复（2026-10-08 维护者报障）--------------------------
+add(
+    "N6 非前台判定恒 true（双浏览器又都闪框——原 bug 复现）",
+    BG,
+    "node",
+    "W11 非前台浏览器不下发闪框请求",
+)
+add(
+    "N7 silent 不再透传给 content（非前台也会画框）",
+    BG,
+    "node",
+    "W11 回传带 silent:true",
+)
+add(
+    "N8 content 忽略 silent（收到也不当回事，照闪）",
+    CT,
+    "node",
+    "C1 silent 时跳过 flashElements",
+)
 
 
 def apply_n1(src: str) -> str:
@@ -205,13 +235,44 @@ def apply_n4(src: str) -> str:
     return src.replace(old, new, 1)
 
 
+def apply_n6(src: str) -> str:
+    """非前台判定失效 ⇒ 双浏览器又都闪框（原 bug 复现）。"""
+    old = """    const win = await chrome.windows.getLastFocused();
+    return !!win.focused;"""
+    new = f"""    const win = await chrome.windows.getLastFocused(); {SENTINEL_JS}
+    return true;"""
+    assert old in src, "N6 锚点未命中"
+    return src.replace(old, new, 1)
+
+
+def apply_n7(src: str) -> str:
+    """silent 不再回传给 host ⇒ 断言读不到 silent:true（W11 红）。"""
+    old = '    post({ ...reply, ...(resp || {}), silent, url: tab.url || "" });'
+    new = f'    post({{ ...reply, ...(resp || {{}}), url: tab.url || "" }}); {SENTINEL_JS}'
+    assert old in src, "N7 锚点未命中"
+    return src.replace(old, new, 1)
+
+
+def apply_n8(src: str) -> str:
+    """content 忽略 silent ⇒ 非前台也画框（C1 红）。"""
+    old = "    if (!silent && !reply.error && reply.count > 0) {"
+    new = f"    if (!reply.error && reply.count > 0) {{ {SENTINEL_JS}"
+    assert old in src, "N8 锚点未命中"
+    return src.replace(old, new, 1)
+
+
 def main() -> int:
     if not BG.exists() or not CHK.exists():
         print("FAIL: 仓库路径不对（找不到 extension/background.js 或 scripts/check_verify.mjs）")
         return 1
 
     tmp = Path(tempfile.mkdtemp(prefix="rpa-verify-target-neg-"))
-    backups = {BG: tmp / "background.js", CHK: tmp / "check_verify.mjs", MANIFEST: tmp / "manifest.json"}
+    backups = {
+        BG: tmp / "background.js",
+        CT: tmp / "content.js",
+        CHK: tmp / "check_verify.mjs",
+        MANIFEST: tmp / "manifest.json",
+    }
     for src, dst in backups.items():
         dst.write_bytes(src.read_bytes())
     originals = {p: _md5(p) for p in backups}
@@ -245,11 +306,17 @@ def main() -> int:
                 mutated = apply_n4(src)
             elif inj.label.startswith("N5"):
                 mutated = src.replace(
-                    'const EXT_BUILD = "0.6.2";',
+                    'const EXT_BUILD = "0.6.3";',
                     f'const EXT_BUILD = "9.9.9"; {SENTINEL_JS}',
                     1,
                 )
                 assert mutated != src, "N5 锚点未命中"
+            elif inj.label.startswith("N6"):
+                mutated = apply_n6(src)
+            elif inj.label.startswith("N7"):
+                mutated = apply_n7(src)
+            elif inj.label.startswith("N8"):
+                mutated = apply_n8(src)
             else:
                 raise AssertionError(f"未知注入 {inj.label}")
             inj.path.write_bytes(mutated.encode("utf-8"))
@@ -332,7 +399,7 @@ def _atexit_guard() -> None:
     只还原带哨兵的行——用陈旧备份整体覆盖会盖掉本轮已改好的文件（M40 真事故）。
     两条还原路径：① 行尾哨兵（``...; // [SENTINEL]``）→ 行内删除；② 整行哨兵。
     """
-    for path in (BG, CHK, MANIFEST):
+    for path in (BG, CT, CHK, MANIFEST):
         try:
             src = path.read_text(encoding="utf-8")
         except OSError:

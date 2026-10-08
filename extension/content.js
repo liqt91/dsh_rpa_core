@@ -23,7 +23,7 @@
   // 构建标识：与 background.js 的 EXT_BUILD、manifest.json 的 version 三方一致（契约测试钉住）。
   // 随捕获结果回传——诊断「页面里跑的脚本是哪个年代的」（Load unpacked 不自动重载，
   // 补注入前已开页面里的可能还是旧快照；见 background.js 顶部的完整说明）。
-  const EXT_BUILD = "0.6.2";
+  const EXT_BUILD = "0.6.3";
 
   // ---- 实例接管守卫（M42）----------------------------------------------------
   // 声明式 content_scripts **只在页面加载时**注入：扩展装载/重载后，已经打开的标签页
@@ -554,7 +554,11 @@
   // M48：mode 决定高亮的「寿命」。flash 闪 1.6s 自清；preview 驻留（persist），
   // **count=0 也必须先清场**——选择器改到不再命中的瞬间，上一轮的黄框若还赖着，
   // 用户会把「旧框」读成「新选择器命中了」，这是预览最危险的静默误导；clear 只清场。
-  const runVerify = (css, mode) => {
+  //
+  // `silent`（2026-10-08 双浏览器报障）：本页所在浏览器**不在前台**时 background 会带它下来
+  // ——只回命中数、**绝不画黄框**（否则 Chrome 与 Edge 各开一页时两边都闪，而用户只该看到
+  // 眼前那个）。silent 仍要回 count：host 认首个回传，全都不在前台时它就是计数兜底。
+  const runVerify = (css, mode, silent) => {
     mode = normalizeVerifyMode(mode);
     const reply = verifyReplyFor(document, css, mode);
     if (mode === "clear") {
@@ -562,7 +566,7 @@
       return reply;
     }
     if (mode === "preview") clearVerifyFlash();
-    if (!reply.error && reply.count > 0) {
+    if (!silent && !reply.error && reply.count > 0) {
       flashElements(
         Array.from(document.querySelectorAll(css)).slice(0, VERIFY_FLASH_LIMIT),
         mode === "preview"
@@ -576,7 +580,7 @@
       // 同步应答：querySelectorAll 是同步的，无需 return true（那是异步应答的写法）
       sendResponse({
         contentBuild: EXT_BUILD,
-        ...runVerify(String(msg.css || ""), msg.mode),
+        ...runVerify(String(msg.css || ""), msg.mode, msg.silent === true),
       });
       return false;
     }

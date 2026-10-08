@@ -614,6 +614,14 @@
   D2 控件级 matchMode 扩到 `automationId`/`name` · D3 锚点起步。差距方案 §4 排定；**破戒授权已于
   2026-09-29 获得**（locator 可加 path 等字段）。任务单：`M48-desktop-contract.md`（本轮新建）。
 
+- [x] **M47.8 双浏览器「都闪框」修复（非前台不应答）**（`done`，2026-10-08）——计划：
+  `M47.8-verify-dual-browser.md`。真机报障「Chrome 与 Edge 同开同样页面，校验时两个页面
+  都闪黄框，但命中数只算 1 个」。根因**本机实测**：host 侧 `ElementVerifier._exchange` 把
+  `capture_verify` 广播给**全部在线端点**（端点=一个浏览器实例，本机实测 chrome + msedge 两个），
+  故两个浏览器都闪；命中数只算 1 是 `read_loop` 只认首个回传。修法＝扩展自判「是否 OS 级前台」
+  （`windows.getLastFocused().focused`），**非前台不闪框**（`silent`）**且延后 120ms 应答**，
+  把首个应答让给前台那个。fail-open + 不假超时两条线钉住。EXT_BUILD 0.6.3（**两个浏览器都要重载**）。
+
 - [x] **M47.7 校验取页口径（真前台窗口优先）**（`done`，2026-10-08）——计划：
   `M47.7-verify-target-tab.md`。真机报障「校验元素命中数 0/1 抖动」；trace 实锤**计数抖动
   其实是「打到了哪一页」在抖**（count 0 全来自 explore 页、count 1 全来自 search_result 页，

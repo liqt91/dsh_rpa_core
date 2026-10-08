@@ -15,7 +15,7 @@ const HOST_NAME = "com.rpa_core.ext_bridge";
 // 快照（2026-09-29 真机排障：仓库已修好「已开网页无红框」，但浏览器还跑着旧 background，
 // 表现成「修复无效」）。把标识随 ack/进度/结果回传，host 侧对账即可判「扩展过期」，
 // 不用再靠症状猜。
-const EXT_BUILD = "0.6.2";
+const EXT_BUILD = "0.6.3";
 const RECONNECT_MS = 3000;      // 断开后的重连退避
 const ALARM_NAME = "rpa-bridge-reconnect";  // SW 被回收时的兜底拉起（MV3 alarm 最小 30s）
 const PERMISSION_KEY = "rpaExecPermission";
@@ -332,7 +332,33 @@ async function pickVerifyTab() {
   if (!tabs.length) tabs = await chrome.tabs.query({ active: true });
   return tabs[0] || null;
 }
+
+// 本浏览器**在操作系统级是否前台**。
+//
+// 为什么需要它（2026-10-08 维护者报障「Chrome 与 Edge 都开了同样的页面，校验时
+// **两个页面都闪黄框**，虽然命中数只算 1 个」）：host 侧的 `ElementVerifier._exchange`
+// 把 `capture_verify` 广播给**全部在线端点**（端点 = 一个浏览器实例）——本机实测就有
+// `chrome` + `msedge` 两个 ⇒ 两个浏览器都收到、都闪框；而 host 只认**首个回传**，
+// 所以命中数仍是 1 个。修法：把「是否前台」这个只有浏览器自己知道的事实交给浏览器
+// 自判——**非前台的浏览器不闪框**（并且延后应答，把「首个应答」让给前台那个）。
+//
+// `windows.getLastFocused().focused`：浏览器整体失焦（前台被另一个浏览器/应用占住）时
+// 为 false，正是需要的语义（与 `focusedState()` 同源）。API 不可用/无窗口时返回 **true**
+// ——fail-open：宁可多闪一个框，也不能让「判不出前台」变成「谁也不应答、host 等满超时」。
+async function isBrowserForeground() {
+  try {
+    const win = await chrome.windows.getLastFocused();
+    return !!win.focused;
+  } catch {
+    return true;
+  }
+}
 // [verify-target:end]
+
+// 非前台浏览器延后应答的时长：给前台那个浏览器「先回」的机会（host 认首个回传）。
+// 必须远小于 host 侧 5s 硬超时（`ElementVerifier(timeout=5.0)`），否则会把
+// 「两个浏览器都不在前台」这种正常情形拖成 verify-timeout。
+const VERIFY_BACKGROUND_ANSWER_DELAY_MS = 120;
 
 async function runVerify(msg) {
   const mode = String(msg.mode || "flash");
@@ -343,6 +369,18 @@ async function runVerify(msg) {
     extBuild: EXT_BUILD,
   };
   try {
+    // 非前台：不闪框、且延后应答。前台那个浏览器会**立即**回，host 认首个回传 ⇒
+    // 命中数与黄框都锁定「用户眼前那个浏览器」。两个浏览器都不在前台时，各自
+    // 延后 120ms 后仍会以 silent 应答 ⇒ 不闪框、计数照常有值（等价旧行为，不假超时）。
+    // 延后期间用户可能切回来了：那时再判一次，前台就转正常路径。
+    let silent = false;
+    if (!(await isBrowserForeground())) {
+      silent = true;
+      await new Promise((resolve) =>
+        setTimeout(resolve, VERIFY_BACKGROUND_ANSWER_DELAY_MS)
+      );
+      if (await isBrowserForeground()) silent = false;
+    }
     const tab = await pickVerifyTab();
     if (!tab || tab.id == null) {
       post({ ...reply, error: "no-active-tab" });
@@ -351,7 +389,7 @@ async function runVerify(msg) {
     let resp = null;
     try {
       resp = await chrome.tabs.sendMessage(
-        tab.id, { type: "rpa-capture-verify", css: String(msg.css || ""), mode }
+        tab.id, { type: "rpa-capture-verify", css: String(msg.css || ""), mode, silent }
       );
     } catch {
       // 没脚本 / 僵尸脚本：补注入后重试一次
@@ -361,14 +399,14 @@ async function runVerify(msg) {
       }
       try {
         resp = await chrome.tabs.sendMessage(
-          tab.id, { type: "rpa-capture-verify", css: String(msg.css || ""), mode }
+          tab.id, { type: "rpa-capture-verify", css: String(msg.css || ""), mode, silent }
         );
       } catch {
         post({ ...reply, error: "no-response", url: tab.url || "" });
         return;
       }
     }
-    post({ ...reply, ...(resp || {}), url: tab.url || "" });
+    post({ ...reply, ...(resp || {}), silent, url: tab.url || "" });
   } catch (err) {
     post({ ...reply, error: String((err && err.message) || err) });
   }

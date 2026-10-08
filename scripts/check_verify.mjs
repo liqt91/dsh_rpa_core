@@ -2,7 +2,8 @@
 //   A. content.js 纯函数（verify-helpers 切片）：querySelectorAll 求值 + 无效选择器
 //      + 闪烁上限——这段只有浏览器里有意义，Python 读源码只能证明「写了这行字」。
 //   B. background.js runVerify 矩阵：只发活跃页 / 无脚本补注入重试 / 注入失败结构化
-//      报错 / requestId 透传 / **取页口径**（真前台窗口优先，W6–W8）——「对哪一页发、
+//      报错 / requestId 透传 / **取页口径**（真前台窗口优先，W6–W8）/ **双浏览器
+//      「都闪框」修复**（非前台不闪框 + 延后应答，W10–W12）——「对哪一页发、
 //      失败怎么报」是调用矩阵，桩测接口形状证明不了。
 //   C. content 接线断言：verify 应答必须带 sendResponse（不带 = tab.sendMessage 永远
 //      得不到回包，host 侧只能等超时）。
@@ -34,8 +35,7 @@ if (pureStart < 0 || pureEnd <= pureStart) {
 const pureSlice = content.slice(pureStart, pureEnd);
 const helpers = new Function(
   `${pureSlice}\nreturn { VERIFY_FLASH_LIMIT, matchCountFor, verifyReplyFor, normalizeVerifyMode };`,
-)();
-const makeDoc = (matches, invalid = false) => ({
+)();const makeDoc = (matches, invalid = false) => ({
   querySelectorAll: (css) => {
     if (invalid) throw new Error(`'${css}' is not a valid selector`);
     return matches;
@@ -87,8 +87,16 @@ if (!extBuild) {
 }
 const bgSlice = `let captureSessionId = null;\nconst EXT_BUILD = ${JSON.stringify(extBuild)};\n${background.slice(bgStart, bgEnd)}`;
 
-const makeChrome = ({ tabs = [], windows = [], windowsFail = false, injectFail = false, hasScript = true } = {}) => {
-  const log = { sent: [], injected: [], posted: [], queried: [] };
+const makeChrome = ({
+  tabs = [],
+  windows = [],
+  windowsFail = false,
+  injectFail = false,
+  hasScript = true,
+  foreground = true,          // 本浏览器是否 OS 级前台（isBrowserForeground 的桩返回值）
+  foregroundFail = false,     // getLastFocused 抛错（API 不可用的极端）
+} = {}) => {
+  const log = { sent: [], injected: [], posted: [], queried: [], delays: [] };
   let injectedOnce = false;
   const chrome = {
     tabs: {
@@ -115,6 +123,10 @@ const makeChrome = ({ tabs = [], windows = [], windowsFail = false, injectFail =
         if (windowsFail) throw new Error("windows API unavailable");
         return windows.map((w) => ({ ...w }));
       },
+      getLastFocused: async () => {
+        if (foregroundFail) throw new Error("no last focused window");
+        return { id: 1, focused: foreground };
+      },
     },
     runtime: { onMessage: { addListener: () => {} } },
     scripting: {
@@ -131,13 +143,15 @@ const makeChrome = ({ tabs = [], windows = [], windowsFail = false, injectFail =
 
 const buildBg = (chrome, log) => new Function(
   "chrome", "post",
-  `${bgSlice}\nreturn { runVerify, pickVerifyTab };`,
+  `${bgSlice}\nreturn { runVerify, pickVerifyTab, isBrowserForeground };`,
 )(
   chrome,
   (payload) => { log.posted.push(payload); return true; },
 );
 
 const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
+// 非前台路径有 120ms 延后（VERIFY_BACKGROUND_ANSWER_DELAY_MS），等待要盖过它
+const settleSlow = () => new Promise((resolve) => setTimeout(resolve, 220));
 
 // W1 活跃页直发：css 透传、结果按 requestId 回传并带构建标识与命中数
 {
@@ -155,9 +169,9 @@ const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
   await buildBg(chrome, log).runVerify({ sessionId: "ver-1", requestId: "rq-1", css: "#kw" });
   await settle();
   check("W1 只发聚焦窗口的活跃页", log.sent.map((s) => s.tabId), [1]);
-  check("W1 页面消息类型与 css（缺省信封归一为 flash）",
+  check("W1 页面消息类型与 css（缺省信封归一为 flash；前台 silent:false）",
     log.sent[0] && log.sent[0].msg,
-    { type: "rpa-capture-verify", css: "#kw", mode: "flash" });
+    { type: "rpa-capture-verify", css: "#kw", mode: "flash", silent: false });
   const reply = log.posted[0] || {};
   check("W1 回传类型/配对/构建/命中",
     [reply.type, reply.requestId, reply.extBuild, reply.count],
@@ -277,6 +291,62 @@ const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
   const { chrome } = makeChrome({ tabs: [] });
   const bg = buildBg(chrome, { posted: [] });
   check("W9 pickVerifyTab 从切片导出（纯函数可测）", typeof bg.pickVerifyTab, "function");
+  check("W9 isBrowserForeground 从切片导出（纯函数可测）", typeof bg.isBrowserForeground, "function");
+}
+
+// ---- W10–W12 双浏览器「都闪框」修复（2026-10-08 维护者报障）----------------
+// Chrome 与 Edge 同开同样页面时，host 把 capture_verify 广播给**全部在线端点**
+// （本机实测 chrome + msedge 两个）⇒ 两个浏览器都闪黄框，而命中数只算 1 个
+// （host 认首个回传）。修法：非前台的浏览器不闪框、且延后应答，把「首个应答」
+// 让给前台那个 —— 高亮与统计都锁定「用户眼前那个浏览器」（对齐影刀行为）。
+
+// W10 前台：正常立即应答、带 silent:false（页面照常闪框）
+{
+  const { chrome, log } = makeChrome({
+    foreground: true,
+    windows: [{ id: 90, focused: true }],
+    tabs: [{ id: 901, url: "https://front.test/", active: true, windowId: 90 }],
+  });
+  await buildBg(chrome, log).runVerify({ requestId: "rq-10", css: "#kw" });
+  await settle();
+  check("W10 前台浏览器正常下发（silent:false ⇒ 页面闪框）",
+    log.sent[0] && log.sent[0].msg.silent, false);
+  check("W10 前台浏览器立即应答（不等延后）", log.posted.length, 1);
+  check("W10 回传带 silent:false", log.posted[0] && log.posted[0].silent, false);
+}
+
+// W11 非前台：不闪框（silent:true）、且延后应答后才回——本次 bug 的核心回归钉
+{
+  const { chrome, log } = makeChrome({
+    foreground: false,
+    windows: [{ id: 91, focused: false }],
+    tabs: [{ id: 911, url: "https://bg.test/", active: true, windowId: 91 }],
+  });
+  const started = Date.now();
+  await buildBg(chrome, log).runVerify({ requestId: "rq-11", css: "#kw" });
+  const elapsed = Date.now() - started;
+  await settleSlow();
+  check("W11 非前台浏览器不下发闪框请求（silent:true —— 否则双浏览器都闪）",
+    log.sent[0] && log.sent[0].msg.silent, true);
+  check("W11 回传带 silent:true（页面据此不画框）", log.posted[0] && log.posted[0].silent, true);
+  check("W11 非前台延后应答（给前台那个先回的机会；此处 elapsed 应 ≥ 100ms）",
+    elapsed >= 100, true);
+  check("W11 非前台仍回命中数（两个都不在前台时它是计数兜底，不假超时）",
+    log.posted[0] && log.posted[0].count, 4);
+}
+
+// W12 getLastFocused 抛错：fail-open（当作前台正常处理），不得把校验拖成失败
+{
+  const { chrome, log } = makeChrome({
+    foregroundFail: true,
+    windows: [{ id: 92, focused: true }],
+    tabs: [{ id: 921, url: "https://x.test/", active: true, windowId: 92 }],
+  });
+  await buildBg(chrome, log).runVerify({ requestId: "rq-12", css: "#kw" });
+  await settle();
+  check("W12 判不出前台时 fail-open（silent:false，不静默丢高亮）",
+    log.sent[0] && log.sent[0].msg.silent, false);
+  check("W12 判不出前台仍正常应答", log.posted[0] && log.posted[0].count, 4);
 }
 
 // ---- C. content 接线断言 ----------------------------------------------------
@@ -286,16 +356,22 @@ check("C1 rpa-capture-verify 分支存在",
   /msg\.type === "rpa-capture-verify"/.test(content), true);
 check("C1 校验应答带 contentBuild（页面脚本新旧可对账）",
   /contentBuild: EXT_BUILD,\s*\n\s*\.\.\.runVerify/.test(content), true);
+check("C1 runVerify 收 silent 参数（双浏览器：非前台不闪框）",
+  /runVerify = \(css, mode, silent\) => \{/.test(content), true);
+check("C1 监听器把 msg.silent 透传给 runVerify（=== true 严格判，缺省不静默）",
+  /runVerify\(String\(msg\.css \|\| ""\), msg\.mode, msg\.silent === true\)/.test(content), true);
+check("C1 silent 时跳过 flashElements（只回 count、绝不画框）",
+  /if \(!silent && !reply\.error && reply\.count > 0\) \{/.test(content), true);
 check("C1 闪烁自动清理（定时器兜底，不留黄框赖在页面）",
   /setTimeout\(clearVerifyFlash, 1600\)/.test(content), true);
 check("C2 闪烁定时器由 persist 短路（preview 驻留 = 不排程自动清理）",
   /if \(!persist\) setTimeout\(clearVerifyFlash, 1600\);/.test(content), true);
 check("C2 runVerify 收 mode 参数并归一（语义收口在 content）",
-  /runVerify = \(css, mode\) => \{\s*\n\s*mode = normalizeVerifyMode\(mode\);/.test(content), true);
+  /runVerify = \(css, mode, silent\) => \{\s*\n\s*mode = normalizeVerifyMode\(mode\);/.test(content), true);
 check("C2 preview 恒先清场（count=0 也要清——旧框冒充命中是预览最危险的误导）",
   /if \(mode === "preview"\) clearVerifyFlash\(\);/.test(content), true);
-check("C2 应答透传 msg.mode（host 侧/诊断要能知道这轮是什么语义）",
-  /runVerify\(String\(msg\.css \|\| ""\), msg\.mode\)/.test(content), true);
+check("C2 应答透传 msg.mode（第 2 参）与 msg.silent（第 3 参，顺序不可换）",
+  /runVerify\(String\(msg\.css \|\| ""\), msg\.mode, msg\.silent === true\)/.test(content), true);
 check("C2 进捕获态先清预览框（捕获红框不能压着上一轮的黄框）",
   /if \(armed\) \{(?:\s*\n\s*\/\/[^\n]*)*\s*\n\s*clearVerifyFlash\(\);/.test(content), true);
 check("C3 校验黄框用 absolute+文档坐标（fixed 钉在视口上，滚动不跟随）",
