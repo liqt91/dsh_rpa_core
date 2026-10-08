@@ -614,6 +614,13 @@
   D2 控件级 matchMode 扩到 `automationId`/`name` · D3 锚点起步。差距方案 §4 排定；**破戒授权已于
   2026-09-29 获得**（locator 可加 path 等字段）。任务单：`M48-desktop-contract.md`（本轮新建）。
 
+- [x] **M47.7 校验取页口径（真前台窗口优先）**（`done`，2026-10-08）——计划：
+  `M47.7-verify-target-tab.md`。真机报障「校验元素命中数 0/1 抖动」；trace 实锤**计数抖动
+  其实是「打到了哪一页」在抖**（count 0 全来自 explore 页、count 1 全来自 search_result 页，
+  交替），根因是 `runVerify` 用 `tabs.query({active:true,lastFocusedWindow:true})` 取页——
+  `lastFocusedWindow` 是**窗口**级记忆，GUI 抢焦点/多窗口下会失准。修法＝新纯函数
+  `pickVerifyTab()`（真前台窗口 → 最近聚焦兜底 → 任一活跃页）。EXT_BUILD 0.6.2（**须重载扩展**）。
+
 - [x] **M47.2–M47.6 校验元素补丁轮次**（`done`，2026-09-29）——合并记录在任务单
   `M47-element-verify-live.md`：M47.2 verify-timeout 根因（bridge 透传白名单漏
   `capture_verify`，跨端对账判据断根）· M47.3 真机三连修（吞钩子结构加固 / 预览黄框跟随滚动 /

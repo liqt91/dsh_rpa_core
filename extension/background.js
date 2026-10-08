@@ -15,7 +15,7 @@ const HOST_NAME = "com.rpa_core.ext_bridge";
 // 快照（2026-09-29 真机排障：仓库已修好「已开网页无红框」，但浏览器还跑着旧 background，
 // 表现成「修复无效」）。把标识随 ack/进度/结果回传，host 侧对账即可判「扩展过期」，
 // 不用再靠症状猜。
-const EXT_BUILD = "0.6.1";
+const EXT_BUILD = "0.6.2";
 const RECONNECT_MS = 3000;      // 断开后的重连退避
 const ALARM_NAME = "rpa-bridge-reconnect";  // SW 被回收时的兜底拉起（MV3 alarm 最小 30s）
 const PERMISSION_KEY = "rpaExecPermission";
@@ -305,6 +305,35 @@ function sendCapture(descriptor) {
 // 只发活跃页是有意的：校验的对象是「刚捕获元素的那一页」，广播到全部标签页既慢
 // 又可能命中别的页面上的同名结构，给出误导性的计数。页面没有脚本（或只剩僵尸）时
 // 补注入一次再试——与 arm 广播同款语义。结果按 requestId 回传，host 侧据此配对。
+//
+// [verify-target:start]
+// 选定校验目标页。**真前台窗口优先**：Chrome 整体在前台时（正常使用），
+// `windows.getAll()` 里恰有一个 `focused:true` 的窗口，取它的活跃标签页就是用户眼前那页。
+//
+// 为什么不能只用 `tabs.query({active:true, lastFocusedWindow:true})`（2026-10-08 真机实锤）：
+// `lastFocusedWindow` 是**窗口**级的「最近聚焦」记忆，Chrome 整体失去前台（GUI 对话框抢
+// 焦点、切到别的应用）时它**不会失效**，仍指向上一次聚焦的那个窗口。开了两个浏览器窗口时
+// 它就在两个窗口之间来回指——真机 trace 抓到同一条 css 的回复一拨来自 explore 页（count 0）、
+// 一拨来自 search_result_ai 页（count 1），**计数抖动其实是「打到了哪一页」在抖**。
+// 因此顺序是：① 真前台窗口的活跃页（准）→ ② 最近聚焦窗口的活跃页（Chrome 不在前台时的
+// 近似，保留旧行为兜底）→ ③ 任一活跃页（极端兜底，如只剩无窗口的标签页）。
+async function pickVerifyTab() {
+  try {
+    const windows = await chrome.windows.getAll({ populate: false });
+    const focused = windows.find((win) => win.focused && win.id != null);
+    if (focused) {
+      const tabs = await chrome.tabs.query({ active: true, windowId: focused.id });
+      if (tabs.length) return tabs[0] || null;
+    }
+  } catch {
+    // windows API 不可用/无窗口：退回下面的兜底链，不让取页失败变成校验失败
+  }
+  let tabs = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+  if (!tabs.length) tabs = await chrome.tabs.query({ active: true });
+  return tabs[0] || null;
+}
+// [verify-target:end]
+
 async function runVerify(msg) {
   const mode = String(msg.mode || "flash");
   const reply = {
@@ -314,9 +343,7 @@ async function runVerify(msg) {
     extBuild: EXT_BUILD,
   };
   try {
-    let tabs = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
-    if (!tabs.length) tabs = await chrome.tabs.query({ active: true });
-    const tab = tabs[0] || null;
+    const tab = await pickVerifyTab();
     if (!tab || tab.id == null) {
       post({ ...reply, error: "no-active-tab" });
       return;

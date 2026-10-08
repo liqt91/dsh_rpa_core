@@ -2,8 +2,8 @@
 //   A. content.js 纯函数（verify-helpers 切片）：querySelectorAll 求值 + 无效选择器
 //      + 闪烁上限——这段只有浏览器里有意义，Python 读源码只能证明「写了这行字」。
 //   B. background.js runVerify 矩阵：只发活跃页 / 无脚本补注入重试 / 注入失败结构化
-//      报错 / requestId 透传——「对哪一页发、失败怎么报」是调用矩阵，桩测接口形状
-//      证明不了。
+//      报错 / requestId 透传 / **取页口径**（真前台窗口优先，W6–W8）——「对哪一页发、
+//      失败怎么报」是调用矩阵，桩测接口形状证明不了。
 //   C. content 接线断言：verify 应答必须带 sendResponse（不带 = tab.sendMessage 永远
 //      得不到回包，host 侧只能等超时）。
 // 用法：node scripts/check_verify.mjs   （退出码非 0 = 有失败）
@@ -87,14 +87,20 @@ if (!extBuild) {
 }
 const bgSlice = `let captureSessionId = null;\nconst EXT_BUILD = ${JSON.stringify(extBuild)};\n${background.slice(bgStart, bgEnd)}`;
 
-const makeChrome = ({ tabs = [], injectFail = false, hasScript = true } = {}) => {
-  const log = { sent: [], injected: [], posted: [] };
+const makeChrome = ({ tabs = [], windows = [], windowsFail = false, injectFail = false, hasScript = true } = {}) => {
+  const log = { sent: [], injected: [], posted: [], queried: [] };
   let injectedOnce = false;
   const chrome = {
     tabs: {
-      query: async (q) => tabs.filter((t) => (q && q.active ? !!t.active : true))
-        .filter((t) => (q && q.lastFocusedWindow ? !!t.focused : true))
-        .map((t) => ({ ...t })),
+      // QueryInfo 语义按需模拟：active / windowId / lastFocusedWindow 三个字段。
+      // `focused` 落在**窗口**上（真 API 也是窗口级），故此桩把它读作窗口状态。
+      query: async (q) => {
+        log.queried.push({ ...(q || {}) });
+        let out = tabs.filter((t) => (q && q.active ? !!t.active : true));
+        if (q && q.windowId != null) out = out.filter((t) => t.windowId === q.windowId);
+        if (q && q.lastFocusedWindow) out = out.filter((t) => !!t.focused);
+        return out.map((t) => ({ ...t }));
+      },
       sendMessage: async (tabId, msg) => {
         if (!hasScript && !injectedOnce) {
           throw new Error("Receiving end does not exist.");
@@ -103,6 +109,12 @@ const makeChrome = ({ tabs = [], injectFail = false, hasScript = true } = {}) =>
         return { contentBuild: "page-build", count: 4 };
       },
       onUpdated: { addListener: () => {} },
+    },
+    windows: {
+      getAll: async () => {
+        if (windowsFail) throw new Error("windows API unavailable");
+        return windows.map((w) => ({ ...w }));
+      },
     },
     runtime: { onMessage: { addListener: () => {} } },
     scripting: {
@@ -119,7 +131,7 @@ const makeChrome = ({ tabs = [], injectFail = false, hasScript = true } = {}) =>
 
 const buildBg = (chrome, log) => new Function(
   "chrome", "post",
-  `${bgSlice}\nreturn { runVerify };`,
+  `${bgSlice}\nreturn { runVerify, pickVerifyTab };`,
 )(
   chrome,
   (payload) => { log.posted.push(payload); return true; },
@@ -130,9 +142,14 @@ const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
 // W1 活跃页直发：css 透传、结果按 requestId 回传并带构建标识与命中数
 {
   const { chrome, log } = makeChrome({
+    // 两个窗口各有一个活跃标签页，只有窗口 1 真在前台：必须发窗口 1 的活跃页。
+    windows: [
+      { id: 10, focused: false },
+      { id: 11, focused: true },
+    ],
     tabs: [
-      { id: 5, url: "https://bg.test/", active: true },
-      { id: 1, url: "https://front.test/", active: true, focused: true },
+      { id: 5, url: "https://bg.test/", active: true, windowId: 10, focused: true },
+      { id: 1, url: "https://front.test/", active: true, windowId: 11, focused: true },
     ],
   });
   await buildBg(chrome, log).runVerify({ sessionId: "ver-1", requestId: "rq-1", css: "#kw" });
@@ -150,7 +167,8 @@ const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
 // W2 活跃页无脚本：补注入后重试一次
 {
   const { chrome, log } = makeChrome({
-    tabs: [{ id: 7, url: "https://a.test/", active: true, focused: true }],
+    windows: [{ id: 20, focused: true }],
+    tabs: [{ id: 7, url: "https://a.test/", active: true, windowId: 20, focused: true }],
     hasScript: false,
   });
   await buildBg(chrome, log).runVerify({ requestId: "rq-2", css: "#x" });
@@ -163,7 +181,8 @@ const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
 // W3 受保护页（注入必失败）：结构化报错
 {
   const { chrome, log } = makeChrome({
-    tabs: [{ id: 3, url: "chrome://settings/", active: true, focused: true }],
+    windows: [{ id: 30, focused: true }],
+    tabs: [{ id: 3, url: "chrome://settings/", active: true, windowId: 30, focused: true }],
     hasScript: false,
     injectFail: true,
   });
@@ -185,11 +204,79 @@ const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
 // 通道语义收口在 content，background 只当邮差；漏传 = 预览永远表现为闪烁。
 {
   const { chrome, log } = makeChrome({
-    tabs: [{ id: 9, url: "https://p.test/", active: true, focused: true }],
+    windows: [{ id: 40, focused: true }],
+    tabs: [{ id: 9, url: "https://p.test/", active: true, windowId: 40, focused: true }],
   });
   await buildBg(chrome, log).runVerify({ requestId: "rq-5", css: "#x", mode: "preview" });
   await settle();
   check("W5 preview mode 原样透传 content", log.sent[0] && log.sent[0].msg.mode, "preview");
+}
+
+// ---- W6–W8 取页口径（2026-10-08 真机实锤：计数抖动其实是「打到了哪一页」在抖）----
+// 真机 trace：同一条 css 的回复一拨来自 explore 页（count 0）、一拨来自 search_result_ai
+// 页（count 1）。根因是旧实现只用 lastFocusedWindow —— 它是**窗口**级的「最近聚焦」记忆，
+// Chrome 整体失去前台时不会失效，多窗口下会来回指。
+
+// W6 真前台窗口优先于「最近聚焦」（本次修复的核心回归钉）：
+// 用户眼前是窗口 51，但 lastFocusedWindow 记忆指向窗口 50（GUI 对话框抢过焦点）
+// ——必须发 51 的活跃页，绝不能发 50 的（那正是真机上数到 0 的那一页）。
+{
+  const { chrome, log } = makeChrome({
+    windows: [
+      { id: 50, focused: false },
+      { id: 51, focused: true },
+    ],
+    tabs: [
+      // 50 是「最近聚焦」记忆所指（focused:true 供 lastFocusedWindow 兜底链读），
+      // 但它不在前台；51 才是前台窗口。
+      { id: 500, url: "https://stale.test/", active: true, windowId: 50, focused: true },
+      { id: 510, url: "https://visible.test/", active: true, windowId: 51, focused: false },
+    ],
+  });
+  await buildBg(chrome, log).runVerify({ requestId: "rq-6", css: "#kw" });
+  await settle();
+  check("W6 真前台窗口的活跃页胜过「最近聚焦」记忆（本次 bug 的回归钉）",
+    log.sent.map((s) => s.tabId), [510]);
+  check("W6 未退化成按 lastFocusedWindow 取页（发给 500 就是旧 bug 复现）",
+    log.sent.map((s) => s.tabId).includes(500), false);
+}
+
+// W7 Chrome 整体不在前台（无 focused 窗口）：回退到 lastFocusedWindow 的旧行为——
+// 修复不得把「Chrome 不在前台」变成 no-active-tab（那是把稳定性换成了永远失败）。
+{
+  const { chrome, log } = makeChrome({
+    windows: [
+      { id: 60, focused: false },
+      { id: 61, focused: false },
+    ],
+    tabs: [
+      { id: 600, url: "https://a.test/", active: true, windowId: 60, focused: false },
+      { id: 610, url: "https://last.test/", active: true, windowId: 61, focused: true },
+    ],
+  });
+  await buildBg(chrome, log).runVerify({ requestId: "rq-7", css: "#kw" });
+  await settle();
+  check("W7 无前台窗口 → 回退最近聚焦窗口的活跃页", log.sent.map((s) => s.tabId), [610]);
+  check("W7 回退链不得报 no-active-tab", log.posted[0] && log.posted[0].error, undefined);
+}
+
+// W8 windows API 不可用：取页失败不得变成校验失败，仍走兜底链
+{
+  const { chrome, log } = makeChrome({
+    windowsFail: true,
+    tabs: [{ id: 800, url: "https://x.test/", active: true, focused: true }],
+  });
+  await buildBg(chrome, log).runVerify({ requestId: "rq-8", css: "#kw" });
+  await settle();
+  check("W8 windows API 抛错仍能取到页（不进 no-active-tab）", log.sent.map((s) => s.tabId), [800]);
+  check("W8 windows API 抛错照常回传命中数", log.posted[0] && log.posted[0].count, 4);
+}
+
+// W9 取页辅助函数可独立求值（切片锚点存在 = 「改了 runVerify 但忘了改取页」会被拦下）
+{
+  const { chrome } = makeChrome({ tabs: [] });
+  const bg = buildBg(chrome, { posted: [] });
+  check("W9 pickVerifyTab 从切片导出（纯函数可测）", typeof bg.pickVerifyTab, "function");
 }
 
 // ---- C. content 接线断言 ----------------------------------------------------
