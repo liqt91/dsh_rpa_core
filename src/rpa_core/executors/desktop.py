@@ -16,7 +16,7 @@ from rpa_core.model.command import (
     EffectKind,
     EffectRecord,
 )
-from rpa_core.model.desktop import DesktopLocator
+from rpa_core.model.desktop import DesktopLocator, effective_match_mode, matches_text
 from rpa_core.model.errors import ErrorCode
 
 from .base import (
@@ -36,6 +36,26 @@ class _DesktopSession:
     process_id: int
     window_handle: int
     elements: dict[str, dict[str, Any]]
+
+
+class AnchorNotResolved(Exception):
+    """D3：`locator.anchor` 声明的锚点在运行期找不到。
+
+    单独成类而不是在 `_find` 里返回 `[]` 的理由：**锚点缺失与目标未命中是两回事**。
+    前者说明「当前上下文根本不对」（窗口/页面不是预期的那个），让等待循环重试到超时
+    只会把一个结构性问题伪装成「元素还没出现」，最后报 `ELEMENT_NOT_FOUND`——
+    错误码指向的是**目标**，而真正缺的是**锚点**。故用专用异常把错误码送到调用点，
+    由调用点报 `ANCHOR_NOT_FOUND`（ADR 0018 §2 D3.3）。
+    """
+
+    def __init__(self, locator: DesktopLocator):
+        super().__init__("Desktop anchor element not found")
+        self.anchor = locator.anchor
+        self.details: dict[str, Any] = {
+            "anchor": locator.anchor.locator.model_dump(by_alias=True)
+            if locator.anchor is not None
+            else None,
+        }
 
 
 class DesktopExecutor(CommandExecutor):
@@ -414,6 +434,12 @@ class DesktopExecutor(CommandExecutor):
                 while True:
                     try:
                         matches = self._find(window, locator)
+                    except AnchorNotResolved as exc:
+                        # D3：锚点缺失是**结构问题**（上下文不对），等到超时也不会变好，
+                        # 故立即失败并给出专属错误码，不并进 ELEMENT_NOT_FOUND 的「没找到」。
+                        return CommandResult.failure(
+                            ErrorCode.ANCHOR_NOT_FOUND, str(exc), details=exc.details
+                        )
                     except COMError:
                         matches = []
                     if len(matches) == 1:
@@ -479,7 +505,15 @@ class DesktopExecutor(CommandExecutor):
             wait_budget_ms = 0
             if command in ("desktop.click", "desktop.getText", "desktop.input"):
                 wait_budget_ms = int(inputs.get("timeoutMs") or 0)
-            found = wait_for_element(lambda: self._find(window, element_locator), wait_budget_ms)
+            try:
+                found = wait_for_element(
+                    lambda: self._find(window, element_locator), wait_budget_ms
+                )
+            except AnchorNotResolved as exc:
+                # D3：锚点缺失不占用等待预算（结构问题，等不到），立即报专属错误码。
+                return CommandResult.failure(
+                    ErrorCode.ANCHOR_NOT_FOUND, str(exc), details=exc.details
+                )
             if not found.matched:
                 return CommandResult.failure(
                     ErrorCode.ELEMENT_NOT_FOUND,
@@ -872,19 +906,131 @@ class DesktopExecutor(CommandExecutor):
         return windows
 
     @staticmethod
-    def _find(window: Any, locator: DesktopLocator) -> list[Any]:
-        criteria = {}
+    def _step_matches(step: Any, element: Any) -> bool:
+        """元素是否匹配祖先链的一级（D1）。**全部给到的键都命中才算匹配**（AND）。
+
+        取不到值的键跳过；一级里所有键都取不到值（不该发生，模型已拦）视为不匹配。
+        """
+        info = getattr(element, "element_info", element)
+        checked = False
+        control_type = getattr(step, "control_type", None)
+        if control_type:
+            checked = True
+            if getattr(info, "control_type", None) != control_type:
+                return False
+        automation_id = getattr(step, "automation_id", None)
+        if automation_id:
+            checked = True
+            if getattr(info, "automation_id", None) != automation_id:
+                return False
+        name = getattr(step, "name", None)
+        if name:
+            checked = True
+            if getattr(info, "name", None) != name:
+                return False
+        class_name = getattr(step, "class_name", None)
+        if class_name:
+            checked = True
+            if getattr(info, "class_name", None) != class_name:
+                return False
+        return checked
+
+    @classmethod
+    def _narrow_by_path(cls, window: Any, path: Any) -> list[Any]:
+        """按祖先链逐级收窄，返回**最后一级容器的列表**（D1）。
+
+        每级在当前候选集合的**后代**里找匹配该级的元素（祖先链里的级都是目标的容器，
+        故只看后代、不看候选自身）。任一级收窄为空 ⇒ 返回空列表（目标必然找不到）。
+        每级只在上一级的候选容器内枚举，避免「每级都从窗口全树重扫」。
+
+        **祖先链不含根窗口自身**（2026-10-08 真机复验定案）：捕获侧只回传「根窗口**之下**」
+        的容器级。UIA 里窗口不属于自己的后代（实测 `window.descendants()` 中
+        `control_type == "Window"` 的个数为 0），若把根窗口也写进 path，这一级永远匹配不上
+        ⇒ 收窄恒空。修法选在**产侧**（不生成无信息级的根级），而不是把这里的谓词放宽成
+        「自身或后代」——放宽一个收窄谓词会让它对别的用法也变松，得不偿失。
+        """
+        current = [window]
+        for step in path:
+            next_level: list[Any] = []
+            for container in current:
+                try:
+                    descendants = container.descendants()
+                except Exception:
+                    continue
+                for item in descendants:
+                    if cls._step_matches(step, item):
+                        next_level.append(item)
+            if not next_level:
+                return []
+            current = next_level
+        return current
+
+    @classmethod
+    def _find(cls, window: Any, locator: DesktopLocator) -> list[Any]:
+        # D3：先解析锚点。锚点找不到 ⇒ 抛 AnchorNotResolved，由调用点报 ANCHOR_NOT_FOUND
+        # （**不是**在这里回落成「直接找目标」——静默降级是本项目最忌讳的一类错误）。
+        # 锚点自身用同一条 _find 路径（因此 anchor.locator 的 path/matchMode 一样生效）；
+        # 模型已禁止 anchor 嵌套，故这里最多深一层，不会无限递归。
+        if locator.anchor is not None:
+            anchor_locator = locator.anchor.locator
+            if not cls._find(window, anchor_locator):
+                raise AnchorNotResolved(locator)
+        # D1：有 path 时先在祖先链收窄出的容器里找目标；无 path 维持原行为（window 后代）。
+        if locator.path is None:
+            return cls._find_in(window, locator)
+        matches: list[Any] = []
+        for scope in cls._narrow_by_path(window, locator.path):
+            matches.extend(cls._find_in(scope, locator))
+        return matches
+
+    @staticmethod
+    def _find_in(scope: Any, locator: DesktopLocator) -> list[Any]:
+        """在 ``scope`` 的后代里按 locator 找目标（D1/D2）。
+
+        matchMode（D2）作用于 ``automationId`` / ``name``：
+        - ``exact``（**默认，未给 matchMode 即此路径**）：走 pywinauto 原生 criteria
+          粗筛（快），行为与今天逐字节一致；
+        - ``contains`` / ``regex``：原生 criteria 只支持等值，必须**全量后代 + 手工过滤**
+          （与 win32 `classNameRe` 的先例一致：新增口子而不削弱等值）。
+        """
+        mode = effective_match_mode(locator.match_mode)
+        name_is_fuzzy = locator.name is not None and mode != "exact"
+        aid_is_fuzzy = locator.automation_id is not None and mode != "exact"
+
+        if name_is_fuzzy or aid_is_fuzzy:
+            matches = scope.descendants()
+        else:
+            criteria = {}
+            if locator.control_type:
+                criteria["control_type"] = locator.control_type
+            if locator.name:
+                criteria["title"] = locator.name
+            matches = scope.descendants(**criteria)
+
         if locator.control_type:
-            criteria["control_type"] = locator.control_type
+            # controlType 恒等值（不参与 matchMode，ADR 0018 §2 D2 定稿）。
+            matches = [
+                match
+                for match in matches
+                if getattr(match.element_info, "control_type", None) == locator.control_type
+            ]
         if locator.name:
-            criteria["title"] = locator.name
-        matches = window.descendants(**criteria)
+            matches = [
+                match
+                for match in matches
+                if matches_text(
+                    getattr(match.element_info, "name", None), locator.name, mode
+                )
+            ]
         if locator.automation_id:
             matches = [
                 match
                 for match in matches
-                if getattr(match.element_info, "automation_id", None)
-                == locator.automation_id
+                if matches_text(
+                    getattr(match.element_info, "automation_id", None),
+                    locator.automation_id,
+                    mode,
+                )
             ]
         return matches
 

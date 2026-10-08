@@ -76,21 +76,27 @@ def _desktop_document() -> dict:
     }
 
 
-# ---- 字段集按 backend 分（实测：两执行器消费的字段完全不重叠） ----------------
+# ---- 字段集按 backend 分（实测：两执行器消费的字段几乎不重叠） ----------------
 def test_backend_field_sets_are_disjoint_and_match_the_executors(qapp):
-    """字段表必须与执行器实际消费的字段一致，且两个后端不重叠。
+    """字段表必须与执行器实际消费的字段一致；两个后端**只共享 matchMode**。
 
-    这条是**事实钉子**：`desktop.py::_find` 只读 automation_id / control_type / name，
-    `desktop_win32.py::_find` 只读 title / class_name / class_name_re / control_id /
-    found_index。谁改了两边的消费面，这里必须跟着改（否则界面会提供死字段）。
+    这条是**事实钉子**：`desktop.py::_find` 读 automation_id / control_type / name /
+    match_mode / path / anchor，`desktop_win32.py::_find` 读 title / class_name /
+    class_name_re / control_id / found_index / match_mode / path / anchor。
+    谁改了两边的消费面，这里必须跟着改（否则界面会提供死字段）。
+
+    `matchMode` 是**唯一**被两个后端共用的消费字段（D2 扩面：uia 作用 name/automationId、
+    win32 作用 title），故它是唯一允许出现在两张表里的键。
     """
     from rpa_core.gui.element_editor import fields_for
 
     uia = {key for key, _kind, _hint in fields_for("uia")}
     win32 = {key for key, _kind, _hint in fields_for("win32")}
-    assert uia == {"controlType", "automationId", "name"}
-    assert win32 == {"title", "className", "classNameRe", "controlId", "foundIndex"}
-    assert not (uia & win32)
+    assert uia == {"controlType", "automationId", "name", "matchMode"}
+    assert win32 == {
+        "title", "className", "classNameRe", "controlId", "foundIndex", "matchMode",
+    }
+    assert uia & win32 == {"matchMode"}
 
 
 def test_never_offers_fields_no_executor_consumes(qapp):
@@ -119,7 +125,7 @@ def test_never_offers_fields_no_executor_consumes(qapp):
 
 
 def test_field_tables_match_what_executors_actually_read(qapp):
-    """字段表 vs 执行器**实际读取**的 locator 字段：双边必须逐字一致。
+    """字段表 ∪ 结构字段 vs 执行器**实际读取**的 locator 字段：双边必须逐字一致。
 
     这是「参数消费」在 UI 层的对应物，判据自维护：用 AST 扫执行器里全部
     ``locator.<字段>`` 读取点，再折回别名与界面字段表比对。
@@ -127,12 +133,17 @@ def test_field_tables_match_what_executors_actually_read(qapp):
     - 表里有、执行器不读 → 界面在生产静默死字段（本次就抓出 uia 下 className 这种情况）
     - 执行器读、表里没有 → 用户永远改不了这个字段
 
+    比对的是 **标量字段表 ∪ `STRUCTURED_LOCATOR_KEYS`**：`path`（层级列表）与
+    `anchor`（嵌套 locator）的值不是标量，塞不进「一个输入框一个值」的表，由专门控件
+    承载。为了避免 `STRUCTURED_LOCATOR_KEYS` 退化成「想加什么就加什么的豁免名单」，
+    另有一条 `test_structured_keys_are_actually_read` 盯着它。
+
     任何一边变了这里就红，不需要有人记得同步两份清单。
     """
     import ast
     from pathlib import Path
 
-    from rpa_core.gui.element_editor import fields_for
+    from rpa_core.gui.element_editor import STRUCTURED_LOCATOR_KEYS, fields_for
     from rpa_core.model.desktop import DesktopLocator
 
     snake_to_alias = {
@@ -156,7 +167,40 @@ def test_field_tables_match_what_executors_actually_read(qapp):
         }
         read_aliases.discard("backend")
         offered = {key for key, _kind, _hint in fields_for(backend)}
+        offered |= set(STRUCTURED_LOCATOR_KEYS)
         assert offered == read_aliases, f"{backend}: 界面 {offered} vs 执行器 {read_aliases}"
+
+
+def test_structured_keys_are_actually_read(qapp):
+    """``STRUCTURED_LOCATOR_KEYS`` 里的每个键都必须被至少一个执行器真读。
+
+    否则它就只是「豁免名单」里的一条——把某个字段从标量表里挪进来就能绕过上面那条
+    契约，界面从此不提供、执行器也不消费，静默死字段换了个地方藏。
+    """
+    import ast
+    from pathlib import Path
+
+    from rpa_core.gui.element_editor import STRUCTURED_LOCATOR_KEYS
+    from rpa_core.model.desktop import DesktopLocator
+
+    snake_to_alias = {
+        name: (field.alias or name)
+        for name, field in DesktopLocator.model_fields.items()
+    }
+    executors = Path(__file__).resolve().parents[2] / "src" / "rpa_core" / "executors"
+    read_aliases: set[str] = set()
+    for filename in ("desktop.py", "desktop_win32.py"):
+        tree = ast.parse((executors / filename).read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.Attribute)
+                and isinstance(node.value, ast.Name)
+                and node.value.id == "locator"
+                and node.attr in snake_to_alias
+            ):
+                read_aliases.add(snake_to_alias[node.attr])
+    for key in STRUCTURED_LOCATOR_KEYS:
+        assert key in read_aliases, f"结构字段 {key} 没有任何执行器读取它"
 
 
 def test_compose_locator_ignores_cross_backend_fields(qapp):
@@ -510,20 +554,29 @@ def test_editor_browser_output_passes_the_real_contract(qapp):
 
 # ---- 对话框：桌面 -------------------------------------------------------------
 def test_editor_desktop_shows_only_the_active_backend_rows(qapp):
-    """uia 元素只显示 uia 的三行；win32 行隐藏（提供它们＝生产死字段）。"""
+    """uia 元素只显示 uia 的行；**对面后端独有**的行隐藏（提供它们＝生产死字段）。
+
+    `matchMode` 是唯一被两个后端共用的字段（D2 扩面），故它在切 backend 时**保持可见**——
+    断言写成「对面后端**独有**的键才隐藏」，而不是「两集合不相交」（后者在 matchMode
+    引入后不成立，且它本就是隐含假设、不是这条测试要断的东西）。
+    """
     from rpa_core.gui.element_editor import ElementEditorDialog, fields_for
+
+    uia = {k for k, _kd, _h in fields_for("uia")}
+    win32 = {k for k, _kd, _h in fields_for("win32")}
+    shared = uia & win32
 
     dialog = ElementEditorDialog(_desktop_document(), name="submit")
     assert dialog.backend_combo.currentText() == "uia"
-    for key in {k for k, _kd, _h in fields_for("uia")}:
+    for key in uia:
         assert dialog.field_boxes[key].isVisibleTo(dialog), key
-    for key in {k for k, _kd, _h in fields_for("win32")}:
+    for key in win32 - shared:
         assert not dialog.field_boxes[key].isVisibleTo(dialog), key
 
     dialog.backend_combo.setCurrentText("win32")
-    for key in {k for k, _kd, _h in fields_for("win32")}:
+    for key in win32:
         assert dialog.field_boxes[key].isVisibleTo(dialog), key
-    for key in {k for k, _kd, _h in fields_for("uia")}:
+    for key in uia - shared:
         assert not dialog.field_boxes[key].isVisibleTo(dialog), key
 
 
@@ -1100,3 +1153,274 @@ def test_editor_dialog_opens_roomy(qapp):
     dialog = ElementEditorDialog(_browser_document(), name="el_size")
     assert dialog.width() >= 680
     assert dialog.height() >= 700
+
+
+# ---- M48：桌面 locator 结构字段（path / anchor / matchMode）不得在编辑中丢失 ------
+
+def _desktop_document_with_extensions() -> dict:
+    """带 M48 三件套的桌面元素：祖先链 + 锚点 + 控件级 matchMode。"""
+    return {
+        "kind": "desktop",
+        "selector": {
+            "locator": {
+                "backend": "uia",
+                "controlType": "Button",
+                "automationId": "submitButton",
+                "name": "Submit",
+                "matchMode": "contains",
+                "path": [
+                    {"controlType": "Window", "name": "RPA Core Desktop Demo"},
+                    {"controlType": "Pane", "automationId": "formPanel"},
+                ],
+                "anchor": {"locator": {"backend": "uia", "automationId": "mainWindow"}},
+            }
+        },
+        "verifyCount": 1,
+        "metadata": {"windowTitle": "RPA Core Desktop Demo"},
+    }
+
+
+def test_editor_roundtrip_preserves_structured_locator_fields(qapp):
+    """**静默数据丢失的钉子**：编辑器打开再确定，path / anchor 必须原样还在。
+
+    `compose_locator` 是「字符串值 → locator」的管道，结构字段不走它；若组装时忘了
+    透传，用户在编辑器里点一次确定，捕获回传的祖先链与锚点就没了——而且**不报错**。
+    """
+    from rpa_core.gui.element_editor import ElementEditorDialog
+
+    dialog = ElementEditorDialog(_desktop_document_with_extensions(), name="submit")
+    out = dialog.result_document()
+    locator = out["selector"]["locator"]
+    assert locator["path"] == [
+        {"controlType": "Window", "name": "RPA Core Desktop Demo"},
+        {"controlType": "Pane", "automationId": "formPanel"},
+    ]
+    assert locator["anchor"] == {"locator": {"backend": "uia", "automationId": "mainWindow"}}
+    assert locator["matchMode"] == "contains"
+
+
+def test_editor_does_not_flag_structured_fields_as_inert(qapp):
+    """path / anchor / matchMode 被执行器真读，不能报成「死字段」。"""
+    from rpa_core.gui.element_editor import inert_locator_keys
+
+    locator = _desktop_document_with_extensions()["selector"]["locator"]
+    assert inert_locator_keys(locator) == []
+
+
+def test_editor_renders_locator_path_tree(qapp):
+    """祖先链表格逐级一行，**空 path 也建表**（M50 起可编辑，用户要能新建祖先链）。
+
+    M48 是「空 ⇒ 不建控件」，M50 改为常驻：没有入口用户就无从给旧元素补祖先链。
+    「空 path 不产出 `path` 字段」这条不变量挪到 **结果文档**上验证（见下一条断言）。
+    """
+    from rpa_core.gui.element_editor import ElementEditorDialog
+
+    dialog = ElementEditorDialog(_desktop_document_with_extensions(), name="submit")
+    table = dialog.path_table
+    assert table.rowCount() == 2
+    assert table.item(0, 0).text() == "Window"
+    assert table.item(1, 1).text() == "formPanel"
+    # 空 path：表格仍存在（可新建），但结果文档里没有 path 字段
+    plain = ElementEditorDialog(_desktop_document(), name="plain")
+    assert plain.path_table.rowCount() == 0
+    assert "path" not in plain.result_document()["selector"]["locator"]
+
+
+def test_editor_compose_with_match_mode_only(qapp):
+    """matchMode 是标量字段：可直接在输入框里改，且组装进 locator。"""
+    from rpa_core.gui.element_editor import ElementEditorDialog
+
+    dialog = ElementEditorDialog(_desktop_document(), name="submit")
+    dialog.field_edits["matchMode"].setText("regex")
+    locator = dialog.result_document()["selector"]["locator"]
+    assert locator["matchMode"] == "regex"
+
+
+# ---- M50：祖先链（path）与锚点（anchor）**可编辑** ----------------------------
+#
+# M48 给了「渲染出来」的只读视图，M50 把它升级成可改写入口。这段判据盯的是
+# **两个方向**：改动能落进结果文档（写侧）、以及编辑器与捕获侧对「一级长什么样」
+# 的口径必须**同源**（两端同规则，防漂移）。
+
+
+def _set_path_cell(dialog, row: int, key: str, text: str) -> None:
+    """改表格里某一格（走控件真实通道：setText 会触发 itemChanged）。"""
+    from PySide6.QtWidgets import QTableWidgetItem
+
+    from rpa_core.model.desktop import LOCATOR_STEP_KEYS
+
+    col = LOCATOR_STEP_KEYS.index(key)
+    item = dialog.path_table.item(row, col)
+    if item is None:
+        dialog.path_table.setItem(row, col, QTableWidgetItem(text))
+    else:
+        item.setText(text)
+
+
+def test_editor_can_edit_path_step_keys(qapp):
+    """改级内键：在表格里改一格，结果文档的 path 随之改变（M48 是只读）。"""
+    from rpa_core.gui.element_editor import ElementEditorDialog
+
+    dialog = ElementEditorDialog(_desktop_document_with_extensions(), name="submit")
+    _set_path_cell(dialog, 1, "automationId", "renamedPanel")
+    locator = dialog.result_document()["selector"]["locator"]
+    assert locator["path"] == [
+        {"controlType": "Window", "name": "RPA Core Desktop Demo"},
+        {"controlType": "Pane", "automationId": "renamedPanel"},
+    ]
+
+
+def test_editor_can_add_and_remove_path_levels(qapp):
+    """增删级：加一级 → path 多一级；删掉它 → 回到原样（且不残留空级）。"""
+    from rpa_core.gui.element_editor import ElementEditorDialog
+
+    dialog = ElementEditorDialog(_desktop_document_with_extensions(), name="submit")
+    dialog.path_table.setCurrentCell(0, 0)
+    dialog._on_path_add_level()
+    # 加的一级是空的 ⇒ 被共享纯函数丢弃，结果文档不会多出空级
+    assert len(dialog.result_document()["selector"]["locator"]["path"]) == 2
+    _set_path_cell(dialog, 1, "name", "middlePane")
+    assert dialog.result_document()["selector"]["locator"]["path"] == [
+        {"controlType": "Window", "name": "RPA Core Desktop Demo"},
+        {"name": "middlePane"},
+        {"controlType": "Pane", "automationId": "formPanel"},
+    ]
+    dialog.path_table.setCurrentCell(1, 0)
+    dialog._on_path_remove_level()
+    assert dialog.result_document()["selector"]["locator"]["path"] == [
+        {"controlType": "Window", "name": "RPA Core Desktop Demo"},
+        {"controlType": "Pane", "automationId": "formPanel"},
+    ]
+
+
+def test_editor_path_move_reorders_levels(qapp):
+    """上移/下移：祖先链**有序**，顺序错了收窄会走错分支——移动必须真落到结果文档。"""
+    from rpa_core.gui.element_editor import ElementEditorDialog
+
+    dialog = ElementEditorDialog(_desktop_document_with_extensions(), name="submit")
+    dialog.path_table.setCurrentCell(1, 0)
+    dialog._on_path_move(-1)  # Pane 上移到 Window 之前
+    assert dialog.result_document()["selector"]["locator"]["path"] == [
+        {"controlType": "Pane", "automationId": "formPanel"},
+        {"controlType": "Window", "name": "RPA Core Desktop Demo"},
+    ]
+    dialog.path_table.setCurrentCell(0, 0)
+    dialog._on_path_move(1)  # 移回去
+    assert dialog.result_document()["selector"]["locator"]["path"] == [
+        {"controlType": "Window", "name": "RPA Core Desktop Demo"},
+        {"controlType": "Pane", "automationId": "formPanel"},
+    ]
+
+
+def test_editor_path_empty_level_is_dropped_and_hinted(qapp):
+    """全空级丢弃 + 给用户提示（每级至少要一个键，模型会拒；界面不能静默吞掉）。"""
+    from rpa_core.gui.element_editor import ElementEditorDialog
+
+    plain = ElementEditorDialog(_desktop_document(), name="plain")
+    plain._on_path_add_level()  # 造出一整行空级
+    assert "path" not in plain.result_document()["selector"]["locator"]
+    assert "丢弃" in plain.path_hint.text()
+
+
+def test_editor_path_emptying_last_level_removes_field(qapp):
+    """把带 path 的元素逐级清空 ⇒ path 字段整体移除（等价「不收窄」），不留空列表。"""
+    from rpa_core.gui.element_editor import ElementEditorDialog
+
+    dialog = ElementEditorDialog(_desktop_document_with_extensions(), name="submit")
+    for key in ("controlType", "name"):
+        _set_path_cell(dialog, 0, key, "")
+    for key in ("controlType", "automationId"):
+        _set_path_cell(dialog, 1, key, "")
+    assert "path" not in dialog.result_document()["selector"]["locator"]
+
+
+def test_editor_path_edit_is_idempotent_when_untouched(qapp):
+    """**编辑不改动 ⇒ 逐字节原样**（M48 修过一次静默丢数据，不能退回去）。"""
+    from rpa_core.gui.element_editor import ElementEditorDialog
+
+    document = _desktop_document_with_extensions()
+    dialog = ElementEditorDialog(document, name="submit")
+    locator = dialog.result_document()["selector"]["locator"]
+    assert locator["path"] == document["selector"]["locator"]["path"]
+    assert locator["anchor"] == document["selector"]["locator"]["anchor"]
+
+
+def test_editor_path_pruning_is_shared_with_capture(qapp):
+    """**两端同规则**：编辑器重拼与捕获侧收级共用 ``prune_locator_steps``（防两处漂移）。"""
+    from rpa_core.capture.desktop_agent import _locator_step_for
+    from rpa_core.model.desktop import prune_locator_steps
+
+    class _Info:
+        control_type = "ComboBox"
+        automation_id = ""
+        name = "  "
+        class_name = None
+
+    # 捕获侧：只有 controlType 有值 ⇒ 保留该键、其余丢弃
+    assert _locator_step_for(_Info()) == {"controlType": "ComboBox"}
+    # 编辑器侧：同一份草稿喂给共享纯函数，得到逐字节相同的一级
+    assert prune_locator_steps([_locator_step_for(_Info())]) == [{"controlType": "ComboBox"}]
+
+    class _Empty:
+        control_type = None
+        automation_id = None
+        name = ""
+        class_name = None
+
+    # 一个键都没有 ⇒ 捕获侧跳过该级（None），编辑器侧丢弃该级——**同一口径**
+    assert _locator_step_for(_Empty()) is None
+    assert prune_locator_steps([{}]) == []
+
+
+def test_editor_anchor_can_be_enabled_and_edited(qapp):
+    """锚点一片：勾上 + 填字段 ⇒ 结果文档里 anchor = {"locator": {...}}。"""
+    from rpa_core.gui.element_editor import ElementEditorDialog
+
+    dialog = ElementEditorDialog(_desktop_document(), name="submit")
+    assert "anchor" not in dialog.result_document()["selector"]["locator"]
+    dialog.anchor_box.setChecked(True)
+    dialog.anchor_edits["automationId"].setText("mainWindow")
+    locator = dialog.result_document()["selector"]["locator"]
+    assert locator["anchor"] == {"locator": {"backend": "uia", "automationId": "mainWindow"}}
+
+
+def test_editor_anchor_uncheck_removes_it(qapp):
+    """取消勾选 ⇒ anchor 整个移除（回到「无锚点」），而不是留一个空 shell。"""
+    from rpa_core.gui.element_editor import ElementEditorDialog
+
+    dialog = ElementEditorDialog(_desktop_document_with_extensions(), name="submit")
+    assert "anchor" in dialog.result_document()["selector"]["locator"]
+    dialog.anchor_box.setChecked(False)
+    assert "anchor" not in dialog.result_document()["selector"]["locator"]
+
+
+def test_editor_anchor_form_has_no_nested_anchor_entry(qapp):
+    """**只给一层**：锚点表单里没有「再加锚点」的入口，用户天然构造不出嵌套。"""
+    from rpa_core.gui.element_editor import ElementEditorDialog
+
+    dialog = ElementEditorDialog(_desktop_document(), name="submit")
+    assert dialog.anchor_edits
+    assert not hasattr(dialog, "anchor_anchor_box")
+    assert not hasattr(dialog, "anchor_path_table")
+
+
+def test_model_rejects_nested_anchor():
+    """界面只给一层，但**模型层才是判据权威**：真构造一条嵌套的，校验必报。"""
+    from pydantic import ValidationError
+
+    from rpa_core.model.desktop import DesktopLocator
+
+    payload = {
+        "backend": "uia",
+        "automationId": "target",
+        "anchor": {
+            "locator": {
+                "backend": "uia",
+                "automationId": "outer",
+                "anchor": {"locator": {"backend": "uia", "automationId": "inner"}},
+            }
+        },
+    }
+    with pytest.raises(ValidationError) as excinfo:
+        DesktopLocator.model_validate(payload)
+    assert "anchor" in str(excinfo.value)

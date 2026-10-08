@@ -18,7 +18,7 @@ from rpa_core.model.command import (
     EffectKind,
     EffectRecord,
 )
-from rpa_core.model.desktop import DesktopLocator
+from rpa_core.model.desktop import DesktopLocator, effective_match_mode, matches_text
 from rpa_core.model.errors import ErrorCode
 
 from .base import (
@@ -31,6 +31,10 @@ from .base import (
     resolve_session_id,
     wait_for_element,
 )
+
+# D3 的锚点异常与 uia 后端**共用同一个类**：两后端的「锚点没找到」是同一件事，
+# 各自定义一份会让上层按错误码分支时不得不区分后端（没有理由）。
+from .desktop import AnchorNotResolved
 
 
 @dataclass
@@ -452,7 +456,13 @@ class Win32DesktopExecutor(CommandExecutor):
             timeout_ms = int(inputs.get("timeoutMs") or 0)
             deadline = time.monotonic() + timeout_ms / 1000.0
             while True:
-                matches = self._find(window, locator)
+                try:
+                    matches = self._find(window, locator)
+                except AnchorNotResolved as exc:
+                    # D3：锚点缺失是结构问题（上下文不对），等不到，立即报专属错误码。
+                    return CommandResult.failure(
+                        ErrorCode.ANCHOR_NOT_FOUND, str(exc), details=exc.details
+                    )
                 if len(matches) == 1:
                     break
                 if len(matches) > 1:
@@ -503,7 +513,13 @@ class Win32DesktopExecutor(CommandExecutor):
         wait_budget_ms = 0
         if command in ("desktop.win32.click", "desktop.win32.getText", "desktop.win32.input"):
             wait_budget_ms = int(inputs.get("timeoutMs") or 0)
-        found = wait_for_element(lambda: self._find(window, locator), wait_budget_ms)
+        try:
+            found = wait_for_element(lambda: self._find(window, locator), wait_budget_ms)
+        except AnchorNotResolved as exc:
+            # D3：锚点缺失不占用等待预算，立即报专属错误码（口径与 uia 后端一致）。
+            return CommandResult.failure(
+                ErrorCode.ANCHOR_NOT_FOUND, str(exc), details=exc.details
+            )
         if not found.matched:
             return CommandResult.failure(
                 ErrorCode.ELEMENT_NOT_FOUND,
@@ -810,13 +826,113 @@ class Win32DesktopExecutor(CommandExecutor):
         return [w for w in windows if (w.window_text() or "") == title]
 
     @staticmethod
-    def _find(window: Any, locator: DesktopLocator) -> list[Any]:
-        criteria = {}
+    def _step_matches(step: Any, element: Any) -> bool:
+        """元素是否匹配祖先链的一级（D1）。**全部给到的键都命中才算匹配**（AND）。
+
+        win32 侧元素没有 UIA 的 control_type/automation_id 概念，故一级里若**只给了**
+        UIA 专有键（controlType/automationId），该级按「无法判定」处理——不匹配（否则
+        win32 元素会全被放过，path 形同虚设）。`className` 用 pywinauto 的 class_name()；
+        `name` 对该后端是控件**窗口文本**（与 title 同源，见 `_find_in` 注释）。
+        """
+        checked = False
+        control_type = getattr(step, "control_type", None)
+        if control_type:
+            # win32 无 control_type 概念——该键在本后端无法兑现，直接判不匹配。
+            return False
+        automation_id = getattr(step, "automation_id", None)
+        if automation_id:
+            # 同上：win32 无 automationId 概念。
+            return False
+        name = getattr(step, "name", None)
+        if name:
+            checked = True
+            try:
+                text = element.window_text()
+            except Exception:
+                text = None
+            if text != name:
+                return False
+        class_name = getattr(step, "class_name", None)
+        if class_name:
+            checked = True
+            try:
+                actual = element.class_name()
+            except Exception:
+                actual = None
+            if actual != class_name:
+                return False
+        return checked
+
+    @classmethod
+    def _narrow_by_path(cls, window: Any, path: Any) -> list[Any]:
+        """按祖先链逐级收窄，返回最后一级容器的列表（D1）。语义同 uia 侧。
+
+        **只看候选的后代**——祖先链由捕获侧保证不含根窗口自身（理由见
+        `desktop.py::DesktopExecutor._narrow_by_path`，2026-10-08 真机复验定案）。
+        """
+        current = [window]
+        for step in path:
+            next_level: list[Any] = []
+            for container in current:
+                try:
+                    descendants = container.descendants()
+                except Exception:
+                    continue
+                for item in descendants:
+                    if cls._step_matches(step, item):
+                        next_level.append(item)
+            if not next_level:
+                return []
+            current = next_level
+        return current
+
+    @classmethod
+    def _find(cls, window: Any, locator: DesktopLocator) -> list[Any]:
+        # D3：先解析锚点，找不到 ⇒ AnchorNotResolved（口径与 uia 后端一致，见 desktop.py）。
+        if locator.anchor is not None:
+            if not cls._find(window, locator.anchor.locator):
+                raise AnchorNotResolved(locator)
+        # D1：有 path 时先在祖先链收窄出的容器里找目标；无 path 维持原行为。
+        if locator.path is None:
+            return cls._find_in(window, locator)
+        matches: list[Any] = []
+        for scope in cls._narrow_by_path(window, locator.path):
+            matches.extend(cls._find_in(scope, locator))
+        return matches
+
+    @staticmethod
+    def _find_in(scope: Any, locator: DesktopLocator) -> list[Any]:
+        """在 ``scope`` 后代里按 locator 找目标（D1/D2）。
+
+        matchMode（D2）在本后端作用于 ``title``（= locator.title，控件窗口文本；uia 侧的
+        对应物是 ``name``——两后端的「目标文本字段」不同名，ADR 0018 §2 D2 已登记这层映射）。
+        ``className`` / ``classId`` 不参与 matchMode：前者是等值口径，后两者是数值。
+        """
+        mode = effective_match_mode(locator.match_mode)
+        title_is_fuzzy = locator.title is not None and mode != "exact"
+
+        if title_is_fuzzy:
+            matches = scope.descendants()
+        else:
+            criteria = {}
+            if locator.title:
+                criteria["title"] = locator.title
+            if locator.class_name:
+                criteria["class_name"] = locator.class_name
+            matches = scope.descendants(**criteria)
+
         if locator.title:
-            criteria["title"] = locator.title
+            def _text_of(item: Any) -> str | None:
+                try:
+                    return item.window_text()
+                except Exception:
+                    return None
+
+            matches = [
+                m for m in matches if matches_text(_text_of(m), locator.title, mode)
+            ]
         if locator.class_name:
-            criteria["class_name"] = locator.class_name
-        matches = window.descendants(**criteria)
+            matches = [m for m in matches if (m.class_name() or "") == locator.class_name]
         if locator.class_name_re:
             # `descendants(class_name=...)` 只做等值比较，没有正则口子；classNameRe
             # 自己按完整类名过一遍（与尾巴 #2 的定案一致：新增口子而不削弱等值）。

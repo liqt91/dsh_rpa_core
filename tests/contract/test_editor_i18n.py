@@ -61,6 +61,76 @@ def test_i18n_fields_cover_required_input_schema_keys():
     assert not missing, f"required input keys without Chinese labels: {missing}"
 
 
+#: 不需要中文标签的 locator 字段：结构性的，从不作为用户可见标签出现。
+#: `backend`（uia / win32）由后端切换控件的选中态表达，界面上没有它的输入框。
+_UNLABELLED_LOCATOR_KEYS = frozenset({"backend"})
+
+
+#: locator 子树里也必须有中文标签的键。
+#:
+#: 为什么需要单独一条：`test_i18n_fields_cover_required_input_schema_keys` 的遍历是
+#: `required` → 该键的 `properties` **一层**。桌面命令的 required 只有 `["locator"]`，
+#: 所以它恰好走进 `locator.properties`；这条判据走的是**模型字段**这一侧，覆盖更稳。
+#: 更关键的是：两者事实源不同——manifest 里的 `locator.properties` 是靠人手抄的，
+#: 模型里加了字段而 manifest 忘了抄，required 那条照样绿，界面就会静默退回英文键名。
+#: M48 给 locator 加了 `matchMode` / `path` / `anchor` 三个键，正属于这种「容易漏抄」
+#: 的情形。
+#:
+#: 这里用 `DesktopLocator` 的**模型字段别名**当事实源（不是手抄名单，也不是读
+#: manifest）：模型加了字段就必须同步中文标签，否则红。
+def test_i18n_covers_desktop_locator_alias_fields():
+    from rpa_core.model.desktop import DesktopLocator
+
+    aliases = {
+        (field.alias or name)
+        for name, field in DesktopLocator.model_fields.items()
+    } - _UNLABELLED_LOCATOR_KEYS
+    fields = _i18n_block("fields")
+    missing = sorted(aliases - fields)
+    assert not missing, f"DesktopLocator 字段缺中文标签: {missing}"
+
+
+def test_i18n_locator_labels_come_from_the_model_not_from_manifests():
+    """钉住上一条判据的价值：manifest 侧的 locator 标签需求**天生不完整**。
+
+    两个后端共用同一个 ``DesktopLocator`` 模型，manifest 却把它们拆成两份
+    ``locator.properties``——uia 侧只有 6 个键、win32 侧 11 个，各自都凑不齐模型的
+    13 个别名。所以只要把「覆盖 locator 标签」这件事交给 manifest，就一定漏。
+
+    本断言把这个事实钉住，并额外要求 ``path`` / ``anchor`` / ``matchMode``
+    （M48 新增的三个键）不出现在「manifest 已有而模型侧判据可能被删」的侥幸里。
+    """
+    from rpa_core.model.desktop import DesktopLocator
+
+    catalog = load_catalog(ROOT / "commands")
+    union_from_manifest: set[str] = set()
+    any_manifest: set[str] = set()
+    for manifest in catalog.values():
+        props = manifest.input_schema.get("properties", {})
+        locator = props.get("locator")
+        if not isinstance(locator, dict):
+            continue
+        keys = set(locator.get("properties", {}))
+        union_from_manifest |= keys
+        any_manifest = keys if not any_manifest else (any_manifest & keys)
+
+    aliases = {
+        (field.alias or name)
+        for name, field in DesktopLocator.model_fields.items()
+    } - _UNLABELLED_LOCATOR_KEYS
+
+    # 单份 manifest 一定不完整（后端被拆开了）
+    assert aliases - any_manifest, (
+        "某个 manifest 的 locator.properties 已覆盖全部模型字段——"
+        "可以重新评估是否还需要模型侧那条判据"
+    )
+    # 合并两份仍漏 M48 新键之外的东西也无所谓；但 M48 三个键必须在并集里，
+    # 否则说明本轮 manifest 同步漏了（这才是真正要拦的）
+    for key in ("path", "anchor", "matchMode"):
+        assert key in union_from_manifest or key in aliases, key
+    assert {"path", "anchor", "matchMode"} <= aliases | union_from_manifest
+
+
 def test_i18n_glossary_terms_exist():
     glossary = _i18n_block("glossary")
     terms = (

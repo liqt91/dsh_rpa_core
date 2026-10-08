@@ -34,3 +34,22 @@ node_modules/
 
 # PySide6 GUI 可行性 demo 的离屏截图（仅本地预览，不入库）
 .harness/demo/*.png
+
+# 仓库根的临时文件（前几轮排障/探针留下的一次性备份与脚本，仅本地；
+# 删除守卫在本机故障，无法用 rm 清理，故以忽略收口而不是删除）
+/_bak_*
+/_[a-z]*_*.txt
+/_m[0-9]*
+/_m[0-9]*.txt
+/_probe_*
+/_rewrite_*
+/_n*.txt
+/_neg*.txt
+/_nv_*
+/_p[0-9]*
+/_t.txt
+/_t2.txt
+/_commit_msg*.txt*
+/.harness/spike/_m[0-9]*
+/.harness/spike/_m4*
+/.harness/spike/_m5*

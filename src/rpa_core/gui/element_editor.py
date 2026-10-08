@@ -91,23 +91,37 @@ from rpa_core.gui.theme import (
     TEXT_SECONDARY,
     WARNING,
 )
+from rpa_core.model.desktop import LOCATOR_STEP_KEYS, prune_locator_steps
 
 # 每个 backend **真正被消费**的 locator 字段：``(键, 值类型, 说明)``。
 # 值类型只有 "text" / "int"；顺序即界面顺序。
+#
+# **只放标量字段**（值能摊成一个字符串）。结构字段（`path` 是层级列表、`anchor` 是嵌套
+# locator）走专门控件，见 `STRUCTURED_LOCATOR_KEYS`——它们塞不进「一个输入框一个值」的
+# 表，硬塞会让 `split_locator` / `compose_locator` 这对**字符串 ↔ 值**的管道把它压成
+# repr 字符串（写回模型必炸）或干脆丢掉（静默数据丢失）。
 LOCATOR_FIELDS_BY_BACKEND: dict[str, tuple[tuple[str, str, str], ...]] = {
     "uia": (
         ("controlType", "text", "控件类型，如 Button / Edit / List"),
         ("automationId", "text", "最稳，等同网页的 id"),
         ("name", "text", "控件显示名（执行器按 title 匹配）"),
+        # D2：控件级匹配方式。`exact`（默认，等价于不给）/ `contains` / `regex`。
+        ("matchMode", "text", "匹配方式：exact（默认）/ contains / regex"),
     ),
     "win32": (
-        ("title", "text", "窗口文本（等值）"),
-        ("className", "text", "类名等值匹配（与 classNameRe 互斥）"),
+        ("title", "text", "窗口文本（等值，已支持 matchMode）"),
+        ("className", "text", "类名等值匹配（与 classNameRe 互斥；不参与 matchMode）"),
         ("classNameRe", "text", "类名正则匹配（与 className 互斥）"),
         ("controlId", "int", "控件序号——**每次进程启动都变**，只适合短期脚本"),
         ("foundIndex", "int", "命中多个时取第几个（从 0 开始）"),
+        ("matchMode", "text", "匹配方式：exact（默认）/ contains / regex（作用于 title）"),
     ),
 }
+
+# 由**专门控件**承载的 locator 字段（值不是标量，不进上面的表）。
+# 契约测试（`test_field_tables_match_what_executors_actually_read`）把
+# 「标量字段表 ∪ 本集合」与执行器实际读取面比对——两边必须逐字一致。
+STRUCTURED_LOCATOR_KEYS: tuple[str, ...] = ("path", "anchor")
 
 BACKENDS: tuple[str, ...] = ("uia", "win32")
 
@@ -129,10 +143,13 @@ def declared_locator_keys() -> tuple[str, ...]:
 
 
 ALL_FIELD_KEYS: tuple[str, ...] = tuple(
-    key
-    for fields in LOCATOR_FIELDS_BY_BACKEND.values()
-    for key, _kind, _hint in fields
+    dict.fromkeys(
+        key
+        for fields in LOCATOR_FIELDS_BY_BACKEND.values()
+        for key, _kind, _hint in fields
+    )
 )
+
 
 
 class LocatorFieldError(ValueError):
@@ -172,8 +189,12 @@ def inert_locator_keys(locator: dict[str, Any]) -> list[str]:
 
     这些字段存在也不会报错（模型只知道键合法），但执行器永远读不到——是静默死字段。
     编辑器如实提示，让用户知道保存会把它们去掉，而不是悄悄改他的文件。
+
+    **结构字段（path / anchor）不算死字段**：它们由专门控件承载、被执行器真读，
+    只是不进「一个输入框一个值」的表。把它们报成「不消费」正好说反了。
     """
     known = {key for key, _kind, _hint in fields_for(str(locator.get("backend")))}
+    known |= set(STRUCTURED_LOCATOR_KEYS)
     declared = set(declared_locator_keys())
     return sorted(
         key
@@ -182,11 +203,32 @@ def inert_locator_keys(locator: dict[str, Any]) -> list[str]:
     )
 
 
-def compose_locator(backend: str, values: dict[str, str]) -> dict[str, Any]:
+def structured_locator_values(locator: dict[str, Any]) -> dict[str, Any]:
+    """取出 locator 里的结构字段（原样，不做字符串化）。
+
+    由专门控件负责编辑；`compose_locator` 用 ``structured`` 参数把它们带回组装结果，
+    避免「编辑器点一次确定就把捕获回传的祖先链/锚点丢掉」这种**静默数据丢失**。
+    """
+    return {
+        key: locator[key]
+        for key in STRUCTURED_LOCATOR_KEYS
+        if locator.get(key) is not None
+    }
+
+
+def compose_locator(
+    backend: str,
+    values: dict[str, str],
+    *,
+    structured: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """按「勾选的字段」组装 locator：**值为空即不出现**那个键。
 
     界面用「值空 = 不勾」表达，所以组装层不需要单独的勾选状态——少一个可能与界面
-    不同步的状态源。只组装该 backend 的字端表内的字段（杜绝跨后端死字段）。
+    不同步的状态源。只组装该 backend 的字段表内的字段（杜绝跨后端死字段）。
+
+    ``structured`` 是结构字段（path / anchor）的**原样透传**：它们不经过字符串管道，
+    但必须原封带回——否则用户在编辑器里点一次确定，捕获回传的祖先链就没了。
     """
     locator: dict[str, Any] = {"backend": backend}
     for key, kind, _hint in fields_for(backend):
@@ -202,6 +244,9 @@ def compose_locator(backend: str, values: dict[str, str]) -> dict[str, Any]:
                 ) from None
             continue
         locator[key] = raw
+    for key, value in (structured or {}).items():
+        if key in STRUCTURED_LOCATOR_KEYS and value is not None:
+            locator[key] = value
     return locator
 
 
@@ -942,6 +987,11 @@ class ElementEditorForm(QWidget):
     def _build_desktop(self, layout: QVBoxLayout, raw_selector: dict) -> None:
         locator = _dict_or_empty(raw_selector.get("locator"))
         self._original_locator = locator
+        # 结构字段（path / anchor）：不经过字符串管道，但要**原样带回**组装结果，
+        # 否则用户在编辑器里点一次确定，捕获回传的祖先链/锚点就静默没了。
+        self._structured: dict[str, Any] = structured_locator_values(locator)
+        # 表格重绘期间挡住 itemChanged（否则 setItem 会触发 _on_path_table_changed 回环）。
+        self._path_table_guard: bool = False
         # 两个后端的行都建出来，只显示当前 backend 的那一组：切换 backend 时值不丢，
         # 用户可以来回比较。组装时只看当前后端（见 _desktop_values）。
         metadata = _dict_or_empty(self._document.get("metadata"))
@@ -1005,7 +1055,267 @@ class ElementEditorForm(QWidget):
         hint.setWordWrap(True)
         hint.setStyleSheet(f"color: {TEXT_SECONDARY};")
         layout.addWidget(hint)
+        self._build_locator_path_tree(layout)
+        self._build_anchor_view(layout)
         self._on_backend_changed(self.backend_combo.currentText())
+
+    # -- 桌面：祖先链节点树（D1，M50 起可编辑） -------------------------------
+
+    def _build_locator_path_tree(self, layout: QVBoxLayout) -> None:
+        """祖先链编辑（D1）：按 ``locator.path`` 逐级列出，**可增删级 + 改级内键**。
+
+        ``path`` 为空/缺失时仍建控件（M48 是「没有就不建」）——M50 起用户要能**新建**
+        祖先链（捕获漏了、或旧元素没有），没有入口就无从开始。故永远给出表格 + 按钮。
+
+        **重拼规则不新发明**：每级至少一个键、全空级丢弃，逐字复用
+        ``model.desktop.prune_locator_steps``（与捕获侧 ``_locator_step_for`` 共用的同一份）。
+        M48 的顾虑是「编辑器另立一套『一级长什么样』的权威」；M50 用**共享纯函数**回应，
+        而不是在编辑器里再抄一遍规则。
+
+        产物即时回写 ``self._structured["path"]``（空 ⇒ 移除该键，等价「不收窄」），
+        再走既有的 ``revalidate()``（判据权威仍是模型）。
+        """
+        label = QLabel("控件祖先链（locator.path，本级到目标的**容器**，不含根窗口与目标自身）")
+        label.setStyleSheet(f"color: {TEXT_SECONDARY};")
+        layout.addWidget(label)
+
+        table = QTableWidget(0, len(LOCATOR_STEP_KEYS))
+        table.setHorizontalHeaderLabels(list(LOCATOR_STEP_KEYS))
+        table.verticalHeader().setVisible(True)
+        table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        # 可编辑（M48 是 NoEditTriggers）；双击单元格即改。
+        table.setEditTriggers(
+            QTableWidget.EditTrigger.DoubleClicked
+            | QTableWidget.EditTrigger.EditKeyPressed
+            | QTableWidget.EditTrigger.AnyKeyPressed
+        )
+        for step in self._structured.get("path") or []:
+            step = _dict_or_empty(step)
+            table.insertRow(table.rowCount())
+            for col, key in enumerate(LOCATOR_STEP_KEYS):
+                table.setItem(table.rowCount() - 1, col, QTableWidgetItem(str(step.get(key) or "")))
+        table.itemChanged.connect(self._on_path_table_changed)
+        layout.addWidget(table)
+        self.path_table = table
+
+        buttons = QHBoxLayout()
+        for text, handler in (
+            ("加一级", self._on_path_add_level),
+            ("删除选中级", self._on_path_remove_level),
+            ("上移", lambda: self._on_path_move(-1)),
+            ("下移", lambda: self._on_path_move(1)),
+        ):
+            button = QPushButton(text)
+            button.clicked.connect(handler)
+            buttons.addWidget(button)
+        buttons.addStretch(1)
+        layout.addLayout(buttons)
+        self.path_hint = QLabel("")
+        self.path_hint.setWordWrap(True)
+        self.path_hint.setStyleSheet(f"color: {WARNING};")
+        layout.addWidget(self.path_hint)
+        self._sync_path_table_rows()
+
+    def _path_table_steps(self) -> list[dict]:
+        """把表格当前内容读成 path 草稿（**原样**，不做裁剪——裁剪交给共享纯函数）。"""
+        table = self.path_table
+        steps: list[dict] = []
+        for row in range(table.rowCount()):
+            step: dict = {}
+            for col, key in enumerate(LOCATOR_STEP_KEYS):
+                item = table.item(row, col)
+                value = item.text() if item is not None else ""
+                if value.strip():
+                    step[key] = value.strip()
+            steps.append(step)
+        return steps
+
+    def _on_path_table_changed(self, *args: Any) -> None:
+        del args
+        if self._path_table_guard:
+            return
+        self._commit_path_steps()
+
+    def _commit_path_steps(self) -> None:
+        """把表格草稿经共享纯函数裁剪后写回 ``self._structured["path"]``。"""
+        raw = self._path_table_steps()
+        pruned = prune_locator_steps(raw)
+        dropped = len(raw) - len(pruned)
+        if pruned:
+            self._structured["path"] = pruned
+        else:
+            self._structured.pop("path", None)
+        self._sync_path_table_rows()
+        self.path_hint.setText(
+            f"有 {dropped} 级没有任何键，保存时会丢弃（每级至少要一个键）。" if dropped else ""
+        )
+        self.revalidate()
+
+    def _sync_path_table_rows(self) -> None:
+        """行标题显示序号 + 高亮「会被丢弃的空级」（整表重绘时挡住信号防回环）。"""
+        table = self.path_table
+        self._path_table_guard = True
+        try:
+            for row in range(table.rowCount()):
+                empty = not any(
+                    (table.item(row, col).text() if table.item(row, col) else "").strip()
+                    for col in range(len(LOCATOR_STEP_KEYS))
+                )
+                header = QTableWidgetItem(f"{row + 1}（空级·将丢弃）" if empty else str(row + 1))
+                table.setVerticalHeaderItem(row, header)
+        finally:
+            self._path_table_guard = False
+
+    def _focus_row(self, row: int) -> None:
+        if 0 <= row < self.path_table.rowCount():
+            self.path_table.setCurrentCell(row, 0)
+
+    def _on_path_add_level(self) -> None:
+        table = self.path_table
+        row = table.currentRow()
+        insert_at = row + 1 if row >= 0 else table.rowCount()
+        table.insertRow(insert_at)
+        for col in range(len(LOCATOR_STEP_KEYS)):
+            table.setItem(insert_at, col, QTableWidgetItem(""))
+        self._focus_row(insert_at)
+        self._commit_path_steps()
+
+    def _on_path_remove_level(self) -> None:
+        table = self.path_table
+        row = table.currentRow()
+        if row < 0:
+            self.path_hint.setText("先选中要删除的那一级。")
+            return
+        table.removeRow(row)
+        self._commit_path_steps()
+
+    def _on_path_move(self, delta: int) -> None:
+        """上移/下移选中级——祖先链是**有序**的，顺序错了收窄就会走错分支。"""
+        table = self.path_table
+        row = table.currentRow()
+        target = row + delta
+        if row < 0 or not (0 <= target < table.rowCount()):
+            return
+        values = self._row_values(row)
+        other = self._row_values(target)
+        self._path_table_guard = True
+        try:
+            self._write_row(row, other)
+            self._write_row(target, values)
+        finally:
+            self._path_table_guard = False
+        self._focus_row(target)
+        self._commit_path_steps()
+
+    def _row_values(self, row: int) -> list[str]:
+        return [
+            (self.path_table.item(row, col).text() if self.path_table.item(row, col) else "")
+            for col in range(len(LOCATOR_STEP_KEYS))
+        ]
+
+    def _write_row(self, row: int, values: list[str]) -> None:
+        for col, value in enumerate(values):
+            item = self.path_table.item(row, col)
+            if item is None:
+                self.path_table.setItem(row, col, QTableWidgetItem(value))
+            else:
+                item.setText(value)
+
+    def _reload_path_table(self) -> None:
+        """按 ``self._structured["path"]`` 重绘表格（外部改动后同步，如锚点清空重建）。"""
+        self._path_table_guard = True
+        try:
+            self.path_table.setRowCount(0)
+            for step in self._structured.get("path") or []:
+                step = _dict_or_empty(step)
+                row = self.path_table.rowCount()
+                self.path_table.insertRow(row)
+                for col, key in enumerate(LOCATOR_STEP_KEYS):
+                    self.path_table.setItem(row, col, QTableWidgetItem(str(step.get(key) or "")))
+        finally:
+            self._path_table_guard = False
+        self._sync_path_table_rows()
+
+
+    # -- 桌面：锚点（D3，M50 起可编辑） ---------------------------------------
+
+    def _build_anchor_view(self, layout: QVBoxLayout) -> None:
+        """锚点编辑（D3）：内嵌**一层** locator 表单（M48 是只读说明）。
+
+        ``anchor`` = ``{"locator": <DesktopLocator>}``，运行目标前先解析它、找不到报
+        ``ANCHOR_NOT_FOUND``。M48 的顾虑是「锚点自己也带锚点怎么办」——**模型层已解决**
+        （``DesktopLocator`` 校验 anchor 不可嵌套），故这里**只给一层**：内嵌表单本身
+        没有「再加锚点」的入口，用户天然构造不出嵌套，不需要界面再立一套等价规则。
+
+        「启用锚点」勾选框：勾上才走表单；取消即从 ``self._structured`` 移除 anchor
+        （回到「无锚点」）。表单字段复用标量字段表（与主 locator 同一份
+        ``LOCATOR_FIELDS_BY_BACKEND``），但**只给后端字段子集**——锚点 locator 与目标
+        locator 走同一个后端。
+        """
+        self.anchor_box = QCheckBox("启用锚点（运行前先确认它存在，找不到报 ANCHOR_NOT_FOUND）")
+        self.anchor_box.setChecked(bool(self._structured.get("anchor")))
+        layout.addWidget(self.anchor_box)
+
+        self._anchor_container = QWidget()
+        anchor_form = QFormLayout(self._anchor_container)
+        anchor_form.setContentsMargins(16, 0, 0, 0)  # 缩进一级，视觉上归属锚点
+        inner = _dict_or_empty(_dict_or_empty(self._structured.get("anchor")).get("locator"))
+
+        self.anchor_backend_combo = QComboBox()
+        self.anchor_backend_combo.addItems(list(BACKENDS))
+        backend = str(inner.get("backend") or self.backend_combo.currentText() or "uia")
+        if backend not in BACKENDS:
+            self.anchor_backend_combo.addItem(backend)
+        self.anchor_backend_combo.setCurrentText(backend)
+        anchor_form.addRow("backend", self.anchor_backend_combo)
+
+        self.anchor_edits: dict[str, QLineEdit] = {}
+        for key in ALL_FIELD_KEYS:
+            edit = QLineEdit(str(inner.get(key) or ""))
+            edit.setPlaceholderText(field_hint(key))
+            edit.textChanged.connect(self._commit_anchor)
+            anchor_form.addRow(key, edit)
+            self.anchor_edits[key] = edit
+        layout.addWidget(self._anchor_container)
+
+        self.anchor_box.toggled.connect(self._on_anchor_toggled)
+        self.anchor_backend_combo.currentTextChanged.connect(self._on_anchor_backend_changed)
+        self._on_anchor_backend_changed(self.anchor_backend_combo.currentText())
+        self._on_anchor_toggled(self.anchor_box.isChecked())
+
+    def _on_anchor_toggled(self, on: bool) -> None:
+        self._anchor_container.setVisible(on)
+        self.anchor_backend_combo.setEnabled(on)
+        for edit in self.anchor_edits.values():
+            edit.setEnabled(on)
+        self._commit_anchor()
+
+    def _on_anchor_backend_changed(self, backend: str) -> None:
+        """锚点后端字段可见性——与主 locator 同规则（各后端只显示自己的字段）。"""
+        visible = {key for key, _kind, _hint in fields_for(backend)}
+        for key, edit in self.anchor_edits.items():
+            edit.setVisible(key in visible)
+        self._commit_anchor()
+
+    def _commit_anchor(self, *args: Any) -> None:
+        """把锚点表单收成 ``{"locator": {...}}`` 写回 ``self._structured``（空/未启用 ⇒ 移除）。"""
+        del args
+        if not self.anchor_box.isChecked():
+            self._structured.pop("anchor", None)
+            self.revalidate()
+            return
+        backend = self.anchor_backend_combo.currentText()
+        values = {
+            key: edit.text()
+            for key, edit in self.anchor_edits.items()
+            if key in {k for k, _kind, _hint in fields_for(backend)}
+        }
+        try:
+            locator = compose_locator(backend, values)
+        except LocatorFieldError:
+            locator = {"backend": backend}  # 非法（如 controlId 非整数）交给 revalidate 报
+        self._structured["anchor"] = {"locator": locator}
+        self.revalidate()
 
     def _on_backend_changed(self, backend: str) -> None:
         """切换 backend：只显示该后端的字段行，并提示被挡掉的死字段。"""
@@ -1035,7 +1345,11 @@ class ElementEditorForm(QWidget):
         }
 
     def _compose(self) -> dict[str, Any]:
-        return compose_locator(self.backend_combo.currentText(), self._desktop_values())
+        return compose_locator(
+            self.backend_combo.currentText(),
+            self._desktop_values(),
+            structured=self._structured,
+        )
 
     def problems(self) -> list[str]:
         """当前编辑结果的结构问题（空列表 = 可保存）。"""

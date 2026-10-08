@@ -259,13 +259,18 @@ def _is_dom_host(info) -> bool:
 
 
 def _dfs_smallest_at(info, x: int, y: int, *, max_depth: int = 30,
-                     max_children: int = 400):
+                     max_children: int = 400, path_out: list | None = None):
     """含点优先 DFS：从 info 向下逐层只走包含点的分支，每层取面积最小者。
 
     与 _drill_to_leaf 同构但作用于任意子树根（窗口作用域），并跳过
     DOM 内容宿主子树（浏览器网页内容）。返回最深命中元素（info 层级对象）。
+
+    ``path_out``（D1）：非 None 时把**沿途经过的每一级容器**依次 append 进去
+    （起点 info 也算一级，**不含最终命中的目标本身**）。默认 None ⇒ 行为零变化。
     """
     current = info
+    if path_out is not None:
+        path_out.append(current)
     for _ in range(max_depth):
         if _is_dom_host(current):
             break
@@ -295,13 +300,19 @@ def _dfs_smallest_at(info, x: int, y: int, *, max_depth: int = 30,
         if cand_hwnd and curr_hwnd and cand_hwnd == curr_hwnd:
             break
         current = candidate
+        if path_out is not None:
+            path_out.append(current)
+    # 最后一跳 candidate 就是目标本身，不入祖先链
+    if path_out is not None and path_out:
+        path_out.pop()
     return current
 
 
-def _window_scope_hit(root_hwnd: int, x: int, y: int):
+def _window_scope_hit(root_hwnd: int, x: int, y: int, path_out: list | None = None):
     """窗口作用域命中：UIA 根下的含点优先 DFS（替代全树 descendants 枚举）。
 
     返回 (element_info, rect)；找不到返回 (None, None)。
+    ``path_out``（D1）：祖先链输出（不含目标本身），见 ``_dfs_smallest_at``。
     """
     if not root_hwnd:
         return None, None
@@ -313,12 +324,14 @@ def _window_scope_hit(root_hwnd: int, x: int, y: int):
         root_info = UIAElementInfo(root_element)
     except Exception:
         return None, None
-    leaf = _dfs_smallest_at(root_info, x, y)
+    leaf = _dfs_smallest_at(root_info, x, y, path_out=path_out)
     try:
         rect = leaf.rectangle
     except Exception:
         return None, None
     if not _rect_contains(rect, x, y):
+        if path_out is not None:
+            path_out.clear()
         return None, None
     return leaf, rect
 
@@ -389,7 +402,83 @@ def _verify_in_root(root_hwnd: int, criteria: dict, automation_id: str | None) -
     return _verify(window, criteria, automation_id)
 
 
-def _describe_info(info, root_hwnd: int) -> dict:
+def _locator_step_for(info) -> dict | None:
+    """把一个 UIA 层级元素转成 LocatorStep 文档（D1）。
+
+    键集与 ``LOCATOR_STEP_KEYS`` 一致（controlType / automationId / name / className）；
+    一个键都取不到时返回 None（该级无法描述，调用方跳过——不发明空 step）。
+
+    **「全空级丢弃」的判据本体在 ``model.desktop.prune_locator_steps``**（M50 抽出共享）——
+    本函数只负责从 UIA info **取值**，合法性判断交给那份唯一权威，避免 GUI 编辑器
+    另立一套「一级长什么样」的口径。
+    """
+    from rpa_core.model.desktop import prune_locator_steps
+
+    raw = {
+        "controlType": getattr(info, "control_type", None),
+        "automationId": getattr(info, "automation_id", None),
+        "name": getattr(info, "name", None),
+        "className": getattr(info, "class_name", None),
+    }
+    pruned = prune_locator_steps([raw])
+    return pruned[0] if pruned else None
+
+
+def _path_steps_from(chain: list, root_hwnd: int) -> list:
+    """把祖先链元素列表转成 ``path``（D1），**去掉根窗口自身那一级**。
+
+    两条生成分支（`_dfs_smallest_at` 的 DFS 起点、`_ancestor_chain` 的父链链尾）都会把
+    根窗口写进链里。根窗口这一级**不携带任何收窄信息**，却是执行器唯一匹配不上的级：
+    UIA 里窗口不属于自己的后代（实测 `window.descendants()` 中
+    `control_type == "Window"` 的个数为 0），而 `_narrow_by_path` 规定「在后代里找这一级」
+    ⇒ 留着它会让**每一条真实 path 在第一级就收窄为空**、桌面元素定位恒失败。
+
+    故这里统一剥掉根窗口级；`path` 的语义随之定为「根窗口**之下**到目标的容器级」。
+    传入的链若**只有**根窗口一级，剥完为空 ⇒ 返回 `[]`（调用方据此不写 `path` 字段，
+    与「无 path = 不收窄」等价，行为正确）。
+    """
+    root = int(root_hwnd or 0)
+    if root:
+        chain = [
+            item
+            for item in chain
+            if int(getattr(item, "handle", 0) or 0) != root
+        ]
+    return [step for step in (_locator_step_for(item) for item in chain) if step]
+
+
+def _ancestor_chain(info, root_hwnd: int, *, max_depth: int = 32) -> list:
+    """从 ``info`` 向上收集到根窗口的祖先链（**不含 info 本身**），根在前。
+
+    与 ``_dfs_smallest_at(path_out=…)`` 的区别：这条用于屏幕级 ElementFromPoint
+    路径（没有 DFS 下降过程，只有父链）。防死循环：深度上限 + handle 重复即停
+    （虚拟元素 handle 全为 0，不参与重复判定）。
+    """
+    chain: list = []
+    current = info
+    seen: set[int] = set()
+    root = int(root_hwnd or 0)
+    for _ in range(max_depth):
+        try:
+            parent = current.parent
+        except Exception:
+            break
+        if parent is None:
+            break
+        handle = int(getattr(parent, "handle", 0) or 0)
+        if handle and handle in seen:
+            break
+        if handle:
+            seen.add(handle)
+        chain.append(parent)
+        if root and handle == root:
+            break
+        current = parent
+    chain.reverse()
+    return chain
+
+
+def _describe_info(info, root_hwnd: int, path_infos: list | None = None) -> dict:
     control_type = info.control_type
     automation_id = info.automation_id or None
     name = info.name or None
@@ -404,6 +493,12 @@ def _describe_info(info, root_hwnd: int) -> dict:
     if name:
         criteria["title"] = name
         locator["name"] = name
+
+    # D1：祖先链（不含目标本身、也不含根窗口自身——见 `_path_steps_from`）。
+    if path_infos:
+        steps = _path_steps_from(path_infos, root_hwnd)
+        if steps:
+            locator["path"] = steps
 
     verify_count = 0
     if criteria:
@@ -441,10 +536,11 @@ def capture_in_window(root_hwnd: int, x: int, y: int) -> dict | None:
 
     找不到包含点的后代时返回 None（调用方回退屏幕级 hit-test）。
     """
-    leaf, _rect = _window_scope_hit(root_hwnd, x, y)
+    path_infos: list = []
+    leaf, _rect = _window_scope_hit(root_hwnd, x, y, path_out=path_infos)
     if leaf is None:
         return None
-    return _describe_info(leaf, root_hwnd)
+    return _describe_info(leaf, root_hwnd, path_infos)
 
 
 def capture_at(x: int, y: int, scope_hwnd: int | None = None) -> dict:
@@ -500,6 +596,13 @@ def capture_at(x: int, y: int, scope_hwnd: int | None = None) -> dict:
         best_locator = {"backend": "uia", "controlType": control_type}
         best_count = 0
 
+    # D1：屏幕级路径没有 DFS 下降过程，祖先链走父链上溯（不含目标本身、不含根窗口自身）。
+    if best_locator:
+        chain = _ancestor_chain(info, root_hwnd)
+        steps = _path_steps_from(chain, root_hwnd)
+        if steps:
+            best_locator["path"] = steps
+
     window_title = ""
     if root_hwnd:
         title_buffer = ctypes.create_unicode_buffer(256)
@@ -537,14 +640,20 @@ def capture_with_retry(x: int, y: int, scope_hwnd: int | None, attempts: int = 4
 
 
 def _hover_hit(x: int, y: int, exclude_hwnd: int, allow_scoped: bool = True):
-    """hover 命中：返回 (rect, root_hwnd, element_info, scoped_ran)。
+    """hover 命中：返回 (rect, root_hwnd, element_info, scoped_ran, path_infos, hit_info)。
 
-    element_info 供捕获瞬间复用（避免重复 hit-test）。其余语义见 DFS 兜底注释。
+    element_info 供捕获瞬间复用（避免重复 hit-test）。``path_infos``（D1）是该元素的
+    祖先链（不含自身，root 在前），供捕获瞬间一并带出；取不到时为空列表。
+    ``hit_info`` 是祖先链所描述的那个元素（快路径 = 下钻后的 fine，DFS 兜底 = leaf），
+    供调用方保证「path 与元素同源」——两者必须一起缓存，否则 path 会挂到别的元素上。
+    其余语义见 DFS 兜底注释。
     """
     rect = None
     root = 0
     scoped_ran = False
     leaf = None
+    path_infos: list = []
+    hit_info = None
     try:
         info = _element_from_point(x, y)
         hwnd = int(info.handle or 0)
@@ -556,6 +665,9 @@ def _hover_hit(x: int, y: int, exclude_hwnd: int, allow_scoped: bool = True):
             # root 定位：有 handle 用 UIA 祖先链；无 handle（虚拟元素）必须走
             # win32 窗口链，否则 hover 缓存的 last_root 会陈旧（指向别的窗口）
             root = _root_window_handle(hwnd) if hwnd else _win32_root_at(x, y)
+            if root:
+                path_infos = _ancestor_chain(fine, root)
+            hit_info = fine
     except Exception:
         pass
     # 仅快路径完全失败（无 rect）才走 DFS 兜底
@@ -564,17 +676,19 @@ def _hover_hit(x: int, y: int, exclude_hwnd: int, allow_scoped: bool = True):
         if not root:
             root = _win32_root_at(x, y)
         if root:
-            scoped_leaf, scoped_rect = _window_scope_hit(root, x, y)
+            path_infos = []
+            scoped_leaf, scoped_rect = _window_scope_hit(root, x, y, path_out=path_infos)
             if scoped_rect is not None:
                 rect = scoped_rect
                 leaf = scoped_leaf
+                hit_info = scoped_leaf
     if rect is None:
         # 全部失败时退化到窗口矩形（至少框住目标窗口）
         if root:
             win_rect = wintypes.RECT()
             ctypes.windll.user32.GetWindowRect(root, ctypes.byref(win_rect))
             rect = win_rect
-    return rect, root, leaf, scoped_ran
+    return rect, root, leaf, scoped_ran, path_infos, hit_info
 
 
 # hybrid 模式：这些窗口类是浏览器**网页内容区**（让位给 content-script 扩展的页内捕获）
@@ -671,6 +785,8 @@ def _hover_capture(hotkey_vk: int, timeout: float, hybrid: bool = False) -> dict
     last_root = 0
     last_leaf = None  # hover 最后命中的元素（捕获瞬间复用，省一次 hit-test）
     last_rect = None
+    last_path: list = []  # D1：与 last_hit_info 同源的祖先链（必须一起更新）
+    last_hit_info = None
     hotkey_was = _hotkey_pressed(hotkey_vk)
     lbutton_was = _hotkey_pressed(VK_LBUTTON)
     try:
@@ -687,6 +803,8 @@ def _hover_capture(hotkey_vk: int, timeout: float, hybrid: bool = False) -> dict
                 overlay.hide()
                 last_leaf = None
                 last_rect = None
+                last_path = []
+                last_hit_info = None
             elif moved and time.monotonic() - last_hit > (
                 0.10 if inside_last else 0.03
             ):
@@ -695,7 +813,7 @@ def _hover_capture(hotkey_vk: int, timeout: float, hybrid: bool = False) -> dict
                 last_pos = (x, y)
                 # 粗命中（大 rect）时才允许 DFS，且节流 150ms（DFS ~50ms 不能每帧跑）
                 allow_scoped = time.monotonic() - last_scoped > 0.15
-                rect, root, leaf, scoped_ran = _hover_hit(
+                rect, root, leaf, scoped_ran, path_infos, hit_info = _hover_hit(
                     x, y, overlay.hwnd, allow_scoped=allow_scoped
                 )
                 hit_ms = (time.perf_counter() - t_hit) * 1000
@@ -712,6 +830,10 @@ def _hover_capture(hotkey_vk: int, timeout: float, hybrid: bool = False) -> dict
                     last_root = root
                 if leaf is not None:
                     last_leaf = leaf
+                # D1：path 与描述它的元素必须同源同时更新——否则 path 会挂到别的元素上
+                if hit_info is not None:
+                    last_hit_info = hit_info
+                    last_path = list(path_infos)
             overlay.pump()
 
             hotkey_now = _hotkey_pressed(hotkey_vk)
@@ -737,9 +859,16 @@ def _hover_capture(hotkey_vk: int, timeout: float, hybrid: bool = False) -> dict
                 if last_leaf is not None and last_rect is not None and _rect_contains(
                     last_rect, x, y
                 ):
-                    return _describe_info(last_leaf, last_root or 0)
+                    # D1：path 与 last_leaf 同源（两者都在 DFS 那轮一起缓存），
+                    # 故只在 last_leaf 可复用时带 path——不会挂到别的元素上。
+                    return _describe_info(
+                        last_leaf, last_root or 0,
+                        last_path if last_hit_info is last_leaf else None,
+                    )
                 # 否则（hover 没跟上/鼠标刚快速移入）走全量 DFS 保证精度
-                _rect, root, _leaf, _ = _hover_hit(x, y, overlay.hwnd, allow_scoped=True)
+                _rect, root, _leaf, _, _path, _hit = _hover_hit(
+                    x, y, overlay.hwnd, allow_scoped=True
+                )
                 scope = root or last_root or None
                 return capture_with_retry(x, y, scope)
             time.sleep(0.015)

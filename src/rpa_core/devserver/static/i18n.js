@@ -178,6 +178,7 @@ window.RPA_I18N = {
     windows: "窗口列表",
     locator: "定位器",
     elementId: "元素 ID",
+    anchor: "锚点",
     workspace: "工作目录",
     path: "文件路径",
     data: "数据",

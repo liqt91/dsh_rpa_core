@@ -162,6 +162,17 @@
 
 ## 后续任务
 
+- [x] **里程碑编号口径定案：M48 = 桌面契约一片，M49 = GUI 体验**（`done`，**已拍板**，2026-10-08）
+  - **冲突曾存在**：`docs/yingdao-gap-catchup.md` §4 里 M48 = 桌面契约一片（D1+D2+D3）、
+    M49 = 系统层 + 新能力立项（E1/D4/E2/E3）；而实际执行的 M49 是「GUI 体验 P0–P3」，
+    同号不同内容，且 M48 从未执行。
+  - **定案（维护者 2026-10-08 拍板，选「不重编号」）**：**M48 保持「桌面契约一片」原定义**
+    ——理由是 2026-09-29 已授权「M48 破戒（locator 可加 path 等字段）」，该授权锚点、
+    `M45-editor-ui-l1.md` 的「契约层，M48」引用、`.workbuddy/memory/2026-09-29.md` 的记录
+    全部依赖这个编号，重编号会让它们失去锚点。**M49 = GUI 体验 P0–P3**（已落地，不再改动，
+    实际执行即成事实口径）。E1/D4/E2/E3 顺延为后续里程碑（编号待排，不占用 M48）。
+  - 已同步：`docs/yingdao-gap-catchup.md` §4 表下说明改为定案；本文件 M48 条目去掉「待拍板」。
+
 - [ ] **`classify_offline_reason` 的 `host-not-reachable` 判据与注释不符**（`planned`，2026-09-28
   M40 §4 自挖；本片未顺手改）
   - 注释写的是「扩展加载着**却没端点**」，实现里**根本没有端点这一项**——只要
@@ -589,6 +600,52 @@
 > 主力形态，该条目（「确认非开发者用户为主力后再立项薄壳」）不再适用。
 
 ## 已完成
+
+- [x] **M49 GUI 体验 P0–P3**（`done`，2026-09-30）——颜色 token 唯一来源 `gui/theme.py`（AST 扫
+  字符串常量 + must-have 名单）· 状态栏徽标图标化（点+文字，同状态不重写 setText）· 尺寸持久化
+  `gui/persist.py`（IniFormat/UserScope，坏值回落出厂）· 视图菜单统一五个懒创建 Dock + 恢复默认
+  布局 · 知会型弹框降级 `hint.setText`（白名单门禁比正文不比标题）· 往返导航只 close 一次 +
+  `gui/motion.py` 过渡动画（`RPA_GUI_ANIMATIONS=0` 可关、失败安全）· 字号像素口径唯一来源
+  `gui/fonts.py` + Ctrl+P 命令面板 `gui/palette.py`。计划：`M49-gui-experience.md`。
+  23 个负向验证注入全命中并逐字节还原核 md5；pytest 1356 passed / 2 failed（QProcess 沙箱挂账）/
+  21 skipped / 2 xfailed；ruff 全绿；静态五组 + 13 个 node 切片全过。提交 `f681f8f`（本地未 push）。
+
+- [x] **M48 桌面契约一片（D1+D2+D3）**（`planned`，**待开工**，2026-10-08 编号定案）——D1 桌面节点树 ·
+  D2 控件级 matchMode 扩到 `automationId`/`name` · D3 锚点起步。差距方案 §4 排定；**破戒授权已于
+  2026-09-29 获得**（locator 可加 path 等字段）。任务单：`M48-desktop-contract.md`（本轮新建）。
+
+- [x] **M47.2–M47.6 校验元素补丁轮次**（`done`，2026-09-29）——合并记录在任务单
+  `M47-element-verify-live.md`：M47.2 verify-timeout 根因（bridge 透传白名单漏
+  `capture_verify`，跨端对账判据断根）· M47.3 真机三连修（吞钩子结构加固 / 预览黄框跟随滚动 /
+  编辑区空间放开）· M47.4 Ctrl+Click 吞钩子 `SetEvent` 落错 DLL（kernel32 非 user32，AST 归属判据）
+  · M47.5 离线提示按「缺哪一环」分支 · M47.5b 良性离线不弹框 · M47.6 中途开浏览器补 arm 守望。
+
+- [x] **M47 / M47.1 校验元素与预览**（`done`，2026-09-29）——计划：`M47-element-verify-live.md` /
+  `M47.1-live-preview.md`。改道**按需短连接校验通道**（放弃会话保活），`capture_verify` 信封 +
+  `mode`（flash/preview/clear）；feature：`element-verify-live` / `live-preview`。
+
+- [x] **M46 元素引用模型（B1 定稿 + S1 落地）**（`done`，2026-09-29）——计划：
+  `M46-element-reference-model.md`，决策 ADR-001。节点双写 `elementRefs` + `with`；运行期从
+  `flow_dir/elements` 解析；缺元素回落快照 + `elementRefFallback` 事件；feature：
+  `element-reference-model`。
+
+- [x] **M45 编辑界面交互收尾（L1：A1–A4）**（`done`，2026-09-30）——计划：
+  `M45-editor-ui-l1.md`。A1 Web 属性表 · A2 R1/R2 残留修复 · A3 默认名三端统一（共享用例表）·
+  A4 元素库搜索；feature：`editor-ui-l1`。
+
+- [x] **M44 捕获即编辑 P1**（`done`，2026-09-28）——计划：`M44-capture-edit-in-place.md`。
+  确认框内嵌 `ElementEditorForm` + 三出口（保存/保存并继续/重新捕获）+ Web 节点树 +
+  网页 Ctrl 光标变蓝；feature：`capture-edit-in-place`。
+
+- [x] **捕获排障与扩展对账**（`done`，2026-09-29–09-30，无独立里程碑号）——冷启动红框延迟归因 ·
+  Ctrl+Click 穿透拦截（WH_MOUSE_LL + 专职子进程 `desktop_click_hook.py`）· 钩子卡顿二次架构级修复
+  （阻塞 `GetMessageW` 泵 + 命中测试降频）· 扩展过期对账（`EXT_BUILD` 三方一致 + host 落
+  `arm_stale`；根因是 Load unpacked「载入即快照」）。
+
+- [x] **M43 捕获 Esc 会话级取消**（`done`，2026-09-28）——feature：`capture-esc-cancel`。
+
+- [x] **M42 扩展与已开页捕获态同步（补注入 + 接管）**（`done`，2026-09-28）——feature：
+  `capture-extension-lifecycle`。
 
 - [x] **M37 closeTabs 增加 `ignoreBeforeUnload`：remove 前注入抑制 beforeunload 弹窗**（`done`，2026-09-21）
   - 计划：`M37-ignore-before-unload.md`
