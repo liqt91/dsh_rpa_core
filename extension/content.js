@@ -441,9 +441,26 @@
     if (el) { current = el; show(el); }
   };
 
+  // [capture-descriptor-rect:start]
+  // 元素矩形 → 元数据。**键名必须是 left/top**（真机 2026-10-09 踩过：原写成
+  // {x, y}，而 host 的 screen_shot.browser_box_in_window 只读 left/top ⇒
+  // 捕获时那张截图恒算不出红框，KeyError 被 except 吞掉、只表现为"有图没框"）。
+  // 提取成独立函数是为了能按锚点切片、**真跑一次求值**（见
+  // scripts/check_capture_descriptor_rect.mjs）——读源码只能证明"写了 left"，
+  // 证明不了"键名与 host 换算函数对得上"，而这次错的就是后者。
+  const rectOf = (el) => {
+    const r = el.getBoundingClientRect();
+    return {
+      left: Math.round(r.left),
+      top: Math.round(r.top),
+      width: Math.round(r.width),
+      height: Math.round(r.height),
+    };
+  };
+  // [capture-descriptor-rect:end]
+
   const buildDescriptor = (el) => {
     const css = cssSelectorFor(el);
-    const r = el.getBoundingClientRect();
     return {
       kind: "browser",
       // path = 祖先链（每级 {tag, id, classes, nthOfType, fragment}）：元素编辑器据它画
@@ -461,8 +478,11 @@
         classes: (typeof el.className === "string"
           ? el.className.trim().split(/\s+/).filter(Boolean) : []),
         text: (el.textContent || "").trim().slice(0, 80),
-        rect: { x: Math.round(r.x), y: Math.round(r.y),
-                width: Math.round(r.width), height: Math.round(r.height) },
+        // 键名与 rectOf 一致（left/top）：桌面腿 desktop_agent 回的也是 left/top、
+        // 同文件 firstHitRect 也是 left/top，host 换算函数只读这一套。
+        // **别与「输出 box 用 x/y」搞混**：那个 x/y 是 screen_shot 内部产物的口径，
+        // GUI 画框也只读它，与这里的输入契约无关。
+        rect: rectOf(el),
         // 语义特征与页面指纹：放在 metadata 里（selector 之外的顶层键会被契约丢弃）
         role: roleOf(el),
         accessibleName: accessibleName(el) || null,

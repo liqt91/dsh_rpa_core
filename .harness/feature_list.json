@@ -386,6 +386,11 @@
       "id": "capture-time-preview-snapshot",
       "title": "The preview tab shows the screenshot taken at the moment of capture instead of re-capturing the browser window when the tab is opened: the host recognises the foreground browser by Z-order (Chrome and Edge both qualify), grabs the window region and the in-image red box, and attaches it to the descriptor as captureShot; the editor loads it from the document itself, prefers it over a live shot while the css is unchanged, and drops it once the selector is edited. This removes the dependency on chrome.windows.get().nativeWindowHandle, which real browsers do not reliably provide (on Edge the handle stayed null even with the current extension build), and the snapshot never reaches the element library because result_document keeps only four keys.",
       "passes": true
+    },
+    {
+      "id": "capture-rect-key-contract",
+      "title": "The capture descriptor reports the element rectangle with the same left/top key names the host conversion reads, so the red box is actually drawn: content.js had emitted {x, y} while browser_box_in_window reads left/top, and its except KeyError returned None silently, which surfaced only as a full-window screenshot with no frame. A new gate check_capture_descriptor_rect.mjs slices rectOf out of content.js, asserts the key set is exactly left/top/width/height, then feeds that output to the real Python browser_box_in_window in a subprocess and asserts a box comes back with the x/y keys the GUI painter reads, so neither side can drift alone. Note the two key sets coexist by design: left/top is the input contract from both capture legs, x/y is the output box consumed by the preview widget.",
+      "passes": true
     }
   ]
 }
