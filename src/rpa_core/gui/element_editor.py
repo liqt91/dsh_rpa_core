@@ -1347,11 +1347,18 @@ class ElementEditorForm(QWidget):
         data_url = data.get("dataUrl")
         if not isinstance(data_url, str) or not data_url:
             # 要了图但没拿到：说清是哪一种，别停在空白页签让用户猜是不是功能坏了。
-            # 四种原因分别是「没命中」「扩展没给窗口句柄」「截屏失败」「选中了但没元素」。
+            # 五种原因（2026-10-09 真机反馈后补ext-stale）：见verify.shot_failure_reason。
             count = data.get("count")
             reason = data.get("shotError")
             if count == 0:
                 self.preview_shot.clear("未命中该选择器，没有可预览的元素")
+            elif reason == "ext-stale":
+                # **最容易被误判成「代码坏了」的一种**：红框、校验都正常，只有新功能不生效。
+                # 根因是 Load unpacked 载入即快照，浏览器里跑的还是旧版本。
+                self.preview_shot.clear(
+                    f"浏览器里跑的是旧版扩展（{data.get('extBuild') or '版本未知'}），"
+                    "请到 chrome://extensions 点该扩展的刷新按钮后重试"
+                )
             elif reason == "no-window-handle" or not data.get("windowHandle"):
                 self.preview_shot.clear(
                     f"已命中 {count} 个，但未能定位到浏览器窗口（请先切到该浏览器窗口再预览）"

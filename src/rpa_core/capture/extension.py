@@ -79,6 +79,11 @@ class ExtensionCaptureSession:
         # arm ack：扩展收到 capture_arm 后回 capture_armed。端点可连接 ≠ 扩展在响应，
         # 这个事件是「扩展腿真的活着」的唯一证据（见 armed 属性）。
         self._armed = threading.Event()
+        # arm ack 时扩展自报的构建标识，与仓库期望不一致 = 浏览器里跑的是旧快照
+        # （Load unpacked **不自动重载**，必须手动点刷新）。记下来供GUI 直接提示，
+        # 否则这类症状（「预览里没有截图」）在现场只能靠猜——M47.12 真机反馈。
+        self._build: str | None = None
+        self._build_expected: str | None = None
         # 离线起步的补 arm 守望（M47.6）：捕获开始时浏览器没开 → arm 广播无人接收，
         # 捕获中途打开浏览器后扩展上线也永远收不到 arm，网页里不会出现红框。
         # 守望线程轮询新端点并收编补 arm；cancel/close 置停。
@@ -137,6 +142,20 @@ class ExtensionCaptureSession:
         「假在线」的腿判死，而不是静默等到超时。
         """
         return self._armed.is_set()
+
+    @property
+    def build_mismatch(self) -> tuple[str, str] | None:
+        """扩展自报构建与仓库期望不一致时返回 ``(实际, 期望)``，一致或未知时``None``。
+
+        **Load unpacked 载入即快照**：改了 ``extension/`` 下的代码而没去
+        ``chrome://extensions`` 点刷新，浏览器里跑的仍是旧版本。这类症状
+        （新字段读不到、新行为不生效）在现场没有任何提示，只能靠猜——M47.12
+        真机就撞上了（跑0.6.3、期望 0.8.0 ⇒ ``windowHandle`` 拿不到 ⇒ 预览空白）。
+        """
+        build, expected = self._build, self._build_expected
+        if build and expected and build != expected:
+            return (build, expected)
+        return None
 
     @property
     def pending(self) -> bool:
@@ -278,6 +297,8 @@ class ExtensionCaptureSession:
                     )
                     if build and expected and build != expected:
                         _trace("extension", "arm_stale", build=build, expected=expected)
+                    self._build = build
+                    self._build_expected = expected
                     self._armed.set()
                     continue
                 if message_type == "capture_arm_progress":

@@ -504,14 +504,18 @@ def test_shot_failure_does_not_touch_hit_label(qapp):
 
 
 def test_shot_without_data_url_distinguishes_zero_hit(qapp):
-    """要了图却没拿到：**区分四种失败**，用户动作完全不同。
+    """要了图却没拿到：**区分五种失败**，用户动作完全不同。
 
-    -没命中 ⇒ 改选择器；
+    - 没命中 ⇒ 改选择器；
+    - **跑的是旧扩展快照** ⇒ 去 chrome://extensions 点刷新（2026-10-09 真机反馈补）；
     - 命中了但**扩展没给窗口句柄** ⇒ 切到那个浏览器窗口再预览；
     - 有句柄但**截屏失败**（最小化/锁屏）⇒ 换个窗口状态。
 
     混成一句「预览失败」等于让用户自己猜（这正是 M47.11 之前那句「浏览器未返回
     截图」的问题：它把「没命中」和「截不到」说成了一件事）。
+
+    ``ext-stale`` 单独一档的理由：它的现场症状是**红框/校验全正常、只有新功能没生效**
+    （截图走host 桌面坐标截屏是新加的），最容易被当成「代码坏了」，而处置只是点一下刷新。
     """
     from rpa_core.gui.element_editor import ElementEditorForm
 
@@ -522,6 +526,15 @@ def test_shot_without_data_url_distinguishes_zero_hit(qapp):
     form._shot_seq += 1
     form._on_shot_done({"seq": form._shot_seq, "count": 0})
     assert "未命中" in form.preview_shot.message
+
+    # 浏览器里跑的是旧扩展快照：新字段读不到 ⇒ 没有句柄
+    form._shot_seq += 1
+    form._on_shot_done(
+        {"seq": form._shot_seq, "count": 1, "shotError": "ext-stale", "extBuild": "0.6.3"}
+    )
+    assert "旧版扩展" in form.preview_shot.message
+    assert "0.6.3" in form.preview_shot.message
+    assert "chrome://extensions" in form.preview_shot.message
 
     # 命中了但扩展没回窗口句柄（拿不到窗口矩形 ⇒ 截不了）
     form._shot_seq += 1
@@ -1868,3 +1881,28 @@ def test_model_rejects_nested_anchor():
     with pytest.raises(ValidationError) as excinfo:
         DesktopLocator.model_validate(payload)
     assert "anchor" in str(excinfo.value)
+
+
+def test_browser_preview_passes_stale_reason_through_to_gui(qapp):
+    """``_browser_preview`` 必须把「扩展旧快照」这一档**真的送到 GUI**。
+
+    这是链路上的一环，此前无人钉：纯函数 :func:`shot_failure_reason` 钉的是「怎么分类」，
+    GUI 判据钉的是「拿到 ext-stale 怎么写文案」，而中间这步（旧扩展 → 旧文案链）
+    两边都够不着。真机现场正是这里断掉的表现：预览空白 + 一句误导性的
+    「未能定位到浏览器窗口」，用户无从判断该去切窗口还是该去重载扩展。
+    """
+    from rpa_core.capture import verify as verify_mod
+    from rpa_core.gui.app import _browser_preview
+
+    class _Verifier:
+        def verify(self, _css, *, want_shot=False):
+            assert want_shot is True
+            #旧扩展：没有 windowHandle，但自报了一个对不上的 extBuild
+            return {"count": 1, "extBuild": "0.6.3"}
+
+    monkey = getattr(verify_mod, "browser_preview_shot", None)
+    out = _browser_preview(_Verifier(), "#kw")
+    assert out["count"] == 1
+    assert out["shotError"] == "ext-stale"
+    assert out["extBuild"] == "0.6.3"
+    del monkey

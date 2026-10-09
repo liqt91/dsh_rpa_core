@@ -410,6 +410,7 @@ def _reply_with_shot(
     viewport: dict | None = None,
     count: int = 2,
     window_handle: int | None = 4242,
+    ext_build: str | None = "0.8.0",
 ) -> None:
     """回一条带截图字段的校验结果（rect/viewport 缺省给一组正常值）。
 
@@ -434,6 +435,8 @@ def _reply_with_shot(
             payload["viewport"] = viewport
         if window_handle is not None:
             payload["windowHandle"] = window_handle
+        if ext_build is not None:
+            payload["extBuild"] = ext_build
         channel.outbox.append(payload)
 
     threading.Thread(target=delayed_reply, daemon=True).start()
@@ -608,3 +611,55 @@ def test_preview_box_survives_junk_image_size():
     assert preview_box_in_image(RECT, VIEWPORT, ("x", None)) == {
         "x": 200.0, "y": 100.0, "width": 400.0, "height": 160.0
     }
+
+
+#---- 截图失败原因分类（M47.12 真机反馈后补）------------------------------------
+
+
+def test_shot_failure_reason_names_extension_stale_first():
+    """**旧扩展快照**要排在最前面判，不能混进「拿不到窗口句柄」。
+
+    真机现场（2026-10-09）：浏览器里跑的是 0.6.3、期望 0.8.0，`windowHandle`
+    这个新字段压根不存在 ⇒ ``has_hwnd=false``。若按旧口径报「未能定位到浏览器窗口」，
+    用户会去切窗口、切一百次也没用——真实处置是去 ``chrome://extensions`` 点刷新。
+    """
+    from rpa_core.capture.extension import expected_extension_build
+    from rpa_core.capture.verify import shot_failure_reason
+
+    expected = expected_extension_build()
+    assert expected, "仓库里应能读出 EXT_BUILD"
+
+    stale = shot_failure_reason({"count": 1, "extBuild": "0.0.1-old"})
+    assert stale == "ext-stale"
+
+    # 版本一致 ⇒ 不是版本问题，退回「拿不到句柄」
+    assert shot_failure_reason({"count": 1, "extBuild": expected}) == "no-window-handle"
+    # 完全没回extBuild（很老的一版扩展）⇒ 也不能瞎报「版本旧」
+    assert shot_failure_reason({"count": 1}) == "no-window-handle"
+    # 有句柄却没图 ⇒ 截屏本身失败，与版本无关
+    assert shot_failure_reason({"count": 1, "windowHandle": 77}) == "shot-failed"
+
+
+def test_verify_result_carries_extension_build(verify_env):
+    """``extBuild`` 必须透传给调用方：它是判「扩展跑的是旧快照」的唯一现场证据。
+
+    background.js 一直在回 ``extBuild``（``capture_verify_result`` 里），此前被
+    ``_exchange`` 丢掉了——于是 host 侧根本没法判版本，只能靠症状猜。
+
+    **默认值给真值**：``_reply_with_shot`` 缺省就回 ``extBuild``，所以上面那些
+    既有用例若哪天把透传删了，会一起变红——这正是我们想要的（不是只有这一条红）。
+    """
+    _channels, set_endpoints = verify_env
+    channel = FakeChannel()
+    set_endpoints(["a"], {"a": channel})
+    _reply_with_shot(channel, rect=dict(RECT), viewport=dict(VIEWPORT))
+
+    result = ElementVerifier(timeout=3.0).verify("#kw", want_shot=True)
+    assert result["extBuild"] == "0.8.0"
+
+    # 扩展完全不带该字段（很老的一版）⇒ 结果里也不该凭空造一个
+    channel2 = FakeChannel()
+    set_endpoints(["a"], {"a": channel2})
+    _reply_with_shot(channel2, rect=dict(RECT), viewport=dict(VIEWPORT), ext_build=None)
+    result2 = ElementVerifier(timeout=3.0).verify("#kw", want_shot=True)
+    assert "extBuild" not in result2

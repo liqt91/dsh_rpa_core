@@ -409,11 +409,16 @@ def _browser_preview(verifier, css: str) -> dict:
         return result
     shot = browser_preview_shot(result)
     if shot is None:
+        from rpa_core.capture.verify import shot_failure_reason
+
         out = {"count": result.get("count")}
-        # 分清「扩展没给窗口句柄」与「截屏失败」——这两种的处置完全不同。
-        out["shotError"] = (
-            "no-window-handle" if not result.get("windowHandle") else "shot-failed"
-        )
+        # 分三类（M47.12 真机反馈）：扩展跑的是旧快照 / 没拿到窗口句柄 / 截屏失败。
+        # **旧快照必须单列**：它的症状是「校验正常、就是没图」，现场极易误判成代码坏了，
+        # 而处置只是去chrome://extensions 点一下刷新。
+        reason = shot_failure_reason(result)
+        out["shotError"] = reason
+        if reason == "ext-stale":
+            out["extBuild"] = result.get("extBuild")
         return out
     return shot
 

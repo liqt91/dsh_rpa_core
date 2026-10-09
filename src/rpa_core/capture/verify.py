@@ -126,6 +126,32 @@ def preview_box_in_image(
     }
 
 
+def shot_failure_reason(result: dict[str, Any]) -> str:
+    """截图拿不到图时，把原因**分类**成给用户看的一句话依据。
+
+    分三类，处置完全不同，不能混成一句「截图失败」：
+
+    * ``ext-stale`` —— **浏览器里跑的是旧扩展快照**。``Load unpacked`` 载入即快照，
+      改了 ``extension/`` 的代码不去``chrome://extensions`` 点刷新就永远跑旧的。
+      典型症状：新加的字段读不到（M47.12 的 ``windowHandle``）、新行为不生效，
+      而「校验/红框」这类老功能一切正常——现场极易误判成代码坏了。
+    * ``no-window-handle`` —— 扩展是新的，但没拿到浏览器顶层窗口句柄
+      （浏览器最小化 / 锁屏会话 / 非顶层窗口）。
+    * ``shot-failed`` —— 句柄拿到了，截屏本身失败。
+
+    纯函数（不碰IO）：判据可直接钉，也便于 GUI 单测。
+    """
+    from rpa_core.capture.extension import expected_extension_build
+
+    if result.get("windowHandle"):
+        return "shot-failed"
+    build = result.get("extBuild")
+    expected = expected_extension_build()
+    if isinstance(build, str) and build and expected and build != expected:
+        return "ext-stale"
+    return "no-window-handle"
+
+
 class ElementVerifier:
     """按需校验通道：一次 ``verify(css)`` = 连接、请求、配对、断开。
 
@@ -360,4 +386,9 @@ class ElementVerifier:
             result["rect"] = dict(reply["rect"])
         if isinstance(reply.get("viewport"), dict):
             result["viewport"] = dict(reply["viewport"])
+        # 扩展自报构建**要透出来**：跑的是旧快照时（新字段读不到、新行为不生效）
+        # 现场唯一的判据就是它。background 一直在回``extBuild``，此前被丢掉了。
+        ext_build = reply.get("extBuild")
+        if isinstance(ext_build, str) and ext_build:
+            result["extBuild"] = ext_build
         return result
