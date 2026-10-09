@@ -342,7 +342,7 @@ def test_capture_overwrite_same_name_needs_confirm(window, monkeypatch):
 
         def __init__(
             self, descriptor, *, default_name, verify_css=None,
-            preview_css=None, clear_preview_css=None, parent=None,
+            preview_css=None, clear_preview_css=None, shot_css=None, parent=None,
         ):
             super().__init__(parent)
             created.append(self)

@@ -34,11 +34,18 @@ if (pureStart < 0 || pureEnd <= pureStart) {
 }
 const pureSlice = content.slice(pureStart, pureEnd);
 const helpers = new Function(
-  `${pureSlice}\nreturn { VERIFY_FLASH_LIMIT, matchCountFor, verifyReplyFor, normalizeVerifyMode };`,
+  `${pureSlice}\nreturn { VERIFY_FLASH_LIMIT, matchCountFor, verifyReplyFor, normalizeVerifyMode, firstHitRect };`,
 )();const makeDoc = (matches, invalid = false) => ({
   querySelectorAll: (css) => {
     if (invalid) throw new Error(`'${css}' is not a valid selector`);
     return matches;
+  },
+  // firstHitRect 走 querySelector（取首个命中画红框）；返回带 getBoundingClientRect 的替身
+  querySelector: (css) => {
+    if (invalid) throw new Error(`'${css}' is not a valid selector`);
+    const first = matches && matches[0];
+    if (!first) return null;
+    return { getBoundingClientRect: () => first.__rect || { left: 0, top: 0, width: 0, height: 0 } };
   },
 });
 
@@ -73,6 +80,25 @@ check("M5 normalizeVerifyMode 是守门入口（缺省信封也走它）",
   [helpers.normalizeVerifyMode(undefined), helpers.normalizeVerifyMode("preview")],
   ["flash", "preview"]);
 
+// ---- A3. firstHitRect（M51 预览截图：首个命中元素在图内的视口坐标） ---------
+// 截图是物理像素、rect 是 CSS 像素，换算交给 host；这里只钉「取的是首个命中 +
+// 只回四要素 + 无命中/坏选择器都不炸」。多提一个字段就可能让 host 读错。
+const rectEl = (rect) => ({ __rect: rect });
+check("R1 取首个命中的视口 rect（不是全部命中的包围盒）",
+  helpers.firstHitRect(makeDoc([rectEl({ left: 10, top: 20, width: 30, height: 40 }),
+    rectEl({ left: 99, top: 99, width: 1, height: 1 })]), "div.ok"),
+  { left: 10, top: 20, width: 30, height: 40 });
+check("R2 只回四要素（不多带 x/y/right/bottom——host 按名字取，多带是隐患）",
+  Object.keys(helpers.firstHitRect(makeDoc([rectEl({ left: 1, top: 2, width: 3, height: 4 })]), "div")),
+  ["left", "top", "width", "height"]);
+check("R3 无命中 → null（不编造 0,0,0,0，否则会在图左上角画个假红框）",
+  helpers.firstHitRect(makeDoc([]), "div.ok"), null);
+check("R4 无效选择器 → null（截图路径不该把校验拖成异常）",
+  helpers.firstHitRect(makeDoc([], true), "div["), null);
+check("R5 全部命中都无可见尺寸时仍回 rect（GUI 自行判 0 面积不画框，不在页面里拦）",
+  helpers.firstHitRect(makeDoc([rectEl({ left: 0, top: 0, width: 0, height: 0 })]), "div"),
+  { left: 0, top: 0, width: 0, height: 0 });
+
 // ---- B. background.js runVerify 矩阵 ---------------------------------------
 const bgStart = background.indexOf("// ---------------------------------------------------------------- 捕获通道");
 const bgEnd = background.indexOf("// ---------------------------------------------------------------- 执行通道");
@@ -95,8 +121,9 @@ const makeChrome = ({
   hasScript = true,
   foreground = true,          // 本浏览器是否 OS 级前台（isBrowserForeground 的桩返回值）
   foregroundFail = false,     // getLastFocused 抛错（API 不可用的极端）
+  shotFail = false,           // captureVisibleTab 抛错（无 windowId / 权限 / 浏览器限制）
 } = {}) => {
-  const log = { sent: [], injected: [], posted: [], queried: [], delays: [] };
+  const log = { sent: [], injected: [], posted: [], queried: [], delays: [], shots: [] };
   let injectedOnce = false;
   const chrome = {
     tabs: {
@@ -115,6 +142,12 @@ const makeChrome = ({
         }
         log.sent.push({ tabId, msg });
         return { contentBuild: "page-build", count: 4 };
+      },
+      // 截图（M47.11「预览」页签）：只记录被拍过哪个窗口，返回一个短 dataUrl。
+      captureVisibleTab: async (windowId, opts) => {
+        log.shots.push({ windowId, opts });
+        if (shotFail) throw new Error("cannot capture this window");
+        return "data:image/png;base64,AAAA";
       },
       onUpdated: { addListener: () => {} },
     },
@@ -171,7 +204,7 @@ const settleSlow = () => new Promise((resolve) => setTimeout(resolve, 220));
   check("W1 只发聚焦窗口的活跃页", log.sent.map((s) => s.tabId), [1]);
   check("W1 页面消息类型与 css（缺省信封归一为 flash；前台 silent:false）",
     log.sent[0] && log.sent[0].msg,
-    { type: "rpa-capture-verify", css: "#kw", mode: "flash", silent: false });
+    { type: "rpa-capture-verify", css: "#kw", mode: "flash", silent: false, keepFlash: false });
   const reply = log.posted[0] || {};
   check("W1 回传类型/配对/构建/命中",
     [reply.type, reply.requestId, reply.extBuild, reply.count],
@@ -349,6 +382,68 @@ const settleSlow = () => new Promise((resolve) => setTimeout(resolve, 220));
   check("W12 判不出前台仍正常应答", log.posted[0] && log.posted[0].count, 4);
 }
 
+// ---- W13–W14 预览页签截图（M47.11，对齐影刀「预览 = 页面截图 + 红框」）-------
+// W13 wantShot=true：先让 content 把框画好（keepFlash），再截当前视口，图随回传走
+{
+  const { chrome, log } = makeChrome({
+    windows: [{ id: 30, focused: true }],
+    tabs: [{ id: 31, url: "https://shot.test/", active: true, windowId: 30, focused: true }],
+  });
+  await buildBg(chrome, log).runVerify({
+    requestId: "rq-13", css: "#shot", wantShot: true,
+  });
+  await settle();
+  check("W13 要截图时让 content 驻留黄框（keepFlash:true——先画框后拍照）",
+    log.sent[0] && log.sent[0].msg.keepFlash, true);
+  check("W13 拍的是目标标签页所在窗口（captureVisibleTab 按 windowId）",
+    log.shots.map((s) => s.windowId), [30]);
+  check("W13 回传带 dataUrl（GUI 预览页签据此显示截图）",
+    typeof log.posted[0]?.dataUrl === "string" && log.posted[0].dataUrl.startsWith("data:image/png"),
+    true);
+  check("W13 截图不影响命中数回传", log.posted[0]?.count, 4);
+}
+
+// W14 不需要截图时不拍（普通「校验元素」不该每次截一张 base64）
+{
+  const { chrome, log } = makeChrome({
+    windows: [{ id: 40, focused: true }],
+    tabs: [{ id: 41, url: "https://nosshot.test/", active: true, windowId: 40, focused: true }],
+  });
+  await buildBg(chrome, log).runVerify({ requestId: "rq-14", css: "#x" });
+  await settle();
+  check("W14 缺省不截图（wantShot 只由预览页签触发）", log.shots.length, 0);
+  check("W14 缺省也不驻留黄框（keepFlash:false）",
+    log.sent[0] && log.sent[0].msg.keepFlash, false);
+  check("W14 回传不带 dataUrl", "dataUrl" in (log.posted[0] || {}), false);
+}
+
+// W15 截图失败**不**把校验拖成失败（截图是观感增强，命中数才是判据）
+{
+  const { chrome, log } = makeChrome({
+    windows: [{ id: 50, focused: true }],
+    tabs: [{ id: 51, url: "https://x.test/", active: true, windowId: 50, focused: true }],
+    shotFail: true,
+  });
+  await buildBg(chrome, log).runVerify({ requestId: "rq-15", css: "#x", wantShot: true });
+  await settle();
+  check("W15 截图抛错仍正常回传命中数", log.posted[0] && log.posted[0].count, 4);
+  check("W15 截图失败只省掉 dataUrl，不报 error", "dataUrl" in (log.posted[0] || {}), false);
+  check("W15 截图失败不静默吞掉 error 字段", log.posted[0]?.error, undefined);
+}
+
+// W16 非前台（silent）时不截图：拍的是别人眼前的窗口，毫无意义
+{
+  const { chrome, log } = makeChrome({
+    windows: [{ id: 60, focused: false }],
+    tabs: [{ id: 61, url: "https://bg2.test/", active: true, windowId: 60, focused: false }],
+    foreground: false,
+  });
+  await buildBg(chrome, log).runVerify({ requestId: "rq-16", css: "#x", wantShot: true });
+  await settleSlow();
+  check("W16 非前台不截图（拍别人眼前的窗口没有意义）", log.shots.length, 0);
+  check("W16 非前台仍回命中数兜底", log.posted[0] && log.posted[0].count, 4);
+}
+
 // ---- C. content 接线断言 ----------------------------------------------------
 check("C1 content 监听器带 sendResponse 形参（无回包 = host 永远等超时）",
   /onRuntimeMessage = \(msg, _sender, sendResponse\)/.test(content), true);
@@ -357,9 +452,9 @@ check("C1 rpa-capture-verify 分支存在",
 check("C1 校验应答带 contentBuild（页面脚本新旧可对账）",
   /contentBuild: EXT_BUILD,\s*\n\s*\.\.\.runVerify/.test(content), true);
 check("C1 runVerify 收 silent 参数（双浏览器：非前台不闪框）",
-  /runVerify = \(css, mode, silent\) => \{/.test(content), true);
+  /runVerify = \(css, mode, silent, keepFlash\) => \{/.test(content), true);
 check("C1 监听器把 msg.silent 透传给 runVerify（=== true 严格判，缺省不静默）",
-  /runVerify\(String\(msg\.css \|\| ""\), msg\.mode, msg\.silent === true\)/.test(content), true);
+  /msg\.mode, msg\.silent === true, msg\.keepFlash === true/.test(content), true);
 check("C1 silent 时跳过 flashElements（只回 count、绝不画框）",
   /if \(!silent && !reply\.error && reply\.count > 0\) \{/.test(content), true);
 check("C1 闪烁自动清理（定时器兜底，不留黄框赖在页面）",
@@ -367,11 +462,11 @@ check("C1 闪烁自动清理（定时器兜底，不留黄框赖在页面）",
 check("C2 闪烁定时器由 persist 短路（preview 驻留 = 不排程自动清理）",
   /if \(!persist\) setTimeout\(clearVerifyFlash, 1600\);/.test(content), true);
 check("C2 runVerify 收 mode 参数并归一（语义收口在 content）",
-  /runVerify = \(css, mode, silent\) => \{\s*\n\s*mode = normalizeVerifyMode\(mode\);/.test(content), true);
+  /runVerify = \(css, mode, silent, keepFlash\) => \{\s*\n\s*mode = normalizeVerifyMode\(mode\);/.test(content), true);
 check("C2 preview 恒先清场（count=0 也要清——旧框冒充命中是预览最危险的误导）",
   /if \(mode === "preview"\) clearVerifyFlash\(\);/.test(content), true);
 check("C2 应答透传 msg.mode（第 2 参）与 msg.silent（第 3 参，顺序不可换）",
-  /runVerify\(String\(msg\.css \|\| ""\), msg\.mode, msg\.silent === true\)/.test(content), true);
+  /msg\.mode, msg\.silent === true, msg\.keepFlash === true/.test(content), true);
 check("C2 进捕获态先清预览框（捕获红框不能压着上一轮的黄框）",
   /if \(armed\) \{(?:\s*\n\s*\/\/[^\n]*)*\s*\n\s*clearVerifyFlash\(\);/.test(content), true);
 check("C3 校验黄框用 absolute+文档坐标（fixed 钉在视口上，滚动不跟随）",

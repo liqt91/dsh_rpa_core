@@ -31,6 +31,83 @@ from rpa_core import local_transport
 from rpa_core.capture._trace import trace as _trace
 
 
+def preview_box_in_image(
+    rect: Any,
+    viewport: Any = None,
+    image_size: tuple[int, int] | None = None,
+) -> dict[str, float] | None:
+    """把 content 回传的**视口**矩形换算成「预览」页签那张截图里的像素框。
+
+    为什么需要换算（三个坐标系）：
+    1. ``getBoundingClientRect()`` 给的是 **CSS 像素**、且以**视口左上角**为原点；
+    2. ``chrome.tabs.captureVisibleTab`` 拍的是**当前视口**，但图是**物理像素**
+       （Retina / Windows 125% 缩放下图宽 =视口宽 × dpr）；
+    3. QLabel 展示时又会按控件宽度缩放——那是 Qt 的事，本函数不碰。
+
+    ⇒ ``图内像素 = 视口 CSS 像素 × (图宽 / 视口宽)``。**优先用图的实际尺寸**而不是
+    ``dpr``：Windows 分数缩放下 captureVisibleTab 的实际图宽与 ``round(宽×dpr)``
+    可能有 1px 差，而红框偏移 1px 在小元素上就是「框没套住元素」。
+
+    **刻意不用滚动偏移**（``viewport`` 里的 ``scrollX/scrollY``）：截图拍的就是视口，
+    而 rect 本身就是视口坐标——两者同源，加偏移反而画歪。保留这两个字段只为诊断
+    （页面上看得见但框画歪时，能确认是不是滚动/缩放对不上），并由
+    ``test_preview_box_ignores_scroll_offset``钉住这一点。
+
+    返回 ``None`` 的三种情形（都意味着「不画框」，而不是画一个假框）：
+    - ``rect`` 缺失/非字典（count=0 或旧版扩展没回传）；
+    - 无任何可用的缩放基准（既没图尺寸也没视口宽高）；
+    - 换算后宽或高 ≤ 0（元素不可见/零面积——在图左上角画个 0×0 框只会误导）。
+    """
+    if not isinstance(rect, dict):
+        return None
+    try:
+        left = float(rect.get("left", 0))
+        top = float(rect.get("top", 0))
+        width = float(rect.get("width", 0))
+        height = float(rect.get("height", 0))
+    except (TypeError, ValueError):
+        return None
+
+    scale_x = scale_y = 0.0
+    if image_size:
+        try:
+            img_w, img_h = float(image_size[0]), float(image_size[1])
+        except (TypeError, ValueError, IndexError):
+            img_w = img_h = 0.0
+        vp = viewport if isinstance(viewport, dict) else {}
+        try:
+            vp_w = float(vp.get("width", 0) or 0)
+            vp_h = float(vp.get("height", 0) or 0)
+        except (TypeError, ValueError):
+            vp_w = vp_h = 0.0
+        if img_w > 0 and vp_w > 0:
+            scale_x = img_w / vp_w
+        if img_h > 0 and vp_h > 0:
+            scale_y = img_h / vp_h
+    if scale_x <= 0 or scale_y <= 0:
+        # 没有图尺寸（还没解出图宽）时退回 dpr——它至少是「同一个量纲」，
+        # 比什么都不画强，也比用 1.0（假装 100% 缩放）不容易误导。
+        dpr = viewport.get("dpr", 1) if isinstance(viewport, dict) else 1
+        try:
+            dpr = float(dpr) or 1.0
+        except (TypeError, ValueError):
+            dpr = 1.0
+        scale_x = scale_y = dpr
+
+    box_w = width * scale_x
+    box_h = height * scale_y
+    if box_w <= 0 or box_h <= 0:
+        return None
+    # 元素可能有一部分滚出视口（此时 rect.left/top 为负）：钳到 0，让框贴住图边，
+    # 而不是画到图外面看不见。
+    return {
+        "x": max(0.0, left * scale_x),
+        "y": max(0.0, top * scale_y),
+        "width": box_w,
+        "height": box_h,
+    }
+
+
 class ElementVerifier:
     """按需校验通道：一次 ``verify(css)`` = 连接、请求、配对、断开。
 
@@ -40,6 +117,12 @@ class ElementVerifier:
     - ``preview``（``mode="preview"``）：黄框**驻留**——编辑器里改 css 时即时高亮，
       每次预览先清上一轮；
     - ``clear_preview``（``mode="clear"``）：只清场——编辑器关掉时收走黄框。
+
+    ``verify(..., want_shot=True)``（M47.11）额外要一张**当前视口截图**：扩展侧先把黄框
+    画好（``keepFlash``）、再 ``captureVisibleTab`` 拍，回传 ``dataUrl`` + 首个命中的视口
+    ``rect`` + 视口信息（含 dpr）。GUI「预览」页签据此在截图上画红框（影刀那样）。
+    截图是**观感增强**：拍不到（图太大/权限/浏览器限制）时``count`` 照常返回，
+    只是没有 ``dataUrl``——绝不让截图故障把校验拖成失败。
     """
 
     def __init__(
@@ -69,9 +152,13 @@ class ElementVerifier:
         # 只是可能被别的窗口挡住。
         self._bring_front = bring_front
 
-    def verify(self, css: str) -> dict[str, Any]:
-        """活体查找 ``css``（黄框闪烁），返回 ``{"count": N}`` 或 ``{"error": 原因}``。"""
-        return self._exchange(css, "flash")
+    def verify(self, css: str, *, want_shot: bool = False) -> dict[str, Any]:
+        """活体查找 ``css``（黄框闪烁），返回 ``{"count": N}`` 或 ``{"error": 原因}``。
+
+        ``want_shot=True`` 时额外回``dataUrl``（视口截图 base64）、``rect``（首个命中的
+        视口矩形）与 ``viewport``（含 dpr）；拍不到时只有后两个/都没有，但 ``count`` 必有。
+        """
+        return self._exchange(css, "flash", want_shot=want_shot)
 
     def preview(self, css: str) -> dict[str, Any]:
         """驻留高亮 ``css`` 命中的元素（编辑中即时预览），回传形状同 :meth:`verify`。"""
@@ -118,8 +205,8 @@ class ElementVerifier:
             return (matched or names), target, hwnd
         return names, None, None
 
-    def _exchange(self, css: str, mode: str) -> dict[str, Any]:
-        """连接、下发（带 mode）、按 requestId 配对、断开。
+    def _exchange(self, css: str, mode: str, *, want_shot: bool = False) -> dict[str, Any]:
+        """连接、下发（带mode 与 wantShot）、按requestId 配对、断开。
 
         任何失败都是**结构化报错**而不是异常：GUI 侧把 ``error`` 直接展示给用户，
         不让通道故障表现为「按钮点了没反应」。
@@ -195,6 +282,9 @@ class ElementVerifier:
                     "requestId": request_id,
                     "css": css,
                     "mode": mode,
+                    # 只要截图（且不是 clear——清场没画面可拍）。扩展侧据此让 content
+                    # 把黄框驻留住再拍，拍完自己清；缺省 false 时整个截图链路不启动。
+                    "wantShot": bool(want_shot) and mode != "clear",
                 }
             )
             threading.Thread(target=read_loop, args=(channel,), daemon=True).start()
@@ -227,4 +317,27 @@ class ElementVerifier:
         if not isinstance(count, int) or isinstance(count, bool) or count < 0:
             return {"error": "bad-reply"}
         _trace("verify", "done", mode=mode, count=count, target=target, url=reply.get("url"))
-        return {"count": count}
+        # **截图数据不进trace**：dataUrl 是整张视口 PNG 的 base64（几百 KB 起），
+        # 落进日志会把 ext-host.log 撑爆、也会把真机排查的注意力带偏。trace 只记
+        # 「有没有图 / 多大 / 有没有 rect」——这三个数就够判断「截图链路是否通」。
+        shot = reply.get("dataUrl")
+        if want_shot:
+            _trace(
+                "verify",
+                "shot",
+                mode=mode,
+                count=count,
+                has_data_url=isinstance(shot, str) and shot.startswith("data:image/"),
+                bytes=len(shot) if isinstance(shot, str) else 0,
+                has_rect=isinstance(reply.get("rect"), dict),
+            )
+        result: dict[str, Any] = {"count": count}
+        # ``dataUrl`` **只在要图时**透传：没要却收到图（扩展版本不对/信封被改过），
+        # 说明这条回传不该带几百 KB 的base64，别把它揣进 GUI 内存里。
+        if want_shot and isinstance(shot, str) and shot:
+            result["dataUrl"] = shot
+        if isinstance(reply.get("rect"), dict):
+            result["rect"] = dict(reply["rect"])
+        if isinstance(reply.get("viewport"), dict):
+            result["viewport"] = dict(reply["viewport"])
+        return result

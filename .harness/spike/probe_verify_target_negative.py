@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -305,12 +306,15 @@ def main() -> int:
             elif inj.label.startswith("N4"):
                 mutated = apply_n4(src)
             elif inj.label.startswith("N5"):
-                mutated = src.replace(
-                    'const EXT_BUILD = "0.6.3";',
+                # 版本号**不写死**：EXT_BUILD 会随每次扩展改动 bump，写死会在下次 bump 时
+                # 「锚点未命中」而不是真的验到「三方一致」判据（本探针已因 0.6.3→0.7.0 踩到）。
+                mutated, hits = re.subn(
+                    r'const EXT_BUILD = "[^"]+";',
                     f'const EXT_BUILD = "9.9.9"; {SENTINEL_JS}',
-                    1,
+                    src,
+                    count=1,
                 )
-                assert mutated != src, "N5 锚点未命中"
+                assert hits == 1, "N5 锚点未命中"
             elif inj.label.startswith("N6"):
                 mutated = apply_n6(src)
             elif inj.label.startswith("N7"):

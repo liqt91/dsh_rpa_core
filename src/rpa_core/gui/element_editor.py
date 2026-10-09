@@ -8,13 +8,20 @@
 
 v1 只做这件事，全部基于**已捕获的数据**：
 
-1. **候选可选** —— 捕获时收集的备选定位（带捕获时**实测**命中数）点一下即成为主定位。
-   提升时旧主定位**按序放回候选队首**（它的实测命中数就是 ``verifyCount``），因此一次
-   提升不丢任何备选，也不是单向操作。
+1. **浏览器元素：影刀式两页签**（M47.11）——「预览」是**页面截图 + 元素红框**
+   （扩展侧 ``chrome.tabs.captureVisibleTab`` 现场拍，框由首个命中的视口 rect
+   换算而来）；「精准定位」是节点树 + 属性表并排。底部「默认选择器 / XPath」单选与
+   「锚点 + 添加」按维护者要求**摆出来但置灰**（XPath 与锚点都还没有运行期消费方，
+   做成能点的就是假功能，见 M51）。
 2. **桌面 locator 字段化** —— 勾选框代替手写 JSON（勾上写进 locator、取消即移除）；
    字段集**按 backend 分**，见下。
 3. **就地结构校验** —— 每次改动都拿**模型**判一次，错误显示在对话框内。界面**不另立
    一套规则**：判据的权威只有 ``DesktopLocator`` / ``selector_errors``，两套规则必然漂移。
+
+**备选定位（候选）界面已移除**（M47.11，维护者「备选移除吧」，并实测「几次捕捉都没看到
+有备选定位」）。但 ``selector.candidates`` 在 ``result_document`` 里**原样带回**——运行期
+自愈（``executors.browser._element_candidates`` 按失败 selector 反查取用）仍读它，
+删界面不等于删数据。纯函数 ``promote_candidate`` / ``promotable`` 一并退役（无调用方即死代码）。
 
 **字段集按 backend 分，这不是排版偏好**：实测两个执行器消费的 locator 字段完全不同
 （``grep -o 'locator\\.[a-z_]*'`` 逐点核过）：
@@ -57,14 +64,16 @@ handle               ✗                 ✗
 
 from __future__ import annotations
 
+import base64
+import binascii
 import re
 import threading
 from collections.abc import Callable, Iterable
 from typing import Any
 
 from pydantic import ValidationError
-from PySide6.QtCore import QObject, Qt, QTimer, Signal
-from PySide6.QtGui import QFontMetrics
+from PySide6.QtCore import QObject, QRectF, Qt, QTimer, Signal
+from PySide6.QtGui import QColor, QFontMetrics, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -79,14 +88,17 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QPlainTextEdit,
     QPushButton,
+    QRadioButton,
     QSizePolicy,
     QSplitter,
     QTableWidget,
     QTableWidgetItem,
+    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
 
+from rpa_core.capture.verify import preview_box_in_image
 from rpa_core.gui.persist import load_size, save_size
 from rpa_core.gui.theme import (
     DANGER,
@@ -396,58 +408,6 @@ def css_problems(css: str) -> list[str]:
     return []
 
 
-def promotable(candidate: dict[str, Any]) -> bool:
-    """该候选能否提升为主定位。
-
-    只有**捕获时实测过命中数**（``matchedCount`` 为正整数）的候选才能提升：提升要把
-    它的实测值写成新的 ``verifyCount``，没有实测值就只能猜一个——而 ``verifyCount``
-    显示给用户的意义就是「这个是实测的」。宁可不给这个按钮，也不给一个假的数。
-
-    实践中不会有候选缺这个值：``content.js`` 的 ``candidatesFor`` 只 push 命中数 ≥1 的项
-    且总是带上 ``matchedCount``。缺值只会出现在手改过的旧文档上。
-    """
-    matched = candidate.get("matchedCount")
-    return isinstance(matched, int) and not isinstance(matched, bool) and matched >= 1
-
-
-def promote_candidate(
-    candidates: list[dict[str, Any]],
-    index: int,
-    *,
-    current_css: str,
-    current_count: int,
-) -> tuple[list[dict[str, Any]], str, int, str | None]:
-    """把 ``candidates[index]`` 提升为主定位。
-
-    返回 ``(新候选列表, 新主 css, 新 verifyCount, 提示或 None)``。
-
-    旧主定位**按序放回候选队首**（``candidates`` 的顺序就是回退优先级，而旧主定位是
-    原本最强的那个），其 ``matchedCount`` 取 ``current_count``——``verifyCount`` 的
-    定义就是「主选择器捕获时的命中数」，所以这个回填是实测值而非估计值。
-    ``current_count < 1`` 时无法表示成合法候选（契约要求 ``matchedCount >= 1``），
-    此时不塞回并返回一条提示，而不是悄悄丢掉它。
-    """
-    if not 0 <= index < len(candidates):
-        raise IndexError(index)
-    remaining = [dict(item) for item in candidates]
-    promoted = remaining.pop(index)
-    note: str | None = None
-    if current_css and current_css != promoted.get("selector"):
-        if current_count >= 1:
-            remaining.insert(
-                0,
-                {"kind": "css", "selector": current_css, "matchedCount": current_count},
-            )
-        else:
-            note = (
-                f"旧主定位 {current_css} 的捕获命中数为 {current_count}，"
-                "无法作为候选保留（候选要求命中数 ≥1）"
-            )
-    return remaining, str(promoted.get("selector") or ""), int(
-        promoted["matchedCount"]
-    ), note
-
-
 # ---------------------------------------------------------------------------
 # 默认元素名（A3：三端一致生成器）
 # ---------------------------------------------------------------------------
@@ -586,15 +546,135 @@ def compile_fragment(entry: dict[str, Any], rows: list[dict[str, Any]]) -> str:
     return out
 
 
-def _candidate_label(candidate: dict[str, Any]) -> str:
-    """候选列表行：``[kind] selector · 命中 N``（不唯一要标出来）。"""
-    matched = candidate.get("matchedCount")
-    if isinstance(matched, int) and not isinstance(matched, bool):
-        count_text = f"命中 {matched}" + ("（不唯一）" if matched > 1 else "")
-    else:
-        count_text = "命中未实测"
-    kind = candidate.get("kind") or "?"
-    return f"[{kind}] {candidate.get('selector') or ''} · {count_text}"
+class PreviewShot(QWidget):
+    """「预览」页签：页面截图 + 首个命中元素的**红框**（对齐影刀那一屏）。
+
+    为什么是「截图 + 画框」而不是直接把浏览器画面搬过来：影刀的预览本身就是
+    ``captureVisibleTab`` 的截图（用户确认过「影刀的预览就是截图」），我们没有第二条
+    能拿到实时画面的通道，也不该为预览开一条。
+
+    **红框坐标换算在 :func:`rpa_core.capture.verify.preview_box_in_image` 里做**（纯函数、
+    可测）：截图是物理像素、``getBoundingClientRect`` 是视口 CSS 像素，两者差一个
+    ``devicePixelRatio``。这里只负责把算好的框画到**控件坐标系**上——控件会把图缩放到
+    自身宽度，所以画之前还要按 ``控件宽 / 图宽`` 再缩一次。
+
+    三种状态都有明确文案，绝不停在「一片空白」让用户猜：
+    没截图 → 「尚未获取预览截图」；有图但没命中 → 「本页未命中该选择器」；
+    有图有命中但框算不出来 → 「已命中，但元素在视口外」。
+
+    刻意**不缩放图**（只画框跟随缩放）：用户要看的是「元素在页面哪儿」，缩小到全图
+    塞进控件会让截图细节全看不清；图按原始像素居中显示，超出部分裁掉。
+    """
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._pixmap: QPixmap | None = None
+        self._box: dict[str, float] | None = None
+        self._message = "尚未获取预览截图"
+        self.setMinimumSize(360, 220)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+
+    #-- 数据 ----------------------------------------------------------------
+
+    def clear(self, message: str = "尚未获取预览截图") -> None:
+        self._pixmap = None
+        self._box = None
+        self._message = message
+        self.update()
+
+    def show_shot(self, data_url: str, box: dict[str, float] | None) -> bool:
+        """显示一张截图与（可选的）红框。返回图是否**解出来了**。
+
+        ``data_url`` 是 ``captureVisibleTab`` 的 ``data:image/png;base64,...``。
+        解不出来（不是 data URL / base64 坏/ 空图）时**不抛**：调用方据此把文案改成
+        「截图无法显示」，而校验命中数仍然有效——截图是观感增强。
+        """
+        pixmap = decode_shot(data_url)
+        if pixmap is None or pixmap.isNull():
+            self._pixmap = None
+            self._box = None
+            self._message = "截图已回传但无法显示（base64 解码失败）"
+            self.update()
+            return False
+        self._pixmap = pixmap
+        self._box = box
+        self._message = "" if box else "已命中，但元素不在当前视口内（无框可画）"
+        self.update()
+        return True
+
+    @property
+    def has_shot(self) -> bool:
+        return self._pixmap is not None and not self._pixmap.isNull()
+
+    @property
+    def box(self) -> dict[str, float] | None:
+        """图内像素坐标下的红框（判据与探针要看它，故暴露只读）。"""
+        return dict(self._box) if self._box else None
+
+    @property
+    def message(self) -> str:
+        return self._message
+
+    # -- 绘制 ----------------------------------------------------------------
+
+    def _image_rect(self) -> tuple[int, int, int, int]:
+        """图在控件里的落位（居中、不缩放；返回 (x, y, w, h)）。"""
+        assert self._pixmap is not None
+        iw, ih = self._pixmap.width(), self._pixmap.height()
+        cw, ch = self.width(), self.height()
+        scale = min(1.0, cw / iw, ch / ih) if iw and ih else 1.0
+        w, h = int(iw * scale), int(ih * scale)
+        return (cw - w) // 2, (ch - h) // 2, w, h
+
+    def paintEvent(self, event) -> None:  # noqa: N802 (Qt naming)
+        painter = QPainter(self)
+        painter.fillRect(self.rect(), self.palette().color(self.backgroundRole()))
+        if not self.has_shot:
+            painter.setPen(QColor(TEXT_SECONDARY))
+            painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, self._message)
+            return
+        x, y, w, h = self._image_rect()
+        painter.drawPixmap(x, y, w, h, self._pixmap)
+        if self._box:
+            # 控件缩放比例：图在控件里被缩到了 w 宽，红框必须按同一比例缩，否则框会
+            # 贴在图外（这正是把「图内像素」换算成「控件像素」这一步的用处）。
+            iw = self._pixmap.width() or 1
+            k = w / iw
+            bx = x + float(self._box["x"]) * k
+            by = y + float(self._box["y"]) * k
+            bw = max(2.0, float(self._box["width"]) * k)
+            bh = max(2.0, float(self._box["height"]) * k)
+            painter.setPen(QPen(QColor(DANGER), 2))
+            painter.drawRect(QRectF(bx, by, bw, bh))
+        painter.setPen(QColor(TEXT_SECONDARY))
+        painter.drawText(
+            self.rect().adjusted(4, 4, -4, 0),
+            Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft,
+            self._message,
+        )
+
+
+def decode_shot(data_url: Any) -> QPixmap | None:
+    """``data:image/png;base64,...`` → ``QPixmap``；任何不合法输入返回 ``None``。
+
+    刻意**不抛**：这张图是校验通道的**附加产物**，一张坏图不该把「命中 N 个」这条
+    真正的判据一起带崩（neg-verification H4钉的就是这条）。
+    """
+    if not isinstance(data_url, str) or "," not in data_url:
+        return None
+    head, _, payload = data_url.partition(",")
+    if not head.startswith("data:image/") or "base64" not in head:
+        return None
+    try:
+        blob = base64.b64decode(payload.strip(), validate=True)
+    except (ValueError, binascii.Error):
+        return None
+    if not blob:
+        return None
+    pixmap = QPixmap()
+    if not pixmap.loadFromData(blob, "PNG"):
+        return None
+    return pixmap
 
 
 class _PreviewDone(QObject):
@@ -668,25 +748,74 @@ class ElementEditorForm(QWidget):
     # -- 浏览器 --------------------------------------------------------------
 
     def _build_browser(self, layout: QVBoxLayout) -> None:
+        """browser 分支：**影刀式两页签**（预览 / 精准定位）+ 底部选择器单选。
+
+        结构照影刀的「元素编辑器」那一屏摆（M47.11，维护者给了对照截图）：
+
+        ======================  ==========================================
+        影刀                      我们
+        ======================  ==========================================
+        元素名称输入框捕获确认框（``ElementDialog.name_edit``）
+        绿色「已找到 1 个元素」    ``preview_label``（命中数唯一落点）
+        页签：预览 / 精准定位      ``QTabWidget`` 同名两页
+        「预览」= 截图 + 红框      ``PreviewShot``（扩展侧 captureVisibleTab 回传）
+        「精准定位」= DOM 树 + 属性表节点树 + 属性表（并排，见 ``_build_path_tree``）
+        底部：默认选择器 / XPath   ``_build_selector_choice``（XPath **置灰**，见下）
+        底部：锚点 + 添加          「添加」**置灰**（见 ``_build_anchor_row``）
+        ======================  ==========================================
+
+        **AI 辅助定位页签不摆**（维护者明确「可以先不做」）：摆一个点不开的空页签
+        比不摆更糟——用户会以为功能坏了。
+
+        **备选定位 UI 整体移除**（维护者「备选移除吧」，且实测「几次捕捉都没看到有备选
+        定位」）。注意：移除的只是**界面**，``selector.candidates`` 在
+        ``result_document`` 里**原样带回**——运行期自愈（``executors.browser``
+        的 ``_element_candidates``）仍按它反查回退，悄悄丢掉数据等于悄悄拆掉M28。
+        """
         selector = _dict_or_empty(self._document.get("selector"))
+
+        # 命中数标签：browser 分支的「已找到 N 个」。摆**在页签之上**（影刀的位置），
+        # 两个页签共用它——切页签不该让「命中几个」这件事消失。
+        self.preview_label = QLabel("")
+        self.preview_label.setStyleSheet(f"color: {TEXT_SECONDARY};")
+        self.preview_label.hide()
+        layout.addWidget(self.preview_label)
+
+        # 主选择器输入：放在页签**之上**（常驻），而不是塞进「精准定位」页里——
+        # 它是主入口，两个页签都要看得见它；藏进某一页签等于「看截图时看不到选择器」。
         form = QFormLayout()
-        # 主选择器用**多行**输入（SelectorEdit）：长祖先链一行装不下，QLineEdit 会把
-        # 尾巴截掉（维护者实测「主选择器的框太小了，不方便」）。对外仍是 .text()/.setText()。
+        # 用**多行**输入（SelectorEdit）：长祖先链一行装不下，QLineEdit 会把尾巴截掉
+        # （维护者实测「主选择器的框太小了，不方便」）。对外仍是 .text()/.setText()。
         self.css_edit = SelectorEdit(str(selector.get("css") or ""))
         self.css_edit.textChanged.connect(self.revalidate)
         form.addRow("主选择器（css）", self.css_edit)
         layout.addLayout(form)
 
+        self.tabs = QTabWidget()
+        # 「预览」页：截图 + 红框。
+        self.preview_shot = PreviewShot()
+        self.tabs.addTab(self.preview_shot, "预览")
+        # 「精准定位」页：节点树 + 属性表（并排）。
+        self.locate_page = QWidget()
+        self._build_path_tree(self.locate_page)
+        self.tabs.addTab(self.locate_page, "精准定位")
+        # 页签切换：**只在切到「精准定位」时才跑一次截图**。影刀是进页签才截，我们
+        # 照做——每次改css 都截一张 base64 PNG 既慢又占内存，而用户在「精准定位」里
+        # 改选择器时根本不看图。
+        self.tabs.currentChanged.connect(self._on_tab_changed)
+        layout.addWidget(self.tabs, 1)
+
+        self._build_selector_choice(layout)
+        self._build_anchor_row(layout)
+
         # 编辑中预览（M48/C3）：改动 css 后 500ms 防抖，页面上驻留高亮当前命中。
         # 通道回调由调用方注入（`enable_live_preview`，app 侧只对 browser 元素接）；
-        # 未注入时标签隐藏、计时器永不启动——桌面元素没有「页面」可高亮。
-        self.preview_label = QLabel("")
-        self.preview_label.setStyleSheet(f"color: {TEXT_SECONDARY};")
-        self.preview_label.hide()
-        layout.addWidget(self.preview_label)
+        # 未注入时标签保持隐藏、计时器永不启动——桌面元素没有「页面」可高亮。
         self._preview_css: Callable[[str], dict] | None = None
         self._clear_preview_css: Callable[[], dict] | None = None
+        self._shot_css: Callable[[str], dict] | None = None
         self._preview_seq = 0
+        self._shot_seq = 0
         self._preview_signal = _PreviewDone()
         self._preview_signal.done.connect(self._on_preview_done)
         self._preview_timer = QTimer(self)
@@ -695,45 +824,82 @@ class ElementEditorForm(QWidget):
         self._preview_timer.timeout.connect(self._run_preview)
         self.css_edit.textChanged.connect(self._on_css_changed)
 
-        self.candidates_label = QLabel(
-            f"捕获时的备选定位 {len(self._candidates)} 条"
-            "（运行期主选择器失效时按序回退）"
-            if self._candidates
-            else "捕获时没有收集到备选定位"
-        )
-        self.candidates_label.setStyleSheet(f"color: {TEXT_SECONDARY};")
-        layout.addWidget(self.candidates_label)
+    def _build_selector_choice(self, layout: QVBoxLayout) -> None:
+        """底部「默认选择器 / XPath」单选（影刀那一屏的最底行）。
 
-        self.candidate_list = QListWidget()
-        self.candidate_list.addItems(
-            [_candidate_label(item) for item in self._candidates]
+        XPath **摆出来但置灰**：用户明确点名要过这个（相比影刀少了它），所以不能装作
+        没有；但全链路只认 CSS（``page_call`` 没有 ``document.evaluate``，``selector.kind``
+        也不是契约判别子），真放一个可选的 XPath 就是**假功能**——用户选它、保存、
+        运行期静默按 css 走。置灰 + 悬浮说明「正在做」比能点但没用诚实。
+        （实现见 M51；一旦落地，只要把 ``setEnabled(True)`` 去掉即可。）
+        """
+        row = QHBoxLayout()
+        row.addWidget(QLabel("选择器"))
+        self.selector_default_radio = QRadioButton("默认选择器")
+        self.selector_default_radio.setChecked(True)   # 唯一可选的那项
+        self.selector_xpath_radio = QRadioButton("XPath")
+        self.selector_xpath_radio.setEnabled(False)
+        self.selector_xpath_radio.setToolTip(
+            "XPath 选择器尚未接入执行链路（正在实现）。"
+            "现在启用会让「选了就以为生效」，运行期仍按 css 执行。"
         )
-        self.candidate_list.currentRowChanged.connect(lambda _row: self._sync_promote())
-        self.candidate_list.itemDoubleClicked.connect(lambda _item: self._promote())
-        layout.addWidget(self.candidate_list)
+        row.addWidget(self.selector_default_radio)
+        row.addWidget(self.selector_xpath_radio)
+        row.addStretch(1)
+        layout.addLayout(row)
 
-        promote_row = QHBoxLayout()
-        self.promote_button = QPushButton("设为主定位")
-        self.promote_button.clicked.connect(self._promote)
-        promote_row.addWidget(self.promote_button)
-        promote_row.addStretch(1)
-        layout.addLayout(promote_row)
-        self._sync_promote()
-        self._build_path_tree(layout)
+    def _build_anchor_row(self, layout: QVBoxLayout) -> None:
+        """底部「锚点 + 添加」行：整个功能**置灰**（维护者「锚点单独立功能项」）。
+
+        浏览器元素的锚点（``selector.anchor``）在模型里还没有消费方——摆一个能点的
+        「添加」只会写下一个运行期没人读的字段，正是本项目最忌讳的静默死字段。
+        桌面腿的锚点编辑是**另一个**入口（``_build_anchor_view``），那边是真能用的。
+        """
+        row = QHBoxLayout()
+        row.addWidget(QLabel("锚点"))
+        self.anchor_hint = QLabel("（锚点定位正在实现，暂不可用）")
+        self.anchor_hint.setStyleSheet(f"color: {TEXT_SECONDARY};")
+        self.anchor_add_button = QPushButton("添加")
+        self.anchor_add_button.setEnabled(False)
+        self.anchor_add_button.setToolTip(
+            "锚点定位正在实现。浏览器元素的 anchor 目前没有运行期消费方，"
+            "这里放一个能点的「添加」只会写下一个没人读的字段。"
+        )
+        row.addWidget(self.anchor_hint)
+        row.addStretch(1)
+        row.addWidget(self.anchor_add_button)
+        layout.addLayout(row)
 
     # -- 浏览器：节点树（勾层级 → 拼回主选择器） -----------------------------
 
-    def _build_path_tree(self, layout: QVBoxLayout) -> None:
+    def _build_path_tree(self, container: QWidget) -> None:
         """节点树：按捕获回传的祖先链（``selector.path``）逐级勾选。
 
         **单向**（树 → 主选择器）。``css_edit`` 是唯一落盘口径；树是「从捕获路径
         重新拼选择器」的入口。不做双向同步是有意的：把 css 解析回层级不可靠
-        （手改的 css / 候选提升后的 css 都不出自这条路径），硬做双向就是立第二套
-        口径、迟早互相改写。所以树只承诺一件事——**再次勾选，就按所选层级重写
-        主选择器**；两个入口写同一个字段，后动手的赢。
+        （手改的 css 不出自这条路径），硬做双向就是立第二套口径、迟早互相改写。
+        所以树只承诺一件事——**再次勾选，就按所选层级重写主选择器**；两个入口写同一个
+        字段，后动手的赢。
+
+        ``container`` 是承载它的页（``QTabWidget`` 里那一页），不是布局：影刀把
+        「精准定位」做成独立页签，节点树与属性表都在**那一页里面**并排。
         """
+        layout = QVBoxLayout(container)
+        layout.setContentsMargins(4, 4, 4, 4)
         if not self._path:
-            return  # 老元素没有 path：不建树也不摆一个空壳
+            # 老元素没有 path：不建树也不摆一个空壳。但**要说清为什么是空的**——
+            # 空白的「精准定位」页会被当成「加载失败」或「这元素不支持」。
+            empty = QLabel(
+                "该元素没有捕获时的节点路径（老元素或手工文档），"
+                "无法按层级勾选；可直接在上方编辑主选择器。"
+            )
+            empty.setWordWrap(True)
+            empty.setStyleSheet(f"color: {TEXT_SECONDARY};")
+            layout.addWidget(empty)
+            layout.addStretch(1)
+            self.path_list = None
+            self.attr_table = None
+            return
         self.path_label = QLabel(
             "节点路径（勾选参与定位的层级；勾选会重写主选择器）"
         )
@@ -941,58 +1107,20 @@ class ElementEditorForm(QWidget):
         if css != self.css_edit.text().strip():
             self.css_edit.setText(css)
 
-    def _sync_promote(self) -> None:
-        row = self.candidate_list.currentRow()
-        ok = 0 <= row < len(self._candidates) and promotable(self._candidates[row])
-        self.promote_button.setEnabled(ok)
-        if 0 <= row < len(self._candidates) and not promotable(
-            self._candidates[row]
-        ):
-            self.promote_button.setToolTip(
-                "该候选捕获时没实测到命中数，无法安全提升（verifyCount 必须是实测值）"
-            )
-        else:
-            self.promote_button.setToolTip("把选中的候选设为主定位")
-
-    def _promote(self) -> None:
-        row = self.candidate_list.currentRow()
-        if not (0 <= row < len(self._candidates)) or not promotable(
-            self._candidates[row]
-        ):
-            return
-        kept, css, count, note = promote_candidate(
-            self._candidates,
-            row,
-            current_css=self.css_edit.text().strip(),
-            current_count=self._verify_count,
-        )
-        self._candidates = kept
-        self._verify_count = count
-        self.css_edit.setText(css)
-        # R2（M44 残留）：提升会改主 css，树的勾选态必须**立刻**按新 css 回读——
-        # 此前只在建树时做一次，提升后树还停在旧勾选，下一次勾选才会重写，
-        # 中间态里「树显示的层级」与「主选择器实际是哪条」是两回事。
-        self._sync_path_checks_from_css()
-        self.candidate_list.clear()
-        self.candidate_list.addItems(
-            [_candidate_label(item) for item in self._candidates]
-        )
-        self.candidates_label.setText(
-            f"捕获时的备选定位 {len(self._candidates)} 条"
-            "（运行期主选择器失效时按序回退）"
-            if self._candidates
-            else "捕获时没有收集到备选定位"
-        )
-        self.revalidate(notice=note)
-
     # -- 浏览器：编辑中预览（M48/C3，通道回调注入式） -------------------------
 
     def enable_live_preview(
         self,
         preview: Callable[[str], dict],
         clear: Callable[[], dict],
+        shot: Callable[..., dict] | None = None,
     ) -> None:
         """接上预览通道：css 每次改动后防抖驻留高亮，收场清场由 ``shutdown_preview``。
+
+        ``shot(css, want_shot=True)`` 是**可选**的截图通道（M47.11）：接上之后切到
+        「预览」页签才会拍一张带红框的页面截图。没接时该页签仍摆出来（影刀那一屏的
+        结构），只是永远停在「尚未获取预览截图」——**不隐藏页签**：用户要的是那两页
+        的布局，藏掉一页比「这一页暂时没内容」更难解释。
 
         桌面元素没有「页面」可高亮，不注入回调即整体不生效（标签都不出现）。
         """
@@ -1000,6 +1128,7 @@ class ElementEditorForm(QWidget):
             return  # 桌面表单没有主 css 行，预览无从谈起
         self._preview_css = preview
         self._clear_preview_css = clear
+        self._shot_css = shot
         self.preview_label.show()
         # 打开编辑器就先预跑一轮：用户还没动键盘也能立刻看到「这条 css 现在命中几个」
         self._preview_timer.start()
@@ -1016,6 +1145,35 @@ class ElementEditorForm(QWidget):
         self._preview_seq += 1
         self._dispatch(self._clear_preview_css, ())
 
+    def _on_tab_changed(self, index: int) -> None:
+        """切到「预览」页签 → 跑一轮**带截图**的校验。
+
+        只在切到预览页时拍（M47.11）：每敲一个 css 字符就截一张base64 PNG 既慢又占
+        内存，而用户在「精准定位」页里改选择器时根本不看图。开框时已经在预览页（索引
+        0）——那次由 :meth:`enable_live_preview` 的预跑负责，不重复拍。
+        """
+        if index == 0:
+            self._run_shot()
+
+    def _run_shot(self) -> None:
+        """取一张截图 + 首个命中的红框，填进「预览」页。
+
+        没有截图通道（未注入 / 桌面表单）时只更新文案，不发请求。
+        """
+        if not hasattr(self, "preview_shot"):
+            return
+        if self._shot_css is None:
+            self.preview_shot.clear(
+                "尚未获取预览截图（当前环境未接入截图通道）"
+            )
+            return
+        css = self.css_edit.text().strip()
+        if not css:
+            self.preview_shot.clear("先填写主选择器再取预览截图")
+            return
+        self._shot_seq += 1
+        self._dispatch(self._shot_css, (css,), kind="shot", seq=self._shot_seq)
+
     def _on_css_changed(self) -> None:
         if self._preview_css is None:
             return
@@ -1027,6 +1185,8 @@ class ElementEditorForm(QWidget):
         if not css:
             # 空选择器没有可预览的对象：就地清场（旧框不能赖着冒充命中）
             self.preview_label.setText("")
+            if hasattr(self, "preview_shot"):
+                self.preview_shot.clear("先填写主选择器再取预览截图")
             if self._clear_preview_css is not None:
                 self._preview_seq += 1
                 self._dispatch(self._clear_preview_css, ())
@@ -1035,16 +1195,28 @@ class ElementEditorForm(QWidget):
         self._preview_seq += 1
         self._dispatch(self._preview_css, (css,))
 
-    def _dispatch(self, callback: Callable[..., dict], args: tuple) -> None:
-        seq = self._preview_seq
+    def _dispatch(
+        self,
+        callback: Callable[..., dict],
+        args: tuple,
+        *,
+        kind: str = "",
+        seq: int | None = None,
+    ) -> None:
+        # 「截图」与「驻留预览」用**各自独立**的 seq：陈旧的截图回传不该作废当前预览
+        # 的命中数，反之亦然（两条通道节奏不同：一个是 500ms 防抖，一个是切页签一次）。
+        seq = self._preview_seq if seq is None else seq
 
         def work() -> None:
             try:
                 result = dict(callback(*args))
             except Exception as exc:  # noqa: BLE001 - 通道故障也要落到标签上
                 result = {"error": f"预览通道异常：{exc}"}
-            kind = "clear" if callback is self._clear_preview_css else "preview"
-            payload = {"kind": kind, "seq": seq, **result}
+            if not kind:
+                kind_ = "clear" if callback is self._clear_preview_css else "preview"
+            else:
+                kind_ = kind
+            payload = {"kind": kind_, "seq": seq, **result}
             try:
                 self._preview_signal.done.emit(payload)
             except RuntimeError:
@@ -1056,6 +1228,9 @@ class ElementEditorForm(QWidget):
         data = payload if isinstance(payload, dict) else {}
         if data.get("kind") == "clear":
             return  # 清场无观感，静默即可
+        if data.get("kind") == "shot":
+            self._on_shot_done(data)
+            return
         if data.get("seq") != self._preview_seq:
             return  # 陈旧结果：用户已改了下一轮，覆盖反而回退显示
         if data.get("error"):
@@ -1069,6 +1244,38 @@ class ElementEditorForm(QWidget):
         else:
             text, color = "命中 0 个（页面上找不到该选择器）", DANGER
         self.set_hit_label(text, color)
+
+    def _on_shot_done(self, data: dict) -> None:
+        """截图回传落地：**先按图的实际像素尺寸**把视口 rect 换算成图内框，再显示。
+
+        顺序不能反：``preview_box_in_image`` 需要图宽（它按「图实际宽 / 视口宽」缩放，
+        而不是拿 ``dpr`` 猜——Windows 分数缩放下两者会差 1px，小元素上就是「框没套住」）。
+        所以先解码图拿到尺寸，再算框，最后一次性交给 :class:`PreviewShot`。
+        """
+        if data.get("seq") != self._shot_seq:
+            return  # 陈旧截图：用户已切走或又改了 css
+        if data.get("error"):
+            # 截图失败**不**改命中标签：那是「校验失败」，而截图只是观感增强。
+            self.preview_shot.clear(f"预览截图失败：{data['error']}")
+            return
+        data_url = data.get("dataUrl")
+        if not isinstance(data_url, str) or not data_url:
+            # 要了图但没拿到（无 windowId / 权限 / 浏览器限制）：说清是哪一种，
+            # 别停在空白页签让用户猜是不是功能坏了。
+            count = data.get("count")
+            if count == 0:
+                self.preview_shot.clear("本页未命中该选择器，没有可预览的元素")
+            else:
+                self.preview_shot.clear(
+                    f"已命中 {count} 个，但浏览器未返回截图（页面过大或受保护页面会这样）"
+                )
+            return
+        shot = decode_shot(data_url)
+        image_size = (shot.width(), shot.height()) if shot is not None else None
+        box = preview_box_in_image(
+            data.get("rect"), data.get("viewport"), image_size
+        )
+        self.preview_shot.show_shot(data_url, box)
 
     def set_hit_label(self, text: str, color: str) -> None:
         """写**唯一**那条命中数标签（预览与「校验元素」共用同一条）。
@@ -1513,6 +1720,7 @@ class ElementEditorDialog(QDialog):
         name: str,
         preview_css: Callable[[str], dict] | None = None,
         clear_preview_css: Callable[[], dict] | None = None,
+        shot_css: Callable[..., dict] | None = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -1532,8 +1740,9 @@ class ElementEditorDialog(QDialog):
         layout.addWidget(self.form)
         # 编辑中预览（M48）：browser 元素且调用方注入了通道才启用；关窗（含取消）
         # 一律发 clear 收走页面上的黄框——预览框不能陪对话框一起「留在页面上」。
+        # ``shot_css`` 是截图通道（M47.11）：切到「预览」页签才拍，不随防抖预跑。
         if document.get("kind") == "browser" and preview_css is not None:
-            self.form.enable_live_preview(preview_css, clear_preview_css)
+            self.form.enable_live_preview(preview_css, clear_preview_css, shot_css)
             self.finished.connect(self.form.shutdown_preview)
 
         buttons = QDialogButtonBox(

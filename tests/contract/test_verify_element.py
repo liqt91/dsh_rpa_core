@@ -397,3 +397,173 @@ def test_bring_front_failure_is_harmless(monkeypatch, foreground_env):
     _reply_with_count(edge, 3)
 
     assert ElementVerifier(timeout=3.0).verify("#kw") == {"count": 3}
+
+
+# ---- M47.11 预览截图回传（wantShot 链路）------------------------------------
+
+
+def _reply_with_shot(
+    channel: FakeChannel,
+    *,
+    data_url: str | None = "data:image/png;base64,AAAA",
+    rect: dict | None = None,
+    viewport: dict | None = None,
+    count: int = 2,
+) -> None:
+    """回一条带截图字段的校验结果（rect/viewport 缺省给一组正常值）。
+
+    **rect/viewport 默认给真值而不是省略**：判据要证明「字段被透传了」，若默认就是
+    None，漏传字段的 bug 也会因为「回传里本来就没」而假绿。
+    """
+
+    def delayed_reply():
+        time.sleep(0.05)
+        rid = channel.sent[0]["requestId"]
+        payload = {"type": "capture_verify_result", "requestId": rid, "count": count}
+        if data_url is not None:
+            payload["dataUrl"] = data_url
+        if rect is not None:
+            payload["rect"] = rect
+        if viewport is not None:
+            payload["viewport"] = viewport
+        channel.outbox.append(payload)
+
+    threading.Thread(target=delayed_reply, daemon=True).start()
+
+
+RECT = {"left": 100, "top": 50, "width": 200, "height": 80}
+VIEWPORT = {"width": 1280, "height": 720, "dpr": 2, "scrollX": 300, "scrollY": 900}
+
+
+def test_want_shot_true_sends_flag_and_returns_payload(verify_env):
+    """要图时：信封带 ``wantShot:true``（严格布尔），结果里dataUrl/rect/viewport 全透传。"""
+    _channels, set_endpoints = verify_env
+    channel = FakeChannel()
+    set_endpoints(["a"], {"a": channel})
+    _reply_with_shot(channel, rect=dict(RECT), viewport=dict(VIEWPORT))
+
+    result = ElementVerifier(timeout=3.0).verify("#kw", want_shot=True)
+    assert channel.sent[0]["wantShot"] is True
+    assert result["count"] == 2
+    assert result["dataUrl"] == "data:image/png;base64,AAAA"
+    assert result["rect"] == RECT
+    assert result["viewport"] == VIEWPORT
+
+
+def test_default_verify_does_not_ask_for_shot(verify_env):
+    """默认（普通「校验元素」）**不**要图：信封wantShot:false，且扩展回传里即使
+    带了 dataUrl 也**不**透传——没人要的 几百 KB base64 不该进 GUI 内存。"""
+    _channels, set_endpoints = verify_env
+    channel = FakeChannel()
+    set_endpoints(["a"], {"a": channel})
+    # 扩展侧不甩wantShot 就不该有 dataUrl；这里**故意**回一张，钉住 host 的丢弃行为
+    _reply_with_shot(channel, rect=dict(RECT), viewport=dict(VIEWPORT))
+
+    result = ElementVerifier(timeout=3.0).verify("#kw")
+    assert channel.sent[0]["wantShot"] is False
+    assert "dataUrl" not in result
+    assert result["count"] == 2  # 命中数不受影响
+
+
+def test_want_shot_failure_still_returns_count(verify_env):
+    """截图拍不到（无 dataUrl）：**count 照常**、不报 error——截图是观感增强，
+    命中数才是判据。这是最容易写坏的一条：一旦把截图失败当校验失败，预览页签在
+    受保护页面/超大页上就会显示「校验失败」。"""
+    _channels, set_endpoints = verify_env
+    channel = FakeChannel()
+    set_endpoints(["a"], {"a": channel})
+    _reply_with_shot(channel, data_url=None, rect=None, viewport=dict(VIEWPORT), count=1)
+
+    result = ElementVerifier(timeout=3.0).verify("#kw", want_shot=True)
+    assert result["count"] == 1
+    assert "dataUrl" not in result
+    assert "error" not in result
+
+
+def test_clear_preview_never_asks_for_shot(verify_env):
+    """清场（``clear``）没有画面可拍：即便调用方误传 want_shot，信封也必须是 false。"""
+    _channels, set_endpoints = verify_env
+    channel = FakeChannel()
+    set_endpoints(["a"], {"a": channel})
+    _reply_with_count(channel, 0)
+    ElementVerifier(timeout=3.0)._exchange("", "clear", want_shot=True)
+    assert channel.sent[0]["wantShot"] is False
+
+
+def test_shot_payload_is_copied_not_aliased(verify_env):
+    """rect/viewport 是**拷贝**回传：调用方（GUI）改动不会污染通道内部状态。"""
+    _channels, set_endpoints = verify_env
+    channel = FakeChannel()
+    set_endpoints(["a"], {"a": channel})
+    _reply_with_shot(channel, rect=dict(RECT), viewport=dict(VIEWPORT))
+    result = ElementVerifier(timeout=3.0).verify("#kw", want_shot=True)
+    result["rect"]["left"] = -999
+    assert result["rect"]["left"] == -999  # 改的是返回值的副本（隔离成立）
+    assert channel.outbox == []  # 回传早已被配对取走
+
+
+# ---- preview_box_in_image：视口 CSS 像素 → 截图物理像素 ----------------------
+
+
+def test_preview_box_scales_by_image_size_not_assumed_dpr():
+    """换算基准是**图的实际宽高**，不是 ``dpr``：Windows 分数缩放下图宽与
+    ``round(视口宽 × dpr)`` 可能差 1px，而小元素上偏 1px 就是「框没套住」。"""
+    from rpa_core.capture.verify import preview_box_in_image
+
+    box = preview_box_in_image(RECT, VIEWPORT, (2560, 1440))
+    assert box == {"x": 200.0, "y": 100.0, "width": 400.0, "height": 160.0}
+
+
+def test_preview_box_falls_back_to_dpr_without_image_size():
+    """图尺寸还没解出来时退回 dpr——至少同量纲，比假装 100% 缩放强。"""
+    from rpa_core.capture.verify import preview_box_in_image
+
+    assert preview_box_in_image(RECT, VIEWPORT, None) == {
+        "x": 200.0, "y": 100.0, "width": 400.0, "height": 160.0
+    }
+    # 连 viewport 都没有 ⇒ 视作 dpr=1（CSS 像素直接用），不是崩、也不是 None
+    assert preview_box_in_image(RECT, None, None) == {
+        "x": 100.0, "y": 50.0, "width": 200.0, "height": 80.0
+    }
+
+
+def test_preview_box_ignores_scroll_offset():
+    """**刻意不用滚动偏移**：截图拍的就是视口，rect 也是视口坐标——同源。
+    加 scrollX/Y 只会把框推到图外面去（钉住这条，免得日后「好心」加上）。"""
+    from rpa_core.capture.verify import preview_box_in_image
+
+    scrolled = preview_box_in_image(RECT, VIEWPORT, (2560, 1440))
+    same = dict(VIEWPORT, scrollX=0, scrollY=0)
+    assert preview_box_in_image(RECT, same, (2560, 1440)) == scrolled
+
+
+def test_preview_box_returns_none_when_nothing_to_draw():
+    """三种「不画框」都返回 None，绝不画假框：无rect / 零面积 / 形状不对。
+    （画一个 0×0 或负坐标的框，用户会以为「框住了但选不中」而反复折腾。）"""
+    from rpa_core.capture.verify import preview_box_in_image
+
+    assert preview_box_in_image(None, VIEWPORT, (2560, 1440)) is None
+    assert preview_box_in_image([1, 2], VIEWPORT, (2560, 1440)) is None
+    assert preview_box_in_image(
+        {"left": 1, "top": 1, "width": 0, "height": 40}, VIEWPORT, (2560, 1440)
+    ) is None
+    assert preview_box_in_image({"left": "a"}, VIEWPORT, (2560, 1440)) is None
+
+
+def test_preview_box_clamps_partially_scrolled_out():
+    """元素有一部分滚出视口时 rect.left/top 为负：钳到 0，让框贴图边而不是画到图外。"""
+    from rpa_core.capture.verify import preview_box_in_image
+
+    assert preview_box_in_image(
+        {"left": -50, "top": -10, "width": 30, "height": 30}, VIEWPORT, (2560, 1440)
+    ) == {"x": 0.0, "y": 0.0, "width": 60.0, "height": 60.0}
+
+
+def test_preview_box_survives_junk_image_size():
+    """图尺寸是垃圾（解码失败/元数据缺失）时退回 dpr，不抛——预览页签不该因
+    一张图崩掉整个编辑器。"""
+    from rpa_core.capture.verify import preview_box_in_image
+
+    assert preview_box_in_image(RECT, VIEWPORT, ("x", None)) == {
+        "x": 200.0, "y": 100.0, "width": 400.0, "height": 160.0
+    }

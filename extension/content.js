@@ -23,7 +23,7 @@
   // 构建标识：与 background.js 的 EXT_BUILD、manifest.json 的 version 三方一致（契约测试钉住）。
   // 随捕获结果回传——诊断「页面里跑的脚本是哪个年代的」（Load unpacked 不自动重载，
   // 补注入前已开页面里的可能还是旧快照；见 background.js 顶部的完整说明）。
-  const EXT_BUILD = "0.6.3";
+  const EXT_BUILD = "0.7.0";
 
   // ---- 实例接管守卫（M42）----------------------------------------------------
   // 声明式 content_scripts **只在页面加载时**注入：扩展装载/重载后，已经打开的标签页
@@ -295,6 +295,31 @@
       return { error: "invalid-selector" };
     }
   };
+  // 首个命中元素的**视口矩形**（预览页签要按它画红框；M47.11）。
+  // 为什么是视口坐标而不是文档坐标：截图来自 `captureVisibleTab`，它拍的就是**当前
+  // 视口**——GUI 把图按图片像素展示，红框必须与「截图那一瞬的视口」对齐，故这里
+  // 一并回传 viewport 尺寸与滚动偏移，GUI 侧把文档坐标换算成图内像素（见
+  // `preview_box_in_image`）。取不到（count=0）返回 null，GUI 就不画框。
+  const firstHitRect = (doc, css) => {
+    let el = null;
+    try {
+      el = doc.querySelector(css);
+    } catch {
+      return null;
+    }
+    if (!el) return null;
+    const r = el.getBoundingClientRect();
+    return { left: r.left, top: r.top, width: r.width, height: r.height };
+  };
+  const viewportInfo = () => ({
+    width: window.innerWidth || 0,
+    height: window.innerHeight || 0,
+    // devicePixelRatio：截图是**物理像素**，视口尺寸是 CSS 像素，两者差 dpr 倍
+    // （Retina/125% 缩放)。画框时按 dpr 缩放才对齐。
+    dpr: window.devicePixelRatio || 1,
+    scrollX: window.scrollX || window.pageXOffset || 0,
+    scrollY: window.scrollY || window.pageYOffset || 0,
+  });
   const verifyReplyFor = (doc, css, mode) => {
     mode = normalizeVerifyMode(mode);
     if (mode === "clear") return { count: 0 };
@@ -551,6 +576,12 @@
     }
     if (!persist) setTimeout(clearVerifyFlash, 1600);
   };
+  // 截图用的一次性高亮：画好 → 等 background 拍完（≈200ms）→ 自己收走。
+  // 不能复用 persist=true 就走人：那样框会一直留到下一次预览，用户关掉编辑器才消失。
+  const flashForShot = (els) => {
+    flashElements(els, true);
+    setTimeout(clearVerifyFlash, 700);
+  };
   // M48：mode 决定高亮的「寿命」。flash 闪 1.6s 自清；preview 驻留（persist），
   // **count=0 也必须先清场**——选择器改到不再命中的瞬间，上一轮的黄框若还赖着，
   // 用户会把「旧框」读成「新选择器命中了」，这是预览最危险的静默误导；clear 只清场。
@@ -558,7 +589,11 @@
   // `silent`（2026-10-08 双浏览器报障）：本页所在浏览器**不在前台**时 background 会带它下来
   // ——只回命中数、**绝不画黄框**（否则 Chrome 与 Edge 各开一页时两边都闪，而用户只该看到
   // 眼前那个）。silent 仍要回 count：host 认首个回传，全都不在前台时它就是计数兜底。
-  const runVerify = (css, mode, silent) => {
+  //
+  // M47.11：回传里带上首个命中的视口 rect 与视口信息，供 GUI 的「预览」页签在截图上
+  // 画红框。**截图前必须先把黄框画好**（background 侧先 sendMessage 拿到应答、再截图），
+  // 所以 `flash` 模式在需要截图时改成 `persist=true`——否则 1.6s 后框自清、截了个空。
+  const runVerify = (css, mode, silent, keepFlash) => {
     mode = normalizeVerifyMode(mode);
     const reply = verifyReplyFor(document, css, mode);
     if (mode === "clear") {
@@ -567,12 +602,19 @@
     }
     if (mode === "preview") clearVerifyFlash();
     if (!silent && !reply.error && reply.count > 0) {
-      flashElements(
-        Array.from(document.querySelectorAll(css)).slice(0, VERIFY_FLASH_LIMIT),
-        mode === "preview"
-      );
+      const els = Array.from(document.querySelectorAll(css)).slice(0, VERIFY_FLASH_LIMIT);
+      if (keepFlash === true && mode !== "preview") {
+        // 截图模式：画好框等 background 拍照，拍完自清（不能像 preview 那样长驻）
+        flashForShot(els);
+      } else {
+        flashElements(els, mode === "preview");
+      }
     }
-    return reply;
+    return {
+      ...reply,
+      rect: reply.error ? null : firstHitRect(document, css),
+      viewport: viewportInfo(),
+    };
   };
 
   const onRuntimeMessage = (msg, _sender, sendResponse) => {
@@ -580,7 +622,9 @@
       // 同步应答：querySelectorAll 是同步的，无需 return true（那是异步应答的写法）
       sendResponse({
         contentBuild: EXT_BUILD,
-        ...runVerify(String(msg.css || ""), msg.mode, msg.silent === true),
+        ...runVerify(
+          String(msg.css || ""), msg.mode, msg.silent === true, msg.keepFlash === true
+        ),
       });
       return false;
     }

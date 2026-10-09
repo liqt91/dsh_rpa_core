@@ -1,17 +1,45 @@
-"""元素编辑器（M39 ③-1 离线版）：候选可选 / 桌面 locator 字段化 / 就地结构校验。
+"""元素编辑器（M47.11 影刀式两页签 / 桌面 locator 字段化 / 就地结构校验）。
 
 在 offscreen Qt 平台运行；缺 PySide6 时整组跳过。
 """
 
 from __future__ import annotations
 
+import base64
 import os
+import struct
+import zlib
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
 
 pytest.importorskip("PySide6")
+
+
+def _one_pixel_png_url() -> str:
+    """一张 1×1 的真 PNG（base64 data URL）。
+
+    「陈旧截图被丢弃」这类判据需要一张**真能解码**的图——用假 base64 的话，
+    判据会在解码那步就短路，分不清是「丢弃了」还是「本来就解不出来」。
+    手写 PNG 字节而不是引Pillow：测试依赖越少越好。
+    """
+
+    def chunk(tag: bytes, data: bytes) -> bytes:
+        return (
+            struct.pack(">I", len(data))
+            + tag
+            + data
+            + struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF)
+        )
+
+    png = (
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(b"IHDR", struct.pack(">IIBBBBB", 1, 1, 8, 2, 0, 0, 0))
+        + chunk(b"IDAT", zlib.compress(b"\x00\xff\x00\x00", 6))
+        + chunk(b"IEND", b"")
+    )
+    return "data:image/png;base64," + base64.b64encode(png).decode("ascii")
 
 
 @pytest.fixture(scope="module")
@@ -310,113 +338,256 @@ def test_css_problems_rejects_blank(qapp):
     assert css_problems("   ") == ["主选择器（css）不能为空"]
 
 
-# ---- 候选提升（交换语义，不是单向覆盖） --------------------------------------
-def test_promotable_requires_measured_positive_count(qapp):
-    """``matchedCount`` 必须是有实测的正整数；bool 不算 int。"""
-    from rpa_core.gui.element_editor import promotable
-
-    assert promotable({"matchedCount": 1})
-    assert promotable({"matchedCount": 3})
-    assert not promotable({"matchedCount": 0})
-    assert not promotable({})
-    assert not promotable({"matchedCount": None})
-    assert not promotable({"matchedCount": True})
-    assert not promotable({"matchedCount": "3"})
+# ---- 备选定位 UI 已移除，但数据必须保留（M47.11）-----------------------------
 
 
-def test_promote_candidate_swaps_old_primary_back_into_candidates(qapp):
-    """提升候选时旧主定位按序放回队首，其实测命中数就是 verifyCount。"""
-    from rpa_core.gui.element_editor import promote_candidate
+def test_candidate_promotion_helpers_are_retired(qapp):
+    """``promotable`` / ``promote_candidate`` 随 UI 一起退役。
 
-    candidates = [
-        {"kind": "attribute", "selector": 'input[name="q"]', "matchedCount": 3},
-        {"kind": "attribute", "selector": "[data-testid=search]", "matchedCount": 1},
+    判据钉的是「**没有调用方即死代码**」这条项目铁律：留着它们，日后有人看到
+    ``promote_candidate`` 还在就以为候选提升功能仍可用（那正是维护者实测「几次捕捉
+    都没看到有备选定位」的由来——功能入口与实际能力脱节）。
+    """
+    import rpa_core.gui.element_editor as mod
+
+    assert not hasattr(mod, "promotable")
+    assert not hasattr(mod, "promote_candidate")
+
+
+def test_browser_form_has_no_candidate_widgets(qapp):
+    """browser 分支不再摆候选列表 / 只读标签 / 提升按钮（三者都不存在，不是隐藏）。"""
+    from rpa_core.gui.element_editor import ElementEditorForm
+
+    form = ElementEditorForm(_browser_document())
+    for gone in ("candidate_list", "candidates_label", "promote_button"):
+        assert not hasattr(form, gone), gone
+    assert not hasattr(form, "_sync_promote")
+    assert not hasattr(form, "_promote")
+
+
+def test_candidates_are_still_written_back(qapp):
+    """**删界面 ≠ 删数据**：`selector.candidates` 原样带回文档。
+
+    运行期自愈（``executors.browser._element_candidates``）按失败 selector 反查这份数据
+    做回退；悄悄丢掉它等于悄悄拆掉 M28，且症状极隐蔽（元素在页面上还在，只是不再
+    自我修复）。
+    """
+    from rpa_core.gui.element_editor import ElementEditorForm
+
+    document = _browser_document()
+    form = ElementEditorForm(document)
+    result = form.result_document()
+    assert result["selector"]["candidates"] == document["selector"]["candidates"]
+
+
+def test_candidates_written_back_even_after_editing_css(qapp):
+    """改过主 css 之后candidates 仍在（不是「只在没动过时才带」）。"""
+    from rpa_core.gui.element_editor import ElementEditorForm
+
+    document = _browser_document()
+    form = ElementEditorForm(document)
+    form.css_edit.setText("#changed")
+    result = form.result_document()
+    assert result["selector"]["css"] == "#changed"
+    assert len(result["selector"]["candidates"]) == 3
+
+
+# ---- 影刀式两页签布局（M47.11）-----------------------------------------------
+
+
+def test_browser_form_has_preview_and_locate_tabs(qapp):
+    """browser 分支是「预览 / 精准定位」两页签，且**没有** AI 辅助定位页签。
+
+    AI 页签是维护者明确「先不做」的：摆一个点不开的空页签比不摆更糟，用户会以为
+    功能坏了。所以判据正面钉住「页签数 == 2 且标题就是这两个」。
+    """
+    from rpa_core.gui.element_editor import ElementEditorForm, PreviewShot
+
+    form = ElementEditorForm(_path_document())
+    titles = [form.tabs.tabText(i) for i in range(form.tabs.count())]
+    assert titles == ["预览", "精准定位"]
+    assert isinstance(form.tabs.widget(0), PreviewShot)
+    assert form.tabs.widget(1) is form.locate_page
+    assert form.tabs.currentIndex() == 0  # 开框就在预览页
+
+
+def test_selector_choice_and_anchor_are_greyed_out(qapp):
+    """底部「默认选择器 / XPath」与「锚点 + 添加」都摆出来，但后两者**置灰**。
+
+    XPath 是维护者点名要的（相比影刀少了它），所以不能装作没有；但全链路只认 css，
+    做成能点的就是假功能。锚点同理——browser 元素没有运行期消费方。
+    """
+    from rpa_core.gui.element_editor import ElementEditorForm
+
+    form = ElementEditorForm(_path_document())
+    assert form.selector_default_radio.isChecked()
+    assert form.selector_xpath_radio.isEnabled() is False
+    assert form.selector_xpath_radio.toolTip()
+    assert form.anchor_add_button.isEnabled() is False
+    assert form.anchor_add_button.toolTip()
+
+
+def test_screenshot_only_requested_when_switching_to_preview(qapp):
+    """**只有切到「预览」页签才截图**：改 css / 切到精准定位都不触发。
+
+    每敲一个字符就截一张 base64 PNG 既慢又占内存，而用户在精准定位页里改选择器时
+    根本不看图。判据用「请求条数」而不是「有没有请求」——把 ``want_shot`` 恒true
+    也会让「有没有请求」这条判据假绿。
+    """
+    from rpa_core.gui.element_editor import ElementEditorForm
+
+    calls: list[dict] = []
+
+    def preview(_css):
+        return {"count": 1}
+
+    def clear():
+        return {"count": 0}
+
+    def shot(css, **_kwargs):
+        calls.append({"css": css})
+        return {"count": 1, "dataUrl": "", "rect": None, "viewport": {}}
+
+    form = ElementEditorForm(_path_document())
+    form.enable_live_preview(preview, clear, shot)
+    form._preview_timer.stop()  # 别让防抖预跑搅进来
+
+    form.css_edit.setText("#typed")
+    form._run_preview()
+    assert calls == []
+
+    # 走**真实信号**（setCurrentIndex 会发currentChanged），不手工调 _on_tab_changed
+    # ——手工调会与信号各触发一次，把「请求条数」这条判据变成数信号次数的假绿。
+    form.tabs.setCurrentIndex(1)
+    assert calls == []
+
+    form.tabs.setCurrentIndex(0)
+    assert calls == [{"css": "#typed"}]
+
+
+def test_preview_shot_without_channel_says_so_instead_of_blank(qapp):
+    """没接截图通道时，「预览」页**仍摆出来**（影刀那两页的结构），但要有话说。
+
+    藏掉整页比「这一页暂时没内容」更难解释——用户要的就是那两页的布局。
+    """
+    from rpa_core.gui.element_editor import ElementEditorForm
+
+    form = ElementEditorForm(_path_document())
+    form.enable_live_preview(lambda _css: {"count": 1}, lambda: {"count": 0})
+    form._preview_timer.stop()
+    form._run_shot()
+    assert not form.preview_shot.has_shot
+    assert "未接入截图通道" in form.preview_shot.message
+
+
+def test_shot_failure_does_not_touch_hit_label(qapp):
+    """截图失败**不改命中标签**：那是「校验失败」，而截图只是观感增强。
+
+    这条与 host 侧 ``test_want_shot_failure_still_returns_count`` 配对：截图链路任何
+    一环坏掉，都只该让预览页显示一句原因，不该把「命中 N 个」这条真判据打成错误。
+    """
+    from rpa_core.gui.element_editor import ElementEditorForm
+
+    form = ElementEditorForm(_path_document())
+    form.enable_live_preview(
+        lambda _css: {"count": 1}, lambda: {"count": 0}, lambda _css, **_k: {"count": 1}
+    )
+    form.set_hit_label("命中 1 个（页面上已黄框高亮）", "#1a7f37")
+    form._shot_seq += 1
+    form._on_shot_done({"seq": form._shot_seq, "error": "no-active-tab"})
+    assert form.preview_label.text() == "命中 1 个（页面上已黄框高亮）"
+    assert "预览截图失败" in form.preview_shot.message
+
+
+def test_shot_without_data_url_distinguishes_zero_hit(qapp):
+    """要了图却没拿到：**区分「没命中」与「命中了但截不到」**。
+
+    两种情形的用户动作完全相反（改选择器 vs 换页面/等截图），混成一句「预览失败」
+    等于让用户自己猜。
+    """
+    from rpa_core.gui.element_editor import ElementEditorForm
+
+    form = ElementEditorForm(_path_document())
+    form.enable_live_preview(
+        lambda _css: {"count": 1}, lambda: {"count": 0}, lambda _css, **_k: {"count": 1}
+    )
+    form._shot_seq += 1
+    form._on_shot_done({"seq": form._shot_seq, "count": 0})
+    assert "未命中" in form.preview_shot.message
+
+    form._shot_seq += 1
+    form._on_shot_done({"seq": form._shot_seq, "count": 3})
+    assert "未返回截图" in form.preview_shot.message
+
+
+def test_stale_shot_reply_is_discarded(qapp):
+    """陈旧截图回传被丢弃：用户已切走或又改了 css，旧图不该盖上去。"""
+    from rpa_core.gui.element_editor import ElementEditorForm
+
+    form = ElementEditorForm(_path_document())
+    form.enable_live_preview(
+        lambda _css: {"count": 1}, lambda: {"count": 0}, lambda _css, **_k: {"count": 1}
+    )
+    form._shot_seq += 1
+    form._on_shot_done(
+        {
+            "seq": form._shot_seq - 1,
+            "count": 1,
+            "dataUrl": _one_pixel_png_url(),
+            "rect": {"left": 0, "top": 0, "width": 1, "height": 1},
+            "viewport": {"width": 10, "height": 10, "dpr": 1},
+        }
+    )
+    assert not form.preview_shot.has_shot
+
+
+def test_decode_shot_rejects_junk_without_raising(qapp):
+    """坏 data URL 一律返回 None，**绝不抛**：一张坏图不该把命中判据一起带崩。"""
+    from rpa_core.gui.element_editor import decode_shot
+
+    assert decode_shot(None) is None
+    assert decode_shot(123) is None
+    assert decode_shot("no-comma-here") is None
+    assert decode_shot("data:text/plain;base64,AAAA") is None
+    assert decode_shot("data:image/png;base64,@@@") is None
+    assert decode_shot("data:image/png;base64,") is None
+    assert decode_shot("data:image/png;base64,AAAA") is None  # 不是合法 PNG
+
+
+def test_locate_page_explains_missing_path(qapp):
+    """老元素没有 path：「精准定位」页**说清为什么空**，不是一片空白。
+
+    空白的页签会被当成「加载失败」或「这元素不支持精准定位」。
+    """
+    from rpa_core.gui.element_editor import ElementEditorForm
+
+    form = ElementEditorForm({"kind": "browser", "selector": {"css": "#a"}})
+    assert form.path_list is None
+    labels = [
+        label.text()
+        for label in form.locate_page.findChildren(type(form.info_label))
+        if label.text()
     ]
-    kept, css, count, note = promote_candidate(
-        candidates, 1, current_css="old.css", current_count=2
+    assert any("没有捕获时的节点路径" in text for text in labels)
+
+
+def test_desktop_form_has_no_tabs(qapp):
+    """桌��分支**不摆**这两个页签：它没有页面可截图，也没有 DOM 路径可勾。
+
+    摆一个永远空着的「预览」页签就是在承诺一个不存在的能力。
+    """
+    from rpa_core.gui.element_editor import ElementEditorForm
+
+    form = ElementEditorForm(
+        {"kind": "desktop", "selector": {"locator": {"backend": "win32", "controlId": 3}}}
     )
-    assert css == "[data-testid=search]"
-    assert count == 1
-    assert note is None
-    # 旧主定位排到队首（candidates 顺序 = 回退优先级，它原本最强）
-    assert kept[0] == {"kind": "css", "selector": "old.css", "matchedCount": 2}
-    assert [item["selector"] for item in kept[1:]] == ['input[name="q"]']
-    # 提升是「交换」，不是「覆盖」：一条备选都没少
-    assert len(kept) == len(candidates)
-    assert candidates[0]["selector"] == 'input[name="q"]'  # 入参不被就地改写
+    assert not hasattr(form, "tabs")
+    assert not hasattr(form, "preview_shot")
+    assert not hasattr(form, "selector_xpath_radio")
+    assert not hasattr(form, "anchor_add_button")
 
 
-def test_promote_candidate_reports_when_old_primary_cannot_be_kept(qapp):
-    """旧主定位命中数为 0 无法表示成合法候选（契约要求 ≥1）→ 返回提示而非静默丢弃。"""
-    from rpa_core.gui.element_editor import promote_candidate
-
-    kept, css, count, note = promote_candidate(
-        [{"kind": "id", "selector": "#a", "matchedCount": 1}],
-        0,
-        current_css="ghost.css",
-        current_count=0,
-    )
-    assert css == "#a"
-    assert count == 1
-    assert note is not None and "ghost.css" in note
-    assert [item["selector"] for item in kept] == []
-
-
-def test_promote_candidate_on_same_selector_does_not_duplicate(qapp):
-    """提升的候选与主选择器相同时不产生重复条目。"""
-    from rpa_core.gui.element_editor import promote_candidate
-
-    kept, css, count, note = promote_candidate(
-        [{"kind": "id", "selector": "#same", "matchedCount": 4}],
-        0,
-        current_css="#same",
-        current_count=1,
-    )
-    assert css == "#same"
-    assert count == 4
-    assert kept == []
-    assert note is None
-
-
-def test_promote_candidate_rejects_bad_index(qapp):
-    from rpa_core.gui.element_editor import promote_candidate
-
-    with pytest.raises(IndexError):
-        promote_candidate([], 0, current_css="", current_count=1)
-
-
-# ---- 对话框：浏览器 -----------------------------------------------------------
-def test_editor_browser_promotes_candidate(qapp):
-    from rpa_core.gui.element_editor import ElementEditorDialog
-
-    dialog = ElementEditorDialog(_browser_document(), name="searchBox")
-    assert dialog.css_edit.text() == "#sb_form_q"
-    assert dialog.candidate_list.count() == 3
-    assert "不唯一" in dialog.candidate_list.item(1).text()
-    assert "命中未实测" in dialog.candidate_list.item(2).text()
-
-    # 未选中任何候选：按钮禁用（不能靠「第一个」隐式生效）
-    assert not dialog.promote_button.isEnabled()
-    dialog.candidate_list.setCurrentRow(1)  # 不唯一的那条，但实测过 → 可选
-    assert dialog.promote_button.isEnabled()
-    dialog._promote()
-
-    assert dialog.css_edit.text() == 'input[name="q"]'
-    document = dialog.result_document()
-    assert document["verifyCount"] == 3  # 新主定位的实测命中数
-    assert document["selector"]["candidates"][0] == {
-        "kind": "css",
-        "selector": "#sb_form_q",
-        "matchedCount": 1,
-    }
-    assert len(document["selector"]["candidates"]) == 3  # 交换而非丢失
-
-    # 未实测的候选不允许提升：verifyCount 必须是实测值，宁可不给按钮
-    dialog.candidate_list.setCurrentRow(2)
-    assert not dialog.promote_button.isEnabled()
-
-
-# ---- 节点树（M44 S5）：勾层级 → 按 fragment 拼回主选择器 ----------------------
+# ---- 节点树（M44 S5）：勾层级 → 按fragment 拼回主选择器 ----------------------
 def _path_document() -> dict:
     """带祖先链的浏览器元素：path 形状与 content.js ``pathFor`` 的产出一致。"""
     return {
@@ -498,12 +669,18 @@ def test_path_tree_derives_checks_from_shortened_css(qapp):
 
 
 def test_path_tree_absent_without_path(qapp):
-    """老元素没有 path：不建树也不摆空壳（树是加分项，不是门槛）。"""
+    """老元素没有 path：不建树，但**要说清为什么空**（不是摆个空壳）。"""
     from rpa_core.gui.element_editor import ElementEditorForm
 
     form = ElementEditorForm(_browser_document())
-    assert not hasattr(form, "path_list")
-    assert not hasattr(form, "path_label")
+    assert form.path_list is None          # 没有控件，不是空控件
+    assert form.attr_table is None
+    labels = [
+        label.text()
+        for label in form.locate_page.findChildren(type(form.info_label))
+        if label.text()
+    ]
+    assert any("没有捕获时的节点路径" in text for text in labels)
 
 
 def test_path_survives_edit_roundtrip(qapp):
@@ -544,8 +721,7 @@ def test_editor_browser_output_passes_the_real_contract(qapp):
     from rpa_core.model.capture import selector_errors, validate_element_document
 
     dialog = ElementEditorDialog(_browser_document(), name="searchBox")
-    dialog.candidate_list.setCurrentRow(1)
-    dialog._promote()
+    dialog.css_edit.setText('input[name="q"]')
     dialog.accept()
     element = validate_element_document(dialog.result_document())
     assert selector_errors(element) == []
@@ -722,7 +898,7 @@ def _fake_editor(result_document: dict | None):
 
         def __init__(
             self, document, *, name,
-            preview_css=None, clear_preview_css=None, parent=None,
+            preview_css=None, clear_preview_css=None, shot_css=None, parent=None,
         ):
             super().__init__(parent)
             type(self).seen.append((name, document))
@@ -822,11 +998,13 @@ def _path_document_with_candidates() -> dict:
     return doc
 
 
-def test_path_tree_resyncs_checks_after_candidate_promotion(qapp):
-    """提升候选会改主 css，树的勾选态必须**跟着**回读。
+def test_path_tree_resyncs_checks_from_current_css(qapp):
+    """树的勾选态始终按**当前**主 css 回读（M47.11 替代原「提升后回读」判据）。
 
-    M44 残留 R2：勾选态反推只在建树时做一次——提升后树停在旧勾选，中间态里
-    「树显示的层级」与「主选择器实际是哪条」是两回事，下一次勾选才会被重写。
+    M44 残留 R2 的教训在候选 UI 移除后换了入口：勾选态不能只在建树时算一次，
+    之后任何改 css 的动作都要让它跟着回读，否则中间态里「树显示的层级」与
+    「主选择器实际是哪条」是两回事。原判据靠 ``_promote()`` 触发，现改为直接调
+    ``_sync_path_checks_from_css()`` —— 判的是**回读本身**，而不是某个已删的入口。
     """
     from PySide6.QtCore import Qt
 
@@ -843,22 +1021,20 @@ def test_path_tree_resyncs_checks_after_candidate_promotion(qapp):
     form.path_list.item(0).setCheckState(Qt.CheckState.Unchecked)
     assert form.css_edit.text() == "div.wrap > button.ok:nth-of-type(2)"
 
-    # 提升的候选恰是路径后缀：回读后勾选态维持「末两级」
-    form.candidate_list.setCurrentRow(0)
-    form._promote()
-    assert form.css_edit.text() == "div.wrap > button.ok:nth-of-type(2)"
+    # css 改成路径的后缀 → 回读后维持「末两级」
+    form.css_edit.setText("div.wrap > button.ok:nth-of-type(2)")
+    form._sync_path_checks_from_css()
     assert form.path_list.item(0).checkState() == Qt.CheckState.Unchecked
     assert form.path_list.item(1).checkState() == Qt.CheckState.Checked
     assert form.path_list.item(2).checkState() == Qt.CheckState.Checked
 
-    # 提升的候选**不**出自路径：回读后回退「完整路径视角」（全勾）
-    form.candidate_list.setCurrentRow(0)
-    form._promote()
-    assert form.css_edit.text() == "button.ok"
+    # css **不**出自路径 → 回读后回退「完整路径视角」（全勾），而不是停在旧勾选
+    form.css_edit.setText("button.ok")
+    form._sync_path_checks_from_css()
     assert all(
         form.path_list.item(i).checkState() == Qt.CheckState.Checked
         for i in range(3)
-    ), "提升出不属于路径的 css 后，树应回退全勾而不是停在旧勾选"
+    ), "回读不出就从完整路径视角来，而不是停在旧勾选"
 
 
 # ---- Web 属性表（A1）：逐属性勾选 + 等于/包含编译回 fragment ------------------

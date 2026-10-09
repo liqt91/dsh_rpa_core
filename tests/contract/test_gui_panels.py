@@ -519,47 +519,38 @@ def _captured_browser_descriptor() -> dict:
     }
 
 
-def test_element_dialog_shows_candidates_with_matched_counts(qapp):
-    """候选必须被展示出来（含捕获时命中数）——此前只入库不展示。
+def test_element_dialog_has_no_candidate_ui_but_keeps_data(qapp):
+    """备选定位**界面整体移除**，但数据原样带回（M47.11）。
 
-    用户此前既不知道自愈能力存在，也无从在命中多个时挑一个更稳的候选。
-    现在它们就在确认框的编辑区里（比只读展示更进一步：点一下即设为主定位）。
+    维护者「备选移除吧」——实测几次捕捉都没看到过备选定位，且候选面本身太窄
+    （``content.js`` 的 ``candidatesFor`` 只推``#id`` + 7 个属性，现代组件恒空）。
+    但``selector.candidates`` 必须**留在文档里**：运行期自愈
+    （``executors.browser._element_candidates``）按失败 selector 反查它做回退，
+    删数据等于悄悄拆掉 M28。
     """
     from rpa_core.gui.element_panel import ElementDialog
 
-    dialog = ElementDialog(_captured_browser_descriptor(), default_name="searchBox")
-    items = [
-        dialog.form.candidate_list.item(index).text()
-        for index in range(dialog.form.candidate_list.count())
-    ]
-    assert len(items) == 2
-    assert "备选定位 2 条" in dialog.form.candidates_label.text()
-    assert "[id] #sb_form_q" in items[0]
-    assert "命中 1" in items[0]
-    assert 'input[name="q"]' in items[1]
+    descriptor = _captured_browser_descriptor()
+    dialog = ElementDialog(descriptor, default_name="searchBox")
+    for gone in ("candidate_list", "candidates_label", "promote_button"):
+        assert not hasattr(dialog.form, gone), gone
+
+    document = descriptor["selector"]["candidates"]
+    dialog.accept()
+    # result_document 返回 (元素名, 文档)
+    _name, result = dialog.result_document()
+    assert result["selector"]["candidates"] == document
 
 
-def test_element_dialog_flags_non_unique_candidate(qapp):
-    """``matchedCount > 1`` 的候选要如实标「不唯一」。
-
-    回退到不唯一的候选可能点到别的元素 —— 这正是运行期自愈最危险的一步。
-    标出来让用户自己做判断，而不是替他过滤掉（过滤会隐藏真实的可选项）。
-    """
+def test_element_dialog_shows_preview_and_locate_tabs(qapp):
+    """确认框里browser 元素是影刀式两页签（预览 / 精准定位），无 AI 页签。"""
     from rpa_core.gui.element_panel import ElementDialog
 
     dialog = ElementDialog(_captured_browser_descriptor(), default_name="searchBox")
-    # 候选现在归编辑区（`ElementEditorForm` 的候选列表，点一下即设为主定位），
-    # 不再是确认框里的只读文本块 —— 判据跟着读列表项。
-    items = [
-        dialog.form.candidate_list.item(index).text()
-        for index in range(dialog.form.candidate_list.count())
-    ]
-    id_line = next(line for line in items if "#sb_form_q" in line)
-    attr_line = next(line for line in items if 'input[name="q"]' in line)
-    assert "命中 1" in id_line
-    assert "不唯一" not in id_line
-    assert "命中 3" in attr_line
-    assert "不唯一" in attr_line
+    titles = [dialog.form.tabs.tabText(i) for i in range(dialog.form.tabs.count())]
+    assert titles == ["预览", "精准定位"]
+    assert dialog.form.selector_xpath_radio.isEnabled() is False
+    assert dialog.form.anchor_add_button.isEnabled() is False
 
 
 def test_element_dialog_shows_semantic_features_and_fingerprint(qapp):
@@ -583,41 +574,32 @@ def test_element_dialog_shows_semantic_features_and_fingerprint(qapp):
     assert "rect: 300×40 @ (10,20)" in meta
 
 
-def test_element_dialog_candidates_section_is_browser_only(qapp):
-    """候选列表是 browser 专属节：「收集到 0 条」与「没有这个概念」不能混成一件事。
+def test_element_dialog_shot_channel_is_forwarded(qapp):
+    """确认框把``shot_css`` 透给编辑区：预览页签切过去才拍截图。
 
-    - browser 收集 0 条 —— 编辑区仍要**明说**「没有收集到备选定位」。候选是运行期
-      自愈的依据（主选择器失效后按序回退），「一条都没有」本身是有意义的信息，
-      静默留白会让人以为界面没显示出来。
-    - desktop 没有候选概念（其回退逻辑不落盘）—— 这一节**整节不存在**（属性都没有），
-      否则会误导用户去找一个不存在的东西。
-
-    此前这两件事被同一个「隐藏」表达盖住；改成读控件本身后，口径反而更硬：
-    桌面侧不是「标签为空」，而是「连控件都没建」。
+    接线判据：确认框与元素库编辑器是**两个入口**，两者都得能把截图通道接上——
+    只在一个入口接上，症状是「在元素库里能用，在捕获确认框里是空页签」。
     """
     from rpa_core.gui.element_panel import ElementDialog
 
-    plain = ElementDialog(
-        {"kind": "browser", "selector": {"css": "#kw"}, "verifyCount": 1, "metadata": {}},
-        default_name="a",
-    )
-    assert plain.form.candidate_list.count() == 0
-    assert "没有收集到备选定位" in plain.form.candidates_label.text()
+    seen: list[dict] = []
 
-    desktop = ElementDialog(
-        {
-            "kind": "desktop",
-            "selector": {"locator": {"controlType": "Button"}},
-            "verifyCount": 1,
-            "metadata": {"controlType": "Button"},
-        },
-        default_name="b",
+    def shot(css, **_kwargs):
+        seen.append({"css": css})
+        return {"count": 1}
+
+    dialog = ElementDialog(
+        _captured_browser_descriptor(),
+        default_name="searchBox",
+        preview_css=lambda _css: {"count": 1},
+        clear_preview_css=lambda: {"count": 0},
+        shot_css=shot,
     )
-    assert not hasattr(desktop.form, "candidate_list")
-    assert not hasattr(desktop.form, "candidates_label")
-    # desktop 的元数据里不该冒出 browser 的语义特征行
-    assert "role:" not in desktop.meta_label.text()
-    assert "url:" not in desktop.meta_label.text()
+    dialog.form._preview_timer.stop()
+    dialog.form._run_shot()
+    assert [item["css"] for item in seen] == [
+        _captured_browser_descriptor()["selector"]["css"]
+    ]
 
 
 def _captured_desktop_descriptor() -> dict:

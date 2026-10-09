@@ -223,10 +223,11 @@ class ElementDialog(QDialog):
     """捕获确认对话框 —— **捕获即编辑**（对齐影刀「元素编辑器」那一屏）。
 
     - 名称可改（默认名由调用方给；同名覆盖保护在 app 侧确认）；
-    - **编辑区复用 `ElementEditorForm`**：browser 可就地改主 css / 点一下把某个候选
-      设为主定位；desktop 直接勾 locator 字段（不再让用户对着
-      `{"backend": "win32", "controlId": 3}` 想办法）。就地结构校验来自同一套模型
-      判据，与元素库编辑器**行为一致**；
+    - **编辑区复用 `ElementEditorForm`**：browser 走影刀式两页签（预览 = 页面截图 +
+      元素红框 / 精准定位 = 节点树 + 属性表并排），底部「默认选择器 / XPath」单选与
+      「锚点 + 添加」（后两者按维护者要求**置灰**，见 M51）；desktop 直接勾 locator
+      字段（不再让用户对着 `{"backend": "win32", "controlId": 3}` 想办法）。就地结构
+      校验来自同一套模型判据，与元素库编辑器**行为一致**；
     - metadata 只读展示（tag/id/classes/text/rect，desktop 另含
       controlType/automationId/window，browser 另含语义特征与页面指纹）；
     - 捕获时命中数：1 绿、其他红（对齐 Web dlg-verify ok/bad）；
@@ -246,6 +247,7 @@ class ElementDialog(QDialog):
         verify_css: Callable[[str], dict] | None = None,
         preview_css: Callable[[str], dict] | None = None,
         clear_preview_css: Callable[[], dict] | None = None,
+        shot_css: Callable[..., dict] | None = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -275,7 +277,7 @@ class ElementDialog(QDialog):
         form.addRow("元素名", self.name_edit)
         layout.addLayout(form)
 
-        # 编辑区：与元素库编辑器**同一份**实现（可就地改主 css / 提升候选 / 勾 locator
+        # 编辑区：与元素库编辑器**同一份**实现（browser 走页签布局 / desktop 勾 locator
         # 字段），就地结构校验也来自同一套模型判据。此前这里是一个 selector 文本框——
         # 桌面元素就是一行 locator JSON，用户要勾字段得先保存、再去元素库点「编辑」。
         self.form = ElementEditorForm(descriptor, parent=self)
@@ -284,7 +286,7 @@ class ElementDialog(QDialog):
         # 接线；关窗（含「重新捕获」）一律清场——预览框不能留在页面上陪用户捕获。
         self._live_preview = descriptor.get("kind") == "browser" and preview_css is not None
         if self._live_preview:
-            self.form.enable_live_preview(preview_css, clear_preview_css)
+            self.form.enable_live_preview(preview_css, clear_preview_css, shot_css)
             self.finished.connect(self.form.shutdown_preview)
         # 有实时预览时不再摆确认框自己的静态命中数：两处「命中 X 个」重复且会互相矛盾。
         if not self._live_preview:
@@ -296,9 +298,13 @@ class ElementDialog(QDialog):
         self.meta_label.setStyleSheet(f"color: {TEXT_SECONDARY};")
         layout.addWidget(self.meta_label)
 
-        # 备选定位不再是只读标签：它归编辑区管（`ElementEditorForm` 的候选列表，
-        # 点一下即设为主定位）。只读展示与可编辑列表摆在同一屏是重复信息，
-        # 而「只读」正是确认框此前做不到「捕获即编辑」的一部分。
+        # 备选定位**整个界面移除**（M47.11，维护者「备选移除吧」）：此前这里挂过一条
+        # 只读候选文本，现在编辑区也不再摆候选列表（`candidates_label` /
+        # `candidate_list` / `promote_button` 都不存在了）——只读展示与可编辑列表摆在
+        # 同一屏本就是重复信息。
+        #
+        # **数据仍在**：`result_document` 原样带回 `selector.candidates`，运行期自愈
+        # （`executors.browser._element_candidates`）照旧按它反查回退。删界面 ≠ 删数据。
         # （`candidates_text` 保留：它是 Web 侧 `elementCandidateLines` 的对等物。）
 
         # 校验错误提示（对话框内联展示，不弹 QMessageBox，保持可测试性）

@@ -15,7 +15,7 @@ const HOST_NAME = "com.rpa_core.ext_bridge";
 // 快照（2026-09-29 真机排障：仓库已修好「已开网页无红框」，但浏览器还跑着旧 background，
 // 表现成「修复无效」）。把标识随 ack/进度/结果回传，host 侧对账即可判「扩展过期」，
 // 不用再靠症状猜。
-const EXT_BUILD = "0.6.3";
+const EXT_BUILD = "0.7.0";
 const RECONNECT_MS = 3000;      // 断开后的重连退避
 const ALARM_NAME = "rpa-bridge-reconnect";  // SW 被回收时的兜底拉起（MV3 alarm 最小 30s）
 const PERMISSION_KEY = "rpaExecPermission";
@@ -362,6 +362,10 @@ const VERIFY_BACKGROUND_ANSWER_DELAY_MS = 120;
 
 async function runVerify(msg) {
   const mode = String(msg.mode || "flash");
+  // 预览页签要的是「页面截图 + 红框」（M47.11，对齐影刀）：截图本身由 host 的
+  // `wantShot` 触发（编辑区只在**点开预览页签**时才要图，普通 flash 校验不要——
+  // 每次都截一张 base64 PNG 既慢又占内存）。
+  const wantShot = msg.wantShot === true;
   const reply = {
     type: "capture_verify_result",
     sessionId: msg.sessionId || null,
@@ -386,11 +390,18 @@ async function runVerify(msg) {
       post({ ...reply, error: "no-active-tab" });
       return;
     }
+    // 要截图时让 content 把黄框**驻留**住：截图必须先有框、后拍照，否则拍到空页面。
+    // 拍完由 content 自己 700ms 后清（见 shot 分支），不依赖 host 再发一次 clear。
+    const ask = {
+      type: "rpa-capture-verify",
+      css: String(msg.css || ""),
+      mode,
+      silent,
+      keepFlash: wantShot,
+    };
     let resp = null;
     try {
-      resp = await chrome.tabs.sendMessage(
-        tab.id, { type: "rpa-capture-verify", css: String(msg.css || ""), mode, silent }
-      );
+      resp = await chrome.tabs.sendMessage(tab.id, ask);
     } catch {
       // 没脚本 / 僵尸脚本：补注入后重试一次
       if (!(await ensureContentScript(tab))) {
@@ -398,17 +409,40 @@ async function runVerify(msg) {
         return;
       }
       try {
-        resp = await chrome.tabs.sendMessage(
-          tab.id, { type: "rpa-capture-verify", css: String(msg.css || ""), mode, silent }
-        );
+        resp = await chrome.tabs.sendMessage(tab.id, ask);
       } catch {
         post({ ...reply, error: "no-response", url: tab.url || "" });
         return;
       }
     }
-    post({ ...reply, ...(resp || {}), silent, url: tab.url || "" });
+    // 截图：在 content **已经把黄框画好之后**拍当前视口（captureVisibleTab 拍的就是
+    // 视口，与我们回传的 rect/viewport 同一坐标系）。失败不当校验失败——截图是观感
+    // 增强，命中数才是判据；故只在回传里省掉 dataUrl，其余照旧。
+    let shot = null;
+    if (wantShot && !silent) {
+      shot = await captureVisible(tab);
+    }
+    post({
+      ...reply,
+      ...(resp || {}),
+      silent,
+      url: tab.url || "",
+      ...(shot ? { dataUrl: shot } : {}),
+    });
   } catch (err) {
     post({ ...reply, error: String((err && err.message) || err) });
+  }
+}
+
+// 当前视口截图（base64 data:image/png）。与 op `screenshot` 同一个 API，但这里
+// **不抛**：拿不到图（无 windowId / 权限 / 浏览器限制）只返回 null，让校验照常收口。
+async function captureVisible(tab) {
+  try {
+    if (!tab || !tab.windowId) return null;
+    const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, { format: "png" });
+    return dataUrl || null;
+  } catch {
+    return null;
   }
 }
 

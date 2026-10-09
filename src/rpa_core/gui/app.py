@@ -21,6 +21,7 @@ import json
 import sys
 import threading
 import time
+from functools import partial
 from pathlib import Path
 
 # Qt 绑定在模块顶层导入：本模块本身已被 CLI 延迟导入，未装 extra 时不会触达。
@@ -2907,18 +2908,23 @@ class MainWindow(QMainWindow):
         from rpa_core.gui.element_editor import ElementEditorDialog
 
         # 编辑中预览（M48）：browser 元素接上按需通道（同 M47 校验的实例语义）
-        preview_css = clear_preview_css = None
+        # 截图通道（M47.11）：「预览」页签切过去才拍一张带红框的页面截图。
+        preview_css = clear_preview_css = shot_css = None
         if document.get("kind") == "browser":
             from rpa_core.capture.verify import ElementVerifier
 
             verifier = ElementVerifier()
             preview_css = verifier.preview
             clear_preview_css = verifier.clear_preview
+            # verify(css, want_shot=True) → 同一通道多带一个「顺便截图」，
+            # 不另开方法：截图与校验必须**同一瞬间**（框要先画好再拍）。
+            shot_css = partial(verifier.verify, want_shot=True)
         dialog = ElementEditorDialog(
             document,
             name=name,
             preview_css=preview_css,
             clear_preview_css=clear_preview_css,
+            shot_css=shot_css,
             parent=self,
         )
         # 与捕获确认框同款置顶：用户在浏览器/目标窗口里刚操作完，本进程是后台应用
@@ -3386,7 +3392,7 @@ class MainWindow(QMainWindow):
 
         # 活体校验（M47）+ 编辑中预览（M48）：browser 元素接上按需校验通道；
         # desktop 元素不接（桌面腿活体查找未实现，按钮永远转圈不如不摆）。
-        verify_css = preview_css = clear_preview_css = None
+        verify_css = preview_css = clear_preview_css = shot_css = None
         if descriptor.get("kind") == "browser":
             from rpa_core.capture.verify import ElementVerifier
 
@@ -3394,12 +3400,14 @@ class MainWindow(QMainWindow):
             verify_css = verifier.verify
             preview_css = verifier.preview
             clear_preview_css = verifier.clear_preview
+            shot_css = partial(verifier.verify, want_shot=True)
         dialog = ElementDialog(
             descriptor,
             default_name=suggest_element_name(existing, hint),
             verify_css=verify_css,
             preview_css=preview_css,
             clear_preview_css=clear_preview_css,
+            shot_css=shot_css,
             parent=self,
         )
         # 此刻用户在浏览器里刚完成捕获，我们是后台应用：不置顶的话对话框会
