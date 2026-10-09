@@ -16,6 +16,7 @@ import pytest
 from rpa_core.capture.screen_shot import (
     box_in_window,
     browser_box_in_window,
+    browser_crop_in_window,
     browser_preview_shot,
     desktop_preview_shot,
     grab_window,
@@ -95,63 +96,184 @@ def test_desktop_box_needs_window_origin():
 
 
 # ---- 浏览器腿：视口 CSS 像素 → 坐标截屏图内像素 ----------------------------
+#
+# **真机实测基准（2026-10-09，%TEMP%/rpa-capture-trace.log 的一行）**：
+#
+#   rect        = {left: 449, top: 79, width: 752, height: 24}
+#   viewport    = {width: 1539, height: 785, dpr: 1,
+#                  screenX: 229, screenY: -939,
+#                  outerWidth: 1555, outerHeight: 936}
+#   windowOrigin= [229, -939]        imageSize = [1555, 936]
+#
+# 两个由此定案的量（下面每条判据都拿它们当基准）：
+#
+#   1) **screenY恒等于 windowOrigin[1]** ⇒ screenX/screenY 是**窗口**左上角的
+#      屏幕坐标，**不是视口的**。旧公式 `screenY - win.top` 恒等于 0，整整少算
+#      了标签栏+地址栏 ⇒ 裁剪区偏上 143px（维护者报「截图位置偏上」）。
+#   2) **imageSize == outerWidth/outerHeight**（1555/936）且 dpr=1 ⇒ 图宽对应的是
+#      **窗口**宽，所以 scale 的分母必须是 outerWidth。旧公式用 viewport.width
+#      算出 1555/1539 = 1.0104，凭空放大 1%。
+#
+# 正确视口顶 = outerHeight - viewport.height - border = 936 - 785 - 8 = **143**。
+# border = (outerWidth - viewport.width) / 2 = (1555-1539)/2 = **8**（Windows 那圈
+# 不可见 resize border，真机每侧 8px）。
+
+#: 真机那一行 viewport（**逐字段照抄 trace**，不是手搓的数）
+REAL_VIEWPORT = {
+    "width": 1539, "height": 785, "dpr": 1,
+    "screenX": 229, "screenY": -939,
+    "outerWidth": 1555, "outerHeight": 936,
+}
+#: 真机那一行窗口矩形（物理像素，负Y = 窗口在副屏上方）
+REAL_ORIGIN = (229, -939)
+REAL_IMAGE = (1555, 936)
+REAL_BORDER = 8.0
+REAL_VIEWPORT_TOP = 143.0
+
+
+def test_browser_viewport_origin_is_not_the_window_origin():
+    """**本轮真机 bug 的正面判据**：视口顶必须落在 143px，而不是 0。
+
+    这条是整个 M47.12 换算的锚：旧公式拿 ``screenY - win.top`` 当视口偏移，
+    而真机这两个值**完全相等** ⇒ 偏移恒为 0 ⇒ 元素被画/裁在标签栏那一段里，
+    整体偏上 143px。判据直接把真机数字钉成期望值——**换一个屏幕布置就红**，
+    因为它压根没读屏幕坐标。
+    """
+    from rpa_core.capture.screen_shot import browser_viewport_in_window
+
+    found = browser_viewport_in_window(REAL_VIEWPORT, REAL_IMAGE)
+    assert found is not None
+    origin_x, origin_y, scale = found
+    # dpr=1 ⇒ 图像素 == CSS 像素，origin 就是 CSS 值本身
+    assert scale == pytest.approx(1.0), "真机 dpr=1，缩放比就该是 1（不是 1.0104）"
+    assert origin_y == pytest.approx(REAL_VIEWPORT_TOP)
+    assert origin_x == pytest.approx(REAL_BORDER)
+    # **反向钉**：屏幕坐标那个减法必须给不出这个值（否则等于没修）
+    assert REAL_VIEWPORT["screenY"] - REAL_ORIGIN[1] == 0
+    assert origin_y != pytest.approx(0.0)
+
+
+def test_browser_viewport_origin_ignores_where_the_window_is():
+    """把窗口搬到**任意屏幕坐标**（含负坐标、多屏不同高度）⇒ 视口偏移**不变**。
+
+    维护者报「有两块屏，一块比另一块更偏上」——这轮修复的关键性质就是
+    **位置只由窗口内部布局决定**：截图是从窗口左上角起的那块矩形，窗口在屏幕上
+    哪儿跟「视口离窗口顶多远」毫无关系。这条把该性质钉住，否则下一个人又会
+    引入屏幕坐标。
+    """
+    from rpa_core.capture.screen_shot import browser_viewport_in_window
+
+    base = browser_viewport_in_window(REAL_VIEWPORT, REAL_IMAGE)
+    assert base is not None
+    # 换到主屏 (0,0)、换到左边的副屏 (-1920, -240)、换到右下 (1920, 0)
+    for moved in (
+        {**REAL_VIEWPORT, "screenX": 0, "screenY": 0},
+        {**REAL_VIEWPORT, "screenX": -1920, "screenY": -240},
+        {**REAL_VIEWPORT, "screenX": 1920, "screenY": 0},
+    ):
+        assert browser_viewport_in_window(moved, REAL_IMAGE) == base
+
+
+def test_browser_viewport_origin_survives_dpi_scaling():
+    """150% 缩放下偏移按比例放大（**不缩放**才是 bug——那样元素会挤在左上角）。
+
+    模拟真机 150%：CSS 尺寸不变、图变 1.5 倍。**图宽必须给 1.5 倍的精确值**
+    （`round(1555*1.5)=2333` 会让 scale 变成 1.4997，判据就红在取整上而不是红在
+    「偏移有没有跟着缩放」上——第一版栽在这）。
+    """
+    from rpa_core.capture.screen_shot import browser_viewport_in_window
+
+    scaled = 1555 * 1.5, 936 * 1.5
+    found = browser_viewport_in_window(REAL_VIEWPORT, scaled)
+    assert found is not None
+    _, origin_y, scale = found
+    assert scale == pytest.approx(1.5)
+    assert origin_y == pytest.approx(REAL_VIEWPORT_TOP * 1.5)
+
+
+def test_browser_box_uses_window_scale_and_real_viewport_offset():
+    """浏览器腿：``图内 = rect_CSS × scale + 视口偏移``（用真机数字端到端算）。
+
+    真机那个元素 top=79 ⇒ 图内 y = 79 + 143 = 222；宽 752、dpr=1 ⇒ 宽 752。
+    旧公式会给 y=79（整整少 143），这就是「偏上」。
+    """
+    box = browser_box_in_window(
+        {"left": 449, "top": 79, "width": 752, "height": 24},
+        REAL_VIEWPORT,
+        REAL_IMAGE,
+    )
+    assert box is not None
+    assert box["y"] == pytest.approx(79 + 143)
+    assert box["x"] == pytest.approx(449 + 8)
+    assert box["width"] == pytest.approx(752.0)
+    assert box["height"] == pytest.approx(24.0)
+    # 与裁剪那条路**必须落在同一位置**（两者只差表达，不差坐标）
+    crop = browser_crop_in_window(
+        {"left": 449, "top": 79, "width": 752, "height": 24},
+        REAL_VIEWPORT,
+        REAL_IMAGE,
+    )
+    assert crop is not None
+    assert crop["y"] <= box["y"] <= crop["y"] + crop["height"]
+    assert crop["x"] <= box["x"] <= crop["x"] + crop["width"]
+
 
 def test_browser_box_scales_by_image_width_then_adds_viewport_origin():
-    """浏览器腿换算：``图内 = rect_CSS × (图宽/视口宽) + (视口原点 − 窗口原点)×scale``。
+    """浏览器腿换算：``图内 = rect_CSS × (图宽/窗口宽) + 视口在窗口内的偏移``。
 
-    取例：视口 1280 宽、图宽 2560 ⇒ scale=2；视口屏幕原点 (0,0)、窗口原点 (0,0)
-    ⇒ 偏移 0。rect (100,50,200,80) ⇒ 图内 (200,100,400,160)。
+    取例：视口 1280×720、窗口 1280×720（无边框）⇒ scale=1、偏移 0。
+    rect (100,50,200,80) ⇒ 图内 (100,50,200,80)。
     """
     box = browser_box_in_window(
         {"left": 100, "top": 50, "width": 200, "height": 80},
-        {"width": 1280, "height": 720, "screenX": 0, "screenY": 0},
-        (2560, 1440),
-        (0, 0),
+        {"width": 1280, "height": 720, "outerWidth": 1280, "outerHeight": 720},
+        (1280, 720),
     )
-    assert box == {"x": 200.0, "y": 100.0, "width": 400.0, "height": 160.0}
+    assert box == {"x": 100.0, "y": 50.0, "width": 200.0, "height": 80.0}
 
 
-def test_browser_box_accounts_for_viewport_origin_offset():
-    """视口不在窗口左上角（标签栏 + 地址栏）⇒ 偏移必须加上，否则框整体上移。
+def test_browser_box_accounts_for_chrome_height_above_the_viewport():
+    """窗口比视口高（标签栏 + 地址栏）⇒ 偏移必须加上，否则框整体上移。
 
-    取例：视口屏幕原点 (0,80)、窗口原点 (0,0)、scale=1 ⇒ rect.top=10 应落在 y=90。
-    **这条是「host 侧推不出视口偏移、必须扩展回传」的直接后果判据**：
-    少了它，红框会正好差一个标签栏的高度（实测这类偏移是 80~140px 量级）。
+    取例：视口 1280×720，窗口 1280×800 ⇒ 差 80px 就是 chrome + 边框。
+    **这条是「host 侧推不出标签栏高度、必须扩展回 outerWidth/outerHeight」的直接
+    后果判据**：少了它，框会正好差一个标签栏的高度（实测这类偏移是 80~150px 量级）。
     """
     box = browser_box_in_window(
         {"left": 10, "top": 10, "width": 100, "height": 30},
-        {"width": 1280, "height": 720, "screenX": 0, "screenY": 80},
-        (1280, 720),
-        (0, 0),
+        {"width": 1280, "height": 720, "outerWidth": 1280, "outerHeight": 800},
+        (1280, 800),
     )
     assert box["y"] == pytest.approx(90.0)
     assert box["x"] == pytest.approx(10.0)
 
 
-def test_browser_box_uses_image_width_not_dpr():
-    """缩放取「图宽 /视口宽」，**不用 dpr**（分数缩放下两者可能差 1px）。
+def test_browser_box_scale_divides_by_window_width_not_viewport():
+    """缩放的分母是**窗口**宽，不是视口宽、也不是 dpr。
 
-    取例：视口 1280、图宽 2564（不是 2560！）⇒ scale=2.003125；
-    若按 dpr=2 算，x=100 会落在 200，而正确值是 200.3125。1px 在小元素上就是
-    「框没套住」。
+    取例：视口 1280、**窗口 1296**（多出 16px 边框+滚动条）、图宽 2592⇒ scale=2。
+    若错用 viewport.width 当分母⇒ 2592/1280 = 2.025，x=100 会落在 202.5 而不是
+    200——真机上就是「框整体偏大/偏小」（实测 1555/1539 = 1.0104）。
     """
+    viewport = {"width": 1280, "height": 720, "outerWidth": 1296, "outerHeight": 736}
     box = browser_box_in_window(
         {"left": 100, "top": 0, "width": 50, "height": 20},
-        {"width": 1280, "height": 720, "screenX": 0, "screenY": 0, "dpr": 2},
-        (2564, 1440),
-        (0, 0),
+        viewport,
+        (2592, 1472),
     )
-    assert box["x"] == pytest.approx(200.3125)
-    assert box["width"] == pytest.approx(100.15625)
+    assert box is not None
+    assert box["width"] == pytest.approx(100.0), "宽度应正好 2×"
+    wrong = 2592 / 1280
+    assert wrong == pytest.approx(2.025)
+    assert box["width"] != pytest.approx(50 * wrong), "错用视口宽当分母会给这个值"
 
 
 def test_browser_box_clamps_partially_scrolled_out():
     """元素一部分在窗口外：钳到图内，框贴着边（而不是画到图外看不见）。"""
     box = browser_box_in_window(
         {"left": -50, "top": 10, "width": 100, "height": 40},
-        {"width": 1280, "height": 720, "screenX": 0, "screenY": 0},
+        {"width": 1280, "height": 720, "outerWidth": 1280, "outerHeight": 720},
         (1280, 720),
-        (0, 0),
     )
     assert box["x"] == 0.0
     assert box["width"] == pytest.approx(50.0)
@@ -161,9 +283,8 @@ def test_browser_box_returns_none_when_fully_outside():
     """完全在窗口外（滚出视口）⇒ 不画框。"""
     box = browser_box_in_window(
         {"left": 5000, "top": 10, "width": 100, "height": 40},
-        {"width": 1280, "height": 720, "screenX": 0, "screenY": 0},
+        {"width": 1280, "height": 720, "outerWidth": 1280, "outerHeight": 720},
         (1280, 720),
-        (0, 0),
     )
     assert box is None
 
@@ -171,45 +292,50 @@ def test_browser_box_returns_none_when_fully_outside():
 @pytest.mark.parametrize(
     "rect,viewport,image_size",
     [
-        (None, {"width": 100, "screenX": 0, "screenY": 0}, (100, 100)),
-        ({}, {"width": 100, "screenX": 0, "screenY": 0}, (100, 100)),
+        (None, {"width": 100, "height": 100, "outerWidth": 100, "outerHeight": 100},
+         (100, 100)),
+        ({}, {"width": 100, "height": 100, "outerWidth": 100, "outerHeight": 100},
+         (100, 100)),
         ({"left": 0, "top": 0, "width": 5, "height": 5}, None, (100, 100)),
         ({"left": 0, "top": 0, "width": 5, "height": 5}, {"width": 100}, (100, 100)),
-        (
-            {"left": 0, "top": 0, "width": 5, "height": 5},
-            {"width": 100, "screenX": 0, "screenY": 0},
-            None,
-        ),
-        (
-            {"left": 0, "top": 0, "width": 0, "height": 5},
-            {"width": 100, "screenX": 0, "screenY": 0},
-            (100, 100),
-        ),
-        (
-            {"left": 0, "top": 0, "width": 5, "height": 5},
-            {"width": 0, "screenX": 0, "screenY": 0},
-            (100, 100),
-        ),
+        # **缺 outerWidth/outerHeight**（旧版扩展）⇒ 不给位置：宁可不出，
+        # 也不给一个偏上百像素的裁剪区。
+        ({"left": 0, "top": 0, "width": 5, "height": 5},
+         {"width": 100, "height": 100}, (100, 100)),
+        ({"left": 0, "top": 0, "width": 5, "height": 5},
+         {"width": 100, "height": 100, "outerWidth": 100}, (100, 100)),
+        ({"left": 0, "top": 0, "width": 5, "height": 5},
+         {"width": 100, "height": 100, "outerWidth": 100, "outerHeight": 100},
+         None),
+        ({"left": 0, "top": 0, "width": 0, "height": 5},
+         {"width": 100, "height": 100, "outerWidth": 100, "outerHeight": 100},
+         (100, 100)),
+        ({"left": 0, "top": 0, "width": 5, "height": 5},
+         {"width": 0, "height": 100, "outerWidth": 100, "outerHeight": 100},
+         (100, 100)),
+        ({"left": 0, "top": 0, "width": 5, "height": 5},
+         {"width": 100, "height": 100, "outerWidth": 0, "outerHeight": 100},
+         (100, 100)),
     ],
 )
 def test_browser_box_returns_none_on_incomplete_inputs(rect, viewport, image_size):
-    """缺 rect / 缺 viewport / 缺图宽 / 零面积 / 视口宽 0 ⇒ 都不画框。
+    """缺 rect / viewport / 窗口尺寸 / 零面积 / 视口宽 0 ⇒ 都不画框。
 
-    这些都是「数据不全」的真实情形（旧版扩展、扩展没给 screenX、图没解出来）。
-    判据要求**一律None 而不是抛异常或退化成假框**。
+    这些都是「数据不全」的真实情形（旧版扩展、扩展没给 outerWidth、图没解出来）。
+    判据要求**一律 None 而不是抛异常或退化成假框**。
     """
-    assert browser_box_in_window(rect, viewport, image_size, (0, 0)) is None
+    assert browser_box_in_window(rect, viewport, image_size) is None
 
 
 def test_browser_box_survives_junk_viewport_values():
     """viewport 里的值是字符串/None 时不能炸（扩展回传不受我们控制）。"""
     box = browser_box_in_window(
         {"left": 0, "top": 0, "width": 10, "height": 10},
-        {"width": "abc", "screenX": None, "screenY": None},
+        {"width": "abc", "height": None, "outerWidth": 100, "outerHeight": "x"},
         (100, 100),
-        (0, 0),
     )
     assert box is None
+
 
 
 # ---- grab_window / 服务层 ----------------------------------------------------
@@ -307,7 +433,7 @@ def test_desktop_service_layer_returns_shot_with_box():
 
 
 def test_browser_service_layer_scales_rect_by_actual_image_width():
-    """浏览器腿走通整条：红框 = rect×scale + 视口原点偏移×scale。
+    """浏览器腿走通整条：box = rect×scale + 视口在窗口内的偏移。
 
     替身的图是 1×1，所以这里只验「不抛 + 形状对」；精确的换算由上面的纯函数
     判据逐项钉。这一条的作用是**覆盖服务层的接线与 trace**（它曾藏着一个
@@ -319,7 +445,7 @@ def test_browser_service_layer_scales_rect_by_actual_image_width():
     shot = shot_for_browser(
         5150,
         {"left": 10, "top": 20, "width": 300, "height": 40},
-        {"width": 1280, "height": 720, "screenX": 12, "screenY": 84},
+        {"width": 1280, "height": 720, "outerWidth": 1280, "outerHeight": 720},
         api=api,
     )
     assert shot is not None
@@ -350,7 +476,9 @@ def test_capture_shot_reads_viewport_from_descriptor_top_level():
         "kind": "browser",
         "selector": {"css": "#kw"},
         "metadata": {"rect": {"left": 10, "top": 20, "width": 300, "height": 40}},
-        "viewport": {"width": 1280, "height": 720, "screenX": 12, "screenY": 84},
+        "viewport": {
+            "width": 1280, "height": 720, "outerWidth": 1280, "outerHeight": 720,
+        },
     }
     shot = capture_shot_from_descriptor(descriptor, 5150, api=FakeAPI(rect=(0, 0, 1930, 1040)))
     assert shot is not None
@@ -403,7 +531,9 @@ def test_browser_crop_never_draws_a_box():
         "kind": "browser",
         "selector": {"css": "#kw"},
         "metadata": {"rect": {"left": 100, "top": 200, "width": 300, "height": 40}},
-        "viewport": {"width": 1280, "height": 720, "screenX": 12, "screenY": 84},
+        "viewport": {
+            "width": 1280, "height": 720, "outerWidth": 1280, "outerHeight": 720,
+        },
     }
     shot = capture_shot_from_descriptor(
         descriptor, 5150, api=FakeAPI(rect=(0, 0, 1936, 1056))
@@ -413,33 +543,69 @@ def test_browser_crop_never_draws_a_box():
     assert "crop" in shot
 
 
+def test_browser_crop_on_real_machine_numbers_lands_on_the_element():
+    """**真机端到端**：把 2026-10-09 trace 那一行喂进去，裁剪区必须罩住元素。
+
+    这是本轮 bug（维护者报「截图位置偏上」）的正面判据。用真机数字而非手搓取样，
+    因为这组数里同时含**负屏幕坐标**（screenY=-939，窗口在副屏上方）、**非 1 的
+    视口/窗口差**（1539 vs 1555）以及**真 chrome 高度差**（785 vs 936）——三者
+    任何一条算错都会让断言红。
+
+    真机那个元素在图内应是 y = 79 + 143 = 222、高 24。旧公式给 79（少 143）
+    ⇒ 元素贴着裁剪区上沿/溢出，症状就是「位置偏上」。
+    """
+    from rpa_core.capture.screen_shot import browser_crop_in_window
+
+    crop = browser_crop_in_window(
+        {"left": 449, "top": 79, "width": 752, "height": 24},
+        REAL_VIEWPORT,
+        REAL_IMAGE,
+    )
+    assert crop is not None
+    el_x, el_y, el_w, el_h = 449 + 8, 79 + 143, 752.0, 24.0
+    assert crop["y"] <= el_y, "裁剪区上边界高于元素 ⇒ 元素被切掉"
+    assert crop["y"] + crop["height"] >= el_y + el_h, "裁剪区下边界在元素下方 ⇒偏上"
+    # 横向同理（左右边框那 8px 也要算进去）
+    assert crop["x"] <= el_x, "裁剪区左边界高于元素 ⇒ 元素被切掉"
+    assert crop["x"] + crop["width"] >= el_x + el_w, "裁剪区右边界在元素右侧"
+    # 元素在裁剪区里必须**偏上但可见**：上边留 1 倍高、下边也留 1 倍高
+    above = el_y - crop["y"]
+    below = crop["y"] + crop["height"] - (el_y + el_h)
+    assert above == pytest.approx(el_h), "上方上下文应约等于元素高"
+    assert below == pytest.approx(el_h), "下方上下文应约等于元素高"
+    # **反向钉**：旧公式（视口偏移当0）会把元素推到裁剪区上沿
+    assert crop["y"] != pytest.approx(0.0)
+
+
 def test_browser_crop_surrounds_the_element():
     """裁剪区必须**包含**元素，且各边留出上下文（不是紧贴元素的一条缝）。"""
     from rpa_core.capture.screen_shot import browser_crop_in_window
 
-    # 取样必须让元素**离图边足够远**：否则上下文先被钳到 0，本条就测不到
-    # 「留上下文」这件事了（第一版栽在这：元素左边界 177、pad 454⇒ 左侧全被钳掉，
-    # 断言 ``ex - crop.x >= 0.5*ew`` 变成在测钳位，不是在测上下文）。
+    # 取样必须让元素**四边都留得出**一倍上下文，否则本条就退化成在测钳位：
+    #   第一版栽在左边（元素 177 + pad 454 被钳到 0）；
+    #   第二版栽在右边（500+600=1100，看似够，但 600+400 上下文共 1100 <1936…
+    #     实际是垂直方向也不够，钳位后 crop.x 反而大于元素左边）；
+    #   第三版栽在**忘了乘 scale**（图 1936 / 窗口 1280 = 1.5125，我却按 1 写期望）。
+    viewport = {"width": 1280, "height": 720, "outerWidth": 1280, "outerHeight": 720}
+    img = (1936, 1056)
     crop = browser_crop_in_window(
-        {"left": 500, "top": 300, "width": 100, "height": 30},
-        {"width": 1280, "height": 720, "screenX": 12, "screenY": 84},
-        (1936, 1056),
-        (-8, -8),
+        {"left": 700, "top": 400, "width": 200, "height": 100},
+        viewport,
+        img,
     )
     assert crop is not None
-    # 元素经 scale 换算后的图内位置（先在 CSS 系里减、再乘 scale）
-    scale = 1936 / 1280
-    ex = (500 * scale) + 12 * scale - (-8)
-    ey = (300 * scale) + 84 * scale - (-8)
-    ew = 100 * scale
-    eh = 30 * scale
-    assert crop["x"] <= ex, "裁剪区左边界不能切掉元素"
-    assert crop["y"] <= ey, "裁剪区上边界不能切掉元素"
-    assert crop["x"] + crop["width"] >= ex + ew, "裁剪区右边界不能切掉元素"
-    assert crop["y"] + crop["height"] >= ey + eh, "裁剪区下边界不能切掉元素"
-    # 上下文：至少留出 0.5 倍元素尺寸的一圈（margin_ratio=1.0 ⇒ 各边一倍）
-    assert ex - crop["x"] >= 0.5 * ew
-    assert crop["x"] + crop["width"] - (ex + ew) >= 0.5 * ew
+    scale = img[0] / viewport["outerWidth"]  # 图是**窗口**的截图
+    ex, ey = 700 * scale, 400 * scale
+    ew, eh = 200 * scale, 100 * scale
+    # 上下文：各边留足一倍（margin_ratio=1.0），本取样下钳位不参与，才能测到这个
+    assert ex - crop["x"] == pytest.approx(ew)
+    assert crop["x"] + crop["width"] - (ex + ew) == pytest.approx(ew)
+    assert ey - crop["y"] == pytest.approx(eh)
+    assert crop["y"] + crop["height"] - (ey + eh) == pytest.approx(eh)
+    # 不许切掉元素
+    assert crop["x"] <= ex and crop["y"] <= ey
+    assert crop["x"] + crop["width"] >= ex + ew
+    assert crop["y"] + crop["height"] >= ey + eh
 
 
 def test_browser_crop_is_clamped_into_the_image():
@@ -448,9 +614,8 @@ def test_browser_crop_is_clamped_into_the_image():
 
     crop = browser_crop_in_window(
         {"left": 0, "top": 0, "width": 20, "height": 20},
-        {"width": 1280, "height": 720, "screenX": 0, "screenY": 0},
+        {"width": 1280, "height": 720, "outerWidth": 1280, "outerHeight": 720},
         (1936, 1056),
-        (-8, -8),
     )
     assert crop is not None
     assert crop["x"] >= 0 and crop["y"] >= 0
@@ -458,62 +623,48 @@ def test_browser_crop_is_clamped_into_the_image():
     assert crop["y"] + crop["height"] <= 1056
 
 
-def test_browser_crop_mixes_no_css_and_physical_pixels():
-    """坐标系必须**先在 CSS 系里减、再统一乘 scale**（真机 150% 缩放的真 bug）。
+def test_browser_crop_scales_the_chrome_offset_too():
+    """150% 缩放下，**chrome 偏移也要跟着乘 scale**（不乘就是「偏上」复发）。
 
-    原式写成 ``(screenX - win.left) * scale``，而 ``win.left`` 是**物理**像素
-    （win32 GetWindowRect）、``screenX`` 是 **CSS** 像素 ⇒ 150% 缩放下偏移错 50%，
-    框/裁剪区整体歪掉。这条用「错公式会给出一个**具体错值**」的方式钉住：
-    正确算法下元素左上角落在某个位置，错算法下会差 screenX 的 50%。
+    真机 150%：CSS 尺寸不变、图变1.5 倍。视口顶 = 143 CSS px ⇒ 图内 214.5。
+    旧公式的错法是「偏移按 1:1 算、只有 rect 乘 scale」——那样在 150% 下会偏
+    一半 chrome 高度。
     """
     from rpa_core.capture.screen_shot import browser_crop_in_window
 
-    screen_x, origin_x = 40, -8
-    scale = 1.5
     crop = browser_crop_in_window(
-        {"left": 0, "top": 0, "width": 100, "height": 20},
-        {"width": 1280, "height": 720, "screenX": screen_x, "screenY": 84},
-        (1920, 1080),
-        (origin_x, -8),
+        {"left": 100, "top": 200, "width": 100, "height": 20},
+        REAL_VIEWPORT,
+        (1555 * 1.5, 936 * 1.5),  # 精确 1.5 倍（取整会让判据红在舍入上）
     )
     assert crop is not None
-    # 正确：x = 0*scale + screen_x*scale - origin_x
-    correct = screen_x * scale - origin_x
-    # 错公式：x = (screen_x - origin_x) * scale
-    wrong = (screen_x - origin_x) * scale
-    assert wrong != correct, "本判据的坐标系前提失效（两者不该相等）"
-    # 取一个**元素离图边足够远**的取样，使 crop.x 不被钳位吃掉，于是
-    # crop.x == 元素左边界 - 一倍上下文，可直接反推。
-    far = browser_crop_in_window(
-        {"left": 600, "top": 300, "width": 100, "height": 20},
-        {"width": 1280, "height": 720, "screenX": screen_x, "screenY": 84},
-        (1920, 1080),
-        (origin_x, -8),
-    )
-    assert far is not None
-    far_correct = 600 * scale + screen_x * scale - origin_x
-    far_wrong = (screen_x - origin_x) * scale + 600 * scale
-    inferred = far["x"] + 100 * scale  # pad = 一倍元素宽
-    assert inferred == pytest.approx(far_correct, abs=1.0), (
-        f"元素左边界算成 {inferred}，正确值 {far_correct}（错公式会给 {far_wrong}）"
-    )
+    el_y = 200 * 1.5 + REAL_VIEWPORT_TOP * 1.5
+    assert crop["y"] <= el_y
+    # 上方留白应约等于元素高（图内 30）
+    assert el_y - crop["y"] == pytest.approx(30.0)
 
 
 def test_browser_crop_returns_none_outside_the_window():
     """完全在窗口外⇒ None（裁不出来就不裁，别给一个空画面）。"""
     from rpa_core.capture.screen_shot import browser_crop_in_window
 
+    viewport = {"width": 1280, "height": 720, "outerWidth": 1280, "outerHeight": 720}
     # 元素远在视口下方数千像素 ⇒ 换算后整块都在图外
     assert (
         browser_crop_in_window(
             {"left": 10, "top": 9000, "width": 100, "height": 20},
-            {"width": 1280, "height": 720, "screenX": 12, "screenY": 84},
+            viewport,
             (1936, 1056),
-            (-8, -8),
         )
         is None
     )
-    # 坏形状也一样
+    # 坏形状、以及**缺窗口尺寸**（旧扩展）也一样
+    assert browser_crop_in_window(None, {"width": 1}, (10, 10)) is None
     assert (
-        browser_crop_in_window(None, {"width": 1}, (10, 10), (0, 0)) is None
+        browser_crop_in_window(
+            {"left": 1, "top": 1, "width": 10, "height": 10},
+            {"width": 100, "height": 100},
+            (10, 10),
+        )
+        is None
     )

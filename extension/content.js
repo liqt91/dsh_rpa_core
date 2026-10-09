@@ -321,12 +321,18 @@
     scrollY: window.scrollY || window.pageYOffset || 0,
     // M47.12：统一改走**桌面坐标截屏**（ImageGrab 截窗口那块屏幕），图左上角 =
     // 窗口左上角。所以要把视口 CSS 像素换算成图内像素，还差「视口左上角相对窗口
-    // 左上角的偏移」——**host 侧推不出来**（标签栏/地址栏高度是 Chromium 自己布局的，
-    // 而 win32 的 client_rect() 只是窗口内相对坐标，实测恒为 (0,0,w,h)）。
-    // window.screenX/screenY 正是视口左上角的**屏幕 CSS 像素**坐标：host 拿它减去
-    // 窗口原点、再乘 scale 即得偏移。
+    // 左上角的偏移」——**只取决于窗口内部布局，与窗口在屏幕上的位置无关**：
+    //   border  = (outerWidth  - width) / 2左右边框，真机实测每侧 8px
+    //   originY = (outerHeight - height - border)   视口底紧邻窗口下边框
+    // **别用 screenX/screenY 推视口位置**（2026-10-09 真机 bug）：它们是**窗口**
+    // 左上角的屏幕坐标，不是视口的——实测 screenY 与 GetWindowRect 的 top 完全
+    // 相等，那个减法恒等于 0，于是少算了标签栏+地址栏整段（真机 151px），裁剪区
+    // 偏上约 143px。下面这两个字段**保留但换算不读**，只作调试对照。
     screenX: window.screenX,
     screenY: window.screenY,
+    // 窗口（含标签栏/地址栏/边框）的 CSS 尺寸：算视口在窗口内偏移的**必需量**。
+    // 缺了它们 host 宁可不出裁剪区，也不给一个偏上百像素的（口径见 host 侧
+    // browser_viewport_in_window 的 docstring）。
     outerWidth: window.outerWidth || 0,
     outerHeight: window.outerHeight || 0,
   });

@@ -88,31 +88,50 @@ if (rect.left !== 12 || rect.top !== 31 || rect.width !== 300 || rect.height !==
   process.exit(1);
 }
 
-// ------------------------------------------------------- W2/W3: 与 host 换算函数对账
+// W2/W3：与 host 换算函数对账
 // 子进程里跑**真** Python：输入就是上面 rectOf 的输出，于是「JS 产出」与
 //「host 消费」真的对上，而不是两边各自绿。
 const PY = join(root, ".venv", "Scripts", "python.exe");
-const probe = [
-  "import json",
-  "from rpa_core.capture.screen_shot import browser_box_in_window",
-  "payload = " + JSON.stringify({
-    rect,
-    viewport: { width: 1280, height: 720, screenX: 12, screenY: 84 },
-    imageSize: [1936, 1056],
-    windowOrigin: [-8, -8],
-  }),
-  "box = browser_box_in_window("
-    + "payload['rect'], payload['viewport'],"
-    + "tuple(payload['imageSize']), tuple(payload['windowOrigin']))",
-  "print(json.dumps(box))",
-].join("\n");
 
-let box;
-try {
-  const out = execFileSync(PY, ["-c", probe], {
+// 喂给 host 的 viewport 用**真机实测值**（2026-10-09 trace 那一行）：
+//   窗口 outerWidth/Height = 1555/936，视口 width/height = 1539/785，
+//   窗口在副屏上方 ⇒ screenX/screenY = 229/-939，与 GetWindowRect 的
+//   windowOrigin 完全相等（这正是它**不能**用来推视口位置的铁证）。
+const REAL_VIEWPORT = {
+  width: 1539,
+  height: 785,
+  dpr: 1,
+  screenX: 229,
+  screenY: -939,
+  outerWidth: 1555,
+  outerHeight: 936,
+};
+const REAL_IMAGE_SIZE = [1555, 936];
+// 真机那个元素在图内应是 y = 79 + 143（视口顶 = 936 - 785 - 8）。
+const REAL_BORDER = 8;
+const REAL_VIEWPORT_TOP = 143;
+
+function callHost(fn, payload) {
+  const probe = [
+    "import json",
+    "from rpa_core.capture.screen_shot import " + fn,
+    "payload = " + JSON.stringify(payload),
+    "box = " + fn + "(payload['rect'], payload['viewport'], tuple(payload['imageSize']))",
+    "print(json.dumps(box))",
+  ].join("\n");
+  return execFileSync(PY, ["-c", probe], {
     cwd: root,
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
+  });
+}
+
+let box;
+try {
+  const out = callHost("browser_box_in_window", {
+    rect,
+    viewport: REAL_VIEWPORT,
+    imageSize: REAL_IMAGE_SIZE,
   });
   box = JSON.parse(out.trim().split(/\r?\n/).pop());
 } catch (err) {
@@ -145,3 +164,78 @@ if (JSON.stringify(boxKeys) !== JSON.stringify(["height", "width", "x", "y"])) {
 }
 
 console.log("check_capture_descriptor_rect: PASS（rectOf 键集 + 与 host 换算函数对账）");
+
+// ------------------------------------------------------------------ W4/W5
+// W4：**换算必须用「窗口尺寸」推视口位置，不能用 screenX/screenY**。
+//
+// 真机事故（2026-10-09，维护者报「截图位置偏上」）：`window.screenY` 是**窗口**
+// 左上角的屏幕坐标，**不是视口的**——实测它与 GetWindowRect 的 top 完全相等
+// （都是 -939），那个减法恒等于 0，于是整整少算了标签栏+地址栏（真机 151px），
+// 裁剪区偏上约 143px。
+//
+// 换算必须读 viewport 里的 `outerWidth/outerHeight`，所以把那两个字段**删掉**
+// 再喂一次：此时 host **必须返回 None**（宁可不出裁剪区，也不给一个偏 143px 的）。
+// 若仍返回框 ⇒ 说明它还在用某条不需要窗口尺寸的路径（多半是 screenY）。
+const withoutWindowSize = { ...REAL_VIEWPORT };
+delete withoutWindowSize.outerWidth;
+delete withoutWindowSize.outerHeight;
+try {
+  const out = callHost("browser_box_in_window", {
+    rect,
+    viewport: withoutWindowSize,
+    imageSize: REAL_IMAGE_SIZE,
+  });
+  const noSize = JSON.parse(out.trim().split(/\r?\n/).pop());
+  if (noSize !== null) {
+    console.error(
+      "FAIL: viewport 缺 outerWidth/outerHeight 时仍算出了框 → "
+        + "换算没走「窗口内部布局」这条路（八成又用回 screenX/screenY 了）\n"
+        + `  实得 ${JSON.stringify(noSize)}`,
+    );
+    process.exit(1);
+  }
+} catch (err) {
+  console.error("FAIL: W4 调 host 失败 → " + String(err.stderr || err.message).split(/\r?\n/)[0]);
+  process.exit(1);
+}
+
+// W5：裁剪与画框**必须落在同一位置**——两者只差表达（crop=裁一块、box=画一个框），
+// 坐标不一致就意味着同一份descriptor 在两条路上会落在不同位置，
+// 而那正是「框在一个位置、裁剪在另一个位置」这类症状的温床。
+let crop;
+try {
+  const out = callHost("browser_crop_in_window", {
+    rect,
+    viewport: REAL_VIEWPORT,
+    imageSize: REAL_IMAGE_SIZE,
+  });
+  crop = JSON.parse(out.trim().split(/\r?\n/).pop());
+} catch (err) {
+  console.error("FAIL: W5 调 host 失败 → " + String(err.stderr || err.message).split(/\r?\n/)[0]);
+  process.exit(1);
+}
+if (!crop || typeof crop.y !== "number") {
+  console.error("FAIL: browser_crop_in_window 没算出裁剪区");
+  process.exit(1);
+}
+// 真机那个元素在图内 y = 79 + 视口顶 143 = 222（视口顶 = 936 - 785 - 8）。
+const realElY = rect.top + REAL_VIEWPORT_TOP;
+if (!(crop.y <= realElY && crop.y + crop.height >= realElY + rect.height)) {
+  console.error(
+    `FAIL: 裁剪区没罩住真机那个元素（应含 y ${realElY}）→ ${JSON.stringify(crop)}\n`
+      + `  视口顶应为 ${REAL_VIEWPORT_TOP}（= ${REAL_VIEWPORT.outerHeight}`
+      + ` - ${REAL_VIEWPORT.height} - ${REAL_BORDER}）`,
+  );
+  process.exit(1);
+}
+if (!(box.y <= realElY && box.y + box.height >= realElY + rect.height)) {
+  console.error(
+    `FAIL: 红框没罩住真机那个元素（应含 y ${realElY}）→ ${JSON.stringify(box)}`,
+  );
+  process.exit(1);
+}
+
+console.log(
+  "check_capture_descriptor_rect: PASS"
+  + "（+ 换算走窗口内部布局、crop/box 同位）",
+);

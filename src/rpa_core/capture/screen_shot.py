@@ -34,16 +34,24 @@ PrintWindow 正常（红色定位标记恰好出现 1 次）⇒ **不是 PrintWi
 * **浏览器元素**：扩展回传的是**视口CSS 像素**的 rect。需要两样换算量：
   ``scale`` 与 ``viewport_origin``。
 
-  - ``scale`` = 图宽 / ``viewport.width``（**不要用 ``devicePixelRatio`` 猜**——
-    Windows 分数缩放下 ``round(视口宽×dpr)`` 可能与图宽差 1px，1px 偏在小元素上
-    就是「框没套住」；这与 M47.11 的 ``preview_box_in_image`` 同一口径）。
-  - ``viewport_origin`` = 视口左上角相对**窗口**左上角的偏移。**host侧推不出来**：
-    ``client_rect()`` 返回的是窗口内**相对**坐标（实测恒为 ``(0,0,w,h)``），
-    而标签栏/地址栏高度由Chromium 自己布局，host 无权威值。
-    ⇒ 由扩展回传 ``window.screenX/screenY``（视口左上角的屏幕 CSS 像素坐标）。
+  - ``scale`` = 图宽 / ``outerWidth``（**窗口**宽）。分母不能是 ``viewport.width``——
+    那会把边框+滚动条那十几像素混进缩放比（真机 dpr=1 时算出 1.0104，凭空放大 1%）。
+  - ``viewport_origin`` = 视口左上角相对**窗口**左上角的偏移。它**只取决于窗口内部
+    布局**（视口多高、窗口多高、边框多厚），**与窗口在屏幕上的位置无关**⇒
+    ``origin_y = (outerHeight - viewport.height - border) × scale``，其中
+    ``border = (outerWidth - viewport.width) / 2``（左右对称，真机实测每侧 8px）。
 
-  故扩展侧 ``viewportInfo()`` 增回 ``screenX`` / ``screenY`` / ``outerWidth`` /
-  ``outerHeight``，host侧据此算偏移。
+  **别用 ``window.screenX/screenY`` 推视口位置**（2026-10-09 真机教训）：它们是
+  **窗口**左上角的屏幕坐标，不是视口的。真机 trace 里 ``screenY=-939`` 与
+  ``GetWindowRect`` 的 ``top=-939`` **完全相等**就是铁证——那个减法恒等于 0，
+  于是整整少算了标签栏+地址栏那一段（实测 151px），裁剪区**偏上约 143px**
+  （维护者报「截图位置偏上」）。**与多屏无关**：负坐标（-939 说明窗口在副屏上方）
+  由 ``ImageGrab(all_screens=True)`` 与 ``GetWindowRect`` 正确处理，那一路是对的。
+  改成只依赖窗口内部布局后，多屏/负坐标/主副屏高度差**自动不再是问题**。
+
+故扩展侧 ``viewportInfo()`` 需回 ``outerWidth`` / ``outerHeight``（窗口 CSS 尺寸）
+与 ``width`` / ``height``（视口 CSS 尺寸）；``screenX`` / ``screenY`` 保留但**换算
+不读**（调试时对照用：它们应恒等于窗口原点）。
 
 ## 平台与失败口径
 
@@ -168,11 +176,91 @@ def box_in_window(
     return {"x": left - ox, "y": top - oy, "width": width, "height": height}
 
 
+def browser_viewport_in_window(
+    viewport: dict[str, Any],
+    image_size: tuple[int, int] | None,
+) -> tuple[float, float, float] | None:
+    """浏览器窗口内「视口左上角 +缩放比」——浏览器腿换算的**唯一真相源**。
+
+    返回 ``(origin_x, origin_y, scale)``，三者都是**图内像素**：
+    视口左上角在图内的位置，以及 CSS 像素 → 图内像素的倍数。
+
+    ## 为什么不再用 ``window.screenX/screenY``（2026-10-09 真机定案）
+
+    此前 ``content.js`` 的注释写着「screenX/screenY 正是视口左上角的屏幕 CSS 像素
+    坐标」，host侧照此推 ``viewport_origin = screenY - win.top``。**那条注释是错的**：
+    ``window.screenY`` 是**浏览器窗口**（含标签栏、地址栏）左上角的屏幕坐标，
+    **不是视口的**。真机trace 一行就拆穿：
+
+        window_origin= [229, -939]   ← GetWindowRect
+        screenY       = -939          ← 与窗口原点**完全相等**
+
+    两者相等 ⇒ 这个减法恒等于 0 ⇒ 视口顶被当成窗口顶，**整整少了标签栏+地址栏
+    那一段**。实测 ``outerHeight - viewport.height = 936 - 785 = 151``（含边框），
+    于是裁剪区**偏上约 143px**——元素被推到裁剪区下沿之外，看起来就是「截图位置
+    偏上」。**与多屏无关**：负坐标（-939 说明窗口在副屏上方）由 ``all_screens=True``
+    的 ImageGrab 与 GetWindowRect 正确处理，那一路是对的。
+
+    ## 现在的口径：只依赖**窗口内部布局**，不碰任何屏幕坐标
+
+    截图是从窗口左上角开始的那块矩形，所以「视口在图内的位置」只取决于窗口
+    自己有多高、视口有多高——**与窗口在屏幕上的位置无关**。于是多屏/负坐标/
+    主副屏高度差**自动不再是问题**（维护者报「两块屏一块比另一块更偏上」）。
+
+    - **上下边框**：Windows 窗口有一圈不可见的 resize border，真机实测
+      ``outerWidth - viewport.width = 16`` ⇒ 每侧 8px（左右对称，跨窗口稳定）。
+    - **视口顶** = ``outerHeight - viewport.height - 下边框``：从窗口底边往上倒推，
+      因为**下边框贴着屏幕、视口底永远紧邻它**；上边框混在 ``outerHeight`` 里被
+      一次性算掉，不需要单独猜「标签栏多高」（那是 Chromium 自己布局的，host
+      无权威值，也**不该**猜）。
+    - **scale = 图宽 / outerWidth**：图是**窗口**的截图，图宽对应的是
+      ``outerWidth``（CSS px）而不是 ``viewport.width``。此前用后者当分母，把
+      16px 的边框+滚动条混进了缩放比，真机 dpr=1 时算出 1.0104，凭空放大 1%。
+
+    缺 ``outerWidth/outerHeight``（旧扩展）时返回 ``None`` —— 宁可不出裁剪区，
+    也不给一个偏 143px 的。
+    """
+    if not isinstance(viewport, dict) or not image_size:
+        return None
+    try:
+        vw = float(viewport["width"])
+        vh = float(viewport["height"])
+        ow = float(viewport["outerWidth"])
+        oh = float(viewport["outerHeight"])
+        img_w = float(image_size[0])
+        img_h = float(image_size[1])
+    except (KeyError, TypeError, ValueError):
+        return None
+    if vw <= 0 or vh <= 0 or ow <= 0 or oh <= 0 or img_w <= 0 or img_h <= 0:
+        return None
+    # 边框：左右对称，各一半。截图为负/异常形状时不猜。
+    border = (ow - vw) / 2.0
+    if border < 0:
+        border = 0.0
+    scale = scale_of(img_w, ow)
+    if scale <= 0:
+        return None
+    # 视口底紧邻窗口下边框 ⇒ 视口顶 = 窗口底 - 视口高 - 下边框。
+    origin_y = (oh - vh - border) * scale
+    origin_x = border * scale
+    return origin_x, origin_y, scale
+
+
+def scale_of(image_width: float, css_width: float) -> float:
+    """图内像素 / CSS 像素。分母是**窗口**宽（``outerWidth``）不是视口宽。
+
+    此前分母误用 ``viewport.width``，把边框+滚动条那16px 混进了缩放比：真机
+    dpr=1 时算出 1.0104，凭空把整个元素放大 1%。
+    """
+    if css_width <= 0:
+        return 0.0
+    return float(image_width) / float(css_width)
+
+
 def browser_crop_in_window(
     rect: dict[str, Any] | None,
     viewport: dict[str, Any] | None,
     image_size: tuple[int, int] | None,
-    window_origin: tuple[int, int] | None,
     margin_ratio: float = 1.0,
 ) -> dict[str, float] | None:
     """浏览器腿：算出「以元素为中心、留适量上下文」的**裁剪区**（图内像素）。
@@ -180,7 +268,7 @@ def browser_crop_in_window(
     为什么是裁剪而不是画框（2026-10-09 真机定的案，维护者「红框是后面绘制上去的，
     偏离了实际元素，不是用户在页面上看到的黄框」）：
 
-    -页面上那个黄框由content.js 在捕获瞬间画，是**位置权威**；
+    - 页面上那个黄框由 content.js 在捕获瞬间画，是**位置权威**；
     - 截图上再画一个框是**二次换算**，误差必然存在，而且无论怎么调都对不齐
       用户眼睛看到的那一个——误差来源至少有：Windows 缩放（真机实测 150%）、
       窗口边框、视口滚动、CSS→物理像素转换。**画框这条路原理上就走不通**。
@@ -191,34 +279,29 @@ def browser_crop_in_window(
     各留一倍），所以小元素不会被撑成整窗、大元素也不会裁成一条窄带。
     裁剪区永远**包含元素**且**不越出图**：宁可少留上下文，不切掉元素本身。
 
-    坐标系换算与 :func:`browser_box_in_window` 同一套（那边还留着画框的旧口径，
-    供 verify 那条路的既有判据使用；本函数是捕获预览的新口径）。
+    坐标系换算见 :func:`browser_viewport_in_window`（唯一真相源）。
     """
     if not isinstance(rect, dict) or not isinstance(viewport, dict):
         return None
-    if window_origin is None or not image_size:
+    if not image_size:
+        return None
+    found = browser_viewport_in_window(viewport, image_size)
+    if found is None:
+        return None
+    origin_x, origin_y, scale = found
+    if scale <= 0:
         return None
     try:
         left = float(rect["left"])
         top = float(rect["top"])
         width = float(rect["width"])
         height = float(rect["height"])
-        vp_w = float(viewport["width"])
-        screen_x = float(viewport["screenX"])
-        screen_y = float(viewport["screenY"])
     except (KeyError, TypeError, ValueError):
         return None
-    if width <= 0 or height <= 0 or vp_w <= 0:
+    if width <= 0 or height <= 0:
         return None
-    scale = float(image_size[0]) / vp_w
-    if scale <= 0:
-        return None
-    # 视口左上角相对窗口左上角的偏移：**先在 CSS 坐标系里做减法，再统一乘 scale**。
-    # 原式写成 (screenX - win.left) * scale —— win.left 是**物理**像素（GetWindowRect），
-    # screenX 是 **CSS** 像素，真机 150% 缩放下两个坐标系混算 ⇒ 偏移错、框画歪。
-    ox, oy = float(window_origin[0]), float(window_origin[1])
-    x = (left * scale) + screen_x * scale - ox
-    y = (top * scale) + screen_y * scale - oy
+    x = left * scale + origin_x
+    y = top * scale + origin_y
     w = width * scale
     h = height * scale
     if x + w <= 0 or y + h <= 0:
@@ -244,59 +327,52 @@ def browser_box_in_window(
     rect: dict[str, Any] | None,
     viewport: dict[str, Any] | None,
     image_size: tuple[int, int] | None,
-    window_origin: tuple[int, int] | None,
 ) -> dict[str, float] | None:
-    """**浏览器腿**：视口 CSS 像素矩形 → 坐标截屏的图内像素。
+    """**浏览器腿**：视口 CSS 像素矩形 → 坐标截屏的图内像素（画框旧口径）。
 
-    换算两步（都是实测得来的，见模块 docstring）：
+    换算全部走 :func:`browser_viewport_in_window`（唯一真相源）。
 
-    1. ``scale = 图宽 / viewport.width``——用**图的实际宽**，不用
-       ``devicePixelRatio`` 猜（分数缩放下两者可能差 1px）。
-    2. ``viewport_origin = (screenX - win.left, screenY - win.top)``——视口左上角
-       相对窗口左上角的偏移，由扩展回传（host侧推不出标签栏高度）。
-
-    之后 ``图内 = rect_CSS × scale + viewport_origin``。
-    与桌面腿共用同一个 ``PreviewShot`` 控件与同一个 ``box`` 形状。
+    与 :func:`browser_crop_in_window` 的差别只在**表达**：这个给 ``box``（画一个框），
+    那个给 ``crop``（裁一块画面）。坐标本身两者必须一致——**否则同一份descriptor
+    在两条路上会落在不同位置**，而那正是「截图偏上」这类症状的温床。
     """
     if not isinstance(rect, dict) or not isinstance(viewport, dict):
         return None
-    if window_origin is None or not image_size:
+    if not image_size:
+        return None
+    found = browser_viewport_in_window(viewport, image_size)
+    if found is None:
+        return None
+    origin_x, origin_y, scale = found
+    if scale <= 0:
         return None
     try:
         left = float(rect["left"])
         top = float(rect["top"])
         width = float(rect["width"])
         height = float(rect["height"])
-        vp_w = float(viewport["width"])
-        screen_x = float(viewport["screenX"])
-        screen_y = float(viewport["screenY"])
     except (KeyError, TypeError, ValueError):
         return None
-    if width <= 0 or height <= 0 or vp_w <= 0:
+    if width <= 0 or height <= 0:
         return None
-    scale = float(image_size[0]) / vp_w
-    if scale <= 0:
-        return None
-    ox, oy = float(window_origin[0]), float(window_origin[1])
-    vx = (screen_x - ox) * scale
-    vy = (screen_y - oy) * scale
-    x = left * scale + vx
-    y = top * scale + vy
+    x = left * scale + origin_x
+    y = top * scale + origin_y
     w = width * scale
     h = height * scale
     # 完全在窗口外（元素被滚出视口）⇒ 不画；部分在外 ⇒ 钳到图内，
     # 与用户「看得出有个框贴着边」的预期一致。
+    img_w, img_h = float(image_size[0]), float(image_size[1])
     if x + w <= 0 or y + h <= 0:
         return None
-    if x >= float(image_size[0]) or y >= float(image_size[1]):
+    if x >= img_w or y >= img_h:
         return None
     # 钳位必须**同时收窄**：元素横跨 -50~50 时，光把 x 钉到 0 而不动 width，框会
-    # 从0 铺到 100——比元素宽一倍，看起来「框住了旁边的东西」。
+    # 从 0 铺到 100——比元素宽一倍，看起来「框住了旁边的东西」。
     # 正确做法是按被切掉的那截从宽高里扣掉。
     clamped_x = max(0.0, x)
     clamped_y = max(0.0, y)
-    w = max(2.0, min(w - (clamped_x - x), float(image_size[0]) - clamped_x))
-    h = max(2.0, min(h - (clamped_y - y), float(image_size[1]) - clamped_y))
+    w = max(2.0, min(w - (clamped_x - x), img_w - clamped_x))
+    h = max(2.0, min(h - (clamped_y - y), img_h - clamped_y))
     return {"x": clamped_x, "y": clamped_y, "width": w, "height": h}
 
 
@@ -373,7 +449,7 @@ def shot_for_browser(
         return None
     origin = tuple(shot["windowOrigin"])  # type: ignore[arg-type]
     size = tuple(shot["imageSize"])  # type: ignore[arg-type]
-    box = browser_box_in_window(rect, viewport, size, origin)  # type: ignore[arg-type]
+    box = browser_box_in_window(rect, viewport, size)  # type: ignore[arg-type]
     if box is not None:
         shot["box"] = box
     _trace(
@@ -403,7 +479,9 @@ def browser_preview_shot(verify_result: dict[str, Any]) -> dict[str, Any] | None
 
     拆成两步的原因（实测得来的）：扩展只知道自己页里的**视口 CSS 像素**，而
     **窗口绝对矩形只有 host 拿得到**（win32 ``GetWindowRect``）。所以截图必须由
-    host 做，而换算要用扩展回的 ``screenX/screenY``——两边拼起来才是完整一张图。
+    host 做；而视口在窗口内的偏移由扩展回的 ``outerWidth/outerHeight`` 与
+    ``width/height`` 算出（见 :func:`browser_viewport_in_window`）——**不需要屏幕
+    坐标**，因此多屏/负坐标一律不再是问题。
 
     产出 ``crop`` 而非 ``box``（2026-10-09 真机定案）：页面上那个黄框由 content.js
     在捕获瞬间画、位置权威；截图上再画一个框是**二次换算**，真机 150% Windows 缩放
@@ -424,7 +502,6 @@ def browser_preview_shot(verify_result: dict[str, Any]) -> dict[str, Any] | None
         verify_result.get("rect"),
         verify_result.get("viewport"),
         tuple(shot["imageSize"]),  # type: ignore[arg-type]
-        tuple(shot["windowOrigin"]),  # type: ignore[arg-type]
     )
     if crop is not None:
         shot["crop"] = crop
@@ -457,9 +534,10 @@ def capture_shot_from_descriptor(
     不依赖扩展给任何东西。
 
     几何来源是content 侧本来就有的：``metadata.rect``（视口 CSS 像素）+ ``viewport``
-    （含视口屏幕原点），换算与 :func:`browser_box_in_window` 同一套口径。
+    （含**窗口** ``outerWidth/outerHeight`` 与视口 ``width/height``），换算走
+    :func:`browser_viewport_in_window`（唯一真相源，不碰任何屏幕坐标）。
 
-    返回 ``{dataUrl, box?, windowOrigin, imageSize}``；拿不到窗口就返回 ``None``，
+    返回 ``{dataUrl, crop?, windowOrigin, imageSize}``；拿不到窗口就返回 ``None``，
     由调用方决定降级文案（**不抛**——截图不该让一次成功的捕获变成失败）。
     """
     if not isinstance(descriptor, dict) or not isinstance(hwnd, int) or hwnd <= 0:
@@ -487,7 +565,6 @@ def capture_shot_from_descriptor(
         rect,
         viewport,
         tuple(shot["imageSize"]),  # type: ignore[arg-type]
-        tuple(shot["windowOrigin"]),  # type: ignore[arg-type]
     )
     if crop is not None:
         shot["crop"] = crop
@@ -499,8 +576,9 @@ def capture_shot_from_descriptor(
         has_crop=crop is not None,
         # **换算现场全量落盘**：坐标系混用这类 bug 从症状（「框画歪了」）到根因
         # （谁在物理像素、谁在 CSS 像素）隔着三层推导，trace 里没这组数就只能猜。
-        # 判据：scale≈图宽/视口宽，应与 viewport.dpr 同量级（真机 150%）；
-        # window_origin 是物理像素、screenX/screenY 是 CSS 像素，不可直接相减。
+        # 判据：outerWidth/outerHeight − viewport.width/height = 窗口边框那一圈；
+        # **screenX/screenY 恒等于 window_origin**（那是窗口左上角，不是视口的），
+        # 所以它们**不可**用来推视口位置——2026-10-09 的「截图偏上」就栽在这里。
         rect=rect,
         viewport=viewport,
         window_origin=shot.get("windowOrigin"),
