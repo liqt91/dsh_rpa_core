@@ -18,6 +18,14 @@ from rpa_core.compiler import WorkflowCompiler
 from rpa_core.compiler.compiler import WorkflowCompileError
 from rpa_core.control_channel import request_pause, reset_control, watch_control_file
 from rpa_core.devserver import DevServer
+from rpa_core.generator import (
+    DEFAULT_GRANTED_CAPABILITIES,
+    FlowGenerationError,
+    FlowSpec,
+    StepSpec,
+    generate_from_spec,
+    generate_from_text,
+)
 from rpa_core.model.runtime import RunResult
 from rpa_core.model.workflow import Workflow
 from rpa_core.runtime import Orchestrator, RunHandle
@@ -106,6 +114,85 @@ def _cmd_catalog() -> int:
         json.dumps({"digest": catalog.digest, "commands": commands},
                    ensure_ascii=False, indent=2)
     )
+    return 0
+
+
+def _load_flow_spec(path: Path) -> FlowSpec:
+    """读取 spec 文件：支持三种形态——步骤字符串列表、含 steps 的对象、单个步骤对象。"""
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    if isinstance(raw, list):
+        steps = [
+            StepSpec(action=s) if isinstance(s, str) else StepSpec.model_validate(s)
+            for s in raw
+        ]
+        return FlowSpec(steps=steps)
+    if isinstance(raw, dict):
+        if "steps" in raw:
+            return FlowSpec.model_validate(raw)
+        return FlowSpec(steps=[StepSpec.model_validate(raw)])
+    raise ValueError("spec 必须是步骤列表或含 steps 的对象")
+
+
+def _cmd_generate(args) -> int:
+    """`generate`：自然语言/结构化描述 → 可被直接加载执行的 workflow.json。
+
+    强制过两道校验闸门（复用真实 WorkflowCompiler + 逐节点 input_schema 实例校验），
+    未通过即报错退出（退出码 2），绝不落盘半成品。成功时写文件并打印校验摘要。
+    """
+    catalog = load_catalog(_commands_root())
+    granted = DEFAULT_GRANTED_CAPABILITIES
+    try:
+        if args.spec:
+            spec = _load_flow_spec(args.spec)
+            flow = generate_from_spec(spec, catalog=catalog, granted_capabilities=granted)
+        else:
+            desc = args.desc
+            if not desc:
+                _cli_fail("BAD_REQUEST", "generate 需要 --desc 或 --spec 二者之一")
+                return 2
+            flow = generate_from_text(
+                desc,
+                name=args.name,
+                id=args.id,
+                inputs=json.loads(args.inputs) if args.inputs else None,
+                catalog=catalog,
+                granted_capabilities=granted,
+            )
+    except FlowGenerationError as exc:
+        _cli_fail("GENERATE_FAILED", str(exc))
+        return 2
+    except (json.JSONDecodeError, ValueError) as exc:
+        _cli_fail("BAD_REQUEST", f"参数解析失败：{exc}")
+        return 2
+
+    node_count = sum(1 for _ in ())
+    # 统计 action 节点数（简单遍历 root.children）
+    def _count(node) -> int:
+        from rpa_core.model.workflow import ActionNode, SequenceNode
+
+        if isinstance(node, ActionNode):
+            return 1
+        if isinstance(node, SequenceNode):
+            return sum(_count(c) for c in node.children)
+        return 0
+
+    node_count = _count(flow.workflow.root)
+
+    payload = {
+        "valid": True,
+        "catalogDigest": flow.plan.catalog_digest,
+        "requiredCapabilities": sorted(flow.plan.required_capabilities),
+        "warnings": flow.warnings,
+        "flowId": flow.workflow.id,
+        "nodeCount": node_count,
+    }
+    if args.out:
+        saved = flow.write(args.out)
+        payload["savedTo"] = str(saved)
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+    else:
+        # 未给 --out 时打印流程 JSON 本身（便于管道消费）
+        print(flow.workflow.model_dump_json(indent=2))
     return 0
 
 
@@ -635,11 +722,24 @@ def main() -> int:
     subparsers = parser.add_subparsers(dest="action", required=True)
     for action in ("validate", "run", "resume", "devserver", "catalog", "capture",
                    "elements", "auth", "status", "unauth", "install-extension",
-                   "env-status", "gui", "pause", "runs"):
+                   "env-status", "gui", "pause", "runs", "generate"):
         sub = subparsers.add_parser(action)
         if action == "devserver":
             sub.add_argument("--port", type=int, default=8765)
             sub.add_argument("--workflows", type=Path, default=Path("workflows"))
+            continue
+        if action == "generate":
+            sub.add_argument("--desc", default=None,
+                             help="自然语言描述（与 --spec 二选一）")
+            sub.add_argument("--spec", type=Path, default=None,
+                             help="结构化 spec JSON 文件路径")
+            sub.add_argument("--name", default=None, help="流程展示名")
+            sub.add_argument("--id", default=None,
+                             help="流程 id（同时作为落盘文件名/目录名）")
+            sub.add_argument("--inputs", default=None,
+                             help="JSON 字符串，覆盖流程默认输入")
+            sub.add_argument("--out", type=Path, default=None,
+                             help="输出 workflow.json 路径；省略则打印到 stdout")
             continue
         if action == "gui":
             sub.add_argument("--workflow", type=Path, default=None,
@@ -769,6 +869,8 @@ def main() -> int:
         return _cmd_runs(args)
     if args.action == "gui":
         return _cmd_gui(args)
+    if args.action == "generate":
+        return _cmd_generate(args)
     try:
         _root, catalog, plan = _compile(args.workflow)
     except FileNotFoundError as exc:

@@ -1,0 +1,81 @@
+{
+  "schema_version": "1.0",
+  "id": "example_search",
+  "name": "自动生成的流程",
+  "inputs": {},
+  "timeout_seconds": 3600.0,
+  "root": {
+    "id": "root",
+    "type": "sequence",
+    "children": [
+      {
+        "id": "step_1",
+        "type": "action",
+        "command": "browser.navigate",
+        "with_": {
+          "browserType": "chrome",
+          "action": "goto",
+          "url": "https://www.baidu.com"
+        },
+        "output_aliases": {
+          "sessionId": "page_1"
+        },
+        "timeout_seconds": null,
+        "retry_count": 0,
+        "retry_backoff_seconds": 0.1,
+        "retry_backoff_max_seconds": 5.0,
+        "expr_modes": null,
+        "element_refs": null
+      },
+      {
+        "id": "step_2",
+        "type": "action",
+        "command": "browser.input",
+        "with_": {
+          "selector": "#kw",
+          "text": "WorkBuddy",
+          "sessionId": "${page_1}"
+        },
+        "output_aliases": {},
+        "timeout_seconds": null,
+        "retry_count": 0,
+        "retry_backoff_seconds": 0.1,
+        "retry_backoff_max_seconds": 5.0,
+        "expr_modes": null,
+        "element_refs": null
+      },
+      {
+        "id": "step_3",
+        "type": "action",
+        "command": "browser.click",
+        "with_": {
+          "selector": "#su",
+          "sessionId": "${page_1}"
+        },
+        "output_aliases": {},
+        "timeout_seconds": null,
+        "retry_count": 0,
+        "retry_backoff_seconds": 0.1,
+        "retry_backoff_max_seconds": 5.0,
+        "expr_modes": null,
+        "element_refs": null
+      },
+      {
+        "id": "step_4",
+        "type": "action",
+        "command": "browser.screenshot",
+        "with_": {
+          "savePath": "outputs/screenshot_1.png",
+          "sessionId": "${page_1}"
+        },
+        "output_aliases": {},
+        "timeout_seconds": null,
+        "retry_count": 0,
+        "retry_backoff_seconds": 0.1,
+        "retry_backoff_max_seconds": 5.0,
+        "expr_modes": null,
+        "element_refs": null
+      }
+    ]
+  }
+}

@@ -74,6 +74,20 @@ def _load_catalog_snapshot(root: Path, signature: CatalogSignature) -> CommandCa
     return CommandCatalog(commands, digest)
 
 
+def commands_root() -> Path:
+    """命令目录解析：pip 安装后读包内打包的 commands/，开发态读仓库根。
+
+    与 `rpa_core.cli._commands_root` 同源（开发态仓库根 `commands/`、安装态包内
+    `rpa_core/commands/`），集中在此避免两份逻辑漂移。
+    """
+    rpa_core_pkg = Path(__file__).resolve().parents[1]  # catalog → rpa_core
+    packaged = rpa_core_pkg / "commands"
+    if packaged.is_dir():
+        return packaged
+    # 开发布局：仓库根 commands/（rpa_core 的祖父目录）
+    return rpa_core_pkg.parents[1] / "commands"
+
+
 def clear_catalog_cache() -> None:
     """丢弃已缓存的快照，强制下一次 `load_catalog` 重新读盘并校验。
 
