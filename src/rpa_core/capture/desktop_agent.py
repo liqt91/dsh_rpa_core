@@ -516,18 +516,39 @@ def _describe_info(info, root_hwnd: int, path_infos: list | None = None) -> dict
         ctypes.windll.user32.GetWindowTextW(root_hwnd, title_buffer, 256)
         window_title = title_buffer.value
 
+    # 元素**屏幕矩形**（M47.12）：桌面预览的红框要它，且它与窗口坐标截屏的图同源
+    # （都是绝对屏幕像素）⇒ 图内框 = 矩形 − 窗口原点，1:1 无换算。
+    # 此前**只读不产**：``gui/element_panel._metadata_text`` 一直读 ``meta["rect"]``，
+    # 于是那一行永远空着——补上之后既修了那个既有显示缺口，也给预览供了数据。
+    rect_text: dict | None = None
+    try:
+        box = info.rectangle
+        if box is not None and (box.right > box.left) and (box.bottom > box.top):
+            rect_text = {
+                "left": int(box.left),
+                "top": int(box.top),
+                "width": int(box.right - box.left),
+                "height": int(box.bottom - box.top),
+            }
+    except Exception:  # noqa: BLE001 - 取不到矩形不该让整个捕获失败
+        rect_text = None
+
+    metadata = {
+        "windowHandle": root_hwnd,
+        "windowTitle": window_title,
+        "controlType": control_type,
+        "automationId": automation_id,
+        "name": name,
+        "className": info.class_name or None,
+    }
+    if rect_text is not None:
+        metadata["rect"] = rect_text
+
     return {
         "kind": "desktop",
         "selector": {"locator": locator},
         "verifyCount": verify_count,
-        "metadata": {
-            "windowHandle": root_hwnd,
-            "windowTitle": window_title,
-            "controlType": control_type,
-            "automationId": automation_id,
-            "name": name,
-            "className": info.class_name or None,
-        },
+        "metadata": metadata,
     }
 
 

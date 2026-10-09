@@ -391,6 +391,54 @@ def _ext_badge_tooltip(diag: dict) -> str:
     return "\n".join(lines)
 
 
+def _browser_preview(verifier, css: str) -> dict:
+    """browser 预览截图的一步：校验回传 + 桌面坐标截屏（M47.12）。
+
+    **为什么不在 GUI 里分两步**：校验回传里只有「视口 CSS 像素的矩形」与「窗口句柄」，
+    而截图要窗口**绝对矩形**、红框要「图内像素」——两边拼起来才是一张完整图。
+    这段拼装是纯数据搬运，放在 :mod:`capture.screen_shot` 里可直测；GUI 只拿成品。
+
+    返回形状与 GUI 的 ``_on_shot_done`` 对齐：``{dataUrl, box, count}``；
+    任何一步失败都给 ``{"count": N}`` + ``{"shotError": 原因}``，让 GUI 分文案，
+    **不抛**——截图失败绝不该变成校验失败。
+    """
+    from rpa_core.capture.screen_shot import browser_preview_shot
+
+    result = verifier.verify(css, want_shot=True)
+    if result.get("error"):
+        return result
+    shot = browser_preview_shot(result)
+    if shot is None:
+        out = {"count": result.get("count")}
+        # 分清「扩展没给窗口句柄」与「截屏失败」——这两种的处置完全不同。
+        out["shotError"] = (
+            "no-window-handle" if not result.get("windowHandle") else "shot-failed"
+        )
+        return out
+    return shot
+
+
+def _desktop_preview_callable(document: dict) -> dict:
+    """desktop 预览截图的一步（M47.12）：窗口截图 + 元素屏幕矩形 → 图内红框。
+
+    桌面元素没有 css 概念，元素**就是捕获时那一个**⇒ 窗口句柄与元素矩形在**调用前**
+    就已确定，这里把它们封进闭包，GUI 侧 ``shot()`` 无参调用即可。
+    """
+    from rpa_core.capture.screen_shot import desktop_preview_shot
+
+    meta = dict(document.get("metadata") or {})
+    hwnd = meta.get("windowHandle")
+    rect = meta.get("rect") if isinstance(meta.get("rect"), dict) else None
+
+    def shot() -> dict:
+        result = desktop_preview_shot(hwnd, rect)
+        if result is None:
+            return {"shotError": "shot-failed"}
+        return result
+
+    return shot
+
+
 def flow_inputs_prompt(
     declaration: dict | None, parent: QWidget | None = None
 ) -> dict | None:
@@ -2908,7 +2956,7 @@ class MainWindow(QMainWindow):
         from rpa_core.gui.element_editor import ElementEditorDialog
 
         # 编辑中预览（M48）：browser 元素接上按需通道（同 M47 校验的实例语义）
-        # 截图通道（M47.11）：「预览」页签切过去才拍一张带红框的页面截图。
+        # 截图通道（M47.12）：「预览」页签切过去才拍一张带红框的截图。
         preview_css = clear_preview_css = shot_css = None
         if document.get("kind") == "browser":
             from rpa_core.capture.verify import ElementVerifier
@@ -2916,9 +2964,11 @@ class MainWindow(QMainWindow):
             verifier = ElementVerifier()
             preview_css = verifier.preview
             clear_preview_css = verifier.clear_preview
-            # verify(css, want_shot=True) → 同一通道多带一个「顺便截图」，
-            # 不另开方法：截图与校验必须**同一瞬间**（框要先画好再拍）。
-            shot_css = partial(verifier.verify, want_shot=True)
+            # 校验 + 截图**必须同一瞬间**（元素要先命中、框要先画好，再拍）⇒
+            # 同一次 verify 回传里把窗口句柄与视口矩形拿全，再由服务层统一截屏。
+            shot_css = partial(_browser_preview, verifier)
+        elif document.get("kind") == "desktop":
+            shot_css = _desktop_preview_callable(document)
         dialog = ElementEditorDialog(
             document,
             name=name,
@@ -3391,7 +3441,8 @@ class MainWindow(QMainWindow):
         from rpa_core.gui.element_editor import suggest_element_name
 
         # 活体校验（M47）+ 编辑中预览（M48）：browser 元素接上按需校验通道；
-        # desktop 元素不接（桌面腿活体查找未实现，按钮永远转圈不如不摆）。
+        # desktop 元素不接（桌面腿活体查找未实现，按钮永远转圈不如不摆），
+        # 但**预览截图两条腿都接**（M47.12：桌面截图是它原生该有的样子）。
         verify_css = preview_css = clear_preview_css = shot_css = None
         if descriptor.get("kind") == "browser":
             from rpa_core.capture.verify import ElementVerifier
@@ -3400,7 +3451,9 @@ class MainWindow(QMainWindow):
             verify_css = verifier.verify
             preview_css = verifier.preview
             clear_preview_css = verifier.clear_preview
-            shot_css = partial(verifier.verify, want_shot=True)
+            shot_css = partial(_browser_preview, verifier)
+        elif descriptor.get("kind") == "desktop":
+            shot_css = _desktop_preview_callable(descriptor)
         dialog = ElementDialog(
             descriptor,
             default_name=suggest_element_name(existing, hint),

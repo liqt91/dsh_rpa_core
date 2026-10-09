@@ -98,7 +98,6 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from rpa_core.capture.verify import preview_box_in_image
 from rpa_core.gui.persist import load_size, save_size
 from rpa_core.gui.theme import (
     DANGER,
@@ -347,7 +346,22 @@ def split_locator(locator: dict[str, Any]) -> dict[str, str]:
 
 # 元素编辑对话框尺寸：默认够宽（节点树 + 属性表），用户调过则沿用（M49 P1-1）
 _DIALOG_SIZE_KEY = "elementEditor/size"
-_DIALOG_DEFAULT_SIZE = (680, 720)
+# M47.12 加宽：维护者「整个捕获确认窗口可以宽一点，现在节点路径和属性太挤了」。
+# 680→860 是**默认**尺寸；下方 :func:`_open_wide_enough` 还会把**已保存的旧窄尺寸**
+# 顶到这个下限——否则用户上一次存过 560 宽，下次打开仍是窄的（持久化会盖过默认值）。
+_DIALOG_MIN_WIDTH = 860
+_DIALOG_DEFAULT_SIZE = (860, 760)
+
+
+def _open_wide_enough(saved: tuple[int, int] | None) -> tuple[int, int]:
+    """取本次开窗尺寸：已保存的尺寸，但**宽度不低于** ``_DIALOG_MIN_WIDTH``。
+
+    为什么要顶宽而不是直接用默认：持久化是「用户调过就沿用」，可那条规则在用户
+    尚未见过宽版之前会一直生效——M47.11 的 680 就是这么被继承下来的。高度不设下限：
+    矮一点只是少看几行，宽了才是「挤」。
+    """
+    width, height = saved or _DIALOG_DEFAULT_SIZE
+    return (max(int(width), _DIALOG_MIN_WIDTH), int(height))
 
 # 模型报错 → 界面中文。**键是模型原文的稳定子串**；`test_gui_element_editor.py` 会逐条
 # 触发这些规则并断言译文命中，所以模型改了措辞就会红（不会静默退回英文原文）。
@@ -517,6 +531,41 @@ def attribute_rows(entry: dict[str, Any], fragment: str) -> list[dict[str, Any]]
     return rows
 
 
+def node_label(entry: dict[str, Any]) -> str:
+    """一级节点的树行文本：**节点类型 + 该级勾选的属性**（对齐影刀那一屏）。
+
+    影刀的行是 ``div#kw.s-hotsearch-content`` 这样——一眼看到「这是个 div、
+    靠 id 和 class 定位」；我们此前摆的是**编译后的 fragment**（同样信息，但
+    还混着``:nth-of-type(2)``、``.cls1.cls2`` 这些「第几层、哪些类」的拼接细节，
+    且看不出「哪个属性是勾上的」——属性表在右半，得来回对照）。
+
+    这里按**已勾选**的属性重建（口径与 :func:`attribute_rows` / :func:`compile_fragment`
+    严格一致：``id`` 勾选→ ``#id``；class 逐个勾选 → ``.cls``；nth 勾选 →
+    ``:nth-of-type(n)``；tag恒在）。所以**这一行就是该级 fragment 的同源呈现**，
+    不会出现「树里写的和真selector 不一致」的两套口径。
+
+    刻意不显示未勾选的属性：那正是用户要去右半属性表里勾的东西，显示出来等于
+    暗示它已经参与定位。
+    """
+    tag = str(entry.get("tag") or "").strip()
+    fragment = str(entry.get("fragment") or "")
+    rows = attribute_rows(entry, fragment)
+    id_row = next((row for row in rows if row["attr"] == "id"), None)
+    if id_row and id_row["checked"]:
+        # 与 compile_fragment 同口径：id 等值命中即整层（tag 不再参与）。
+        return "#" + str(id_row["value"]) if not tag else f"{tag}#{id_row['value']}"
+    parts = [tag] if tag else []
+    if id_row and id_row["checked"]:
+        parts.append(f'[id*="{id_row["value"]}"]')
+    parts.extend(
+        "." + str(row["value"]) for row in rows if row["attr"] == "class" and row["checked"]
+    )
+    nth_row = next((row for row in rows if row["attr"] == "nth-of-type"), None)
+    if nth_row and nth_row["checked"]:
+        parts.append(f":nth-of-type({nth_row['value']})")
+    return "".join(parts) or tag or "?"
+
+
 def compile_fragment(entry: dict[str, Any], rows: list[dict[str, Any]]) -> str:
     """按属性表的勾选与匹配方式，把一层重新拼成 fragment。
 
@@ -547,20 +596,26 @@ def compile_fragment(entry: dict[str, Any], rows: list[dict[str, Any]]) -> str:
 
 
 class PreviewShot(QWidget):
-    """「预览」页签：页面截图 + 首个命中元素的**红框**（对齐影刀那一屏）。
+    """「预览」页签：窗口截图 + 首个命中元素的**红框**（对齐影刀那一屏）。
 
-    为什么是「截图 + 画框」而不是直接把浏览器画面搬过来：影刀的预览本身就是
-    ``captureVisibleTab`` 的截图（用户确认过「影刀的预览就是截图」），我们没有第二条
-    能拿到实时画面的通道，也不该为预览开一条。
+    截图来源（M47.12）：**host 统一走桌面坐标截屏**——``PIL.ImageGrab.grab(bbox=
+    窗口绝对矩形)``，与影刀同一路。维护者实测影刀「会把浏览器前面窗口的内容也截取
+    到」，那正是坐标截屏的特征（截的是屏幕上那块矩形），所以这不是缺陷、是我们的口径。
 
-    **红框坐标换算在 :func:`rpa_core.capture.verify.preview_box_in_image` 里做**（纯函数、
-    可测）：截图是物理像素、``getBoundingClientRect`` 是视口 CSS 像素，两者差一个
-    ``devicePixelRatio``。这里只负责把算好的框画到**控件坐标系**上——控件会把图缩放到
-    自身宽度，所以画之前还要按 ``控件宽 / 图宽`` 再缩一次。
+    为什么统一到桌面而不用 ``captureVisibleTab``：桌面腿（WinForms/Qt 控件）压根**没有**
+    「页面」可截，而两条通道各拍各的会让控件与控件长得一模一样、换算公式也两套
+    （视口截图要 dpr、坐标截屏要窗口原点）。统一后浏览器与桌面共用同一个控件、
+    同一种 ``box`` 形状，换算在 ``capture.screen_shot`` 里是两条纯函数。
 
-    三种状态都有明确文案，绝不停在「一片空白」让用户猜：
+    **红框坐标换算在 :mod:`rpa_core.capture.screen_shot` 里做**（纯函数、可测）：
+    桌面腿的元素矩形本就是屏幕坐标、与图同源 1:1；浏览器腿要把视口 CSS 像素
+    换算过去（差一个 ``图宽/视口宽`` 的缩放与一个视口原点偏移）。这里只负责把算好的框
+    画到**控件坐标系**上——控件会把图缩放到自身宽度，所以画之前还要按
+    ``控件宽 / 图宽`` 再缩一次。
+
+    各种状态都有明确文案，绝不停在「一片空白」让用户猜：
     没截图 → 「尚未获取预览截图」；有图但没命中 → 「本页未命中该选择器」；
-    有图有命中但框算不出来 → 「已命中，但元素在视口外」。
+    有图有命中但框算不出来 → 「已命中，但元素不在窗口内（无框可画）」。
 
     刻意**不缩放图**（只画框跟随缩放）：用户要看的是「元素在页面哪儿」，缩小到全图
     塞进控件会让截图细节全看不清；图按原始像素居中显示，超出部分裁掉。
@@ -585,7 +640,7 @@ class PreviewShot(QWidget):
     def show_shot(self, data_url: str, box: dict[str, float] | None) -> bool:
         """显示一张截图与（可选的）红框。返回图是否**解出来了**。
 
-        ``data_url`` 是 ``captureVisibleTab`` 的 ``data:image/png;base64,...``。
+        ``data_url`` 是 ``data:image/png;base64,...``（host 坐标截屏的产物）。
         解不出来（不是 data URL / base64 坏/ 空图）时**不抛**：调用方据此把文案改成
         「截图无法显示」，而校验命中数仍然有效——截图是观感增强。
         """
@@ -598,7 +653,7 @@ class PreviewShot(QWidget):
             return False
         self._pixmap = pixmap
         self._box = box
-        self._message = "" if box else "已命中，但元素不在当前视口内（无框可画）"
+        self._message = "" if box else "已命中，但元素不在窗口内（无框可画）"
         self.update()
         return True
 
@@ -799,8 +854,13 @@ class ElementEditorForm(QWidget):
         self.locate_page = QWidget()
         self._build_path_tree(self.locate_page)
         self.tabs.addTab(self.locate_page, "精准定位")
-        # 页签切换：**只在切到「精准定位」时才跑一次截图**。影刀是进页签才截，我们
-        # 照做——每次改css 都截一张 base64 PNG 既慢又占内存，而用户在「精准定位」里
+        # **默认停在「精准定位」**（M47.12，维护者「默认展示精准定位便签页」）。
+        # 用户进编辑器的第一诉求是「改选择器」，那棵树和属性表才是主力；截图是
+        # 改完之后的确认手段。附带好处：默认页不是预览 ⇒ 开框不会顺手拍一张
+        # 几百KB 的PNG。
+        self.tabs.setCurrentIndex(1)
+        # 页签切换：**只在切到「预览」时才跑一次截图**。影刀是进页签才截，我们
+        # 照做——每次改 css 都截一张既慢又占内存，而用户在「精准定位」页里
         # 改选择器时根本不看图。
         self.tabs.currentChanged.connect(self._on_tab_changed)
         layout.addWidget(self.tabs, 1)
@@ -906,14 +966,6 @@ class ElementEditorForm(QWidget):
         self.path_label.setStyleSheet(f"color: {TEXT_SECONDARY};")
         layout.addWidget(self.path_label)
 
-        # 属性表标题摆在并排区**之上**（它是整块区域的说明，不属于右列本身）
-        self.attr_label = QLabel(
-            "属性（勾选参与定位；匹配方式「包含」= 属性值出现即可，"
-            "改动会重写主选择器）"
-        )
-        self.attr_label.setStyleSheet(f"color: {TEXT_SECONDARY};")
-        layout.addWidget(self.attr_label)
-
         # 节点树与属性表**并排**（M47.10，维护者要求）：树在左、属性表在右，中间可拖。
         # 此前是上下堆叠——树的每一行是一条祖先链层级，属性表是「选中那层的属性」，
         # 两者是「选级 → 看/改该级」的联动关系，并排后联动一眼可见，也不必上下滚动。
@@ -922,22 +974,26 @@ class ElementEditorForm(QWidget):
         self.path_list.setMinimumHeight(150)
         self._composing_path = False
         for index, entry in enumerate(self._path):
-            item = QListWidgetItem(str(entry["fragment"]))
+            item = QListWidgetItem(node_label(entry))
             item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
             item.setCheckState(Qt.CheckState.Checked)
+            # tooltip 补全 fragment 与序号：行内为了紧凑只摆「类型 + 勾选属性」。
             extra = entry.get("id") or (entry.get("classes") or "")
             item.setToolTip(
                 f"层级 {index + 1}/{len(self._path)} · tag={entry.get('tag') or '?'}"
                 + (f" · {extra}" if extra else "")
+                + f"\n参与定位的片段：{entry.get('fragment')}"
             )
             self.path_list.addItem(item)
         self.path_list.itemChanged.connect(self._on_path_item_changed)
         splitter.addWidget(self.path_list)
         self._build_attr_table(splitter)   # 表只进右半
-        # 左树窄、右表宽：属性表 4 列（参与/属性/匹配方式/值）需要更宽
+        # **两栏均分**（M47.12，维护者「节点路径和属性框均分即可」）。此前是 1:2
+        # （`setSizes([180, 360])`），理由是「属性表 4 列需要更宽」——实测树那几行
+        # 加上类型与勾选属性之后并不窄，而1:2 让树右侧留白、显得空。
         splitter.setStretchFactor(0, 1)
-        splitter.setStretchFactor(1, 2)
-        splitter.setSizes([180, 360])
+        splitter.setStretchFactor(1, 1)
+        splitter.setSizes([260, 260])
         self.path_splitter = splitter
         layout.addWidget(splitter, 1)
         self._sync_path_checks_from_css()
@@ -1109,6 +1165,20 @@ class ElementEditorForm(QWidget):
 
     # -- 浏览器：编辑中预览（M48/C3，通道回调注入式） -------------------------
 
+    def enable_shot_channel(self, shot: Callable[..., dict]) -> None:
+        """桌面腿接上截图通道（``shot()`` 无参：窗口与元素矩形已在服务层封好）。
+
+        与 :meth:`enable_live_preview` 刻意**分开**：桌面腿没有「页面」可高亮，
+        没有 css 改动可防抖，所以「命中数实时标签 + 驻留预览」整条都不适用，
+        只剩「点开预览页拍一张」。混在一个方法里会留下一堆
+        ``if kind == "browser"`` 分支。
+
+        **页签已经在 :meth:`_build_desktop` 里摆出来了**（默认停在「精准定位」），
+        没接通道时切过去只会看到「尚未获取预览截图」——与 browser 腿未注入时同一
+        口径：不藏页签，藏掉比「这一页暂时没内容」更难解释。
+        """
+        self._shot_css = shot
+
     def enable_live_preview(
         self,
         preview: Callable[[str], dict],
@@ -1158,7 +1228,13 @@ class ElementEditorForm(QWidget):
     def _run_shot(self) -> None:
         """取一张截图 + 首个命中的红框，填进「预览」页。
 
-        没有截图通道（未注入 / 桌面表单）时只更新文案，不发请求。
+        两条腿同一个控件、同一条通道回调，但**入参形状不同**：
+
+        - browser：入参是 css 字符串（要先校验才知道命中谁）；
+        - desktop：没有 css 概念，元素**就是捕获时那一个**⇒ 入参是空的，
+          窗口句柄与元素矩形由 :meth:`enable_shot_channel` 注入时就已经封好了。
+
+        没有截图通道（未注入 / 非win32）时只更新文案，不发请求。
         """
         if not hasattr(self, "preview_shot"):
             return
@@ -1166,6 +1242,11 @@ class ElementEditorForm(QWidget):
             self.preview_shot.clear(
                 "尚未获取预览截图（当前环境未接入截图通道）"
             )
+            return
+        if self._kind == "desktop":
+            # 桌面腿：不需要选择器，直接拍（入参留空——服务层已绑定窗口与矩形）。
+            self._shot_seq += 1
+            self._dispatch(self._shot_css, (), kind="shot", seq=self._shot_seq)
             return
         css = self.css_edit.text().strip()
         if not css:
@@ -1246,11 +1327,16 @@ class ElementEditorForm(QWidget):
         self.set_hit_label(text, color)
 
     def _on_shot_done(self, data: dict) -> None:
-        """截图回传落地：**先按图的实际像素尺寸**把视口 rect 换算成图内框，再显示。
+        """截图回传落地（M47.12：截图已由 host 的坐标截屏算好 ``box``）。
 
-        顺序不能反：``preview_box_in_image`` 需要图宽（它按「图实际宽 / 视口宽」缩放，
-        而不是拿 ``dpr`` 猜——Windows 分数缩放下两者会差 1px，小元素上就是「框没套住」）。
-        所以先解码图拿到尺寸，再算框，最后一次性交给 :class:`PreviewShot`。
+        与 M47.11 的一处关键差别：**图内红框不再在这里算**。坐标截屏的图左上角 =
+        窗口左上角，而浏览器元素矩形是视口 CSS 像素，两者换算需要「窗口绝对矩形」
+        （只有 host 拿得到 win32 ``GetWindowRect``）＋ 视口屏幕原点（只有扩展能给）。
+        所以整段换算被收在 :func:`rpa_core.capture.screen_shot.browser_preview_shot`
+        里做完，这里只负责展示与降级文案。
+
+        顺序仍不能反：先解码图拿到尺寸（控件按图宽缩放，红框得跟同一比例），
+        最后一次性交给 :class:`PreviewShot`。
         """
         if data.get("seq") != self._shot_seq:
             return  # 陈旧截图：用户已切走或又改了 css
@@ -1260,22 +1346,22 @@ class ElementEditorForm(QWidget):
             return
         data_url = data.get("dataUrl")
         if not isinstance(data_url, str) or not data_url:
-            # 要了图但没拿到（无 windowId / 权限 / 浏览器限制）：说清是哪一种，
-            # 别停在空白页签让用户猜是不是功能坏了。
+            # 要了图但没拿到：说清是哪一种，别停在空白页签让用户猜是不是功能坏了。
+            # 四种原因分别是「没命中」「扩展没给窗口句柄」「截屏失败」「选中了但没元素」。
             count = data.get("count")
+            reason = data.get("shotError")
             if count == 0:
-                self.preview_shot.clear("本页未命中该选择器，没有可预览的元素")
+                self.preview_shot.clear("未命中该选择器，没有可预览的元素")
+            elif reason == "no-window-handle" or not data.get("windowHandle"):
+                self.preview_shot.clear(
+                    f"已命中 {count} 个，但未能定位到浏览器窗口（请先切到该浏览器窗口再预览）"
+                )
             else:
                 self.preview_shot.clear(
-                    f"已命中 {count} 个，但浏览器未返回截图（页面过大或受保护页面会这样）"
+                    f"已命中 {count} 个，但截图失败（窗口最小化或锁屏会话时会这样）"
                 )
             return
-        shot = decode_shot(data_url)
-        image_size = (shot.width(), shot.height()) if shot is not None else None
-        box = preview_box_in_image(
-            data.get("rect"), data.get("viewport"), image_size
-        )
-        self.preview_shot.show_shot(data_url, box)
+        self.preview_shot.show_shot(data_url, data.get("box"))
 
     def set_hit_label(self, text: str, color: str) -> None:
         """写**唯一**那条命中数标签（预览与「校验元素」共用同一条）。
@@ -1356,14 +1442,32 @@ class ElementEditorForm(QWidget):
 
         hint = QLabel(
             "勾选即写入 locator，取消即移除；值为空等于不勾。"
-            "字段集按 backend 分：uia 与 win32 的执行器读取**不同的** locator 字段，"
-            "提供对面后端的字段只会产出「写了没人读」的死字段。"
         )
         hint.setWordWrap(True)
         hint.setStyleSheet(f"color: {TEXT_SECONDARY};")
         layout.addWidget(hint)
-        self._build_locator_path_tree(layout)
-        self._build_anchor_view(layout)
+        # 桌面腿的预览（M47.12）：**统一走桌面坐标截屏**——桌面元素没有「页面」可拍，
+        # 但窗口/控件截图恰恰是它原生该有的样子（红框换算还是1:1，见 screen_shot）。
+        # 默认停在「精准定位」（即这一屏字段表），与browser 腿同一口径。
+        self.desktop_tabs = QTabWidget()
+        self.preview_shot = PreviewShot()
+        self.desktop_tabs.addTab(self.preview_shot, "预览")
+        locate = QWidget()
+        locate_layout = QVBoxLayout(locate)
+        locate_layout.setContentsMargins(4, 4, 4, 4)
+        locate_layout.addLayout(layout)
+        self.desktop_tabs.addTab(locate, "精准定位")
+        self.desktop_tabs.setCurrentIndex(1)
+        self._desktop_tab_host = self
+        self._build_locator_path_tree(locate_layout)
+        self._build_anchor_view(locate_layout)
+        # 桌面截图通道（注入式）：app 侧按 metadata 里的 windowHandle + 元素矩形接上；
+        # 未注入时页签仍在，只是停在「尚未获取预览截图」（同 browser 腿口径）。
+        self._shot_css = None
+        self._shot_seq = 0
+        self._preview_signal = _PreviewDone()
+        self._preview_signal.done.connect(self._on_preview_done)
+        self.desktop_tabs.currentChanged.connect(self._on_tab_changed)
         self._on_backend_changed(self.backend_combo.currentText())
 
     # -- 桌面：祖先链节点树（D1，M50 起可编辑） -------------------------------
@@ -1725,10 +1829,10 @@ class ElementEditorDialog(QDialog):
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle(f"编辑元素 · {name}")
-        self.setMinimumWidth(560)
+        self.setMinimumWidth(_DIALOG_MIN_WIDTH)
         # 默认开大一点：节点树 + 属性表是主工作区，窄窗会把表格压成三行；
-        # 用户调过的尺寸下次沿用（M49 P1-1，键见 persist 模块）。
-        self.resize(*(load_size(_DIALOG_SIZE_KEY) or _DIALOG_DEFAULT_SIZE))
+        # 用户调过的尺寸下次沿用（M49 P1-1，键见 persist 模块），但宽度有下限。
+        self.resize(*_open_wide_enough(load_size(_DIALOG_SIZE_KEY)))
 
         layout = QVBoxLayout(self)
         header = "浏览器元素" if document.get("kind") == "browser" else "桌面元素"
@@ -1740,10 +1844,16 @@ class ElementEditorDialog(QDialog):
         layout.addWidget(self.form)
         # 编辑中预览（M48）：browser 元素且调用方注入了通道才启用；关窗（含取消）
         # 一律发 clear 收走页面上的黄框——预览框不能陪对话框一起「留在页面上」。
-        # ``shot_css`` 是截图通道（M47.11）：切到「预览」页签才拍，不随防抖预跑。
+        # ``shot_css`` 是截图通道（M47.12）：切到「预览」页签才拍，不随防抖预跑。
+        #
+        # **两条腿都要接上截图**（M47.12 起桌面腿也有「预览」页签）：browser 走
+        # enable_live_preview 的第三参，desktop 走 enable_shot_channel——分开的理由
+        # 见那两个方法的 docstring（桌面没有「页面」可高亮、没有 css 可防抖）。
         if document.get("kind") == "browser" and preview_css is not None:
             self.form.enable_live_preview(preview_css, clear_preview_css, shot_css)
             self.finished.connect(self.form.shutdown_preview)
+        elif shot_css is not None:
+            self.form.enable_shot_channel(shot_css)
 
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Save

@@ -15,7 +15,7 @@ const HOST_NAME = "com.rpa_core.ext_bridge";
 // 快照（2026-09-29 真机排障：仓库已修好「已开网页无红框」，但浏览器还跑着旧 background，
 // 表现成「修复无效」）。把标识随 ack/进度/结果回传，host 侧对账即可判「扩展过期」，
 // 不用再靠症状猜。
-const EXT_BUILD = "0.7.0";
+const EXT_BUILD = "0.8.0";
 const RECONNECT_MS = 3000;      // 断开后的重连退避
 const ALARM_NAME = "rpa-bridge-reconnect";  // SW 被回收时的兜底拉起（MV3 alarm 最小 30s）
 const PERMISSION_KEY = "rpaExecPermission";
@@ -415,32 +415,43 @@ async function runVerify(msg) {
         return;
       }
     }
-    // 截图：在 content **已经把黄框画好之后**拍当前视口（captureVisibleTab 拍的就是
-    // 视口，与我们回传的 rect/viewport 同一坐标系）。失败不当校验失败——截图是观感
-    // 增强，命中数才是判据；故只在回传里省掉 dataUrl，其余照旧。
+    // M47.12：预览截图**改由 host 统一走桌面坐标截屏**（ImageGrab 截窗口那块屏幕），
+    // 与影刀同一路（维护者实测：影刀的 web 元素截图会把浏览器前面窗口也截进去，
+    // 那正是坐标截屏的特征）。所以扩展侧**不再拍图**，只负责把 content 算好的
+    // 视口矩形 / 视口屏幕原点回传——拍图要窗口绝对矩形，那是 host 的活。
+    //
+    // `windowId` 要留着：host 靠它找窗口矩形。chrome.windows.get 能拿到该窗口的
+    // 顶层 hwnd（Windows 上 Chrome 的窗口句柄），拿不到就只回 windowId 让host
+    // 自己在 Z 序里找。
     let shot = null;
     if (wantShot && !silent) {
-      shot = await captureVisible(tab);
+      shot = await windowHandleFor(tab);
     }
     post({
       ...reply,
       ...(resp || {}),
       silent,
       url: tab.url || "",
-      ...(shot ? { dataUrl: shot } : {}),
+      ...(shot ? { windowHandle: shot } : {}),
     });
   } catch (err) {
     post({ ...reply, error: String((err && err.message) || err) });
   }
 }
 
-// 当前视口截图（base64 data:image/png）。与 op `screenshot` 同一个 API，但这里
-// **不抛**：拿不到图（无 windowId / 权限 / 浏览器限制）只返回 null，让校验照常收口。
-async function captureVisible(tab) {
+// 顶层窗口句柄：host 侧桌面坐标截屏需要窗口的绝对矩形，而截图已从扩展移到 host
+// （M47.12）。Windows 上 chrome.windows.get 的 winId 就是 Chrome 的顶层 hwnd；
+// 拿不到（权限/其它平台）返回 null，host 会退回按进程名在 Z 序里找那个浏览器窗。
+// **不抛**：句柄拿不到只影响预览出图，不影响命中数这条真判据。
+async function windowHandleFor(tab) {
   try {
-    if (!tab || !tab.windowId) return null;
-    const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, { format: "png" });
-    return dataUrl || null;
+    if (!tab || tab.windowId == null || tab.windowId === chrome.windows.WINDOW_ID_NONE) {
+      return null;
+    }
+    const win = await chrome.windows.get(tab.windowId, { populate: false });
+    const hwnd = win && win["nativeWindowHandle"];
+    // 只认「像是真句柄」的值（正整数）；其它形态（0 / undefined）一律当拿不到。
+    return typeof hwnd === "number" && hwnd > 0 ? hwnd : null;
   } catch {
     return null;
   }

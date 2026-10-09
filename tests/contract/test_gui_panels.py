@@ -337,8 +337,11 @@ def test_element_dialog_desktop_edits_locator_by_fields_not_json(qapp):
     assert dialog.form.field_edits["name"].text() == "确定"
     assert "命中 3 个" in dialog.verify_label.text()
     assert "#cf222e" in dialog.verify_label.styleSheet()  # 命中非 1 = 红
-    assert "controlType: Button" in dialog.meta_label.text()
-    assert "window: 记事本" in dialog.meta_label.text()
+    # M47.12：下方描述区不再重复摆「字段表里能勾的」信息——`controlType` 已经是一
+    # 个勾选框，平行摆一份只读副本只会让人怀疑改了到底生效没有。
+    assert "controlType" not in dialog.meta_label.text()
+    # 只留定位用不上的：所在窗口（不进 locator），以及类名的**用途**提示。
+    assert "所在窗口：记事本" in dialog.meta_label.text()
 
     # 取消全部身份字段 → 结构校验拦住保存（旧的手写 JSON 校验查不出这一条）
     dialog.form.field_boxes["controlType"].setChecked(False)
@@ -553,25 +556,40 @@ def test_element_dialog_shows_preview_and_locate_tabs(qapp):
     assert dialog.form.anchor_add_button.isEnabled() is False
 
 
-def test_element_dialog_shows_semantic_features_and_fingerprint(qapp):
-    """语义特征与页面指纹要展示（它们正是「命中多个时人工消歧」最有用的信息）。"""
+def test_element_dialog_metadata_keeps_only_non_checkable_info(qapp):
+    """描述区只留「定位用不上、且字段表里勾不到」的信息（M47.12）。
+
+    维护者指正：「下方展示了很多描述信息，可以不用，这些信息大部分应该作为节点
+    属性供勾选」。判据据此**反向**钉死两件事：
+
+    - 能勾的一律不在描述区（tag/id/classes/text 走属性表；语义特征与 url/title/
+      rect 本来就定位用不上——rect 已由预览红框承担）；
+    - 空时给一句占位说明，避免「信息凭空消失」的错觉。
+
+    这条是**反向判据**：删东西的改动天然容易假绿（断言少写一条照样通过），
+    所以这里逐条点名被删的键，而不是只断言「描述区是空的」。
+    """
     from rpa_core.gui.element_panel import ElementDialog
 
     dialog = ElementDialog(_captured_browser_descriptor(), default_name="searchBox")
     meta = dialog.meta_label.text()
-    for expected in (
-        "role: searchbox",
-        "accessibleName: 搜索",
-        "placeholder: 请输入搜索内容",
-        "label: 搜索框",
-        "containerText: 主页 搜索 更多",
-        "url: https://www.bing.com/",
-        "title: Bing",
+    for gone in (
+        "role:",
+        "accessibleName:",
+        "placeholder:",
+        "label:",
+        "containerText:",
+        "url:",
+        "title:",
+        "tag:",
+        "rect:",
+        "请输入搜索内容",
+        "https://www.bing.com/",
+        "300×40",
     ):
-        assert expected in meta, expected
-    # 既有行集不能因此丢（tag/id/classes/rect 仍要展示）
-    assert "tag: textarea" in meta
-    assert "rect: 300×40 @ (10,20)" in meta
+        assert gone not in meta, gone
+    # browser 元素在描述区已无「非定位用不上」的东西⇒ 落到占位说明
+    assert "可勾选的属性" in meta
 
 
 def test_element_dialog_shot_channel_is_forwarded(qapp):
@@ -630,21 +648,57 @@ def _captured_desktop_descriptor() -> dict:
     }
 
 
-def test_element_dialog_shows_desktop_class_and_name(qapp):
-    """桌面元数据要展示 className / name。
+def test_element_dialog_metadata_only_hints_at_desktop_class(qapp):
+    """桌面描述区不罗列字段表里能勾的**值**（M47.12；提示分后端见下一条）。
 
-    探针实测发现：捕获 agent 一直回传 ``className``（win32 侧定位无窗口文本控件的
-    唯一手段，也是 ``classNameRe`` 的输入），但 GUI 从没显示过它。
+    上一版把 ``className`` 的值抄在这里（探针实测捕获 agent 一直回传它、GUI 从没
+    显示过）。但它同时是下方 locator 字段表里的一个勾选框 + 可编辑输入框——摆一份
+    只读平行副本，只会让用户怀疑「改了到底生效没有」。
     """
     from rpa_core.gui.element_panel import ElementDialog
 
     dialog = ElementDialog(_captured_desktop_descriptor(), default_name="submit")
     meta = dialog.meta_label.text()
-    assert "controlType: Button" in meta
-    assert "automationId: submitButton" in meta
-    assert "name: Submit" in meta
-    assert "className: WindowsForms10.BUTTON.app.0.34f5582_r8_ad1" in meta
-    assert "window: RPA Core Desktop Demo" in meta
+    # 字段表里能勾的：值一律不在描述区
+    for gone in ("controlType", "automationId", "submitButton", "name: Submit"):
+        assert gone not in meta, gone
+    # 只留定位用不上的：所在窗口（不进 locator）
+    assert "所在窗口：RPA Core Desktop Demo" in meta
+    # **类名提示只在 win32 后端出现**：fixture 是 uia，而 uia 字段表
+    # （controlType / automationId / name / matchMode）里没有 className 可勾——
+    # 无条件打这句等于指着一个不存在的入口（捕获 agent 两种后端都回传 className）。
+    assert "win32 定位靠类名" not in meta
+    # 但 uia 的身份字段仍然在字段表里可勾可编辑（删的只是平行副本，不是数据）
+    assert dialog.form.field_boxes["controlType"].isChecked()
+    assert dialog.form.field_boxes["automationId"].isChecked()
+    assert dialog.form.field_edits["automationId"].text() == "submitButton"
+
+
+def test_element_dialog_metadata_hints_win32_class_use(qapp):
+    """win32 后端才提示「靠类名定位」——因为只有那张字段表真的有 className。
+
+    与 :func:`test_element_dialog_metadata_only_hints_at_desktop_class` 配对：
+    上一条钉住「uia 不出现」，本条钉住「win32 出现」。少任何一条都会漏掉一种漂移
+    （把提示错给 uia / 该提示时漏掉）。
+    """
+    from rpa_core.gui.element_panel import ElementDialog
+
+    descriptor = _captured_desktop_descriptor()
+    descriptor["selector"]["locator"] = {
+        "backend": "win32",
+        "title": "提交",
+        "className": "WindowsForms10.BUTTON.app.0.34f5582_r8_ad1",
+    }
+    dialog = ElementDialog(descriptor, default_name="submit")
+    meta = dialog.meta_label.text()
+    assert "win32 定位靠类名" in meta
+    assert "所在窗口：RPA Core Desktop Demo" in meta
+    # 值不进描述区，但仍在字段表里（win32 切过来后 className 勾上且带值）
+    assert "WindowsForms10.BUTTON" not in meta
+    assert dialog.form.field_boxes["className"].isChecked()
+    assert dialog.form.field_edits["className"].text().startswith("WindowsForms10.BUTTON")
+    # title 是可勾字段 ⇒ 同样不进描述区
+    assert "title: 提交" not in meta
 
 
 def test_element_dialog_hides_per_session_desktop_values(qapp):

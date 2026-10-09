@@ -400,6 +400,10 @@ def test_browser_form_has_preview_and_locate_tabs(qapp):
 
     AI 页签是维护者明确「先不做」的：摆一个点不开的空页签比不摆更糟，用户会以为
     功能坏了。所以判据正面钉住「页签数 == 2 且标题就是这两个」。
+
+    **默认停在「精准定位」**（M47.12，维护者「默认展示精准定位便签页」）：用户进
+    编辑器的主诉求是改选择器，树 + 属性表才是主力，截图是改完之后的确认手段。
+    顺带还有个好处：默认页不是预览 ⇒ 开框不会顺手拍一张几百 KB 的 PNG。
     """
     from rpa_core.gui.element_editor import ElementEditorForm, PreviewShot
 
@@ -408,7 +412,7 @@ def test_browser_form_has_preview_and_locate_tabs(qapp):
     assert titles == ["预览", "精准定位"]
     assert isinstance(form.tabs.widget(0), PreviewShot)
     assert form.tabs.widget(1) is form.locate_page
-    assert form.tabs.currentIndex() == 0  # 开框就在预览页
+    assert form.tabs.currentIndex() == 1  # 默认精准定位，不是预览
 
 
 def test_selector_choice_and_anchor_are_greyed_out(qapp):
@@ -500,10 +504,14 @@ def test_shot_failure_does_not_touch_hit_label(qapp):
 
 
 def test_shot_without_data_url_distinguishes_zero_hit(qapp):
-    """要了图却没拿到：**区分「没命中」与「命中了但截不到」**。
+    """要了图却没拿到：**区分四种失败**，用户动作完全不同。
 
-    两种情形的用户动作完全相反（改选择器 vs 换页面/等截图），混成一句「预览失败」
-    等于让用户自己猜。
+    -没命中 ⇒ 改选择器；
+    - 命中了但**扩展没给窗口句柄** ⇒ 切到那个浏览器窗口再预览；
+    - 有句柄但**截屏失败**（最小化/锁屏）⇒ 换个窗口状态。
+
+    混成一句「预览失败」等于让用户自己猜（这正是 M47.11 之前那句「浏览器未返回
+    截图」的问题：它把「没命中」和「截不到」说成了一件事）。
     """
     from rpa_core.gui.element_editor import ElementEditorForm
 
@@ -515,9 +523,22 @@ def test_shot_without_data_url_distinguishes_zero_hit(qapp):
     form._on_shot_done({"seq": form._shot_seq, "count": 0})
     assert "未命中" in form.preview_shot.message
 
+    # 命中了但扩展没回窗口句柄（拿不到窗口矩形 ⇒ 截不了）
     form._shot_seq += 1
-    form._on_shot_done({"seq": form._shot_seq, "count": 3})
-    assert "未返回截图" in form.preview_shot.message
+    form._on_shot_done({"seq": form._shot_seq, "count": 3, "shotError": "no-window-handle"})
+    assert "未能定位到浏览器窗口" in form.preview_shot.message
+
+    # 有句柄但截屏本身失败
+    form._shot_seq += 1
+    form._on_shot_done(
+        {
+            "seq": form._shot_seq,
+            "count": 2,
+            "windowHandle": 123,
+            "shotError": "shot-failed",
+        }
+    )
+    assert "截图失败" in form.preview_shot.message
 
 
 def test_stale_shot_reply_is_discarded(qapp):
@@ -571,20 +592,186 @@ def test_locate_page_explains_missing_path(qapp):
     assert any("没有捕获时的节点路径" in text for text in labels)
 
 
-def test_desktop_form_has_no_tabs(qapp):
-    """桌��分支**不摆**这两个页签：它没有页面可截图，也没有 DOM 路径可勾。
+def test_desktop_form_has_preview_and_locate_tabs(qapp):
+    """桌面分支**也有**「预览 / 精准定位」两页签（M47.12 推翻 M47.11 的结论）。
 
-    摆一个永远空着的「预览」页签就是在承诺一个不存在的能力。
+    M47.11 的判据写的是「桌面分支不摆这两个页签」，理由是「它没有页面可截图」。
+    M47.12 实测否掉了这条理由：桌面腿截的是**窗口/控件**（win32 ``GetWindowRect``
+    + 坐标截屏），而且 ``capture_as_image`` 走屏幕 BitBlt 这条路本来就在执行器里
+    用了（``desktop.screenshot`` 命令）——**不是不存在的能力，是没接到编辑区**。
+    统一到桌面坐标截屏后，桌面与浏览器共用同一个 ``PreviewShot`` 控件，
+    不摆页签反而让「两条腿长得不一样」。
+
+    仍然**不摆**的是浏览器专属那两样：XPath 单选与锚点「添加」（桌面腿的锚点是
+    ``_build_anchor_view``，真能用；XPath 对两条腿都还没有消费方）。
+    """
+    from rpa_core.gui.element_editor import ElementEditorForm, PreviewShot
+
+    form = ElementEditorForm(
+        {"kind": "desktop", "selector": {"locator": {"backend": "win32", "controlId": 3}}}
+    )
+    titles = [form.desktop_tabs.tabText(i) for i in range(form.desktop_tabs.count())]
+    assert titles == ["预览", "精准定位"]
+    assert isinstance(form.desktop_tabs.widget(0), PreviewShot)
+    # 默认也停在「精准定位」（与browser 腿同一口径）。
+    assert form.desktop_tabs.currentIndex() == 1
+    # 浏览器专属的两样不摆。
+    assert not hasattr(form, "selector_xpath_radio")
+    assert not hasattr(form, "anchor_add_button")
+
+
+def test_desktop_preview_screenshot_takes_no_css_argument(qapp):
+    """桌面腿的截图通道**无参调用**：元素就是捕获时那一个，没有 css 可传。
+
+    这条钉住 :meth:`_run_shot` 里的分流——browser 传 ``(css,)``、desktop 传 ``()``。
+    如果哪天桌面也要求传选择器，这里会红，而红的方向就是「调用点与签名又对不上」
+    （M47.11 就在``FakeEditor`` 签名没跟上时集体红过一次）。
     """
     from rpa_core.gui.element_editor import ElementEditorForm
 
     form = ElementEditorForm(
         {"kind": "desktop", "selector": {"locator": {"backend": "win32", "controlId": 3}}}
     )
-    assert not hasattr(form, "tabs")
-    assert not hasattr(form, "preview_shot")
-    assert not hasattr(form, "selector_xpath_radio")
-    assert not hasattr(form, "anchor_add_button")
+    calls: list[tuple] = []
+
+    def shot():
+        calls.append(())
+        return {"shotError": "shot-failed"}
+
+    form.enable_shot_channel(shot)
+    form._run_shot()
+    # 截图走**工作线程**⇒ 必须等信号回来。
+    #
+    # 这里刻意**不用** `QSignalSpy.wait()`：它在单文件跑时绿、全量跑时红（实测
+    # `spy.wait(2000)` 返回 False）——阻塞式等待在整套件跑、别的用例留了未清的事件
+    # 循环时不可靠。改成与 `test_gui_panels.py` 里 `pump_until` 同一套写法：泵事件 +
+    # 轮询条件。**判据自身的稳定性也是判据质量的一部分**——一条时绿时红的判据
+    # 会把真回归淹没在噪声里。
+    import time as _time
+
+    def pump_until(predicate, timeout: float = 10.0) -> bool:
+        deadline = _time.time() + timeout
+        while _time.time() < deadline:
+            qapp.processEvents()
+            if predicate():
+                return True
+            _time.sleep(0.02)
+        return False
+
+    assert pump_until(lambda: calls == [()]), "桌面截图通道没被无参调用"
+    assert calls == [()], f"桌面截图通道必须能无参调用，实际 {calls}"
+
+
+def test_path_tree_and_attr_table_are_equal_width(qapp):
+    """节点树与属性表**均分**（M47.12，维护者「节点路径和属性框均分即可」）。
+
+    M47.10 是 1:2（``setSizes([180, 360])``），理由是「属性表 4 列需要更宽」。实测
+    树那几行加上类型与勾选属性之后并不窄，而 1:2 让树右侧大片留白、显得空。
+    """
+    from rpa_core.gui.element_editor import ElementEditorForm
+
+    form = ElementEditorForm(_path_document())
+    form.show()
+    form.resize(900, 700)
+    form.path_splitter.setSizes([450, 450])
+    sizes = form.path_splitter.sizes()
+    assert len(sizes) == 2
+    # **不能断言严格相等**：splitter 有 handle（默认几 px），两栏总宽要减掉它，
+    # 实测均分请求拿到的是 [438, 437]。钉「差值不超过 handle 宽」才是「均分」的
+    # 真实语义——写成 `sizes[0] == sizes[1]` 只会得到一条永远红的假判据。
+    handle = form.path_splitter.handleWidth()
+    assert abs(sizes[0] - sizes[1]) <= handle + 1, (
+        f"两栏应均分（差值≤handle 宽 {handle}），实际 {sizes}"
+    )
+    # 反向：偏离均分（例如 1:2）必须超出差值上限，否则这条判据抓不到真回归
+    form.path_splitter.setSizes([180, 720])
+    skewed = form.path_splitter.sizes()
+    assert abs(skewed[0] - skewed[1]) > handle + 1, f"1:2 不该被判成均分，实际 {skewed}"
+
+
+def test_path_splitter_stretch_factors_keep_columns_equal():
+    """``setStretchFactor`` 也要均分（用户拖宽窗口后多出的宽度怎么分）。
+
+    上一条只钉了 ``setSizes``（**初始**比例），漏了另一半：``setStretchFactor``
+    决定用户拉宽窗口后多出来的宽度怎么分。少钉这一半，注入
+    ``setStretchFactor(1, 2)`` 会**全绿**——但真机上用户一拖宽窗口，属性表立刻
+    比节点路径宽一倍，正是「太挤了」那条诉求的复发。
+
+    **为什么在源码层钉、而不是读运行时属性**（两条都实测过，不是猜的）：
+
+    1. **读取侧不存在**：``QSplitter.stretchFactor()`` 在 PySide6 里**没有**——
+       只有 ``setStretchFactor``。写 ``splitter.stretchFactor(i)`` 拿到的是
+       ``AttributeError``（PySide6 还会提示 "Did you mean: 'setStretchFactor'?"）。
+    2. **运行时也测不到**：对裸 QSplitter 实测，``f=(1,1)`` 与 ``f=(1,2)`` 在
+       ``resize(1400)`` + ``processEvents()`` 之后 sizes **完全相同**（都还是
+       ``[318, 318]``）——offscreen 下 ``resize`` 不触发 splitter 重分配。
+
+    ⇒ 离屏环境里「拉宽后仍均分」根本不可观测，只能钉配置本身。这与
+    ``test_field_tables_match_what_executors_actually_read`` 是同一类妥协；
+    判据要写清**为什么只能这样**，免得后人以为漏了运行时验证。
+    """
+    import re
+    from pathlib import Path
+
+    source = (
+        Path(__file__).resolve().parents[2]
+        / "src" / "rpa_core" / "gui" / "element_editor.py"
+    ).read_text(encoding="utf-8")
+    pairs = re.findall(r"splitter\.setStretchFactor\((\d+),\s*(\d+)\)", source)
+    assert pairs, "没找到 setStretchFactor 调用（splitter 布局代码被改名/挪走了？）"
+    factors = [int(value) for _index, value in pairs]
+    assert factors == [1, 1], (
+        f"两栏 stretch factor 应都是 1（新增宽度平均分），实际 {factors}——"
+        f"改成 1:2 的话，用户一拉宽窗口属性表就比节点路径宽一倍"
+    )
+
+
+def test_dialog_minimum_width_is_wide_enough(qapp):
+    """两个窗口的最小宽度都≥ 860（M47.12「整个捕获确认窗口可以宽一点」）。
+
+    同时钉住 :func:`_open_wide_enough`：**已保存的旧窄尺寸也要被顶宽**——否则用户
+    上一次存过 560 宽，下次打开仍是窄的（持久化会盖过新的默认值）。
+    """
+    from rpa_core.gui.element_editor import (
+        _DIALOG_MIN_WIDTH,
+        ElementEditorForm,
+        _open_wide_enough,
+    )
+
+    assert _open_wide_enough(None)[0] == _DIALOG_MIN_WIDTH
+    assert _open_wide_enough((560, 640))[0] == _DIALOG_MIN_WIDTH
+    assert _open_wide_enough((1200, 900))[0] == 1200  # 已经够宽就沿用
+    # 高度不设下限（矮只是少看几行）
+    assert _open_wide_enough((1200, 400))[1] == 400
+    # 纯函数别依赖 Qt 也能算
+    assert _DIALOG_MIN_WIDTH >= 860
+    assert ElementEditorForm is not None
+
+
+def test_node_label_shows_tag_and_checked_attrs(qapp):
+    """树行显示**节点类型 + 勾选的属性**（M47.12，影刀那一屏的行样式）。
+
+    影刀摆的是 ``div#kw.s-hotsearch-content`` 这样；我们此前摆的是编译后的
+    ``fragment``（同信息但看不出「哪个属性是勾上的」，要跟右侧属性表来回对照）。
+    """
+    from rpa_core.gui.element_editor import node_label
+
+    # id 等值命中 ⇒ 整层就是 #id（与 compile_fragment 同口径）
+    assert node_label({"tag": "div", "id": "kw", "fragment": "#kw"}) == "div#kw"
+    # tag + 勾中的 class + nth
+    assert (
+        node_label(
+            {"tag": "li", "classes": ["a", "b"], "nthOfType": 2, "fragment": "li.a:nth-of-type(2)"}
+        )
+        == "li.a:nth-of-type(2)"
+    )
+    # 未勾选的 class 不显示（那是用户要去右半勾的东西，显示出来等于暗示它已生效）
+    assert (
+        node_label({"tag": "span", "classes": ["x", "y"], "fragment": "span.x"})
+        == "span.x"
+    )
+    # 没有 tag 也不该返回空串
+    assert node_label({"fragment": ""}) == "?"
 
 
 # ---- 节点树（M44 S5）：勾层级 → 按fragment 拼回主选择器 ----------------------
@@ -1340,6 +1527,8 @@ def test_path_tree_and_attr_table_are_side_by_side(qapp):
 
     判据用**父子关系**而不是「有没有这个控件」：摆一个 QSplitter 但把树和表塞进
     同一个 QVBoxLayout，视觉上仍是上下堆叠——只有在同一个横向 splitter 里才算并排。
+
+    **均分**（M47.12）由 :func:`test_path_tree_and_attr_table_are_equal_width` 单独钉住。
     """
     from PySide6.QtWidgets import QSplitter
 
@@ -1354,9 +1543,6 @@ def test_path_tree_and_attr_table_are_side_by_side(qapp):
     # 树在左、表在右（index 0 / 1），两者同属这一个 splitter
     assert splitter.widget(0) is form.path_list
     assert splitter.widget(1) is form.attr_table
-    # 右表更宽：属性表 4 列，窄列装不下（左树窄右表宽）
-    sizes = splitter.sizes()
-    assert sizes[1] > sizes[0]
 
 
 def test_selector_edit_is_multiline_and_grows(qapp):

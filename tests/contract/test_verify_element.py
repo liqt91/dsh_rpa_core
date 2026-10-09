@@ -409,11 +409,17 @@ def _reply_with_shot(
     rect: dict | None = None,
     viewport: dict | None = None,
     count: int = 2,
+    window_handle: int | None = 4242,
 ) -> None:
     """回一条带截图字段的校验结果（rect/viewport 缺省给一组正常值）。
 
     **rect/viewport 默认给真值而不是省略**：判据要证明「字段被透传了」，若默认就是
     None，漏传字段的 bug 也会因为「回传里本来就没」而假绿。
+
+    M47.12：截图改由 host 统一走桌面坐标截屏，扩展侧**不再回传 dataUrl**——它只回
+    ``windowHandle``（截图要窗口绝对矩形，那是 host 的活）。``data_url`` 参数保留且
+    默认仍给值，是为了钉住「即使扩展回了 base64，host 也不透传」（扩展版本不对
+    或信封被改过时不该把几百 KB 揣进 GUI 内存）。
     """
 
     def delayed_reply():
@@ -426,17 +432,35 @@ def _reply_with_shot(
             payload["rect"] = rect
         if viewport is not None:
             payload["viewport"] = viewport
+        if window_handle is not None:
+            payload["windowHandle"] = window_handle
         channel.outbox.append(payload)
 
     threading.Thread(target=delayed_reply, daemon=True).start()
 
 
 RECT = {"left": 100, "top": 50, "width": 200, "height": 80}
-VIEWPORT = {"width": 1280, "height": 720, "dpr": 2, "scrollX": 300, "scrollY": 900}
+VIEWPORT = {
+    "width": 1280,
+    "height": 720,
+    "dpr": 2,
+    "scrollX": 300,
+    "scrollY": 900,
+    # M47.12：坐标截屏要靠视口的**屏幕原点**换算红框（host 侧推不出标签栏高度）。
+    "screenX": 12,
+    "screenY": 84,
+    "outerWidth": 1296,
+    "outerHeight": 900,
+}
 
 
 def test_want_shot_true_sends_flag_and_returns_payload(verify_env):
-    """要图时：信封带 ``wantShot:true``（严格布尔），结果里dataUrl/rect/viewport 全透传。"""
+    """要图时：信封带 ``wantShot:true``（严格布尔），结果里 ``windowHandle``/rect/viewport 全透传。
+
+    **M47.12 的关键形状变化**：截图改由 host 统一走桌面坐标截屏，扩展侧不再回传
+    ``dataUrl``（几百 KB base64 不该穿过扩展回传通道），只回 ``windowHandle``。
+    同一函数刻意仍回一个 dataUrl，用来钉住 host 会把它**丢掉**。
+    """
     _channels, set_endpoints = verify_env
     channel = FakeChannel()
     set_endpoints(["a"], {"a": channel})
@@ -445,9 +469,11 @@ def test_want_shot_true_sends_flag_and_returns_payload(verify_env):
     result = ElementVerifier(timeout=3.0).verify("#kw", want_shot=True)
     assert channel.sent[0]["wantShot"] is True
     assert result["count"] == 2
-    assert result["dataUrl"] == "data:image/png;base64,AAAA"
+    assert result["windowHandle"] == 4242
     assert result["rect"] == RECT
     assert result["viewport"] == VIEWPORT
+    # 扩展回传里的 base64 **不**透传（截图由 host 自己截）。
+    assert "dataUrl" not in result
 
 
 def test_default_verify_does_not_ask_for_shot(verify_env):
@@ -551,12 +577,27 @@ def test_preview_box_returns_none_when_nothing_to_draw():
 
 
 def test_preview_box_clamps_partially_scrolled_out():
-    """元素有一部分滚出视口时 rect.left/top 为负：钳到 0，让框贴图边而不是画到图外。"""
+    """元素有一部分滚出视口时 rect.left/top 为负：**钳到 0 且同时收窄宽高**。
+
+    M47.12 修的是真bug：原先只把 x 钉到 0 而不动 width，元素横跨 -50~30（宽 30,
+    scale=2 ⇒ 宽 60）时框会从0 铺到 60——比元素可见部分宽一倍，看着像框住了旁边
+    的东西。正确是「切掉的那一截从宽高里扣掉」：-50*2=-100 被切 100 ⇒ 60-100 <0
+    ⇒ 说明元素**完全在视口外**，此时应返回 None。
+    """
     from rpa_core.capture.verify import preview_box_in_image
 
+    # 部分露出：left=-30, 宽 100, scale=2 ⇒ 图内 x=-60, 宽 200 ⇒ 切掉 60 ⇒ 宽 140
     assert preview_box_in_image(
-        {"left": -50, "top": -10, "width": 30, "height": 30}, VIEWPORT, (2560, 1440)
-    ) == {"x": 0.0, "y": 0.0, "width": 60.0, "height": 60.0}
+        {"left": -30, "top": -10, "width": 100, "height": 30}, VIEWPORT, (2560, 1440)
+    ) == {"x": 0.0, "y": 0.0, "width": 140.0, "height": 40.0}
+
+    # 完全在视口外（左边整块都在外面）⇒ 不画框
+    assert (
+        preview_box_in_image(
+            {"left": -500, "top": 10, "width": 30, "height": 30}, VIEWPORT, (2560, 1440)
+        )
+        is None
+    )
 
 
 def test_preview_box_survives_junk_image_size():

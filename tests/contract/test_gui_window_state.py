@@ -154,11 +154,24 @@ def test_element_editor_dialog_restores_saved_size(qapp):
 
 
 def test_element_editor_dialog_defaults_without_record(qapp):
-    """没有记录时保持 M47.3 定的默认尺寸（680×720）。"""
-    from rpa_core.gui.element_editor import ElementEditorDialog
+    """没有记录时用M47.12 的加宽默认尺寸（860×760），不是 M47.3 的 680×720。
+
+    维护者「整个捕获确认窗口可以宽一点，现在节点路径和属性太挤了」——旧默认 680
+    放不下并排的节点树与属性表。这里的数字必须从 ``_DIALOG_DEFAULT_SIZE`` /
+    ``_DIALOG_MIN_WIDTH`` 取，不要硬编码：那条更细的「宽度下限 / 高度不设下限」
+    策略由 ``test_gui_element_editor.py::test_dialog_minimum_width_is_wide_enough``
+    钉。
+    """
+    from rpa_core.gui.element_editor import (
+        _DIALOG_DEFAULT_SIZE,
+        _DIALOG_MIN_WIDTH,
+        ElementEditorDialog,
+    )
 
     dialog = ElementEditorDialog(_browser_document(), name="q")
-    assert (dialog.width(), dialog.height()) == (680, 720)
+    assert (dialog.width(), dialog.height()) == _DIALOG_DEFAULT_SIZE
+    assert dialog.width() >= _DIALOG_MIN_WIDTH
+    assert dialog.minimumWidth() == _DIALOG_MIN_WIDTH
     dialog.close()
 
 

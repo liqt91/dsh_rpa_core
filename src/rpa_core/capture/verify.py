@@ -36,16 +36,22 @@ def preview_box_in_image(
     viewport: Any = None,
     image_size: tuple[int, int] | None = None,
 ) -> dict[str, float] | None:
-    """把 content 回传的**视口**矩形换算成「预览」页签那张截图里的像素框。
+    """把 content 回传的**视口**矩形换算成预览图里的像素框（**视口截图**口径）。
+
+    .. deprecated::
+        M47.12 起预览改走**桌面坐标截屏**（``capture.screen_shot.browser_box_in_window``，
+        与影刀同一路），本函数仍服务于「视口截图」那一路口径，保留是因为
+        ``check_verify`` 的切片判据与部分单测仍钉住这份换算，且它仍是
+        **图宽/视口宽优先于 dpr** 这条口径的权威实现。
 
     为什么需要换算（三个坐标系）：
     1. ``getBoundingClientRect()`` 给的是 **CSS 像素**、且以**视口左上角**为原点；
-    2. ``chrome.tabs.captureVisibleTab`` 拍的是**当前视口**，但图是**物理像素**
+    2. 视口截图拍的是**当前视口**，但图是**物理像素**
        （Retina / Windows 125% 缩放下图宽 =视口宽 × dpr）；
     3. QLabel 展示时又会按控件宽度缩放——那是 Qt 的事，本函数不碰。
 
     ⇒ ``图内像素 = 视口 CSS 像素 × (图宽 / 视口宽)``。**优先用图的实际尺寸**而不是
-    ``dpr``：Windows 分数缩放下 captureVisibleTab 的实际图宽与 ``round(宽×dpr)``
+    ``dpr``：Windows 分数缩放下实际图宽与 ``round(宽×dpr)``
     可能有 1px 差，而红框偏移 1px 在小元素上就是「框没套住元素」。
 
     **刻意不用滚动偏移**（``viewport`` 里的 ``scrollX/scrollY``）：截图拍的就是视口，
@@ -100,11 +106,23 @@ def preview_box_in_image(
         return None
     # 元素可能有一部分滚出视口（此时 rect.left/top 为负）：钳到 0，让框贴住图边，
     # 而不是画到图外面看不见。
+    #
+    # **钳位要同时收窄宽高**（M47.12 修）：元素横跨 -50~50 时，只把 x 钉到 0 而不动
+    # width，框会从 0 铺到 100 —— 比元素宽一倍，看着像「框住了旁边的东西」。
+    # 正确做法是把被切掉的那一截从宽高里扣掉。
+    raw_x = left * scale_x
+    raw_y = top * scale_y
+    # 完全在视口外（钳位后宽或高被切光）⇒ 不画框：在图边画一个 2px 的小框只会
+    # 让人以为「元素在那儿」，而它其实已经滚出去了。
+    if raw_x + box_w <= 0 or raw_y + box_h <= 0:
+        return None
+    x = max(0.0, raw_x)
+    y = max(0.0, raw_y)
     return {
-        "x": max(0.0, left * scale_x),
-        "y": max(0.0, top * scale_y),
-        "width": box_w,
-        "height": box_h,
+        "x": x,
+        "y": y,
+        "width": max(2.0, box_w - (x - raw_x)),
+        "height": max(2.0, box_h - (y - raw_y)),
     }
 
 
@@ -155,8 +173,10 @@ class ElementVerifier:
     def verify(self, css: str, *, want_shot: bool = False) -> dict[str, Any]:
         """活体查找 ``css``（黄框闪烁），返回 ``{"count": N}`` 或 ``{"error": 原因}``。
 
-        ``want_shot=True`` 时额外回``dataUrl``（视口截图 base64）、``rect``（首个命中的
-        视口矩形）与 ``viewport``（含 dpr）；拍不到时只有后两个/都没有，但 ``count`` 必有。
+        ``want_shot=True`` 时额外回``windowHandle``（浏览器顶层窗口句柄，截图要靠它）、
+        ``rect``（首个命中的视口矩形）与 ``viewport``（含 dpr 与视口屏幕原点）。
+        **不含截图本身**：M47.12 起截图由 host 统一走桌面坐标截屏（与影刀同一路），
+        扩展只负责告诉 host「是哪个窗口、元素在那儿哪」。
         """
         return self._exchange(css, "flash", want_shot=want_shot)
 
@@ -317,25 +337,25 @@ class ElementVerifier:
         if not isinstance(count, int) or isinstance(count, bool) or count < 0:
             return {"error": "bad-reply"}
         _trace("verify", "done", mode=mode, count=count, target=target, url=reply.get("url"))
-        # **截图数据不进trace**：dataUrl 是整张视口 PNG 的 base64（几百 KB 起），
-        # 落进日志会把 ext-host.log 撑爆、也会把真机排查的注意力带偏。trace 只记
-        # 「有没有图 / 多大 / 有没有 rect」——这三个数就够判断「截图链路是否通」。
-        shot = reply.get("dataUrl")
+        # M47.12：截图**改由 host 统一走桌面坐标截屏**（``capture.screen_shot``，
+        # 与影刀同一路：ImageGrab 截窗口那块屏幕），扩展侧不再拍图、只回窗口句柄。
+        # 所以这里透传的是 ``windowHandle``（要截图时才有值），而不是 dataUrl——
+        # 几百 KB 的 base64 压根不该穿过扩展回传通道。
+        hwnd = reply.get("windowHandle")
         if want_shot:
             _trace(
                 "verify",
                 "shot",
                 mode=mode,
                 count=count,
-                has_data_url=isinstance(shot, str) and shot.startswith("data:image/"),
-                bytes=len(shot) if isinstance(shot, str) else 0,
+                has_hwnd=isinstance(hwnd, int) and not isinstance(hwnd, bool) and hwnd > 0,
+                hwnd=hwnd if isinstance(hwnd, int) else None,
                 has_rect=isinstance(reply.get("rect"), dict),
+                has_viewport=isinstance(reply.get("viewport"), dict),
             )
         result: dict[str, Any] = {"count": count}
-        # ``dataUrl`` **只在要图时**透传：没要却收到图（扩展版本不对/信封被改过），
-        # 说明这条回传不该带几百 KB 的base64，别把它揣进 GUI 内存里。
-        if want_shot and isinstance(shot, str) and shot:
-            result["dataUrl"] = shot
+        if isinstance(hwnd, int) and not isinstance(hwnd, bool) and hwnd > 0:
+            result["windowHandle"] = int(hwnd)
         if isinstance(reply.get("rect"), dict):
             result["rect"] = dict(reply["rect"])
         if isinstance(reply.get("viewport"), dict):

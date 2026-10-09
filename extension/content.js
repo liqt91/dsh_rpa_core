@@ -23,7 +23,7 @@
   // 构建标识：与 background.js 的 EXT_BUILD、manifest.json 的 version 三方一致（契约测试钉住）。
   // 随捕获结果回传——诊断「页面里跑的脚本是哪个年代的」（Load unpacked 不自动重载，
   // 补注入前已开页面里的可能还是旧快照；见 background.js 顶部的完整说明）。
-  const EXT_BUILD = "0.7.0";
+  const EXT_BUILD = "0.8.0";
 
   // ---- 实例接管守卫（M42）----------------------------------------------------
   // 声明式 content_scripts **只在页面加载时**注入：扩展装载/重载后，已经打开的标签页
@@ -319,6 +319,16 @@
     dpr: window.devicePixelRatio || 1,
     scrollX: window.scrollX || window.pageXOffset || 0,
     scrollY: window.scrollY || window.pageYOffset || 0,
+    // M47.12：统一改走**桌面坐标截屏**（ImageGrab 截窗口那块屏幕），图左上角 =
+    // 窗口左上角。所以要把视口 CSS 像素换算成图内像素，还差「视口左上角相对窗口
+    // 左上角的偏移」——**host 侧推不出来**（标签栏/地址栏高度是 Chromium 自己布局的，
+    // 而 win32 的 client_rect() 只是窗口内相对坐标，实测恒为 (0,0,w,h)）。
+    // window.screenX/screenY 正是视口左上角的**屏幕 CSS 像素**坐标：host 拿它减去
+    // 窗口原点、再乘 scale 即得偏移。
+    screenX: window.screenX,
+    screenY: window.screenY,
+    outerWidth: window.outerWidth || 0,
+    outerHeight: window.outerHeight || 0,
   });
   const verifyReplyFor = (doc, css, mode) => {
     mode = normalizeVerifyMode(mode);

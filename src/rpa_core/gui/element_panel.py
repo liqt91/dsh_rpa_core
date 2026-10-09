@@ -255,8 +255,13 @@ class ElementDialog(QDialog):
         # 出口意图。默认 "save"：用户直接按「保存」/回车/双击标题栏关闭都走它。
         self._intent = "save"
         self.setWindowTitle("捕获确认")
-        self.setMinimumWidth(480)
-        self.resize(560, 640)
+        # M47.12 加宽（维护者「整个捕获确认窗口可以宽一点，现在节点路径和属性太挤了」）：
+        # 与元素编辑器同一个下限（``element_editor._DIALOG_MIN_WIDTH``），两处窗口摆出
+        # 同一条编辑区，宽窄不一致会让「同一个元素在两处长得不一样」。
+        from rpa_core.gui.element_editor import _DIALOG_MIN_WIDTH
+
+        self.setMinimumWidth(_DIALOG_MIN_WIDTH)
+        self.resize(_DIALOG_MIN_WIDTH, 760)
         layout = QVBoxLayout(self)
 
         # 命中数只留**一处**（M47.10，维护者实测「当前命中X个 / 预览：命中X个 文案重复」）：
@@ -284,10 +289,14 @@ class ElementDialog(QDialog):
         layout.addWidget(self.form)
         # 编辑中预览（M48）：挂在**编辑区**（与元素库编辑器同一份实现），确认框只做
         # 接线；关窗（含「重新捕获」）一律清场——预览框不能留在页面上陪用户捕获。
+        # 截图通道（M47.12）**两条腿都接**：browser 走 enable_live_preview 的第三参，
+        # desktop 走 enable_shot_channel。
         self._live_preview = descriptor.get("kind") == "browser" and preview_css is not None
         if self._live_preview:
             self.form.enable_live_preview(preview_css, clear_preview_css, shot_css)
             self.finished.connect(self.form.shutdown_preview)
+        elif shot_css is not None:
+            self.form.enable_shot_channel(shot_css)
         # 有实时预览时不再摆确认框自己的静态命中数：两处「命中 X 个」重复且会互相矛盾。
         if not self._live_preview:
             layout.addWidget(self.verify_label)
@@ -360,36 +369,60 @@ class ElementDialog(QDialog):
 
     @staticmethod
     def _metadata_text(descriptor: dict[str, Any]) -> str:
-        meta = descriptor.get("metadata") or {}
-        rect = meta.get("rect") or {}
-        rect_text = ""
-        if rect:
-            rect_text = (
-                f"rect: {rect.get('width')}×{rect.get('height')} "
-                f"@ ({rect.get('x')},{rect.get('y')})"
-            )
+        """捕获时的只读信息——**只保留定位用不上的那些**（M47.12）。
+
+        M47.12 之前这里摆的是全量行集（tag / id / classes / text / rect /
+        controlType / automationId / name / className / window 标题 / 语义特征），
+        维护者指正：「下方展示了很多描述信息，可以不用，这些信息大部分应该作为
+        节点属性供勾选」。于是判据就是**一条线**：
+
+        - **能在属性表里勾的，一律删**。``tag``/``id``/``classes``/``text``（browser）
+          对应属性表里的 tag / id / class 行；``controlType`` / ``automationId`` /
+          ``name`` / ``title`` / ``className``（desktop）对应 locator 字段表里的
+          同名 checkbox——它们本来就能勾、勾了就写进 selector，摆一份只读的平行
+          副本只会让人怀疑「改了到底生效没有」。
+        - **定位用不上的，删掉没有损失**：``rect`` 是屏幕像素（M47.12 已由预览的
+          红框承担）、``windowTitle`` 是窗口标题（桌面靠 className 定位无窗口文本的
+          控件时也用不到它）、``semantic_meta_text``（页面指纹/语义特征）本来就没进
+          selector，是调试残留。
+
+        结果 desktop 常剩「窗口标题 + 类名提示」两行，browser 多半整块消失——
+        **空就是空**：真实情况就是「这些信息都有对应的可勾字段，没有需要额外说明的」。
+        保留一个占位说明，避免「信息凭空消失」的错觉。
+        """
+        meta = descriptor.get("metadata")
+        if not isinstance(meta, dict):
+            meta = {}
         is_desktop = descriptor.get("kind") == "desktop"
-        classes = meta.get("classes") or []
+        # `selector` 可能是字符串/None 等坏形状（既有判据
+        # `test_element_dialog_tolerates_non_dict_selector`钉的就是这条），所以这里
+        # **必须逐层判 isinstance**再取键——`"oops".get` 会直接AttributeError，
+        # 而这个函数是在构造对话框的**头几行**被调用的，崩在这里 = 整个对话框打不开。
+        selector = descriptor.get("selector")
+        if not isinstance(selector, dict):
+            selector = {}
+        locator = selector.get("locator")
+        backend = locator.get("backend") if isinstance(locator, dict) else None
         lines = [
-            meta.get("tag") and f"tag: {meta['tag']}",
-            meta.get("id") and f"id: {meta['id']}",
-            classes and f"classes: {' '.join(str(c) for c in classes)}",
-            meta.get("text") and f"text: {meta['text']}",
-            rect_text,
-            is_desktop and meta.get("controlType") and f"controlType: {meta['controlType']}",
-            is_desktop and meta.get("automationId") and f"automationId: {meta['automationId']}",
-            is_desktop and meta.get("name") and f"name: {meta['name']}",
-            # className 是 win32 侧定位**无窗口文本控件**（ListBox/ComboBox）的唯一手段，
-            # 也是 `classNameRe` 正则的输入。捕获 agent 一直带着它回传，GUI 却从没显示过
-            # （2026-09-23 探针 `probe_element_dialog_display.py` 实测发现）。
-            is_desktop and meta.get("className") and f"className: {_clip(meta['className'])}",
-            is_desktop and meta.get("windowTitle") and f"window: {meta['windowTitle']}",
-            # browser 的语义特征与页面指纹（见 semantic_meta_text）
-            semantic_meta_text(descriptor),
+            is_desktop and meta.get("windowTitle") and f"所在窗口：{meta['windowTitle']}",
+            # className 提一句**用途**而不是罗列值：它是 win32 侧定位「无窗口文本控件」
+            # （ListBox/ComboBox）的唯一手段，也是 classNameRe 的输入。但值本身已经能在
+            # 下方 locator 字段表里勾选与编辑，不必在这里再摆一份。
+            #
+            # **必须按后端判**：`className` 只在 win32 后端的字段表里
+            # （`LOCATOR_FIELDS_BY_BACKEND`），uia 后端字段表是 controlType /
+            # automationId / name / matchMode——那里根本没有 className 可勾。捕获 agent
+            # 两种后端都会回传 className（`_describe_info` 无差别取），所以在 uia 元素上
+            # 无条件打这句提示，等于指着一个不存在的入口让用户去找。
+            is_desktop
+            and backend == "win32"
+            and meta.get("className")
+            and "提示：该控件无窗口文本，win32 定位靠类名（下方字段表可勾选）",
         ]
-        # 刻意**不展示** windowHandle / point：它们是本次会话的运行期值（句柄每次启动都变），
-        # 摆出来会诱导用户粘进 locator，写出一个下次必定失效的元素。
-        return "\n".join(line for line in lines if line) or "(无 metadata)"
+        real = [line for line in lines if line]
+        if not real:
+            return "（捕获信息已全部收进上方可勾选的属性/字段表，此处不再重复展示）"
+        return "\n".join(real)
 
     def _validate_or_report(self) -> bool:
         """保存前校验：元素名非空 + 编辑区无结构错误。通过返回 True。

@@ -121,9 +121,11 @@ const makeChrome = ({
   hasScript = true,
   foreground = true,          // 本浏览器是否 OS 级前台（isBrowserForeground 的桩返回值）
   foregroundFail = false,     // getLastFocused 抛错（API 不可用的极端）
-  shotFail = false,           // captureVisibleTab 抛错（无 windowId / 权限 / 浏览器限制）
+  windowGetFail = false,      // windows.get 抛错（无 windowId / 权限 / 浏览器限制）
 } = {}) => {
-  const log = { sent: [], injected: [], posted: [], queried: [], delays: [], shots: [] };
+  const log = {
+    sent: [], injected: [], posted: [], queried: [], delays: [], shots: [], windowGets: [],
+  };
   let injectedOnce = false;
   const chrome = {
     tabs: {
@@ -143,12 +145,8 @@ const makeChrome = ({
         log.sent.push({ tabId, msg });
         return { contentBuild: "page-build", count: 4 };
       },
-      // 截图（M47.11「预览」页签）：只记录被拍过哪个窗口，返回一个短 dataUrl。
-      captureVisibleTab: async (windowId, opts) => {
-        log.shots.push({ windowId, opts });
-        if (shotFail) throw new Error("cannot capture this window");
-        return "data:image/png;base64,AAAA";
-      },
+      // M47.12：扩展不再拍图（截图统一由 host 按屏幕坐标截），因此**不再有**
+      // captureVisibleTab 桩；这一段只留原 sendMessage 需要的返回。
       onUpdated: { addListener: () => {} },
     },
     windows: {
@@ -156,6 +154,16 @@ const makeChrome = ({
         if (windowsFail) throw new Error("windows API unavailable");
         return windows.map((w) => ({ ...w }));
       },
+      // M47.12：预览截图只取顶层 hwnd。注意**保留 windowId 无关形状**——
+      // `nativeWindowHandle` 只在真 Windows 的 chrome.windows.get 上有，
+      // 桩必须允许它缺席/为0/为字符串，否则门禁会把「不认非法句柄」判成假绿。
+      get: async (windowId) => {
+        log.windowGets.push({ id: windowId });
+        if (windowGetFail) throw new Error("no such window");
+        const win = windows.find((w) => w.id === windowId);
+        return win ? { ...win } : null;
+      },
+      WINDOW_ID_NONE: -1,
       getLastFocused: async () => {
         if (foregroundFail) throw new Error("no last focused window");
         return { id: 1, focused: foreground };
@@ -382,11 +390,14 @@ const settleSlow = () => new Promise((resolve) => setTimeout(resolve, 220));
   check("W12 判不出前台仍正常应答", log.posted[0] && log.posted[0].count, 4);
 }
 
-// ---- W13–W14 预览页签截图（M47.11，对齐影刀「预览 = 页面截图 + 红框」）-------
-// W13 wantShot=true：先让 content 把框画好（keepFlash），再截当前视口，图随回传走
+// ---- W13–W14 预览页签截图（M47.12 改为「host 自己按坐标截屏」）-----------------
+// M47.11 走的是「扩展拍图 + dataUrl 回传」。M47.12 实测：`captureVisibleTab` 只能拍
+// 视口，而我们最终统一走**桌面坐标截屏**（ImageGrab 截窗口那块屏幕），扩展不再拍图、
+// 也不再回传几百 KB base64——只回 `windowHandle`（Windows 上 chrome.windows.get 能
+// 直接给顶层 hwnd），由 host 负责取图与画红框。
 {
   const { chrome, log } = makeChrome({
-    windows: [{ id: 30, focused: true }],
+    windows: [{ id: 30, focused: true, nativeWindowHandle: 33120 }],
     tabs: [{ id: 31, url: "https://shot.test/", active: true, windowId: 30, focused: true }],
   });
   await buildBg(chrome, log).runVerify({
@@ -395,15 +406,16 @@ const settleSlow = () => new Promise((resolve) => setTimeout(resolve, 220));
   await settle();
   check("W13 要截图时让 content 驻留黄框（keepFlash:true——先画框后拍照）",
     log.sent[0] && log.sent[0].msg.keepFlash, true);
-  check("W13 拍的是目标标签页所在窗口（captureVisibleTab 按 windowId）",
-    log.shots.map((s) => s.windowId), [30]);
-  check("W13 回传带 dataUrl（GUI 预览页签据此显示截图）",
-    typeof log.posted[0]?.dataUrl === "string" && log.posted[0].dataUrl.startsWith("data:image/png"),
-    true);
+  check("W13 定位目标标签页所在窗口（按 tab.windowId 取 nativeWindowHandle）",
+    log.windowGets.map((w) => w.id), [30]);
+  check("W13 回传带 windowHandle（host 据此自己截屏）",
+    log.posted[0]?.windowHandle, 33120);
+  check("W13 **不回传** dataUrl（截图归 host，base64 不该穿回传通道）",
+    "dataUrl" in (log.posted[0] || {}), false);
   check("W13 截图不影响命中数回传", log.posted[0]?.count, 4);
 }
 
-// W14 不需要截图时不拍（普通「校验元素」不该每次截一张 base64）
+// W14 不需要截图时不查窗口句柄（普通「校验元素」不该为预览多做一次 windows.get）
 {
   const { chrome, log } = makeChrome({
     windows: [{ id: 40, focused: true }],
@@ -411,27 +423,45 @@ const settleSlow = () => new Promise((resolve) => setTimeout(resolve, 220));
   });
   await buildBg(chrome, log).runVerify({ requestId: "rq-14", css: "#x" });
   await settle();
-  check("W14 缺省不截图（wantShot 只由预览页签触发）", log.shots.length, 0);
+  check("W14 缺省不查窗口句柄（wantShot 只由预览页签触发）", log.windowGets.length, 0);
   check("W14 缺省也不驻留黄框（keepFlash:false）",
     log.sent[0] && log.sent[0].msg.keepFlash, false);
-  check("W14 回传不带 dataUrl", "dataUrl" in (log.posted[0] || {}), false);
+  check("W14 回传不带 windowHandle", "windowHandle" in (log.posted[0] || {}), false);
 }
 
-// W15 截图失败**不**把校验拖成失败（截图是观感增强，命中数才是判据）
+// W15 拿不到句柄（windows.get 抛错）**不**把校验拖成失败（截图是观感增强）
 {
   const { chrome, log } = makeChrome({
     windows: [{ id: 50, focused: true }],
     tabs: [{ id: 51, url: "https://x.test/", active: true, windowId: 50, focused: true }],
-    shotFail: true,
+    windowGetFail: true,
   });
   await buildBg(chrome, log).runVerify({ requestId: "rq-15", css: "#x", wantShot: true });
   await settle();
-  check("W15 截图抛错仍正常回传命中数", log.posted[0] && log.posted[0].count, 4);
-  check("W15 截图失败只省掉 dataUrl，不报 error", "dataUrl" in (log.posted[0] || {}), false);
-  check("W15 截图失败不静默吞掉 error 字段", log.posted[0]?.error, undefined);
+  check("W15 取句柄抛错仍正常回传命中数", log.posted[0] && log.posted[0].count, 4);
+  check("W15 取句柄失败只省掉 windowHandle，不报 error",
+    "windowHandle" in (log.posted[0] || {}), false);
+  check("W15 取句柄失败不静默吞掉 error 字段", log.posted[0]?.error, undefined);
 }
 
-// W16 非前台（silent）时不截图：拍的是别人眼前的窗口，毫无意义
+// W15b 句柄形态不合法（0 /缺字段）同样当「拿不到」——0 会被 host 当成句柄去截一个
+// 完全不相干的窗口，比拿不到更糟
+{
+  for (const bad of [0, undefined, "123"]) {
+    const { chrome, log } = makeChrome({
+      windows: [{ id: 70, focused: true, nativeWindowHandle: bad }],
+      tabs: [{ id: 71, url: "https://bad.test/", active: true, windowId: 70, focused: true }],
+    });
+    await buildBg(chrome, log).runVerify({
+      requestId: `rq-15b-${String(bad)}`, css: "#x", wantShot: true,
+    });
+    await settle();
+    check(`W15b 句柄 ${String(bad)} 不回传 windowHandle`,
+      "windowHandle" in (log.posted[0] || {}), false);
+  }
+}
+
+// W16 非前台（silent）时不查句柄：截的是别人眼前的窗口，毫无意义
 {
   const { chrome, log } = makeChrome({
     windows: [{ id: 60, focused: false }],
@@ -440,7 +470,7 @@ const settleSlow = () => new Promise((resolve) => setTimeout(resolve, 220));
   });
   await buildBg(chrome, log).runVerify({ requestId: "rq-16", css: "#x", wantShot: true });
   await settleSlow();
-  check("W16 非前台不截图（拍别人眼前的窗口没有意义）", log.shots.length, 0);
+  check("W16 非前台不查窗口句柄（截别人眼前的窗口没有意义）", log.windowGets.length, 0);
   check("W16 非前台仍回命中数兜底", log.posted[0] && log.posted[0].count, 4);
 }
 

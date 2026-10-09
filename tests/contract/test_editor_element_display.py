@@ -27,11 +27,11 @@ _HELPERS_END = "// [element-display-helpers:end]"
 _JS_LABEL = re.compile(r"`([A-Za-z][A-Za-z0-9]*): \$\{")
 _PY_LABEL = re.compile(r'f"([A-Za-z][A-Za-z0-9]*): \{')
 
-# 取字段标签的 Python 区段：只在这两个函数里数，避免文件里别处的 f-string 误入
-_PY_REGIONS = (
-    ("def semantic_meta_text", "def candidates_text"),
-    ("def _metadata_text", "def accept"),
-)
+# 取字段标签的 Python 区段：**只扫 GUI 真正展示的那一段**（``_metadata_text``）。
+# 曾经还包含 ``semantic_meta_text``，M47.12 起它与 ``candidates_text`` 一样已不再被
+# GUI 调用（保留作Web 侧对等物）——扫着它会把「源码里还留着」误判成「界面上还在
+# 展示」，这正是本文件要防的那类假同步。
+_PY_REGIONS = (("def _metadata_text", "def accept"),)
 
 
 def _app_js_text() -> str:
@@ -77,9 +77,12 @@ def _js_labels() -> set[str]:
 
 
 def _py_labels() -> set[str]:
-    labels = set(_PY_LABEL.findall(_panel_label_region()))
-    assert labels, "未从 element_panel.py 提取到字段标签（函数被改名了？）"
-    return labels
+    """GUI 展示区的 ``键: 值`` 标签。**允许为空**——M47.12 起 GUI 描述区只剩提示句。
+
+    别把「提取不到就断言非空」抄回来：这里提取为空恰恰是本轮要钉住的结果之一
+    （GUI 有属性/字段表可替代，描述区不再抄 ``键: 值`` 的只读副本）。
+    """
+    return set(_PY_LABEL.findall(_panel_label_region()))
 
 
 def test_dialog_renders_the_readonly_block_from_the_helper() -> None:
@@ -93,17 +96,30 @@ def test_dialog_renders_the_readonly_block_from_the_helper() -> None:
     assert "const meta = descriptor.metadata || {};" not in body
 
 
-def test_both_surfaces_show_the_same_field_labels() -> None:
-    """两端展示的字段标签集合必须逐字相同（缺一个就红）。
+def test_gui_labels_are_a_subset_of_web_labels() -> None:
+    """GUI 的展示标签**不许发明 Web 没有的字段**（否则两端语义错位）。
 
-    先比**集合相等**抓两端漂移，再用下面的 must-have 抓「两边一起被删」——
-    只比相等的话，同时删掉两端同一个字段也能过。
+    M47.12 之后两端**不再是集合相等**，而是有意的**包含关系**——这不是漂移，是两条
+    界面能力不同：
+
+    - **GUI 侧的确认框有属性/字段表**（browser 的 tag/id/class、desktop 的
+      ``controlType``/``automationId``/``name``/``className`` 都是勾选框），所以描述区
+      再抄一份只读副本就是重复信息，维护者明确要求删掉（「这些信息大部分应该作为
+      节点属性供勾选」）；
+    - **Web 侧确认框只有一行 ``selectorInput``**（css 或 locator JSON），**没有属性
+      表**——那个只读区块是它唯一的信息入口，删掉等于信息无处可看。
+
+    所以这里钉的是「GUI ⊆ Web」这个方向：**GUI 少展示可以（有能力替代），多展示不行**
+    （就成了「这边没这条 = 库里没有」那种语义错位）。
+    下方两条 must-have 分别钉住 Web 的全量与 GUI 的精简口径——单靠包含关系会漏掉
+    「两边一起删」/「Web 侧误删」。
     """
     js = _js_labels()
     py = _py_labels()
-    assert js == py, (
-        f"两端展示字段不一致：仅 Web {sorted(js - py)}；仅 GUI {sorted(py - js)}"
-    )
+    assert py <= js, f"GUI 侧展示了 Web 侧没有的字段：仅 GUI {sorted(py - js)}"
+    # 差异必须是**已知且可解释**的：GUI 只剩「定位用不上、字段表也勾不到」的
+    # 窗口/类名提示，其标签集合为空（提示句不是 `键: 值` 形式）。
+    assert py == set(), f"GUI 侧不该再有 `键: 值` 形式的展示行，实际 {sorted(py)}"
 
 
 def test_display_covers_the_facts_that_were_missing() -> None:
