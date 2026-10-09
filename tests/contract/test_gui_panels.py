@@ -277,6 +277,40 @@ def test_element_dialog_browser_defaults_and_result(qapp):
     assert document["metadata"]["url"] == "https://example.com"
 
 
+def test_element_dialog_single_hit_label_when_live_preview(qapp):
+    """③ 有实时预览时，命中数**只留一处**（编辑区那条），确认框自己的静态旧值不摆出来。
+
+    维护者实测「当前命中X个 / 预览：命中X个 文案重复」：确认框那条是**捕获时**的旧值，
+    编辑区那条是**实时**的，两者并排既重复、用户改了 css 后还会互相矛盾。
+    判据用**父子关系**：确认框的静态标签不在布局里（`isVisibleTo` 为假），
+    而编辑区的实时标签在。desktop 元素没有实时通道，此时静态标签仍要摆（另一条判据管）。
+    """
+    from rpa_core.gui.element_panel import ElementDialog
+
+    dialog = ElementDialog(
+        _browser_element(),
+        default_name="x",
+        preview_css=lambda css: {"count": 1},
+        clear_preview_css=lambda: {"count": 0},
+    )
+    assert dialog._live_preview is True
+    # 静态旧值标签没进布局（并排就会重复）
+    assert not dialog.verify_label.isVisibleTo(dialog)
+    # 实时那条在编辑区，且是可见的
+    assert dialog.form.preview_label.isVisibleTo(dialog)
+    dialog.form._preview_timer.stop()
+
+
+def test_element_dialog_keeps_static_hit_label_without_live_preview(qapp):
+    """desktop / 无实时通道：静态命中数仍要摆（否则用户看不到捕获时命中几个）。"""
+    from rpa_core.gui.element_panel import ElementDialog
+
+    dialog = ElementDialog(_browser_element(), default_name="x")
+    assert dialog._live_preview is False
+    assert dialog.verify_label.isVisibleTo(dialog)
+    assert "捕获时命中 1 个" in dialog.verify_label.text()
+
+
 def test_element_dialog_desktop_edits_locator_by_fields_not_json(qapp):
     """桌面元素在确认框里直接勾 locator 字段——不再让用户写/看一行 JSON。
 
@@ -868,6 +902,27 @@ def test_element_dialog_live_verify_reports_count(qapp):
     )
     assert seen == ["#kw"]  # 用的是编辑区**当前**的 css
     assert dialog.verify_button.isEnabled()
+
+
+def test_element_dialog_verify_routes_to_form_when_live_preview(qapp):
+    """有实时预览时「校验元素」的命中数也落到编辑区那一条——否则又变成两处命中数。"""
+    from rpa_core.gui.element_panel import ElementDialog
+
+    dialog = ElementDialog(
+        _browser_element(),
+        default_name="x",
+        verify_css=lambda css: {"count": 2},
+        preview_css=lambda css: {"count": 2},
+        clear_preview_css=lambda: {"count": 0},
+    )
+    dialog.form._preview_timer.stop()
+    dialog.verify_button.click()
+    assert _pump_until_gui(
+        lambda: dialog.form.preview_label.text().startswith("当前命中 2")
+    )
+    # 静态那条未被校验回写（还停在初始的「捕获时命中 1 个」，且它根本没进布局）
+    assert "当前命中" not in dialog.verify_label.text()
+    assert not dialog.verify_label.isVisibleTo(dialog)
 
 
 def test_element_dialog_live_verify_error_is_inline(qapp):

@@ -1038,6 +1038,8 @@ def test_form_live_preview_dispatch_and_label(qapp):
     assert log["preview"] == ["#sb_form_q2"]
     assert "命中 1 个" in form.preview_label.text()
     assert log["clear"] == []  # 正常预览不清场
+    # ③ 文案去重：不再有「预览：」前缀（命中数那条已由场景体现，标签不必自称「预览」）
+    assert "预览：" not in form.preview_label.text()
 
 
 def test_form_preview_empty_css_clears_instead_of_querying(qapp):
@@ -1153,6 +1155,86 @@ def test_editor_dialog_opens_roomy(qapp):
     dialog = ElementEditorDialog(_browser_document(), name="el_size")
     assert dialog.width() >= 680
     assert dialog.height() >= 700
+
+
+# ---- M47.10：捕获确认框三处体验（维护者实测反馈） ---------------------------
+
+def test_path_tree_and_attr_table_are_side_by_side(qapp):
+    """① 节点树与属性表**并排**（QSplitter 横向：左树、右表），不再上下堆叠。
+
+    判据用**父子关系**而不是「有没有这个控件」：摆一个 QSplitter 但把树和表塞进
+    同一个 QVBoxLayout，视觉上仍是上下堆叠——只有在同一个横向 splitter 里才算并排。
+    """
+    from PySide6.QtWidgets import QSplitter
+
+    from rpa_core.gui.element_editor import ElementEditorForm
+
+    form = ElementEditorForm(_path_document())
+    splitter = form.path_splitter
+    assert isinstance(splitter, QSplitter)
+    assert splitter.orientation() == __import__(
+        "PySide6.QtCore", fromlist=["Qt"]
+    ).Qt.Orientation.Horizontal
+    # 树在左、表在右（index 0 / 1），两者同属这一个 splitter
+    assert splitter.widget(0) is form.path_list
+    assert splitter.widget(1) is form.attr_table
+    # 右表更宽：属性表 4 列，窄列装不下（左树窄右表宽）
+    sizes = splitter.sizes()
+    assert sizes[1] > sizes[0]
+
+
+def test_selector_edit_is_multiline_and_grows(qapp):
+    """④ 主选择器输入框是**多行**（QPlainTextEdit），长祖先链不再被截掉尾巴。
+
+    ``QLineEdit`` 一行装不下祖先链、尾部 CSS 被截断；换成多行后整段可读，
+    高度按内容自适应（1~4 行）。对外仍保留 ``.text()`` / ``.setText()`` 同名 API。
+    """
+    from PySide6.QtWidgets import QLineEdit, QPlainTextEdit
+
+    from rpa_core.gui.element_editor import ElementEditorForm, SelectorEdit
+
+    form = ElementEditorForm(_browser_document())
+    assert isinstance(form.css_edit, SelectorEdit)
+    assert isinstance(form.css_edit, QPlainTextEdit)
+    assert not isinstance(form.css_edit, QLineEdit)
+    # 同名 API 保住：调用点（二十来处）不需要跟着改
+    assert form.css_edit.text() == form.css_edit.toPlainText()
+    form.css_edit.setText("a")
+    assert form.css_edit.text() == "a"
+    # 横向滚动条关掉（换行即整段可见）；纵向按需
+    assert form.css_edit.horizontalScrollBarPolicy() == __import__(
+        "PySide6.QtCore", fromlist=["Qt"]
+    ).Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+
+
+def test_selector_edit_settext_emits_textchanged(qapp):
+    """**信号遮蔽的钉子**：``setText`` / ``setPlainText`` 必须触发 ``textChanged``。
+
+    初版把 ``textChanged = Signal(str)`` 盖在 ``QPlainTextEdit`` 原生信号上，结果
+    ``super().textChanged`` 在 MRO 下仍解析到子类那个从未 emit 的信号，
+    ``setText`` 之后界面毫无反应（``test_editor_browser_blocks_blank_css`` 直接红）。
+    这条判据钉住修复：不用看下游是否变色，只证明信号**真的**发出来了。
+    """
+    from rpa_core.gui.element_editor import SelectorEdit
+
+    edit = SelectorEdit("a")
+    fired: list[bool] = []
+    edit.textChanged.connect(lambda: fired.append(True))
+    edit.setText("   ")
+    assert fired == [True]
+    edit.setPlainText("yy")
+    assert fired == [True, True]
+
+
+def test_selector_edit_height_tracks_line_count(qapp):
+    """高度自适应：多行内容比单行高，且封顶在 4 行（不无限膨胀把对话框撑爆）。"""
+    from rpa_core.gui.element_editor import SelectorEdit
+
+    single = SelectorEdit("a")
+    many = SelectorEdit("\n".join(f"div.layer{i}" for i in range(20)))
+    assert many.height() > single.height()
+    # 封顶：20 行内容不会换来 20 行高度（上限 4 行 + 边距）
+    assert many.height() < single.height() * 6
 
 
 # ---- M48：桌面 locator 结构字段（path / anchor / matchMode）不得在编辑中丢失 ------

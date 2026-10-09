@@ -257,7 +257,11 @@ class ElementDialog(QDialog):
         self.resize(560, 640)
         layout = QVBoxLayout(self)
 
-        # 捕获时命中数（1=绿 ok，其他=红 bad，对齐 Web dlg-verify）
+        # 命中数只留**一处**（M47.10，维护者实测「当前命中X个 / 预览：命中X个 文案重复」）：
+        # browser 元素走编辑区的实时预览标签（`ElementEditorForm.preview_label`，开框即预跑
+        # 一轮，且每次改 css 都会刷新）；确认框自己那条「捕获时命中 X 个」是**静态旧值**，
+        # 与实时那条并排既重复又可能矛盾（用户改了 css 后旧值就不再成立）。
+        # desktop 元素没有活体通道（预览标签不出现），此时才保留这条捕获时命中数。
         verify = descriptor.get("verifyCount")
         self.verify_label = QLabel(
             "" if verify is None else f"捕获时命中 {verify} 个"
@@ -265,7 +269,6 @@ class ElementDialog(QDialog):
         if verify is not None:
             color = SUCCESS if verify == 1 else DANGER
             self.verify_label.setStyleSheet(f"color: {color}; font-weight: bold;")
-        layout.addWidget(self.verify_label)
 
         form = QFormLayout()
         self.name_edit = QLineEdit(default_name)
@@ -279,9 +282,13 @@ class ElementDialog(QDialog):
         layout.addWidget(self.form)
         # 编辑中预览（M48）：挂在**编辑区**（与元素库编辑器同一份实现），确认框只做
         # 接线；关窗（含「重新捕获」）一律清场——预览框不能留在页面上陪用户捕获。
-        if descriptor.get("kind") == "browser" and preview_css is not None:
+        self._live_preview = descriptor.get("kind") == "browser" and preview_css is not None
+        if self._live_preview:
             self.form.enable_live_preview(preview_css, clear_preview_css)
             self.finished.connect(self.form.shutdown_preview)
+        # 有实时预览时不再摆确认框自己的静态命中数：两处「命中 X 个」重复且会互相矛盾。
+        if not self._live_preview:
+            layout.addWidget(self.verify_label)
 
         # metadata 只读（对齐 Web metaEl 的行集；browser 另含语义特征与页面指纹）
         self.meta_label = QLabel(self._metadata_text(descriptor))
@@ -450,7 +457,7 @@ class ElementDialog(QDialog):
         threading.Thread(target=work, daemon=True).start()
 
     def _on_verify_done(self, result: dict) -> None:
-        """校验结果回显：命中数换掉「捕获时命中」的旧值；错误就地展示。"""
+        """校验结果回显：命中数写进**那一处**命中标签；错误就地展示。"""
         if self.verify_button is not None:
             self.verify_button.setEnabled(True)
             self.verify_button.setText("校验元素")
@@ -459,8 +466,13 @@ class ElementDialog(QDialog):
             return
         count = result.get("count")
         color = SUCCESS if count == 1 else DANGER
-        self.verify_label.setText(f"当前命中 {count} 个（页面上已黄框闪烁）")
-        self.verify_label.setStyleSheet(f"color: {color}; font-weight: bold;")
+        # 有实时预览时「校验元素」的命中数也落到编辑区那一条（否则又变成两处「命中 X 个」，
+        # 与去重的初衷背道而驰）；无预览（desktop）时才用确认框自己的标签。
+        if self._live_preview and hasattr(self.form, "preview_label"):
+            self.form.set_hit_label(f"当前命中 {count} 个（页面上已黄框闪烁）", color)
+        else:
+            self.verify_label.setText(f"当前命中 {count} 个（页面上已黄框闪烁）")
+            self.verify_label.setStyleSheet(f"color: {color}; font-weight: bold;")
 
     def intent(self) -> str:
         """用户按的是哪个出口：``save`` / ``save_and_continue`` / ``recapture``。

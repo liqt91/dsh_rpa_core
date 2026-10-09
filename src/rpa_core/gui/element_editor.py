@@ -64,6 +64,7 @@ from typing import Any
 
 from pydantic import ValidationError
 from PySide6.QtCore import QObject, Qt, QTimer, Signal
+from PySide6.QtGui import QFontMetrics
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -76,8 +77,10 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QListWidget,
     QListWidgetItem,
+    QPlainTextEdit,
     QPushButton,
     QSizePolicy,
+    QSplitter,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -92,6 +95,76 @@ from rpa_core.gui.theme import (
     WARNING,
 )
 from rpa_core.model.desktop import LOCATOR_STEP_KEYS, prune_locator_steps
+
+
+class SelectorEdit(QPlainTextEdit):
+    """主选择器输入框：**多行 + 随内容自适应高度**（M47.10）。
+
+    为什么不是 ``QLineEdit``：主选择器是祖先链拼出来的（``body > div.wrap > button.ok
+    :nth-of-type(2) > span``），在 560px 宽的对话框里一行装不下，``QLineEdit`` 会把尾巴
+    截掉，用户没法一眼看全自己到底定位到了哪一层（维护者实测反馈「主选择器的框太小了」）。
+    换多行后长选择器换行显示、可整段读，同时不再需要横向滚动。
+
+    **对外 API 与 ``QLineEdit`` 同名**（``text()`` / ``setText()`` / ``textChanged``）：
+    编辑区里读/写主选择器的调用点有二十来处，全部改签名等于把一次纯排版改动扩散成
+    大面积重构。这里刻意保留同名三件套，让替换是**就地**的——落盘口径仍只有一个
+    ``self.css_edit``，不新增第二条路径。
+
+    **不遮蔽原生 ``textChanged``**（踩过的坑）：初版写了 ``textChanged = Signal(str)``
+    盖住 ``QPlainTextEdit.textChanged()``，想借它对外提供 ``QLineEdit`` 的
+    ``textChanged(str)`` 语义；结果 ``super().textChanged`` 在 Python MRO 下仍解析到
+    **子类那个从未 emit 的**信号，``.connect`` 连上去永远不触发——``setText`` 之后
+    界面毫无反应（``test_editor_browser_blocks_blank_css`` 直接红）。
+    ``QPlainTextEdit.textChanged`` 还是 ``Signal`` descriptor，想直接 ``.connect``
+    原生信号会 ``AttributeError``。
+
+    正确做法：**让原生信号保持可用**（调用方连到它就是 ``QLineEdit.textChanged``
+    的等价能力——无参信号 + 读 ``.text()``），高度重排另外挂在
+    ``document().contentsChanged`` 上（编辑器唯一的「文本变了」真源，``setPlainText``
+    与键入都会触发）。
+    """
+
+    def __init__(self, text: str = "", parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setPlainText(text)
+        # 高度自适应：按当前行数算（1~4 行），保持「一行时紧凑、多行时放开」。
+        self.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._sync_height()
+        # 文本变化的真源：document 的 contentsChanged（setPlainText / 键入都走它）。
+        # 不碰原生 textChanged——它保持原样供调用方连接。
+        self.document().contentsChanged.connect(self._sync_height)
+
+    def _sync_height(self) -> None:
+        """按当前文本的**显示行数**（含自动换行折行）把高度钉在 1~4 行。
+
+        显示行数按「每行文本宽度 ÷ 可用宽度」估：``QLineEdit`` 时代一行就够，
+        换多行后长选择器会被 WidgetWidth 折行——用字符数估算比
+        ``document().size().height()`` 可靠（后者在 ``textChanged`` 同步时刻还没重排）。
+        """
+        metrics = QFontMetrics(self.font())
+        line = metrics.lineSpacing() or 16
+        margins = self.contentsMargins().top() + self.contentsMargins().bottom()
+        available = max(1, self.viewport().width() - margins)
+        displayed = 0
+        for raw_line in self.text().splitlines() or [""]:
+            width = metrics.horizontalAdvance(raw_line) or 1
+            displayed += max(1, -(-width // available))  # 向上取整
+        rows = max(1, min(4, displayed or 1))
+        self.setFixedHeight(int(line * rows + margins + 12))
+
+    def text(self) -> str:  # noqa: A003 - 与 QLineEdit 同名，替换才是就地的
+        return self.toPlainText()
+
+    def setText(self, text: str) -> None:  # noqa: N802 - 与 QLineEdit 同名
+        self.setPlainText(text)
+
+    def resizeEvent(self, event) -> None:  # noqa: N802 - Qt 命名
+        super().resizeEvent(event)
+        # 宽度变了，折行数就变：高度必须跟着重算（否则拉宽对话框后仍停在多行高度）
+        self._sync_height()
+
 
 # 每个 backend **真正被消费**的 locator 字段：``(键, 值类型, 说明)``。
 # 值类型只有 "text" / "int"；顺序即界面顺序。
@@ -597,7 +670,9 @@ class ElementEditorForm(QWidget):
     def _build_browser(self, layout: QVBoxLayout) -> None:
         selector = _dict_or_empty(self._document.get("selector"))
         form = QFormLayout()
-        self.css_edit = QLineEdit(str(selector.get("css") or ""))
+        # 主选择器用**多行**输入（SelectorEdit）：长祖先链一行装不下，QLineEdit 会把
+        # 尾巴截掉（维护者实测「主选择器的框太小了，不方便」）。对外仍是 .text()/.setText()。
+        self.css_edit = SelectorEdit(str(selector.get("css") or ""))
         self.css_edit.textChanged.connect(self.revalidate)
         form.addRow("主选择器（css）", self.css_edit)
         layout.addLayout(form)
@@ -618,7 +693,7 @@ class ElementEditorForm(QWidget):
         self._preview_timer.setSingleShot(True)
         self._preview_timer.setInterval(500)
         self._preview_timer.timeout.connect(self._run_preview)
-        self.css_edit.textChanged.connect(lambda _text: self._on_css_changed())
+        self.css_edit.textChanged.connect(self._on_css_changed)
 
         self.candidates_label = QLabel(
             f"捕获时的备选定位 {len(self._candidates)} 条"
@@ -665,6 +740,18 @@ class ElementEditorForm(QWidget):
         self.path_label.setStyleSheet(f"color: {TEXT_SECONDARY};")
         layout.addWidget(self.path_label)
 
+        # 属性表标题摆在并排区**之上**（它是整块区域的说明，不属于右列本身）
+        self.attr_label = QLabel(
+            "属性（勾选参与定位；匹配方式「包含」= 属性值出现即可，"
+            "改动会重写主选择器）"
+        )
+        self.attr_label.setStyleSheet(f"color: {TEXT_SECONDARY};")
+        layout.addWidget(self.attr_label)
+
+        # 节点树与属性表**并排**（M47.10，维护者要求）：树在左、属性表在右，中间可拖。
+        # 此前是上下堆叠——树的每一行是一条祖先链层级，属性表是「选中那层的属性」，
+        # 两者是「选级 → 看/改该级」的联动关系，并排后联动一眼可见，也不必上下滚动。
+        splitter = QSplitter(Qt.Orientation.Horizontal)
         self.path_list = QListWidget()
         self.path_list.setMinimumHeight(150)
         self._composing_path = False
@@ -679,15 +766,21 @@ class ElementEditorForm(QWidget):
             )
             self.path_list.addItem(item)
         self.path_list.itemChanged.connect(self._on_path_item_changed)
-        layout.addWidget(self.path_list)
-        self._build_attr_table(layout)
+        splitter.addWidget(self.path_list)
+        self._build_attr_table(splitter)   # 表只进右半
+        # 左树窄、右表宽：属性表 4 列（参与/属性/匹配方式/值）需要更宽
+        splitter.setStretchFactor(0, 1)
+        splitter.setStretchFactor(1, 2)
+        splitter.setSizes([180, 360])
+        self.path_splitter = splitter
+        layout.addWidget(splitter, 1)
         self._sync_path_checks_from_css()
         # 默认选中目标所在层（末级）：属性表打开即有内容可看
         self.path_list.setCurrentRow(len(self._path) - 1)
 
     # -- 浏览器：属性表（A1，勾属性/改匹配方式 → 重写该层 fragment） ----------
 
-    def _build_attr_table(self, layout: QVBoxLayout) -> None:
+    def _build_attr_table(self, container) -> None:
         """属性表：对**树中选中的一层**逐属性勾选、改匹配方式。
 
         节点树回答「参与定位的是哪几级」，属性表回答「这一级里哪些属性参与、
@@ -696,15 +789,12 @@ class ElementEditorForm(QWidget):
         消费方照旧是执行器的 ``querySelectorAll``，不需要动执行器。
         落盘口径仍唯一：所有编辑最终都只是重写 ``css_edit``（经
         ``_on_path_item_changed`` 的同一条组装路径）。
+
+        ``container`` 是并排区的右半（QSplitter）；标题 ``attr_label`` 由调用方
+        摆在并排区之上，这里只建表。
         """
         self._composing_table = False
         self._attr_rows: list[dict[str, Any]] = []
-        self.attr_label = QLabel(
-            "属性（勾选参与定位；匹配方式「包含」= 属性值出现即可，"
-            "改动会重写主选择器）"
-        )
-        self.attr_label.setStyleSheet(f"color: {TEXT_SECONDARY};")
-        layout.addWidget(self.attr_label)
 
         self.attr_table = QTableWidget(0, 4)
         self.attr_table.setHorizontalHeaderLabels(["参与", "属性", "匹配方式", "值"])
@@ -727,7 +817,7 @@ class ElementEditorForm(QWidget):
         self.attr_table.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
         )
-        layout.addWidget(self.attr_table)
+        container.addWidget(self.attr_table)
         self.path_list.currentRowChanged.connect(
             lambda _row: self._rebuild_attr_table()
         )
@@ -941,7 +1031,7 @@ class ElementEditorForm(QWidget):
                 self._preview_seq += 1
                 self._dispatch(self._clear_preview_css, ())
             return
-        self.preview_label.setText("预览中…")
+        self.set_hit_label("查找中…", TEXT_SECONDARY)
         self._preview_seq += 1
         self._dispatch(self._preview_css, (css,))
 
@@ -969,16 +1059,26 @@ class ElementEditorForm(QWidget):
         if data.get("seq") != self._preview_seq:
             return  # 陈旧结果：用户已改了下一轮，覆盖反而回退显示
         if data.get("error"):
-            self.preview_label.setText(f"预览失败：{data['error']}")
-            self.preview_label.setStyleSheet(f"color: {DANGER};")
+            self.set_hit_label(f"预览失败：{data['error']}", DANGER)
             return
         count = data.get("count")
         if count == 1:
-            text, color = "预览：命中 1 个（页面上已黄框高亮）", SUCCESS
+            text, color = "命中 1 个（页面上已黄框高亮）", SUCCESS
         elif isinstance(count, int) and not isinstance(count, bool) and count > 1:
-            text, color = f"预览：命中 {count} 个（超过 1 个不唯一）", DANGER
+            text, color = f"命中 {count} 个（超过 1 个不唯一）", DANGER
         else:
-            text, color = "预览：命中 0 个（页面上找不到该选择器）", DANGER
+            text, color = "命中 0 个（页面上找不到该选择器）", DANGER
+        self.set_hit_label(text, color)
+
+    def set_hit_label(self, text: str, color: str) -> None:
+        """写**唯一**那条命中数标签（预览与「校验元素」共用同一条）。
+
+        M47.10 去重：确认框曾有「当前命中 X 个」与编辑区的「预览：命中 X 个」两处，
+        语义重叠且改 css 后会互相矛盾。现在两处来源都写这一条——「预览」前缀也去掉
+        （来源已在场景里体现，不需要标签再声明一次它叫「预览」）。
+        """
+        if not hasattr(self, "preview_label"):
+            return
         self.preview_label.setText(text)
         self.preview_label.setStyleSheet(f"color: {color};")
 
