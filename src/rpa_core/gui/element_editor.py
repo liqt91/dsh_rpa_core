@@ -625,6 +625,9 @@ class PreviewShot(QWidget):
         super().__init__(parent)
         self._pixmap: QPixmap | None = None
         self._box: dict[str, float] | None = None
+        # 裁剪区（浏览器腿捕获预览）：**与 _box 是两回事**，box=画框、crop=裁画面。
+        # 字段必须在 __init__ 就位——paintEvent 会直接读它。
+        self._crop: dict[str, float] | None = None
         self._message = "尚未获取预览截图"
         self.setMinimumSize(360, 220)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
@@ -634,15 +637,28 @@ class PreviewShot(QWidget):
     def clear(self, message: str = "尚未获取预览截图") -> None:
         self._pixmap = None
         self._box = None
+        self._crop = None
         self._message = message
         self.update()
 
-    def show_shot(self, data_url: str, box: dict[str, float] | None) -> bool:
-        """显示一张截图与（可选的）红框。返回图是否**解出来了**。
+    def show_shot(
+        self,
+        data_url: str,
+        box: dict[str, float] | None,
+        crop: dict[str, float] | None = None,
+    ) -> bool:
+        """显示一张截图。可选 ``crop``（图内像素）**把画面裁到元素附近**。
 
-        ``data_url`` 是 ``data:image/png;base64,...``（host 坐标截屏的产物）。
-        解不出来（不是 data URL / base64 坏/ 空图）时**不抛**：调用方据此把文案改成
-        「截图无法显示」，而校验命中数仍然有效——截图是观感增强。
+        ``crop`` 与 ``box`` 是两种不同的表达，**不是一回事**（2026-10-09 真机定案）：
+
+        - ``box`` = 在图上**画一个框**。那是二次换算，必然对不齐——真机 150%
+          Windows 缩放下偏得肉眼可见。维护者原话：「红框是后面绘制上去的，偏离了
+          实际元素，不是用户在页面上看到的黄框」。**浏览器腿不再传box。**
+        - ``crop`` = **把画面裁到元素附近**，位置感由裁剪范围本身表达，不声称
+          「框住它」，所以错不了。
+
+        两者都缺省时按旧口径：原图 + 可选红框（桌面腿仍在用，那条路的 rect 本来
+        就是屏幕坐标、与图同源 1:1，不存在换算误差）。
         """
         pixmap = decode_shot(data_url)
         if pixmap is None or pixmap.isNull():
@@ -653,9 +669,40 @@ class PreviewShot(QWidget):
             return False
         self._pixmap = pixmap
         self._box = box
-        self._message = "" if box else "已命中，但元素不在窗口内（无框可画）"
+        self._crop = None
+        if isinstance(crop, dict):
+            self._crop = self._clamp_crop(pixmap, crop)
+        self._message = self._notice_for(box, self._crop)
         self.update()
         return True
+
+    @staticmethod
+    def _clamp_crop(pixmap: QPixmap, crop: dict[str, float]) -> dict[str, float] | None:
+        """裁剪区钳到图内且**不小于 1px**（坏形状直接当没裁剪，不画崩控件）。"""
+        try:
+            x = float(crop["x"])
+            y = float(crop["y"])
+            w = float(crop["width"])
+            h = float(crop["height"])
+        except (KeyError, TypeError, ValueError):
+            return None
+        iw, ih = pixmap.width(), pixmap.height()
+        x1 = max(0, min(int(x), iw - 1))
+        y1 = max(0, min(int(y), ih - 1))
+        x2 = max(x1 + 1, min(int(x + w), iw))
+        y2 = max(y1 + 1, min(int(y + h), ih))
+        return {"x": x1, "y": y1, "width": x2 - x1, "height": y2 - y1}
+
+    @staticmethod
+    def _notice_for(
+        box: dict[str, float] | None, crop: dict[str, float] | None
+    ) -> str:
+        """左上角那行说明。裁剪模式下说明「裁到了什么」，不重复说「有没有框」。"""
+        if crop is not None:
+            return "已裁到元素附近（未画框：框在截图上对不齐页面上的黄框）"
+        if box:
+            return ""
+        return "已命中，但元素不在窗口内（无框可画）"
 
     @property
     def has_shot(self) -> bool:
@@ -667,19 +714,39 @@ class PreviewShot(QWidget):
         return dict(self._box) if self._box else None
 
     @property
+    def crop(self) -> dict[str, float] | None:
+        """裁剪区（浏览器腿捕获预览用；桌面腿与旧口径是 None）。"""
+        return dict(self._crop) if self._crop else None
+
+    @property
     def message(self) -> str:
         return self._message
 
     # -- 绘制 ----------------------------------------------------------------
 
     def _image_rect(self) -> tuple[int, int, int, int]:
-        """图在控件里的落位（居中、不缩放；返回 (x, y, w, h)）。"""
+        """图在控件里的落位（居中、不缩放；返回 (x, y, w, h)）。
+
+        **裁剪模式下画的是裁剪出来的那一块**（``drawPixmap(target, source)`` 的源
+        矩形用法），不是整图缩小 —— 这样控件有多少空间就显示多少细节，且元素永远
+        在画面中央附近。
+        """
         assert self._pixmap is not None
-        iw, ih = self._pixmap.width(), self._pixmap.height()
+        iw, ih = self._source_size()
         cw, ch = self.width(), self.height()
         scale = min(1.0, cw / iw, ch / ih) if iw and ih else 1.0
         w, h = int(iw * scale), int(ih * scale)
         return (cw - w) // 2, (ch - h) // 2, w, h
+
+    def _source_size(self) -> tuple[int, int]:
+        """当前显示区域的**源像素**尺寸（裁剪区或整图）。"""
+        assert self._pixmap is not None
+        if self._crop:
+            return (
+                max(1, int(self._crop["width"])),
+                max(1, int(self._crop["height"])),
+            )
+        return self._pixmap.width(), self._pixmap.height()
 
     def paintEvent(self, event) -> None:  # noqa: N802 (Qt naming)
         painter = QPainter(self)
@@ -689,10 +756,21 @@ class PreviewShot(QWidget):
             painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, self._message)
             return
         x, y, w, h = self._image_rect()
-        painter.drawPixmap(x, y, w, h, self._pixmap)
+        if self._crop:
+            src = QRectF(
+                float(self._crop["x"]),
+                float(self._crop["y"]),
+                float(self._crop["width"]),
+                float(self._crop["height"]),
+            )
+            painter.drawPixmap(QRectF(x, y, w, h), self._pixmap, src)
+        else:
+            painter.drawPixmap(x, y, w, h, self._pixmap)
         if self._box:
             # 控件缩放比例：图在控件里被缩到了 w 宽，红框必须按同一比例缩，否则框会
             # 贴在图外（这正是把「图内像素」换算成「控件像素」这一步的用处）。
+            # **裁剪模式下不画框**：浏览器腿已改用裁剪表达位置（见 show_shot 的
+            # docstring）——截图上的框与页面上的黄框原理上就对不齐。
             iw = self._pixmap.width() or 1
             k = w / iw
             bx = x + float(self._box["x"]) * k
@@ -1267,7 +1345,8 @@ class ElementEditorForm(QWidget):
         self._capture_shot = shot
         # 记下快照对应的 css：只有选择器没动过，它才算「这张就是你要看的那张」。
         self._capture_shot_css = self.css_edit.text().strip()
-        self.preview_shot.show_shot(data_url, shot.get("box"))
+        # **裁剪，不画框**（2026-10-09 真机定案）：框在截图上对不齐页面上的黄框。
+        self.preview_shot.show_shot(data_url, None, shot.get("crop"))
 
     def _run_shot(self) -> None:
         """取一张截图 + 首个命中的红框，填进「预览」页。
@@ -1288,7 +1367,8 @@ class ElementEditorForm(QWidget):
             if self._capture_shot_css == self.css_edit.text().strip():
                 self.preview_shot.show_shot(
                     str(self._capture_shot.get("dataUrl") or ""),
-                    self._capture_shot.get("box"),
+                    None,
+                    self._capture_shot.get("crop"),
                 )
                 return
             # 选择器改了 ⇒ 快照过期：丢掉它，让实时截屏接管（别拿旧图冒充）。
@@ -1423,7 +1503,12 @@ class ElementEditorForm(QWidget):
                     f"已命中 {count} 个，但截图失败（窗口最小化或锁屏会话时会这样）"
                 )
             return
-        self.preview_shot.show_shot(data_url, data.get("box"))
+        # **浏览器腿用裁剪、桌面腿用画框**（2026-10-09 真机定案）：页面上的黄框由
+        # content.js 在捕获瞬间画、位置权威；截图上再画一个框是二次换算，真机 150%
+        # Windows 缩放下必然对不齐。桌面腿不受影响——它的 rect 本来就是屏幕坐标、
+        # 与图同源1:1，不存在换算误差，那个框是准的。
+        crop = data.get("crop")
+        self.preview_shot.show_shot(data_url, data.get("box"), crop)
 
     def set_hit_label(self, text: str, color: str) -> None:
         """写**唯一**那条命中数标签（预览与「校验元素」共用同一条）。

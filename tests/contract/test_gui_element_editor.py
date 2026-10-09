@@ -18,11 +18,19 @@ pytest.importorskip("PySide6")
 
 
 def _one_pixel_png_url() -> str:
-    """一张 1×1 的真 PNG（base64 data URL）。
+    return _solid_png_url(1, 1)
+
+
+def _solid_png_url(width: int, height: int) -> str:
+    """一张 ``width``×``height`` 的真纯色 PNG（base64 data URL）。
 
     「陈旧截图被丢弃」这类判据需要一张**真能解码**的图——用假 base64 的话，
     判据会在解码那步就短路，分不清是「丢弃了」还是「本来就解不出来」。
     手写 PNG 字节而不是引Pillow：测试依赖越少越好。
+
+    尺寸**必须给够**（2026-10-09）：裁剪判据的裁剪区是几百像素宽，1×1 图会被
+    ``_clamp_crop`` 钳成 1×1，于是判据红在「钳位」上而不是红在「裁剪被透传」上
+    ——那是判据自己把靶子放偏了。产品代码没错。
     """
 
     def chunk(tag: bytes, data: bytes) -> bytes:
@@ -33,10 +41,11 @@ def _one_pixel_png_url() -> str:
             + struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF)
         )
 
+    raw = b"".join(b"\x00" + b"\xff\x00\x00" * width for _ in range(height))
     png = (
         b"\x89PNG\r\n\x1a\n"
-        + chunk(b"IHDR", struct.pack(">IIBBBBB", 1, 1, 8, 2, 0, 0, 0))
-        + chunk(b"IDAT", zlib.compress(b"\x00\xff\x00\x00", 6))
+        + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0))
+        + chunk(b"IDAT", zlib.compress(raw, 6))
         + chunk(b"IEND", b"")
     )
     return "data:image/png;base64," + base64.b64encode(png).decode("ascii")
@@ -1911,17 +1920,13 @@ def test_browser_preview_passes_stale_reason_through_to_gui(qapp):
 # ---- 捕获时快照（M47.12 真机反馈：预览要的是「捕获时的截图」）--------------------
 
 
-_ONE_PIXEL = (
-    "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk"
-    "YPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
-)
-
-
 def _doc_with_capture_shot() -> dict:
     doc = _path_document()
     doc["captureShot"] = {
-        "dataUrl": _ONE_PIXEL,
-        "box": {"x": 10, "y": 20, "width": 300, "height": 40},
+        # 图必须**比裁剪区大**（310×60），否则 _clamp_crop 会把裁剪区钳到图边界，
+        # 判据就红在钳位上而不是红在「裁剪有没有被透传」上。
+        "dataUrl": _solid_png_url(400, 200),
+        "crop": {"x": 10, "y": 20, "width": 300, "height": 40},
         "windowOrigin": [0, 0],
         "imageSize": [1930, 1040],
     }
@@ -1945,14 +1950,47 @@ def test_capture_shot_is_shown_without_asking_the_extension(qapp):
         lambda: {"count": 0},
         lambda css, **_k: calls.append(css) or {"count": 1, "shotError": "no-window-handle"},
     )
-    # 开箱即有图
+    # 开箱即有图，且**裁到元素附近**
     assert form.preview_shot.has_shot
-    assert form.preview_shot.box == {"x": 10, "y": 20, "width": 300, "height": 40}
+    assert form.preview_shot.crop == {"x": 10, "y": 20, "width": 300, "height": 40}
+    # 浏览器腿**不画框**（2026-10-09 真机定案）：截图上的框是二次换算，真机 150%
+    # Windows 缩放下对不齐页面上那个权威黄框，位置由裁剪表达而不是由框表达。
+    assert form.preview_shot.box is None
 
     # 切到「预览」页签 ⇒ 仍然不发请求（快照就是答案）
     form.tabs.setCurrentIndex(0)
     assert calls == [], "有捕获时快照时不该再去要窗口句柄"
     assert form.preview_shot.has_shot
+
+
+def test_capture_shot_crop_survives_a_preview_tab_round_trip(qapp):
+    """切走再切回「预览」页签（真走 :meth:`_run_shot`）⇒ **裁剪不能丢**。
+
+    为什么必须单独一条：``set_capture_shot`` 与 ``_run_shot`` 是**两处**独立的
+    ``show_shot`` 调用，两处都要自己传``crop``。只测开箱那一次的话，``_run_shot``
+    里那次透传被掐断（全绿——负向验证 N1 实测过），而它恰好是「用户切回预览页签
+    看到整张窗口截图」的真实路径。
+
+    另：``setCurrentIndex(0)`` 在开框时**已经是 0** ⇒ 是个空动作，不触发
+    ``_run_shot``。必须先切走再切回。
+    """
+    from rpa_core.gui.element_editor import ElementEditorForm
+
+    calls: list[str] = []
+    form = ElementEditorForm(_doc_with_capture_shot())
+    form.enable_live_preview(
+        lambda _css: {"count": 1},
+        lambda: {"count": 0},
+        lambda css, **_k: calls.append(css) or {"count": 1, "shotError": "no-window-handle"},
+    )
+    form.tabs.setCurrentIndex(1)
+    form.tabs.setCurrentIndex(0)
+
+    assert calls == [], "有捕获时快照时不该再去要窗口句柄"
+    assert form.preview_shot.has_shot
+    assert form.preview_shot.box is None
+    # 负向验证 N1 的靶心：这两行任一被掐断，本判据立刻红。
+    assert form.preview_shot.crop == {"x": 10, "y": 20, "width": 300, "height": 40}
 
 
 def test_capture_shot_is_dropped_once_css_changes(qapp):

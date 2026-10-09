@@ -354,15 +354,15 @@ def test_capture_shot_reads_viewport_from_descriptor_top_level():
     }
     shot = capture_shot_from_descriptor(descriptor, 5150, api=FakeAPI(rect=(0, 0, 1930, 1040)))
     assert shot is not None
-    # viewport 缺失 ⇒ box 算不出来；有 ⇒ 必须算出四元组。两者的差别就是本条判据。
-    assert set(shot["box"]) == {"x", "y", "width", "height"}
+    # viewport 缺失 ⇒ 裁剪区算不出来；有 ⇒ 必须算出四元组。两者的差别就是本条判据。
+    assert set(shot["crop"]) == {"x", "y", "width", "height"}
 
     del descriptor["viewport"]
     without = capture_shot_from_descriptor(
         descriptor, 5150, api=FakeAPI(rect=(0, 0, 1930, 1040))
     )
     assert without is not None
-    assert "box" not in without, "没有 viewport 就不该凭空给出红框"
+    assert "crop" not in without, "没有 viewport 就不该凭空给出裁剪区"
 
 
 def test_capture_shot_needs_valid_hwnd_and_never_raises():
@@ -384,3 +384,136 @@ def test_capture_shot_needs_valid_hwnd_and_never_raises():
 
 
 # ---- 捕获时快照（M47.12 真机反馈：预览要的是「捕获时的截图」）--------------------
+
+
+# ---- 捕获预览：裁剪而非画框（M47.12 真机定案）----------------------------------
+
+
+def test_browser_crop_never_draws_a_box():
+    """浏览器腿**只裁不画**：产物里没有 ``box``，只有 ``crop``。
+
+    真机定案（2026-10-09，维护者原话「红框是后面绘制上去的，偏离了实际元素，
+    不是用户在页面上看到的黄框」）：页面上那个黄框由 ``content.js`` 在捕获瞬间画、
+    **位置权威**；截图上再画一个框是**二次换算**，真机 150% Windows 缩放下偏得肉眼
+    可见。⇒ 改用裁剪表达位置：错不了，也不需要「框准不准」这个无法保证的承诺。
+    """
+    from rpa_core.capture.screen_shot import capture_shot_from_descriptor
+
+    descriptor = {
+        "kind": "browser",
+        "selector": {"css": "#kw"},
+        "metadata": {"rect": {"left": 100, "top": 200, "width": 300, "height": 40}},
+        "viewport": {"width": 1280, "height": 720, "screenX": 12, "screenY": 84},
+    }
+    shot = capture_shot_from_descriptor(
+        descriptor, 5150, api=FakeAPI(rect=(0, 0, 1936, 1056))
+    )
+    assert shot is not None
+    assert "box" not in shot, "浏览器腿不再产出box（截图上的框对不齐页面上的黄框）"
+    assert "crop" in shot
+
+
+def test_browser_crop_surrounds_the_element():
+    """裁剪区必须**包含**元素，且各边留出上下文（不是紧贴元素的一条缝）。"""
+    from rpa_core.capture.screen_shot import browser_crop_in_window
+
+    # 取样必须让元素**离图边足够远**：否则上下文先被钳到 0，本条就测不到
+    # 「留上下文」这件事了（第一版栽在这：元素左边界 177、pad 454⇒ 左侧全被钳掉，
+    # 断言 ``ex - crop.x >= 0.5*ew`` 变成在测钳位，不是在测上下文）。
+    crop = browser_crop_in_window(
+        {"left": 500, "top": 300, "width": 100, "height": 30},
+        {"width": 1280, "height": 720, "screenX": 12, "screenY": 84},
+        (1936, 1056),
+        (-8, -8),
+    )
+    assert crop is not None
+    # 元素经 scale 换算后的图内位置（先在 CSS 系里减、再乘 scale）
+    scale = 1936 / 1280
+    ex = (500 * scale) + 12 * scale - (-8)
+    ey = (300 * scale) + 84 * scale - (-8)
+    ew = 100 * scale
+    eh = 30 * scale
+    assert crop["x"] <= ex, "裁剪区左边界不能切掉元素"
+    assert crop["y"] <= ey, "裁剪区上边界不能切掉元素"
+    assert crop["x"] + crop["width"] >= ex + ew, "裁剪区右边界不能切掉元素"
+    assert crop["y"] + crop["height"] >= ey + eh, "裁剪区下边界不能切掉元素"
+    # 上下文：至少留出 0.5 倍元素尺寸的一圈（margin_ratio=1.0 ⇒ 各边一倍）
+    assert ex - crop["x"] >= 0.5 * ew
+    assert crop["x"] + crop["width"] - (ex + ew) >= 0.5 * ew
+
+
+def test_browser_crop_is_clamped_into_the_image():
+    """元素贴边时裁剪区必须**钳到图内**，不许算出图外的坐标。"""
+    from rpa_core.capture.screen_shot import browser_crop_in_window
+
+    crop = browser_crop_in_window(
+        {"left": 0, "top": 0, "width": 20, "height": 20},
+        {"width": 1280, "height": 720, "screenX": 0, "screenY": 0},
+        (1936, 1056),
+        (-8, -8),
+    )
+    assert crop is not None
+    assert crop["x"] >= 0 and crop["y"] >= 0
+    assert crop["x"] + crop["width"] <= 1936
+    assert crop["y"] + crop["height"] <= 1056
+
+
+def test_browser_crop_mixes_no_css_and_physical_pixels():
+    """坐标系必须**先在 CSS 系里减、再统一乘 scale**（真机 150% 缩放的真 bug）。
+
+    原式写成 ``(screenX - win.left) * scale``，而 ``win.left`` 是**物理**像素
+    （win32 GetWindowRect）、``screenX`` 是 **CSS** 像素 ⇒ 150% 缩放下偏移错 50%，
+    框/裁剪区整体歪掉。这条用「错公式会给出一个**具体错值**」的方式钉住：
+    正确算法下元素左上角落在某个位置，错算法下会差 screenX 的 50%。
+    """
+    from rpa_core.capture.screen_shot import browser_crop_in_window
+
+    screen_x, origin_x = 40, -8
+    scale = 1.5
+    crop = browser_crop_in_window(
+        {"left": 0, "top": 0, "width": 100, "height": 20},
+        {"width": 1280, "height": 720, "screenX": screen_x, "screenY": 84},
+        (1920, 1080),
+        (origin_x, -8),
+    )
+    assert crop is not None
+    # 正确：x = 0*scale + screen_x*scale - origin_x
+    correct = screen_x * scale - origin_x
+    # 错公式：x = (screen_x - origin_x) * scale
+    wrong = (screen_x - origin_x) * scale
+    assert wrong != correct, "本判据的坐标系前提失效（两者不该相等）"
+    # 取一个**元素离图边足够远**的取样，使 crop.x 不被钳位吃掉，于是
+    # crop.x == 元素左边界 - 一倍上下文，可直接反推。
+    far = browser_crop_in_window(
+        {"left": 600, "top": 300, "width": 100, "height": 20},
+        {"width": 1280, "height": 720, "screenX": screen_x, "screenY": 84},
+        (1920, 1080),
+        (origin_x, -8),
+    )
+    assert far is not None
+    far_correct = 600 * scale + screen_x * scale - origin_x
+    far_wrong = (screen_x - origin_x) * scale + 600 * scale
+    inferred = far["x"] + 100 * scale  # pad = 一倍元素宽
+    assert inferred == pytest.approx(far_correct, abs=1.0), (
+        f"元素左边界算成 {inferred}，正确值 {far_correct}（错公式会给 {far_wrong}）"
+    )
+
+
+def test_browser_crop_returns_none_outside_the_window():
+    """完全在窗口外⇒ None（裁不出来就不裁，别给一个空画面）。"""
+    from rpa_core.capture.screen_shot import browser_crop_in_window
+
+    # 元素远在视口下方数千像素 ⇒ 换算后整块都在图外
+    assert (
+        browser_crop_in_window(
+            {"left": 10, "top": 9000, "width": 100, "height": 20},
+            {"width": 1280, "height": 720, "screenX": 12, "screenY": 84},
+            (1936, 1056),
+            (-8, -8),
+        )
+        is None
+    )
+    # 坏形状也一样
+    assert (
+        browser_crop_in_window(None, {"width": 1}, (10, 10), (0, 0)) is None
+    )
