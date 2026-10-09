@@ -358,3 +358,54 @@ def desktop_preview_shot(hwnd: int, rect: dict[str, Any] | None) -> dict[str, An
     if not isinstance(hwnd, int) or isinstance(hwnd, bool) or hwnd <= 0:
         return None
     return shot_for_desktop(hwnd, rect)
+
+
+# ------------------------------------------------- 捕获时快照（M47.12 真机反馈）
+
+def capture_shot_from_descriptor(
+    descriptor: dict[str, Any],
+    hwnd: int | None,
+    api: _ScreenAPI | None = None,
+) -> dict[str, Any] | None:
+    """**捕获那一刻**的窗口快照 + 图内红框（预览页签直接展示它，不再二次截屏）。
+
+    为什么不用「点预览时才截」那条路（M47.12 真机撞墙的教训）：
+    那条路依赖扩展回 ``windowHandle``，而 ``chrome.windows.get().nativeWindowHandle``
+    在真实环境里**未必给得出**（2026-10-09 真机：版本已是0.8.0，Edge 上仍
+    ``has_hwnd=false``）。而捕获时不同——**用户刚点完元素，浏览器窗口必定在眼前**，
+    窗口句柄由 host 用 Z 序认（``first_browser_window()``，Chrome/Edge 都在册），
+    不依赖扩展给任何东西。
+
+    几何来源是content 侧本来就有的：``metadata.rect``（视口 CSS 像素）+ ``viewport``
+    （含视口屏幕原点），换算与 :func:`browser_box_in_window` 同一套口径。
+
+    返回 ``{dataUrl, box?, windowOrigin, imageSize}``；拿不到窗口就返回 ``None``，
+    由调用方决定降级文案（**不抛**——截图不该让一次成功的捕获变成失败）。
+    """
+    if not isinstance(descriptor, dict) or not isinstance(hwnd, int) or hwnd <= 0:
+        return None
+    meta = descriptor.get("metadata")
+    meta = meta if isinstance(meta, dict) else {}
+    rect = meta.get("rect")
+    rect = rect if isinstance(rect, dict) else None
+    # 注意 viewport 在 descriptor **顶层**（content.js 的 viewportInfo()），
+    # 不在 selector 里 —— 早期版本读错位置，恒为 None，红框整个消失且不报错。
+    viewport = descriptor.get("viewport")
+    viewport = viewport if isinstance(viewport, dict) else None
+    if viewport is None:
+        sel = descriptor.get("selector")
+        sel = sel if isinstance(sel, dict) else {}
+        legacy = sel.get("viewport")
+        viewport = legacy if isinstance(legacy, dict) else None
+    shot = shot_for_browser(hwnd, rect, viewport, api=api)
+    if shot is None:
+        _trace("capture_shot", "no_window", hwnd=int(hwnd))
+        return None
+    _trace(
+        "capture_shot",
+        "ok",
+        hwnd=int(hwnd),
+        bytes=data_len(shot),
+        has_box="box" in shot,
+    )
+    return shot

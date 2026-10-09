@@ -451,6 +451,10 @@
       // （都出自 pathFor），所以树上高亮的路径与真正下发执行的选择器必然是同一条。
       selector: { css, path: pathFor(el), candidates: candidatesFor(el, css) },
       verifyCount: document.querySelectorAll(css).length,
+      // M47.12 真机反馈（预览要的是「捕获时的截图」）：把视口几何一并回传，
+      // host 拿它把 metadata.rect 换算成图内红框。**不依赖扩展给窗口句柄**
+      // （真实环境里 nativeWindowHandle 未必给得出，见 host侧capture_shot 注释）。
+      viewport: viewportInfo(),
       metadata: {
         tag: el.tagName.toLowerCase(),
         id: el.id || null,

@@ -170,6 +170,34 @@ class ExtensionCaptureSession:
     def result(self) -> dict | None:
         return self._result
 
+    def _attach_capture_shot(self, descriptor: dict) -> None:
+        """捕获成功那一刻给descriptor 挂上窗口快照（预览页签直接展示它）。
+
+        **为什么截在这里而不是「点预览时」**（M47.12 真机撞墙的教训）：
+        「点预览时再截」依赖扩展回 ``windowHandle``，而
+        ``chrome.windows.get().nativeWindowHandle`` 在真实环境里未必给得出——2026-10-09
+        真机实测：扩展已是最新0.8.0，**Edge 上仍然 has_hwnd=false**，预览整页空白。
+        捕获时则不同：用户刚点完元素，浏览器窗口必定在眼前，句柄由 host 用 Z 序认
+        （``first_browser_window()``，Chrome/Edge 都在册），**不依赖扩展给任何东西**。
+
+        挂不上也不影响捕获：``descriptor`` 照样提交，预览页签显示一句降级说明即可。
+        """
+        try:
+            from rpa_core.capture.foreground_window import first_browser_window
+            from rpa_core.capture.screen_shot import capture_shot_from_descriptor
+
+            found = first_browser_window()
+            if found is None:
+                _trace("capture_shot", "no_browser_window")
+                return
+            shot = capture_shot_from_descriptor(descriptor, found.hwnd)
+            if shot is None:
+                return
+            # 挂在 descriptor 内部而不是另开通道：预览页签读的就是它。
+            descriptor["captureShot"] = shot
+        except Exception:  # noqa: BLE001 - 截图绝不该让一次成功的捕获变成失败
+            _trace("capture_shot", "error")
+
     def submit(self, payload: dict) -> None:
         """外部回传结果（兼容旧调用点；常规路径由读线程自行接收）。"""
         if self._event.is_set():
@@ -327,7 +355,11 @@ class ExtensionCaptureSession:
                         content_build=message.get("contentBuild"),
                     )
                     descriptor = message.get("descriptor")
-                    self.submit(descriptor if isinstance(descriptor, dict) else message)
+                    if isinstance(descriptor, dict):
+                        self._attach_capture_shot(descriptor)
+                        self.submit(descriptor)
+                    else:
+                        self.submit(message)
                 return
         finally:
             with self._live_lock:

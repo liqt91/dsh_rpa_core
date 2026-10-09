@@ -381,6 +381,11 @@
       "id": "stale-extension-self-diagnosis",
       "title": "When a screenshot or other new extension-dependent feature produces no image, the program identifies it as a stale extension snapshot rather than mislabeling it as a window or capture failure: the extension reports extBuild on every reply, the host forwards it and compares against the expected build, shot_failure_reason classifies failures into ext-stale / no-window-handle / shot-failed, and the GUI states the actual version plus the chrome://extensions refresh step. Load unpacked does not reload automatically, so without this the only symptom is a blank preview while highlighting and verification keep working.",
       "passes": true
+    },
+    {
+      "id": "capture-time-preview-snapshot",
+      "title": "The preview tab shows the screenshot taken at the moment of capture instead of re-capturing the browser window when the tab is opened: the host recognises the foreground browser by Z-order (Chrome and Edge both qualify), grabs the window region and the in-image red box, and attaches it to the descriptor as captureShot; the editor loads it from the document itself, prefers it over a live shot while the css is unchanged, and drops it once the selector is edited. This removes the dependency on chrome.windows.get().nativeWindowHandle, which real browsers do not reliably provide (on Edge the handle stayed null even with the current extension build), and the snapshot never reaches the element library because result_document keeps only four keys.",
+      "passes": true
     }
   ]
 }

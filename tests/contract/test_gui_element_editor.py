@@ -1906,3 +1906,122 @@ def test_browser_preview_passes_stale_reason_through_to_gui(qapp):
     assert out["shotError"] == "ext-stale"
     assert out["extBuild"] == "0.6.3"
     del monkey
+
+
+# ---- 捕获时快照（M47.12 真机反馈：预览要的是「捕获时的截图」）--------------------
+
+
+_ONE_PIXEL = (
+    "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk"
+    "YPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
+)
+
+
+def _doc_with_capture_shot() -> dict:
+    doc = _path_document()
+    doc["captureShot"] = {
+        "dataUrl": _ONE_PIXEL,
+        "box": {"x": 10, "y": 20, "width": 300, "height": 40},
+        "windowOrigin": [0, 0],
+        "imageSize": [1930, 1040],
+    }
+    return doc
+
+
+def test_capture_shot_is_shown_without_asking_the_extension(qapp):
+    """捕获时的快照**直接展示**，不去问扩展要窗口句柄。
+
+    真机现场（2026-10-09）：扩展已是 0.8.0，Edge 上``has_hwnd`` 仍为 false ⇒
+    「点预览时再截」那条路必然停在「未能定位到浏览器窗口」。而维护者的原话是
+    「预览的意思就是把捕获时的截图展示出来就行」——快照就在descriptor 里，
+    不需要任何回传往返。
+    """
+    from rpa_core.gui.element_editor import ElementEditorForm
+
+    calls: list[str] = []
+    form = ElementEditorForm(_doc_with_capture_shot())
+    form.enable_live_preview(
+        lambda _css: {"count": 1},
+        lambda: {"count": 0},
+        lambda css, **_k: calls.append(css) or {"count": 1, "shotError": "no-window-handle"},
+    )
+    # 开箱即有图
+    assert form.preview_shot.has_shot
+    assert form.preview_shot.box == {"x": 10, "y": 20, "width": 300, "height": 40}
+
+    # 切到「预览」页签 ⇒ 仍然不发请求（快照就是答案）
+    form.tabs.setCurrentIndex(0)
+    assert calls == [], "有捕获时快照时不该再去要窗口句柄"
+    assert form.preview_shot.has_shot
+
+
+def test_capture_shot_is_dropped_once_css_changes(qapp):
+    """改了选择器 ⇒ 快照过期，退回实时截屏，**不拿旧图冒充新选择器**。
+
+    这一条是「快照优先」必须配的对偶：没有它，界面会一直亮着旧截图，
+    而红框指的是另一个元素——比空白页签更坏（它看起来是对的）。
+    """
+    from rpa_core.gui.element_editor import ElementEditorForm
+
+    calls: list[str] = []
+    form = ElementEditorForm(_doc_with_capture_shot())
+    form.enable_live_preview(
+        lambda _css: {"count": 1},
+        lambda: {"count": 0},
+        lambda css, **_k: calls.append(css) or {"count": 1},
+    )
+    form.css_edit.setText("#other")
+    form.tabs.setCurrentIndex(0)
+    assert calls == ["#other"], "选择器改了就得重新取图"
+    assert form._capture_shot is None, "过期快照要被丢掉，不能留在字段里"
+
+
+def test_capture_shot_never_reaches_the_element_document(qapp):
+    """快照**不进元素库**：``result_document`` 只挑四个键。
+
+    base64 PNG 几十万字符，塞进元素库既臃肿又毫无用处（每次捕获白写一遍）。
+    顶层未知键另有pydantic ``extra="ignore"`` 兜底，两道都要在。
+    """
+    from rpa_core.gui.element_editor import ElementEditorForm
+
+    form = ElementEditorForm(_doc_with_capture_shot())
+    form.set_capture_shot(_doc_with_capture_shot()["captureShot"])
+    out = form.result_document()
+    assert set(out) == {"kind", "selector", "verifyCount", "metadata"}
+    assert "captureShot" not in out
+    assert "captureShot" not in out["selector"]
+    assert "captureShot" not in out["metadata"]
+
+
+def test_set_capture_shot_ignores_junk(qapp):
+    """坏形状的快照直接忽略，别把页签打成半残状态。"""
+    from rpa_core.gui.element_editor import ElementEditorForm
+
+    form = ElementEditorForm(_path_document())
+    for junk in (None, {}, {"dataUrl": ""}, {"dataUrl": 123}, "not-a-dict"):
+        form.set_capture_shot(junk)
+    assert form._capture_shot is None
+    assert not form.preview_shot.has_shot
+
+
+def test_desktop_form_has_capture_shot_fields(qapp):
+    """桌面腿也必须带 ``_capture_shot`` 字段（哪怕恒为 None）。
+
+    这条是**实测抓出来的**：字段第一版只初始化在 :meth:`_build_browser` 里，
+    而 :meth:`_run_shot` 的快照判断在两条腿之前 ⇒ 桌面腿一走预览就
+    ``AttributeError``（真机全量跑才暴露，单跑那条用例因为构造顺序不同没红）。
+
+    为什么值得单列一条：上一条 ``test_desktop_preview_screenshot_takes_no_css_argument``
+    也覆盖到了同一个面，但它**本意**是钉「调用点与签名对齐」，用它当护栏等于
+    「靠别人的意图顺带兜住」——那条哪天改写就会连这层保护一起消失。
+    """
+    from rpa_core.gui.element_editor import ElementEditorForm
+
+    form = ElementEditorForm(
+        {"kind": "desktop", "selector": {"locator": {"backend": "win32", "controlId": 3}}}
+    )
+    assert form._capture_shot is None
+    assert form._capture_shot_css == ""
+    # 桌面腿没有 css_edit，快照装载必须跳过（否则读它就是 AttributeError）
+    form.set_capture_shot({"dataUrl": "data:image/png;base64,AAA"})
+    assert form._capture_shot is None, "桌面腿不该装载浏览器快照"

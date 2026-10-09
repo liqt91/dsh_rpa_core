@@ -792,6 +792,13 @@ class ElementEditorForm(QWidget):
         self.info_label.setWordWrap(True)
         self.info_label.setStyleSheet(f"color: {DANGER};")
 
+        # 捕获时快照的字段必须在**建腿之前**就位：_run_shot 会读它，而桌面腿
+        # 同样会走到那里（第一版放在 _build_browser 里 ⇒ 桌面腿 AttributeError，
+        # 由 test_desktop_preview_screenshot_takes_no_css_argument 抓出来）。
+        # 装载则放在 _build_browser 里（那里才有 css_edit 可读）。
+        self._capture_shot: dict | None = None
+        self._capture_shot_css: str = ""
+
         if self._kind == "browser":
             self._build_browser(layout)
         else:
@@ -883,6 +890,11 @@ class ElementEditorForm(QWidget):
         self._preview_timer.setInterval(500)
         self._preview_timer.timeout.connect(self._run_preview)
         self.css_edit.textChanged.connect(self._on_css_changed)
+        # 捕获时快照直接装载：**唯一来源是文档本身**，不靠调用方记得调
+        # set_capture_shot（上一版挂在 ElementDialog 上，元素库编辑器那条路就漏了——
+        # 正是「两处各自绿 ≠ 链路通」的同类坑）。只能放在 browser 腿里：
+        # set_capture_shot 要读 css_edit，桌面腿没有这个控件。
+        self.set_capture_shot(self._document.get("captureShot"))
 
     def _build_selector_choice(self, layout: QVBoxLayout) -> None:
         """底部「默认选择器 / XPath」单选（影刀那一屏的最底行）。
@@ -1225,6 +1237,38 @@ class ElementEditorForm(QWidget):
         if index == 0:
             self._run_shot()
 
+    def set_capture_shot(self, shot: dict | None) -> None:
+        """接收**捕获那一刻**的窗口快照（``descriptor["captureShot"]``），直接展示。
+
+        为什么优先用它而不是「点预览时重新截」（M47.12 真机撞出来的）：
+        「点预览时截」依赖 ``chrome.windows.get().nativeWindowHandle``，真实环境里
+        **未必给得出**（2026-10-09：扩展已是0.8.0，Edge 上仍 ``has_hwnd=false``），
+        于是预览页签永远停在「未能定位到浏览器窗口」——那句话还把用户引向错误的
+        处置（去切窗口，切一百次也没用）。捕获时则由 host 用 Z 序认窗口
+        （:func:`first_browser_window`，Chrome/Edge 都在册），**不依赖扩展**。
+
+        快照与「当前 css」绑定：用户改了选择器之后那张图就过期了，此时
+        :meth:`_run_shot` 会自动退回实时截屏，而不是拿旧图冒充新选择器。
+
+        **不会**被写进元素库：:meth:`result_document` 只挑 ``kind``/``selector``/
+        ``verifyCount``/``metadata`` 四个键，base64 PNG 不在其中（几十万字符进
+        元素库既臃肿又毫无用处）。
+        """
+        if not isinstance(shot, dict):
+            return
+        data_url = shot.get("dataUrl")
+        if not isinstance(data_url, str) or not data_url:
+            return
+        # 桌面腿没有 css_edit（也没有 preview_shot 的浏览器语义）：它的截图由
+        # _desktop_preview_callable 在服务层封好窗口与矩形。这里直接返回，不去碰
+        # 不存在的控件——否则桌面元素一旦被塞进 captureShot 就是 AttributeError。
+        if not hasattr(self, "css_edit") or not hasattr(self, "preview_shot"):
+            return
+        self._capture_shot = shot
+        # 记下快照对应的 css：只有选择器没动过，它才算「这张就是你要看的那张」。
+        self._capture_shot_css = self.css_edit.text().strip()
+        self.preview_shot.show_shot(data_url, shot.get("box"))
+
     def _run_shot(self) -> None:
         """取一张截图 + 首个命中的红框，填进「预览」页。
 
@@ -1238,6 +1282,17 @@ class ElementEditorForm(QWidget):
         """
         if not hasattr(self, "preview_shot"):
             return
+        # **捕获时快照优先**（M47.12 真机反馈）：它就是用户要看的那张图，且不依赖
+        # 扩展给窗口句柄。失效条件只有一个——选择器被改过（那张图对不上新 css）。
+        if self._capture_shot is not None and self._kind != "desktop":
+            if self._capture_shot_css == self.css_edit.text().strip():
+                self.preview_shot.show_shot(
+                    str(self._capture_shot.get("dataUrl") or ""),
+                    self._capture_shot.get("box"),
+                )
+                return
+            # 选择器改了 ⇒ 快照过期：丢掉它，让实时截屏接管（别拿旧图冒充）。
+            self._capture_shot = None
         if self._shot_css is None:
             self.preview_shot.clear(
                 "尚未获取预览截图（当前环境未接入截图通道）"

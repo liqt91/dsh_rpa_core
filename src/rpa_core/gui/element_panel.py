@@ -297,6 +297,10 @@ class ElementDialog(QDialog):
             self.finished.connect(self.form.shutdown_preview)
         elif shot_css is not None:
             self.form.enable_shot_channel(shot_css)
+        # 捕获那一刻的快照（``descriptor["captureShot"]``）由
+        # ``ElementEditorForm.__init__`` 自己从文档装载——不在这层重复接线：
+        # 上一版挂在这里，元素库编辑器那条路就漏了（同一个表单、两个入口，
+        # 只在一处接线 = 另一处必然漏）。
         # 有实时预览时不再摆确认框自己的静态命中数：两处「命中 X 个」重复且会互相矛盾。
         if not self._live_preview:
             layout.addWidget(self.verify_label)

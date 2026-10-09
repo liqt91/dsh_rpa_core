@@ -391,4 +391,11 @@ class ElementVerifier:
         ext_build = reply.get("extBuild")
         if isinstance(ext_build, str) and ext_build:
             result["extBuild"] = ext_build
+        # 扩展自报的诊断（devProbe：windows.get 的原始形态）。只在 wantShot 时有值，
+        # 体积小、无用户数据。**目的是让「拿不到句柄」不用再靠猜**（M47.12 真机：
+        # 换到 Edge 后 has_hwnd 恒false，得知道是字段不存在、类型不对还是 get 抛错）。
+        probe = reply.get("devProbe")
+        if isinstance(probe, dict):
+            result["devProbe"] = dict(probe)
+            _trace("verify", "hwnd_probe", **{k: v for k, v in probe.items()})
         return result

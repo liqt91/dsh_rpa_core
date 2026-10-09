@@ -332,3 +332,55 @@ def data_len_or_zero(shot: dict) -> int:
     from rpa_core.capture.screen_shot import data_len
 
     return data_len(shot)
+
+
+# ---- 捕获时快照（M47.12 真机反馈：预览要的是「捕获时的截图」）--------------------
+
+
+def test_capture_shot_reads_viewport_from_descriptor_top_level():
+    """``viewport`` 在 descriptor **顶层**（content.js 的 ``viewportInfo()``）。
+
+    早期版本从 ``selector.viewport`` 取，真实数据永远取不到 ⇒ 红框整个消失、
+    **且不报错**（``rect`` 还在，图照出，只是没框）。这类「读错位置但静默降级」
+    的 bug 只有把取值位置钉死才拦得住。
+    """
+    from rpa_core.capture.screen_shot import capture_shot_from_descriptor
+
+    descriptor = {
+        "kind": "browser",
+        "selector": {"css": "#kw"},
+        "metadata": {"rect": {"left": 10, "top": 20, "width": 300, "height": 40}},
+        "viewport": {"width": 1280, "height": 720, "screenX": 12, "screenY": 84},
+    }
+    shot = capture_shot_from_descriptor(descriptor, 5150, api=FakeAPI(rect=(0, 0, 1930, 1040)))
+    assert shot is not None
+    # viewport 缺失 ⇒ box 算不出来；有 ⇒ 必须算出四元组。两者的差别就是本条判据。
+    assert set(shot["box"]) == {"x", "y", "width", "height"}
+
+    del descriptor["viewport"]
+    without = capture_shot_from_descriptor(
+        descriptor, 5150, api=FakeAPI(rect=(0, 0, 1930, 1040))
+    )
+    assert without is not None
+    assert "box" not in without, "没有 viewport 就不该凭空给出红框"
+
+
+def test_capture_shot_needs_valid_hwnd_and_never_raises():
+    """句柄非正整数 / 描述符形状不对 ⇒ 返回 None（**不抛**）。
+
+    截图是观感增强，绝不该把一次成功的捕获变成失败——这层异常处理在
+    ``extension.py::_attach_capture_shot`` 里也有一道，两道都要在。
+    """
+    from rpa_core.capture.screen_shot import capture_shot_from_descriptor
+
+    assert capture_shot_from_descriptor({"kind": "browser"}, 0, api=FakeAPI()) is None
+    assert capture_shot_from_descriptor({"kind": "browser"}, -5, api=FakeAPI()) is None
+    assert capture_shot_from_descriptor({"kind": "browser"}, True, api=FakeAPI()) is None
+    # 没有 rect / viewport 的**残缺**descriptor 仍要出图（只是没框）：
+    # 截图是观感增强，不能因为几何字段缺席就把整张图也毙掉。
+    thin = capture_shot_from_descriptor({}, 5150, api=FakeAPI(rect=(0, 0, 1930, 1040)))
+    assert thin is not None
+    assert "box" not in thin
+
+
+# ---- 捕获时快照（M47.12 真机反馈：预览要的是「捕获时的截图」）--------------------

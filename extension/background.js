@@ -424,8 +424,11 @@ async function runVerify(msg) {
     // 顶层 hwnd（Windows 上 Chrome 的窗口句柄），拿不到就只回 windowId 让host
     // 自己在 Z 序里找。
     let shot = null;
+    let shotProbe = null;
     if (wantShot && !silent) {
-      shot = await windowHandleFor(tab);
+      const got = await windowHandleFor(tab);
+      shot = got.hwnd;
+      shotProbe = got.probe;
     }
     post({
       ...reply,
@@ -433,6 +436,7 @@ async function runVerify(msg) {
       silent,
       url: tab.url || "",
       ...(shot ? { windowHandle: shot } : {}),
+      ...(shotProbe ? { devProbe: shotProbe } : {}),
     });
   } catch (err) {
     post({ ...reply, error: String((err && err.message) || err) });
@@ -444,16 +448,34 @@ async function runVerify(msg) {
 // 拿不到（权限/其它平台）返回 null，host 会退回按进程名在 Z 序里找那个浏览器窗。
 // **不抛**：句柄拿不到只影响预览出图，不影响命中数这条真判据。
 async function windowHandleFor(tab) {
+  // 诊断（M47.12 真机：换到 Edge 后has_hwnd 一直 false）：把**原始形态**一并回传，
+  // 免得只能靠猜「是字段不存在 / 类型不对 / get 抛错」。devProbe 只在 wantShot
+  // 时附带，体积可忽略，且不含用户数据（只有 windowId 与句柄数值）。
+  const probe = {
+    hasTab: !!tab,
+    windowId: tab ? tab.windowId : null,
+    hasWindowId: !!(tab && tab.windowId != null),
+  };
   try {
     if (!tab || tab.windowId == null || tab.windowId === chrome.windows.WINDOW_ID_NONE) {
-      return null;
+      probe.reason = "no-window-id";
+      return { hwnd: null, probe };
     }
     const win = await chrome.windows.get(tab.windowId, { populate: false });
-    const hwnd = win && win["nativeWindowHandle"];
+    probe.gotWindow = !!win;
+    const raw = win && win["nativeWindowHandle"];
+    probe.rawType = typeof raw;
+    probe.rawValue = typeof raw === "number" ? raw : null;
+    probe.hasKey = !!(win && "nativeWindowHandle" in win);
+    const hwnd = raw;
     // 只认「像是真句柄」的值（正整数）；其它形态（0 / undefined）一律当拿不到。
-    return typeof hwnd === "number" && hwnd > 0 ? hwnd : null;
-  } catch {
-    return null;
+    probe.accepted = typeof hwnd === "number" && hwnd > 0;
+    if (!probe.accepted) probe.reason = "not-a-number-or-zero";
+    return { hwnd: probe.accepted ? hwnd : null, probe };
+  } catch (err) {
+    probe.reason = "throw";
+    probe.error = String((err && err.message) || err);
+    return { hwnd: null, probe };
   }
 }
 
