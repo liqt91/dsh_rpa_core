@@ -24,6 +24,7 @@ from rpa_core.model.command import (
     EffectRecord,
 )
 from rpa_core.model.errors import ErrorCode
+from rpa_core.model.selector_ranking import rank_web_candidates
 
 from .base import CommandExecutor, resolve_session_id
 from .browser_ext import ExtensionExecSession
@@ -401,7 +402,10 @@ class PlaywrightExecutor(CommandExecutor):
                     and candidate.get("selector")
                 ]
                 if usable:
-                    index[self._normalize_selector(css)] = usable
+                    # M52 S2：候选按「唯一优先、其次稳定」排序后落进索引——运行期自愈
+                    # （``_page_call_with_fallback``）按此序逐个 try。排序引擎与桌面腿
+                    # 共用 ``model.selector_ranking.rank_candidates``（只有一份权威）。
+                    index[self._normalize_selector(css)] = rank_web_candidates(usable)
             self._element_assets_cache = (stamp, index)
         return self._element_assets_cache[1].get(self._normalize_selector(selector), [])
 

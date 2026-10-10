@@ -495,6 +495,8 @@ def _describe_info(info, root_hwnd: int, path_infos: list | None = None) -> dict
         locator["name"] = name
 
     # D1：祖先链（不含目标本身、也不含根窗口自身——见 `_path_steps_from`）。
+    # `steps` 提到外面：候选打分要注入同一条 path（见下方 M52 S3）。
+    steps: list = []
     if path_infos:
         steps = _path_steps_from(path_infos, root_hwnd)
         if steps:
@@ -509,6 +511,17 @@ def _describe_info(info, root_hwnd: int, path_infos: list | None = None) -> dict
     if verify_count != 1 and "controlType" in locator and locator["controlType"] == "Pane":
         # 面板类泛化元素找不到唯一 locator 时仍返回（供人工确认），避免假唯一
         verify_count = verify_count if verify_count > 1 else 0
+
+    # M52 S3：本函数是 **hover 快路径 / 窗口作用域** 这条**日常捕获**路径的出口
+    # （`_hover_capture` 复用缓存元素时直接 return 它，压根不经 `capture_at`）——候选
+    # 与分数必须在这里也落盘，否则确认框里永远看不到（2026-10-10 维护者实测的根因）。
+    # 候选形状与 `capture_at` 同源（`_locator_candidates`）；实测走本函数既有的 root
+    # 作用域口径（`_root_verify` → `_verify_in_root`），因为本函数没有 window 对象。
+    scored = _evaluate_candidates(
+        _locator_candidates(control_type, automation_id, name),
+        _root_verify(root_hwnd),
+        path_steps=steps,
+    )
 
     window_title = ""
     if root_hwnd:
@@ -544,9 +557,13 @@ def _describe_info(info, root_hwnd: int, path_infos: list | None = None) -> dict
     if rect_text is not None:
         metadata["rect"] = rect_text
 
+    selector: dict = {"locator": locator}
+    if scored:
+        selector["candidates"] = scored
+
     return {
         "kind": "desktop",
-        "selector": {"locator": locator},
+        "selector": selector,
         "verifyCount": verify_count,
         "metadata": metadata,
     }
@@ -562,6 +579,157 @@ def capture_in_window(root_hwnd: int, x: int, y: int) -> dict | None:
     if leaf is None:
         return None
     return _describe_info(leaf, root_hwnd, path_infos)
+
+
+def _locator_candidates(
+    control_type: str | None,
+    automation_id: str | None,
+    name: str | None,
+) -> list[tuple[dict, dict, str | None]]:
+    """由一个 UIA 元素的三个属性生成候选定位方案——**候选形状的唯一权威**。
+
+    从「最具体」到「最宽泛」最多三层，属性缺失的层不生成（不发明空候选）：
+
+    1. ``controlType + automationId (+ name)``（要 aid 与 ct 都有）
+    2. ``controlType + name``（要 name 与 ct 都有）
+    3. ``controlType``（只要 ct 有）
+
+    **两条捕获路径共用本函数**：``capture_at``（屏幕级点捕获）与
+    ``_describe_info``（hover 快路径 / 窗口作用域捕获）。此前候选只在 ``capture_at``
+    里就地构造，hover 那条**日常捕获**路径压根没有候选——2026-10-10 维护者实测
+    「重启了还是没有」的根因。同源之后再不会出现「集合取决于用户用哪种手势捕获」。
+    """
+    out: list[tuple[dict, dict, str | None]] = []
+    if automation_id and control_type:
+        criteria = {"control_type": control_type}
+        locator = {
+            "backend": "uia",
+            "controlType": control_type,
+            "automationId": automation_id,
+        }
+        if name:
+            criteria["title"] = name
+            locator["name"] = name
+        out.append((criteria, locator, automation_id))
+    if name and control_type:
+        out.append(
+            (
+                {"control_type": control_type, "title": name},
+                {"backend": "uia", "controlType": control_type, "name": name},
+                None,
+            )
+        )
+    if control_type:
+        out.append(
+            (
+                {"control_type": control_type},
+                {"backend": "uia", "controlType": control_type},
+                None,
+            )
+        )
+    return out
+
+
+def _window_verify(window):
+    """把 pywinauto 窗口对象包成 ``_evaluate_candidates`` 的实测接缝。
+
+    ``window`` 为 None（无根窗口）⇒ 返回 None（调用方据此跳过实测，不产假数据）。
+    """
+    if window is None:
+        return None
+    return lambda criteria, automation_id: _verify(window, criteria, automation_id)
+
+
+def _root_verify(root_hwnd: int | None):
+    """把根窗口句柄包成实测接缝——``_describe_info`` 手上没有 window 对象，只有 hwnd。
+
+    口径与 ``_verify_in_root`` 一致（root 作用域）；``root_hwnd`` 为 0/None ⇒ None。
+    """
+    if not root_hwnd:
+        return None
+    return lambda criteria, automation_id: _verify_in_root(
+        root_hwnd, criteria, automation_id
+    )
+
+
+def _evaluate_candidates(
+    candidates: list[tuple[dict, dict, str | None]],
+    verify,
+    path_steps: list | None = None,
+) -> list[dict]:
+    """实测每条候选的命中数并给出 penalty 分数（M52 S3，捕获期落盘用）。
+
+    返回 ``[{"kind": "uia", "locator": <dict>, "matchedCount": <int>,
+    "penalty": <int>}]``——**全部**评估过的定位方案都保留（含最终被选中的那条），
+    供捕获确认框展示「系统评估过哪些方案、各自命中几个、稳定性分数多少」。
+
+    ``verify(criteria, automation_id) -> int`` 是**实测接缝**：点捕获传
+    ``_window_verify(window)``（有 pywinauto 窗口对象），hover / 窗口作用域捕获传
+    ``_root_verify(root_hwnd)``（只有根窗口句柄）——两条路径打分口径一致，只是命中
+    测试的实现不同。``verify`` 为 None（无法实测）⇒ 返回空表。
+
+    ``path_steps``（D1 祖先链，可选）注入每条候选的 locator 并计入其 penalty——
+    path 是同一元素的收窄条件，对每条方案都适用，这样「候选之一」与最终主定位
+    完全一致（含 path），debug 时不会出现「主定位有 path、候选没有」的错位。
+
+    某条实测异常 ⇒ 该条跳过。产出的 ``locator``/``matchedCount`` 正是
+    ``choose_best_locator`` 择优时读的两个键。
+    """
+    from rpa_core.model.desktop import locator_penalty
+
+    if verify is None:
+        return []
+    scored: list[dict] = []
+    for criteria, locator, automation_id in candidates:
+        try:
+            count = verify(criteria, automation_id)
+        except Exception:
+            continue
+        full = dict(locator)
+        if path_steps:
+            full["path"] = [dict(step) for step in path_steps]
+        scored.append(
+            {
+                "kind": "uia",
+                "locator": full,
+                "matchedCount": int(count),
+                "penalty": locator_penalty(full),
+            }
+        )
+    return scored
+
+
+def _choose_from_scored(scored: list[dict]) -> tuple[dict, int]:
+    """从已实测打分的候选里择优：唯一性硬门 + penalty 最小化（共享引擎，M52 单一权威）。
+
+    净函数（不碰 window / ``_verify``）：把 ``_evaluate_candidates`` 的产物交给
+    ``model.desktop.choose_best_locator``；空列表 ⇒ ``({}, 0)``，调用方自行回退。
+    """
+    from rpa_core.model.desktop import choose_best_locator
+
+    chosen = choose_best_locator(
+        [
+            {"locator": item["locator"], "count": item["matchedCount"]}
+            for item in scored
+        ]
+    )
+    if chosen is None:
+        return {}, 0
+    return chosen["locator"], chosen["count"]
+
+
+def _pick_best_candidate(
+    candidates: list[tuple[dict, dict, str | None]], window
+) -> tuple[dict, int]:
+    """实测候选后择优的薄封装——与 ``capture_at`` 走**同一条**「实测 → 打分 → 择优」路径。
+
+    组合 ``_evaluate_candidates``（依赖 window/``_verify`` 的脏活）与
+    ``_choose_from_scored``（共享引擎的纯择优），单测据它钉住这条链路确实接上了
+    （不是残留的朴素「遇 count==1 即 break」循环）。
+    """
+    return _choose_from_scored(
+        _evaluate_candidates(candidates, _window_verify(window))
+    )
 
 
 def capture_at(x: int, y: int, scope_hwnd: int | None = None) -> dict:
@@ -581,48 +749,30 @@ def capture_at(x: int, y: int, scope_hwnd: int | None = None) -> dict:
     name = info.name or None
     class_name = info.class_name or None
 
-    candidates: list[tuple[dict, dict, str | None]] = []
-    if automation_id and control_type:
-        criteria = {"control_type": control_type}
-        locator = {"backend": "uia", "controlType": control_type, "automationId": automation_id}
-        if name:
-            criteria["title"] = name
-            locator["name"] = name
-        candidates.append((criteria, locator, automation_id))
-    if name and control_type:
-        candidates.append(
-            ({"control_type": control_type, "title": name},
-             {"backend": "uia", "controlType": control_type, "name": name},
-             None)
-        )
-    if control_type:
-        candidates.append(
-            ({"control_type": control_type}, {"backend": "uia", "controlType": control_type}, None)
-        )
+    # 候选形状的唯一权威在 `_locator_candidates`（与 hover / 窗口作用域路径共用）。
+    candidates = _locator_candidates(control_type, automation_id, name)
 
-    best_locator: dict = {}
-    best_count = -1
-    if window is not None:
-        for criteria, locator, aid in candidates:
-            try:
-                count = _verify(window, criteria, aid)
-            except Exception:
-                continue
-            if count == 1:
-                best_locator, best_count = locator, count
-                break
-            if best_count < 0 or count < best_count:
-                best_locator, best_count = locator, count
+    # D1：屏幕级路径没有 DFS 下降过程，祖先链走父链上溯（不含目标本身、不含根窗口自身）。
+    # **先算 path 再评估候选**：path 是同一元素的收窄条件，对每条定位方案都适用，故一并
+    # 注入候选 locator 并计入分数——这样「候选之一」与最终主定位逐字节一致。
+    chain = _ancestor_chain(info, root_hwnd)
+    steps = _path_steps_from(chain, root_hwnd)
+
+    # M52：候选先实测（命中数 + penalty），同一份测量既供择优、也随元素落盘。
+    scored = _evaluate_candidates(candidates, _window_verify(window), path_steps=steps)
+    best_locator, best_count = _choose_from_scored(scored)
     if not best_locator and control_type:
         best_locator = {"backend": "uia", "controlType": control_type}
         best_count = 0
-
-    # D1：屏幕级路径没有 DFS 下降过程，祖先链走父链上溯（不含目标本身、不含根窗口自身）。
-    if best_locator:
-        chain = _ancestor_chain(info, root_hwnd)
-        steps = _path_steps_from(chain, root_hwnd)
         if steps:
-            best_locator["path"] = steps
+            best_locator["path"] = [dict(step) for step in steps]
+
+    # M52 S3：评估过的全部定位方案（含分数）随元素落盘——捕获确认框据此 debug 展示。
+    # desktop 的 selector 是自由字典：``_candidate_errors`` 只校验 browser 的候选，
+    # 这里的形状（每项带 ``locator`` 而非 ``selector`` 串）不会被拦。
+    selector: dict = {"locator": best_locator}
+    if scored:
+        selector["candidates"] = scored
 
     window_title = ""
     if root_hwnd:
@@ -632,7 +782,7 @@ def capture_at(x: int, y: int, scope_hwnd: int | None = None) -> dict:
 
     return {
         "kind": "desktop",
-        "selector": {"locator": best_locator},
+        "selector": selector,
         "verifyCount": max(best_count, 0),
         "metadata": {
             "point": [x, y],

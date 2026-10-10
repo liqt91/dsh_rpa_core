@@ -23,7 +23,7 @@
   // 构建标识：与 background.js 的 EXT_BUILD、manifest.json 的 version 三方一致（契约测试钉住）。
   // 随捕获结果回传——诊断「页面里跑的脚本是哪个年代的」（Load unpacked 不自动重载，
   // 补注入前已开页面里的可能还是旧快照；见 background.js 顶部的完整说明）。
-  const EXT_BUILD = "0.8.0";
+  const EXT_BUILD = "0.9.1";
 
   // ---- 实例接管守卫（M42）----------------------------------------------------
   // 声明式 content_scripts **只在页面加载时**注入：扩展装载/重载后，已经打开的标签页
@@ -138,11 +138,14 @@
    * 都从这里取。两处各写一遍必然漂移，而漂移的后果是「节点树高亮的路径与真正
    * 下发执行的选择器不是同一条」。
    */
+  // 节点自身的 class 列表（SVG 元素的 className 不是字符串，按「无 class」处理）。
+  const classListOf = (node) => (typeof node.className === "string"
+    ? node.className.trim().split(/\s+/).filter(Boolean)
+    : []);
+
   const pathEntryFor = (node) => {
     const id = node.id || "";
-    const classes = typeof node.className === "string"
-      ? node.className.trim().split(/\s+/).filter(Boolean)
-      : [];
+    const classes = classListOf(node);
     let nthOfType = null;
     let fragment;
     if (id) {
@@ -154,7 +157,15 @@
       const parent = node.parentElement;
       if (parent) {
         const same = Array.from(parent.children).filter((c) => c.tagName === node.tagName);
-        if (same.length > 1) {
+        // 「同标签兄弟不止一个」只是补 :nth-of-type 的**必要**条件，不是**充分**条件：
+        // 本层片段是 `tag + 首类`，若该片段在同标签兄弟间已唯一，位置序号纯属多余——
+        // 父节点多几个同标签兄弟就跟着变号，页面一重排 / 插入兄弟即失效。仅当片段
+        // **仍不唯一**时才补序号：同构列表（每个 li.hotsearch-item 一模一样）靠它才分得开，
+        // 而 div.search-area 这类特征 class 不再被硬塞序号。
+        const cls = classes[0];
+        const ambiguous = !cls
+          || same.filter((c) => classListOf(c).includes(cls)).length > 1;
+        if (same.length > 1 && ambiguous) {
           nthOfType = same.indexOf(node) + 1;
           fragment += ":nth-of-type(" + nthOfType + ")";
         }
@@ -194,6 +205,36 @@
     "data-testid", "data-test", "data-qa", "name", "aria-label", "placeholder", "title",
   ];
 
+  // 祖先链收缩候选（M51-B「候选生成对齐主 css class 路径」）：主 css 是「根 → 目标」的
+  // 完整路径（见 pathFor），**逐级丢掉最外层**即得更短的写法；每条都实测命中数，合起来
+  // 正好回答「收到哪一级才唯一命中」——这正是维护者要 debug 的那件事。
+  //
+  // 为什么必须有这个来源：id/属性两类候选只能覆盖「有 id 或 data-*/name/aria-label 等属性」
+  // 的元素。**只有 class 的普通元素**（小红书 `a.cover`、百度热搜 `a.title-content` 这类
+  // 列表项链接）一条属性都不占 ⇒ 属性候选恒空。M52 S3 实测：元素库里已保存的元素
+  // **无一含候选**，确认框因此一直是空的。祖先链收缩是这类元素**唯一**可用的定位素材。
+  //
+  // 每级再给「去掉 :nth-of-type」的变体（位置序号最脆，@medv/finder 给 10、Robula+ /
+  // Playwright 都把它排最后）。级数上限 MAX_PATH_SUFFIX、每级至多 2 条，避免候选爆炸
+  // ——候选越多，运行期自愈逐个 try 的开销越大。
+  const MAX_PATH_SUFFIX = 3;
+  const pathSuffixSelectorsFor = (el) => {
+    const fragments = pathFor(el).map((entry) => entry.fragment);
+    if (fragments.length < 2) return [];  // 单级链（元素自带 id）没有「更短写法」可给
+    const top = Math.min(fragments.length - 1, MAX_PATH_SUFFIX);
+    const out = [];
+    for (let take = top; take >= 1; take -= 1) {  // 长的（更具体）在前
+      const tail = fragments.slice(-take).join(" > ");
+      out.push(tail);
+      const stripped = fragments
+        .slice(-take)
+        .map((fragment) => fragment.replace(/:nth-of-type\(\d+\)/g, ""))
+        .join(" > ");
+      if (stripped !== tail) out.push(stripped);
+    }
+    return out;
+  };
+
   const candidatesFor = (el, primary) => {
     const out = [];
     const seenValues = new Set(primary ? [primary] : []);
@@ -211,6 +252,7 @@
     };
     if (el.id) push("id", "#" + CSS.escape(el.id));
     for (const name of CANDIDATE_ATTRS) push("attribute", attrSelectorFor(el, name));
+    for (const selector of pathSuffixSelectorsFor(el)) push("path", selector);
     return out;
   };
 

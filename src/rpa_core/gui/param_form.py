@@ -148,6 +148,7 @@ class ParamForm(QWidget):
         manifest: Any | None = None,
         output_aliases: dict[str, str] | None = None,
         raw: dict[str, Any] | None = None,
+        element_provider: Any = None,
     ) -> None:
         super().__init__(parent)
         args = dict(args or {})
@@ -162,6 +163,14 @@ class ParamForm(QWidget):
         # 输出别名字段（outField → QLineEdit）
         self._alias_fields: dict[str, QLineEdit] = {}
         self._alias_validator = re.compile(r"^[A-Za-z_]\w*$")
+        # 节点 raw（读其中的 elementRefs 作元素引用行的初值）
+        self._raw: dict[str, Any] = dict(raw or {})
+        # 元素库引用：element_provider 提供 (元素名, 文档) 列表；为 None 则不加选择行
+        self._element_provider = element_provider
+        self._element_rows: dict[str, QComboBox] = {}
+        # 只记**用户显式动过**的键（值 → 元素名 / None = 清除引用）；没动过的不在内，
+        # 调用方据此区分「用户接管了该参数」与「用户只是打开面板又应用」。
+        self._ref_intent: dict[str, str | None] = {}
 
         self._form = QFormLayout(self)
         self._form.setContentsMargins(8, 8, 8, 8)
@@ -372,6 +381,7 @@ class ParamForm(QWidget):
         """按字段类型创建控件并登记；description 进 tooltip。"""
         value_type = _effective_type(field_schema)
         has_value = name in args
+        row_widget: QWidget | None = None
 
         if value_type == "string" and "enum" in field_schema:
             widget = self._build_enum(field_schema, args.get(name), has_value)
@@ -380,8 +390,6 @@ class ParamForm(QWidget):
             widget = self._build_text(field_schema, args.get(name), has_value)
             kind = _KIND_TEXT
             row_widget = self._wrap_fx_row(name, widget)
-            self._attach(name, kind, widget, field_schema, row_widget=row_widget, target=target)
-            return
         elif value_type == "integer":
             widget = self._build_number_line(
                 field_schema, args.get(name), has_value, QIntValidator(-10**9, 10**9),
@@ -403,7 +411,8 @@ class ParamForm(QWidget):
             widget.setPlaceholderText("JSON，如 [\"a\", \"b\"]")
             kind = _KIND_JSON
 
-        self._attach(name, kind, widget, field_schema, target=target)
+        self._attach(name, kind, widget, field_schema, row_widget=row_widget, target=target)
+        self._attach_element_row(name, widget, target=target)
 
     @staticmethod
     def _build_enum(
@@ -557,6 +566,115 @@ class ParamForm(QWidget):
         for path in paths:
             menu.addAction(path, lambda p=path: editor.insert(f"[{p}]"))
         return menu
+
+    # ---- 元素库引用（M52 S4：参数面板里的「从元素库选择」） ------------------
+    def _attach_element_row(
+        self, name: str, widget: QWidget, *, target: QFormLayout | None = None
+    ) -> None:
+        """给支持元素引用的参数（`selector` / `locator`）加一行「从元素库选择」。
+
+        出现的条件：调用方给了元素来源，**且**参数键在 runtime 的取值路径表里
+        （`element_kind_for_param_key` 以 `_VALUE_BY_KEY` 为准）——能选却替换不了
+        = 静默失配，两者必须同一事实源。
+
+        选中元素 = 把值控件填成**元素库最新值** + 记引用意图；点 ✕ = 摘引用但
+        **保留当前手填值**（回退纯手工）。取值复用 `element_value_for_key`，
+        与运行期替换、元素库「插入参数」同源。
+        """
+        if self._element_provider is None:
+            return
+        from rpa_core.runtime.element_refs import (
+            element_kind_for_param_key,
+            element_value_for_key,
+        )
+
+        kind = element_kind_for_param_key(name)
+        if kind is None:
+            return
+
+        documents: dict[str, dict] = {}
+        combo = QComboBox()
+        combo.setObjectName(f"elementCombo::{name}")
+        combo.setToolTip("从当前流程的元素库选择；运行期按引用取元素库最新值")
+        combo.addItem("（不使用元素库）", None)
+        for element_name, document in self._element_provider():
+            if not isinstance(document, dict) or document.get("kind") != kind:
+                continue  # 只列与该参数后端匹配的元素（selector↔browser / locator↔desktop）
+            if element_value_for_key(document, name) is None:
+                continue  # 取不出定位值的元素，列了也填不进去
+            documents[element_name] = document
+            combo.addItem(element_name, element_name)
+
+        clear = QToolButton()
+        clear.setText("✕")
+        clear.setObjectName(f"elementClear::{name}")
+        clear.setAutoRaise(True)
+        clear.setToolTip("清除引用（保留当前手填值）")
+
+        row = QWidget()
+        layout = QHBoxLayout(row)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(4)
+        layout.addWidget(combo, 1)
+        layout.addWidget(clear)
+
+        # 初值：节点已带引用时定位到它。**必须在连信号之前**，否则会被当成用户操作。
+        current_ref = (self._raw.get("elementRefs") or {}).get(name)
+        if isinstance(current_ref, str):
+            index = combo.findData(current_ref)
+            if index >= 0:
+                combo.setCurrentIndex(index)
+
+        combo.currentIndexChanged.connect(
+            lambda _i, k=name, b=combo, d=documents, w=widget: self._on_element_pick(k, b, d, w)
+        )
+        clear.clicked.connect(lambda _c=False, k=name, b=combo: self._on_element_clear(k, b))
+
+        layout_target = target if target is not None else self._form
+        layout_target.addRow(QLabel("元素"), row)
+        self._element_rows[name] = combo
+
+    def _on_element_pick(
+        self, name: str, combo: QComboBox, documents: dict[str, dict], widget: QWidget
+    ) -> None:
+        """下拉选元素：记引用意图并把值控件填成元素库最新值（选「不使用」= 清除引用）。"""
+        chosen = combo.currentData()
+        if chosen is None:
+            self._ref_intent[name] = None  # 摘引用，值不动（用户可继续手填）
+            return
+        from rpa_core.runtime.element_refs import element_value_for_key
+
+        value = element_value_for_key(documents.get(chosen), name)
+        if value is None:
+            return  # 构建时已滤过，正常到不了这里；真到了也不写半截引用
+        self._ref_intent[name] = chosen
+        self._fill_field_value(name, widget, value)
+
+    def _on_element_clear(self, name: str, combo: QComboBox) -> None:
+        """✕ 清除引用：回到「不使用元素库」，手填值保留。"""
+        if combo.currentIndex() == 0:
+            self._ref_intent[name] = None
+        else:
+            combo.setCurrentIndex(0)  # 触发 _on_element_pick ⇒ 记 None
+
+    def _fill_field_value(self, name: str, widget: QWidget, value: Any) -> None:
+        """把元素库取出的定位值填进字段控件（string 直写，复合类型写 JSON 文本）。"""
+        for field_name, kind, field_widget in self._fields:
+            if field_name != name or field_widget is not widget:
+                continue
+            if kind == _KIND_JSON or not isinstance(value, str):
+                widget.setText(json.dumps(value, ensure_ascii=False))
+            else:
+                widget.setText(value)
+            return
+
+    def element_refs(self) -> dict[str, str | None]:
+        """用户**显式改过**的元素引用选择（键 → 元素名 / None = 清除引用、回退手填）。
+
+        没动过的键不在结果里——调用方对它们仍按「值被手工改动即摘引用」的旧规则处理，
+        否则「打开面板又直接应用」会把还在生效的引用误摘。
+        """
+        return dict(self._ref_intent)
 
     def expr_modes(self) -> dict[str, str]:
         """返回各字段当前的表达式模式（仅 fx 开启的字段）。"""

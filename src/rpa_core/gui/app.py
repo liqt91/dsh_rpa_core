@@ -536,6 +536,9 @@ class MainWindow(QMainWindow):
         self._run_float = None
         # 元素库 dock 是否已预热（showEvent 里空闲建一次，见 _prewarm_elements_dock）
         self._elements_prewarmed = False
+        # 底部 Dock 已并入同一片页签的集合（元素库/运行/运行历史/数据表格同处
+        # BottomDockWidgetArea，见 _stack_bottom_panels）
+        self._bottom_tabbed: set[object] = set()
         self._events_seen = 0
         self._cancel_requested = False
         self._pause_requested = False
@@ -1435,6 +1438,7 @@ class MainWindow(QMainWindow):
             self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, dock)
             dock.hide()
             self._history_dock_widget = dock
+            self._stack_bottom_panels()  # 并入底部页签片（元素库那一片）
         return self._history_dock_widget
 
     def _artifacts_root(self) -> Path:
@@ -1446,6 +1450,8 @@ class MainWindow(QMainWindow):
     def _toggle_history_dock(self) -> None:
         dock = self._history_dock()
         dock.show()
+        # 四个底部面板同片页签：只 show 会让「这一片」可见、当前页签可能还停在别页
+        dock.raise_()
         self._refresh_history()
 
     def _refresh_history(self) -> None:
@@ -1518,6 +1524,7 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(str(exc), 5000)
             return False
         self._run_dock().show()
+        self._run_dock().raise_()  # 与元素库同片页签：不退让就会停在元素库那页
         self._history_events = detail["events"]
         view = self._run_events_view
         view.clear()
@@ -2222,6 +2229,7 @@ class MainWindow(QMainWindow):
             self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, dock)
             dock.hide()
             self._run_dock_widget = dock
+            self._stack_bottom_panels()  # 并入底部页签片（元素库那一片）
         return self._run_dock_widget
 
     def _run_workflow(self) -> None:
@@ -2269,6 +2277,7 @@ class MainWindow(QMainWindow):
         self.step_run_action.setEnabled(False)
         dock = self._run_dock()
         dock.show()
+        dock.raise_()  # 与元素库同片页签：运行时把「运行」那页顶到前面
         self._run_status_label.setText(f"运行中…（{name}）")
         self._run_events_view.clear()
         self._run_jump_button.hide()
@@ -2608,6 +2617,7 @@ class MainWindow(QMainWindow):
         self._failed_node_id = None
         # 先确保运行面板（及其内部控件）已创建，再动里面的部件
         self._run_dock().show()
+        self._run_dock().raise_()  # 与元素库同片页签：起跑时把「运行」那页顶到前面
         self._run_error_widget.hide()
         self._run_jump_button.hide()
         self._run_status_label.setText("运行中…（已从检查点继续）")
@@ -2848,7 +2858,33 @@ class MainWindow(QMainWindow):
     def _toggle_elements_dock(self) -> None:
         dock = self._elements_dock()
         dock.show()  # 幂等；offscreen 下 isVisible 不可靠，不做取反切换
+        # 元素库与运行面板同处底部页签（对齐影刀）：不 raise_ 的话，勾菜单只会让
+        # 「这一片」可见，当前页签可能还停在运行上，用户以为没打开。
+        dock.raise_()
         self._refresh_elements()
+
+    def _stack_bottom_panels(self) -> None:
+        """把底部各 Dock（元素库 / 运行 / 运行历史 / 数据表格）叠成**同一片**页签。
+
+        为什么必须显式 tabify：Qt 的 `addDockWidget` 对同区 Dock 默认是**并排分栏**、
+        不是页签——实测四个 Dock 只 add 不 tabify 时整片底部横向铺开、连一条 `QTabBar`
+        都不生成（维护者截图正是这个现象：元素库与运行历史左右并列）。对齐影刀
+        （元素库 / 运行日志在下方以页签切换）就得显式 `tabifyDockWidget`。
+
+        锚固定为**元素库**并排最前：它是首屏 `_prewarm_elements_dock` 建的，其余三个
+        都要等用户操作才建；每有新 Dock 建好就并入锚，页签顺序即
+        「元素库 → 运行 → 运行历史 → 数据表格」。已并入的记进 `_bottom_tabbed`，
+        重复调用不会重复 tabify。
+        """
+        anchor = getattr(self, "_elements_dock_widget", None)
+        if anchor is None:
+            return  # 锚还没建；元素库建好时会自己再调一次
+        for key in ("run", "history", "table"):
+            dock = getattr(self, f"_{key}_dock_widget", None)
+            if dock is None or dock in self._bottom_tabbed:
+                continue
+            self.tabifyDockWidget(anchor, dock)
+            self._bottom_tabbed.add(dock)
 
     def _elements_dock(self):
         if getattr(self, "_elements_dock_widget", None) is None:
@@ -2878,10 +2914,12 @@ class MainWindow(QMainWindow):
             dock = QDockWidget("元素库", self)
             dock.setObjectName("elements-dock")
             dock.setWidget(panel)
-            self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, dock)
+            # 底部（对齐影刀：元素库 / 运行日志在下方以页签切换），不再占右侧竖条
+            self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, dock)
             dock.hide()
             self._elements_dock_widget = dock
             self._element_panel = panel
+            self._stack_bottom_panels()  # 其余底部面板若已建，立刻并入同片页签
         return self._elements_dock_widget
 
     def _element_store(self):
@@ -2892,6 +2930,23 @@ class MainWindow(QMainWindow):
         from rpa_core.devserver.store import WorkflowStore
 
         return WorkflowStore(self._store.directory(name) / "elements", create=False)
+
+    def _element_choices(self) -> list[tuple[str, dict]]:
+        """当前流程元素库的 (元素名, 文档) 列表；流程未入库 / 单个文件坏就跳过。
+
+        参数面板据此渲染「从元素库选择」下拉（按 kind 过滤在面板侧做）。
+        """
+        store = self._element_store()
+        if store is None:
+            return []
+        choices: list[tuple[str, dict]] = []
+        for name in store.list():
+            try:
+                document = store.read(name)
+            except Exception:  # noqa: BLE001 - 单个坏文件不拖垮下拉
+                continue
+            choices.append((name, document))
+        return choices
 
     def _refresh_elements(self) -> None:
         self._elements_dock()  # 保证面板存在（直接调用路径可能先于 dock 创建）
@@ -3022,16 +3077,23 @@ class MainWindow(QMainWindow):
             return
         manifest = self.catalog[current.data(ROLE_COMMAND_ID)]
         properties = manifest.input_schema.get("properties", {})
+        # kind ↔ 参数键、取值路径都走 runtime 的共享表（与参数面板「从元素库选择」
+        # 同源），两处各自 if/elif 硬编码会漂移出第二套权威。
+        from rpa_core.runtime.element_refs import (
+            element_value_for_key,
+            param_key_for_element_kind,
+        )
+
         kind = document.get("kind")
-        selector = document.get("selector") or {}
-        if kind == "browser" and "selector" in properties:
-            key, value = "selector", selector.get("css", "")
-        elif kind == "desktop" and "locator" in properties:
-            key, value = "locator", selector.get("locator")
-        else:
+        key = param_key_for_element_kind(kind) if isinstance(kind, str) else None
+        if key is None or key not in properties:
             self.statusBar().showMessage(
                 f"该指令没有匹配 {kind} 元素的参数字段", 5000
             )
+            return
+        value = element_value_for_key(document, key)
+        if value is None:
+            self.statusBar().showMessage(f"元素 {name} 没有可用的定位值", 5000)
             return
         self._begin_edit()
         item = self.flow_model.itemFromIndex(current)
@@ -3545,6 +3607,8 @@ class MainWindow(QMainWindow):
     def _toggle_table_dock(self) -> None:
         dock = self._table_dock()
         dock.show()
+        # 四个底部面板同片页签：只 show 会让「这一片」可见、当前页签可能还停在别页
+        dock.raise_()
         self._refresh_table()
 
     def _table_dock(self):
@@ -3574,6 +3638,7 @@ class MainWindow(QMainWindow):
             dock.hide()
             self._table_dock_widget = dock
             self._table_panel = panel
+            self._stack_bottom_panels()  # 并入底部页签片（元素库那一片）
         return self._table_dock_widget
 
     def _variables_dock(self):
@@ -4180,6 +4245,7 @@ class MainWindow(QMainWindow):
             manifest=manifest,
             output_aliases=(raw or {}).get("output_aliases"),
             raw=raw,
+            element_provider=self._element_choices,
         )
 
         scroll = QScrollArea()
@@ -4216,19 +4282,29 @@ class MainWindow(QMainWindow):
             holder.args = dict(values)
             if holder.raw is not None:
                 holder.raw["with"] = dict(values)
-                # 元素引用对账（M46/B1）：手工改值/删键 = 用户接管该参数，
-                # 摘掉引用（否则运行期元素库值会盖掉手工输入）；值没动则保留引用。
-                refs = holder.raw.get("elementRefs")
-                if isinstance(refs, dict) and refs:
-                    stale = [
-                        key
-                        for key in refs
-                        if key not in values or values[key] != previous_args.get(key)
-                    ]
-                    for key in stale:
+                # 元素引用对账（M46/B1 + M52 S4）：面板里的**显式选择**优先——下拉选了
+                # 元素 = 写引用，点 ✕ = 摘引用并回退手填；其余键仍按旧规则：手工改值 /
+                # 删键 = 用户接管该参数，摘掉引用（否则运行期元素库值会盖掉手工输入）。
+                chosen = form.element_refs()
+                existing = holder.raw.get("elementRefs")
+                refs = dict(existing) if isinstance(existing, dict) else {}
+                for key, ref_name in chosen.items():
+                    if ref_name is None:
                         refs.pop(key, None)
-                    if not refs:
-                        holder.raw.pop("elementRefs", None)
+                    else:
+                        refs[key] = ref_name
+                stale = [
+                    key
+                    for key in refs
+                    if key not in chosen
+                    and (key not in values or values[key] != previous_args.get(key))
+                ]
+                for key in stale:
+                    refs.pop(key, None)
+                if refs:
+                    holder.raw["elementRefs"] = refs
+                else:
+                    holder.raw.pop("elementRefs", None)
                 modes = form.expr_modes()
                 if modes:
                     holder.raw["_exprModes"] = modes

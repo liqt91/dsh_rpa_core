@@ -198,6 +198,31 @@ class ExtensionCaptureSession:
         except Exception:  # noqa: BLE001 - 截图绝不该让一次成功的捕获变成失败
             _trace("capture_shot", "error")
 
+    def _score_candidates(self, descriptor: dict) -> None:
+        """给捕获候选补上稳定性分数（penalty，M52 S3，捕获期算好落盘）。
+
+        候选由 content script 生成（``{kind, selector, matchedCount}``），本方法在
+        宿主侧用共享引擎（``model.selector_ranking.web_candidate_penalty``）就地补
+        ``penalty`` 字段——两端读**同一份**分数，不再各自重算（否则两套先验必然漂移）。
+
+        只加字段、**不改候选顺序**（顺序由运行期自愈的 ``rank_web_candidates`` 决定）。
+        任何异常都吞掉：打分是展示数据，绝不该让一次成功的捕获变成失败。
+        """
+        try:
+            from rpa_core.model.selector_ranking import web_candidate_penalty
+
+            selector = descriptor.get("selector")
+            if not isinstance(selector, dict):
+                return
+            candidates = selector.get("candidates")
+            if not isinstance(candidates, list):
+                return
+            for item in candidates:
+                if isinstance(item, dict) and isinstance(item.get("selector"), str):
+                    item["penalty"] = web_candidate_penalty(item)
+        except Exception:  # noqa: BLE001 - 打分绝不该让一次成功的捕获变成失败
+            pass
+
     def submit(self, payload: dict) -> None:
         """外部回传结果（兼容旧调用点；常规路径由读线程自行接收）。"""
         if self._event.is_set():
@@ -356,6 +381,7 @@ class ExtensionCaptureSession:
                     )
                     descriptor = message.get("descriptor")
                     if isinstance(descriptor, dict):
+                        self._score_candidates(descriptor)
                         self._attach_capture_shot(descriptor)
                         self.submit(descriptor)
                     else:

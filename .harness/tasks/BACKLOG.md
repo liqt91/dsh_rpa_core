@@ -162,6 +162,16 @@
 
 ## 后续任务
 
+- [ ] **M52 选择器优选（唯一 · 稳定 · 短）**（`active`，2026-10-10 立项；**S1 已落地**）
+  - **S1（2026-10-10）已落地**：桌面 penalty 引擎（`model.desktop.choose_best_locator` /
+    `locator_penalty`，字典序唯一硬门）+ `capture_at` 接线（`_pick_best_candidate`）；
+    判据 11 条；负向验证 6 注入全命中。判据 `tests/contract/test_desktop_locator_ranking.py`。
+  - 计划：`M52-selector-advisor.md`。对标影刀「智能元素」（捕获期挑唯一/稳定/短的选择器）。
+  - 本质＝候选生成 × 唯一性实测 × 打分排序，**可确定性实现、不需 LLM**（守 `AGENTS.md` 规则 6）。
+  - 与 M51 分界：**M51 = 候选「供给」**（XPath / 候选扩容），**M52 = 候选「优选」**
+    （三因子打分 唯一/稳定/长度 + 排序落盘 + 推荐 UI）。软依赖 M51-B；编辑期优选与运行期
+    自愈共用同一份排序候选。**未动 `project_state` 排期字段**（`next_milestone` 仍 M51）。
+
 - [x] **里程碑编号口径定案：M48 = 桌面契约一片，M49 = GUI 体验**（`done`，**已拍板**，2026-10-08）
   - **冲突曾存在**：`docs/yingdao-gap-catchup.md` §4 里 M48 = 桌面契约一片（D1+D2+D3）、
     M49 = 系统层 + 新能力立项（E1/D4/E2/E3）；而实际执行的 M49 是「GUI 体验 P0–P3」，

@@ -3,9 +3,9 @@
   "phase": "command-parity-extension-editor",
   "status": "active",
   "completed_milestone": "M47.12-browser-shot-viewport-offset-from-window",
-  "active_milestone": null,
-  "active_plan": null,
-  "active_feature": null,
+  "active_milestone": "M52-selector-advisor",
+  "active_plan": ".harness/tasks/M52-selector-advisor.md",
+  "active_feature": "selector-advisor",
   "next_milestone": "M51-selector-supply-expansion",
   "later_milestones": [
     "M51-selector-supply-expansion"

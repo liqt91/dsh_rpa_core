@@ -10,10 +10,11 @@
 调用方（app）确认。编辑区复用 ``ElementEditorForm``，因此与元素库编辑器**同一份实现、
 同一套模型判据**——不是两处口径。
 
-此外把捕获侧已经收集、此前**只入库不展示**的数据也读出来：``selector.candidates``
-（备选定位 + 捕获时命中数，运行期自愈按序回退，现已可一键提升为主定位）与 browser 的
-语义特征（``role`` / ``accessibleName`` / ``label`` / ``containerText`` / 页面指纹，
-仍为只读展示——它们是「为什么这样定位」的依据，不是可编辑的定位本身）。
+此外把捕获侧已经收集的数据也读出来：``selector.candidates``（候选定位 + 捕获时命中数
++ M52 稳定性分数 ``penalty``，**只读 debug 展示**；运行期自愈按序回退用的仍是同一份
+数据）与 browser 的语义特征（``role`` / ``accessibleName`` / ``label`` /
+``containerText`` / 页面指纹，仍为只读展示——它们是「为什么这样定位」的依据，不是可
+编辑的定位本身）。
 """
 
 from __future__ import annotations
@@ -187,13 +188,36 @@ def semantic_meta_text(descriptor: dict[str, Any]) -> str:
     return "\n".join(line for line in lines if line)
 
 
-def candidates_text(descriptor: dict[str, Any]) -> str:
-    """备选定位展示文本（无候选返回空串）。
+def _candidate_locator_label(item: dict[str, Any]) -> str:
+    """一条候选的可读定位串：browser 用 css 串，desktop 用 locator 摘要。
 
-    候选由捕获侧按 ``{kind, selector, matchedCount}`` 收集（browser 专有，见
-    ``_candidate_errors``），运行期主选择器失效时按序回退。``matchedCount > 1`` 的候选
-    本身不唯一 —— 回退到它有可能点到别的元素，这里如实标出「不唯一」而不是替用户
-    过滤掉：选择更稳的候选是用户的判断，不是展示层的判断。
+    两种候选形状并存（browser：``selector`` 是 CSS；desktop：``locator`` 是字段字典），
+    展示层必须都能读——否则 desktop 候选会显示成空白，用户以为「这条没内容」。
+    """
+    selector = item.get("selector")
+    if isinstance(selector, str) and selector.strip():
+        return selector
+    locator = item.get("locator")
+    if isinstance(locator, dict):
+        parts = (
+            locator.get("controlType"),
+            locator.get("automationId"),
+            locator.get("name"),
+        )
+        text = " ".join(str(part) for part in parts if part)
+        return text or "(locator)"
+    return ""
+
+
+def candidates_text(descriptor: dict[str, Any]) -> str:
+    """候选定位展示文本（无候选返回空串）——**捕获期 debug 视图**：候选 + 命中数 + 分数。
+
+    候选由捕获侧收集：browser 形如 ``{kind, selector, matchedCount, penalty}``，
+    desktop 形如 ``{kind, locator, matchedCount, penalty}``。``penalty`` 是 M52 的
+    稳定性先验分数（**越小越稳**），捕获期算好落盘，这里只读展示。
+
+    ``matchedCount > 1`` 的候选本身不唯一 —— 回退到它有可能点到别的元素，这里如实标出
+    「不唯一」而不是替用户过滤掉：选择更稳的候选是用户的判断，不是展示层的判断。
     """
     raw = _as_dict(descriptor.get("selector")).get("candidates")
     if not isinstance(raw, list):
@@ -201,7 +225,7 @@ def candidates_text(descriptor: dict[str, Any]) -> str:
     items = [item for item in raw if isinstance(item, dict)]
     if not items:
         return ""
-    lines = [f"备选定位 {len(items)} 条（主选择器失效时按序回退）"]
+    lines = [f"备选定位 {len(items)} 条（捕获时已评估；分越小越稳）"]
     for index, item in enumerate(items, start=1):
         matched = item.get("matchedCount")
         if isinstance(matched, int) and not isinstance(matched, bool):
@@ -209,7 +233,16 @@ def candidates_text(descriptor: dict[str, Any]) -> str:
         else:
             match_text = "命中未实测"
         kind = item.get("kind") or "?"
-        lines.append(f"  {index}. [{kind}] {item.get('selector') or ''} · {match_text}")
+        penalty = item.get("penalty")
+        score_text = (
+            f"分 {penalty}"
+            if isinstance(penalty, int) and not isinstance(penalty, bool)
+            else "分未算"
+        )
+        lines.append(
+            f"  {index}. [{kind}] {_candidate_locator_label(item)}"
+            f" · {match_text} · {score_text}"
+        )
     return "\n".join(lines)
 
 
@@ -311,14 +344,18 @@ class ElementDialog(QDialog):
         self.meta_label.setStyleSheet(f"color: {TEXT_SECONDARY};")
         layout.addWidget(self.meta_label)
 
-        # 备选定位**整个界面移除**（M47.11，维护者「备选移除吧」）：此前这里挂过一条
-        # 只读候选文本，现在编辑区也不再摆候选列表（`candidates_label` /
-        # `candidate_list` / `promote_button` 都不存在了）——只读展示与可编辑列表摆在
-        # 同一屏本就是重复信息。
-        #
-        # **数据仍在**：`result_document` 原样带回 `selector.candidates`，运行期自愈
-        # （`executors.browser._element_candidates`）照旧按它反查回退。删界面 ≠ 删数据。
-        # （`candidates_text` 保留：它是 Web 侧 `elementCandidateLines` 的对等物。）
+        # 备选定位：**只读列出全部候选 + 分数**（M52 S3，维护者「把所有的候选和分数列
+        # 出来吧，方便 debug」）。这与 M47.11 移除的那套**可编辑**候选 UI
+        # （`candidate_list` / `promote_button`「提升为主定位」）不是一回事——本 label
+        # 只展示、不带任何写回入口，因此不构成「只读副本与可编辑列表重复」。
+        # 分数（`penalty`）在捕获期算好落盘（见 `capture.desktop_agent` /
+        # `capture.extension`），这里只读；`matchedCount > 1` 的候选如实标「不唯一」。
+        # 数据底座不变：`result_document` 仍原样带回 `selector.candidates`，运行期自愈
+        # （`executors.browser._element_candidates`）照旧按它反查回退。
+        self.candidates_label = QLabel(candidates_text(descriptor))
+        self.candidates_label.setWordWrap(True)
+        self.candidates_label.setStyleSheet(f"color: {TEXT_SECONDARY};")
+        layout.addWidget(self.candidates_label)
 
         # 校验错误提示（对话框内联展示，不弹 QMessageBox，保持可测试性）
         self.error_label = QLabel("")

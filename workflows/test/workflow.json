@@ -12,11 +12,10 @@
         "id": "setVar",
         "command": "data.setVar",
         "with": {
-          "varType": "string",
           "varName": "url",
-          "value": "baidu.com"
-        },
-        "_exprModes": {}
+          "varType": "string",
+          "value": "xiaohongshu.com"
+        }
       },
       {
         "type": "action",
@@ -30,6 +29,22 @@
         },
         "_exprModes": {
           "url": "fx"
+        }
+      },
+      {
+        "type": "action",
+        "id": "n1",
+        "command": "browser.input",
+        "with": {
+          "selector": "#search-input-in-feeds",
+          "text": "摄影",
+          "mode": "type",
+          "append": false,
+          "pressEnter": true,
+          "clickBeforeInput": true
+        },
+        "elementRefs": {
+          "selector": "el_textarea"
         }
       }
     ]

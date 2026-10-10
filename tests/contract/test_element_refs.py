@@ -77,6 +77,43 @@ def test_make_element_reader_tolerates_missing_and_corrupt(tmp_path):
     assert make_element_reader(None)("anything") is None
 
 
+def test_kind_key_mapping_is_sourced_from_value_table():
+    """kind↔参数键映射与取值路径表必须同源（防第二套权威漂移）。
+
+    M52 S4：参数面板的「从元素库选择」与元素库「插入参数」都读这两张表——一旦
+    某张表加了键、另一张没跟上，就会出现「面板给了入口、运行期替换不了」的
+    静默失配（不报错、只是新来源永远排不上）。
+    """
+    from rpa_core.runtime.element_refs import (
+        _KEY_BY_KIND,
+        _VALUE_BY_KEY,
+        element_capable_keys,
+        element_kind_for_param_key,
+        param_key_for_element_kind,
+    )
+
+    # 两张表互为反向：键集合必须相等
+    assert set(_KEY_BY_KIND.values()) == set(_VALUE_BY_KEY)
+    assert element_capable_keys() == frozenset(_VALUE_BY_KEY)
+
+    # 反查只认「取得出定位值」的键
+    assert element_kind_for_param_key("selector") == "browser"
+    assert element_kind_for_param_key("locator") == "desktop"
+    assert element_kind_for_param_key("text") is None
+    assert element_kind_for_param_key("elementId") is None
+
+    # 每个 kind 映射到的键都要真能取出值（否则面板会列出选了也填不进去的项）
+    browser = {"kind": "browser", "selector": {"css": "#kw"}}
+    desktop = {"kind": "desktop", "selector": {"locator": {"automationId": "ok"}}}
+    for kind, document, expected in (
+        ("browser", browser, "#kw"),
+        ("desktop", desktop, {"automationId": "ok"}),
+    ):
+        key = param_key_for_element_kind(kind)
+        assert key is not None
+        assert element_value_for_key(document, key) == expected
+
+
 # ---- 2. 模型兼容 ----------------------------------------------------------------
 def test_action_node_accepts_element_refs_and_old_files():
     from rpa_core.model.workflow import ActionNode

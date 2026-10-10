@@ -38,15 +38,43 @@ const document = {
   querySelectorAll: (selector) => page.filter((node) => matches(node, selector)),
 };
 
-const matches = (node, selector) => {
-  const byId = selector.match(/^#(.+)$/);
+// 单段：`#id` / `tag[attr="v"]` / `tag.class.class` / `tag…:nth-of-type(n)`。
+const matchesSimple = (node, segment) => {
+  const byId = segment.match(/^#(.+)$/);
   if (byId) return node.id === unescape(byId[1]);
-  const byAttr = selector.match(/^([a-z0-9]+)\[([a-z-]+)="([\s\S]*)"\]$/);
+  const byAttr = segment.match(/^([a-z0-9]+)\[([a-z-]+)="([\s\S]*)"\]$/);
   if (byAttr) {
     if (node.tagName.toLowerCase() !== byAttr[1]) return false;
     return node.getAttribute(byAttr[2]) === unescape(byAttr[3]).replace(/\\\\/g, "\\");
   }
+  const byClass = segment.match(/^([a-z0-9]+)((?:\.[^.:>\s]+)*)(?::nth-of-type\((\d+)\))?$/);
+  if (byClass) {
+    if (node.tagName.toLowerCase() !== byClass[1]) return false;
+    const wanted = byClass[2] ? byClass[2].split(".").filter(Boolean).map(unescape) : [];
+    const own = String(node.className || "").trim().split(/\s+/).filter(Boolean);
+    if (!wanted.every((name) => own.includes(name))) return false;
+    if (byClass[3]) {
+      const parent = node.parentElement;
+      if (!parent) return false;
+      const same = (parent.children || []).filter((c) => c.tagName === node.tagName);
+      if (same.indexOf(node) + 1 !== Number(byClass[3])) return false;
+    }
+    return true;
+  }
   return false;
+};
+
+// 后代组合 `A > B`（pathEntryFor 产的就是逐级 `>`）：末段匹 B，再**逐级**沿 parentElement 上溯匹前面各级。
+// （注：朴素 split 对属性值里含 " > " 的极端选择器不成立——桩 DOM 只求覆盖被测形态。）
+const matches = (node, selector) => {
+  const parts = selector.split(" > ");
+  if (!matchesSimple(node, parts[parts.length - 1])) return false;
+  let current = node.parentElement;
+  for (let i = parts.length - 2; i >= 0; i -= 1) {
+    if (!current || !matchesSimple(current, parts[i])) return false;
+    current = current.parentElement;
+  }
+  return true;
 };
 
 const textNode = (text) => ({ nodeType: 3, textContent: text });
@@ -158,8 +186,8 @@ const mid = makeEl({ tag: "DIV", classes: ["position-relative"] });
 const root = makeEl({ tag: "DIV", id: "nav" });
 parentOf(root, [mid]);
 parentOf(mid, [leaf, makeEl({ tag: "DIV", classes: ["sibling"] })]);
-check("无 id → 逐级路径带 :nth-of-type",
-  cssSelectorFor(leaf), "#nav > div.position-relative > div.d-flex:nth-of-type(1)");
+check("无 id → 逐级路径；特征 class 已唯一 ⇒ **不**补 :nth-of-type",
+  cssSelectorFor(leaf), "#nav > div.position-relative > div.d-flex");
 
 // 祖先链（节点树的原料）：pathFor 是**唯一**的片段生成处，cssSelectorFor 由它 join 而来，
 // 所以「树上显示的路径」与「真正下发执行的选择器」不可能漂移——这条断言就是那句保证。
@@ -170,9 +198,38 @@ check("pathFor 与 cssSelectorFor 同源（fragment join 即主 css）",
 check("祖先链每级可展示（tag / id / classes / nthOfType）",
   pathFor(leaf).map((e) => [e.tag, e.id, e.classes.join("."), e.nthOfType]),
   [["div", "nav", "", null], ["div", null, "position-relative", null],
-    ["div", null, "d-flex", 1]]);
+    ["div", null, "d-flex", null]]);
 check("祖先链根 → 目标（顺序不能反）",
   pathFor(leaf).map((e) => e.tag), ["div", "div", "div"]);
+
+// ★ :nth-of-type 只在**必要**时才补（用户实测：div.search-area:nth-of-type(1) 这类冗余序号）。
+// 判据是「本层片段（tag + 首类）在同标签兄弟间是否仍不唯一」——位置序号是稳定性最差的
+// 一环（@medv/finder 给 10、Robula+ / Playwright 都排最后），页面一重排 / 插入兄弟即失效。
+
+// 反例：父节点有多个同标签兄弟，但只有目标带特征 class ⇒ 片段已唯一，绝不补序号。
+const searchArea = makeEl({ tag: "DIV", classes: ["search-area"] });
+const plainA = makeEl({ tag: "DIV" });
+const plainB = makeEl({ tag: "DIV" });
+parentOf(makeEl({ tag: "BODY" }), [plainA, searchArea, plainB]);
+check("特征 class 唯一 ⇒ 多个同标签兄弟也不补 :nth-of-type",
+  cssSelectorFor(searchArea), "body > div.search-area");
+
+// 正例：同构列表（每个兄弟 class 完全一样）⇒ 只能靠位置区分，序号是**真必要**的。
+const hot1 = makeEl({ tag: "LI", classes: ["hotsearch-item"] });
+const hot2 = makeEl({ tag: "LI", classes: ["hotsearch-item"] });
+const hot3 = makeEl({ tag: "LI", classes: ["hotsearch-item"] });
+parentOf(makeEl({ tag: "UL", id: "hotsearch-content-wrapper" }), [hot1, hot2, hot3]);
+check("同构列表取第 2 项 ⇒ 补 :nth-of-type(2)（class 分不开，位置是唯一办法）",
+  cssSelectorFor(hot2), "#hotsearch-content-wrapper > li.hotsearch-item:nth-of-type(2)");
+check("同构列表取第 1 项 ⇒ :nth-of-type(1)",
+  cssSelectorFor(hot1), "#hotsearch-content-wrapper > li.hotsearch-item:nth-of-type(1)");
+// 已知取舍：片段只取**首类**，特征 class 若排在次位则首类不足以唯一化、仍会补序号。
+// 要根治需让片段按「最能消歧的 class」选——那会改动 fragment 语义与界面「首类勾选」口径，
+// 属另一处切片，此处如实钉住现状（防止被当成已修）。
+const pinned = makeEl({ tag: "LI", classes: ["hotsearch-item", "pinned"] });
+parentOf(makeEl({ tag: "UL", id: "list2" }), [hot1, pinned, hot3]);
+check("首类不足以唯一化时（特征 class 在次位）仍补序号——现状，见上方注释",
+  cssSelectorFor(pinned), "#list2 > li.hotsearch-item:nth-of-type(2)");
 
 // 捕获光标（按下 Ctrl/⌘ 未点击时的就绪反馈）：纯函数层只判「哪个键算修饰键」与样式文本，
 // 真正的 DOM 开关在 check_capture_lifecycle.mjs 里用桩真求值。
@@ -216,6 +273,37 @@ check("命中多个也保留，如实记录 matchedCount",
 
 page = [makeEl({ tag: "BUTTON", attrs: { name: "" } })];
 check("空属性值不产生候选", candidatesFor(page[0], "button"), []);
+
+// ★ 祖先链收缩候选（M51-B）：主 css 是「根 → 目标」的完整路径，逐级丢最外层即得更短写法，
+// 每条实测命中数。这是「只有 class、没有 id/data-* 属性」的普通元素的**唯一**候选来源
+// （M52 S3 实测：全库已存元素的候选全为空——小红书 a.cover 这类列表项链接一条属性都不占）。
+const cover1 = makeEl({ tag: "A", classes: ["cover"] });
+const cover2 = makeEl({ tag: "A", classes: ["cover"] });
+const holder1 = makeEl({ tag: "DIV" });
+const holder2 = makeEl({ tag: "DIV" });
+parentOf(holder1, [cover1]);
+parentOf(holder2, [cover2]);
+const section1 = makeEl({ tag: "SECTION", classes: ["note-item"] });
+const section2 = makeEl({ tag: "SECTION", classes: ["note-item"] });
+parentOf(section1, [holder1]);
+parentOf(section2, [holder2]);
+const feed = makeEl({ tag: "DIV", id: "exploreFeeds" });
+parentOf(feed, [section1, section2]);
+page = [cover1, cover2, holder1, holder2, section1, section2, feed];
+check("祖先链收缩候选：逐级丢最外层 + 去 nth 变体，各自实测命中数（1 = 收到该级才唯一）",
+  candidatesFor(cover1, cssSelectorFor(cover1)),
+  [
+    { kind: "path", selector: "section.note-item:nth-of-type(1) > div > a.cover", matchedCount: 1 },
+    { kind: "path", selector: "section.note-item > div > a.cover", matchedCount: 2 },
+    { kind: "path", selector: "div > a.cover", matchedCount: 2 },
+    { kind: "path", selector: "a.cover", matchedCount: 2 },
+  ]);
+check("只有 class 的元素也拿得到候选（补属性候选恒空的位）",
+  candidatesFor(cover1, cssSelectorFor(cover1)).filter((c) => c.kind === "path").length > 0, true);
+
+page = [makeEl({ tag: "INPUT", id: "kw" })];
+check("有 id 的元素不产祖先链候选（单级链没有更短写法）",
+  candidatesFor(page[0], "#kw").filter((c) => c.kind === "path"), []);
 
 // 捕获手势（回归：macOS 的 Ctrl+Click 只派发 contextmenu，不派发 ctrlKey 的 click）
 check("Ctrl+左键（Windows/Linux）算捕获手势",

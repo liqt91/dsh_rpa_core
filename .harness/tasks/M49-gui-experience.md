@@ -57,3 +57,84 @@ Status: `done`
 ## 备注
 
 本次提交 `f681f8f`，本地提交未 push。
+
+---
+
+## 追加：主窗口布局仿影刀（2026-10-10）
+
+**触发**：维护者指着影刀截图说「元素库、运行日志是在下方通过 tab 来切换的，比较合理」。
+
+**改动**：`gui/app.py`
+
+- 「元素库」Dock 从 `RightDockWidgetArea` 挪到 `BottomDockWidgetArea`，与「运行」（日志）
+  同处一片底部页签。
+- 新增 `_stack_bottom_panels()`：两处 Dock 都是**懒创建**（元素库由 `_prewarm_elements_dock`
+  在首屏空闲预热，运行面板要等第一次运行才建），谁先建谁先落进底部区 ⇒ 页签先后本会随
+  「用户先点哪个」漂移。故在两者都建好时显式 `tabifyDockWidget(元素库, 运行)` 把顺序定死
+  （元素库在左），`_bottom_tabs_ordered` 保证只做一次；两个创建点各自收尾调用它。
+  ⚠️ **此版只覆盖「元素库 + 运行」，已被文末「补丁：底部四个面板叠成同一片页签」取代**
+  （漏了运行历史 / 数据表格；且 `_bottom_tabs_ordered` 已换成 `_bottom_tabbed`）——以补丁节为准。
+- `_toggle_elements_dock` 与运行面板的两处 `show()` 补 `raise_()`：不同片时 `show()` 只让
+  「这一片」可见，当前页签可能还停在另一页，用户会以为没打开。
+- 「变量面板」仍在右侧，未动。
+
+**为什么不需要迁移**：窗口状态只持久化**几何 + 三栏比例**（`_save_window_state`），
+**不存 Dock 布局** ⇒ 下次启动即生效，无需让用户点「恢复默认布局」。
+
+**判据**（`tests/contract/test_gui_view_menu.py` **+2**）：
+- `test_elements_and_run_share_one_bottom_tab_strip`——**故意反着建**（先运行、后元素库），
+  断言两 Dock 都在 `BottomDockWidgetArea`、且落在**同一条** `QTabBar` 上、元素库排在运行左边；
+- `test_elements_dock_tabs_with_run_when_elements_built_first`——元素库先建（预热路径的
+  真实现状）也落到同一片、同样顺序。
+
+**门禁**：`FULL GATE PASSED`（**1562 passed** / 0 failed / 21 skipped / 2 xfailed）。
+全量首两次红 `test_gui_node_edit.py::test_delete_suppressed_while_param_editor_focused`，
+单跑绿、`view_menu + node_edit` 同跑绿 ⇒ 定向对照排除本片；第三次同代码全量 **1562 passed
+零 failed** ⇒ 判**焦点竞争环境 flaky**（与 M52 记录同一条老用例），**不动其代码**。
+
+**未决（见 PROGRESS 同日条目）**：维护者另报「删除元素提示删除失败」，本地（含真实数据、
+offscreen 全链路）**复现不出**，两条「删除失败」出口都跑通；待维护者给出精确报错文本。
+
+## 补丁：底部四个面板叠成同一片页签（2026-10-10）
+
+维护者贴图：「元素库默认是去下面了，但是**不能做成和日志的 tab 切换吗？两个并列了**」。
+
+**根因（含我上一版的错误假设）**：上一版 `_stack_bottom_panels` 只在「元素库 + 运行**都**建好」
+时 `tabifyDockWidget(元素库, 运行)`，**漏了**运行历史 / 数据表格。更关键的是我在注释里把 Qt
+行为写反了——**Qt 的 `addDockWidget` 对同区 Dock 默认是「并排分栏」、不是页签**；实测四个 Dock
+只 `addDockWidget` 到 Bottom 区、不 tabify 时整片底部横向铺开，`findChildren(QTabBar)` **为空**。
+维护者没跑过流程（运行面板没建）⇒ 旧实现直接 return ⇒ 元素库 + 运行历史左右并列，正是截图现象。
+
+**改动**：
+
+- `_stack_bottom_panels()` 重写：锚固定为 **元素库**（保证排最前，实测 `tabifyDockWidget(a, b)`
+  把 b 叠到 a、顺序 = 调用顺序），对 `("run", "history", "table")` 逐个并入锚；已并入的记进
+  `_bottom_tabbed`（set），重复调用不重复 tabify。`_bottom_tabs_ordered` 布尔量随之删掉。
+- `_history_dock()` / `_table_dock()` 末尾各加一次 `_stack_bottom_panels()` 收尾调用
+  （懒创建 ⇒ 谁建好谁并入）。
+- `_toggle_history_dock()` / `_toggle_table_dock()` 补 `raise_()`：同片之后 `show()` 只让
+  「这一片」可见、当前页签可能还停在元素库那页，用户会以为没打开。
+
+**不需要迁移**：`_save_window_state` 只存几何 + 三栏比例、不存 Dock 布局 ⇒ 重启即生效。
+
+**判据 +3**（`tests/contract/test_gui_view_menu.py`）：
+
+- `test_elements_and_history_share_bottom_tab_strip`——**维护者截图场景**：只开元素库 + 运行历史
+  （运行面板未建），断言两者落在同一条 `QTabBar` 上、元素库在左。
+- `test_all_bottom_docks_share_one_tab_strip`——四个底部面板全部落在**同一条**页签、元素库排最前。
+- `test_toggle_buttons_raise_their_tab`——点工具栏「运行历史」/「数据表格」后
+  `QTabBar.currentIndex` 指向目标页（offscreen 下当前页文本可读，正好钉「顶页」）。
+
+**负向验证**（`.harness/spike/probe_m52_dock_negative.py`，4 注入全命中、逐字节还原、复绿）：
+
+| 注入 | 方向 | 红 |
+| --- | --- | --- |
+| I1 遍历缩回 `("run",)` | 并入范围缩水 | 3 |
+| I2 `tabifyDockWidget(anchor, dock)` 参数反转 | 叠放方向 | 4 |
+| I3 `if anchor is None` 反成 `is not None`（永 return） | 锚开闭 | 5 |
+| I4 删 `_toggle_history_dock` 的 `raise_()` | 忘了顶页 | 1 |
+
+期望集里显式含 `test_toggle_buttons_raise_their_tab`：同片判据被破坏时该用例前提失效、
+**连带红是合理的**，不是越界（探针首跑据此修正 expectations）。
+
+**门禁**：`FULL GATE PASSED`（**1565 passed** / 0 failed / 21 skipped / 2 xfailed）。本地提交未 push。

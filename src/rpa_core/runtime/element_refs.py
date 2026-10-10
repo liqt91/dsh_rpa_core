@@ -25,6 +25,41 @@ _VALUE_BY_KEY = {
     "locator": ("selector", "locator"),
 }
 
+# 元素 kind → 承载它的参数键（与 `_VALUE_BY_KEY` 互为反向，两处必须同步）。
+# 事实源仍以 `_VALUE_BY_KEY` 为准：`element_kind_for_param_key` 只认能取出定位值的键。
+_KEY_BY_KIND = {
+    "browser": "selector",
+    "desktop": "locator",
+}
+
+
+def param_key_for_element_kind(kind: str) -> str | None:
+    """元素 kind → 它应填入的参数键；未知 kind 返回 None。
+
+    GUI 两条写入路径（元素库「插入参数」、参数面板「从元素库选择」）共用这一份，
+    避免各自 if/elif 硬编码出第二套权威。
+    """
+    return _KEY_BY_KIND.get(kind)
+
+
+def element_kind_for_param_key(key: str) -> str | None:
+    """参数键 → 它接受哪类元素；不支持元素引用的键返回 None。
+
+    **以 `_VALUE_BY_KEY` 为准**：取不出定位值的键就不该给「从元素库选」入口，
+    否则会出现「面板能选、运行期替换不了」的静默失配。
+    """
+    if key not in _VALUE_BY_KEY:
+        return None
+    for kind, mapped in _KEY_BY_KIND.items():
+        if mapped == key:
+            return kind
+    return None
+
+
+def element_capable_keys() -> frozenset[str]:
+    """支持元素引用的参数键集合（参数面板据此决定要不要加选择入口）。"""
+    return frozenset(_VALUE_BY_KEY)
+
 
 @dataclass
 class ElementRefResolution:

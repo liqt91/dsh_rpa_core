@@ -118,3 +118,117 @@ def test_reset_layout_closes_docks_and_restores_splitter(window, qapp):
             sizes,
             DEFAULT_SPLITTER_SIZES,
         )
+
+
+# ---- 底部页签（M52 补丁：元素库不再是右侧竖条，与运行日志同片切换）-------------
+
+def _tab_strip_with(window, *labels):
+    """找到同时含全部 ``labels`` 的那条页签（找不到返回 None）。"""
+    from PySide6.QtWidgets import QTabBar
+
+    wanted = set(labels)
+    for bar in window.findChildren(QTabBar):
+        texts = [bar.tabText(i) for i in range(bar.count())]
+        if wanted <= set(texts):
+            return texts
+    return None
+
+
+def _assert_bottom_tab_strip(win, qapp):
+    """元素库与运行落在同一片**底部**页签，且元素库在左（对齐影刀）。"""
+    from PySide6.QtCore import Qt
+
+    run = win._run_dock()
+    els = win._elements_dock()
+    run.show()
+    els.show()
+    qapp.processEvents()
+
+    assert win.dockWidgetArea(els) == Qt.DockWidgetArea.BottomDockWidgetArea, "元素库应落底部"
+    assert win.dockWidgetArea(run) == Qt.DockWidgetArea.BottomDockWidgetArea
+    texts = _tab_strip_with(win, "元素库", "运行")
+    assert texts is not None, "元素库与运行没有落在同一片页签里"
+    assert texts.index("元素库") < texts.index("运行"), texts
+
+
+def test_elements_and_run_share_one_bottom_tab_strip(window, qapp):
+    """先建运行再建元素库（反着建）也要落到同一片底部页签。
+
+    两处 Dock 都是**懒创建**，页签先后本会随「用户先点哪个」漂移；这里故意用与预热
+    相反的创建顺序，确认 `_stack_bottom_panels` 把顺序定死了、不依赖创建时机。
+    """
+    _assert_bottom_tab_strip(window, qapp)
+
+
+def test_elements_dock_tabs_with_run_when_elements_built_first(qapp, catalog, tmp_path):
+    """元素库先建（`_prewarm_elements_dock` 的真实现状）也要落到同一片、同样顺序。"""
+    from rpa_core.gui.app import MainWindow
+
+    win = MainWindow(catalog, workflows_root=tmp_path / "workflows")
+    win.show()
+    qapp.processEvents()
+    try:
+        win._elements_dock()  # 先元素库（预热路径的真实顺序）
+        _assert_bottom_tab_strip(win, qapp)
+    finally:
+        win.close()
+
+
+def test_elements_and_history_share_bottom_tab_strip(window, qapp):
+    """只开「元素库」+「运行历史」（运行面板**尚未建**）时也必须同片页签、不能并列。
+
+    这正是维护者截图里的场景：没跑过流程 ⇒ 运行面板没建，旧实现只在「元素库 + 运行
+    都建好」时才 tabify ⇒ 元素库与运行历史各占一片、左右并列。判据钉住它俩同片。
+    """
+    els = window._elements_dock()
+    hist = window._history_dock()
+    els.show()
+    hist.show()
+    qapp.processEvents()
+
+    texts = _tab_strip_with(window, "元素库", "运行历史")
+    assert texts is not None, "元素库与运行历史并列了（没落在同一片页签）"
+    assert texts.index("元素库") < texts.index("运行历史"), texts
+
+
+def test_all_bottom_docks_share_one_tab_strip(window, qapp):
+    """四个底部面板（元素库/运行/运行历史/数据表格）全部落在**同一条**页签上。"""
+    for getter in ("_elements_dock", "_run_dock", "_history_dock", "_table_dock"):
+        getattr(window, getter)().show()
+    qapp.processEvents()
+
+    labels = ("元素库", "运行", "运行历史", "数据表格")
+    texts = _tab_strip_with(window, *labels)
+    assert texts is not None, "底部面板没有全部并入同一条页签"
+    assert texts[0] == "元素库", f"元素库应排最前（锚），实际 {texts}"
+
+
+def _current_tab_text(window, *must_include):
+    """含全部 ``must_include`` 的那条页签上，**当前选中页**的文本（没有则 None）。"""
+    from PySide6.QtWidgets import QTabBar
+
+    wanted = set(must_include)
+    for bar in window.findChildren(QTabBar):
+        texts = [bar.tabText(i) for i in range(bar.count())]
+        if wanted <= set(texts):
+            return bar.tabText(bar.currentIndex())
+    return None
+
+
+def test_toggle_buttons_raise_their_tab(window, qapp):
+    """点工具栏「运行历史」/「数据表格」后当前页签要切过去。
+
+    同片之后 `show()` 只让「这一片」可见、当前页签可能还停在元素库那页——不 `raise_()`
+    用户会以为没打开（M52 补丁修的就是这个）。offscreen 下 `QTabBar.currentIndex` 可读，
+    正好钉住「顶页」这个行为。
+    """
+    window._elements_dock().show()  # 先让锚可见，页签条才生成
+    qapp.processEvents()
+
+    window._toggle_history_dock()
+    qapp.processEvents()
+    assert _current_tab_text(window, "元素库", "运行历史") == "运行历史"
+
+    window._toggle_table_dock()
+    qapp.processEvents()
+    assert _current_tab_text(window, "元素库", "数据表格") == "数据表格"

@@ -496,11 +496,12 @@ def _captured_browser_descriptor() -> dict:
         "selector": {
             "css": "#sb_form_q",
             "candidates": [
-                {"kind": "id", "selector": "#sb_form_q", "matchedCount": 1},
+                {"kind": "id", "selector": "#sb_form_q", "matchedCount": 1, "penalty": 0},
                 {
                     "kind": "attribute",
                     "selector": 'input[name="q"]',
                     "matchedCount": 3,
+                    "penalty": 3,
                 },
             ],
         },
@@ -522,14 +523,14 @@ def _captured_browser_descriptor() -> dict:
     }
 
 
-def test_element_dialog_has_no_candidate_ui_but_keeps_data(qapp):
-    """备选定位**界面整体移除**，但数据原样带回（M47.11）。
+def test_element_dialog_shows_candidates_readonly(qapp):
+    """候选**只读展示**（含捕获期分数），但仍无可编辑列表/提升入口（守住 M47.11 的底线）。
 
-    维护者「备选移除吧」——实测几次捕捉都没看到过备选定位，且候选面本身太窄
-    （``content.js`` 的 ``candidatesFor`` 只推``#id`` + 7 个属性，现代组件恒空）。
-    但``selector.candidates`` 必须**留在文档里**：运行期自愈
-    （``executors.browser._element_candidates``）按失败 selector 反查它做回退，
-    删数据等于悄悄拆掉 M28。
+    M47.11 移除的是「只读副本 + 可编辑列表」的重复；M52 S3 按维护者要求恢复**纯只读**
+    的候选 debug 视图（列出全部候选 + 命中数 + 分数）——不提供「提升为主定位」入口，
+    故 `candidate_list` / `promote_button` 依旧不得存在。
+    数据底座不变：``selector.candidates`` 必须**留在文档里**（运行期自愈
+    ``executors.browser._element_candidates`` 按失败 selector 反查它做回退）。
     """
     from rpa_core.gui.element_panel import ElementDialog
 
@@ -537,6 +538,11 @@ def test_element_dialog_has_no_candidate_ui_but_keeps_data(qapp):
     dialog = ElementDialog(descriptor, default_name="searchBox")
     for gone in ("candidate_list", "candidates_label", "promote_button"):
         assert not hasattr(dialog.form, gone), gone
+
+    body = dialog.candidates_label.text()
+    assert "备选定位 2 条" in body
+    assert "#sb_form_q" in body and "分 0" in body
+    assert "命中 3（不唯一）" in body and "分 3" in body
 
     document = descriptor["selector"]["candidates"]
     dialog.accept()
@@ -739,6 +745,49 @@ def test_candidates_text_tolerates_missing_or_bad_counts(qapp):
     assert "命中未实测" in text
 
 
+def test_candidates_text_shows_scores_and_desktop_locators(qapp):
+    """分数（penalty）与 desktop 形状（locator）都要能读——否则 desktop 候选择空白。"""
+    from rpa_core.gui.element_panel import candidates_text
+
+    browser = {
+        "kind": "browser",
+        "selector": {
+            "css": "#a",
+            "candidates": [
+                {"kind": "id", "selector": "#a", "matchedCount": 1, "penalty": 0},
+                {
+                    "kind": "attribute",
+                    "selector": "input[name=q]",
+                    "matchedCount": 3,
+                    "penalty": 3,
+                },
+            ],
+        },
+    }
+    text = candidates_text(browser)
+    assert "备选定位 2 条" in text
+    assert "#a" in text and "分 0" in text
+    assert "命中 3（不唯一）" in text and "分 3" in text
+
+    desktop = {
+        "kind": "desktop",
+        "selector": {
+            "locator": {"backend": "uia", "controlType": "Button"},
+            "candidates": [
+                {
+                    "kind": "uia",
+                    "locator": {"backend": "uia", "controlType": "Button", "name": "提交"},
+                    "matchedCount": 2,
+                    "penalty": 50,
+                }
+            ],
+        },
+    }
+    dtext = candidates_text(desktop)
+    assert "Button" in dtext and "提交" in dtext  # desktop 用 locator 摘要
+    assert "分 50" in dtext
+
+
 def test_semantic_meta_text_is_browser_only(qapp):
     """desktop 描述符走这条路必须返回空串（语义特征键只属于 browser）。"""
     from rpa_core.gui.element_panel import semantic_meta_text
@@ -899,6 +948,116 @@ def test_manual_param_edit_takes_over_and_drops_element_ref(window):
     apply_button.click()
     assert holder.raw["with"]["selector"] == "#hand-tuned"
     assert "elementRefs" not in holder.raw
+
+
+# ---- 参数面板「从元素库选择」（M52 S4） -------------------------------------------
+def _select_node(window, node_id: str):
+    item = window.flow_model.find_by_id(node_id)
+    window.canvas_view.setCurrentIndex(window.flow_model.indexFromItem(item))
+    return item
+
+
+def test_param_form_element_row_lists_only_matching_kind(window):
+    """元素行只给支持引用的参数，且下拉只列与该后端匹配的元素。"""
+    from rpa_core.gui.param_form import ParamForm
+
+    window._save_named_flow("epick_kind")
+    window.save_element_descriptor("searchBox", _browser_element())
+    window.save_element_descriptor(
+        "winBtn", {"kind": "desktop", "selector": {"locator": {"automationId": "ok"}}}
+    )
+    _select_node(window, "read")
+
+    form = window.param_holder.findChild(ParamForm)
+    assert set(form._element_rows) == {"selector"}, "只有 selector 该有元素行"
+    combo = form._element_rows["selector"]
+    texts = [combo.itemText(i) for i in range(combo.count())]
+    assert texts[0] == "（不使用元素库）"
+    assert "searchBox" in texts
+    assert "winBtn" not in texts, "desktop 元素不该出现在 selector 的下拉里"
+
+
+def test_param_form_element_pick_matches_insert_element_output(window):
+    """面板选元素与元素库「插入参数」产出同一份结果（值 + 引用双写同构）。"""
+    from PySide6.QtWidgets import QPushButton
+
+    from rpa_core.gui.flow_model import ROLE_ARGS_RAW
+    from rpa_core.gui.param_form import ParamForm
+
+    window._save_named_flow("epick_same")
+    window.save_element_descriptor("searchBox", _browser_element())
+    item = _select_node(window, "read")
+
+    # 路径 A：元素库「插入参数」
+    window._insert_element("searchBox")
+    holder = item.data(ROLE_ARGS_RAW)
+    via_insert = (
+        holder.raw["with"].get("selector"),
+        dict(holder.raw.get("elementRefs") or {}),
+    )
+
+    # 路径 B：参数面板「从元素库选择」。先摆成**纯手填态**（args 与 with 都改掉，
+    # 再重挂表单让下拉回到「不使用」）——这条正是「手工改过值之后又改用元素」的真实路径：
+    # 此时 previous_args 与面板填出来的值不同，若显式选择不豁免 stale 判据，刚写的引用会被摘掉。
+    holder.args["selector"] = "#hand-tuned"
+    holder.raw.pop("elementRefs", None)
+    holder.raw["with"]["selector"] = "#hand-tuned"
+    index = window.canvas_view.currentIndex()
+    window._on_canvas_selection(index, index)
+    form = window.param_holder.findChild(ParamForm)
+    combo = form._element_rows["selector"]
+    combo.setCurrentIndex(combo.findData("searchBox"))
+    window.param_holder.findChild(QPushButton).click()
+    via_panel = (
+        holder.raw["with"].get("selector"),
+        dict(holder.raw.get("elementRefs") or {}),
+    )
+
+    assert via_panel == via_insert == ("#kw", {"selector": "searchBox"})
+
+
+def test_param_form_clear_element_ref_keeps_hand_value(window):
+    """点 ✕ 清除引用：摘掉 elementRefs，但当前值保留（回退纯手工）。"""
+    from PySide6.QtWidgets import QPushButton, QToolButton
+
+    from rpa_core.gui.flow_model import ROLE_ARGS_RAW
+    from rpa_core.gui.param_form import ParamForm
+
+    window._save_named_flow("epick_clear")
+    window.save_element_descriptor("searchBox", _browser_element())
+    item = _select_node(window, "read")
+    window._insert_element("searchBox")
+    holder = item.data(ROLE_ARGS_RAW)
+    assert holder.raw["elementRefs"] == {"selector": "searchBox"}
+
+    form = window.param_holder.findChild(ParamForm)
+    form.findChild(QToolButton, "elementClear::selector").click()
+    window.param_holder.findChild(QPushButton).click()
+    assert "elementRefs" not in holder.raw
+    assert holder.raw["with"]["selector"] == "#kw", "清除引用不该把值也清掉"
+
+
+def test_param_form_apply_without_touching_element_keeps_ref(window):
+    """面板若没被显式改过引用，直接应用不能把还在生效的引用误摘。"""
+    from PySide6.QtWidgets import QPushButton
+
+    from rpa_core.gui.flow_model import ROLE_ARGS_RAW
+    from rpa_core.gui.param_form import ParamForm
+
+    window._save_named_flow("epick_keep")
+    window.save_element_descriptor("searchBox", _browser_element())
+    item = _select_node(window, "read")
+    window._insert_element("searchBox")
+
+    index = window.canvas_view.currentIndex()
+    window._on_canvas_selection(index, index)  # 重挂表单，让它读到已写入的引用
+    form = window.param_holder.findChild(ParamForm)
+    combo = form._element_rows["selector"]
+    assert combo.currentData() == "searchBox", "已带引用时下拉应指向该元素"
+
+    window.param_holder.findChild(QPushButton).click()  # 原样应用
+    holder = item.data(ROLE_ARGS_RAW)
+    assert holder.raw["elementRefs"] == {"selector": "searchBox"}
 
 
 # ---- 活体校验（M47 S1）：确认框里的「校验元素」按钮 -----------------------------

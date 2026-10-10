@@ -2,6 +2,8 @@ import re
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from rpa_core.model.selector_ranking import looks_generated_id, rank_candidates
+
 DesktopBackend = str
 
 # LocatorStep 允许的键（D1/ADR 0018 定稿）：即 capture agent 现在能拿到的四个。
@@ -74,6 +76,96 @@ def matches_text(actual: str | None, expected: str, mode: str | None) -> bool:
     except re.error:
         return False
 
+
+
+# M52：桌面 locator 优选（唯一性硬门 + penalty 最小化）。
+# penalty 表是**稳定先验**，依据 2026-10-10 开源调研（@medv/finder 的 penalty 表、
+# Robula+ 的属性白/黑名单、Playwright codegen 的语义阶梯）：值越小越稳。
+# **表可调**——判据只钉「表被读到、合成生效」，不钉具体数值（否则调表即静默变红）。
+LOCATOR_FIELD_PENALTIES: dict[str, int] = {
+    "automationId": 0,   # 最稳：固定 id（像框架生成哈希时改按 HASHY_ID_PENALTY 降权）
+    "className": 15,     # WinForms 类名（机器级常量）
+    "classNameRe": 15,   # 同 className，正则形态（用于含动态哈希的类名）
+    "name": 20,          # 可见文本 / 可访问名（语义强，但文本可能随内容变）
+    "title": 20,         # Win32 窗口标题
+    "menuPath": 30,      # 菜单路径
+    "controlType": 40,   # 弱：几乎不唯一
+    "foundIndex": 80,    # 位置序号：只活当次快照
+    "controlId": 90,     # 每次进程启动都变
+    "handle": 100,       # 运行期值（每次启动都变）
+}
+
+PATH_STEP_PENALTY = 12   # 祖先链每级（越长越脆）
+HASHY_ID_PENALTY = 70    # automationId 形如框架生成哈希时改用此值
+
+
+# ``looks_generated_id``（"像哈希的 id"判定）已迁至 ``model.selector_ranking``——
+# 那里是**两端共用**的稳定性先验（桌面 automationId 与浏览器 ``#id`` 都靠它降权），
+# 由顶部 import 引入本模块（re-export），既有
+# ``from rpa_core.model.desktop import looks_generated_id`` 的调用点（含 S1 判据）继续可用。
+
+
+def locator_penalty(locator: dict) -> int:
+    """一个桌面 locator（dict 形态）的 penalty 总和——**越小越稳**。
+
+    纯函数、表驱动：命中任一 ``LOCATOR_FIELD_PENALTIES`` 字段即累加该字段 penalty；
+    ``automationId`` 单独按 ``looks_generated_id`` 在 0 / ``HASHY_ID_PENALTY`` 之间取值；
+    祖先链 ``path`` 按级数乘 ``PATH_STEP_PENALTY``。字段**存在**即计入（不看值）。
+    """
+    total = 0
+    automation_id = locator.get("automationId")
+    for field, penalty in LOCATOR_FIELD_PENALTIES.items():
+        if field == "automationId":
+            continue
+        if locator.get(field) is not None:
+            total += penalty
+    if automation_id is not None:
+        total += (
+            HASHY_ID_PENALTY
+            if looks_generated_id(str(automation_id))
+            else LOCATOR_FIELD_PENALTIES["automationId"]
+        )
+    path = locator.get("path")
+    if isinstance(path, list):
+        total += PATH_STEP_PENALTY * len(path)
+    return total
+
+
+def choose_best_locator(entries: list[dict]) -> dict | None:
+    """从候选中择优：**唯一性硬门 + penalty 最小化 + 稳定序**（M52 核心，单一权威）。
+
+    每条 entry 形如 ``{"locator": <dict>, "count": <实测命中数 int>}``。
+
+    规则（对齐 @medv/finder 的「唯一即停 + penalty 排序」）：
+    **字典序比较 ``(count, penalty)``**——``count`` 是**第一关键字**，故
+    「唯一命中（count==1）恒优先于任何 penalty」即是「**唯一性硬门**」；若反过来先比
+    penalty，一条 count=2 但更稳的选择器会压过唯一的那条（那是**加权口径**，不是硬门）。
+    同 count 再比 penalty；**完全并列时保留输入序** ⇒ 稳定序（防 flaky）。
+    空列表 / 无有效 count → 返回 ``None``（调用方自行回退）。
+
+    排序引擎（``rank_candidates``）与浏览器腿**共用同一份**（``model.selector_ranking``）；
+    本函数只提供桌面侧的 penalty 分派（``locator_penalty``）与合法性清洗。
+
+    与旧实现（``capture_at`` 里「遇 count==1 即 break」）的**有意差异**：旧实现取**首个**
+    唯一命中，本函数在所有候选里取「count 最小、其次 penalty 最小」的那条——可能选到
+    penalty 更低者，这是 M52 的改进目标。
+    """
+    usable = [
+        entry
+        for entry in entries
+        if isinstance(entry, dict)
+        and isinstance(entry.get("locator"), dict)
+        and isinstance(entry.get("count"), int)
+        and not isinstance(entry.get("count"), bool)
+    ]
+    if not usable:
+        return None
+    ranked = rank_candidates(
+        usable,
+        count_of=lambda entry: entry["count"],
+        penalty_of=lambda entry: locator_penalty(entry["locator"]),
+    )
+    return ranked[0]
 
 
 class LocatorStep(BaseModel):

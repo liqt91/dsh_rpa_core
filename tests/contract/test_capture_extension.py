@@ -26,7 +26,14 @@ ROOT = Path(__file__).resolve().parents[2]
 
 _DESCRIPTOR = {
     "kind": "browser",
-    "selector": {"css": "#go"},
+    "selector": {
+        "css": "#go",
+        # 候选由 content script 生成（不含分数）；宿主在捕获期补 penalty（M52 S3）。
+        "candidates": [
+            {"kind": "id", "selector": "#go", "matchedCount": 1},
+            {"kind": "attribute", "selector": 'button[name="go"]', "matchedCount": 2},
+        ],
+    },
     "verifyCount": 1,
     "metadata": {"tag": "button", "text": "OK"},
 }
@@ -147,6 +154,39 @@ def test_extension_capture_flow_arms_and_picks(server, bridge):
     # 会话确实向端点下发了 capture_arm（携带会话 id）
     assert bridge.armed, "capture_arm was not sent to the bridge endpoint"
     assert bridge.armed[0]["sessionId"]
+
+
+def test_extension_capture_scores_browser_candidates(server, bridge):
+    """候选的稳定性分数在**宿主侧捕获期**算好（M52 S3，捕获确认框据此 debug 展示）。"""
+    from rpa_core.model.selector_ranking import web_candidate_penalty
+
+    base = f"http://127.0.0.1:{server.port}"
+    status, payload = _request(
+        "POST", "/api/capture/browser/start", {"transport": "extension"}, base=base
+    )
+    assert status == 200
+    session_id = payload["sessionId"]
+
+    picked: dict = {}
+
+    def do_pick():
+        picked["result"] = _request(
+            "POST", "/api/capture/browser/pick",
+            {"sessionId": session_id, "timeoutSeconds": 10}, base=base,
+        )
+
+    thread = threading.Thread(target=do_pick)
+    thread.start()
+    thread.join(timeout=8)
+    status, pick_result = picked["result"]
+    assert status == 200
+    candidates = pick_result["selector"]["candidates"]
+    # 每条候选都带上分数，且分数出自**共享引擎**（宿主侧算，不是 content script）
+    assert [c["penalty"] for c in candidates] == [
+        web_candidate_penalty(c) for c in candidates
+    ]
+    # 打分不改候选顺序（顺序由运行期自愈的 rank_web_candidates 决定）
+    assert [c["selector"] for c in candidates] == ["#go", 'button[name="go"]']
 
 
 def test_extension_capture_save_to_flow(server, bridge):
