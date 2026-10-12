@@ -219,3 +219,55 @@ def test_run_success_auto_restores(window):
     assert window._restore_timer.interval() == 2000
     window._restore_from_float()
     assert not window.isMinimized()
+
+
+# ---- 失败归属：节点 id 在 error["details"]["nodeId"]（不在顶层） -----------------
+def test_run_failure_attributes_node_from_details(window):
+    """错误归属取自 `details.nodeId`；界面不许再显示「节点 None」。
+
+    回归（真机）：两处渲染都直读 `error.get("nodeId")`，而运行时把归属放在
+    `error["details"]["nodeId"]` ⇒ 一次 `browser.input` 缺 `selector` 的失败在界面上
+    显示成「节点 None」，且「跳到节点」按钮不出现——明明有明确归属。
+    """
+    window._run_dock()  # 摘要控件属运行面板（懒创建）
+    error = {
+        "code": "INVALID_INPUT",
+        "message": "'selector' is a required property",
+        "retryable": False,
+        "details": {"nodeId": "n1", "commandId": "browser.input", "attempt": 0},
+    }
+    assert window._error_node_id(error) == "n1"
+    window._show_error_summary(error)
+    assert "n1" in window._run_error_node.text()
+    assert window._run_error_node.isVisibleTo(window._run_error_widget)
+    assert "browser.input" in window._run_error_detail.text()
+
+
+def test_run_failure_without_node_stays_blank(window):
+    """没有归属的错误不硬编一个 id（否则又会出现假的「节点 None」）。"""
+    assert window._error_node_id({"code": "TIMEOUT", "message": "boom"}) is None
+
+
+def test_missing_required_element_param_gets_actionable_hint():
+    """缺必填的 selector / locator 时给一句可操作提示；其它键与错误码不改动文本。"""
+    from rpa_core.gui.app import missing_element_param_hint
+
+    hint = missing_element_param_hint(
+        {"code": "INVALID_INPUT", "message": "'selector' is a required property"}
+    )
+    assert hint is not None
+    assert "selector" in hint and "元素" in hint  # 指到元素库这条正路
+
+    assert (
+        missing_element_param_hint(
+            {"code": "INVALID_INPUT", "message": "'url' is a required property"}
+        )
+        is None
+    ), "url 不能由元素库提供，别乱加提示"
+    assert (
+        missing_element_param_hint(
+            {"code": "TIMEOUT", "message": "'selector' is a required property"}
+        )
+        is None
+    ), "只对 INVALID_INPUT 生效"
+

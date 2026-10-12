@@ -10,7 +10,11 @@ Status: `active`
 > **S3 部分落地（2026-10-10）**：捕获确认框（GUI）**只读列出全部候选 + 分数**
 > （候选与分数在**捕获期算好落盘**）；判据 6 条 + 负向验证 8 注入全命中。
 > 详见文末「S3 实施记录」。
-> 后续切片：S3 余项（「推荐 / 理由」**可采纳**入口）、S4 M51 候选扩容消费。
+> **S4 已落地（2026-10-10）**：参数面板「从元素库选择」入口（两条写入路径产出**同构**、
+> 共享事实源 `runtime/element_refs.py`）；判据 5 条 + 负向验证 6 注入全命中。
+> **S5 已落地（2026-10-12）**：修「选了元素但 `selector` 没落进节点」+「节点 None」归属 +
+> 缺元素型必填参数可操作提示；判据 4 条 + 负向验证 4 注入全命中。详见文末「S5 实施记录」。
+> 后续切片：S3 余项（「推荐 / 理由」**可采纳**入口）、M51 候选扩容消费。
 
 > 本轮**不实现**，只立范围与验收口径（2026-10-10 维护者提问「影刀的 AI 判断元素选择器，我们能不能做」派生）。
 
@@ -565,3 +569,60 @@ div.search-area:nth-of-type(1) > div.input-box > div.wendian-wrapper
 **门禁**：`FULL GATE PASSED`（**1570 passed** / 0 failed / 21 skipped / 2 xfailed）。
 flaky 两条（`test_gui_node_edit` 焦点竞争、`test_gui_command_matrix` 子进程）均以
 「单跑绿 + 同代码全量重跑绿/未碰该模块」判定为**环境级**，不动其代码。本地提交未 push。
+
+## S5 实施记录（2026-10-12）：修「选了元素但 selector 没落进节点」+「节点 None」
+
+**报障**（真机）：`test` 流程里选了元素、没填 `selector`，点运行报
+`INVALID_INPUT · 节点 None  'selector' is a required property`。
+
+**取证链（先取证、再归因）**：
+1. `workflows/test/workflow.json` 的 `n1`（`browser.input`）**既无 `selector` 也无 `elementRefs`**；
+2. 该次运行的 `events.jsonl` **无 `elementRefFallback`** ⇒ 不是「引用存在但取不到值回落」，
+   而是 `elementRefs` **压根不存在**；
+3. `run_artifacts/<id>/result.json` 的 `error` 里 `details.nodeId == "n1"` ⇒ **归属一直都在**，
+   界面显示「节点 None」是**取错层级**（读的是 `error.get("nodeId")`，顶层没这个键）。
+
+**根因两处（互相独立）**：
+- **引用静默丢失**：`_action_form_dirty` 只比值 / fx 模式 / 输出别名 / 超时重试，
+  **不看 `form.element_refs()`**。用户在下拉里选了元素、而值控件看不出差异时被判「无改动」，
+  工具栏「运行」经 `_commit_pending_edits` **整段跳过** ⇒ 引用没落盘。
+  （「应用参数」按钮走 `apply()` 闭包本身没问题，所以症状只在走「运行」这条路上出现。）
+- **失败归属显示错层**：两处渲染（`_poll_run` 失败行、`_show_error_summary`）都直读
+  `error.get("nodeId")` ⇒ 永远「节点 None」、「跳到节点」按钮也不出现。
+
+**改动（`gui/app.py` 三处）**：
+1. `_action_form_dirty` 增加「元素引用意图」一段：`form.element_refs()` 与 `raw["elementRefs"]`
+   逐键比对，不同即算**未应用的编辑**；
+2. 新增模块级 `missing_element_param_hint(error)`：`INVALID_INPUT` 且
+   `message == "'{key}' is a required property"` 时给**可操作提示**（去「元素」下拉选 / 元素库
+   「插入参数」、并提醒点「应用参数」）；键的权威是 `element_capable_keys()` /
+   `element_kind_for_param_key()`，**不手抄 `selector`/`locator`**；
+3. 新增 `MainWindow._error_node_id(error)`（优先 `details.nodeId`、回退顶层、缺失返 `None`
+   **不返空串**），两处渲染共用它，并给「跳到节点」按钮补上归属。
+
+**判据 +4**：`test_element_ref_intent_alone_counts_as_pending_edit`（panels）、
+`test_run_failure_attributes_node_from_details` / `test_run_failure_without_node_stays_blank` /
+`test_missing_required_element_param_gets_actionable_hint`（run）。
+
+**负向验证**（`.harness/spike/probe_m52s5_negative.py`，4 注入全命中、逐字节还原、复绿）：
+
+| 注入 | 方向 | 红 |
+| --- | --- | --- |
+| I1 | `_action_form_dirty` 去掉元素引用段 | 1（T_DIRTY） |
+| I2 | `_error_node_id` 退回只读顶层 | 1（T_NODEID） |
+| I3 | `missing_element_param_hint` 恒 `None` | 1（T_HINT） |
+| I4 | 提示函数闸门换硬编码 `["url",…]` | 1（T_HINT） |
+
+**探针自身踩的坑（重犯）**：I1 的锚点带了**尾随 `\n`**，而 `inject()` 是
+`replace(old, new + "  " + 哨兵)` ⇒ 这个换行被吃掉、哨兵与下一行
+`rt = form.retry_timeout_values()` **粘连成一行注释** ⇒ `rt` 未定义、
+`_action_form_dirty` 一旦被调用即 `NameError` ⇒ 多红一条无关用例
+（`test_insert_element_writes_element_ref`）。首跑见「红在期望之外」时我一度判成
+**环境级 flaky**，直到有界重跑 3/3 稳定复现才回头查代码，发现是**注入锚点自伤**——
+正是 S4 已记过的那条坑（「锚点整行取但**不带**换行」）。修锚点后 I1 精确红 1。
+
+**门禁**：`FULL GATE PASSED`（**1574 passed** / 0 failed / 21 skipped / 2 xfailed）。
+两次**后台**跑各报 2~3 failed（`test_gui_command_matrix` 的 QProcess「子进程没起来」+
+`test_capture_extension` 线程超时），**前台 + 沙箱豁免**重跑即 `FULL GATE PASSED`；
+那 3 条单独复跑亦全绿 ⇒ **后台命令不真正豁免沙箱、QProcess 被挡**，属**环境级**。
+本地提交未 push。

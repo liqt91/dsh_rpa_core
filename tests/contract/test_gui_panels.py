@@ -1060,6 +1060,39 @@ def test_param_form_apply_without_touching_element_keeps_ref(window):
     assert holder.raw["elementRefs"] == {"selector": "searchBox"}
 
 
+def test_element_ref_intent_alone_counts_as_pending_edit(window):
+    """选了元素、而值控件看不出差异时，「未应用的编辑」判定也必须为真。
+
+    回归（真机）：`_action_form_dirty` 原先只比 值 / fx 模式 / 输出别名 / 超时重试，
+    **不看元素引用** ⇒ 下拉选了元素却因「值没变化」被判成无改动，保存/运行走的
+    `_commit_pending_edits` 整段跳过，引用被**静默丢掉**——落盘节点既无 `selector`
+    也无 `elementRefs`，运行只剩 `INVALID_INPUT 'selector' is a required property`。
+    """
+    from rpa_core.gui.flow_model import ROLE_ARGS_RAW
+    from rpa_core.gui.param_form import ParamForm
+
+    window._save_named_flow("epick_dirty")
+    window.save_element_descriptor("searchBox", _browser_element())
+    item = _select_node(window, "read")
+    holder = item.data(ROLE_ARGS_RAW)
+    # 让值控件**先等于**元素库那份，且模型里没有引用 ⇒ 唯一的变化就是「选了元素」
+    holder.args["selector"] = "#kw"
+    holder.raw["with"]["selector"] = "#kw"
+    index = window.canvas_view.currentIndex()
+    window._on_canvas_selection(index, index)
+    form = window.param_holder.findChild(ParamForm)
+    combo = form._element_rows["selector"]
+    combo.setCurrentIndex(combo.findData("searchBox"))
+
+    assert form.element_refs() == {"selector": "searchBox"}
+    assert window._action_form_dirty(form, holder, holder.raw) is True, (
+        "选了元素 = 有未应用的编辑；漏掉这一步会让保存/运行静默丢掉引用"
+    )
+    window._commit_pending_edits()
+    assert holder.raw["elementRefs"] == {"selector": "searchBox"}
+    assert holder.raw["with"]["selector"] == "#kw"
+
+
 # ---- 活体校验（M47 S1）：确认框里的「校验元素」按钮 -----------------------------
 def _pump_until_gui(predicate, timeout_ms: int = 5000) -> bool:
     """泵事件循环直到谓词为真（跨线程信号是队列投递，必须泵才送达）。"""

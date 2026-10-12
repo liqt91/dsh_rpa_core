@@ -290,6 +290,37 @@ def collect_validation_issues(
     return issues
 
 
+def missing_element_param_hint(error: dict) -> str | None:
+    """必填的「元素型」参数缺失时给一句**可操作**提示，否则不改动错误文本。
+
+    真机反馈：`browser.input` 选了元素但 `selector` 没落盘时，界面只剩
+    `INVALID_INPUT · 节点 None  'selector' is a required property`——用户不知道
+    该去哪儿补、也不知道元素库能提供它。这里只认 `INVALID_INPUT` + jsonschema
+    的 required 文案，且键必须**真能由元素库提供**（以 `element_capable_keys` /
+    `element_kind_for_param_key` 为事实源，不手抄 selector / locator——手抄出
+    第二套权威会在加键时静默漂移）。
+    """
+    from rpa_core.runtime.element_refs import (
+        element_capable_keys,
+        element_kind_for_param_key,
+    )
+
+    if error.get("code") != "INVALID_INPUT":
+        return None
+    message = error.get("message") or ""
+    for key in sorted(element_capable_keys()):
+        if message != f"'{key}' is a required property":
+            continue
+        kind = element_kind_for_param_key(key)
+        where = f"{kind} 元素" if kind else "元素"
+        return (
+            f"提示：该参数可由元素库提供——在参数面板「{key}」旁的「元素」下拉里选一个"
+            f"{where}，或在元素库里选中元素后点「插入参数」（画布需先选中该指令节点）；"
+            f"选完记得点「应用参数」。"
+        )
+    return None
+
+
 def populate_command_tree(
     tree: QTreeWidget,
     catalog: CommandCatalog,
@@ -2652,13 +2683,16 @@ class MainWindow(QMainWindow):
             self._run_status_label.setText(f"完成：{run_status}")
             error = result.get("error")
             if error:
+                failed_id = self._error_node_id(error)
                 detail = (
-                    f"{error.get('code')} · 节点 {error.get('nodeId')}\n"
+                    f"{error.get('code')} · 节点 {failed_id}\n"
                     f"{error.get('message')}"
                 )
+                hint = missing_element_param_hint(error)
+                if hint:
+                    detail = f"{detail}\n{hint}"
                 self._run_events_view.appendPlainText(f"失败：{detail}")
                 self._show_error_summary(error)
-                failed_id = error.get("nodeId")
                 if failed_id:
                     self._failed_node_id = failed_id
                     self._run_jump_button.show()
@@ -2796,10 +2830,25 @@ class MainWindow(QMainWindow):
                 return event.get("node_id") or (event.get("payload") or {}).get("nodeId")
         return None
 
+    @staticmethod
+    def _error_node_id(error: dict) -> str | None:
+        """运行错误归属的节点 id。
+
+        运行时把它放在 `error["details"]["nodeId"]`，**顶层没有** `nodeId`——早先
+        两处渲染都直读 `error.get("nodeId")`，于是界面永远显示「节点 None」、
+        「跳到节点」按钮也不出现，而错误明明有明确归属（真机一次 `browser.input`
+        缺 `selector` 的失败即如此）。两处共用这一份，免得再各自读错层级。
+        """
+        details = error.get("details")
+        if isinstance(details, dict) and details.get("nodeId"):
+            return str(details["nodeId"])
+        fallback = error.get("nodeId")
+        return str(fallback) if fallback else None
+
     def _show_error_summary(self, error: dict) -> None:
         """填充结构化错误摘要（对齐 Web renderRunError）。"""
         code = error.get("code", "ERROR")
-        node_id = error.get("nodeId", "")
+        node_id = self._error_node_id(error) or ""
         message = error.get("message", "")
         details = error.get("details") or {}
 
@@ -4346,7 +4395,7 @@ class MainWindow(QMainWindow):
 
     @staticmethod
     def _action_form_dirty(form, holder, raw) -> bool:
-        """参数表单相对模型是否有未应用的编辑（含 fx 模式、输出别名、超时/重试）。"""
+        """参数表单相对模型是否有未应用的编辑（含 fx 模式、输出别名、超时/重试、元素引用）。"""
         try:
             values = form.values()
         except ValueError:
@@ -4357,6 +4406,14 @@ class MainWindow(QMainWindow):
             return True
         if form.output_aliases() != ((raw or {}).get("output_aliases") or {}):
             return True
+        # 元素引用（M52 S4）：下拉选了元素 / 点了 ✕ 同样是**未应用的编辑**——它不一定
+        # 让值控件产生差异（清空后重选、或值本就等于元素库那份），漏掉的话保存/运行
+        # 的 `_commit_pending_edits` 会整段跳过，引用被**静默丢掉**（维护者实测
+        # 「选了元素却没生效」，落盘节点既无 selector 也无 elementRefs）。
+        existing_refs = (raw or {}).get("elementRefs") or {}
+        for key, ref_name in form.element_refs().items():
+            if ref_name != existing_refs.get(key):
+                return True
         rt = form.retry_timeout_values()
         raw = raw or {}
         if rt.get("timeout_seconds") != raw.get("timeout_seconds"):
