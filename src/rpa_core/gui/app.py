@@ -269,10 +269,14 @@ def collect_validation_issues(
             else:
                 manifest = catalog[command_id]
                 with_args = node.get("with") or {}
+                # M52 S6：被元素引用的参数**不在 `with` 里存值**（引用即唯一真值），
+                # 所以必填判定要把 elementRefs 也算作「已提供」，否则 ref-only 节点
+                # 在画布上会**恒红**「缺少必填参数」。
+                refs = node.get("elementRefs") or {}
                 missing = [
                     key
                     for key in manifest.input_schema.get("required", [])
-                    if key not in with_args
+                    if key not in with_args and key not in refs
                 ]
                 if missing:
                     issues.append(
@@ -319,6 +323,32 @@ def missing_element_param_hint(error: dict) -> str | None:
             f"选完记得点「应用参数」。"
         )
     return None
+
+
+def element_ref_missing_hint(error: dict) -> str | None:
+    """引用的元素在元素库里找不到（`ELEMENT_REF_MISSING`）时给一句可操作提示。
+
+    M52 S6 去掉值快照后，元素被删/改名不再有兜底（fail-closed）。这条错误本身
+    已带节点归属与元素名，但仍要说清「去哪儿修」——否则用户只看到「元素不存在」。
+    """
+    if error.get("code") != "ELEMENT_REF_MISSING":
+        return None
+    return (
+        "提示：该节点引用的元素在元素库里不存在（可能被删除或改名）。"
+        "点「跳到节点」后，在参数面板的「元素」下拉里重新选一个元素，"
+        "或在元素库选中元素后点「插入参数」；选完记得点「应用参数」。"
+    )
+
+
+def run_failure_hint(error: dict) -> str | None:
+    """运行失败时给用户的**那一句**可操作提示（两条来源收敛到这一个权威入口）。
+
+    `missing_element_param_hint`（缺必填的元素型参数）与 `element_ref_missing_hint`
+    （引用的元素在元素库里不存在）是两种病，却指向同一个去处（参数面板「元素」下拉 /
+    元素库「插入参数」）。调用侧只该问一次——各写各的 `or` 迟早会漏掉一条，
+    而漏掉的症状恰恰是「只有干巴巴的元素名、不说去哪儿修」。
+    """
+    return missing_element_param_hint(error) or element_ref_missing_hint(error)
 
 
 def populate_command_tree(
@@ -2688,7 +2718,7 @@ class MainWindow(QMainWindow):
                     f"{error.get('code')} · 节点 {failed_id}\n"
                     f"{error.get('message')}"
                 )
-                hint = missing_element_param_hint(error)
+                hint = run_failure_hint(error)
                 if hint:
                     detail = f"{detail}\n{hint}"
                 self._run_events_view.appendPlainText(f"失败：{detail}")
@@ -3107,7 +3137,7 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(f"已删除元素 {name}", 4000)
 
     def _insert_element(self, name: str) -> None:
-        """把元素填入画布当前 action 节点的 selector/locator 参数。"""
+        """把元素**引用**写到画布当前 action 节点的 selector/locator 参数（M52 S6 只写引用）。"""
         from rpa_core.gui.flow_model import (
             ROLE_ARGS_RAW,
             ROLE_ARGS_SUMMARY,
@@ -3147,20 +3177,21 @@ class MainWindow(QMainWindow):
         self._begin_edit()
         item = self.flow_model.itemFromIndex(current)
         holder = item.data(ROLE_ARGS_RAW)
-        holder.args[key] = value
+        # M52 S6 只写引用：被引用的参数**不在 `with` 里留值快照**（引用即唯一真值），
+        # 定位值一律运行期从元素库取——「元素库里改主定位、已插入指令跟着生效」正是
+        # 引用模型的卖点，而两份真值只会带来同步难度（维护者 2026-10-12 拍板）。
+        holder.args.pop(key, None)
         if holder.raw is not None:
-            holder.raw.setdefault("with", {})[key] = value
-            # 元素引用（M46/B1）：节点同时记「引用」与「值快照」——运行期按引用
-            # 从元素库取最新值（改主定位后已插入指令自动生效），快照仅作缺元素回落。
+            holder.raw.setdefault("with", {}).pop(key, None)
             holder.raw.setdefault("elementRefs", {})[key] = name
         item.setData(summarize_args(holder.args), ROLE_ARGS_SUMMARY)
         self._end_edit()
         self._set_dirty(True)
-        # 重渲染表单让新值可见 + 重绘画布（元素填入可能补上必填项，红色感叹号要消失）
+        # 重渲染表单让引用可见 + 重绘画布（元素填入可能补上必填项，红色感叹号要消失）
         self._on_canvas_selection(current, current)
         if self.canvas_view is not None:
             self.canvas_view.viewport().update()
-        self.statusBar().showMessage(f"已把元素 {name} 填入参数 {key}", 4000)
+        self.statusBar().showMessage(f"已把参数 {key} 引用到元素 {name}", 4000)
 
     # ---- 元素捕获（切 G1：单入口混合捕获） ---------------------------------
     def _capture_element(self) -> None:
@@ -4327,13 +4358,13 @@ class MainWindow(QMainWindow):
                     self._undo_stack.pop()
                 self.statusBar().showMessage("该节点没有可编辑的参数", 4000)
                 return
-            previous_args = dict(holder.args)
             holder.args = dict(values)
             if holder.raw is not None:
                 holder.raw["with"] = dict(values)
-                # 元素引用对账（M46/B1 + M52 S4）：面板里的**显式选择**优先——下拉选了
-                # 元素 = 写引用，点 ✕ = 摘引用并回退手填；其余键仍按旧规则：手工改值 /
-                # 删键 = 用户接管该参数，摘掉引用（否则运行期元素库值会盖掉手工输入）。
+                # 元素引用对账（M46/B1；M52 S6 去快照）：引用是**唯一真值源**——
+                # 面板里显式选了元素 ⇒ 写引用，且该参数**不进 `with`**（`form.values()`
+                # 已跳过被引用的键，这里再兜一道），节点不留第二份真值；点 ✕ ⇒ 摘引用、
+                # 值控件恢复可编辑。参数字典里真出现该键的值 ⇒ 用户改成手填 ⇒ 摘引用。
                 chosen = form.element_refs()
                 existing = holder.raw.get("elementRefs")
                 refs = dict(existing) if isinstance(existing, dict) else {}
@@ -4342,12 +4373,8 @@ class MainWindow(QMainWindow):
                         refs.pop(key, None)
                     else:
                         refs[key] = ref_name
-                stale = [
-                    key
-                    for key in refs
-                    if key not in chosen
-                    and (key not in values or values[key] != previous_args.get(key))
-                ]
+                        holder.raw["with"].pop(key, None)
+                stale = [key for key in refs if key not in chosen and key in values]
                 for key in stale:
                     refs.pop(key, None)
                 if refs:

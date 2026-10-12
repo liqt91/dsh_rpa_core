@@ -62,6 +62,33 @@ def test_missing_required_param_reports_node_id(catalog):
     )
 
 
+def test_element_ref_satisfies_required_param(catalog):
+    """M52 S6：被元素引用的参数**不进 `with`**，必填校验必须把引用算作「已提供」。
+
+    引用即唯一真值 ⇒ ref-only 节点在模型层没有任何值，但它完全配置好了；漏掉这段
+    判定就会让它**恒报**「缺少必填参数」，把正常流程判成坏的。
+    后一段是**对照**（摘掉引用、也没填值 ⇒ 必须报缺），证明前一条不是恒不报。
+    """
+    from rpa_core.gui.app import collect_validation_issues
+
+    document = {
+        "schema_version": "1.0", "id": "s", "name": "s",
+        "root": {
+            "type": "sequence", "id": "root",
+            "children": [
+                {"type": "action", "id": "read", "command": "browser.getText",
+                 "with": {}, "elementRefs": {"selector": "searchBox"}},
+            ],
+        },
+    }
+    assert collect_validation_issues(document, catalog) == []
+
+    no_ref = copy.deepcopy(document)
+    no_ref["root"]["children"][0].pop("elementRefs")
+    issues = collect_validation_issues(no_ref, catalog)
+    assert any("selector" in message and node_id == "read" for message, node_id in issues)
+
+
 def test_unknown_command_reports_node_id(catalog):
     from rpa_core.gui.app import SAMPLE_WORKFLOW, collect_validation_issues
 

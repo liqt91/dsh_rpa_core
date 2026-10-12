@@ -162,7 +162,9 @@ def test_insert_element_into_selector(window):
     from rpa_core.gui.flow_model import ROLE_ARGS_RAW
 
     holder = item.data(ROLE_ARGS_RAW)
-    assert holder.raw["with"]["selector"] == "#kw"
+    # M52 S6：只写引用——值不再进 `with`（引用即唯一真值）
+    assert holder.raw["elementRefs"] == {"selector": "searchBox"}
+    assert "selector" not in holder.raw["with"]
 
 
 def test_insert_element_kind_mismatch_hint(window):
@@ -885,9 +887,9 @@ def test_element_panel_search_filters_display_only(qapp):
     assert panel.current_name() == "searchBox"
 
 
-# ---- 元素引用（M46/B1 引用模型：GUI 侧写入口径） --------------------------------
-def test_insert_element_writes_element_ref(window):
-    """插入 = 双写：值快照进 with，引用进 elementRefs（运行期按引用取最新值）。"""
+# ---- 元素引用（M46/B1 引用模型；M52 S6 去快照 = 只写引用） --------------------
+def test_insert_element_writes_ref_only(window):
+    """插入 = **只写引用**：值快照不再进 `with`（M52 S6），运行期一律查元素库。"""
     window._save_named_flow("eref1")
     window.save_element_descriptor("searchBox", _browser_element())
     item = window.flow_model.find_by_id("read")
@@ -897,9 +899,9 @@ def test_insert_element_writes_element_ref(window):
     from rpa_core.gui.flow_model import ROLE_ARGS_RAW
 
     holder = item.data(ROLE_ARGS_RAW)
-    assert holder.raw["with"]["selector"] == "#kw"
     assert holder.raw["elementRefs"] == {"selector": "searchBox"}
-    # 落盘链路过得去校验（elementRefs 是声明过的模型字段）
+    assert "selector" not in holder.raw["with"], "快照已去掉：节点里只留引用"
+    # 落盘链路过得去校验（ref-only 是合法形状；引用键不必在 with 里）
     document = window._build_document()
 
     def _find(nodes, node_id):
@@ -915,32 +917,37 @@ def test_insert_element_writes_element_ref(window):
     node = _find(document["root"].get("children") or [], "read")
     assert node is not None
     assert node["elementRefs"] == {"selector": "searchBox"}
+    assert "selector" not in (node.get("with") or {})
 
 
 def test_manual_param_edit_takes_over_and_drops_element_ref(window):
-    """手工改引用参数 = 用户接管：引用摘除（否则运行期元素库值盖掉手工输入）；
-    值没动的提交保留引用。"""
+    """手工接管：先 ✕ 摘引用、再填值 ⇒ 节点只有值、没有引用。
+
+    （M52 S6 起引用生效时值控件是隐藏的，「手工改值」必然以「摘引用」为前置动作；
+    另留一条兜底：参数字典里真出现该键的值 ⇒ 用户改成手填 ⇒ 摘引用。）
+    """
+    from PySide6.QtWidgets import QPushButton, QToolButton
+
+    from rpa_core.gui.flow_model import ROLE_ARGS_RAW
+    from rpa_core.gui.param_form import ParamForm
+
     window._save_named_flow("eref2")
     window.save_element_descriptor("searchBox", _browser_element())
     item = window.flow_model.find_by_id("read")
     window.canvas_view.setCurrentIndex(window.flow_model.indexFromItem(item))
     window._insert_element("searchBox")
 
-    from PySide6.QtWidgets import QPushButton
-
-    from rpa_core.gui.flow_model import ROLE_ARGS_RAW
-    from rpa_core.gui.param_form import ParamForm
-
     holder = item.data(ROLE_ARGS_RAW)
     assert holder.raw["elementRefs"] == {"selector": "searchBox"}
 
-    # 不改值直接应用 → 引用保留（如改别的字段）
+    # 不改引用直接应用 → 引用保留（如只改了别的字段）
     apply_button = window.param_holder.findChild(QPushButton)
     apply_button.click()
     assert holder.raw["elementRefs"] == {"selector": "searchBox"}
 
-    # 改 selector 值再应用 → 引用被摘除
+    # ✕ 摘引用 + 填值再应用 → 引用摘除、值进 with
     form = window.param_holder.findChild(ParamForm)
+    form.findChild(QToolButton, "elementClear::selector").click()
     selector_edit = next(
         widget for field, _kind, widget in form._fields if field == "selector"
     )
@@ -978,7 +985,10 @@ def test_param_form_element_row_lists_only_matching_kind(window):
 
 
 def test_param_form_element_pick_matches_insert_element_output(window):
-    """面板选元素与元素库「插入参数」产出同一份结果（值 + 引用双写同构）。"""
+    """两条写入路径产出**逐字节相同**的节点状态（M52 S6：都只写引用、不写快照）。
+
+    光有「两条路各自绿」抓不到「各自漂移」——事故形状恰恰是「一条有、一条没有」。
+    """
     from PySide6.QtWidgets import QPushButton
 
     from rpa_core.gui.flow_model import ROLE_ARGS_RAW
@@ -991,14 +1001,11 @@ def test_param_form_element_pick_matches_insert_element_output(window):
     # 路径 A：元素库「插入参数」
     window._insert_element("searchBox")
     holder = item.data(ROLE_ARGS_RAW)
-    via_insert = (
-        holder.raw["with"].get("selector"),
-        dict(holder.raw.get("elementRefs") or {}),
-    )
+    via_insert = (dict(holder.raw["with"]), dict(holder.raw["elementRefs"]))
 
-    # 路径 B：参数面板「从元素库选择」。先摆成**纯手填态**（args 与 with 都改掉，
-    # 再重挂表单让下拉回到「不使用」）——这条正是「手工改过值之后又改用元素」的真实路径：
-    # 此时 previous_args 与面板填出来的值不同，若显式选择不豁免 stale 判据，刚写的引用会被摘掉。
+    # 路径 B：参数面板「从元素库选择」。先摆成**纯手填态**（值 + 无引用）并重挂表单——
+    # 这条正是「手工改过值之后又改用元素」的真实路径：此时参数字典里有该键的值，
+    # 若显式选择不豁免 stale 判据，刚写的引用会被摘掉、值又会留在 with 里。
     holder.args["selector"] = "#hand-tuned"
     holder.raw.pop("elementRefs", None)
     holder.raw["with"]["selector"] = "#hand-tuned"
@@ -1008,16 +1015,47 @@ def test_param_form_element_pick_matches_insert_element_output(window):
     combo = form._element_rows["selector"]
     combo.setCurrentIndex(combo.findData("searchBox"))
     window.param_holder.findChild(QPushButton).click()
-    via_panel = (
-        holder.raw["with"].get("selector"),
-        dict(holder.raw.get("elementRefs") or {}),
-    )
+    via_panel = (dict(holder.raw["with"]), dict(holder.raw["elementRefs"]))
 
-    assert via_panel == via_insert == ("#kw", {"selector": "searchBox"})
+    assert via_panel == via_insert
+    assert via_panel[1] == {"selector": "searchBox"}
+    assert "selector" not in via_panel[0]
 
 
-def test_param_form_clear_element_ref_keeps_hand_value(window):
-    """点 ✕ 清除引用：摘掉 elementRefs，但当前值保留（回退纯手工）。"""
+def test_param_form_referenced_param_shows_only_element_name(window):
+    """M52 S6：引用生效的参数**只显元素名**，值控件整行隐藏；✕ 后回到手填态。"""
+    from PySide6.QtWidgets import QToolButton
+
+    from rpa_core.gui.param_form import ParamForm
+
+    window._save_named_flow("epick_show")
+    window.save_element_descriptor("searchBox", _browser_element())
+    _select_node(window, "read")
+    window._insert_element("searchBox")
+
+    index = window.canvas_view.currentIndex()
+    window._on_canvas_selection(index, index)  # 重挂表单，让它读到已写入的引用
+    form = window.param_holder.findChild(ParamForm)
+
+    assert form._current_ref("selector") == "searchBox"
+    picked = form._element_picked["selector"]
+    assert picked.text() == "元素：searchBox"
+    assert picked.isVisibleTo(form)
+    assert form._element_clears["selector"].isVisibleTo(form)
+    assert not form._row_shown["selector"].isVisibleTo(form), "值控件应整行隐藏"
+    assert not form._row_labels["selector"].isVisibleTo(form)
+    assert not form._element_rows["selector"].isVisibleTo(form)
+
+    # ✕ 摘引用 ⇒ 回到手填态：值控件、下拉回来，元素名与 ✕ 藏起来
+    form.findChild(QToolButton, "elementClear::selector").click()
+    assert not picked.isVisibleTo(form)
+    assert form._row_shown["selector"].isVisibleTo(form)
+    assert form._row_labels["selector"].isVisibleTo(form)
+    assert form._element_rows["selector"].isVisibleTo(form)
+
+
+def test_param_form_clear_element_ref_returns_to_plain(window):
+    """点 ✕ 清除引用：摘掉 elementRefs，且节点里**没有快照可残留**（回退纯手填）。"""
     from PySide6.QtWidgets import QPushButton, QToolButton
 
     from rpa_core.gui.flow_model import ROLE_ARGS_RAW
@@ -1034,7 +1072,8 @@ def test_param_form_clear_element_ref_keeps_hand_value(window):
     form.findChild(QToolButton, "elementClear::selector").click()
     window.param_holder.findChild(QPushButton).click()
     assert "elementRefs" not in holder.raw
-    assert holder.raw["with"]["selector"] == "#kw", "清除引用不该把值也清掉"
+    # 没有引用 ⇒ 也没有值（快照已去掉），节点处于「缺必填」等用户填
+    assert "selector" not in holder.raw["with"]
 
 
 def test_param_form_apply_without_touching_element_keeps_ref(window):
@@ -1061,12 +1100,14 @@ def test_param_form_apply_without_touching_element_keeps_ref(window):
 
 
 def test_element_ref_intent_alone_counts_as_pending_edit(window):
-    """选了元素、而值控件看不出差异时，「未应用的编辑」判定也必须为真。
+    """选了元素而**值控件看不出差异**时，「未应用的编辑」判定也必须为真。
 
     回归（真机）：`_action_form_dirty` 原先只比 值 / fx 模式 / 输出别名 / 超时重试，
     **不看元素引用** ⇒ 下拉选了元素却因「值没变化」被判成无改动，保存/运行走的
     `_commit_pending_edits` 整段跳过，引用被**静默丢掉**——落盘节点既无 `selector`
     也无 `elementRefs`，运行只剩 `INVALID_INPUT 'selector' is a required property`。
+
+    M52 S6 起节点里连快照都没有，「选了元素」是**唯一**信号，这条更关键。
     """
     from rpa_core.gui.flow_model import ROLE_ARGS_RAW
     from rpa_core.gui.param_form import ParamForm
@@ -1075,9 +1116,10 @@ def test_element_ref_intent_alone_counts_as_pending_edit(window):
     window.save_element_descriptor("searchBox", _browser_element())
     item = _select_node(window, "read")
     holder = item.data(ROLE_ARGS_RAW)
-    # 让值控件**先等于**元素库那份，且模型里没有引用 ⇒ 唯一的变化就是「选了元素」
-    holder.args["selector"] = "#kw"
-    holder.raw["with"]["selector"] = "#kw"
+    # 模型里既无值也无引用 ⇒ 唯一的变化就是「在下拉里选了元素」
+    holder.args.pop("selector", None)
+    holder.raw["with"].pop("selector", None)
+    holder.raw.pop("elementRefs", None)
     index = window.canvas_view.currentIndex()
     window._on_canvas_selection(index, index)
     form = window.param_holder.findChild(ParamForm)
@@ -1090,7 +1132,7 @@ def test_element_ref_intent_alone_counts_as_pending_edit(window):
     )
     window._commit_pending_edits()
     assert holder.raw["elementRefs"] == {"selector": "searchBox"}
-    assert holder.raw["with"]["selector"] == "#kw"
+    assert "selector" not in holder.raw["with"]
 
 
 # ---- 活体校验（M47 S1）：确认框里的「校验元素」按钮 -----------------------------

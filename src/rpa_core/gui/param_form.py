@@ -168,6 +168,11 @@ class ParamForm(QWidget):
         # 元素库引用：element_provider 提供 (元素名, 文档) 列表；为 None 则不加选择行
         self._element_provider = element_provider
         self._element_rows: dict[str, QComboBox] = {}
+        # M52 S6：引用生效时该参数**只显元素名**、值控件整行隐藏，故需留下这些把手
+        self._element_picked: dict[str, QLabel] = {}
+        self._element_clears: dict[str, QToolButton] = {}
+        self._row_labels: dict[str, QLabel] = {}
+        self._row_shown: dict[str, QWidget] = {}
         # 只记**用户显式动过**的键（值 → 元素名 / None = 清除引用）；没动过的不在内，
         # 调用方据此区分「用户接管了该参数」与「用户只是打开面板又应用」。
         self._ref_intent: dict[str, str | None] = {}
@@ -490,7 +495,11 @@ class ParamForm(QWidget):
         if description:
             label.setToolTip(description)
         layout = target if target is not None else self._form
-        layout.addRow(label, row_widget if row_widget is not None else widget)
+        shown = row_widget if row_widget is not None else widget
+        layout.addRow(label, shown)
+        # M52 S6：元素型参数引用生效时要整行隐藏值控件 ⇒ 把 label 与行内展示控件都留档
+        self._row_labels[name] = label
+        self._row_shown[name] = shown
 
     # ---- fx 变量引用模式 ---------------------------------------------------
     def _wrap_fx_row(self, name: str, editor: QLineEdit) -> QWidget:
@@ -567,19 +576,20 @@ class ParamForm(QWidget):
             menu.addAction(path, lambda p=path: editor.insert(f"[{p}]"))
         return menu
 
-    # ---- 元素库引用（M52 S4：参数面板里的「从元素库选择」） ------------------
+    # ---- 元素库引用（M52 S4 加入口；M52 S6 去快照 = 唯一真值源） --------------
     def _attach_element_row(
         self, name: str, widget: QWidget, *, target: QFormLayout | None = None
     ) -> None:
-        """给支持元素引用的参数（`selector` / `locator`）加一行「从元素库选择」。
+        """给支持元素引用的参数（`selector` / `locator`）加一行「元素」。
 
         出现的条件：调用方给了元素来源，**且**参数键在 runtime 的取值路径表里
         （`element_kind_for_param_key` 以 `_VALUE_BY_KEY` 为准）——能选却替换不了
         = 静默失配，两者必须同一事实源。
 
-        选中元素 = 把值控件填成**元素库最新值** + 记引用意图；点 ✕ = 摘引用但
-        **保留当前手填值**（回退纯手工）。取值复用 `element_value_for_key`，
-        与运行期替换、元素库「插入参数」同源。
+        **M52 S6 起引用就是唯一真值**：引用生效时该参数**只显元素名**（`元素：xxx`），
+        **值控件整行隐藏**，也不再往 `with` 里写值快照——快照正是「一份参数两份真值」
+        的来源，也是「选了元素、selector 却没落进节点」这类事故的土壤。
+        ✕ 摘引用 ⇒ 值控件恢复可编辑（内容为之前手填的残留）。
         """
         if self._element_provider is None:
             return
@@ -605,17 +615,20 @@ class ParamForm(QWidget):
             documents[element_name] = document
             combo.addItem(element_name, element_name)
 
+        picked = QLabel("")
+        picked.setObjectName(f"elementName::{name}")
         clear = QToolButton()
         clear.setText("✕")
         clear.setObjectName(f"elementClear::{name}")
         clear.setAutoRaise(True)
-        clear.setToolTip("清除引用（保留当前手填值）")
+        clear.setToolTip("摘除元素引用，回到手填")
 
         row = QWidget()
         layout = QHBoxLayout(row)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(4)
         layout.addWidget(combo, 1)
+        layout.addWidget(picked, 1)
         layout.addWidget(clear)
 
         # 初值：节点已带引用时定位到它。**必须在连信号之前**，否则会被当成用户操作。
@@ -625,54 +638,73 @@ class ParamForm(QWidget):
             if index >= 0:
                 combo.setCurrentIndex(index)
 
-        combo.currentIndexChanged.connect(
-            lambda _i, k=name, b=combo, d=documents, w=widget: self._on_element_pick(k, b, d, w)
-        )
-        clear.clicked.connect(lambda _c=False, k=name, b=combo: self._on_element_clear(k, b))
+        combo.currentIndexChanged.connect(lambda _i, k=name: self._on_element_pick(k))
+        clear.clicked.connect(lambda _c=False, k=name: self._on_element_clear(k))
 
         layout_target = target if target is not None else self._form
         layout_target.addRow(QLabel("元素"), row)
         self._element_rows[name] = combo
+        self._element_picked[name] = picked
+        self._element_clears[name] = clear
+        self._apply_element_state(name)
 
-    def _on_element_pick(
-        self, name: str, combo: QComboBox, documents: dict[str, dict], widget: QWidget
-    ) -> None:
-        """下拉选元素：记引用意图并把值控件填成元素库最新值（选「不使用」= 清除引用）。"""
-        chosen = combo.currentData()
-        if chosen is None:
-            self._ref_intent[name] = None  # 摘引用，值不动（用户可继续手填）
-            return
-        from rpa_core.runtime.element_refs import element_value_for_key
+    def _current_ref(self, name: str) -> str | None:
+        """参数当前生效的元素引用：用户显式动过以用户为准，否则取节点里已有的。"""
+        if name in self._ref_intent:
+            return self._ref_intent[name]
+        raw_ref = (self._raw.get("elementRefs") or {}).get(name)
+        return raw_ref if isinstance(raw_ref, str) else None
 
-        value = element_value_for_key(documents.get(chosen), name)
-        if value is None:
-            return  # 构建时已滤过，正常到不了这里；真到了也不写半截引用
-        self._ref_intent[name] = chosen
-        self._fill_field_value(name, widget, value)
+    def _apply_element_state(self, name: str) -> None:
+        """两态显示：引用生效 ⇒ **只显元素名**、值控件整行隐藏；否则显示值控件+下拉。"""
+        ref = self._current_ref(name)
+        active = ref is not None
+        label = self._row_labels.get(name)
+        if label is not None:
+            label.setVisible(not active)
+        shown = self._row_shown.get(name)
+        if shown is not None:
+            shown.setVisible(not active)
+        combo = self._element_rows.get(name)
+        if combo is not None:
+            combo.setVisible(not active)
+            if active and combo.findData(ref) >= 0:
+                previous = combo.blockSignals(True)
+                combo.setCurrentIndex(combo.findData(ref))
+                combo.blockSignals(previous)
+        picked = self._element_picked.get(name)
+        if picked is not None:
+            picked.setText(f"元素：{ref}" if active else "")
+            picked.setVisible(active)
+        clear = self._element_clears.get(name)
+        if clear is not None:
+            clear.setVisible(active)
 
-    def _on_element_clear(self, name: str, combo: QComboBox) -> None:
-        """✕ 清除引用：回到「不使用元素库」，手填值保留。"""
-        if combo.currentIndex() == 0:
-            self._ref_intent[name] = None
-        else:
+    def _on_element_pick(self, name: str) -> None:
+        """下拉选择：只记引用意图（None = 摘引用）。
+
+        **不再把元素库的值写进值控件**——那是 M52 S6 之前的快照口径；现在定位值一律
+        运行期从元素库取，节点里不留第二份真值。
+        """
+        combo = self._element_rows.get(name)
+        self._ref_intent[name] = combo.currentData() if combo is not None else None
+        self._apply_element_state(name)
+
+    def _on_element_clear(self, name: str) -> None:
+        """✕ 摘除引用：回到手填（值控件恢复可编辑）。"""
+        combo = self._element_rows.get(name)
+        if combo is not None and combo.currentIndex() != 0:
             combo.setCurrentIndex(0)  # 触发 _on_element_pick ⇒ 记 None
-
-    def _fill_field_value(self, name: str, widget: QWidget, value: Any) -> None:
-        """把元素库取出的定位值填进字段控件（string 直写，复合类型写 JSON 文本）。"""
-        for field_name, kind, field_widget in self._fields:
-            if field_name != name or field_widget is not widget:
-                continue
-            if kind == _KIND_JSON or not isinstance(value, str):
-                widget.setText(json.dumps(value, ensure_ascii=False))
-            else:
-                widget.setText(value)
-            return
+        else:
+            self._ref_intent[name] = None
+            self._apply_element_state(name)
 
     def element_refs(self) -> dict[str, str | None]:
         """用户**显式改过**的元素引用选择（键 → 元素名 / None = 清除引用、回退手填）。
 
-        没动过的键不在结果里——调用方对它们仍按「值被手工改动即摘引用」的旧规则处理，
-        否则「打开面板又直接应用」会把还在生效的引用误摘。
+        没动过的键不在结果里——调用方对它们保留节点里已有的引用，否则「打开面板又
+        直接应用」会把还在生效的引用误摘（旧的「值被手工改动即摘引用」只剩兜底一支：
+        参数字典里真的出现了该键的值 ⇒ 用户改成手填了）。
         """
         return dict(self._ref_intent)
 
@@ -685,9 +717,15 @@ class ParamForm(QWidget):
         """把控件当前值收集为参数 dict（保持字段声明顺序）。
 
         未设置项不进入结果；JSON 字段解析失败时抛 ValueError。
+
+        **被元素引用的参数一律不进结果**（M52 S6）：引用是唯一真值源，节点里不留
+        值快照。即便隐藏的值控件里还残留旧文本（例如先手填、后改引用），也不会被
+        收进来——否则「一份参数两份真值」又从后门回来了。
         """
         result: dict[str, Any] = {}
         for name, kind, widget in self._fields:
+            if self._current_ref(name) is not None:
+                continue  # 引用生效 ⇒ 值由运行期从元素库取，节点不存快照
             if kind == _KIND_ENUM:
                 chosen = widget.currentData()
                 if chosen is None:

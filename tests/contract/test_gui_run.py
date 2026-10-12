@@ -271,3 +271,43 @@ def test_missing_required_element_param_gets_actionable_hint():
         is None
     ), "只对 INVALID_INPUT 生效"
 
+
+def test_element_ref_missing_gets_actionable_hint():
+    """M52 S6：引用的元素不存在 ⇒ `ELEMENT_REF_MISSING` 也要给「去哪儿修」。
+
+    去快照后元素被删/改名没有兜底（fail-closed），错误本身只有元素名；
+    不说清去处的话用户只看到「元素不存在」而不知道下一步。
+    """
+    from rpa_core.gui.app import element_ref_missing_hint
+
+    hint = element_ref_missing_hint(
+        {"code": "ELEMENT_REF_MISSING", "message": "元素 `searchBox` 在元素库里不存在"}
+    )
+    assert hint is not None
+    assert "元素" in hint and "插入参数" in hint  # 指到元素库这条正路
+
+    assert (
+        element_ref_missing_hint({"code": "INVALID_INPUT", "message": "x"}) is None
+    ), "只对 ELEMENT_REF_MISSING 生效"
+
+
+def test_run_failure_hint_is_one_authority_for_both_kinds():
+    """两条提示来源收敛到 `run_failure_hint`：两种病各能拿到提示、无关错误拿不到。
+
+    直接判「组合入口」而不是只判两个纯函数——S6 新增的 `element_ref_missing_hint`
+    原先只被调用侧用 `or` 串起来，漏掉任一条不会有任何症状（只剩干巴巴的元素名）。
+    """
+    from rpa_core.gui.app import run_failure_hint
+
+    missing_param = run_failure_hint(
+        {"code": "INVALID_INPUT", "message": "'selector' is a required property"}
+    )
+    assert missing_param is not None and "selector" in missing_param
+
+    missing_element = run_failure_hint(
+        {"code": "ELEMENT_REF_MISSING", "message": "元素 `searchBox` 在元素库里不存在"}
+    )
+    assert missing_element is not None and "元素" in missing_element
+
+    assert run_failure_hint({"code": "TIMEOUT", "message": "boom"}) is None
+

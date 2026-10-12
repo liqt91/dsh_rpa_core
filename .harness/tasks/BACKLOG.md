@@ -652,7 +652,8 @@
 - [x] **M46 元素引用模型（B1 定稿 + S1 落地）**（`done`，2026-09-29）——计划：
   `M46-element-reference-model.md`，决策 ADR-001。节点双写 `elementRefs` + `with`；运行期从
   `flow_dir/elements` 解析；缺元素回落快照 + `elementRefFallback` 事件；feature：
-  `element-reference-model`。
+  `element-reference-model`。**（2026-10-12 M52 S6 收口：去快照 ref-only——节点只存引用，
+  缺元素改 `ELEMENT_REF_MISSING` 硬失败，ADR-002。）**
 
 - [x] **M45 编辑界面交互收尾（L1：A1–A4）**（`done`，2026-09-30）——计划：
   `M45-editor-ui-l1.md`。A1 Web 属性表 · A2 R1/R2 残留修复 · A3 默认名三端统一（共享用例表）·

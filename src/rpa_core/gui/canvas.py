@@ -786,7 +786,11 @@ class CardDelegate(QStyledItemDelegate):
         return count or 1
 
     def _has_config_error(self, index: QModelIndex) -> bool:
-        """action 行的必填参数缺失（未填或空值）即为配置错误。"""
+        """action 行的必填参数缺失（未填或空值）即为配置错误。
+
+        M52 S6：被元素引用的参数**不在 `with` 里存值**（引用即唯一真值），
+        所以带引用的键算**已配置**——否则 ref-only 节点会**恒红**。
+        """
         if self._catalog is None or index.data(ROLE_NODE_TYPE) != "action":
             return False
         command_id = index.data(ROLE_COMMAND_ID)
@@ -797,7 +801,10 @@ class CardDelegate(QStyledItemDelegate):
             return False
         holder = index.data(ROLE_ARGS_RAW)
         args = holder.args if holder is not None else {}
-        return any(args.get(key) in (None, "", [], {}) for key in required)
+        refs = (getattr(holder, "raw", None) or {}).get("elementRefs") or {}
+        return any(
+            key not in refs and args.get(key) in (None, "", [], {}) for key in required
+        )
 
     # ---- 结束行 / 否则行通用的"与父容器对齐"缩进补偿 ----------------------
     @staticmethod

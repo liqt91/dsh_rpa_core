@@ -768,20 +768,24 @@ class Orchestrator:
             )
             command_inputs.update(evaluated)
 
-        # 元素引用解析（M46/B1）：引用键在 schema 校验前换入元素库最新值——
-        # 这是「元素库里改主定位，已插入指令跟着生效」的兑现点。缺元素回落
-        # 节点快照并落事件（可观测的回落，不是自愈候选那种静默失效）。
+        # 元素引用解析（M46/B1；M52 S6 去快照）：引用键在 schema 校验前换入元素库最新值——
+        # 这是「元素库里改主定位，已插入指令跟着生效」的兑现点。节点里**不再有值快照**，
+        # 所以取不到值就没有兜底：**显式失败**，绝不静默用旧值跑（与 ANCHOR_NOT_FOUND 同口径）。
         if node.element_refs:
             resolution = resolve_element_refs(
                 command_inputs, node.element_refs, self._element_reader()
             )
             if resolution.missing:
-                await events.append(
-                    "elementRefFallback",
-                    node_id=node.id,
-                    payload={
-                        "missing": sorted(set(resolution.missing)),
-                        "resolved": sorted(set(resolution.resolved)),
+                key, name = resolution.missing[0]
+                raise RpaError(
+                    ErrorCode.ELEMENT_REF_MISSING,
+                    f"元素 `{name}` 在元素库里不存在或没有可用的定位值（参数 `{key}`）",
+                    details={
+                        **context,
+                        "missing": [
+                            f"{miss_key}={miss_name}"
+                            for miss_key, miss_name in resolution.missing
+                        ],
                     },
                 )
 

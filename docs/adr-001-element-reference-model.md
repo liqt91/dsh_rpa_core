@@ -23,6 +23,11 @@
 
 ## 本期实现（M46 S1，分阶段的第一步）
 
+> **⚠ 已被 ADR-002 取代（2026-10-12，M52 S6）**：下面「节点仍保留值快照」的双写取舍
+> 已按维护者拍板去掉——**元素引用是唯一真值源**，`with` 里不再存值，解析不到元素即
+> `ELEMENT_REF_MISSING` 硬失败（不再回落、不再有 `elementRefFallback` 事件）。
+> 本节的字段与运行期解析部分仍然有效，仅「值快照」一条作废。详见 `adr-002-element-ref-only.md`。
+
 - **schema 双写**：`ActionNode.elementRefs`（alias `elementRefs`，`参数键 → 元素名`）。
   节点仍保留值快照在 `with`——旧文件零迁移、元素删除时可回落。
 - **运行期解析**：`_execute_action` 在 schema 校验前把引用键的值换入元素库最新值

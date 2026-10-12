@@ -1,11 +1,15 @@
-"""元素引用解析契约（M46/B1 引用模型）。
+"""元素引用解析契约（M46/B1 引用模型；M52 S6 去快照）。
 
 引用模型（与影刀同构）：节点参数携带 `elementRefs: {参数键: 元素名}`，
-选择器值只在流程 `elements/` 目录存一份，运行期解析最新值。判据三层：
-1. 纯函数（element_refs 模块）：取值口径 / 回落语义 / 读取器容错；
-2. 模型（ActionNode.elementRefs）：新字段可解析、旧文件兼容、未知键仍拒；
+选择器值**只在流程 `elements/` 目录存一份**，运行期解析最新值。
+
+**M52 S6 起为唯一真值源**：节点 `with` 里不再有值快照（`ActionNode` 直接拒绝
+「快照 + 引用」共存），因此解析不到元素时**没有兜底**——硬失败 `ELEMENT_REF_MISSING`。
+判据三层：
+1. 纯函数（element_refs 模块）：取值口径 / 缺失只报不回落 / 读取器容错；
+2. 模型（ActionNode.elementRefs）：ref-only 可解析、双写被拒、未知键仍拒；
 3. 编排器端到端：改元素库主定位后，已插入指令运行期拿到新值（B1 的核心
-   承诺）；缺元素回落快照且落 `elementRefFallback` 事件（可观测回落）。
+   承诺）；元素缺失 ⇒ `ELEMENT_REF_MISSING` 硬失败、**不执行**、不再有回落事件。
 """
 
 from __future__ import annotations
@@ -34,24 +38,25 @@ def test_element_value_for_key_matches_insert_convention():
     # desktop：键 locator → 文档 selector.locator，且允许结构化对象
     desktop = {"kind": "desktop", "selector": {"locator": {"controlType": "Button"}}}
     assert element_value_for_key(desktop, "locator") == {"controlType": "Button"}
-    # 形状不对 / 空值 / 未知键 → None（回落快照）
+    # 形状不对 / 空值 / 未知键 → None（该引用取不到定位值 ⇒ 调用方硬失败）
     assert element_value_for_key(None, "selector") is None
     assert element_value_for_key({"kind": "browser"}, "selector") is None
     assert element_value_for_key({"selector": {"css": ""}}, "selector") is None
     assert element_value_for_key(browser, "text") is None
 
 
-def test_resolve_element_refs_fallback_keeps_snapshot():
-    inputs = {"selector": "#snapshot", "text": "hi"}
-    reader = lambda name: None  # noqa: E731 - 元素缺失
-    resolution = resolve_element_refs(inputs, {"selector": "ghost"}, reader)
-    assert resolution.missing == ["ghost"]
-    assert inputs["selector"] == "#snapshot"  # 快照保持不动
+def test_resolve_element_refs_reports_missing_without_fallback():
+    """M52 S6：解析不到只**记入 missing**，绝不回落——`with` 里已经没有快照可回落。"""
+    inputs = {"text": "hi"}
+    resolution = resolve_element_refs(inputs, {"selector": "ghost"}, lambda name: None)
+    assert resolution.missing == [("selector", "ghost")]
+    assert "selector" not in inputs  # 既不注入，也没有旧值可留
+    assert not resolution.resolved
     assert inputs["text"] == "hi"  # 未引用键不受牵连
 
 
-def test_resolve_element_refs_overwrites_with_fresh_value():
-    inputs = {"selector": "#old"}
+def test_resolve_element_refs_injects_fresh_value():
+    inputs = {}
     docs = {"searchBox": {"kind": "browser", "selector": {"css": "#fresh"}}}
     resolution = resolve_element_refs(inputs, {"selector": "searchBox"}, docs.get)
     assert resolution.resolved == ["searchBox"]
@@ -115,29 +120,70 @@ def test_kind_key_mapping_is_sourced_from_value_table():
 
 
 # ---- 2. 模型兼容 ----------------------------------------------------------------
-def test_action_node_accepts_element_refs_and_old_files():
+def test_action_node_accepts_ref_only_and_plain_nodes():
+    """ref-only 节点可解析；纯手工节点照旧；未知键仍被 extra=forbid 拦住。"""
     from rpa_core.model.workflow import ActionNode
 
-    node = ActionNode.model_validate(
+    ref_only = ActionNode.model_validate(
         {
             "type": "action",
             "id": "step1",
             "command": "browser.getText",
-            "with": {"selector": "#old"},
+            "with": {"text": "hi"},
             "elementRefs": {"selector": "searchBox"},
         }
     )
-    assert node.element_refs == {"selector": "searchBox"}
-    # 旧文件（无 elementRefs）照常解析：None = 纯值拷贝语义
-    old = ActionNode.model_validate(
-        {"type": "action", "id": "step2", "command": "x.y", "with": {}}
+    assert ref_only.element_refs == {"selector": "searchBox"}
+    assert "selector" not in ref_only.with_  # 引用即唯一真值，不留快照
+    # 纯手工节点（无 elementRefs）照常：值就是值
+    plain = ActionNode.model_validate(
+        {
+            "type": "action",
+            "id": "step2",
+            "command": "x.y",
+            "with": {"selector": "#kw"},
+        }
     )
-    assert old.element_refs is None
+    assert plain.element_refs is None
     # extra=forbid 仍然拦未知键（elementRefs 是声明过的字段，不是开了口子）
     with pytest.raises(ValidationError):
         ActionNode.model_validate(
             {"type": "action", "id": "s3", "command": "x.y", "elementRefz": {}}
         )
+
+
+def test_action_node_rejects_snapshot_alongside_element_ref():
+    """M52 S6 硬切：被引用的参数**不许**同时带值快照。
+
+    旧版双写数据（`with.selector` + `elementRefs.selector`）直接报错而不静默迁移——
+    两份真值正是「选了元素、selector 却没落进节点」这类事故的土壤（维护者拍板硬切）。
+    """
+    from rpa_core.model.workflow import ActionNode
+
+    with pytest.raises(ValidationError) as excinfo:
+        ActionNode.model_validate(
+            {
+                "type": "action",
+                "id": "step1",
+                "command": "browser.getText",
+                "with": {"selector": "#old", "text": "hi"},
+                "elementRefs": {"selector": "searchBox"},
+            }
+        )
+    assert "selector" in str(excinfo.value)
+    assert "值快照" in str(excinfo.value)
+
+    # 未引用的键带着值不算冲突（那就是纯手工参数）
+    ok = ActionNode.model_validate(
+        {
+            "type": "action",
+            "id": "step2",
+            "command": "browser.getText",
+            "with": {"text": "hi"},
+            "elementRefs": {"selector": "searchBox"},
+        }
+    )
+    assert ok.element_refs == {"selector": "searchBox"}
 
 
 # ---- 3. 编排器端到端 --------------------------------------------------------------
@@ -213,7 +259,7 @@ def _run_once(tmp_path: Path, node_with: dict, element_refs: dict | None):
     events = (tmp_path / "runs" / result.run_id / "events.jsonl").read_text(
         encoding="utf-8"
     )
-    return EchoExecutor.seen, events
+    return EchoExecutor.seen, events, result
 
 
 def test_orchestrator_resolves_element_ref_to_fresh_value(tmp_path):
@@ -223,13 +269,10 @@ def test_orchestrator_resolves_element_ref_to_fresh_value(tmp_path):
         json.dumps({"kind": "browser", "selector": {"css": "#fresh"}}),
         encoding="utf-8",
     )
-    seen, events = _run_once(
-        tmp_path,
-        {"selector": "#snapshot"},
-        {"selector": "searchBox"},
-    )
-    # 元素库里写的是 #fresh：运行期必须拿到 #fresh 而不是节点快照 #snapshot
+    seen, events, result = _run_once(tmp_path, {}, {"selector": "searchBox"})
+    # 节点里**没有**值（ref-only）：运行期必须把元素库的 #fresh 注进去
     assert seen[0]["selector"] == "#fresh"
+    assert result.status == "succeeded"
     assert "elementRefFallback" not in events
 
 
@@ -239,32 +282,38 @@ def test_orchestrator_picks_up_element_edit_between_runs(tmp_path):
     elements = flow / "elements"
     elements.mkdir(parents=True)
     doc = {"kind": "browser", "selector": {"css": "#v1"}}
-    (elements / "searchBox.json").write_text(
-        json.dumps(doc), encoding="utf-8"
-    )
-    seen, _ = _run_once(tmp_path, {"selector": "#snapshot"}, {"selector": "searchBox"})
+    (elements / "searchBox.json").write_text(json.dumps(doc), encoding="utf-8")
+    seen, _events, _result = _run_once(tmp_path, {}, {"selector": "searchBox"})
     assert seen[0]["selector"] == "#v1"
 
     # 元素库里改主定位（不改流程文件）
     doc["selector"]["css"] = "#v2"
     (elements / "searchBox.json").write_text(json.dumps(doc), encoding="utf-8")
-    seen, _ = _run_once(tmp_path, {"selector": "#snapshot"}, {"selector": "searchBox"})
+    seen, _events, _result = _run_once(tmp_path, {}, {"selector": "searchBox"})
     assert seen[0]["selector"] == "#v2"
 
 
-def test_orchestrator_falls_back_to_snapshot_with_event(tmp_path):
-    seen, events = _run_once(
-        tmp_path,
-        {"selector": "#snapshot"},
-        {"selector": "ghost"},
-    )
-    assert seen[0]["selector"] == "#snapshot"  # 回落快照，运行不中断
-    assert '"elementRefFallback"' in events
-    assert '"missing":["ghost"]' in events
+def test_orchestrator_hard_fails_when_element_missing(tmp_path):
+    """M52 S6：引用是唯一真值 ⇒ 元素不在元素库就**硬失败**，且不执行、不回落。
+
+    这条取代了旧判据「回落快照 + 落 elementRefFallback 事件」——那条语义随快照
+    一起去掉了。fail-closed 与本项目对 `ANCHOR_NOT_FOUND` 的口径一致。
+    """
+    from rpa_core.model.errors import ErrorCode
+
+    seen, events, result = _run_once(tmp_path, {}, {"selector": "ghost"})
+    assert seen == []  # 缺元素 ⇒ **不执行**该指令
+    assert result.status == "failed"
+    assert result.error is not None
+    assert result.error["code"] == ErrorCode.ELEMENT_REF_MISSING
+    assert "ghost" in result.error["message"]
+    assert result.error["details"]["nodeId"] == "step"
+    assert "elementRefFallback" not in events  # 旧回落事件已彻底移除
 
 
-def test_orchestrator_ignores_snapshot_only_nodes(tmp_path):
-    """旧格式节点（无 elementRefs）：行为与从前完全一致，零事件。"""
-    seen, events = _run_once(tmp_path, {"selector": "#plain"}, None)
+def test_orchestrator_plain_value_nodes_untouched(tmp_path):
+    """纯手工值节点（无 elementRefs）：行为与从前完全一致，零事件。"""
+    seen, events, result = _run_once(tmp_path, {"selector": "#plain"}, None)
     assert seen[0]["selector"] == "#plain"
+    assert result.status == "succeeded"
     assert "elementRefFallback" not in events

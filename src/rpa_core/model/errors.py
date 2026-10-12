@@ -9,6 +9,11 @@ class ErrorCode(StrEnum):
     INVALID_OUTPUT = "INVALID_OUTPUT"
     ELEMENT_NOT_FOUND = "ELEMENT_NOT_FOUND"
     ELEMENT_AMBIGUOUS = "ELEMENT_AMBIGUOUS"
+    # M52 S6 元素引用去快照：节点引用的元素在**元素库**里找不到（被删/改名/文件坏）时
+    # 必须显式失败。旧实现靠 `with` 里的值快照回落——那正是「一份参数两份真值」的来源，
+    # 也是「选了元素、selector 却没落进节点」这类事故的土壤。快照已去掉 ⇒ 没有兜底，
+    # 语义等同 ANCHOR_NOT_FOUND：**宁可停，不静默用旧值跑**。
+    ELEMENT_REF_MISSING = "ELEMENT_REF_MISSING"
     # M48 D3 锚点：`locator.anchor` 声明的锚点元素在运行期找不到时必须**显式失败**，
     # 绝不静默回落到「直接找目标」——静默降级正是本项目最忌讳的一类错误（ADR 0018 §2 D3）。
     ANCHOR_NOT_FOUND = "ANCHOR_NOT_FOUND"

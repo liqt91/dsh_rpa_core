@@ -1,13 +1,15 @@
-"""元素引用解析（M46/B1 引用模型）。
+"""元素引用解析（M46/B1 引用模型；M52 S6 去快照）。
 
 流程节点参数可携带 `elementRefs: {参数键: 元素名}`（与影刀同构：指令存引用，
 选择器值只在流程 `elements/` 目录存一份）。运行期在 schema 校验前把引用键的
-值替换为元素库的最新值；元素缺失/文件损坏时回落到节点 `with` 里存的快照值
-并落 `elementRefFallback` 事件——与自愈候选的「按 css 反查静默失效」相反，
-这条路径的回落必须可观测。
+值替换为元素库的最新值。
 
-写入口径（GUI `_insert_element`）：browser 元素填参数 `selector`（取文档
-`selector.css`），desktop 元素填参数 `locator`（取文档 `selector.locator`）。
+**M52 S6 起为唯一真值源**：节点不再在 `with` 里保留值快照，因此解析不到
+（元素被删/改名/文件坏）时**没有兜底**——调用方必须以 `ELEMENT_REF_MISSING`
+中止（fail-closed）。本项目对「静默降级」一贯不允许：宁可停，也不静默用旧值跑。
+
+写入口径（GUI）：browser 元素填参数 `selector`（取文档 `selector.css`），
+desktop 元素填参数 `locator`（取文档 `selector.locator`）——都**只写引用**。
 """
 
 from __future__ import annotations
@@ -63,10 +65,14 @@ def element_capable_keys() -> frozenset[str]:
 
 @dataclass
 class ElementRefResolution:
-    """一次解析的结果：resolved=换入了新值，missing=回落快照（含原因归类）。"""
+    """一次解析的结果。
+
+    ``resolved`` = 成功换入新值的元素名；``missing`` = 取不到定位值的引用，
+    形如 ``(参数键, 元素名)`` —— 调用方据此**硬失败**（M52 S6 起无快照可回落）。
+    """
 
     resolved: list[str] = field(default_factory=list)
-    missing: list[str] = field(default_factory=list)
+    missing: list[tuple[str, str]] = field(default_factory=list)
 
 
 def _usable(value: Any) -> bool:
@@ -123,10 +129,10 @@ def resolve_element_refs(
     element_refs: dict[str, str] | None,
     reader: Callable[[str], dict | None],
 ) -> ElementRefResolution:
-    """就地把引用键的值替换为元素库最新值；返回解析/回落清单供事件取证。
+    """就地把引用键的值替换为元素库最新值；取不到值的引用记入 `missing` 交调用方硬失败。
 
-    回落语义：元素缺失或取不出有效值时**保持快照值不动**（运行不中断），
-    由调用方落 `elementRefFallback` 事件。
+    M52 S6：`with` 里已经**没有快照**，所以「解析不到」没有任何兜底 —— 调用方
+    必须报 `ELEMENT_REF_MISSING` 并中止。绝不静默退回「拿旧值跑」或「当作没填」。
     """
     resolution = ElementRefResolution()
     if not element_refs:
@@ -134,7 +140,7 @@ def resolve_element_refs(
     for key, name in element_refs.items():
         value = element_value_for_key(reader(name), key)
         if value is None:
-            resolution.missing.append(name)
+            resolution.missing.append((key, name))
             continue
         command_inputs[key] = value
         resolution.resolved.append(name)

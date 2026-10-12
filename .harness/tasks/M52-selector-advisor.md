@@ -14,6 +14,10 @@ Status: `active`
 > 共享事实源 `runtime/element_refs.py`）；判据 5 条 + 负向验证 6 注入全命中。
 > **S5 已落地（2026-10-12）**：修「选了元素但 `selector` 没落进节点」+「节点 None」归属 +
 > 缺元素型必填参数可操作提示；判据 4 条 + 负向验证 4 注入全命中。详见文末「S5 实施记录」。
+> **S6 已落地（2026-10-12）**：**元素引用去快照（ref-only）**——引用成**唯一真值源**
+> （ADR-002：旧双写**硬切**拒绝 / 缺元素 `ELEMENT_REF_MISSING` **硬失败**、移除回落事件 /
+> 参数面板引用参数**只显元素名**）；判据重写 11 + 52 条、另补 4 条此前**完全没有判据**的改动
+> （编译期与画布必填认引用、两条失败提示）；负向验证 **9 注入全命中**。详见文末「S6 实施记录」。
 > 后续切片：S3 余项（「推荐 / 理由」**可采纳**入口）、M51 候选扩容消费。
 
 > 本轮**不实现**，只立范围与验收口径（2026-10-10 维护者提问「影刀的 AI 判断元素选择器，我们能不能做」派生）。
@@ -625,4 +629,70 @@ flaky 两条（`test_gui_node_edit` 焦点竞争、`test_gui_command_matrix` 子
 两次**后台**跑各报 2~3 failed（`test_gui_command_matrix` 的 QProcess「子进程没起来」+
 `test_capture_extension` 线程超时），**前台 + 沙箱豁免**重跑即 `FULL GATE PASSED`；
 那 3 条单独复跑亦全绿 ⇒ **后台命令不真正豁免沙箱、QProcess 被挡**，属**环境级**。
+本地提交未 push。
+
+## S6 实施记录（2026-10-12）
+
+**需求来源**：维护者「selector 这个字段多余了，既然存了元素字段，那就直接去元素库找就行了，
+没必要再额外存储一个 selector，增加同步难度」——并明确要求「类似的情况**先问再实施**，这个很重要，避免返工」。
+
+**先只读取证（这一步决定了本片的性质）**：`docs/adr-001-element-reference-model.md` 的「决策」原文就是
+「采纳**引用模型**（与影刀同构）：指令引用元素名、**值只在元素库存一份**、运行期解析」。
+⇒ 维护者要的是**原设计终态**；当年「本期实现」为「旧文件零迁移 + 元素删除可回落」额外保留了
+`with` 值快照（**双写**），这次是把那条临时妥协收掉 —— **是补完既定终态，不是推翻设计**。
+（这条也要如实写清：既不把「实施既定终态」误升格成「改架构」，也不因此就不问直接动手。）
+
+**拍板四点**（选项卡，用户答复）：存量迁移=**硬切**／缺元素=**硬失败（fail-closed）**／
+参数面板=**只显元素名**／时机=**现在做**。
+
+**改动八处**
+
+| # | 文件 | 改动 |
+| --- | --- | --- |
+| 1 | `model/workflow.py` | `ActionNode` 加 `@model_validator(mode="after")`：同键**同时有值快照与元素引用即 ValueError**（旧双写数据不再被接受；报错点名该参数并指路「删掉值或重新插入元素」）——**不静默迁移** |
+| 2 | `model/errors.py` | 新码 `ELEMENT_REF_MISSING`（口径对齐 `ANCHOR_NOT_FOUND`：**宁可停，不静默用旧值跑**） |
+| 3 | `runtime/element_refs.py` | 删掉回落分支；`missing` 形状改 `list[tuple[参数键, 元素名]]`；只报缺失、**绝不回落** |
+| 4 | `runtime/orchestrator.py` | 原回落处改抛 `RpaError(ELEMENT_REF_MISSING, …)`（`details` 带 `missing` 与 `nodeId`）；**`elementRefFallback` 事件整体移除** |
+| 5 | `gui/app.py::_insert_element` | 只写引用：`holder.args.pop(key)` + `raw["with"].pop(key)` + `raw["elementRefs"][key]=name`；元素值只用来做「能不能取出定位值」的可用性校验。`apply()` 对账判据随之从「值变了」改为「引用了但本轮没选中」 |
+| 6 | `gui/app.py::collect_validation_issues` + `gui/canvas.py::_has_config_error` | **必填校验认引用**：都改为 `key not in with_args and key not in refs` ⇒ ref-only 节点不再**恒红** |
+| 7 | `gui/param_form.py` | **两态显示**：引用生效 ⇒ 值控件**整行隐藏**（label 与行内展示控件都要 `setVisible(False)`——`QFormLayout.addRow(label, field)` 把两者塞进内部容器，只藏 field 会留一个空标签）、只显 `元素：xxx` + ✕；`values()` 首行跳过被引用的键（隐藏控件里的残留旧文本**绝不进 `with`**） |
+| 8 | `gui/app.py` | 新增 `element_ref_missing_hint`；两条失败提示**收敛到唯一权威入口 `run_failure_hint`** |
+
+**判据**：`test_element_refs.py` 重写 **11 条**、`test_gui_panels.py` **52 条**（见 PROGRESS 同日行）。
+**★ 另补 4 条此前完全没有判据的改动** —— 第 6/8 项改完后，`tests/` 里**搜 `elementRefs` 一处都搜不到**
+（只出现在 `test_element_refs.py` / `test_gui_panels.py` 的 raw 断言里）：
+`test_element_ref_satisfies_required_param`（编译期认引用，**含「摘掉引用必须报缺」的对照**）、
+`test_gutter_error_badge_cleared_by_element_ref`（画布红点认引用 + 对照）、
+`test_element_ref_missing_gets_actionable_hint`、`test_run_failure_hint_is_one_authority_for_both_kinds`。
+两条「认引用」判据都带**对照臂**——只写「ref-only 不报错」的话，把 `_has_config_error` 改成恒 `False` 也能过。
+
+**负向验证**（`.harness/spike/probe_m52s6_negative.py`，**9 注入全命中、逐字节还原、复绿**）：
+
+| 注入 | 方向 | 红 |
+| --- | --- | --- |
+| I1 | 硬切校验变空判 | 1（T_REJECT） |
+| I2 | 缺元素不记 `missing` | 2（RESOLVE + ORCH） |
+| I3 | 错误码换 `INVALID_INPUT` | 1（ORCH） |
+| I4 | `_insert_element` 写回快照 | 4（两路相等 + ✕ 后快照顶上来） |
+| I5 | 画布不看引用 | 1（CANVAS） |
+| I6 | 编译期不看引用 | 1（VALIDATE） |
+| I7 | 值行不隐藏 | 1（PANEL_SHOW） |
+| I8 | **两处兜底一起删**（`values()` + `apply()`） | 1（PANEL_MATCH） |
+| I9 | 提示断线（丢 `element_ref_missing_hint`） | 1（HINT_AUTH） |
+
+**I8 的取证（本片最有价值的一条）**：我第一版按「单点删除」写，**首跑报假绿灯**——回头取证才发现
+`values()` 的跳过与 `apply()` 的显式 `pop` **互为兜底**：`holder.raw["with"] = dict(values)` 里本就不带该键，
+所以 `pop` 删掉也无症状；而只删 `values()` 的跳过时，`pop` 又把漏进来的键摘了回去。
+⇒ 「只删一层」的注入**永远是假绿灯**，必须一次删掉整对才是在验证「被引用的参数不许出现在 `with`」这个不变量；
+探针因此从「单点编辑」改成支持**多点编辑**。顺带验证了「先编机制再找证据」是错的顺序：
+我是先按推断写期望集、被假绿灯打回后才去 `_diag` 打印真实中间态（`widget text == '#hand-tuned'`、
+`current_ref == 'searchBox'`）的。
+
+**门禁**：`FULL GATE PASSED`（**1580 passed** / 0 failed / 21 skipped / 2 xfailed；ruff + 5 组 Python
+静态门禁 + 14 个 `check_*.mjs` 全 rc=0）。首跑 **ruff 报 E501**（`orchestrator.py:785` 109 > 100，
+S6 新写的一行）⇒ 拆多行后重跑即 PASSED；`ruff` 是门禁**第 2 条**，它一红后面 5 组静态门禁与 14 个 mjs
+**全没跑**（`check_all.py` 首条非零即 `SystemExit`），所以「pytest 过了」不等于门禁过。
+
+**维护者侧影响**：`workflows/test/workflow.json` 现处「无 selector / 无 elementRefs」状态
+⇒ **旧双写文件一被加载就直接报错**（硬切是投票结果）；请重启编辑器、在参数面板「元素」下拉重选元素。
 本地提交未 push。

@@ -386,6 +386,39 @@ def test_gutter_error_badge_on_missing_required_args(qapp):
     view.deleteLater()
 
 
+def test_gutter_error_badge_cleared_by_element_ref(qapp):
+    """M52 S6：ref-only 节点（必填键只在 `elementRefs` 里）不该被判配置错误。
+
+    编号栏红色感叹号读的是 `holder.args`，而元素引用**不在** `args` 里 ⇒ 不认引用
+    就会让每个 ref-only 节点**恒红**——用户看到「配置好了还是报错」。
+    摘掉引用（值仍空）必须立刻变红，证明这条判据真在求值。
+    """
+    from rpa_core.catalog import load_catalog
+    from rpa_core.cli import _commands_root
+
+    catalog = load_catalog(_commands_root())
+    node = {
+        "type": "action", "id": "read", "command": "browser.getText",
+        "with": {}, "elementRefs": {"selector": "searchBox"},
+    }
+    model = build_model_from_workflow({
+        "schema_version": "1.0", "id": "s", "name": "s",
+        "root": {"type": "sequence", "id": "root", "children": [node]},
+    })
+    view = build_canvas(model, catalog=catalog)
+    assert view.itemDelegate()._has_config_error(model.index(0, 0)) is False
+    view.deleteLater()
+
+    no_ref = {k: v for k, v in node.items() if k != "elementRefs"}
+    model2 = build_model_from_workflow({
+        "schema_version": "1.0", "id": "s", "name": "s",
+        "root": {"type": "sequence", "id": "root", "children": [no_ref]},
+    })
+    view2 = build_canvas(model2, catalog=catalog)
+    assert view2.itemDelegate()._has_config_error(model2.index(0, 0)) is True
+    view2.deleteLater()
+
+
 def test_gutter_collapse_button_toggles_expansion(qapp):
     """编号栏收起/展开按钮：合成点击热区 → 容器折叠，再点 → 展开。"""
     from PySide6.QtCore import QEvent, QPointF
