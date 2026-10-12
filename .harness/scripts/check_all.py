@@ -40,6 +40,12 @@ PURE_FUNCTION_SCRIPTS = (
     # ±2px 热区（M41「框要躲着鼠标」）。同样是「只在浏览器里跑」的几何——Python
     # 侧读源码只能证明写了 `left - OVERLAY_OUTSET`，证明不了算出来的带落在哪。
     "check_capture_overlay_geometry.mjs",
+    # 捕获描述符里的元素矩形**键名**（content.js 的 rectOf，2026-10-09 真机事故）：
+    # 捕获回传原写 {x, y}，而 host 的 screen_shot.browser_box_in_window 只读 {left, top}
+    # ⇒ 截图恒算不出红框，且异常被 `except (KeyError, ...)` 吞掉，只表现为「截图有、框没有」，
+    # 看起来像功能没实现而不是键名对不上。必须**真跑一次求值 + 与 host 换算函数交叉对账**
+    # ——Python 读源码只能证明「文件里出现过 left」，证明不了键名真对得上。
+    "check_capture_descriptor_rect.mjs",
     # 捕获脚本的**实例生命周期**（content.js，M42）：可接管守卫（活实例拦人、僵尸实例
     # 先拆干净再接管）、僵尸在 mousemove 下不再留框、失败路径只收框不留残影。
     # 这几个语义只在浏览器里跑：Python 读源码最多证明「写了 if (previous.alive())」。

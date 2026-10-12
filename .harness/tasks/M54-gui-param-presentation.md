@@ -1,10 +1,9 @@
 # M54：GUI 参数呈现补完（字段中文化 + 元素槽位口径）
 
-Status: `planned`
+Status: `done`
 
 > **进度：2026-10-12 拍板，G1~G4 当日全部落地**（结果与证据见 §六「实施结果」）。
-> 状态仍取 `planned`——`check_tasks.py` 要求全仓唯一 `Status: active`，该位已被 M52 占用，
-> 台账切换由维护者决定，本文不擅自占用。
+> 同日维护者确认收口，状态置 `done`（落实提交 `685953c`，已推送 `origin/main`）。
 >
 > **2026-10-12 重评估**：原 M54（`element-slot-completion`）的落点被维护者一句
 > 「**web 的不用改，重点做 GUI**」推翻，本文是重评估后的版本。三个结论：
@@ -157,7 +156,7 @@ GUI 的 `CONDITION_OP_LABELS`（`param_form.py:802`）是**手抄** `i18n.js` �
 | 2 | 中文口径跟谁 | **跟影刀「操作目标」**（而不是 Web 的「选择器」/「定位器」） |
 | 3 | G2 / G3 / G4 是否并做 | **全做** |
 | 4 | 元素槽位呈现 | 维护者口径「**元素都是引用态**」⇒ 按引用态为准设计，**不为非引用态重排行结构** |
-| 5 | 原方案 4（浏览器句柄层） | **未拍板**（本文建议另立里程碑；本轮未做） |
+| 5 | 原方案 4（浏览器句柄层） | **另立里程碑**（2026-10-12 追加确认 ⇒ M55，见 §八） |
 
 ### 实施结果（2026-10-12，G1~G4 全部落地）
 
@@ -204,9 +203,10 @@ GUI 的 `CONDITION_OP_LABELS`（`param_form.py:802`）是**手抄** `i18n.js` �
 
 **明确未做**
 
-- 原方案 4（浏览器元素句柄层 `browser.findElement → elementId`）——另立里程碑候选，见 §三。
-- `desktop` 命令的元素槽位参数是 **`elementId`**（现显示「元素 ID」），它**不是引用键**
-  （`element_refs._VALUE_BY_KEY` 只有 `selector`/`locator`）⇒ 没有元素库行，本轮未动其文案。
+- 原方案 4（浏览器元素句柄层 `browser.findElement → elementId`）——**已另立里程碑 M55**（见 §八）。
+- `desktop` 命令的元素槽位参数是 **`elementId`**，它**不是引用键**
+  （`element_refs._VALUE_BY_KEY` 只有 `selector`/`locator`）⇒ 没有元素库行；
+  文案已于同日追加确认 ⇒ 对标影刀「操作目标」（见 §八）。
 - Web 编辑器一行未碰（`i18n.js` 只**增**键，未改任何既有条目）。
 
 ## 七、明确不动
@@ -228,3 +228,20 @@ GUI 的 `CONDITION_OP_LABELS`（`param_form.py:802`）是**手抄** `i18n.js` �
 **降为已知差异**（Web 编辑器与 GUI 在元素引用上语义不同；Web 端产出「快照 + 引用」并存
 的数据会被 `devserver/app.py:234` 的 `model_validate` 拒绝——该行为本身是**正确的保护**，
 只是 Web 端没有摘引用入口，用户需回 GUI 处理）。不在本方案范围内。
+
+## 八、追加确认（2026-10-12 同日收口）
+
+实施完毕后维护者追加确认四项：
+
+| # | 事项 | 结论 |
+| --- | --- | --- |
+| A | M54 台账状态 | **置 `done`**（本文 `Status` 已改；`feature_list` 的 `gui-ux-parity` 本就是 `passes: true`，无需改） |
+| B | `desktop` 元素槽位 `elementId` 文案 | **对标影刀 ⇒ 「操作目标」**（只加 `GUI_LABEL_OVERRIDES` 一项，**不动** `i18n.js` 的 `fields.elementId` ⇒ Web 不受影响） |
+| C | 原方案 4 浏览器元素句柄层 | **另立里程碑 M55**（见 `BACKLOG.md`） |
+| D | 欠账处置 | ① 校正 `yingdao-gap-matrix.md` 过期数字；② `check_all.py` 登记第 15 个 mjs；③ 清理临时文件债 |
+
+**B 的机制说明**：`elementId` 在桌面命令里是**普通输入参数**（不走元素库、不是引用键），
+影刀把这一类也统称「操作目标」；GUI 侧按影刀口径统一，Web 侧 `fields.elementId` 保持原文
+——与 `selector`/`locator` 完全同构（都走 `GUI_LABEL_OVERRIDES`，都有判据钉住）。
+注意 `desktop.findElement` 的 `elementId` 是**输出**（走 `x-outputs` 的 label「元素ID」），
+不经过 `field_label`，不受此覆盖影响。

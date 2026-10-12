@@ -1,7 +1,7 @@
 # 影刀指令差距矩阵
 
 > 面向维护者。目标：对齐影刀指令集，按使用频度排优先级，作为 `BACKLOG.md` Phase 6 及后续批次的输入。
-> 口径：当前已实现 77 个 manifest（browser 30 / desktop 17 / desktop_win32 19 / data 11，其中 data.table 6 个）。
+> 口径：当前已实现 86 个 manifest（browser 32 / desktop 17 / desktop_win32 19 / data 17，其中 data.table 6 个；另 workflow 1 个）。
 > 通道约束：浏览器执行通道仅扩展；桌面分 UIA（desktop）与 Win32（desktop_win32）双驱动；纯本地数据处理走 `python.worker`。
 > Playwright 已移除，任何 browser.* 新增均须走背景页 `background.js` ↔ orchestrator 扩展协议。
 
@@ -17,7 +17,7 @@
 
 ## 一、数据处理（data，重点补齐）
 
-> `data` 当前仅 11 个。这是影刀覆盖最宽、本项目最薄弱的命名空间，也是 RPA 落地最高频的一类。
+> `data` 当前 17 个（含 `data.table` 6 个）。这是影刀覆盖最宽、本项目最薄弱的命名空间，也是 RPA 落地最高频的一类。
 
 | 影刀指令（中文） | 建议 command id | 状态 | 频度 | 难度 | 依赖/通道 | 备注 |
 | --- | --- | --- | --- | --- | --- | --- |

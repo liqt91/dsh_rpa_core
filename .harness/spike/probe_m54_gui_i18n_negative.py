@@ -2,13 +2,16 @@
 
 被测改动：GUI 参数面板字段标签接上 ``devserver/static/i18n.js`` 的中文层（M54 S1/G2/G4）。
 
-五个注入，每个打在一个**不同**的判据组上（方向必须打在门禁实际检查的地方）：
+八个注入，每个打在一个**不同**的判据组上（方向必须打在门禁实际检查的地方）：
 
   I1 i18n.py   `field_label` 恒返回键名       ⇒ 中文化层本体失效（覆盖/回退全没了）。
   I2 i18n.py   `GUI_LABEL_OVERRIDES` 改回「选择器」⇒ 元素槽位的**有意口径分歧**被抹平。
   I3 param_form `CONDITION_OP_LABELS` 手抄回一份 ⇒ ops 与 i18n.js 脱钩（G4 回归）。
   I4 param_form `_attach` 的 label 回裸键名    ⇒ 面板**没接线**（纯函数对、界面没用上）。
   I5 i18n.js   删掉 `flowDir` 标签             ⇒ 全覆盖门禁（S3）抓「新增字段忘配中文」。
+  I6 manifest  枚举标签多一个键                ⇒ enum ⇄ x-enum-labels 相等门禁（死标签）。
+  I7 manifest  枚举标签少一个键                ⇒ 同上（UI 里会露出英文原值）。
+  I8 i18n.py   摘掉 `elementId` 覆盖           ⇒ desktop 元素槽位口径回落 Web（元素 ID）。
 
 ★ 哨兵 `# [M54-I18N-NEGATIVE]`（Python）与 `// [M54-I18N-NEGATIVE]`（JS）——**按后缀取**。
 ★ 输出重定向到文件再读，绝不接管道（M48：BrokenPipe 打断还原会把注入留在工作区）。
@@ -119,6 +122,14 @@ INJECTIONS = [
         '"x-enum-labels": {"single": "单击", ' + JSON_SENTINEL + "}",
         {T_ENUM},
         "枚举标签少一个键（UI 里会露出英文原值）",
+    ),
+    (
+        "I8",
+        F_I18N,
+        '    "elementId": "操作目标",',
+        f'    # elementId 覆盖被摘掉 ⇒ desktop 元素槽位回落到 Web 的「元素 ID」  {PY_SENTINEL}',
+        {T_YINGDAO},
+        "desktop 的 elementId 覆盖被摘掉（口径分歧消失）",
     ),
 ]
 

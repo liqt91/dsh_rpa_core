@@ -91,13 +91,21 @@ def test_element_slot_uses_yingdao_wording():
 
     这条不是「顺便检查」，而是**钉住有意的口径分歧**：谁把 ``GUI_LABEL_OVERRIDES``
     改回与 Web 一致（或删掉），它就会红，从而挡住「口径无声漂移」。
+    覆盖三个元素槽位键：浏览器 ``selector``、桌面 ``locator``，以及桌面命令的
+    **普通输入参数** ``elementId``（2026-10-12 追加确认，同样对标影刀）。
     """
-    assert GUI_LABEL_OVERRIDES == {"selector": "操作目标", "locator": "操作目标"}
+    assert GUI_LABEL_OVERRIDES == {
+        "selector": "操作目标",
+        "locator": "操作目标",
+        "elementId": "操作目标",
+    }
     assert field_label("selector", "browser.input") == "操作目标"
     assert field_label("locator", "desktop.findElement") == "操作目标"
-    # 共享事实源本身没被改：Web 侧仍显示「选择器」（web 不用改）
+    assert field_label("elementId", "desktop.click") == "操作目标"
+    # 共享事实源本身没被改：Web 侧仍显示「选择器」/「定位器」/「元素 ID」（web 不用改）
     assert load_field_labels()["selector"] == "选择器"
     assert load_field_labels()["locator"] == "定位器"
+    assert load_field_labels()["elementId"] == "元素 ID"
 
 
 # ---- 4. ops 单一来源（G4） -------------------------------------------------
