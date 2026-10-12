@@ -1,7 +1,7 @@
 # 影刀浏览器（网页自动化）指令整理与对标
 
 状态：`对标基线`
-日期：2026-09-10（2026-10-12 校正，见下「落地记录」）
+日期：2026-09-10（2026-10-12 M53 校正 + **2026-10-12 反向全量复核**，见下两条落地记录）
 用途：以影刀「网页自动化」44 条指令为基准，逐条映射 rpa_core 现有 `browser.*` 命令（32 条），明确已覆盖 / 部分覆盖 / 缺失，为命令面补齐提供清单。
 数据来源：影刀官方文档实机抓取，原始正文 + 参数截图见 `docs/yingdao-cmds/<指令名>.md`（44 条，177 张参数截图）；指令模型抽象见 `docs/yingdao-command-model.md`。
 
@@ -19,130 +19,175 @@
 > **落地记录 2026-10-12（M53：参数级缺口补全 + 本表校正）**：镜像改用影刀官方 noauth 接口
 > 重抓（`scripts/scrape_yingdao_docs.py`，去 Playwright），网页侧 44 条正文与旧镜像**实质内容差异 0 条**，
 > 借此逐行复核本表，发现**三类偏差**（均已在本轮修掉）：
-> 1. **我方条数**：表里写 14 条 / §一 写 24 条，都不对——`commands/browser/` 实为 **32 条**（本表只映射到其中 24 条），已全部改正；
+> 1. **我方条数**：表里写 14 条 / §一 写 24 条，都不对——`commands/browser/` 实为 **32 条**，已全部改正；
 > 2. **两处凭空的「影刀参数」**：`设置元素值` 的「设置方式」与 `获取元素信息` 的「智能补全前缀」覆盖面。前者经三方核实（线上正文两处独立来源 + 参数面板截图）**影刀根本没有该参数**，我方 `setWay` 是**本命令扩展**，已改口径；后者只对「获取网页链接地址」生效，已按此收窄并实装；
 > 3. **六条「有命令但跑不通」的假覆盖**：`browser.upload` / `browser.download` / `browser.handleDialog` 在扩展单通道下**明确返回 `COMMAND_NOT_FOUND`**（`docs/element-mvp-boundaries.md` §1 第 6~8 行、`docs/extension-channel-baseline.md`），本表却把六行标成 ✅/🟡 ⇒ 已一律改为 ❌（维护者 2026-10-12 拍板）。
 >
 > 同轮补的参数缺口（四契约同步，参数消费门禁不红）：`browser.getPosition` 补 **8 项输出**（右/底边距 + 中心点 x,y，此前只有 x/y/宽/高）；`browser.getScrollPosition` 补 `direction`（纵向/横向）与 `position`（当前位置/底部位置），**保留** `scrollX`/`scrollY` 不破坏既有流程；`browser.getText` 补 `infoType=attribute` + `attributeName`（任意属性）与 `completeUrlPrefix`（仅 href 生效）。扩展 build **0.9.1 → 0.9.2**（**维护者须重新加载扩展**）。
 
+> **复核记录 2026-10-12（反向全量复核，本轮）**：维护者指出「填写输入框(web) 我方还带着 `selector`、
+> 影刀没有这个参数」，追问**为什么对标没发现**。查证结论：不是没资料，是**上一轮复核只做了单向**——
+> 只查「我方参数/命令 ⇒ 影刀是否也承认」（抓我方多出来的假参数），**没查反向**「影刀每个参数/枚举值
+> ⇒ 我方是否有落点」。于是补齐反向，对 **44 条逐行重定状态**：**11 行由 ✅ 改判 🟡**
+> （#3/#6/#10/#11/#12/#14/#18/#19/#21/#27/#32），汇总由 ✅26 / 🟡4 / ❌14 变成
+> **✅15 / 🟡15 / ❌14**；另改正 **3 处凭记忆写错的影刀参数**、**1 处已过期的结构性结论**（§三-4）。
+> 判定口径已明文化（见 §一），方法与改正记录见 §六。
+
 ---
 
 ## 一、覆盖总览
 
+### 判定口径（2026-10-12 反向复核时明文化）
+
+| 状态 | 判据 |
+|---|---|
+| ✅ 已覆盖 | 影刀该指令的**参数 / 枚举值 / 输出项**在我方对应命令上**都有落点** |
+| 🟡 部分覆盖 | 影刀有**至少一个「行为性」参数、枚举分支或输出项**在我方对应命令上**完全没有落点**（会改变「能做什么 / 能取到什么」） |
+| ❌ 缺失 | 无对应命令，或命令已登记但执行期返回 `COMMAND_NOT_FOUND` |
+
+**不计入 🟡 的三类差异**（否则几乎每行都会变黄，表格失去分辨力）：
+
+1. **通用尾参**——影刀每条元素类指令都带的「等待元素存在(s)／设置超时时间」「执行后延迟(s)／延迟时间(s)」「焦点超时时间(ms)」。我方是否逐个命令带齐，统一在 §三-3 记账，不逐行计分。
+2. **机制等价**——会话对象（影刀「网页对象」变量）↔ 我方 `sessionId`；元素库（影刀「操作目标」）↔ 我方 `selector` 元素引用；浏览器路由（影刀「浏览器类型」）↔ 我方由会话绑定的扩展实例。见 §三-1 / §三-4。
+3. **平台/架构性差异与实现健壮性**——影刀自带浏览器家族（cef/chrome/edge/ie/360se/firefox/QQBrowser）vs 我方自研扩展单通道（架构决策）；影刀「元素无滚动条时自动向上查找滚动条元素」这类健壮性行为。
+
+> 反方向的差异（**我方多出**的参数）不构成缺口，但一并登记在 §三-7，避免下次复核又当成「凭空多出来的参数」。
+
+### 汇总
+
 | 状态 | 条数 | 占比 | 说明 |
 |---|---|---|---|
-| ✅ 已覆盖 | 26 | 59% | rpa_core 有直接对应命令，参数面基本对齐 |
-| 🟡 部分覆盖 | 4 | 9% | 有相近命令但参数/语义有缺口 |
-| ❌ 缺失 | 14 | 32% | rpa_core 无对应命令，或命令存在但本期未实现（跑起来是 `COMMAND_NOT_FOUND`） |
-| 合计 | **44** | 100% | rpa_core 现有 `browser.*` 共 32 条（本表映射到其中 24 条） |
+| ✅ 已覆盖 | 15 | 34% | 影刀该条指令的参数/枚举/输出在我方对应命令上都有落点 |
+| 🟡 部分覆盖 | 15 | 34% | 有对应命令，但影刀至少有一项行为性参数/枚举分支/输出项我方完全无法表达 |
+| ❌ 缺失 | 14 | 32% | 无对应命令，或命令存在但本期未实现（跑起来是 `COMMAND_NOT_FOUND`） |
+| 合计 | **44** | 100% | 本表共引用到我方**全部 32 条** `browser.*` 命令（含 6 处「命令存在但本期未实现」） |
 
-> 结论（2026-10-12 校正后）：元素交互主链路、Cookie 管理、页面级导航/滚动/等待、元素信息与位置读取、
-> 多标签管理、拖拽均已对齐；剩余缺口集中在 **元素对象句柄、批量数据抓取、网络监听**，
-> 以及**文件上传/下载与原生对话框**（命令已登记但扩展通道本期未实现）——均依赖 P2 架构决策（见 §四）。
+> 结论（2026-10-12 反向复核后）：主链路（元素交互 / Cookie 读写 / 页面导航·滚动·等待 / 元素信息与位置 /
+> 多标签 / 拖拽 / 执行 JS）**均有对应命令且核心参数可用**，但「✅」的含义**收紧了**——原先多数 ✅ 只验证了
+> 「我方参数影刀都认」，本轮补上「影刀参数我方是否有落点」后有 **11 行**改判 🟡。
+> 缺口形状高度一致，是三小类：
+>
+> ① **可选开关**：模拟人工（点击/悬停）、显示鼠标移动轨迹、显示/隐藏密码、保存图片至剪切板、自动随机文件名、是否等待下载完成；
+> ② **枚举细分**：输入方式 5 种 vs 我方 3 种、鼠标点击位置（中心格 + 九宫格 + 自定义）vs 我方 2 值、
+>    下拉框匹配方式（模糊/精准/正则）、拖拽方式、截图区域 3 种、相似元素取值 6 种、Cookie 筛选 7 维 vs 我方 3 维；
+> ③ **落点微调**：鼠标按下/释放位置、鼠标悬停位置、输入内容里的快捷键符号、`waitFor` 的超时语义。
+>
+> ❌ 的 14 条不变，仍集中在 **元素对象句柄、批量数据抓取、网络监听、文件上传/下载与原生对话框** 四条线，
+> 均依赖 P2 架构决策（见 §四）。
 
 ---
 
 ## 二、影刀指令全集 × rpa_core 逐条映射
 
-图例：✅ 已覆盖 / 🟡 部分覆盖 / ❌ 缺失。「影刀参数」列只列核心参数，完整参数与截图见对应原始文档。
+图例：✅ 已覆盖 / 🟡 部分覆盖 / ❌ 缺失。
+「影刀参数」列以 `docs/yingdao-cmds/<指令名>.md` 的**镜像正文**为准（2026-10-12 逐条核对）。
+「差距备注」里标 **反向复核新增** 的，是本轮才查出来的影刀有、我方无的项。
 
 ### 1. 网页操作（9 条）
 
 | # | 影刀指令 | 影刀核心参数（→输出） | rpa_core 对应 | 状态 | 差距备注 |
 |---|---|---|---|---|---|
-| 1 | [打开网页](yingdao-cmds/打开网页.md) | 浏览器类型(7值枚举)、网址、加载超时、命令行参数（→网页对象） | `browser.navigate` | ✅ | 参数面差异：影刀「浏览器类型」是用户语义枚举（cef/chrome/edge/ie/360se/firefox/QQBrowser），我们收敛为**自研扩展单通道**、仅支持 Edge/Chrome 插件，故 `browserType` 只取 `msedge`/`chrome`（必选一，默认 msedge，无 auto）；playwright / bsk 已彻底移除。多浏览器各自装了插件时，命令按 `browserType` 路由到对应扩展实例，未装插件的浏览器在编辑器下拉置灰、运行期快速失败（TARGET_HOST_OFFLINE）。参数：`browserType/url/action/timeoutMs`（分组：浏览器 + 常规 + 高级）。输出为会话（网页）对象 |
-| 2 | [选择浏览器用户](yingdao-cmds/选择浏览器用户.md) | 浏览器类型（→用户配置对象） | — | ❌ | 多账号/用户配置文件切换，依赖登录态的场景需要 |
-| 3 | [获取已打开的网页对象](yingdao-cmds/获取已打开的网页对象.md) | 浏览器类型、标题/URL匹配（→网页对象） | `browser.attach` | ✅ | 同 context 按 title/url 子串或正则匹配，产出独立网页会话 |
-| 4 | [关闭网页](yingdao-cmds/关闭网页.md) | 操作(关闭指定/关闭所有)、终止浏览器进程、忽略确认离开对话框 | `browser.close` / `browser.closeTabs` / `browser.closeBrowser` | ✅ | 三条命令分工（M32 引入后两者，M35 收敛 closeBrowser 语义）：`close`=**本地解绑**（把标签页留给用户）；`closeTabs`=关标签页，`tabIds`（自 `browser.listPages`）与 `all`（当前窗口全部）二选一，可选 `ignoreBeforeUnload`（M37，默认 true）；`closeBrowser`=**按类型终止该浏览器的全部进程**（含用户自开窗口，执行即显式授权）。`closeTabs` **没有** `browserType`：路由按会话绑定的那台浏览器走（M38 S1.1 删除该声明——它从未被本命令分支读取） |
-| 5 | [跳转至新网址](yingdao-cmds/跳转至新网址.md) | 网页对象、跳转方式(新页面/**后退/前进/重新加载**)、加载超时 | `browser.navigate` | ✅ | `action=goto/back/forward/reload` |
-| 6 | [等待网页加载完成](yingdao-cmds/等待网页加载完成.md) | 网页对象、超时时间(s) | `browser.waitLoad` | ✅ | 影刀本身也只传「网页对象 + 超时」；我们**只等 `load`**——manifest 曾声明 `state=load/domcontentloaded/networkidle` 但从未转发给扩展（`tabs.waitLoad` 只收 `tabId`/`timeoutMs`），M38 S1.1 已删除该声明，属删除「声明」而非「能力」 |
+| 1 | [打开网页](yingdao-cmds/打开网页.md) | 浏览器类型、网址、保存网页对象至、等待网页加载完成（含「加载超时后执行」）、命令行参数（→网页对象） | `browser.navigate` | ✅ | 主参数全有落点：`browserType`/`url`/`commandLineArgs`；「等待网页加载完成（加载超时后执行）」↔ `timeoutMs` + `onTimeout{error|stop}`；「保存网页对象至」↔ 输出 `sessionId`。**平台性差异（不计缺口）**：影刀 7 值浏览器枚举是影刀自带浏览器体系，我方收敛为自研扩展单通道、仅支持 Edge/Chrome 插件，`browserType` 只取 `msedge`/`chrome`。我方多出 `action=goto/back/forward/reload`（影刀另立「跳转至新网址」） |
+| 2 | [选择浏览器用户](yingdao-cmds/选择浏览器用户.md) | 浏览器用户/环境（→用户配置对象） | — | ❌ | 影刀可在多个浏览器用户/账号环境间切换（支持谷歌浏览器与跨境/指纹浏览器等 Chromium 内核浏览器），依赖浏览器 profile 体系，我方无对应命令 |
+| 3 | [获取已打开的网页对象](yingdao-cmds/获取已打开的网页对象.md) | 浏览器类型、匹配方式（根据标题匹配 / 根据网址匹配 / 匹配当前选中的页面）、保存网页对象至、等待网页加载完成、匹配失败时打开新页面 | `browser.attach` | 🟡 | **反向复核改判（原 ✅ → 🟡），新增 3 项缺口**：①「匹配当前选中的页面」——我方 `matchBy` 只有 `url`/`title`；②「等待网页加载完成」——`attach` 不等加载；③「匹配失败时打开新页面」——我方直接失败。另影刀「支持通配符匹配」我方用 `useRegex`（正则）表达，机制不同 |
+| 4 | [关闭网页](yingdao-cmds/关闭网页.md) | 操作（关闭指定网页 / 关闭所有网页）、终止浏览器进程（含子进程）、忽略"确认离开页面"对话框 | `browser.close` / `browser.closeTabs` / `browser.closeBrowser` | ✅ | 三条命令分工（M32 引入后两者，M35 收敛 closeBrowser 语义）：`close`=**本地解绑**（把标签页留给用户）；`closeTabs`=关标签页，`tabIds`（自 `browser.listPages`）与 `all`（当前窗口全部）二选一，可选 `ignoreBeforeUnload`（M37，默认 true）；`closeBrowser`=**按类型终止该浏览器的全部进程**（含用户自开窗口，执行即显式授权）。`closeTabs` **没有** `browserType`：路由按会话绑定的那台浏览器走（M38 S1.1 删除该声明——它从未被本命令分支读取） |
+| 5 | [跳转至新网址](yingdao-cmds/跳转至新网址.md) | 网页对象、跳转方式（跳转至新页面 / 后退 / 前进 / 重新加载）、网页加载超时时间(秒) | `browser.navigate` | ✅ | `action=goto/back/forward/reload` **逐值对齐** |
+| 6 | [等待网页加载完成](yingdao-cmds/等待网页加载完成.md) | 网页对象、加载超时时间、加载超时后执行（错误处理 / 停止网页加载） | `browser.waitLoad` | 🟡 | **反向复核改判（原 ✅ → 🟡）**：「加载超时后执行」**无落点**——我方 `waitLoad` 超时即抛错（＝影刀的「错误处理」那一支），**无法表达「超时后停止网页加载」**。该能力在 `browser.navigate.onTimeout=stop` 上存在，但 `waitLoad` 自身没有这个参数。另：我方**只等 `load`**——manifest 曾声明 `state=load/domcontentloaded/networkidle` 但从未转发（`tabs.waitLoad` 只收 `tabId`/`timeoutMs`），M38 S1.1 已删除该声明 |
 | 7 | [停止网页加载](yingdao-cmds/停止网页加载.md) | 网页对象 | `browser.stopLoading` | ✅ | 扩展 `tabs.stopLoading`，输出回带当前网址 |
-| 8 | [鼠标滚动网页](yingdao-cmds/鼠标滚动网页.md) | 网页对象、在指定元素上滚动、位置(顶/底/指定/一屏)、平滑/瞬间 | `browser.scroll` | ✅ | position=top/bottom/point/page + 可选元素内滚动 + smooth |
-| 9 | [自动处理弹框(web)](yingdao-cmds/自动处理弹框_web.md) | 网页对象、处理方式(接受/Dismiss) | `browser.handleDialog` | ❌ | 命令已登记但**本期未实现**：扩展单通道下直接返回 `COMMAND_NOT_FOUND`（`element-mvp-boundaries.md` §2.8）。语义也与影刀不同（影刀是「挂自动策略，弹了就按方式处理」，我们是「弹了就主动调一次」），两者都要补 |
+| 8 | [鼠标滚动网页](yingdao-cmds/鼠标滚动网页.md) | 网页对象、在指定元素上滚动、滚动位置（底部 / 顶部 / 指定位置 / 一屏）、滚动效果（平滑 / 瞬间） | `browser.scroll` | ✅ | 四个滚动位置 ↔ `position{top|bottom|point|page}`；滚动效果 ↔ `smooth`；元素内滚动 ↔ `selector`。**健壮性差异（不计缺口）**：影刀「元素无滚动条时自动向上查找滚动条元素」未支持，我方需自行指向正确的可滚动祖先 |
+| 9 | [自动处理弹框(web)](yingdao-cmds/自动处理弹框_web.md) | 网页对象、处理方式（接受 / Dismiss） | `browser.handleDialog` | ❌ | 命令已登记但**本期未实现**：扩展单通道下直接返回 `COMMAND_NOT_FOUND`（`element-mvp-boundaries.md` §2.8）。语义也与影刀不同（影刀是「挂自动策略，弹了就按方式处理」，我们是「弹了就主动调一次」），两者都要补 |
 
 ### 2. 元素操作（11 条）
 
 | # | 影刀指令 | 影刀核心参数（→输出） | rpa_core 对应 | 状态 | 差距备注 |
 |---|---|---|---|---|---|
-| 10 | [点击元素(web)](yingdao-cmds/点击元素_web.md) | 网页对象、操作目标、模拟人工、点击方式、鼠标按钮、辅助按键、点击位置、执行后延迟、等待存在(s) | `browser.click` | ✅ | 参数面齐全**且已实装**（M29 前 `clickPosition`/`simulateHuman`/`modifiers` 只进 manifest 未消费，属纸面对齐） |
-| 11 | [鼠标悬停在元素上(web)](yingdao-cmds/鼠标悬停在元素上_web.md) | 网页对象、操作目标 | `browser.hover` | ✅ | 一致 |
-| 12 | [填写输入框(web)](yingdao-cmds/填写输入框_web.md) | 网页对象、操作目标、内容、输入模式(set_value/模拟人工/逐字按键)、追加、Enter、执行后延迟、等待存在(s) | `browser.input` | ✅ | mode/append/pressEnter/keyIntervalMs/postDelayMs 对齐 |
-| 13 | [填写密码框(web)](yingdao-cmds/填写密码框_web.md) | 同输入框，值为密码 | `browser.input` | 🟡 | input 可填，但无密码框专用语义（防泄露/掩码展示），编辑器体验差异 |
-| 14 | [设置下拉框(web)](yingdao-cmds/设置下拉框_web.md) | 网页对象、操作目标、选择方式(按文字/索引/值)、等待存在(s) | `browser.select` | ✅ | `selectBy` 对齐 |
-| 15 | [设置复选框(web)](yingdao-cmds/设置复选框_web.md) | 网页对象、操作目标、操作(勾选/取消/**反选**)、延迟、等待存在(s) | `browser.check` | ✅ | operation=check/uncheck/toggle，幂等到目标状态 |
-| 16 | [设置元素值(web)](yingdao-cmds/设置元素值_web.md) | 网页对象、操作目标、元素值 | `browser.setValue` | ✅ | **校正**：影刀**没有**「设置方式」参数（原表凭记忆写成「设置方式(value/innerText/…)」）。我方 `setWay`=value/innerText/innerHTML 是**本命令扩展**，manifest 描述已改口径；`value` 与影刀「元素值」对齐，默认 `setWay=value` 即影刀的语义 |
-| 17 | [设置元素属性(web)](yingdao-cmds/设置元素属性_web.md) | 网页对象、操作目标、属性名、属性值 | `browser.setAttribute` | ✅ | 参数名差异：影刀「属性名」→ 我方 `name`。直改属性、不触发事件（与影刀一致） |
-| 18 | [拖拽元素(web)](yingdao-cmds/拖拽元素_web.md) | 网页对象、操作目标、目标位置、拖拽方式 | `browser.drag` | ✅ | selector → targetSelector（Playwright drag_to） |
-| 19 | [等待元素(web)](yingdao-cmds/等待元素_web.md) | 网页对象、操作目标、条件(**出现/消失/可见/不可见**)、超时(s) | `browser.waitFor` | ✅ | state=visible/hidden/detached/attached |
-| 20 | [获取元素对象(web)](yingdao-cmds/获取元素对象_web.md) | 网页对象、操作目标（→元素对象变量） | — | ❌ | 影刀有独立「元素对象」句柄可复用（配合关联元素/相似元素）；我们每条命令直接用 selector，无元素句柄概念 |
+| 10 | [点击元素(web)](yingdao-cmds/点击元素_web.md) | 网页对象、操作目标、模拟人工点击、显示鼠标移动轨迹、点击方式（单击/双击）、鼠标按钮（左键/右键）、辅助按键（无/Alt/Ctrl/Shift/Win）、执行后延迟(s)、鼠标点击位置（中心格 + 九宫格 + 自定义）、等待元素存在(s) | `browser.click` | 🟡 | **反向复核改判（原 ✅ → 🟡），新增 2 项缺口**：①「显示鼠标移动轨迹」（完整轨迹 / 直接到最终位置）无落点；②「鼠标点击位置」影刀是**中心格 + 九宫格 + 自定义任意点**，我方 `clickPosition` 只有 `center`/`random` ⇒ 「指定第几格 / 自定义坐标」无落点。已对齐且**已实装**：`clickType`/`button`/`modifiers`/`simulateHuman`/`postDelayMs`（M29 前 `clickPosition`/`simulateHuman`/`modifiers` 只进 manifest 未消费，属纸面对齐）；我方 `button` 多出 `middle` |
+| 11 | [鼠标悬停在元素上(web)](yingdao-cmds/鼠标悬停在元素上_web.md) | 网页对象、操作目标、模拟人工悬停、延迟时间(s)、鼠标悬停位置（中心点 / 随机位置）、等待元素存在(s) | `browser.hover` | 🟡 | **反向复核改判（原 ✅ → 🟡）**：我方 `hover` 只有 `selector`/`timeoutMs`，**缺「模拟人工悬停」（bool）、「鼠标悬停位置」、「延迟时间」三项** |
+| 12 | [填写输入框(web)](yingdao-cmds/填写输入框_web.md) | 网页对象、操作目标、输入内容、追加输入、**输入方式（5 种：模拟人工输入 / 谷歌系浏览器接口输入(稳定) / 剪贴板输入 / 自动化接口输入 / 驱动输入）**、输入内容包含快捷键、强制加载美式键盘(ENG)、按键输入间隔(ms)、焦点超时时间(ms)、执行后延迟(s)、输入前点击元素、鼠标点击位置（中心点 / 随机位置）、等待元素存在(s) | `browser.input` | 🟡 | **反向复核改判（原 ✅ → 🟡）**，且**原表把「输入方式」写成「(set_value/模拟人工/逐字按键)」是凭记忆的错词**（影刀实为 5 种，「set_value」不是影刀用词）。**缺 4 项**：① `mode` 只有 `fill`/`type`/`clipboard` 3 种，「谷歌系浏览器接口输入(稳定)」「驱动输入」无显式落点；②「输入内容包含快捷键」——我方只有 `pressEnter`（单个回车），无法在内容里嵌 `{enter}` 等符号；③「强制加载美式键盘(ENG)」；④「鼠标点击位置」（同 #10）。「焦点超时时间」归入 §三-3 通用尾参。已对齐：`text`/`append`/`keyIntervalMs`/`postDelayMs`/`clickBeforeInput` |
+| 13 | [填写密码框(web)](yingdao-cmds/填写密码框_web.md) | 网页对象、操作目标、输入密码、以隐藏的方式键入密码（可切换为显示）、选择输入方式、按键输入间隔(ms)、焦点超时时间(ms)、延迟时间(s)、输入前点击元素、鼠标点击位置、等待元素存在(s) | `browser.input` | 🟡 | 用 `browser.input` 即可填（`<input type=password>` 的掩码由页面自身承担），但**无密码框专用语义**：缺「以隐藏/显示的方式键入」这一支与「选择输入方式」的 5 种细分（同 #12），编辑器体验有差异 |
+| 14 | [设置下拉框(web)](yingdao-cmds/设置下拉框_web.md) | 网页对象、操作目标、选择方式（按选项内容 / 按选项位置）、选择值、**匹配方式（模糊匹配 / 精准匹配 / 正则匹配）**、延迟时间(s)、等待元素存在(s) | `browser.select` | 🟡 | **反向复核改判（原 ✅ → 🟡）**，且**原表把「选择方式」写成「(按文字/索引/值)」是错词**（影刀实为「按选项内容 / 按选项位置」，且整条「匹配方式」被漏掉）。「匹配方式（模糊/精准/正则）」**无落点**——我方只能精确匹配。我方 `selectBy{value|label|index}` 是影刀两个「选择方式」的**超集**（「按选项内容」拆成 `label`/`value`） |
+| 15 | [设置复选框(web)](yingdao-cmds/设置复选框_web.md) | 网页对象、操作目标、操作（勾选 / 取消勾选 / 反选）、延迟时间(s)、等待元素存在(s) | `browser.check` | ✅ | `operation{check|uncheck|toggle}` **逐值对齐**，幂等到目标状态；除通用尾参外无缺口 |
+| 16 | [设置元素值(web)](yingdao-cmds/设置元素值_web.md) | 网页对象、操作目标、元素值、等待元素存在(s) | `browser.setValue` | ✅ | **校正**：影刀**没有**「设置方式」参数（原表凭记忆写成「设置方式(value/innerText/…)」，反向复核再次确认影刀侧只有上述 4 项）。我方 `setWay`=value/innerText/innerHTML 是**本命令扩展**，manifest 描述已改口径；默认 `setWay=value` 即影刀语义 |
+| 17 | [设置元素属性(web)](yingdao-cmds/设置元素属性_web.md) | 网页对象、操作目标、属性名称、属性值、等待元素存在(s) | `browser.setAttribute` | ✅ | 参数名差异：影刀「属性名称」→ 我方 `name`。直改属性、不触发事件（与影刀一致）；除通用尾参外无缺口 |
+| 18 | [拖拽元素(web)](yingdao-cmds/拖拽元素_web.md) | 网页对象、操作目标、拖拽方式（拖拽至目标点：手动输入位置或按 Ctrl+Alt 取当前鼠标位置）、鼠标按下位置（中心点 / 随机位置 / 自定义）、鼠标释放位置（同上）、延迟时间(s)、等待元素存在(s) | `browser.drag` | 🟡 | **反向复核改判（原 ✅ → 🟡），新增 3 项缺口**：我方 `drag` 只有 `selector`/`targetSelector`，缺「拖拽方式」「鼠标按下位置」「鼠标释放位置」——影刀可精细控制按下/释放落点，我方只能固定拖到目标元素 |
+| 19 | [等待元素(web)](yingdao-cmds/等待元素_web.md) | 网页对象、操作目标、等待状态（出现 / 消失）、设置超时时间、等待结果（→True/False） | `browser.waitFor` | 🟡 | **反向复核改判（原 ✅ → 🟡）**：①**超时语义不同**——影刀「超时后流程自动往下继续、返回 False」，我方超时**抛 `TIMEOUT` 硬失败**（`_ext_wait_for`）；②原表把「等待状态」写成「(出现/消失/可见/不可见)」是**把我方枚举反填成影刀的**——镜像正文只有「出现/消失」，已改正；我方 `state{visible|hidden|detached|attached}` 是**超集**，属「我方多出」不计缺口；③「等待结果」↔ 输出 `matchedCount`（影刀是 bool，形状不同） |
+| 20 | [获取元素对象(web)](yingdao-cmds/获取元素对象_web.md) | 网页对象、定位方式（捕获元素 / CSS 选择器 / XPath 选择器）、关联父元素、保存元素对象至、等待元素存在(s) | — | ❌ | 影刀有独立「元素对象」句柄可复用（配合关联元素/相似元素）；我们每条命令直接用 selector，无元素句柄概念 |
 
 ### 3. 数据提取（9 条）
 
 | # | 影刀指令 | 影刀核心参数（→输出） | rpa_core 对应 | 状态 | 差距备注 |
 |---|---|---|---|---|---|
-| 21 | [获取元素位置(web)](yingdao-cmds/获取元素位置_web.md) | 网页对象、操作目标、相对于(屏幕/页面)、转为 dpi96（→左边距、右边距、顶部边距、底部边距、中心点横坐标、中心点纵坐标、宽度、高度） | `browser.getPosition` | ✅ | **本轮补 8 项输出**（此前只有 x/y/宽/高；`right`/`bottom`/`center` 由执行器从 boundingRect 派生）。**基准只有一种**：相对**浏览器页面左上角**（客户区域）；影刀的「相对于屏幕左上角」与「转为 dpi96」**未支持**（已知欠账，屏幕坐标需 `window.screenX/Y` + 窗口 chrome 补偿） |
-| 22 | [获取元素信息(web)](yingdao-cmds/获取元素信息_web.md) | 操作目标、操作(文本/源代码/值/链接地址/**属性**/位置)、属性名、智能补全地址前缀、等待元素存在(s)（→字符串） | `browser.getText` | ✅ | `infoType`=text/html/outerHTML/value/href + 本轮新增 **`attribute`**（配 `attributeName` 取任意属性，如 href/src/class/data-*）与 **`completeUrlPrefix`**（智能补全地址前缀，**仅 href 生效**）。「操作」里的**获取元素位置**一项由 `browser.getPosition` 独立承担（影刀把它也列在这个下拉里） |
-| 23 | [获取下拉框选项(web)](yingdao-cmds/获取下拉框选项_web.md) | 网页对象、操作目标（→选项列表） | `browser.getSelectOptions` | ✅ | 输出 `options`（`{index, value, label, selected}` 列表）+ `count`；比影刀多回带 `selected` |
-| 24 | [获取相似元素列表(web)](yingdao-cmds/获取相似元素列表_web.md) | 网页对象、操作目标（→相似元素列表） | `browser.queryAll` | 🟡 | queryAll 返回文本列表；影刀返回「元素对象列表」可逐个操作（依赖 #20 元素句柄） |
-| 25 | [获取关联元素(web)](yingdao-cmds/获取关联元素_web.md) | 操作目标、关联方式(父/子/兄弟/前一个/后一个)（→关联元素对象） | — | ❌ | 依赖元素对象模型 |
-| 26 | [获取网页信息](yingdao-cmds/获取网页信息.md) | 网页对象（→标题/URL/文本长度） | — | 🟡 | executeScript 可变通；建议给 navigate 输出补 title 或加独立命令 |
-| 27 | [获取网页对象列表](yingdao-cmds/获取网页对象列表.md) | —（→网页对象列表） | `browser.listPages` | ✅ | 输出同 context 全部标签页 index/url/title |
-| 28 | [获取滚动条位置](yingdao-cmds/获取滚动条位置.md) | 网页对象、元素滚动条、滚动条(纵向/横向)、位置(当前位置/底部位置)（→滚动位置） | `browser.getScrollPosition` | ✅ | **本轮补 `direction`（vertical/horizontal）+ `position`（current/bottom）**，输出新增 `scrollPosition`；**`scrollX`/`scrollY` 恒返回且语义不变**（不破坏既有流程）。`bottom` 口径＝**可滚动内容总长**（`scrollHeight`/`scrollWidth`，影刀原文「即滚动条的长度」），**不是**最大滚动距离。影刀的「自动向上查找滚动条元素」未支持 |
-| 29 | [网页截图](yingdao-cmds/网页截图.md) | 截图区域(元素/可视区域/**整个网页**)、保存文件夹、随机文件名、剪切板输出（→文件路径） | `browser.screenshot` | 🟡 | 只截「窗口当前可见标签页的可见区」；M29 已删 `selector`/`fullPage`（`captureVisibleTab` 能力边界，整页/元素截图见 BACKLOG）；缺「保存到剪切板」 |
+| 21 | [获取元素位置(web)](yingdao-cmds/获取元素位置_web.md) | 网页对象、操作目标、相对于（屏幕左上角 / 浏览器页面左上角）、保存位置信息至（左边距/右边距/顶部边距/底部边距/中心点横坐标/中心点纵坐标/宽度/高度）、转为 dpi 为 96 对应值、等待元素存在(s) | `browser.getPosition` | 🟡 | 输出已由 4 项补到 **8 项**（M53）。**反向复核改判（原 ✅ → 🟡），新增 2 项缺口**：①「相对于」缺「**屏幕左上角**」这一支（我方只有「浏览器页面左上角＝客户区域」）；②「**转为 dpi 为 96 对应值**」无落点（扩展通道拿不到可信的设备缩放因子来源）。`right`/`bottom`/`centerX`/`centerY` 由执行器从 boundingRect **派生**（扩展只回四个原始量，避免两套算法漂移） |
+| 22 | [获取元素信息(web)](yingdao-cmds/获取元素信息_web.md) | 网页对象、操作目标、操作（文本内容 / 源代码 / 元素值 / 网页链接地址 / 元素属性 / **元素位置**）、属性名、智能识别并补充地址前缀、保存元素信息至、等待元素存在(s)（→字符串） | `browser.getText` + `browser.getPosition` | ✅ | `infoType`=text/html/outerHTML/value/href/attribute + `attributeName` + `completeUrlPrefix`（**仅 href 生效**，5 种形态有判据）。影刀把「获取元素位置」也塞在这个下拉里，我方**独立成 `browser.getPosition`**（见 5.1）——能力有落点，故不计缺口；除通用尾参外无缺口 |
+| 23 | [获取下拉框选项(web)](yingdao-cmds/获取下拉框选项_web.md) | 网页对象、操作目标、获取内容（当前选中项 / 全部下拉项）、保存获取到的内容至（一维列表）、等待元素存在(s) | `browser.getSelectOptions` | ✅ | 输出 `options`（`{index, value, label, selected}`）+ `count`：一次查询即覆盖「当前选中项」（按 `selected` 过滤）与「全部下拉项」，比影刀的一维列表**多回带** `value`/`selected` |
+| 24 | [获取相似元素列表(web)](yingdao-cmds/获取相似元素列表_web.md) | 网页对象、定位方式（捕获元素 / CSS / XPath）、关联父元素、元素操作（元素对象 / 文本内容 / 元素值 / 链接地址 / 源代码 / 元素属性）、输出相似元素个数、保存相似元素列表至 | `browser.queryAll` | 🟡 | **反向复核补齐缺口清单**：①「元素操作」影刀有 **6 种取值方式**，我方只有**文本**一种（缺元素对象/链接地址/源代码/属性）；②缺「关联父元素」（限定搜索范围）；③缺「定位方式」的 XPath 支；④`count` ↔「输出相似元素个数」已对齐。元素对象一档依赖 #20 的句柄模型 |
+| 25 | [获取关联元素(web)](yingdao-cmds/获取关联元素_web.md) | 网页对象、操作目标、关联方式（父元素 / 子元素 / 相邻元素）、保存网页元素至、等待元素存在(s)（→关联元素对象） | — | ❌ | 依赖元素对象模型。原表写「兄弟 / 前一个 / 后一个」，镜像正文只有「父元素 / 子元素 / 相邻元素」，已改正 |
+| 26 | [获取网页信息](yingdao-cmds/获取网页信息.md) | 网页对象、操作（获取网址 / 标题 / 源代码 / 文本内容）、存储网页信息至 | — | 🟡 | 四条取值我方**都没有专用命令**：网址可由 `navigate` 输出拿到；「源代码 / 文本」只能 `executeScript` 变通；**标题拿不到**（`listPages` 有 title 但要先列页）。建议给 `navigate` 输出补 `title` 或加独立命令 |
+| 27 | [获取网页对象列表](yingdao-cmds/获取网页对象列表.md) | 浏览器类型、匹配方式（匹配所有网页 / 根据标题匹配，支持通配符）、保存网页对象列表至 | `browser.listPages` | 🟡 | **反向复核改判（原 ✅ → 🟡）**：缺「匹配方式」——我方 `listPages` **无任何筛选参数**，只能列出全部标签页再由流程自己筛。输出 `pages`（index/url/title）+ `count` 已对齐 |
+| 28 | [获取滚动条位置](yingdao-cmds/获取滚动条位置.md) | 网页对象、元素滚动条、滚动条（纵向 / 横向）、位置（当前位置 / 底部位置）、保存滚动条位置至、等待元素存在(s)（→滚动位置） | `browser.getScrollPosition` | ✅ | `direction`（vertical/horizontal）+ `position`（current/bottom）+ 输出 `scrollPosition` 已在 M53 补齐；`scrollX`/`scrollY` **恒返回、语义不变**。`bottom` 口径＝**可滚动内容总长**（`scrollHeight`/`scrollWidth`，影刀原文「即滚动条的长度」），**不是**最大滚动距离。**健壮性差异（不计缺口）**：影刀「元素无滚动条时自动向上查找滚动条元素」未支持 |
+| 29 | [网页截图](yingdao-cmds/网页截图.md) | 网页对象、截图区域（网页元素 / 网页可见区域 / 整个网页）、保存图片至剪切板、保存文件夹、使用自动随机文件名、截图保存位置、等待元素存在(s)（→文件路径） | `browser.screenshot` | 🟡 | **反向复核补齐缺口清单**：①「截图区域」3 种我方只有「可见区域」一种（缺元素截图 / 整页截图——M29 已删 `selector`/`fullPage`，`captureVisibleTab` 能力边界）；②缺「保存图片至剪切板」；③缺「使用自动随机文件名」（我方 `savePath` 必填，由调用方给全路径） |
 
 ### 4. 批量抓取（1 条）
 
 | # | 影刀指令 | 影刀核心参数（→输出） | rpa_core 对应 | 状态 | 差距备注 |
 |---|---|---|---|---|---|
-| 30 | [批量数据抓取](yingdao-cmds/批量数据抓取.md) | 网页对象、抓取方式、相似元素循环（→数据表格） | — | ❌ | 影刀的招牌能力（结构化表格抽取 + 分页循环）；可用 queryAll+loop 变通但体验差距大 |
+| 30 | [批量数据抓取](yingdao-cmds/批量数据抓取.md) | 网页对象、批量抓取数据（启动捕获）、保存至数据表格、抓取多页（下一页按钮 + 抓取页数）、保存批量数据至（二维列表）、翻页间隔(秒)、模拟人工点击翻页按钮 | — | ❌ | 影刀的招牌能力（结构化表格抽取 + 分页循环）；可用 `queryAll` + loop 变通但体验差距大 |
 
 ### 5. Cookie 管理（4 条）
 
 | # | 影刀指令 | 影刀核心参数（→输出） | rpa_core 对应 | 状态 | 差距备注 |
 |---|---|---|---|---|---|
-| 31 | [设置Cookie](yingdao-cmds/设置Cookie.md) | 网页对象、浏览器类型、cookie数据 | `browser.cookieSet` | ✅ | Cookie 对象数组（name/value + url 或 domain+path） |
-| 32 | [获取筛选所有Cookie](yingdao-cmds/获取筛选所有Cookie.md) | 筛选(domain/path/name)（→Cookie列表） | `browser.cookieGetAll` | ✅ | name 精确 + domain/path 子串筛选 |
-| 33 | [获取指定Cookie信息](yingdao-cmds/获取指定Cookie信息.md) | cookie名称（→cookie值） | `browser.cookieGet` | ✅ | |
-| 34 | [移除指定Cookie](yingdao-cmds/移除指定Cookie.md) | cookie名称 | `browser.cookieRemove` | ✅ | 缺省 name = 清空全部 |
+| 31 | [设置Cookie](yingdao-cmds/设置Cookie.md) | 网页对象、浏览器类型、cookie name / value / domain / path、标记为 HttpOnly、标记为 Secure、设置为会话 Cookie | `browser.cookieSet` | ✅ | 我方 `cookies` 数组每项支持 name/value + url 或 domain+path，**可选** `expires`/`httpOnly`/`secure`/`sameSite` ⇒ 影刀三个开关都有落点（「设置为会话 Cookie」＝不给 `expires`）。「浏览器类型」↔ 由 `sessionId` 绑定的浏览器路由（机制等价） |
+| 32 | [获取筛选所有Cookie](yingdao-cmds/获取筛选所有Cookie.md) | 筛选 cookie url、浏览器类型、筛选 cookie name、筛选 cookie domain、筛选 cookie partition key、筛选 cookie path、根据 Cookie secure 属性筛选、根据 Cookie 生命周期筛选、保存 cookie 列表至 | `browser.cookieGetAll` | 🟡 | **反向复核改判（原 ✅ → 🟡）**：影刀 V2 有 **7 个筛选维度**，我方只有 3 个（`name` 精确 + `domain`/`path` 子串）。**缺**：① `url` 筛选（V1 必填 / V2 可为空）；② `partitionKey`（影刀 5.16 起 V2 新增，用于 CHIPS 分区 cookie）；③ `secure` 属性筛选；④ 会话/持久化**生命周期**筛选。我方输出 `cookies` 列表项也少 `partitionKey` |
+| 33 | [获取指定Cookie信息](yingdao-cmds/获取指定Cookie信息.md) | url 指定方式（根据网页对象 / 根据输入的 url）、浏览器类型、cookie name、保存 cookie 至（字典）（→cookie 值） | `browser.cookieGet` | ✅ | `sessionId` ↔「url 指定方式＝根据网页对象」（机制等价）；`name` ↔ cookie name；输出 `value` ↔「保存 cookie 至」。**待核对**：影刀声明「同名 cookie 取 path 最长者、path 相同取创建时间较早者」，我方取舍口径未核对（已登记 §四） |
+| 34 | [移除指定Cookie](yingdao-cmds/移除指定Cookie.md) | 浏览器类型、cookie url、cookie name（可为空） | `browser.cookieRemove` | ✅ | `name` 缺省 = 清空全部（对应影刀「cookie name 可为空」）；`sessionId` ↔ 浏览器/cookie store 路由（机制等价） |
 
 ### 6. 网络请求监听（3 条）
 
 | # | 影刀指令 | 影刀核心参数（→输出） | rpa_core 对应 | 状态 | 差距备注 |
 |---|---|---|---|---|---|
-| 35 | [开始监听网页请求](yingdao-cmds/开始监听网页请求.md) | 网页对象、监听条件(URL/资源类型)（→监听对象） | — | ❌ | 接口级取数（比 DOM 抓取稳定），配合扩展执行通道是差异化机会 |
-| 36 | [停止监听网页请求](yingdao-cmds/停止监听网页请求.md) | 监听对象 | — | ❌ | |
-| 37 | [获取网页监听结果](yingdao-cmds/获取网页监听结果.md) | 监听对象（→请求/响应数据列表） | — | ❌ | |
+| 35 | [开始监听网页请求](yingdao-cmds/开始监听网页请求.md) | 网页对象、资源路径 URL、根据通配符匹配、筛选资源类型（JS/图片/文档等）（→监听对象） | — | ❌ | 接口级取数（比 DOM 抓取稳定），配合扩展执行通道是差异化机会 |
+| 36 | [停止监听网页请求](yingdao-cmds/停止监听网页请求.md) | 网页对象 / 监听对象 | — | ❌ | |
+| 37 | [获取网页监听结果](yingdao-cmds/获取网页监听结果.md) | 网页对象、资源路径 URL、根据通配符匹配、筛选资源类型、保存网页监听结果列表至（列表项键：`url`/`type`/`method`/`status`/`body`/`headers`/`requestHeaders`/`requestBody`/`base64Encoded`）（→请求/响应数据列表） | — | ❌ | |
 
 ### 7. 文件与对话框（6 条）
 
 | # | 影刀指令 | 影刀核心参数（→输出） | rpa_core 对应 | 状态 | 差距备注 |
 |---|---|---|---|---|---|
-| 38 | [上传文件](yingdao-cmds/上传文件.md) | 网页对象、操作目标、文件路径 | `browser.upload` | ❌ | 命令已登记但**本期未实现**：扩展单通道下直接返回 `COMMAND_NOT_FOUND`（`element-mvp-boundaries.md` §2.6）。原表标 ✅「一致」是错的 |
-| 39 | [下载文件](yingdao-cmds/下载文件.md) | 网页对象、下载URL、保存路径 | `browser.download` | ❌ | 同 #38（§2.7）。影刀分「URL 直接下载」与「处理下载对话框」两条，两条我们都没实现 |
-| 40 | [处理下载对话框](yingdao-cmds/处理下载对话框.md) | 保存文件夹、随机文件名（→文件路径） | `browser.download` | ❌ | 同 #38（§2.7） |
-| 41 | [处理上传对话框](yingdao-cmds/处理上传对话框.md) | 操作目标、文件路径 | `browser.upload` | ❌ | 同 #38（§2.6） |
-| 42 | [处理网页对话框](yingdao-cmds/处理网页对话框.md) | 网页对象、处理方式(确定/取消) | `browser.handleDialog` | ❌ | 命令已登记但**本期未实现**（`element-mvp-boundaries.md` §2.8；`alert` 会阻塞页面 JS）。原表标 ✅ 是错的 |
-| 43 | [提取网页对话框内容](yingdao-cmds/提取网页对话框内容.md) | 网页对象（→对话框内容） | — | ❌ | alert 文本回读 |
-| 44 | [执行JS脚本](yingdao-cmds/执行JS脚本.md) | 网页对象、参数、JS代码（→脚本结果） | `browser.executeScript` | ✅ | args/timeoutMs/result 对齐 |
+| 38 | [上传文件](yingdao-cmds/上传文件.md) | 网页对象、操作目标、上传文件路径（支持多文件）、输入方式（自动化接口 / 剪切板 / 模拟人工）、等待对话框出现(s)、焦点超时时间(ms) | `browser.upload` | ❌ | 命令已登记但**本期未实现**：扩展单通道下直接返回 `COMMAND_NOT_FOUND`（`element-mvp-boundaries.md` §2.6）。原表标 ✅「一致」是错的 |
+| 39 | [下载文件](yingdao-cmds/下载文件.md) | 网页对象、下载场景（点击下载按钮 / 指定下载地址）、保存文件夹、是否自定义保存文件名、是否等待下载完成、文件保存位置、输入方式、等待对话框出现(s)、焦点超时时间(ms) | `browser.download` | ❌ | 同 #38（§2.7）。影刀分「URL 直接下载」与「处理下载对话框」两条，两条我们都没实现 |
+| 40 | [处理下载对话框](yingdao-cmds/处理下载对话框.md) | 浏览器类型、对话框按钮、保存文件夹、是否自定义保存文件名、是否等待下载完成、文件保存位置、等待对话框出现(s)、焦点超时时间(ms)（→文件路径） | `browser.download` | ❌ | 同 #38（§2.7） |
+| 41 | [处理上传对话框](yingdao-cmds/处理上传对话框.md) | 浏览器类型、对话框按钮（确定/取消）、上传文件路径、输入方式、等待对话框出现(s)、焦点超时时间(ms) | `browser.upload` | ❌ | 同 #38（§2.6） |
+| 42 | [处理网页对话框](yingdao-cmds/处理网页对话框.md) | 网页对象、对话框按钮（确定 / 取消）、输入内容（prompt 用）、等待对话框出现(s) | `browser.handleDialog` | ❌ | 命令已登记但**本期未实现**（`element-mvp-boundaries.md` §2.8；`alert` 会阻塞页面 JS）。原表标 ✅ 是错的。原表把参数写成「处理方式(确定/取消)」，镜像正文为「对话框按钮」，已改正 |
+| 43 | [提取网页对话框内容](yingdao-cmds/提取网页对话框内容.md) | 网页对象、存储对话框内容至、等待元素存在(s)（→对话框内容） | — | ❌ | alert 文本回读 |
+| 44 | [执行JS脚本](yingdao-cmds/执行JS脚本.md) | 网页对象、参数、javascript、存储脚本执行结果至、等待元素存在(s)（→脚本结果） | `browser.executeScript` | ✅ | `args`/`timeoutMs`/输出 `result` 对齐 |
 
 ---
 
 ## 三、结构性差距（跨指令切面）
 
-影刀的指令面之下有 6 个横切模式，rpa_core 需要对应机制才能补齐上面的 ❌/🟡：
+影刀的指令面之下有 7 个横切模式，rpa_core 需要对应机制才能补齐上面的 ❌/🟡：
 
-1. **会话对象变量**：影刀 39/44 条指令第一参数是「网页对象」（用户命名变量，fx 引用）。rpa_core 用 `sessionId` + `${steps.x.outputs.sessionId}`，机制等价、编辑器已包装为对象下拉 —— 维持现状（调研文档决策）。
-2. **浏览器类型枚举**：影刀 7 值用户语义枚举（cef/chrome/edge/ie/360se/firefox/QQBrowser）vs 我们 `transport`+`channel`。一等公民扩展通道落地时需重定义（见 `yingdao-command-model.md` §五-1）。
-3. **等待元素存在(s) / 执行后延迟(s)**：影刀所有元素操作指令的标准尾参。我们部分命令有 `timeoutMs`/`postDelayMs`，但**不统一**——补命令时应作为规范默认带上。
+1. **会话对象变量**：影刀 39/44 条指令第一参数是「网页对象」（用户命名变量，fx 引用）。rpa_core 用 `sessionId` + `${steps.x.outputs.sessionId}`，机制等价、编辑器已包装为对象下拉 —— 维持现状（调研文档决策）。**不计缺口**。
+2. **浏览器类型枚举**：影刀 7 值用户语义枚举（cef/chrome/edge/ie/360se/firefox/QQBrowser）vs 我们 `transport`+`channel`。一等公民扩展通道落地时需重定义（见 `yingdao-command-model.md` §五-1）。**平台性差异，不计缺口**。
+3. **等待元素存在(s) / 执行后延迟(s) / 焦点超时时间(ms)**：影刀所有元素操作指令的标准尾参。我们部分命令有 `timeoutMs`/`postDelayMs`，但**不统一**——补命令时应作为规范默认带上。**通用尾参，§一 口径里明示不逐行计分**（本节即其统一记账处）。
    > **M30 更新（2026-09-21）**：`timeoutMs` 的「声明了不生效」已四类通道全部收口
    > （`.harness/scripts/check_param_consumption.py` 覆盖 78 条命令、跳过 0 条），
    > 桌面侧 `timeoutMs` 已变成**真等待**（此前是一次性查找）。但**「统一带上」这件事仍未做**——
    > 各通道的 `timeoutMs` 语义还有一处刻意差异：桌面侧会连带抬高节点超时与执行器操作超时
    > （浏览器侧只交给等待选择器）。`postDelayMs` 的统一化同样仍待办。
    > 详见 `docs/element-mvp-boundaries.md` §3.4 与 `docs/desktop_backends.md`「超时层级与元素等待」。
-4. **元素库（捕获的元素描述符）**：影刀「操作目标」一律来自元素库（捕获 + 云端持久化）。我们用裸 `selector` 字符串；自研扩展已具备捕获能力，需要把捕获产物接入命令参数（elementRef 结构化）。
+4. **元素库（捕获的元素描述符）——已落地，本项不再是差距（2026-10-12 更正）**：影刀「操作目标」一律来自元素库
+   （捕获 + 云端持久化），**不向用户暴露底层 selector**（截图 `docs/yingdao-cmds/assets/填写输入框_web/img0.png`：
+   `操作目标:（未选择元素）[去元素库选择]`）。我方早期用裸 `selector` 字符串，**M52 S6 起已 ref-only**（ADR-002）：
+   `selector` 这个参数在参数面板里就是「从元素库选择」下拉（`element_kind_for_param_key("selector") == "browser"`，
+   `param_form._attach_element_row`），被引用参数**不进 `with`**、运行期从 `elements/` 解析，取不到即
+   `ELEMENT_REF_MISSING` 硬失败。⇒ 原来的「我们用裸 selector 字符串……需要把捕获产物接入命令参数（elementRef 结构化）」
+   **已经做完**，本条描述此前未更新，现改正。仍需补的是下一条的**元素对象句柄**，以及「关联父元素」这类限定范围参数。
 5. **元素对象句柄**：影刀支持把元素保存为对象变量再操作（获取元素对象/关联元素/相似元素列表）。我们是纯 selector 模型，缺这层（影响 #20/#24/#25）。
 6. **错误处理三件套**：影刀所有指令统一带「错误处理方式(继续/停止/重试)+重试次数」。我们 `errorPolicy` 已覆盖，需确认新命令默认接入。
+7. **我方多出的参数（反方向登记，不是缺口）**：`navigate.action`（影刀另立「跳转至新网址」）、`getText.infoType=outerHTML`、`click.button=middle`、`waitFor.state` 的 `hidden/attached` 细化、`getSelectOptions` 回带 `value`/`selected`、`setValue.setWay`（本命令扩展）、`close` 的「本地解绑」语义（影刀只有关闭）。
+   登记在此，避免下次复核又把它们当成「凭空多出来的参数」——**这正是触发本轮复核的那个问题**。
 
 ---
 
@@ -168,6 +213,23 @@
       扩展通道缺 CDP，`<input type=file>` 的赋值与原生对话框都无法从 service worker 完成
       ——落地路径与代价见 `docs/element-mvp-boundaries.md` §2.6/§2.7/§2.8 与 `.harness/BACKLOG.md` P4 三片。
 
+**P2.5 — 影刀有、我方无的「行为性参数」补齐（2026-10-12 反向复核新增，按命令归口）**
+
+- [ ] `attach`：匹配失败时打开新页面 / 等待网页加载完成 / 匹配当前选中的页面（#3）
+- [ ] `waitLoad`：加载超时后执行＝停止网页加载（#6）
+- [ ] `click` / `input` / `hover`：鼠标点击（悬停）位置 **九宫格 + 自定义任意点**（我方只有 center/random）；`click` 的「显示鼠标移动轨迹」（#10/#11/#12）
+- [ ] `hover`：模拟人工悬停（bool）+ 延迟时间（#11）
+- [ ] `input`：输入内容包含快捷键（`{enter}` 等符号）、强制加载美式键盘(ENG)、`mode` 的 5 种细分（#12/#13）
+- [ ] `select`：匹配方式（模糊 / 精准 / 正则）（#14）
+- [ ] `drag`：拖拽方式、鼠标按下位置、鼠标释放位置（#18）
+- [ ] `getPosition`：相对屏幕左上角、转为 dpi 96（#21）
+- [ ] `listPages`：匹配方式（匹配所有 / 按标题，含通配符）（#27）
+- [ ] `cookieGetAll`：url / partitionKey / secure / 生命周期 4 个筛选维度（#32）
+- [ ] `screenshot`：元素截图与整页截图、保存图片至剪切板、自动随机文件名（#29）
+- [ ] `queryAll`：元素操作 6 种取值（对象/文本/值/链接/源码/属性）、关联父元素、XPath 定位（#24）
+- [ ] **待决策（语义级，改它会动错误契约）**：`waitFor` 影刀「超时后继续并返回 False」，我方现为抛 `TIMEOUT`（#19）
+- [ ] **待核对**：`cookieGet` 同名 cookie 的取舍口径（影刀 = path 最长优先、再取创建更早者）（#33）
+
 **实现边界说明**：新命令统一为自研扩展单通道实现。
 
 ---
@@ -183,11 +245,11 @@
 | 影刀 | 我方 | 结论 |
 |---|---|---|
 | 网页对象 | `sessionId` | 等价（编辑器已包装成对象下拉） |
-| 操作目标（元素库） | `selector` | 机制等价（我们无元素句柄，见 §三-4/5） |
-| 相对于（屏幕左上角 / 浏览器页面左上角） | — | **只支持后者**（`getBoundingClientRect` 即视口坐标）。屏幕坐标**未支持**，已记欠账 |
+| 操作目标（元素库） | `selector` | 机制等价（我方 `selector` 已是元素引用，见 §三-4） |
+| 相对于（屏幕左上角 / 浏览器页面左上角） | — | **只支持后者**（`getBoundingClientRect` 即视口坐标）。屏幕坐标**未支持**（§四 P2.5） |
 | 转为 dpi96 | — | **未支持**；扩展通道拿不到可信的设备缩放因子来源 |
 | 等待元素存在(s) | `timeoutMs` | 等价 |
-| 输出：左边距/右边距/顶部边距/底部边距/中心点横坐标/中心点纵坐标/宽度/高度（**8 项**） | `x` / `right` / `y` / `bottom` / `centerX` / `centerY` / `width` / `height`（**8 项**） | **本轮补齐**：`right`=x+width、`bottom`=y+height、`centerX`=x+width/2、`centerY`=y+height/2，由执行器从 boundingRect **派生**（扩展只回四个原始量，避免两套算法漂移） |
+| 输出：左边距/右边距/顶部边距/底部边距/中心点横坐标/中心点纵坐标/宽度/高度（**8 项**） | `x` / `right` / `y` / `bottom` / `centerX` / `centerY` / `width` / `height`（**8 项**） | **已补齐**：`right`=x+width、`bottom`=y+height、`centerX`=x+width/2、`centerY`=y+height/2，由执行器从 boundingRect **派生**（扩展只回四个原始量，避免两套算法漂移） |
 
 > 命名口径：我方沿用 `x`/`y`（=左边距/顶部边距）而非 `left`/`top`，是历史命名，
 > 语义与影刀一致（`x` 就是左边距）；`x-outputs` 的中文标签已写成「X 坐标 / Y 坐标 / 右边距 / …」。
@@ -197,9 +259,9 @@
 | 影刀 | 我方 | 结论 |
 |---|---|---|
 | 网页对象 | `sessionId` | 等价 |
-| 元素滚动条（可选；**无滚动条时自动向上查找**） | `selector`（可选） | 可选元素对齐；**「自动向上查找」未支持** |
-| 滚动条（纵向/横向） | `direction`（`vertical` 默认 / `horizontal`） | **本轮新增** |
-| 位置（当前位置/底部位置） | `position`（`current` 默认 / `bottom`） | **本轮新增** |
+| 元素滚动条（可选；**无滚动条时自动向上查找**） | `selector`（可选） | 可选元素对齐；**「自动向上查找」未支持**（健壮性差异，§一 口径第 3 类） |
+| 滚动条（纵向/横向） | `direction`（`vertical` 默认 / `horizontal`） | **M53 新增** |
+| 位置（当前位置/底部位置） | `position`（`current` 默认 / `bottom`） | **M53 新增** |
 | 等待元素存在(s) | `timeoutMs` | 等价 |
 | 输出：滚动位置（**单个数值**） | `scrollPosition`（新）+ `scrollX`/`scrollY`（**保留**） | `scrollPosition` 按 `direction`×`position` 取轴取值；旧输出**恒返回、语义不变**（维护者定案：不破坏既有流程） |
 
@@ -213,14 +275,14 @@
 
 | 影刀 | 我方 | 结论 |
 |---|---|---|
-| 操作目标（元素库） | `selector` | 机制等价 |
+| 操作目标（元素库） | `selector` | 机制等价（元素引用，见 §三-4） |
 | 操作：获取元素文本内容 | `infoType=text`（默认） | 等价（可见文本；输入框回退 textContent/title/placeholder，见 `content.js`） |
 | 操作：获取元素源代码 | `infoType=html` | 等价（元素内部 HTML）；另有多出的 `outerHTML`（含元素自身的完整 HTML） |
 | 操作：获取元素值 | `infoType=value` | 等价 |
 | 操作：获取网页链接地址 | `infoType=href` | 等价 |
-| 操作：获取元素属性（href/src/class…） | `infoType=attribute` + `attributeName` | **本轮新增** |
+| 操作：获取元素属性（href/src/class…） | `infoType=attribute` + `attributeName` | **M53 新增** |
 | 操作：获取元素位置 | — | 由 `browser.getPosition` 独立承担（见 5.1） |
-| 智能识别并补充地址前缀(http:// 或 https://) | `completeUrlPrefix`（默认 `false`） | **本轮新增**，**仅 `infoType=href` 生效**（维护者定案，严格对标该选项在影刀里挂在「获取网页链接地址」之下） |
+| 智能识别并补充地址前缀(http:// 或 https://) | `completeUrlPrefix`（默认 `false`） | **M53 新增**，**仅 `infoType=href` 生效**（维护者定案，严格对标该选项在影刀里挂在「获取网页链接地址」之下） |
 | 等待元素存在(s) | `timeoutMs` | 等价 |
 | 保存元素信息至 | `value` | 等价（单字符串输出；`x-outputs.value.primary=true`） |
 
@@ -231,3 +293,36 @@
 > ⑤ 其余（裸域名/裸文本地址）→ 补「当前页面协议 + `//`」。补哪个协议按**当前页面**协议
 > （页面是 `http:` 就补 `http:`，其余一律 `https:`）。协议头判据与 host 侧 `_SCHEME_RE`
 > **同口径**（跨端正则由 `scripts/check_url_prefix_helpers.mjs` 钉住）。
+
+---
+
+## 六、反向复核方法与本次改正记录（2026-10-12）
+
+### 方法（可复用）
+
+1. **影刀侧事实源** = `docs/yingdao-cmds/*.md` 的**镜像正文**（44 条；正文无标记，只能按「短行 + 后接较长说明」的
+   形状抽取「参数行」，再人工判它到底是**参数**、还是**选项值**、还是**小节标题**——本次抽出的候选里，
+   「影刀浏览器 | cef」这类选项值、「指令背景/限制一」这类小节标题都混在里面，**必须逐条看说明文字才能定性**）。
+2. **我方侧事实源** = `commands/browser/*.json`（唯一事实源）：参数名 + 枚举值 + 输出项。
+3. **双侧对账**：正向（我方参数 ⇒ 影刀是否承认）+ **反向（影刀每个参数/枚举值 ⇒ 我方是否有落点）**，按 §一 口径定状态。
+
+### 本次改正（3 类）
+
+| 类 | 处数 | 明细 |
+|---|---|---|
+| ① 凭记忆写错的影刀参数 | 3 | #12「输入方式」写成「(set_value/模拟人工/逐字按键)」——实为 5 种，且「set_value」不是影刀用词；#14「选择方式」写成「(按文字/索引/值)」——实为「按选项内容/按选项位置」，并漏掉整个「匹配方式」；#19「等待状态」写成「(出现/消失/可见/不可见)」——镜像正文只有「出现/消失」，多出的两值是把**我方**枚举反填成影刀的 |
+| ② 漏列的影刀参数（改判 🟡 的依据） | 11 行 | #3 #6 #10 #11 #12 #14 #18 #19 #21 #27 #32（另 #24 #29 补齐了缺口清单）；已逐条写进 §二 备注并在 §四 P2.5 归口 |
+| ③ 已过期的结构性结论 | 1 | §三-4「元素库」写着我方仍是裸 `selector`、待 elementRef 结构化——**M52 S6 已完成**，已改写；并区分「元素库引用（已做）」与「元素对象句柄（未做）」 |
+
+### 为什么会漏（写下来防止重犯）
+
+上一轮（2026-10-12 M53）的复核是**单向**的：只查「我方参数/命令 ⇒ 影刀是否也承认」，
+用来抓「我方多出来的假参数」（抓到 `setWay`）与「我方口径写错」（补前缀只对 href 生效）。
+**没有做反向那一半**：影刀文档里每个参数、每个枚举值，我方有没有落点。
+而 `selector` ↔ 影刀「操作目标」这种「**名字不同、机制对应**」的一对，**单向扫描永远不会报出来**；
+加上 §三-4 是个 2026-09-10 建档后再没更新过的条目（`git log -S` 只有一个提交），
+于是一个「我方多带的参数」在表里既没被当成差异、也没被当成已解决。
+
+⇒ **规矩：对标/口径类复核必须双向。** 本方参数 → 对方查「凭空多出来的假参数」；
+对方参数/枚举值 → 本方查「漏项」。缺任一半，都会出现「整表看着绿、其实对不上」的假覆盖。
+启动复核前先看这份基线文档自身的**最后更新日期**，凡是早于相关里程碑的结论都要先当可疑。
