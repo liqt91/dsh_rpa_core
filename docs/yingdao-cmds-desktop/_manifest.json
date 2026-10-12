@@ -1,0 +1,461 @@
+{
+  "source": "yingdao help center /api/noauth/v1/yddoc",
+  "brandCode": "rpa",
+  "languageCode": "zh-CN",
+  "group": "桌面软件自动化",
+  "scrapedAt": "2026-10-12T12:55:23+0800",
+  "count": 40,
+  "docs": {
+    "获取窗口对象": {
+      "name": "获取窗口对象",
+      "docId": "722724724878135296",
+      "url": "https://www.yingdao.com/yddoc/rpa/zh-CN/help/722724724878135296",
+      "body": "b425900d45105b1b67d08848de1d37824a9e58e18305749cd1600a730902723a",
+      "images": [
+        "3dff89ad6b1f92dbd79f9236a8d8d5cf2f48e85590f365a961438a67e6ffe45e",
+        "b75cff5befc81164a256c97c59b78617042992a516981971e4c841867afa59fa"
+      ]
+    },
+    "获取窗口对象列表": {
+      "name": "获取窗口对象列表",
+      "docId": "711541999601172480",
+      "url": "https://www.yingdao.com/yddoc/rpa/zh-CN/help/711541999601172480",
+      "body": "862b6dd308c3e679dcb675bc8c736de41dd6451ed8d6a9f704290c7d60ad5793",
+      "images": [
+        "daf9efe8e9ccdfc27fa06a96aed159abbdf7e415814261bd7e5f132eb52006ee"
+      ]
+    },
+    "点击元素_win": {
+      "name": "点击元素(win)",
+      "docId": "711540898209185792",
+      "url": "https://www.yingdao.com/yddoc/rpa/zh-CN/help/711540898209185792",
+      "body": "854b4eac1e2dbb5dbd471f585eeb6ae642c4bb46ed2ef538e22ead0b4348c2a9",
+      "images": [
+        "1a88b0022fbf9fb3c3a07551770737cbdf6e58885f5249dd4247a21c156b63ac",
+        "1bdfb5befebe389d5b2fb7ffd9f6942750d11db106ac95b702a1209576ebe316",
+        "65dc31b44f48448794171a13bfa7b5981e38ac46901dd1784f4fc9992148105f"
+      ]
+    },
+    "鼠标悬停在元素上_win": {
+      "name": "鼠标悬停在元素上(win)",
+      "docId": "711539997456150528",
+      "url": "https://www.yingdao.com/yddoc/rpa/zh-CN/help/711539997456150528",
+      "body": "decce58b3141c6facd9d77eb9b36a4e5a2b4a998f380b2baa1d1674d0616cea8",
+      "images": [
+        "50779e772948786f50911fadde325237c34849d4a1424ae3999a6ae7ae2746b3",
+        "e84d1c9ee442df977fbb77a185de390feb3811cc142a560311c6a31b8a7a89e5",
+        "7aa01be3972e22830ec6490b65aa97a8ba318d69f0abaa5678fe7756332c1277"
+      ]
+    },
+    "填写输入框_win": {
+      "name": "填写输入框(win)",
+      "docId": "711538637392560128",
+      "url": "https://www.yingdao.com/yddoc/rpa/zh-CN/help/711538637392560128",
+      "body": "a611ea5b3d9a924ff08033f4ada203c9b852d0ccdb15563cdf93c379a7880997",
+      "images": [
+        "215f2ae7795269530699e74d8649d74dec89ceb722fdcb366f66ab4c530be008",
+        "ee037c79519ad980b0b020481517010c0de15651cf42ceef23387e0adb55d5bd",
+        "af067557be986c9df35738895469fab7b8047c1900aed2c698a18625e26d3d0a",
+        "dfdc13e424ddde0628dede8e6f82a918acea0aefb6f716efdd27b2d5cd2fc9d3"
+      ]
+    },
+    "运行或打开": {
+      "name": "运行或打开",
+      "docId": "716536339057848320",
+      "url": "https://www.yingdao.com/yddoc/rpa/zh-CN/help/716536339057848320",
+      "body": "8ac569256827796a83d55f8cdc1bc6a057ab5c0875bcb84c477331e926318c2b",
+      "images": [
+        "ab48c2362a9c12cd53692bc4e1531d1f05a953937388718a2746ab32799bf88d",
+        "92939200c9291614d944b0b2e9cf287705c42ac765cc91d9128559b445258d23",
+        "24dfb30d6a413c52526c88ab4baeb19af20c6afd8b29c40de820bace3b9f0fed",
+        "c698ee1360a5b085bac5dbab11b22f31489d4b383e0465691bb31a2df533f63c",
+        "6b9feb9f42bd70eec0484407b478613aa561e2ed434e64ea3f068e713cf1058d"
+      ]
+    },
+    "拖拽元素_win": {
+      "name": "拖拽元素(win)",
+      "docId": "711537456075714560",
+      "url": "https://www.yingdao.com/yddoc/rpa/zh-CN/help/711537456075714560",
+      "body": "490d1a1027b474661f1f1d50f4f20e669811c32ad8c97e136a6343b6b17e87dd",
+      "images": [
+        "9495d1525187342cf0cdf693e8c808f3d66b217f792d203e2a757185110becee",
+        "8157a535f538efd9da18920322ffe0ee526e92e0686172eb15b7e504472253bb",
+        "aea114be49caa0307d82277da9eef4f44567d996f9611136ef6d7f2a2bf7c1c2",
+        "dd3d63957dfc44e662ae1717c6a24ec8a623881a477ec7dea2a161473edec9db"
+      ]
+    },
+    "等待元素_win": {
+      "name": "等待元素(win)",
+      "docId": "711536330364391424",
+      "url": "https://www.yingdao.com/yddoc/rpa/zh-CN/help/711536330364391424",
+      "body": "977c99a8004dafae824f42790a4cfd6a843d8097d87f6eabcf5cd15485711307",
+      "images": [
+        "ad22866c634c37c25695a222e386f0f64ecfe49185d77dc57246bd5d2fd4c938",
+        "eaecc3229304829017877e49eca247281c8d8be2731a2da666b2f3b4382ff828"
+      ]
+    },
+    "填写密码框_win": {
+      "name": "填写密码框(win)",
+      "docId": "711535077082775552",
+      "url": "https://www.yingdao.com/yddoc/rpa/zh-CN/help/711535077082775552",
+      "body": "cb11eb091b4c7f20b296005e21e8defd85cc0fb2a3dc34254419675942af25d0",
+      "images": [
+        "e1695a9dedeb3abbb7f7d88c4e74aadcc8049a163f0b39e6cd0e83da0f426a55",
+        "1c040562a064bde4874f4e12630da83c51796283812010e25d4acd2a2d7ae84a",
+        "5932b7dc913c6eeb9478702d3590420f2679b4afa04546c7e0aac62bf8ae1fca",
+        "e6502dd9131ec4190f2d807172e663bb7b343641e3dccdf6c349e0bf4852e483"
+      ]
+    },
+    "设置下拉框_win": {
+      "name": "设置下拉框(win)",
+      "docId": "711534008175673344",
+      "url": "https://www.yingdao.com/yddoc/rpa/zh-CN/help/711534008175673344",
+      "body": "d40caead7379a60fb61870b5f232f27246c622dd5cc70b59bcfbce431775d44c",
+      "images": [
+        "cbd1269f82ff707b52e10dc757c6f5d61e1435cd3180d7491beced9f5a5ec17f",
+        "7bffb29413ac8e7872a69fa5a5ff03ccd6258be406e252d701053d0dbd294eb7",
+        "5cb13688e967b98e52389a28a0470d8114463ae66a5bdc5c1846b3ea4d6a25d8",
+        "3bf7cb168b34ed8aa2b2bc2de4d0717ef48a4797e45482a94fd0a9dca9c4b301"
+      ]
+    },
+    "设置复选框_win": {
+      "name": "设置复选框(win)",
+      "docId": "711532996210327552",
+      "url": "https://www.yingdao.com/yddoc/rpa/zh-CN/help/711532996210327552",
+      "body": "1d4f92629eddae0516abb88037692fa17818949faa267ae52613c1f12cd4c562",
+      "images": [
+        "bbce8455b807e307bc20682278bd0b9d699804aad778fd076dad46032ab8085b",
+        "61e24d6ab55cd435c9225fedccf6bc4a296ecdf426d72052097d88683f714bdd",
+        "929e7de9aa4aba5677b1968bd53e136917696a4f1985689210a44f23523beaca",
+        "12357cd7f57bc18d37c2004e16a37a0cb6b4688f4eb9c5d46e00665b1179e2dd"
+      ]
+    },
+    "设置元素值_win": {
+      "name": "设置元素值(win)",
+      "docId": "711532018751488000",
+      "url": "https://www.yingdao.com/yddoc/rpa/zh-CN/help/711532018751488000",
+      "body": "2cf3e4276626dc4d6cc342005021646e339c541fdabe6e014cefa35c35d06961",
+      "images": [
+        "241edf92a19d7d254b1bce470f491b2f277352e107a982f180ffd8342cc60da6",
+        "3b1957e06561b391d60fd980cadd2b8b1295527385176febc03d8b1162e7f827",
+        "ee76f794dcc02de6068d4373fb3a764cae8480dd830e317edf0887258e5d88c1",
+        "cd6c21fac1fae66d1f5c8eaa59f54a34644de7b5d5668cd576b3714921cd2b46"
+      ]
+    },
+    "获取元素对象_win": {
+      "name": "获取元素对象(win)",
+      "docId": "711531014460407808",
+      "url": "https://www.yingdao.com/yddoc/rpa/zh-CN/help/711531014460407808",
+      "body": "b1af28c9a7ed0035f123680d401c88e00d5b405660c29f3f335167341f82c1d1",
+      "images": [
+        "27bdcb3835e38d5b891a1f19de7717776d6e83cc7083a0d1b6b2261ba54e34e0",
+        "f23108a24091088f7ac31ff1b2180491ab0cae7ba0148c1d23ea7ea20090777b",
+        "723c4376e97f7d6d3eec0b3a7808eedab68ec5a2b23df4e71a80542bcb146e3b",
+        "6c9e26fd1c5ba40834b86300b9f52ba42c6217558d9795ffecb55a6683dd3e9c"
+      ]
+    },
+    "获取关联元素_win": {
+      "name": "获取关联元素(win)",
+      "docId": "711529786270756864",
+      "url": "https://www.yingdao.com/yddoc/rpa/zh-CN/help/711529786270756864",
+      "body": "191d3c44a5e3a1e41374e9eced9b270660e7658f5ffca4207bc0f5763b489a72",
+      "images": [
+        "909ca871b7a3d2bfb62bdeee6da47c6354873943586df06896c1576b7cc95b17",
+        "92a857dcacd8f38afc3b27fc08006015bfb5b8b6bc5d142335c1bbdd8851ef00",
+        "dde210863b1e6cbed5cdca99b7a02380938273d4a11a3f56c9f0523eca66fe0a",
+        "3becc8c64e719b0e194696d34197ca4d7f5886cc6cc27fff3f0038e4b7879530",
+        "59bf911032238453d3e93b8ef0a567e4145011eb71d4c88ab07bc4bc7cad1540"
+      ]
+    },
+    "获取相似元素列表_win": {
+      "name": "获取相似元素列表(win)",
+      "docId": "711528339464491008",
+      "url": "https://www.yingdao.com/yddoc/rpa/zh-CN/help/711528339464491008",
+      "body": "242dcd08696240fe47986b4019a68597adb11ddedd4681b110bca028ecf19dd4",
+      "images": [
+        "1ec70445eab54beb1a6664bf33a0fe37a8f37ded85add646dcb83798e633a804",
+        "2c64c01904206f8bec202b713910b5e59b4d7138d7947b0c89b77ad83977db93",
+        "18b420792bcba4cf3a3542562d0a74d841c1b29908ea8b2c1276fb1e14fccf31",
+        "68d5187c89c995442bf0a827198fd2bbf81d0d91f66a25012a94633ae04a8a99"
+      ]
+    },
+    "窗口操作_获取窗口对象": {
+      "name": "获取窗口对象",
+      "docId": "711527614915526656",
+      "url": "https://www.yingdao.com/yddoc/rpa/zh-CN/help/711527614915526656",
+      "body": "b425900d45105b1b67d08848de1d37824a9e58e18305749cd1600a730902723a",
+      "images": [
+        "3dff89ad6b1f92dbd79f9236a8d8d5cf2f48e85590f365a961438a67e6ffe45e",
+        "b75cff5befc81164a256c97c59b78617042992a516981971e4c841867afa59fa"
+      ]
+    },
+    "激活软件窗口": {
+      "name": "激活软件窗口",
+      "docId": "711526964947976192",
+      "url": "https://www.yingdao.com/yddoc/rpa/zh-CN/help/711526964947976192",
+      "body": "49155f61dc76a84cd9494e2141523976f0f9824174a5d65fe0cbe2518623c9bf",
+      "images": [
+        "03b78f7b000aabbe7744edd1ff00036d715a1905c815058b14f1b12dd275c9e7",
+        "733fc61e8d02e48bfe89be79d72d6d84fdc8b1613950d777a3e8757952f52cba"
+      ]
+    },
+    "设置窗口状态": {
+      "name": "设置窗口状态",
+      "docId": "711526300570562560",
+      "url": "https://www.yingdao.com/yddoc/rpa/zh-CN/help/711526300570562560",
+      "body": "65a3ad7ce7eed34734cd97e31d7c303b610a248c16629e73ef32453d1a32ae87",
+      "images": [
+        "d49209c5e202b1b02d5bd016e70471c370c3e37c9e2b94afebf1624fad842d6c",
+        "b321c9a90559ec6700755206dabe75a111f021c9f965b47cb569acd01e286cd9"
+      ]
+    },
+    "设置窗口是否显示": {
+      "name": "设置窗口是否显示",
+      "docId": "711525635005820928",
+      "url": "https://www.yingdao.com/yddoc/rpa/zh-CN/help/711525635005820928",
+      "body": "1a14d9dd3e7cdc85a8eadde4b81233ae8e6c66876c1ad8647d7d53b785b04466",
+      "images": [
+        "cd6e76db3007232816f4cb92a2c1e178066b7aaf44f5b834f33718683c392bb4",
+        "cf7d30afc1940c34d93e1f3bf5d65548624f63efda69b8a38b9dc01ffb9d07b3"
+      ]
+    },
+    "移动窗口位置": {
+      "name": "移动窗口位置",
+      "docId": "711524970015358976",
+      "url": "https://www.yingdao.com/yddoc/rpa/zh-CN/help/711524970015358976",
+      "body": "dc356a81a7cb1611f96cf059c69b7a258e26737bfb8ca3072d4c236d29f2c095",
+      "images": [
+        "bc17a47cca729c6ecf60a429730ff871dee10510bce7cbe40dbc8433b3feda59",
+        "cb49aa48ca5a5561b24513d687d36591f97ecf624acad934e07633579d8446a6"
+      ]
+    },
+    "调整窗口大小": {
+      "name": "调整窗口大小",
+      "docId": "711524250847752192",
+      "url": "https://www.yingdao.com/yddoc/rpa/zh-CN/help/711524250847752192",
+      "body": "0b3299b248be26d12a660722161f71080d9a878c64286658e13400bf1788cf24",
+      "images": [
+        "42f7249370b59c7ff018bfd60b4c92cb2b14494d5e5880391453f95b5029f2ff",
+        "3f7209c6c3c1a39411a2025977ebb1d48db2955908583ae922bf54ad703e55c5"
+      ]
+    },
+    "关闭软件窗口": {
+      "name": "关闭软件窗口",
+      "docId": "711523613478207488",
+      "url": "https://www.yingdao.com/yddoc/rpa/zh-CN/help/711523613478207488",
+      "body": "5e97b970786cc94842a68594b15918dc7506dc65662f1c29ef67287ba074103a",
+      "images": [
+        "937ff7cd7e18004d50e13720f081aeeb3c44acf012e8eac02e84e361dcd0f8eb",
+        "032fd2a7624d111c141f8e1beca02bb6e4e17a847ed829d7c64d0dc224e35c44"
+      ]
+    },
+    "常用元素属性": {
+      "name": "常用元素属性",
+      "docId": "730347552696844288",
+      "url": "https://www.yingdao.com/yddoc/rpa/zh-CN/help/730347552696844288",
+      "body": "4e1f8a0824530fb7a55baef16466f5f796e46ed1b2f4c1d35d948b09bf957f9b",
+      "images": [
+        "46c4b7e3b6c5e60ce2fa638a09537292916317111148344b2c458533306bd625"
+      ]
+    },
+    "元素截图_win": {
+      "name": "元素截图(win)",
+      "docId": "711522642030178304",
+      "url": "https://www.yingdao.com/yddoc/rpa/zh-CN/help/711522642030178304",
+      "body": "05501e2a1e8d3b3584ebe0c401b5c6e8e2957e07e26a09908dabc3c820fd0ac9",
+      "images": [
+        "5989bbc1362fc5ac3336ee5d72225559f0da1d1ba475ad31ee41d28ecbf39bf2",
+        "3c1186e67fc609064e3004c664fe45ab7f468667101696df7e04b44f76972165",
+        "e9dcca403df4e22c5064310d08da351d1f71f3c89b6cba9416a854ef0a9820ed"
+      ]
+    },
+    "获取元素信息_win": {
+      "name": "获取元素信息(win)",
+      "docId": "711521417084506112",
+      "url": "https://www.yingdao.com/yddoc/rpa/zh-CN/help/711521417084506112",
+      "body": "00ded4495a4850c927f0a35f0e5f1e32015f530521918bb194813022c5a646f0",
+      "images": [
+        "1e9f6cdd9fea1c255f7ddcb0b823c27c151a8e24ad4baddc2fdf9821bfd02096",
+        "215d298c89421b7d7c980c5ca228f600739b8b232b084f85964bddd529deeb3e",
+        "3ba1da45d3f55c4a39045b43381f4dfd3633fa2e481f4398280fe1a4495962fe",
+        "5441075348103d23cae43671154af2776b71cf3b7c16ff02b5e258850c501947",
+        "2c38ebd80e949ba6cc8f55a63d47cedf38157d4ff80b6edcf290dfb24a954a99"
+      ]
+    },
+    "获取元素位置_win": {
+      "name": "获取元素位置(win)",
+      "docId": "711520193666822144",
+      "url": "https://www.yingdao.com/yddoc/rpa/zh-CN/help/711520193666822144",
+      "body": "58991952d746f5464bac47392b6083808a8e9f18b9e2f5f9cc041e659213ef58",
+      "images": [
+        "b418fa3a5fbe372d4bd04d47e0c30ddb502411a1278ef956de52fec1909e0954",
+        "ac34d264e1c1e99af6896b7c428972b02ad831e83380b07ec5b031f5485df029",
+        "3b7bf7491ab84a74086004ddb1c787c196f335adface3a9fe718985757e9c268",
+        "e43d96f7ae31b45f6a9f44f1de1b8b962e21523ea878c79ce2c26f8efab3f885",
+        "13f27c691b772f69a3577871d075e9d023f3c901565634a0b978bcfe5cda8a55"
+      ]
+    },
+    "获取下拉框选项_win": {
+      "name": "获取下拉框选项(win)",
+      "docId": "711519055898947584",
+      "url": "https://www.yingdao.com/yddoc/rpa/zh-CN/help/711519055898947584",
+      "body": "4eeac106d5eacb329a9c554d5e493c30d686ed3664bfe6f693f67d14731bf608",
+      "images": [
+        "2e7c3cb6108326311af5dd94d8287974075539c7db4e31075a6ed7ebcb889c8a",
+        "529e5e137345dae4dbbafef760851801f800477dcf3b11934c1046d3b697c5df",
+        "5cb13688e967b98e52389a28a0470d8114463ae66a5bdc5c1846b3ea4d6a25d8",
+        "61c51ff7b430dffbfcf192b6b23a5fec0d7cb4740bc37f064af76d014c2547a2",
+        "e331edfd3975c61cd26a59cb86b45d8f710ab320bf9565b10e1a097dc0901bea"
+      ]
+    },
+    "获取窗口信息": {
+      "name": "获取窗口信息",
+      "docId": "711518091920261120",
+      "url": "https://www.yingdao.com/yddoc/rpa/zh-CN/help/711518091920261120",
+      "body": "27a0de71096d15bc28d33f54c9249975ecf6e1e5a771e24e7ab5fee80f8587be",
+      "images": [
+        "7613f3e33899c522f5022e0056afffbd51c2364b157bab642214c10327884898",
+        "bb2b9b25d232a7660885d60876771b8ef4e37da2d3ad6e314b14691205f7a257",
+        "c7dafab4548106a83e611c6b87261288a6b407bbf5377aeb14a1d8072ad86f10",
+        "957134f7cb6330894af9b909dc82ec58a929b0a7f5bb2b0eea179d24330f1409"
+      ]
+    },
+    "获取选中文本": {
+      "name": "获取选中文本",
+      "docId": "711516597693841408",
+      "url": "https://www.yingdao.com/yddoc/rpa/zh-CN/help/711516597693841408",
+      "body": "4f6c7637d57b9cf264c817c7afe01321e4d9cec3a0b43574bbb04b36df788927",
+      "images": [
+        "1627141b0edb61f153063dbe21a144691879d2e1692c8bef1767950ecdad5ed6",
+        "8536b3b877f60c860b0ea3e4f7553467a89b40dd6b3a241324a0cfb709ebf128",
+        "3a4a7045ce4f196afaf46423bcb9c065066b57d112b6a172ed74f7bf0923ad86",
+        "09e17514ebc1def948c2d6b2a88c2a026a569be2dd8931cce969aa3447c8dc55"
+      ]
+    },
+    "选中树节点_sap": {
+      "name": "选中树节点(sap)",
+      "docId": "711515410511413248",
+      "url": "https://www.yingdao.com/yddoc/rpa/zh-CN/help/711515410511413248",
+      "body": "3a3c25f9d7849a3b93f0c8800f55cde2087326d01154d7d8a29f5107e973ce57",
+      "images": [
+        "b5c01d9a204f17ded47a5bdd09456b79e0273ca2178242da39b8ceb1fb8f569f",
+        "1274676f15c22ec66d421af1b5b5f3177fcaf8d906bb6844fc67d47956bee8fa",
+        "77a02200925284921b15b79c1173172636fbd7cf94b8d9546afbaf2eebe75823",
+        "47d4cefbc6414f59cee4b830a4cacb39b64197e635a4b19fdfd30e5b55c837d3"
+      ]
+    },
+    "点击工具栏按钮_sap": {
+      "name": "点击工具栏按钮(sap)",
+      "docId": "757849808331407360",
+      "url": "https://www.yingdao.com/yddoc/rpa/zh-CN/help/757849808331407360",
+      "body": "17714641c93e329f017daffe6fea8e919f4dd6c4517d3dfa69aae30b348789fb",
+      "images": [
+        "c17d8183f2898cf1450f466d5b605cd70e68354cbd268f9c11762e9970cb915e",
+        "9920f53ec0ec7cf70053fd895cf7dde48611fe5a9a5390d36e6fe1d7327c97f0",
+        "611e6d28eda63dbf871608b951b27453df6cced0b593e661f4306e026a5165e8",
+        "22600b5c4a2a901eea1fdc34b27e5ce4c0a6cbd02c9f2a66483dee254c1de8fb",
+        "78fa39e8a8eecc5deea1a2b6ad1ee3ff6c87421fa06d1bbd98518abaf617e11c",
+        "67c5ff61fc5e0d2cb12692775507f6eedd393a1e23d6093bc8dbf9e597550da1",
+        "eca0f9fee3b35285ce4042ac7066077b34500bf06889de36f5f1dcbdc77a3f1a",
+        "521ea2a2cc0d1a8d031a36ed127ba72d3a088b462d593a642fbf94c878cf9b86",
+        "9090e49c381c6b7ddddf3687d7628f01b13e894975c07ddc750558a634a4333b"
+      ]
+    },
+    "获取单元格_sap": {
+      "name": "获取单元格(sap)",
+      "docId": "711514428320120832",
+      "url": "https://www.yingdao.com/yddoc/rpa/zh-CN/help/711514428320120832",
+      "body": "249412ced035644ff0b6e456644e68207bcb6ce1703add6574237137f9815f03",
+      "images": [
+        "e2f1246b5217af21052d5181bb69cdc99e1fa5d6fbe41eb38682d5f7f570c644",
+        "3490da2b8564afc85508cec54dbd164acaa21dab285d477be7374c271da415b6",
+        "15c51712c7c847689c874bf5efd2f394d795b46c36f47b94a932dd9adccf64af"
+      ]
+    },
+    "获取表格总行数_sap": {
+      "name": "获取表格总行数(sap)",
+      "docId": "711513500998680576",
+      "url": "https://www.yingdao.com/yddoc/rpa/zh-CN/help/711513500998680576",
+      "body": "1f15f5bba568014d0464e3625e8ec72be4b0ca532f94dd8bb076d9223461f1f6",
+      "images": [
+        "be892eac8d9f7e5cb086256b0f3c2aab82e5fed9555b11643d4479ed0d954c10",
+        "4cb40592a70d864466c2f2135c24633a30ff825bab930bd75a30c73552b2681f",
+        "c527af5066dbfb920540be5e9f62928df9c263ebf5b8c5106d3c2f4c6fccf2f7"
+      ]
+    },
+    "获取表格总列数_sap": {
+      "name": "获取表格总列数(sap)",
+      "docId": "711512576947097600",
+      "url": "https://www.yingdao.com/yddoc/rpa/zh-CN/help/711512576947097600",
+      "body": "b7c6b1e3811aa6f43ca9b40be1b8a6ab8c903ab99e4e113a243b06985a919beb",
+      "images": [
+        "c4d09de936e995851f118483d3d1120968fd027bc56279c81754e6728d63b454",
+        "ecca6b536d884b75585da7e76e7e15e2fba75adbb7e46c4f13f2c6d29c849c47",
+        "ebfe9f1c5c738eef054271ac2ca38ac4794ca39030cfb06731a2835709cf0e8a"
+      ]
+    },
+    "等待加载完成_sap": {
+      "name": "等待加载完成(sap)",
+      "docId": "762488719345401856",
+      "url": "https://www.yingdao.com/yddoc/rpa/zh-CN/help/762488719345401856",
+      "body": "20f49e38095df60684a4358e7e24b7c0300b96056bb652155608d154a530b66f",
+      "images": [
+        "d4a22defca1c212c7790212ce6a00135cc41a086b599fe82d5ebdfcb433d011f",
+        "274ba9295c993f2727f5e63044edfac1399279f7336fe6bd3bc04c5ee816f5bb"
+      ]
+    },
+    "启动事务_sap": {
+      "name": "启动事务(sap)",
+      "docId": "762489926654836736",
+      "url": "https://www.yingdao.com/yddoc/rpa/zh-CN/help/762489926654836736",
+      "body": "0d3df3d9e05ac9ccb51398a6877caed396d65b7ea4a0ffa0ea38cb73468a9f72",
+      "images": [
+        "5ca3390a8cc30ca5e9089409585242485ac09e370aef9656cd2e05ac8f998cbc",
+        "f65554c2f774b8ca330d67df33d9528ed4ef10c55d210ea76028d1f747da862c"
+      ]
+    },
+    "获取状态栏信息_sap": {
+      "name": "获取状态栏信息(sap)",
+      "docId": "762490818564419584",
+      "url": "https://www.yingdao.com/yddoc/rpa/zh-CN/help/762490818564419584",
+      "body": "9ddb3cef40facb9359542c3167e4af7b22fc46a7a829297fc563aa6dde429957",
+      "images": [
+        "04c410bfe6f6e2d434184ef8aba9a10c215b316a37c5072c428dee5b5fc6617f",
+        "dddc7e635d37c8c89e01745c3826beb91a528839b1e41ecbdedfd1e76cb4da59",
+        "079c8b42897f99b84efaa53dff3d846c01f1d4dfccf67fa1486830f7c3ad08ad"
+      ]
+    },
+    "选中菜单项_sap": {
+      "name": "选中菜单项(sap)",
+      "docId": "762499843512025088",
+      "url": "https://www.yingdao.com/yddoc/rpa/zh-CN/help/762499843512025088",
+      "body": "ef2f8c44cdd0bd88c51a2d44c8850f07c8fd7ca9dcf41f917f789d01ffbe68b5",
+      "images": [
+        "97e73b2e8752bddc15654eeaec3d8b2c811ea9361cc898fedacd3a75ab3d3b9a",
+        "616edfc40328d00f797fed8ecab0ee3e9b4b5ecc3761f8664d47bbcc22416ec8",
+        "0fd30243d1370b114dd4aa40dc1436b4ab9fc8da3dec1ea5f3924166222da4ca"
+      ]
+    },
+    "选中日期_SAP": {
+      "name": "选中日期(SAP)",
+      "docId": "762509038197370880",
+      "url": "https://www.yingdao.com/yddoc/rpa/zh-CN/help/762509038197370880",
+      "body": "c5aa98076866f0beedad132b943c4a61d1de28224fa905b6d7104491796d3307",
+      "images": [
+        "2e5d2f04054b7bc1594f1b0a0889ed36c14dd0999284f965385554553e62ee95"
+      ]
+    },
+    "读取表格内容_SAP": {
+      "name": "读取表格内容(SAP)",
+      "docId": "762509925926780928",
+      "url": "https://www.yingdao.com/yddoc/rpa/zh-CN/help/762509925926780928",
+      "body": "b5b1f23221021413db1a5e0edc0b6d2bb9a836033348419c5f152eabdd6c3a4c",
+      "images": [
+        "768fd17d98be7206be49f1ba90eefe5ffe80abca18091826c1a11087bf959480",
+        "e7cbebbeb58030a3465bc5035f8686efafba0883b224225a50688aabdbf2fbef",
+        "d2789cbee5bde7974e20d03e1e3998f8323818a0a6a52172dc964335594925cd",
+        "d6b9992da28d91816562766f90d50b4e258dd70c02611d72a24c654182e81905"
+      ]
+    }
+  }
+}

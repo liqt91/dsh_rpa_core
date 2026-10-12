@@ -1,11 +1,12 @@
 # 点击元素(web)
 
 点击元素(web)
-💡
 
 点击网页中的按钮、链接或者其他任何元素
 
 🎬 视频课程：影刀RPA中级课程： 网页自动化-进阶
+
+![assets/点击元素_web/img0.png](assets/点击元素_web/img0.png)
 
 网页对象
 
@@ -14,6 +15,8 @@
 操作目标
 
 从「元素库」中选择一个已捕获的元素或通过「捕获新元素」来捕获新的网页元素作为操作目标
+
+![assets/点击元素_web/img1.png](assets/点击元素_web/img1.png)
 
 模拟人工点击
 
@@ -49,14 +52,15 @@
 
 注：除中心格外，其余八格的鼠标点击位置如下图所示
 
-
-
+![assets/点击元素_web/img2.png](assets/点击元素_web/img2.png)
 
 等待元素存在(s)
 
 等待目标元素存在的超时时间
 
 使用示例
+
+![assets/点击元素_web/img3.png](assets/点击元素_web/img3.png)
 
 此流程执行逻辑：【获取已打开的网页对象】 --> 使用【点击元素(web)】模拟人工鼠标左键单击指定元素的中心点
 
@@ -65,9 +69,3 @@
 点击被遮挡的网页元素
 
 点击的元素位置会变动
-
-## 参数截图
-![assets/点击元素_web/img0.png](assets/点击元素_web/img0.png)
-![assets/点击元素_web/img1.png](assets/点击元素_web/img1.png)
-![assets/点击元素_web/img2.png](assets/点击元素_web/img2.png)
-![assets/点击元素_web/img3.png](assets/点击元素_web/img3.png)

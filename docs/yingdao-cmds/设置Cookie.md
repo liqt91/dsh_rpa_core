@@ -1,9 +1,10 @@
 # 设置Cookie
 
 设置Cookie
-💡
 
 根据指定的cookie 数据设置 cookie，若存在等效 cookie 则覆盖
+
+![assets/设置Cookie/img0.png](assets/设置Cookie/img0.png)
 
 url 设置方式
 
@@ -13,76 +14,25 @@ url 设置方式
 
 浏览器类型支持fx变量：
 
-浏览器类型
+浏览器类型 | 变量值
 
-	
+影刀浏览器 | cef
 
-变量值
+Google Chrome浏览器 | chrome
 
+Microsoft Edge浏览器 | edge
 
+Internet Explorer浏览器 | ie
 
+360浏览器 | 360se
 
-影刀浏览器
+Firefox | firefox
 
-	
-
-cef
-
-
-
-
-Google Chrome浏览器
-
-	
-
-chrome
-
-
-
-
-Microsoft Edge浏览器
-
-	
-
-edge
-
-
-
-
-Internet Explorer浏览器
-
-	
-
-ie
-
-
-
-
-360浏览器
-
-	
-
-360se
-
-
-
-
-Firefox
-
-	
-
-firefox
-
-
-
-
-QQ浏览器(自定义)
-
-	
-
-QQBrowser
+QQ浏览器(自定义) | QQBrowser
 
 例如：
+
+![assets/设置Cookie/img1.png](assets/设置Cookie/img1.png)
 
 cookie name
 
@@ -114,9 +64,6 @@ cookie path
 
 使用示例
 
-此流程执行逻辑：【获取已打开的网页对象】 --> 使用【设置Cookie】指令设置Cookie各个值
-
-## 参数截图
-![assets/设置Cookie/img0.png](assets/设置Cookie/img0.png)
-![assets/设置Cookie/img1.png](assets/设置Cookie/img1.png)
 ![assets/设置Cookie/img2.png](assets/设置Cookie/img2.png)
+
+此流程执行逻辑：【获取已打开的网页对象】 --> 使用【设置Cookie】指令设置Cookie各个值

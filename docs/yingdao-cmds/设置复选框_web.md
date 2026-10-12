@@ -1,11 +1,12 @@
 # 设置复选框(web)
 
 设置复选框(web)
-💡
 
 将网页中的复选框状态设置为勾选或不勾选
 
 🎬 视频课程：影刀RPA中级课程： 网页自动化-进阶
+
+![assets/设置复选框_web/img0.png](assets/设置复选框_web/img0.png)
 
 网页对象
 
@@ -19,6 +20,8 @@
 
 勾选/取消勾选/反选
 
+![assets/设置复选框_web/img1.png](assets/设置复选框_web/img1.png)
+
 延迟时间(s)
 
 指令执行完成后的等待时间
@@ -29,10 +32,8 @@
 
 使用示例
 
-此流程执行逻辑：打开影刀商城网页 --> 使用【设置复选框(web)】指令勾选"复选框_blue" --> 使用【设置复选框(web)】指令取消勾选"复选框_red" --> 使用【设置复选框(web)】指令反选"复选框_green"
-
-## 参数截图
-![assets/设置复选框_web/img0.png](assets/设置复选框_web/img0.png)
-![assets/设置复选框_web/img1.png](assets/设置复选框_web/img1.png)
 ![assets/设置复选框_web/img2.png](assets/设置复选框_web/img2.png)
+
 ![assets/设置复选框_web/img3.png](assets/设置复选框_web/img3.png)
+
+此流程执行逻辑：打开影刀商城网页 --> 使用【设置复选框(web)】指令勾选"复选框_blue" --> 使用【设置复选框(web)】指令取消勾选"复选框_red" --> 使用【设置复选框(web)】指令反选"复选框_green"

@@ -53,3 +53,4 @@ node_modules/
 /.harness/spike/_m[0-9]*
 /.harness/spike/_m4*
 /.harness/spike/_m5*
+/.harness/spike/_nv_*

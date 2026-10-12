@@ -1,6 +1,7 @@
 import asyncio
 import base64
 import json
+import math
 import os
 import re
 import signal
@@ -269,6 +270,34 @@ def _ensure_scheme(url: str) -> str:
     if _SCHEME_RE.match(stripped):
         return stripped
     return f"https://{stripped}"
+
+
+def _as_number(value: Any) -> float:
+    """数值归一：扩展回的几何量一律当 float，取不到/脏数据按 0.0（不因缺字段抛错）。"""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    return number if math.isfinite(number) else 0.0
+
+
+def _scroll_position_value(direction: str, measure: str, metrics: dict[str, Any]) -> float:
+    """「滚动条位置」的取值口径（对标影刀「获取滚动条位置」）。
+
+    - `direction`：`vertical`（纵向，默认）/ `horizontal`（横向）——只决定取哪根轴；
+    - `position`：`current`（当前位置，默认）/ `bottom`（底部位置）。
+
+    **bottom 口径 = 可滚动内容总长**（`scrollHeight` / `scrollWidth`）：影刀原文是
+    「底部位置：滚动条的底部位置，即滚动条的长度」，不是「最大滚动距离」
+    （`scrollHeight - clientHeight`）。这是**刻意选定的口径**，改它等于改契约语义。
+
+    扩展只如实上报 `scrollX/scrollY/scrollWidth/scrollHeight`（四条路径的唯一权威），
+    轴向与口径的选取只在这里做一次——避免「扩展算一半、执行器算一半」的两套权威。
+    """
+    horizontal = str(direction) == "horizontal"
+    if str(measure) == "bottom":
+        return _as_number(metrics.get("scrollWidth" if horizontal else "scrollHeight"))
+    return _as_number(metrics.get("scrollX" if horizontal else "scrollY"))
 
 
 def _fallback_details(fallback: dict[str, Any] | None) -> dict[str, Any]:
@@ -985,9 +1014,18 @@ class PlaywrightExecutor(CommandExecutor):
                 )
             if command == "browser.getText":
                 info_type = str(inputs.get("infoType") or "text")
+                # M53：新增两个参数（对标影刀「获取元素信息」的「获取元素属性」与
+                # 「智能识别并补充地址前缀」）。**必须在命令分支内按字面量读取**——
+                # `.harness/scripts/check_param_consumption.py` 只认命令分支里的字面量键。
+                attribute_name = str(inputs.get("attributeName") or "")
+                complete_url_prefix = bool(inputs.get("completeUrlPrefix", False))
                 payload, fallback = await self._page_call_with_fallback(
                     tab_id, selector, "getText",
-                    args={"infoType": info_type},
+                    args={
+                        "infoType": info_type,
+                        "attributeName": attribute_name,
+                        "completeUrlPrefix": complete_url_prefix,
+                    },
                     timeout_s=timeout_s, target_host=host,
                 )
                 precheck = _precheck_result(payload)
@@ -1005,6 +1043,8 @@ class PlaywrightExecutor(CommandExecutor):
                     {
                         "operation": "getText",
                         "infoType": info_type,
+                        "attributeName": attribute_name,
+                        "completeUrlPrefix": complete_url_prefix,
                         "matchedCount": count,
                         **_fallback_details(fallback),
                     },
@@ -1154,18 +1194,50 @@ class PlaywrightExecutor(CommandExecutor):
                     outputs={"items": items, "count": count},
                 )
             if command == "browser.getPosition":
+                # M53：扩展只回带 x/y/width/height（`getBoundingClientRect` 的四个原始量），
+                # 右边距/底部边距/中心点由这里派生——影刀「获取元素位置」的八项输出
+                # （左边距、右边距、顶部边距、底部边距、中心点横坐标、中心点纵坐标、宽、高）。
+                # 坐标基准 = **浏览器页面左上角**（客户区域）；「相对屏幕左上角」未支持
+                # （已知欠账）。
                 box = dict(result) if isinstance(result, dict) else {}
+                pos_x = _as_number(box.get("x"))
+                pos_y = _as_number(box.get("y"))
+                size_w = _as_number(box.get("width"))
+                size_h = _as_number(box.get("height"))
                 return self._ext_success(
                     invocation, effect, resource + f":selector:{selector}",
                     {"operation": op, "matchedCount": count},
-                    outputs=box,
+                    outputs={
+                        "x": pos_x,
+                        "y": pos_y,
+                        "width": size_w,
+                        "height": size_h,
+                        "right": pos_x + size_w,
+                        "bottom": pos_y + size_h,
+                        "centerX": pos_x + size_w / 2,
+                        "centerY": pos_y + size_h / 2,
+                    },
                 )
             if command == "browser.getScrollPosition":
+                # M53：`direction`/`position` 只在这里读一次（命令分支内按字面量读，
+                # 参数消费门禁要求如此）。scrollX/scrollY 恒按各自轴返回，**不受两个新参数影响**
+                # ——旧流程读这两个键的行为逐字节不变。
                 pos = dict(result) if isinstance(result, dict) else {}
+                direction = str(inputs.get("direction") or "vertical")
+                measure = str(inputs.get("position") or "current")
                 return self._ext_success(
                     invocation, effect, resource + f":selector:{selector}",
-                    {"operation": op, "matchedCount": count},
-                    outputs={"scrollX": pos.get("scrollX", 0), "scrollY": pos.get("scrollY", 0)},
+                    {
+                        "operation": op,
+                        "direction": direction,
+                        "position": measure,
+                        "matchedCount": count,
+                    },
+                    outputs={
+                        "scrollX": _as_number(pos.get("scrollX")),
+                        "scrollY": _as_number(pos.get("scrollY")),
+                        "scrollPosition": _scroll_position_value(direction, measure, pos),
+                    },
                 )
             if command == "browser.getSelectOptions":
                 data = dict(result) if isinstance(result, dict) else {}

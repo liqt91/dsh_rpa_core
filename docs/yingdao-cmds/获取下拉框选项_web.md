@@ -1,11 +1,12 @@
 # 获取下拉框选项(web)
 
 获取下拉框选项(web)
-💡
 
 获取网页中下拉框的选项
 
 🎬 视频课程：影刀RPA中级课程： 网页自动化-进阶
+
+![assets/获取下拉框选项_web/img0.png](assets/获取下拉框选项_web/img0.png)
 
 网页对象
 
@@ -23,17 +24,18 @@
 
 保存获取到的下拉项内容为变量，变量类型为一维列表
 
+![assets/获取下拉框选项_web/img1.png](assets/获取下拉框选项_web/img1.png)
+
 等待元素存在(s)
 
 等待目标元素存在的超时时间
 
 使用示例
 
-此流程执行逻辑：打开影刀商城网页 --> 使用【获取下拉框选项(web)】指令获取指定下拉框的全部下拉项并保存结果 --> 执行【打印日志】指令打印保存结果
-
-## 参数截图
-![assets/获取下拉框选项_web/img0.png](assets/获取下拉框选项_web/img0.png)
-![assets/获取下拉框选项_web/img1.png](assets/获取下拉框选项_web/img1.png)
 ![assets/获取下拉框选项_web/img2.png](assets/获取下拉框选项_web/img2.png)
+
 ![assets/获取下拉框选项_web/img3.png](assets/获取下拉框选项_web/img3.png)
+
 ![assets/获取下拉框选项_web/img4.png](assets/获取下拉框选项_web/img4.png)
+
+此流程执行逻辑：打开影刀商城网页 --> 使用【获取下拉框选项(web)】指令获取指定下拉框的全部下拉项并保存结果 --> 执行【打印日志】指令打印保存结果

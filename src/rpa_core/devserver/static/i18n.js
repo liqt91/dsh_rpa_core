@@ -228,6 +228,13 @@ window.RPA_I18N = {
     "browser.drag": { targetSelector: "目标选择器" },
     "browser.setValue": { setWay: "设置方式", value: "要设置的值" },
     "browser.setAttribute": { name: "属性名", value: "属性值" },
+    // M53：对标影刀「获取元素信息」补的两项——「获取元素属性」（attribute）与
+    // 「智能识别并补充地址前缀」。infoType 此前一直没有中文标签（界面上裸显示 "infoType"），
+    // 新枚举值 attribute 会把歧义放大，顺手一并补上。
+    "browser.getText": { infoType: "信息类型", attributeName: "属性名", completeUrlPrefix: "智能补全地址前缀" },
+    // M53：对标影刀「获取滚动条位置」的「纵向/横向滚动条」与「当前位置/底部位置」。
+    // 与 browser.scroll 的 position（滚动位置：顶/底/指定/一屏）**语义不同**，故各写一处。
+    "browser.getScrollPosition": { direction: "滚动条方向", position: "位置（当前位置/底部位置）" },
   },
   glossary: {
     action: "动作：对外部世界执行一次操作（点击、写入等）",

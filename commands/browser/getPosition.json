@@ -43,20 +43,42 @@
       "x",
       "y",
       "width",
-      "height"
+      "height",
+      "right",
+      "bottom",
+      "centerX",
+      "centerY"
     ],
     "properties": {
       "x": {
-        "type": "number"
+        "type": "number",
+        "description": "左边距（相对浏览器页面左上角，即客户区域；屏幕坐标未支持）"
       },
       "y": {
-        "type": "number"
+        "type": "number",
+        "description": "顶部边距（相对浏览器页面左上角，即客户区域；屏幕坐标未支持）"
       },
       "width": {
         "type": "number"
       },
       "height": {
         "type": "number"
+      },
+      "right": {
+        "type": "number",
+        "description": "右边距（x + width，相对浏览器页面左上角）"
+      },
+      "bottom": {
+        "type": "number",
+        "description": "底部边距（y + height，相对浏览器页面左上角）"
+      },
+      "centerX": {
+        "type": "number",
+        "description": "中心点横坐标（x + width / 2，相对浏览器页面左上角）"
+      },
+      "centerY": {
+        "type": "number",
+        "description": "中心点纵坐标（y + height / 2，相对浏览器页面左上角）"
       }
     },
     "additionalProperties": false
@@ -74,6 +96,18 @@
     },
     "height": {
       "label": "高度"
+    },
+    "right": {
+      "label": "右边距"
+    },
+    "bottom": {
+      "label": "底部边距"
+    },
+    "centerX": {
+      "label": "中心点横坐标"
+    },
+    "centerY": {
+      "label": "中心点纵坐标"
     }
   },
   "errors": [

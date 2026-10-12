@@ -1,11 +1,12 @@
 # 设置下拉框(win)
 
 设置下拉框(win)
-💡
 
 设置窗口中下拉框的选中项
 
 🎬 视频课程：影刀RPA中级课程：桌面软件＋键鼠自动化
+
+![assets/设置下拉框_win/img0.png](assets/设置下拉框_win/img0.png)
 
 窗口对象
 
@@ -27,6 +28,8 @@
 
 模糊匹配/精准匹配/正则匹配
 
+![assets/设置下拉框_win/img1.png](assets/设置下拉框_win/img1.png)
+
 执行后延迟(s)
 
 指令执行完成后的等待时间
@@ -37,10 +40,8 @@
 
 使用示例
 
-此流程执行逻辑：使用【设置下拉框(web)】指令按选项内容选择
-
-## 参数截图
-![assets/设置下拉框_win/img0.png](assets/设置下拉框_win/img0.png)
-![assets/设置下拉框_win/img1.png](assets/设置下拉框_win/img1.png)
 ![assets/设置下拉框_win/img2.png](assets/设置下拉框_win/img2.png)
+
 ![assets/设置下拉框_win/img3.png](assets/设置下拉框_win/img3.png)
+
+此流程执行逻辑：使用【设置下拉框(web)】指令按选项内容选择

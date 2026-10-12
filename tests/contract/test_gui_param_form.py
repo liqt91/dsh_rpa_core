@@ -112,6 +112,43 @@ def test_string_integer_boolean_widget_types(catalog):
     assert _field(form_bool, "overwrite").isChecked()
 
 
+def test_bool_defaults_seed_the_checkbox_and_stay_out_of_values(catalog):
+    """布尔字段按 manifest 默认值起勾；等于默认时不进 `values()`（M53）。
+
+    两个诉求一次钉住，**两侧都判**：
+
+    ① **起勾按默认值**：此前一律 `False`，而 `simulateHuman`（默认 `true`）显示成没勾
+       ——用户打开面板点一次「应用」就把「模拟人工点击」静默关掉（真缺陷）；
+    ② **等于默认不进参数**：复选框无法表达「未设置」，一律写入会让面板写入路径与
+       「元素库插入」路径对同一节点产出不同参数
+       （`test_gui_panels.py::test_param_form_element_pick_matches_insert_element_output`）。
+
+    反面也要判：**显式取反后必须写进去**（否则用户关不掉默认开启的开关）；未声明
+    `default` 的布尔（`browser.closeTabs.all`）照旧写入——那时无法判断执行器把缺省
+    当成什么，写了才不会丢用户意图。
+    """
+    click = catalog["browser.click"].input_schema
+    form = ParamForm(click, {"selector": "#a"})
+    assert _field(form, "simulateHuman").isChecked()  # 默认 true ⇒ 勾着
+    assert "simulateHuman" not in form.values()  # 未设置 ⇒ 不写
+    _field(form, "simulateHuman").setChecked(False)  # 显式取反 ⇒ 必须写
+    assert form.values()["simulateHuman"] is False
+    # 节点里已有该键时以节点为准（true 与默认同形 ⇒ 同样按「不写」处理）
+    assert "simulateHuman" not in ParamForm(click, {"simulateHuman": True}).values()
+
+    scroll = ParamForm(catalog["browser.scroll"].input_schema, {"selector": "#a"})
+    assert not _field(scroll, "smooth").isChecked()  # 默认 false ⇒ 没勾
+    assert "smooth" not in scroll.values()
+
+    get_text = ParamForm(catalog["browser.getText"].input_schema, {"selector": "#a"})
+    assert not _field(get_text, "completeUrlPrefix").isChecked()
+    assert "completeUrlPrefix" not in get_text.values()
+
+    # 未声明 default 的布尔照旧写入
+    close_tabs = ParamForm(catalog["browser.closeTabs"].input_schema, {})
+    assert close_tabs.values().get("all") is False
+
+
 def test_values_skip_unset_and_empty(catalog):
     form = ParamForm(catalog["browser.navigate"].input_schema, {})
     # 全部未设置 → 空 dict

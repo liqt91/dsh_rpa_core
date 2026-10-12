@@ -1,11 +1,12 @@
 # 设置复选框(win)
 
 设置复选框(win)
-💡
 
 将窗口中的复选框设置成勾选或不勾选
 
 🎬 视频课程：影刀RPA中级课程：桌面软件＋键鼠自动化
+
+![assets/设置复选框_win/img0.png](assets/设置复选框_win/img0.png)
 
 窗口对象
 
@@ -19,6 +20,8 @@
 
 勾选/取消勾选/反选
 
+![assets/设置复选框_win/img1.png](assets/设置复选框_win/img1.png)
+
 执行后延迟(s)
 
 指令执行完成后的等待时间
@@ -29,10 +32,8 @@
 
 使用示例
 
-此流程执行逻辑：使用【设置复选框(win)】指令根据操作目标自动匹配窗口并勾选指定复选框
-
-## 参数截图
-![assets/设置复选框_win/img0.png](assets/设置复选框_win/img0.png)
-![assets/设置复选框_win/img1.png](assets/设置复选框_win/img1.png)
 ![assets/设置复选框_win/img2.png](assets/设置复选框_win/img2.png)
+
 ![assets/设置复选框_win/img3.png](assets/设置复选框_win/img3.png)
+
+此流程执行逻辑：使用【设置复选框(win)】指令根据操作目标自动匹配窗口并勾选指定复选框

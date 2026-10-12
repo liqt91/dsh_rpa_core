@@ -2215,7 +2215,7 @@
     },
     "variants": [
       {
-        "name": "bounding-box-is-spread-into-outputs",
+        "name": "bounding-box-is-projected-into-eight-outputs",
         "inputs": {
           "sessionId": "s",
           "selector": "#t"
@@ -2235,7 +2235,11 @@
             "x": 1,
             "y": 2,
             "width": 3,
-            "height": 4
+            "height": 4,
+            "right": 4,
+            "bottom": 6,
+            "centerX": 2.5,
+            "centerY": 4
           },
           "effect": "read"
         },
@@ -2246,13 +2250,44 @@
               "x",
               "y",
               "width",
-              "height"
+              "height",
+              "right",
+              "bottom",
+              "centerX",
+              "centerY"
             ],
             "outputs": {
               "x": 8,
               "y": 8
             },
             "effect": "read"
+          }
+        }
+      },
+      {
+        "name": "missing-geometry-keys-fall-back-to-zero",
+        "stub": {
+          "page.call": {
+            "matchedCount": 1,
+            "result": {
+              "x": 1
+            }
+          }
+        },
+        "inputs": {
+          "sessionId": "s",
+          "selector": "#t"
+        },
+        "expect": {
+          "outputs": {
+            "x": 1,
+            "y": 0,
+            "width": 0,
+            "height": 0,
+            "right": 1,
+            "bottom": 0,
+            "centerX": 1,
+            "centerY": 0
           }
         }
       },
@@ -2449,6 +2484,159 @@
           "onlyCall": {
             "timeoutSeconds": 0.1,
             "op": "page.call"
+          }
+        }
+      },
+      {
+        "name": "default-is-vertical-current-and-still-passes-no-args",
+        "stub": {
+          "page.call": {
+            "matchedCount": 1,
+            "result": {
+              "scrollX": 5,
+              "scrollY": 7,
+              "scrollWidth": 800,
+              "scrollHeight": 2000
+            }
+          }
+        },
+        "inputs": {
+          "sessionId": "s"
+        },
+        "expect": {
+          "onlyCall": {
+            "op": "page.call",
+            "argsExact": {
+              "tabId": "7",
+              "selector": "",
+              "method": "getScrollPosition",
+              "args": {}
+            }
+          },
+          "outputs": {
+            "scrollX": 5,
+            "scrollY": 7,
+            "scrollPosition": 7
+          }
+        }
+      },
+      {
+        "name": "position-bottom-vertical-uses-scrollHeight",
+        "stub": {
+          "page.call": {
+            "matchedCount": 1,
+            "result": {
+              "scrollX": 5,
+              "scrollY": 7,
+              "scrollWidth": 800,
+              "scrollHeight": 2000
+            }
+          }
+        },
+        "inputs": {
+          "sessionId": "s",
+          "direction": "vertical",
+          "position": "bottom"
+        },
+        "expect": {
+          "outputs": {
+            "scrollX": 5,
+            "scrollY": 7,
+            "scrollPosition": 2000
+          }
+        }
+      },
+      {
+        "name": "direction-horizontal-current-uses-scrollX",
+        "stub": {
+          "page.call": {
+            "matchedCount": 1,
+            "result": {
+              "scrollX": 5,
+              "scrollY": 7,
+              "scrollWidth": 800,
+              "scrollHeight": 2000
+            }
+          }
+        },
+        "inputs": {
+          "sessionId": "s",
+          "direction": "horizontal",
+          "position": "current"
+        },
+        "expect": {
+          "outputs": {
+            "scrollPosition": 5
+          }
+        }
+      },
+      {
+        "name": "direction-horizontal-bottom-uses-scrollWidth",
+        "stub": {
+          "page.call": {
+            "matchedCount": 1,
+            "result": {
+              "scrollX": 5,
+              "scrollY": 7,
+              "scrollWidth": 800,
+              "scrollHeight": 2000
+            }
+          }
+        },
+        "inputs": {
+          "sessionId": "s",
+          "direction": "horizontal",
+          "position": "bottom"
+        },
+        "expect": {
+          "outputs": {
+            "scrollPosition": 800
+          }
+        }
+      },
+      {
+        "name": "unknown-enum-values-fall-back-to-vertical-current",
+        "stub": {
+          "page.call": {
+            "matchedCount": 1,
+            "result": {
+              "scrollX": 5,
+              "scrollY": 7,
+              "scrollWidth": 800,
+              "scrollHeight": 2000
+            }
+          }
+        },
+        "inputs": {
+          "sessionId": "s",
+          "direction": "diagonal",
+          "position": "middle"
+        },
+        "expect": {
+          "outputs": {
+            "scrollPosition": 7
+          }
+        }
+      },
+      {
+        "name": "metrics-missing-keys-fall-back-to-zero",
+        "stub": {
+          "page.call": {
+            "matchedCount": 1,
+            "result": {
+              "scrollY": 7
+            }
+          }
+        },
+        "inputs": {
+          "sessionId": "s",
+          "position": "bottom"
+        },
+        "expect": {
+          "outputs": {
+            "scrollX": 0,
+            "scrollY": 7,
+            "scrollPosition": 0
           }
         }
       }
@@ -2852,6 +3040,107 @@
           "onlyCall": {
             "timeoutSeconds": 0.1,
             "op": "page.call"
+          }
+        }
+      },
+      {
+        "name": "all-three-args-are-always-forwarded-with-defaults",
+        "inputs": {
+          "selector": "#t",
+          "sessionId": "s"
+        },
+        "expect": {
+          "onlyCall": {
+            "op": "page.call",
+            "argsExact": {
+              "tabId": "7",
+              "selector": "#t",
+              "method": "getText",
+              "args": {
+                "infoType": "text",
+                "attributeName": "",
+                "completeUrlPrefix": false
+              }
+            },
+            "timeoutSeconds": 30.0
+          },
+          "outputs": {
+            "value": "text"
+          }
+        }
+      },
+      {
+        "name": "infoType-attribute-forwards-the-attribute-name",
+        "inputs": {
+          "selector": "#t",
+          "sessionId": "s",
+          "infoType": "attribute",
+          "attributeName": "data-x"
+        },
+        "expect": {
+          "onlyCall": {
+            "op": "page.call",
+            "args": {
+              "args": {
+                "infoType": "attribute",
+                "attributeName": "data-x"
+              }
+            }
+          },
+          "outputs": {
+            "value": "text"
+          }
+        }
+      },
+      {
+        "name": "attribute-without-name-still-forwards-an-empty-string",
+        "inputs": {
+          "selector": "#t",
+          "sessionId": "s",
+          "infoType": "attribute"
+        },
+        "expect": {
+          "onlyCall": {
+            "op": "page.call",
+            "argsExact": {
+              "tabId": "7",
+              "selector": "#t",
+              "method": "getText",
+              "args": {
+                "infoType": "attribute",
+                "attributeName": "",
+                "completeUrlPrefix": false
+              }
+            }
+          }
+        }
+      },
+      {
+        "name": "complete-url-prefix-is-forwarded-for-href",
+        "stub": {
+          "page.call": {
+            "matchedCount": 1,
+            "result": "https://www.baidu.com"
+          }
+        },
+        "inputs": {
+          "selector": "#t",
+          "sessionId": "s",
+          "infoType": "href",
+          "completeUrlPrefix": true
+        },
+        "expect": {
+          "onlyCall": {
+            "op": "page.call",
+            "args": {
+              "args": {
+                "infoType": "href",
+                "completeUrlPrefix": true
+              }
+            }
+          },
+          "outputs": {
+            "value": "https://www.baidu.com"
           }
         }
       }

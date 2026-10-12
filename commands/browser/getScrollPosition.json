@@ -29,6 +29,24 @@
         "minLength": 1,
         "description": "可选：指定内部有独立滚动条的元素，缺省读取整个页面的滚动位置"
       },
+      "direction": {
+        "type": "string",
+        "enum": [
+          "vertical",
+          "horizontal"
+        ],
+        "description": "滚动条方向（对标影刀「获取滚动条位置」的纵向/横向）：vertical=纵向（默认）；horizontal=横向。只影响 scrollPosition 的取轴，scrollX/scrollY 恒按各自轴返回",
+        "default": "vertical"
+      },
+      "position": {
+        "type": "string",
+        "enum": [
+          "current",
+          "bottom"
+        ],
+        "description": "取哪个位置（对标影刀「获取滚动条位置」的当前位置/底部位置）：current=当前位置（默认，即 scrollX/scrollY）；bottom=底部位置（即滚动条长度＝可滚动内容总长，取 scrollHeight/scrollWidth）。只影响 scrollPosition",
+        "default": "current"
+      },
       "timeoutMs": {
         "type": "integer",
         "minimum": 1
@@ -40,14 +58,21 @@
     "type": "object",
     "required": [
       "scrollX",
-      "scrollY"
+      "scrollY",
+      "scrollPosition"
     ],
     "properties": {
       "scrollX": {
-        "type": "number"
+        "type": "number",
+        "description": "横向滚动位置（当前值，恒返回，不受 direction/position 影响）"
       },
       "scrollY": {
-        "type": "number"
+        "type": "number",
+        "description": "纵向滚动位置（当前值，恒返回，不受 direction/position 影响）"
+      },
+      "scrollPosition": {
+        "type": "number",
+        "description": "按 direction 与 position 取定的滚动条位置：direction=vertical 时取 scrollY 或 scrollHeight，horizontal 时取 scrollX 或 scrollWidth"
       }
     },
     "additionalProperties": false
@@ -59,6 +84,9 @@
     "scrollY": {
       "label": "纵向滚动位置",
       "primary": true
+    },
+    "scrollPosition": {
+      "label": "滚动条位置"
     }
   },
   "errors": [

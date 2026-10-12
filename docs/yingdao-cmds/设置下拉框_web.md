@@ -1,11 +1,12 @@
 # 设置下拉框(web)
 
 设置下拉框(web)
-💡
 
 设置网页中下拉框的选中项
 
 🎬 视频课程：影刀RPA中级课程： 网页自动化-进阶
+
+![assets/设置下拉框_web/img0.png](assets/设置下拉框_web/img0.png)
 
 网页对象
 
@@ -27,6 +28,8 @@
 
 模糊匹配/精准匹配/正则匹配
 
+![assets/设置下拉框_web/img1.png](assets/设置下拉框_web/img1.png)
+
 延迟时间(s)
 
 指令执行完成后的等待时间
@@ -36,19 +39,13 @@
 等待目标元素存在的超时时间
 
 注：F12打开开发者工具，查看元素标签，只有标签为<select>，【设置下拉框(web)】指令才可生效
+
 如下所示，图①指令可生效，图②指令不生效
-
-
-
-
-
 
 使用示例
 
-此流程执行逻辑：打开影刀商城网页 --> 使用【设置下拉框(web)】指令按选项内容选择
-
-## 参数截图
-![assets/设置下拉框_web/img0.png](assets/设置下拉框_web/img0.png)
-![assets/设置下拉框_web/img1.png](assets/设置下拉框_web/img1.png)
 ![assets/设置下拉框_web/img3.png](assets/设置下拉框_web/img3.png)
+
 ![assets/设置下拉框_web/img4.png](assets/设置下拉框_web/img4.png)
+
+此流程执行逻辑：打开影刀商城网页 --> 使用【设置下拉框(web)】指令按选项内容选择

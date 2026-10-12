@@ -15,7 +15,7 @@ const HOST_NAME = "com.rpa_core.ext_bridge";
 // 快照（2026-09-29 真机排障：仓库已修好「已开网页无红框」，但浏览器还跑着旧 background，
 // 表现成「修复无效」）。把标识随 ack/进度/结果回传，host 侧对账即可判「扩展过期」，
 // 不用再靠症状猜。
-const EXT_BUILD = "0.9.1";
+const EXT_BUILD = "0.9.2";
 const RECONNECT_MS = 3000;      // 断开后的重连退避
 const ALARM_NAME = "rpa-bridge-reconnect";  // SW 被回收时的兜底拉起（MV3 alarm 最小 30s）
 const PERMISSION_KEY = "rpaExecPermission";
@@ -921,6 +921,29 @@ async function domOp(payload) {
     return null;
   };
   // [precheck-helpers:end]
+  // [url-prefix-helpers:start]
+  // 纯函数区：scripts/check_url_prefix_helpers.mjs 按标记抽取求值（标记独占一行便于切片）。
+  // 「智能识别并补充地址前缀(http:// 或 https://)」——对标影刀「获取元素信息」同名选项，
+  // 按维护者定案**只对 infoType=href 生效**。HTTP 前缀的判据与 host 侧同口径
+  // （`browser.py` 的 `_SCHEME_RE`：`^[a-zA-Z][a-zA-Z0-9+.-]*:`）。
+  // 五种形态各有归处，逐条可测：
+  //   ① 已有协议头（http/https/file/data/about/…）→ 原样返回；
+  //   ② 空值/纯空白 → 返回空串（不做「这串文本看着像网址」的猜测，见 manifest 描述）；
+  //   ③ 以 `//` 开头（协议相对）→ 补「当前页面协议 + :」；
+  //   ④ 以 `/` `.` `#` `?` 开头（相对引用）→ 用**浏览器解析后的绝对地址**（调用方传 el.href），
+  //      传不进来才退回原值（补前缀反而会把 `/next` 拼成 `https:///next`）；
+  //   ⑤ 其余（裸域名/裸文本地址）→ 补「当前页面协议 + //」。
+  // 补哪个协议按**当前页面**协议：页面是 http 就补 http，其余（https/file/…）一律 https。
+  const completeUrlPrefix = (raw, resolved, pageProtocol) => {
+    const text = String(raw == null ? "" : raw).trim();
+    if (!text) return "";
+    if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(text)) return text;
+    const scheme = String(pageProtocol) === "http:" ? "http:" : "https:";
+    if (text.startsWith("//")) return scheme + text;
+    if (/^[./#?]/.test(text)) return String(resolved || text);
+    return scheme + "//" + text;
+  };
+  // [url-prefix-helpers:end]
   // [click-helpers:start]
   // 纯函数区：scripts/check_click_helpers.mjs 按标记抽取求值（标记独占一行便于切片）。
   // M29：`browser.click` 的 `simulateHuman` / `clickPosition` 此前**声明了不生效**；
@@ -1091,12 +1114,35 @@ async function domOp(payload) {
     return { matchedCount: items.length, result: items };
   }
   if (method === "getScrollPosition") {
+    // M53：除当前位置外，额外如实回带**可滚动内容总长**（scrollWidth/scrollHeight），
+    // 供「底部位置（即滚动条长度）」口径使用。轴向与口径的选取**不在这里做**——
+    // 扩展只报数，host 侧 `browser.py::_scroll_position_value` 是唯一权威（两套算法会漂移）。
     const target = selector ? document.querySelector(selector) : null;
     if (selector && !target) return { matchedCount: 0, result: null };
     if (target) {
-      return { matchedCount: 1, result: { scrollX: target.scrollLeft || 0, scrollY: target.scrollTop || 0 } };
+      return {
+        matchedCount: 1,
+        result: {
+          scrollX: target.scrollLeft || 0,
+          scrollY: target.scrollTop || 0,
+          scrollWidth: target.scrollWidth || 0,
+          scrollHeight: target.scrollHeight || 0,
+        },
+      };
     }
-    return { matchedCount: 1, result: { scrollX: window.scrollX, scrollY: window.scrollY } };
+    // 整页滚动：文档内容总长取 documentElement 与 body 的较大者
+    // （quirks 模式下 documentElement.scrollHeight 会小于 body 的）。
+    const docEl = document.documentElement || {};
+    const bodyEl = document.body || {};
+    return {
+      matchedCount: 1,
+      result: {
+        scrollX: window.scrollX,
+        scrollY: window.scrollY,
+        scrollWidth: Math.max(docEl.scrollWidth || 0, bodyEl.scrollWidth || 0),
+        scrollHeight: Math.max(docEl.scrollHeight || 0, bodyEl.scrollHeight || 0),
+      },
+    };
   }
 
   const el = selector ? document.querySelector(selector) : null;
@@ -1290,8 +1336,16 @@ async function domOp(payload) {
       if (info === "html") result = el.innerHTML;
       else if (info === "outerHTML") result = el.outerHTML;
       else if (info === "value") result = el.value == null ? "" : String(el.value);
-      else if (info === "href") result = el.getAttribute("href") || el.href || "";
+      else if (info === "attribute") {
+        // M53「获取元素属性」：任意属性名，取不到返回空串（不区分「属性不存在」与「属性值为空」）
+        result = el.getAttribute(String(args.attributeName || "")) || "";
+      } else if (info === "href") result = el.getAttribute("href") || el.href || "";
       else result = el.innerText == null ? el.textContent : el.innerText;
+      // 「智能补全地址前缀」只对 infoType=href 生效（维护者定案：严格对标影刀
+      //「获取网页链接地址」那一项）。第二个入参给浏览器解析后的绝对地址，供相对引用那一类用。
+      if (info === "href" && args.completeUrlPrefix) {
+        result = completeUrlPrefix(result, el.href, location.protocol);
+      }
       return { matchedCount, result: result == null ? "" : result };
     }
     case "select": {

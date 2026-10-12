@@ -1,350 +1,242 @@
 [
   {
-    "title": "影刀概述",
-    "leaf": true
+    "name": "获取窗口对象",
+    "id": "722724724878135296",
+    "stem": "获取窗口对象",
+    "parent": ""
   },
   {
-    "title": "快速入门",
-    "leaf": false
+    "name": "获取窗口对象列表",
+    "id": "711541999601172480",
+    "stem": "获取窗口对象列表",
+    "parent": ""
   },
   {
-    "title": "功能文档",
-    "leaf": false
+    "name": "点击元素(win)",
+    "id": "711540898209185792",
+    "stem": "点击元素_win",
+    "parent": ""
   },
   {
-    "title": "指令文档",
-    "leaf": false
+    "name": "鼠标悬停在元素上(win)",
+    "id": "711539997456150528",
+    "stem": "鼠标悬停在元素上_win",
+    "parent": ""
   },
   {
-    "title": "魔法指令",
-    "leaf": true
+    "name": "填写输入框(win)",
+    "id": "711538637392560128",
+    "stem": "填写输入框_win",
+    "parent": ""
   },
   {
-    "title": "条件判断",
-    "leaf": false
+    "name": "运行或打开",
+    "id": "716536339057848320",
+    "stem": "运行或打开",
+    "parent": ""
   },
   {
-    "title": "循环",
-    "leaf": false
+    "name": "拖拽元素(win)",
+    "id": "711537456075714560",
+    "stem": "拖拽元素_win",
+    "parent": "元素操作"
   },
   {
-    "title": "等待",
-    "leaf": false
+    "name": "等待元素(win)",
+    "id": "711536330364391424",
+    "stem": "等待元素_win",
+    "parent": "元素操作"
   },
   {
-    "title": "相似元素操作",
-    "leaf": false
+    "name": "填写密码框(win)",
+    "id": "711535077082775552",
+    "stem": "填写密码框_win",
+    "parent": "元素操作"
   },
   {
-    "title": "循环手机相似元素（手机）",
-    "leaf": true
+    "name": "设置下拉框(win)",
+    "id": "711534008175673344",
+    "stem": "设置下拉框_win",
+    "parent": "元素操作"
   },
   {
-    "title": "获取相似元素列表（手机）",
-    "leaf": true
+    "name": "设置复选框(win)",
+    "id": "711532996210327552",
+    "stem": "设置复选框_win",
+    "parent": "元素操作"
   },
   {
-    "title": "获取相似元素列表(win)",
-    "leaf": true
+    "name": "设置元素值(win)",
+    "id": "711532018751488000",
+    "stem": "设置元素值_win",
+    "parent": "元素操作"
   },
   {
-    "title": "获取相似元素列表(web)",
-    "leaf": true
+    "name": "获取元素对象(win)",
+    "id": "711531014460407808",
+    "stem": "获取元素对象_win",
+    "parent": "元素操作"
   },
   {
-    "title": "循环相似元素(web)",
-    "leaf": true
+    "name": "获取关联元素(win)",
+    "id": "711529786270756864",
+    "stem": "获取关联元素_win",
+    "parent": "元素操作"
   },
   {
-    "title": "循环相似元素(win)",
-    "leaf": true
+    "name": "获取相似元素列表(win)",
+    "id": "711528339464491008",
+    "stem": "获取相似元素列表_win",
+    "parent": "元素操作"
   },
   {
-    "title": "网页自动化",
-    "leaf": false
+    "name": "获取窗口对象",
+    "id": "711527614915526656",
+    "stem": "窗口操作_获取窗口对象",
+    "parent": "窗口操作"
   },
   {
-    "title": "打开网页",
-    "leaf": true
+    "name": "激活软件窗口",
+    "id": "711526964947976192",
+    "stem": "激活软件窗口",
+    "parent": "窗口操作"
   },
   {
-    "title": "选择浏览器用户",
-    "leaf": true
+    "name": "设置窗口状态",
+    "id": "711526300570562560",
+    "stem": "设置窗口状态",
+    "parent": "窗口操作"
   },
   {
-    "title": "获取已打开的网页对象",
-    "leaf": true
+    "name": "设置窗口是否显示",
+    "id": "711525635005820928",
+    "stem": "设置窗口是否显示",
+    "parent": "窗口操作"
   },
   {
-    "title": "点击元素(web)",
-    "leaf": true
+    "name": "移动窗口位置",
+    "id": "711524970015358976",
+    "stem": "移动窗口位置",
+    "parent": "窗口操作"
   },
   {
-    "title": "鼠标悬停在元素上(web)",
-    "leaf": true
+    "name": "调整窗口大小",
+    "id": "711524250847752192",
+    "stem": "调整窗口大小",
+    "parent": "窗口操作"
   },
   {
-    "title": "填写输入框(web)",
-    "leaf": true
+    "name": "关闭软件窗口",
+    "id": "711523613478207488",
+    "stem": "关闭软件窗口",
+    "parent": "窗口操作"
   },
   {
-    "title": "关闭网页",
-    "leaf": true
+    "name": "常用元素属性",
+    "id": "730347552696844288",
+    "stem": "常用元素属性",
+    "parent": "数据提取"
   },
   {
-    "title": "网页操作",
-    "leaf": false
+    "name": "元素截图(win)",
+    "id": "711522642030178304",
+    "stem": "元素截图_win",
+    "parent": "数据提取"
   },
   {
-    "title": "元素操作",
-    "leaf": false
+    "name": "获取元素信息(win)",
+    "id": "711521417084506112",
+    "stem": "获取元素信息_win",
+    "parent": "数据提取"
   },
   {
-    "title": "数据提取",
-    "leaf": false
+    "name": "获取元素位置(win)",
+    "id": "711520193666822144",
+    "stem": "获取元素位置_win",
+    "parent": "数据提取"
   },
   {
-    "title": "对话框处理",
-    "leaf": false
+    "name": "获取下拉框选项(win)",
+    "id": "711519055898947584",
+    "stem": "获取下拉框选项_win",
+    "parent": "数据提取"
   },
   {
-    "title": "桌面软件自动化",
-    "leaf": false
+    "name": "获取窗口信息",
+    "id": "711518091920261120",
+    "stem": "获取窗口信息",
+    "parent": "数据提取"
   },
   {
-    "title": "获取窗口对象",
-    "leaf": true
+    "name": "获取选中文本",
+    "id": "711516597693841408",
+    "stem": "获取选中文本",
+    "parent": "数据提取"
   },
   {
-    "title": "获取窗口对象列表",
-    "leaf": true
+    "name": "选中树节点(sap)",
+    "id": "711515410511413248",
+    "stem": "选中树节点_sap",
+    "parent": "SAP"
   },
   {
-    "title": "点击元素(win)",
-    "leaf": true
+    "name": "点击工具栏按钮(sap)",
+    "id": "757849808331407360",
+    "stem": "点击工具栏按钮_sap",
+    "parent": "SAP"
   },
   {
-    "title": "鼠标悬停在元素上(win)",
-    "leaf": true
+    "name": "获取单元格(sap)",
+    "id": "711514428320120832",
+    "stem": "获取单元格_sap",
+    "parent": "SAP"
   },
   {
-    "title": "填写输入框(win)",
-    "leaf": true
+    "name": "获取表格总行数(sap)",
+    "id": "711513500998680576",
+    "stem": "获取表格总行数_sap",
+    "parent": "SAP"
   },
   {
-    "title": "运行或打开",
-    "leaf": true
+    "name": "获取表格总列数(sap)",
+    "id": "711512576947097600",
+    "stem": "获取表格总列数_sap",
+    "parent": "SAP"
   },
   {
-    "title": "元素操作",
-    "leaf": false
+    "name": "等待加载完成(sap)",
+    "id": "762488719345401856",
+    "stem": "等待加载完成_sap",
+    "parent": "SAP"
   },
   {
-    "title": "窗口操作",
-    "leaf": false
+    "name": "启动事务(sap)",
+    "id": "762489926654836736",
+    "stem": "启动事务_sap",
+    "parent": "SAP"
   },
   {
-    "title": "获取窗口对象",
-    "leaf": true
+    "name": "获取状态栏信息(sap)",
+    "id": "762490818564419584",
+    "stem": "获取状态栏信息_sap",
+    "parent": "SAP"
   },
   {
-    "title": "激活软件窗口",
-    "leaf": true
+    "name": "选中菜单项(sap)",
+    "id": "762499843512025088",
+    "stem": "选中菜单项_sap",
+    "parent": "SAP"
   },
   {
-    "title": "设置窗口状态",
-    "leaf": true
+    "name": "选中日期(SAP)",
+    "id": "762509038197370880",
+    "stem": "选中日期_SAP",
+    "parent": "SAP"
   },
   {
-    "title": "设置窗口是否显示",
-    "leaf": true
-  },
-  {
-    "title": "移动窗口位置",
-    "leaf": true
-  },
-  {
-    "title": "调整窗口大小",
-    "leaf": true
-  },
-  {
-    "title": "关闭软件窗口",
-    "leaf": true
-  },
-  {
-    "title": "数据提取",
-    "leaf": false
-  },
-  {
-    "title": "SAP",
-    "leaf": false
-  },
-  {
-    "title": "鼠标键盘",
-    "leaf": false
-  },
-  {
-    "title": "特殊字符列表",
-    "leaf": true
-  },
-  {
-    "title": "键盘输入",
-    "leaf": true
-  },
-  {
-    "title": "鼠标点击",
-    "leaf": true
-  },
-  {
-    "title": "移动鼠标",
-    "leaf": true
-  },
-  {
-    "title": "获取鼠标当前位置",
-    "leaf": true
-  },
-  {
-    "title": "滚动鼠标滚轮",
-    "leaf": true
-  },
-  {
-    "title": "点击图像",
-    "leaf": true
-  },
-  {
-    "title": "鼠标悬停在图像上",
-    "leaf": true
-  },
-  {
-    "title": "点击文本(OCR)",
-    "leaf": true
-  },
-  {
-    "title": "鼠标悬停在文本上(OCR)",
-    "leaf": true
-  },
-  {
-    "title": "开启模拟真人操作",
-    "leaf": true
-  },
-  {
-    "title": "结束模拟真人操作",
-    "leaf": true
-  },
-  {
-    "title": "数据表格",
-    "leaf": false
-  },
-  {
-    "title": "Excel/WPS表格",
-    "leaf": false
-  },
-  {
-    "title": "对话框",
-    "leaf": false
-  },
-  {
-    "title": "数据处理",
-    "leaf": false
-  },
-  {
-    "title": "操作系统",
-    "leaf": false
-  },
-  {
-    "title": "运行或打开",
-    "leaf": true
-  },
-  {
-    "title": "运行DOS命令",
-    "leaf": true
-  },
-  {
-    "title": "终止程序",
-    "leaf": true
-  },
-  {
-    "title": "截屏",
-    "leaf": true
-  },
-  {
-    "title": "文件",
-    "leaf": false
-  },
-  {
-    "title": "文件夹",
-    "leaf": false
-  },
-  {
-    "title": "剪切板",
-    "leaf": false
-  },
-  {
-    "title": "压缩/解压",
-    "leaf": false
-  },
-  {
-    "title": "锁屏/解锁",
-    "leaf": false
-  },
-  {
-    "title": "输入法",
-    "leaf": false
-  },
-  {
-    "title": "屏幕保护",
-    "leaf": false
-  },
-  {
-    "title": "流程/应用",
-    "leaf": false
-  },
-  {
-    "title": "人工智能AI",
-    "leaf": false
-  },
-  {
-    "title": "网络",
-    "leaf": false
-  },
-  {
-    "title": "工作队列",
-    "leaf": false
-  },
-  {
-    "title": "其他",
-    "leaf": false
-  },
-  {
-    "title": "手机操作自动化",
-    "leaf": false
-  },
-  {
-    "title": "自定义指令",
-    "leaf": false
-  },
-  {
-    "title": "接口文档",
-    "leaf": false
-  },
-  {
-    "title": "常见问题",
-    "leaf": false
-  },
-  {
-    "title": "开放API",
-    "leaf": false
-  },
-  {
-    "title": "管理文档",
-    "leaf": false
-  },
-  {
-    "title": "专题文档",
-    "leaf": false
-  },
-  {
-    "title": "解决方案",
-    "leaf": false
+    "name": "读取表格内容(SAP)",
+    "id": "762509925926780928",
+    "stem": "读取表格内容_SAP",
+    "parent": "SAP"
   }
 ]

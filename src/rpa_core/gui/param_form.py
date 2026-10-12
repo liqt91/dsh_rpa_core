@@ -157,6 +157,9 @@ class ParamForm(QWidget):
         self._variable_provider = variable_provider
         # (字段名, 种类, 控件)：顺序即 properties 声明顺序
         self._fields: list[tuple[str, str, QWidget]] = []
+        # 声明了 default 的布尔字段（名字 → 默认值）：`values()` 靠它把「等于默认」
+        # 的布尔认成「未设置」而不写进参数（详见 `values()` 里的说明）。
+        self._bool_defaults: dict[str, bool] = {}
         self._fx_buttons: dict[str, tuple[QToolButton, QToolButton]] = {}
         # 分组模式下的区段引用（section_name → _CollapsibleSection）
         self._sections: dict[str, _CollapsibleSection] = {}
@@ -407,8 +410,15 @@ class ParamForm(QWidget):
             kind = _KIND_NUMBER
         elif value_type == "boolean":
             widget = QCheckBox()
-            widget.setChecked(bool(args.get(name, False)))
+            # 未设置（节点里没这个键）时按**声明默认值**起勾，不是一律 False。
+            # 此前一律 False，而 manifest 里 `simulateHuman` / `visible` /
+            # `ignoreBeforeUnload` 的默认是 `true`：表单显示成「没勾」，用户打开面板
+            # 点一次「应用」就把它们写成 `false`——静默翻转行为（点了「模拟人工点击」
+            # 的节点被改成不模拟）。默认值的唯一事实源是 manifest，这里只如实呈现。
+            widget.setChecked(bool(args.get(name, field_schema.get("default", False))))
             kind = _KIND_BOOL
+            if "default" in field_schema:
+                self._bool_defaults[name] = bool(field_schema["default"])
         else:
             # array/object 等复合类型：单行 JSON 文本编辑
             text = json.dumps(args[name], ensure_ascii=False) if has_value else ""
@@ -742,7 +752,19 @@ class ParamForm(QWidget):
                     continue
                 result[name] = int(text) if kind == _KIND_INT else float(text)
             elif kind == _KIND_BOOL:
-                result[name] = widget.isChecked()
+                checked = widget.isChecked()
+                # 与**声明默认值**相同的布尔不进结果：运行时「缺省」与「显式等于默认」
+                # 等价（执行器一律 `inputs.get(name, <manifest 默认>)`），所以省掉的是
+                # 噪声不是语义。两个理由：
+                # ① 「元素库插入」与「参数面板选择」两条写入路径要对同一节点**逐字节
+                #    相同**（`test_param_form_element_pick_matches_insert_element_output`）；
+                # ② 复选框无法表达「未设置」，若一律写入，打开面板再点应用就会给每个
+                #    布尔参数塞一个默认值（把「没设」变成「显式设为默认」）。
+                # 未声明 default 的布尔（如 `browser.closeTabs.all`）照旧写入——那时
+                # 无法判断执行器把缺省当成什么，写了才不会丢用户意图。
+                if name in self._bool_defaults and self._bool_defaults[name] is checked:
+                    continue
+                result[name] = checked
             else:  # JSON 复合字段
                 text = widget.text()
                 if not text:

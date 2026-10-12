@@ -1,11 +1,12 @@
 # 拖拽元素(win)
 
 拖拽元素(win)
-💡
 
 在指定的窗口中将元素拖拽至指定位置
 
 🎬 视频课程：影刀RPA中级课程：桌面软件＋键鼠自动化
+
+![assets/拖拽元素_win/img0.png](assets/拖拽元素_win/img0.png)
 
 窗口对象
 
@@ -21,8 +22,7 @@
 
 拖拽至目标元素上：选择一个操作目标
 
-
-
+![assets/拖拽元素_win/img1.png](assets/拖拽元素_win/img1.png)
 
 执行后延迟(s)
 
@@ -35,9 +35,6 @@
 随机位置：自动随机元素矩形区域内的点
 
 自定义：手动指定目标点
-
-
-
 
 移动速度
 
@@ -53,10 +50,8 @@
 
 使用示例
 
-此流程执行逻辑：使用【拖拽元素(win)】指令根据操作目标自动匹配窗口并拖拽滑块至指定位置
-
-## 参数截图
-![assets/拖拽元素_win/img0.png](assets/拖拽元素_win/img0.png)
-![assets/拖拽元素_win/img1.png](assets/拖拽元素_win/img1.png)
 ![assets/拖拽元素_win/img2.png](assets/拖拽元素_win/img2.png)
+
 ![assets/拖拽元素_win/img3.png](assets/拖拽元素_win/img3.png)
+
+此流程执行逻辑：使用【拖拽元素(win)】指令根据操作目标自动匹配窗口并拖拽滑块至指定位置

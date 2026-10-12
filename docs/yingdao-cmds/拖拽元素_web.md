@@ -1,11 +1,12 @@
 # 拖拽元素(web)
 
 拖拽元素(web)
-💡
 
 在指定的网页中将元素拖拽到指定位置
 
 🎬 视频课程：影刀RPA中级课程： 网页自动化-进阶
+
+![assets/拖拽元素_web/img0.png](assets/拖拽元素_web/img0.png)
 
 网页对象
 
@@ -21,8 +22,7 @@
 
 拖拽至目标元素上：选择一个操作目标
 
-
-
+![assets/拖拽元素_web/img1.png](assets/拖拽元素_web/img1.png)
 
 延迟时间(s)
 
@@ -36,9 +36,6 @@
 
 自定义：手动指定目标点
 
-
-
-
 鼠标释放位置
 
 同上，在指定位置鼠标释放
@@ -49,10 +46,8 @@
 
 使用示例
 
-此流程执行逻辑：打开影刀商城网页 --> 使用【拖拽元素(web)】指令拖拽滑块至指定位置 --> 使用【拖拽元素(web)】指令拖拽滑块至目标元素
-
-## 参数截图
-![assets/拖拽元素_web/img0.png](assets/拖拽元素_web/img0.png)
-![assets/拖拽元素_web/img1.png](assets/拖拽元素_web/img1.png)
 ![assets/拖拽元素_web/img2.png](assets/拖拽元素_web/img2.png)
+
 ![assets/拖拽元素_web/img3.png](assets/拖拽元素_web/img3.png)
+
+此流程执行逻辑：打开影刀商城网页 --> 使用【拖拽元素(web)】指令拖拽滑块至指定位置 --> 使用【拖拽元素(web)】指令拖拽滑块至目标元素

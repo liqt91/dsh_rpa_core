@@ -1,9 +1,10 @@
 # 获取元素信息(win)
 
 获取元素信息(win)
-💡
 
 获取窗口中指定元素的文本内容、值、属性等信息
+
+![assets/获取元素信息_win/img0.png](assets/获取元素信息_win/img0.png)
 
 窗口对象
 
@@ -21,12 +22,11 @@
 
 获取元素属性 ：可获取BoundingRectangle(位置宽高)等属性
 
-
-
-
 保存元素信息至
 
 保存获取到的操作结果为变量
+
+![assets/获取元素信息_win/img1.png](assets/获取元素信息_win/img1.png)
 
 等待元素存在(s)
 
@@ -34,13 +34,12 @@
 
 使用示例
 
+![assets/获取元素信息_win/img2.png](assets/获取元素信息_win/img2.png)
+
+![assets/获取元素信息_win/img3.png](assets/获取元素信息_win/img3.png)
+
+![assets/获取元素信息_win/img4.png](assets/获取元素信息_win/img4.png)
+
 此流程执行逻辑：执行【获取窗口对象】指令获取指定窗口 --> 使用【获取元素信息(win)】指令分别获取指定元素的文本内容、值、BoundingRectangle属性并保存操作结果 --> 执行【打印日志】指令分别打印操作结果
 
 注：CV元素无法获取元素信息
-
-## 参数截图
-![assets/获取元素信息_win/img0.png](assets/获取元素信息_win/img0.png)
-![assets/获取元素信息_win/img1.png](assets/获取元素信息_win/img1.png)
-![assets/获取元素信息_win/img2.png](assets/获取元素信息_win/img2.png)
-![assets/获取元素信息_win/img3.png](assets/获取元素信息_win/img3.png)
-![assets/获取元素信息_win/img4.png](assets/获取元素信息_win/img4.png)

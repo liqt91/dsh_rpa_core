@@ -1,9 +1,10 @@
 # 元素截图(win)
 
 元素截图(win)
-💡
 
 对桌面软件中的元素进行截图，并将结果保存至指定文件
+
+![assets/元素截图_win/img0.png](assets/元素截图_win/img0.png)
 
 窗口对象
 
@@ -29,15 +30,14 @@
 
 保存截图文件路径信息为变量
 
+![assets/元素截图_win/img1.png](assets/元素截图_win/img1.png)
+
 等待元素存在(s)
 
 等待目标元素存在的超时时间
 
 使用示例
 
-此流程执行逻辑：使用【元素截图】指令根据操作目标自动匹配窗口对指定元素截图并保存至本地
-
-## 参数截图
-![assets/元素截图_win/img0.png](assets/元素截图_win/img0.png)
-![assets/元素截图_win/img1.png](assets/元素截图_win/img1.png)
 ![assets/元素截图_win/img2.png](assets/元素截图_win/img2.png)
+
+此流程执行逻辑：使用【元素截图】指令根据操作目标自动匹配窗口对指定元素截图并保存至本地

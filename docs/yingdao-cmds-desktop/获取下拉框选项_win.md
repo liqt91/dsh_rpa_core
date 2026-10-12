@@ -1,9 +1,10 @@
 # 获取下拉框选项(win)
 
 获取下拉框选项(win)
-💡
 
 获取窗口中下拉框的选项
+
+![assets/获取下拉框选项_win/img0.png](assets/获取下拉框选项_win/img0.png)
 
 窗口对象
 
@@ -21,17 +22,18 @@
 
 保存获取到的下拉项内容为变量，变量类型为一维列表
 
+![assets/获取下拉框选项_win/img1.png](assets/获取下拉框选项_win/img1.png)
+
 等待元素存在(s)
 
 等待目标元素存在的超时时间
 
 使用示例
 
-此流程执行逻辑：使用【获取下拉框选项(win)】指令获取指定下拉框的当前下拉项并保存结果 --> 执行【打印日志】指令打印保存结果
-
-## 参数截图
-![assets/获取下拉框选项_win/img0.png](assets/获取下拉框选项_win/img0.png)
-![assets/获取下拉框选项_win/img1.png](assets/获取下拉框选项_win/img1.png)
 ![assets/获取下拉框选项_win/img2.png](assets/获取下拉框选项_win/img2.png)
+
 ![assets/获取下拉框选项_win/img3.png](assets/获取下拉框选项_win/img3.png)
+
 ![assets/获取下拉框选项_win/img4.png](assets/获取下拉框选项_win/img4.png)
+
+此流程执行逻辑：使用【获取下拉框选项(win)】指令获取指定下拉框的当前下拉项并保存结果 --> 执行【打印日志】指令打印保存结果

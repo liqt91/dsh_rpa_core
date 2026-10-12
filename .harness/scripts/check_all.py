@@ -50,6 +50,10 @@ PURE_FUNCTION_SCRIPTS = (
     "check_input_helpers.mjs",
     "check_precheck_helpers.mjs",
     "check_click_helpers.mjs",
+    # 「智能识别并补充地址前缀」（background.js，M53）：「获取元素属性」与补前缀两项
+    # 对标影刀「获取元素信息」的参数缺口。补前缀是纯字符串语义、五种形态各有归处，
+    # 只在浏览器里跑——Python 读源码证明不了「`/next` 会不会被拼成 `https:///next`」。
+    "check_url_prefix_helpers.mjs",
     # 浏览器收尾 op（关标签页 / 终止浏览器）：批量关闭的「逐项记账」语义只有
     # 扩展侧能证明——Python 桩测的是接口形状，一个把 Promise.all 当成功的实现
     # 也能过 Python 测试，却会在真机上把「关了 2/3」报成「全关了」。

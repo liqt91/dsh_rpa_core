@@ -1,7 +1,6 @@
 # 获取元素信息(web)
 
 获取元素信息(web)
-💡
 
 获取网页中元素的文本内容、源代码、属性值等信息
 
@@ -11,8 +10,7 @@
 
 操作
 
-
-
+![assets/获取元素信息_web/img0.png](assets/获取元素信息_web/img0.png)
 
 网页对象
 
@@ -38,12 +36,11 @@
 
 获取元素位置：
 
-
-
-
 保存元素信息至
 
 保存获取到的操作结果为变量
+
+![assets/获取元素信息_web/img1.png](assets/获取元素信息_web/img1.png)
 
 等待元素存在(s)
 
@@ -51,11 +48,10 @@
 
 使用示例
 
-此流程执行逻辑：打开影刀帮助中心网页 --> 使用【获取元素信息(web)】指令获取指定元素的文本内容并保存操作结果 --> 执行【打印日志】指令打印操作结果
-
-## 参数截图
-![assets/获取元素信息_web/img0.png](assets/获取元素信息_web/img0.png)
-![assets/获取元素信息_web/img1.png](assets/获取元素信息_web/img1.png)
 ![assets/获取元素信息_web/img2.png](assets/获取元素信息_web/img2.png)
+
 ![assets/获取元素信息_web/img3.png](assets/获取元素信息_web/img3.png)
+
 ![assets/获取元素信息_web/img4.png](assets/获取元素信息_web/img4.png)
+
+此流程执行逻辑：打开影刀帮助中心网页 --> 使用【获取元素信息(web)】指令获取指定元素的文本内容并保存操作结果 --> 执行【打印日志】指令打印操作结果

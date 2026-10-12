@@ -275,13 +275,22 @@ def test_workbench_has_command_matrix_tab(qapp, tmp_path):
 
 
 def test_panel_scope_mentions_covered_and_pending(qapp, tmp_path):
-    """覆盖范围来自用例表，未建表的命名空间也要写出来（免得问「怎么只有浏览器」）。"""
+    """覆盖范围来自用例表，未建表的命名空间也要写出来（免得问「怎么只有浏览器」）。
+
+    **规模数字从用例表现算、不写死**：写死的话每加一个变体都得来改这里（M53 只加了
+    11 个变体就红了一次），而这条判据真正要守的是「面板列的规模 == 用例表的真实规模」。
+    数字由**直接读 JSON** 得出，与面板的 `describe_namespaces` 是两条独立路径——
+    面板的计数逻辑坏了这里仍会红，所以它不是同义反复。
+    """
     home = _home(qapp, tmp_path)
     text = home.matrix_panel.scope_label.text()
 
+    cases_dir = REPO_ROOT / "tests" / "commands" / "cases"
+    browser_cases = json.loads((cases_dir / "browser.json").read_text(encoding="utf-8"))
+    variants = sum(len(spec.get("variants") or []) for spec in browser_cases.values())
+
     assert "browser" in text
-    assert "32 条命令" in text
-    assert "180 个变体" in text
+    assert f"browser {len(browser_cases)} 条命令 · {variants} 个变体" in text
     assert "desktop" in text and "data" in text and "workflow" in text
 
     home.matrix_panel.shutdown()
