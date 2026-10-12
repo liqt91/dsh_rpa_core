@@ -38,7 +38,7 @@
         "enum": [
           "url",
           "title"
-        ],
+        ], "x-enum-labels": {"url": "按网址", "title": "按标题"},
         "description": "按网址/按标题匹配",
         "default": "url"
       },

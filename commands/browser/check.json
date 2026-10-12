@@ -37,7 +37,7 @@
           "check",
           "uncheck",
           "toggle"
-        ],
+        ], "x-enum-labels": {"check": "勾选", "uncheck": "取消勾选", "toggle": "反选"},
         "description": "勾选/取消勾选/反选",
         "default": "check"
       },

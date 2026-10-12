@@ -3,22 +3,19 @@
 - 叶子指令渲染为圆角卡片：左侧命名空间彩色图标块（取显示名首字符）+
   中文显示名（粗体）+ 小字命令 id；hover/选中态与画布卡片同调色板；
 - 分组行保持轻量文本（粗体、行高收紧），不做卡片，避免视觉噪声；
-- 中文显示名复用 Web 编辑器单一事实来源 ``devserver/static/i18n.js``
-  （正则解析，与 tests/contract/test_editor_i18n.py 同款），
+- 中文显示名复用 Web 编辑器单一事实来源 ``devserver/static/i18n.js``；解析统一收在
+  :mod:`rpa_core.gui.i18n`（M54 S1 起，本模块只做同名 re-export），
   缺失时回退命令 id 原文，不做第二份映射表。
 """
 
 from __future__ import annotations
-
-import re
-from functools import lru_cache
-from pathlib import Path
 
 from PySide6.QtCore import QRect, QSize, Qt
 from PySide6.QtGui import QColor, QFont, QPainter, QPen
 from PySide6.QtWidgets import QStyle, QStyledItemDelegate, QStyleOptionViewItem
 
 from rpa_core.gui import fonts
+from rpa_core.gui.i18n import load_command_display_names as load_command_display_names
 from rpa_core.gui.theme import (
     ACCENT,
     BORDER,
@@ -38,24 +35,6 @@ from rpa_core.gui.theme import (
 # 树 item 上携带完整命令 id 的自定义数据角色（组节点不携带）。
 # 历史定义在 app.py，为让 delegate 独立可用迁到本模块；app.py 仍 re-export。
 ROLE_COMMAND_ID = Qt.ItemDataRole.UserRole + 1
-
-_I18N_PATH = Path(__file__).resolve().parent.parent / "devserver" / "static" / "i18n.js"
-_COMMANDS_BLOCK = re.compile(r"^\s*commands:\s*\{(.*?)\n  \}", re.DOTALL | re.MULTILINE)
-_ENTRY = re.compile(r'"([\w.]+)"\s*:\s*"([^"]+)"')
-
-
-@lru_cache(maxsize=1)
-def load_command_display_names() -> dict[str, str]:
-    """从 i18n.js 的 commands 块读出「命令 id → 中文显示名」；失败一律回退空表。"""
-    try:
-        text = _I18N_PATH.read_text(encoding="utf-8")
-    except OSError:
-        return {}
-    match = _COMMANDS_BLOCK.search(text)
-    if not match:
-        return {}
-    return {m.group(1): m.group(2) for m in _ENTRY.finditer(match.group(1))}
-
 
 # 命名空间 → 图标底色（与画布深度线同谱系；按前缀匹配，desktop.win32 归 desktop）
 _NAMESPACE_COLORS = (

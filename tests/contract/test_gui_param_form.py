@@ -193,10 +193,15 @@ def test_nullable_type_list_falls_back_to_string(qapp):
 
 
 def test_required_field_label_has_star(catalog):
-    form = ParamForm(catalog["browser.navigate"].input_schema, {})
+    """必填字段是「中文标签 + 空格 + *」；标签取 i18n 层，不硬编码中文（M54 S1）。"""
+    from rpa_core.gui.i18n import field_label
+
+    manifest = catalog["browser.navigate"]
+    form = ParamForm(manifest.input_schema, {}, manifest=manifest)
     labels = form.findChildren(QLabel)
-    required_label = next(label for label in labels if label.text().startswith("browserType"))
-    assert required_label.text().endswith("*")
+    expected = field_label("browserType", manifest.id)
+    required_label = next(label for label in labels if label.text().startswith(expected))
+    assert required_label.text() == f"{expected} *"
 
 
 # ---- MainWindow 集成 ------------------------------------------------------

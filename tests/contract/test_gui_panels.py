@@ -1039,16 +1039,20 @@ def test_param_form_referenced_param_shows_only_element_name(window):
 
     assert form._current_ref("selector") == "searchBox"
     picked = form._element_picked["selector"]
-    assert picked.text() == "元素：searchBox"
+    # M54 G2：行标签已经说明这是「操作目标」，值里不再重复「元素：」前缀
+    assert picked.text() == "searchBox"
+    assert form._element_row_labels["selector"].text() == "操作目标"
     assert picked.isVisibleTo(form)
     assert form._element_clears["selector"].isVisibleTo(form)
     assert not form._row_shown["selector"].isVisibleTo(form), "值控件应整行隐藏"
     assert not form._row_labels["selector"].isVisibleTo(form)
     assert not form._element_rows["selector"].isVisibleTo(form)
 
-    # ✕ 摘引用 ⇒ 回到手填态：值控件、下拉回来，元素名与 ✕ 藏起来
+    # ✕ 摘引用 ⇒ 回到手填态：值控件、下拉回来，元素名与 ✕ 藏起来，
+    # 元素行标签退回「元素库」（此时值行才叫「操作目标」，两行不能同名）
     form.findChild(QToolButton, "elementClear::selector").click()
     assert not picked.isVisibleTo(form)
+    assert form._element_row_labels["selector"].text() == "元素库"
     assert form._row_shown["selector"].isVisibleTo(form)
     assert form._row_labels["selector"].isVisibleTo(form)
     assert form._element_rows["selector"].isVisibleTo(form)

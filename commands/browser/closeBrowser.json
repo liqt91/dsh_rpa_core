@@ -25,7 +25,7 @@
         "enum": [
           "msedge",
           "chrome"
-        ],
+        ], "x-enum-labels": {"msedge": "Edge", "chrome": "Chrome"},
         "description": "要终止的浏览器类型（按进程名匹配）。终止范围是该类型的全部进程——包含用户自己打开的窗口，执行本命令即视为显式确认",
         "default": "msedge"
       },

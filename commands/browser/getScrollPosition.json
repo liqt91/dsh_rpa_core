@@ -34,7 +34,7 @@
         "enum": [
           "vertical",
           "horizontal"
-        ],
+        ], "x-enum-labels": {"vertical": "纵向", "horizontal": "横向"},
         "description": "滚动条方向（对标影刀「获取滚动条位置」的纵向/横向）：vertical=纵向（默认）；horizontal=横向。只影响 scrollPosition 的取轴，scrollX/scrollY 恒按各自轴返回",
         "default": "vertical"
       },
@@ -43,7 +43,7 @@
         "enum": [
           "current",
           "bottom"
-        ],
+        ], "x-enum-labels": {"current": "当前位置", "bottom": "底部位置"},
         "description": "取哪个位置（对标影刀「获取滚动条位置」的当前位置/底部位置）：current=当前位置（默认，即 scrollX/scrollY）；bottom=底部位置（即滚动条长度＝可滚动内容总长，取 scrollHeight/scrollWidth）。只影响 scrollPosition",
         "default": "current"
       },

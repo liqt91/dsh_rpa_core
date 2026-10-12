@@ -162,6 +162,56 @@
 
 ## 后续任务
 
+- [x] **M54 GUI 参数呈现补完（字段中文化 + 元素槽位口径）**（`planned` → **2026-10-12 当日实施完毕**；
+  立项 → 同日重评估 → 同日拍板并落地 G1~G4）
+  - 起因：维护者问「填写输入框(web) 的 `selector` 参数为什么还在？如果是引用，那元素参数就够了呀？」
+    → 选定「模型层大改，先出方案」→ 维护者拍板「**web 的不用改，重点做 GUI**」→ **重评估**。
+  - **★ 重评估后的真缺口（原方案取向错误）**：**GUI 参数面板的字段标签是裸英文键名**
+    （`gui/param_form.py::_attach` 的 `label_text = f"{name} *"`），实测**全仓 86/86 命令、
+    88 个去重键名、302 处**；出现最多 `sessionId`(62) / `timeoutMs`(32) / `selector`(16) /
+    `elementId`(14)。而 Web 侧有完整中文层（`i18n.js` 的 `fields` 82 键 + `commandFields` 13 命令），
+    **GUI 一个都没消费**（`command_palette.py` 只用 `commands` 块取命令名）。
+    ⇒ 维护者看到的「还带着 `selector`」在 GUI 上是字面事实（Web 显示「选择器」）。
+  - **原方案三项处置**：① 补完 Web 前端引用模型 → **作废**（与 ADR 0016「Web 编辑器冻结、
+    不再为它补能力」冲突）；② 槽位键统一 → **作废**（`selector` 同名字执行器接口
+    `browser.py inputs.get("selector")` + 扩展线协议 + Web 硬编码 `app.js:1798/2690/2692` 三处
+    ⇒ 改键名必然改 Web，与「web 不改」冲突；差别改「显示层」即可）；③ 浏览器句柄层
+    `browser.findElement → elementId` → **保留，另立里程碑**（纯新增，不碰 Web）。
+  - 计划：`M54-gui-param-presentation.md`（G1 字段中文化 / G2 元素槽位口径对齐影刀「操作目标」/
+    G3 枚举值中文化扩容（现仅 3/86 manifest 有 `x-enum-labels`）/ G4 ops 标签去重
+    （GUI 硬编码 `CONDITION_OP_LABELS` 手抄 `i18n.js` 的 `ops`）+ 实施切片 S0~S3 + 5 个待拍板点）。
+  - **G1 覆盖缺口（已现算）**：`fields`+`commandFields` 对全仓 300 处「命令 × 字段」覆盖 282，
+    剩 18 处空白（`data.table.*` 的 `flowDir`/`table` 12、`browser.closeTabs` 3、
+    `browser.closeBrowser.force` 1、`desktop*.attachWindow.operationTimeoutMs` 2）⇒ 落地时补。
+  - 连带面：`test_required_field_label_has_star` 现断言 `startswith("browserType")`，改中文化后需同步
+    （其本意只是「必填带星号」）。
+  - 明确不动：**Web 编辑器**（`devserver/static/*`，ADR 0016 冻结）、槽位键名、扩展线协议
+    （⇒ **不 bump `EXT_BUILD`**）、ADR-002 ref-only 口径、元素文档的 `selector{...}` 字段、
+    `model/selector_ranking.py` 与桌面定位模型。
+  - **原方案取证存档**（仍成立，但按拍板降为**已知差异**）：ADR-002 ref-only 只落地在 PySide 一条腿上
+    ——`devserver/static/app.js` 里 `elementRefs` 出现 0 次，三条写入路径（`:1828` 字段下拉 /
+    `:2690,2692` 元素库插入 / `:2873` 捕获）全部写值快照；Web 端产出的「快照 + 引用」并存数据会被
+    `devserver/app.py:234` 的 `model_validate` 拒绝（该保护本身正确，只是 Web 端没有摘引用入口）；
+    `insertElement`/`element-pick` 在 `tests/` 与 `.harness/` 里命中 0 次。
+  - **✅ 实施结果（2026-10-12 当日）**：拍板 = G1 做 / 中文口径**跟影刀「操作目标」** /
+    G2+G3+G4 全做 / 元素槽位按「**元素都是引用态**」为准（不为非引用态重排行结构）。
+    落地：新增 `gui/i18n.py`（`i18n.js` 的**唯一解析入口**——commands/fields/commandFields/ops
+    四块 + 三级回退）、`_attach` 的 label 走中文化（英文键名降 tooltip）、元素行两态
+    （引用态「操作目标」+ 元素名 / 非引用态「元素库」）、`CONDITION_OP_LABELS` 改读 `ops`、
+    `command_palette` 改同名 re-export；`i18n.js` 补 **7 个**公共键；**24 个 manifest 共 31 处**
+    `x-enum-labels`（G3）。判据新增 `tests/contract/test_gui_i18n.py` **9 条**——含两条漂移闸：
+    「每个 manifest 的每个字段都有中文标签」与「enum ⇄ `x-enum-labels` 键集合**相等**」。
+    负向验证 `probe_m54_gui_i18n_negative.py` **7 注入全部精确命中**（I1 中文化层失效→6 红 /
+    I2 口径改回「选择器」→3 / I3 ops 脱钩→1 / I4 面板不接线→2 / I5 少字段标签→1 /
+    I6 枚举多死标签→1 / I7 枚举少键→1），逐字节还原核 md5、复绿 **150 passed**。
+    **探针抓到我自己判据的假绿灯**：`test_param_form_labels_come_from_i18n` 首版期望值与实际值
+    同源（都经 `field_label`）⇒ 中文化层整体失效时两边一起退化成裸键名、判据恒真，补**字面锚点**
+    后才精确命中。门禁：pytest **1590 passed / 0 failed / 21 skipped / 2 xfailed**（收尾崩溃
+    rc=127 与 139、两次 passed 数一致 ⇒ **退出阶段环境级崩溃**）；ruff + 5 组 Python 静态门禁 +
+    15 个 `check_*.mjs` **逐条单跑全 rc=0**（`check_command_matrix` 必须单跑——它排在 `check_all.py`
+    第 7 条，被 pytest 那步的收尾崩溃遮住）。**未做**：原方案③ 浏览器元素句柄层（另立里程碑候选，未拍板）、
+    `desktop` 的 `elementId` 文案（它**不是**引用键、没有元素库行）。
+
 - [ ] **M52 选择器优选（唯一 · 稳定 · 短）**（`active`，2026-10-10 立项；**S1 已落地**）
   - **S1（2026-10-10）已落地**：桌面 penalty 引擎（`model.desktop.choose_best_locator` /
     `locator_penalty`，字典序唯一硬门）+ `capture_at` 接线（`_pick_best_candidate`）；

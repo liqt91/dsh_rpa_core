@@ -214,6 +214,16 @@ window.RPA_I18N = {
     name: "名称",
     message: "日志内容",
     level: "日志级别",
+    // M54：补最后 7 个此前没有中文标签的公共键——GUI 参数面板会**裸显示英文键名**，
+    // 比 Web 更扎眼。Web 侧此前回退英文原文，加进来两端同时受益。判据见
+    // tests/contract/test_gui_i18n.py::test_every_manifest_field_has_chinese_label。
+    all: "关闭全部标签页",
+    tabIds: "标签页 ID 列表",
+    ignoreBeforeUnload: "忽略离开页面确认",
+    force: "强制终止",
+    operationTimeoutMs: "操作超时（毫秒）",
+    flowDir: "流程目录",
+    table: "数据表格名称",
   },
   // 按命令覆盖的字段标签：同名参数在不同命令下含义不同（如 args）
   commandFields: {

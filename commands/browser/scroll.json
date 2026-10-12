@@ -34,7 +34,7 @@
           "bottom",
           "point",
           "page"
-        ],
+        ], "x-enum-labels": {"top": "顶部", "bottom": "底部", "point": "指定坐标", "page": "向下滚动一屏"},
         "description": "滚动位置：top=顶部 bottom=底部 point=指定坐标(x,y) page=向下滚动一屏",
         "default": "bottom"
       },

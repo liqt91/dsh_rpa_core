@@ -37,7 +37,7 @@
           "value",
           "innerText",
           "innerHTML"
-        ],
+        ], "x-enum-labels": {"value": "表单元素值", "innerText": "可见文本", "innerHTML": "内部 HTML"},
         "description": "设置方式（本命令扩展，影刀「设置元素值_web」无此参数）：value=表单元素值（默认）；innerText=可见文本；innerHTML=元素内部 HTML",
         "default": "value"
       },

@@ -36,6 +36,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from rpa_core.gui.i18n import field_label, load_op_labels
 from rpa_core.gui.theme import (
     DANGER,
     SUCCESS,
@@ -168,9 +169,13 @@ class ParamForm(QWidget):
         self._alias_validator = re.compile(r"^[A-Za-z_]\w*$")
         # 节点 raw（读其中的 elementRefs 作元素引用行的初值）
         self._raw: dict[str, Any] = dict(raw or {})
+        # 命令 id：字段标签的「按命令覆盖」（commandFields）要用它；manifest 缺失时 None
+        self._command_id: str | None = getattr(manifest, "id", None)
         # 元素库引用：element_provider 提供 (元素名, 文档) 列表；为 None 则不加选择行
         self._element_provider = element_provider
         self._element_rows: dict[str, QComboBox] = {}
+        # 元素行的行标签：引用态称「操作目标」、非引用态称「元素库」（见 _apply_element_state）
+        self._element_row_labels: dict[str, QLabel] = {}
         # M52 S6：引用生效时该参数**只显元素名**、值控件整行隐藏，故需留下这些把手
         self._element_picked: dict[str, QLabel] = {}
         self._element_clears: dict[str, QToolButton] = {}
@@ -497,10 +502,16 @@ class ParamForm(QWidget):
         target 为分组区段的 body_layout；None 时回退到主表单 self._form。
         """
         self._fields.append((name, kind, widget))
-        label_text = f"{name} *" if name in self._required else name
-        description = field_schema.get("description")
-        if description:
-            widget.setToolTip(description)
+        # M54 S1：字段标签走 i18n.js 的中文层（命令级覆盖 → 公共键 → 键名原文）；
+        # 英文键名降为 tooltip——显示成中文之后，仍要能看见「这个字段在数据里叫什么」。
+        display = field_label(name, self._command_id)
+        label_text = f"{display} *" if name in self._required else display
+        description = field_schema.get("description") or ""
+        tip = f"{name}：{description}" if description else name
+        if display == name:  # 没有中文标签时键名已在标签上，tooltip 不必再重复
+            tip = description
+        if tip:
+            widget.setToolTip(tip)
         label = QLabel(label_text)
         if description:
             label.setToolTip(description)
@@ -652,10 +663,13 @@ class ParamForm(QWidget):
         clear.clicked.connect(lambda _c=False, k=name: self._on_element_clear(k))
 
         layout_target = target if target is not None else self._form
-        layout_target.addRow(QLabel("元素"), row)
+        element_label = QLabel("元素库")
+        element_label.setObjectName(f"elementLabel::{name}")
+        layout_target.addRow(element_label, row)
         self._element_rows[name] = combo
         self._element_picked[name] = picked
         self._element_clears[name] = clear
+        self._element_row_labels[name] = element_label
         self._apply_element_state(name)
 
     def _current_ref(self, name: str) -> str | None:
@@ -684,8 +698,17 @@ class ParamForm(QWidget):
                 combo.blockSignals(previous)
         picked = self._element_picked.get(name)
         if picked is not None:
-            picked.setText(f"元素：{ref}" if active else "")
+            # 行标签已经说了这是什么，值里不再重复「元素：」前缀
+            picked.setText(str(ref) if active else "")
             picked.setVisible(active)
+        element_label = self._element_row_labels.get(name)
+        if element_label is not None:
+            # 引用态这行就是影刀式「操作目标」（M54 G2：中文口径跟影刀，不跟 Web 的
+            # 「选择器」/「定位器」）；非引用态标「元素库」——那时值行已经叫「操作目标」，
+            # 两行同名会分不清哪行填什么。
+            element_label.setText(
+                field_label(name, self._command_id) if active else "元素库"
+            )
         clear = self._element_clears.get(name)
         if clear is not None:
             clear.setVisible(active)
@@ -798,17 +821,9 @@ def build_param_form(
 NAME_PATTERN = re.compile(r"^[A-Za-z_]\w*$")
 
 CONDITION_OPS = ["eq", "ne", "gt", "gte", "lt", "lte", "contains", "truthy"]
-# 中文标签与 devserver/static/i18n.js 的 ops 表一致
-CONDITION_OP_LABELS = {
-    "eq": "等于",
-    "ne": "不等于",
-    "gt": "大于",
-    "gte": "大于等于",
-    "lt": "小于",
-    "lte": "小于等于",
-    "contains": "包含",
-    "truthy": "为真（非空）",
-}
+# 中文标签取自 devserver/static/i18n.js 的 ops 块（全仓唯一一份）。原先这里手抄了一份，
+# 加操作符要改两处、且没有门禁钉住两处相等 ⇒ 漂移无症状（M54 G4 收敛）。
+CONDITION_OP_LABELS: dict[str, str] = load_op_labels()
 
 _LITERAL_JSON_HEADS = "[{tfn\"-"  # 数字首字符单独用 isdigit() 判定（JS 的 0-9 区间）
 
