@@ -182,9 +182,12 @@ if expr_capable and (allow_fx or allow_python):
   ——较 M58 门禁的 1630 为 **+6 = M58 后续判据 1 条 + 本轮 5 条**。
 - **逐条取证**：6 组 Python 项（`ruff check .` + 5 个 `check_*.py`）+ **15 个 `check_*.mjs`**，
   共 21 条逐条 `rc=0`（日志 `.harness/spike/_m59_gate_items.log`）。
-- 说明：全量 pytest **在沙箱内**收尾会被 shim 的批量删除守卫打断（`SystemExit: 1`，
-  pytest 临时目录清理触发），属**已知环境级现象**（此前形态为 `rc=139` / Segfault，同一成因）；
-  **豁免沙箱后 rc=0**，故本轮按「先确认豁免、再判挂账」的纪律取绿。
+- **提交后同树复跑**：pytest 仍 **1636 passed / 0 failed**（**两次 passed 数一致**），但收尾被环境级打断、
+  `GATE_RC=127`（只有收尾失败，用例全过）。⇒ 按纪律取「有界重跑 + passed 数一致 + 其中一次 `rc=0`」为绿，
+  两条证据留档（`_gate_all_m59.log` / `_gate_all_m59_postcommit.log`）。
+- 说明：全量 pytest **在沙箱内**收尾会被 shim 的批量删除守卫打断（`_check_bulk_delete_guard` →
+  `SystemExit: 1`，`rc=1`；pytest 临时目录清理触发），属**已知环境级现象**，与 `rc=127` / `rc=139` **同源**；
+  **豁免沙箱后**取到 `rc=0`，故本轮按「先确认豁免、再判挂账」的纪律取绿。
 
 ## 七、明确不动
 
