@@ -534,6 +534,29 @@
     **但不许用「放宽断言」消红**——那会把真实缺陷一起放掉（M41 §5.2 的既定口径）。
   - 证据：M41 任务单 §5.2（首轮）· §5.3（S4 轮订正）· §5.4（S5 轮三条否证 + A/B 对照）。
 
+- [ ] **参数 Python 模式的「运行前校验」缺口**（`planned`，2026-10-13 立）
+  - 起因：维护者跑 `xiaohongshu` 流程报 `SCRIPT_FAILED · 节点 n1` /
+    `Python expression failed in field 'value': NameError: name 'www' is not defined`。
+    归因 = **用户数据**：n1（`data.setVar`）的 `with.value = "www.xiaohongshu.com"` 被标了
+    `_exprModes: {"value": "python"}` ⇒ 编排器把该字段交子进程求值，而 `www.xiaohongshu.com`
+    是「`www` 的属性链」⇒ 根名未定义。**不是 M58/M59 引入**：`_probe_xhs_bug.py` 六项实测
+    （不传模式不会凭空造 / 普通态输入文本不置 python / 点 Py 可撤销无粘滞 / 界面只照实读文件 /
+    文件里只有 n1 是 python / 按钮与标签间有 26px 空隙不存在误触）。
+  - **缺口本身**：`www.xiaohongshu.com` 在 Python 里**语法完全合法**，所以面板不报错、也不拦
+    「应用参数」，一直到运行期才炸。叠加 M58 的「切到 Py 时**首次继承**内容」⇒ **切模式后内容
+    一字不变**（只有按钮底色由灰变彩），用户很难察觉自己已进 python 态——本次事故正是这条路径。
+    即：**从「点错一下」到「运行报错」之间没有任何一道拦网。**
+  - 候选（从轻到重，均未开工）：(a) python 模式编辑器加 placeholder + 更醒目的模式标识；
+    (b) 点「应用参数」时对 python 字段做 `ast.parse` 编译校验（只抓语法错，抓不到本次这种）；
+    (c) 再用 `ast` 检查表达式里的 `Name` 节点是否都在已知变量集合（流程入参 / 输出别名 /
+    `x-var-write` 目标 / 内置作用域）里 ⇒ 能在**应用时**直说「`www` 不是已知变量」。
+    (c) 必须与运行期 `python_worker` 的 `namespace` **同源**，否则会造出**假拦网**。
+  - 佐证：`.workbuddy/memory/2026-10-13.md` §二十六（诊断方法、实测数字与结论已全量抄录；
+    该轮的一次性只读探针 `.harness/spike/_probe_xhs_bug.py` 按 `/_probe_*` 约定不入库）·
+    `workers/python_worker.py:209`（报错文案来源）· `gui/param_form.py::_swap_expr_slot`（切模式继承内容）。
+  - 明确不动：**不改维护者的 `workflows/xiaohongshu/workflow.json`**（他选择自己在界面上点掉
+    n1 的 Py 开关）；**不动运行期求值语义**（子进程隔离执行是本条的前提，不是问题）。
+
 ## 远期任务
 
 - [ ] **AI 按自然语言生成流程（设计期）**（`planned`）——自然语言 → 流程草稿 AST（catalog 命令 +
