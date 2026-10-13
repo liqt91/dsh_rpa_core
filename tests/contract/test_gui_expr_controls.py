@@ -1,6 +1,6 @@
 """参数表达式控件契约测试（对标影刀的「左 Py 右 fx」）。
 
-覆盖五件事：
+覆盖七件事：
 
 1. **门控来自 manifest 字段级声明**——``x-fx`` 才给 fx、``x-python`` 才给 Py；
    都没有就不挂表达式行（与 Web 编辑器同一份声明、同一套规则）。
@@ -12,6 +12,11 @@
 5. **菜单按来源分组、只列用户命名的变量**——组标题是不可点的灰行；空组不渲染；
    菜单内容由 ``variable_groups_provider`` 供给，排除规则见
    ``MainWindow._reference_groups``。
+6. **编辑态双缓冲**（``_expr_slots``）——两种模式各存一份输入内容，来回切不互相
+   覆盖；缓冲只活在面板内存里，落盘仍是「模式 + 一份值」（维护者 2026-10-13 核实
+   的影刀语义）。
+7. **``x-multiline`` ⇒ 多行输入区**（QPlainTextEdit），与 ``x-fx`` / ``x-python``
+   可叠加；表达式态底色要用匹配真实控件类型的 QSS 选择器，否则静默不生效。
 
 测试在 offscreen Qt 平台运行；缺 PySide6 时整组跳过。
 """
@@ -29,7 +34,12 @@ import pytest
 
 pytest.importorskip("PySide6")
 
-from PySide6.QtWidgets import QLineEdit, QToolButton, QWidget  # noqa: E402
+from PySide6.QtWidgets import (  # noqa: E402
+    QLineEdit,
+    QPlainTextEdit,
+    QToolButton,
+    QWidget,
+)
 
 from rpa_core.gui.param_form import ParamForm  # noqa: E402
 
@@ -43,7 +53,7 @@ def qapp():
     return build_application()
 
 
-def _editor(form: ParamForm, name: str) -> QLineEdit:
+def _editor(form: ParamForm, name: str) -> QLineEdit | QPlainTextEdit:
     return next(widget for field, _kind, widget in form._fields if field == name)
 
 
@@ -335,3 +345,293 @@ def test_tag_detection_reuses_runtime_resolver(qapp):
     assert has_tags("[web]") is True
     assert has_tags("a[title]") is True
     assert has_tags("纯文本") is False
+
+
+# ---- 编辑态双缓冲（切模式不丢内容） ----------------------------------------
+def _swap_schema() -> dict:
+    return {
+        "type": "object",
+        "properties": {"text": {"type": "string", "x-fx": True, "x-python": True}},
+    }
+
+
+def test_py_toggle_keeps_both_edits(qapp):
+    """切到 Python 改一版 → 切回普通仍是原稿 → 再切过去 Python 那版还在。
+
+    维护者 2026-10-13 核实的影刀语义：**只有编辑态两份值**，落盘仍是「模式 +
+    一份值」；这条判据钉的就是「编辑态两份、互不覆盖」。
+    """
+    form = ParamForm(
+        _swap_schema(), {"text": "abc"}, variable_groups_provider=lambda: []
+    )
+    editor = _editor(form, "text")
+    py_button = form._expr_rows["text"][0]
+
+    py_button.setChecked(True)
+    assert editor.text() == "abc", "首次切过去应继承原内容，而不是清空"
+    editor.setText("len(abc)")
+
+    py_button.setChecked(False)
+    assert editor.text() == "abc", "切回来必须还原普通模式那一份"
+
+    py_button.setChecked(True)
+    assert editor.text() == "len(abc)", "再切过去 Python 那一份也要还在"
+
+
+def test_first_py_toggle_inherits_current_text(qapp):
+    """首次切换继承原内容——点一下 Py 就看到内容消失最劝退（也是他要修的痛点）。"""
+    form = ParamForm(
+        _swap_schema(), {"text": "abc"}, variable_groups_provider=lambda: []
+    )
+    editor = _editor(form, "text")
+    form._expr_rows["text"][0].setChecked(True)
+    assert editor.text() == "abc"
+
+
+def test_slot_swap_moves_cursor_to_end(qapp):
+    """换槽后光标停在末尾——**判据必须打在多行控件上**。
+
+    ``QLineEdit.setText`` 本来就把光标放到行尾（所以单行字段看不出问题），而
+    ``QPlainTextEdit.setPlainText`` 会把它复位到 0：切过去接着点 fx 插变量就插到了
+    内容最前面（维护者 2026-10-13 复核前的实测 ``web[web]``）。两种控件行为不同，
+    打在单行上等于没测。
+    """
+    form = ParamForm(
+        {
+            "type": "object",
+            "properties": {
+                "both": {
+                    "type": "string",
+                    "x-fx": True,
+                    "x-python": True,
+                    "x-multiline": True,
+                },
+            },
+        },
+        {"both": "line1"},
+        variable_groups_provider=lambda: [],
+    )
+    py_button, _fx_button, editor = form._expr_rows["both"]
+    py_button.setChecked(True)
+
+    assert editor.toPlainText() == "line1"
+    assert editor.textCursor().position() == len(editor.toPlainText())
+
+
+def test_slots_never_leak_into_saved_values(qapp):
+    """缓冲只活在面板内存：``values()`` 永远只有当前模式那一份，不落第二份值。"""
+    form = ParamForm(
+        _swap_schema(), {"text": "abc"}, variable_groups_provider=lambda: []
+    )
+    editor = _editor(form, "text")
+    py_button = form._expr_rows["text"][0]
+    py_button.setChecked(True)
+    editor.setText("len(abc)")
+    py_button.setChecked(False)
+
+    assert form.values() == {"text": "abc"}
+    assert form.expr_modes() == {}
+    assert "_exprValues" not in form.values(), "落盘形状里不许出现第二份值"
+
+
+def test_switching_back_keeps_tags_alive(qapp):
+    """切回普通模式后 ``[变量]`` 必须继续被解析（自动回到 fx 态）。
+
+    否则用户只是切了一趟模式，自己写的引用就变成**不解析的死文本**（运行期走
+    ``resolve``，只认整串 ``${var}``）——而换槽是程序换内容，不会触发
+    ``textChanged`` 那条「删光标签才撤销」的路径。
+    """
+    form = ParamForm(
+        _swap_schema(),
+        {"text": "[web]"},
+        expr_modes={"text": "fx"},
+        variable_groups_provider=lambda: [],
+    )
+    py_button = form._expr_rows["text"][0]
+
+    py_button.setChecked(True)
+    assert form.expr_modes() == {"text": "python"}
+
+    py_button.setChecked(False)
+    assert form.expr_modes() == {"text": "fx"}, "取回带标签的内容应回到 fx 态"
+
+
+def test_switching_back_to_plain_text_drops_fx(qapp):
+    """反向兜底：取回的是**纯文本**（无标签）时不许停在 fx 态。"""
+    form = ParamForm(
+        _swap_schema(),
+        {"text": "普通文本"},
+        expr_modes={"text": "fx"},
+        variable_groups_provider=lambda: [],
+    )
+    py_button = form._expr_rows["text"][0]
+
+    py_button.setChecked(True)
+    editor = _editor(form, "text")
+    editor.setText("count + 1")
+    py_button.setChecked(False)
+
+    assert form.expr_modes() == {}, "无标签的纯文本不该留在 fx 态"
+
+
+# ---- 输入区域（x-multiline，对标影刀「输入区域」） -------------------------
+def _multiline_schema() -> dict:
+    """把「多行 / 多行+表达式 / 单行」三种组合摆出来。"""
+    return {
+        "type": "object",
+        "properties": {
+            "script": {"type": "string", "x-multiline": True},
+            "both": {
+                "type": "string",
+                "x-fx": True,
+                "x-python": True,
+                "x-multiline": True,
+            },
+            "single": {"type": "string", "x-fx": True},
+        },
+    }
+
+
+def test_multiline_declaration_switches_to_plain_text_edit(qapp):
+    """声明 ``x-multiline`` 才换多行控件；没声明仍是单行（读声明，不靠字段名猜）。"""
+    form = ParamForm(_multiline_schema(), {}, variable_groups_provider=lambda: [])
+    assert isinstance(_editor(form, "script"), QPlainTextEdit)
+    assert isinstance(_editor(form, "both"), QPlainTextEdit)
+    assert isinstance(_editor(form, "single"), QLineEdit)
+
+
+def test_multiline_value_survives_collection(qapp):
+    """多行内容（含换行）必须完整收回，不被压成一行或截断。"""
+    form = ParamForm(
+        _multiline_schema(),
+        {"script": "const a = 1;\nconst b = 2;\nreturn a + b;"},
+        variable_groups_provider=lambda: [],
+    )
+    assert form.values() == {"script": "const a = 1;\nconst b = 2;\nreturn a + b;"}
+
+
+def test_multiline_and_expr_declarations_compose(qapp):
+    """``x-multiline`` 与 ``x-fx`` / ``x-python`` 可叠加：先多行输入区，再挂两按钮。"""
+    form = ParamForm(
+        _multiline_schema(), {}, variable_groups_provider=lambda: [("变量", ["web"])]
+    )
+    py_button, fx_button, editor = form._expr_rows["both"]
+    assert isinstance(editor, QPlainTextEdit)
+    assert py_button is not None and fx_button is not None
+
+    form._insert_variable("both", editor, "web")
+    assert editor.toPlainText() == "[web]"
+    assert form.expr_modes() == {"both": "fx"}
+
+
+def test_multiline_editor_expression_highlight_uses_its_own_selector(qapp):
+    """多行控件的表达式底色必须用 ``QPlainTextEdit`` 选择器——写成 ``QLineEdit``
+    内联样式会**静默不生效**（看着有值、底色却不出现）。"""
+    form = ParamForm(_multiline_schema(), {}, variable_groups_provider=lambda: [])
+    py_button, _fx_button, editor = form._expr_rows["both"]
+    py_button.setChecked(True)
+
+    style = editor.styleSheet()
+    assert "QPlainTextEdit" in style
+    assert "QLineEdit" not in style
+
+
+def test_multiline_slot_swap_works_on_plain_text_edit(qapp):
+    """双缓冲对多行编辑器同样成立（换槽走的是适配函数，不是 ``QLineEdit`` 专用 API）。"""
+    form = ParamForm(
+        {
+            "type": "object",
+            "properties": {
+                "both": {
+                    "type": "string",
+                    "x-fx": True,
+                    "x-python": True,
+                    "x-multiline": True,
+                },
+            },
+        },
+        {"both": "line1\nline2"},
+        variable_groups_provider=lambda: [],
+    )
+    py_button, _fx_button, editor = form._expr_rows["both"]
+
+    py_button.setChecked(True)
+    assert editor.toPlainText() == "line1\nline2"
+    editor.setPlainText("len(line1)")
+
+    py_button.setChecked(False)
+    assert editor.toPlainText() == "line1\nline2"
+
+
+# ---- Py 按钮视觉（灰 / 彩两态） --------------------------------------------
+def test_py_button_carries_two_state_style(qapp):
+    """Py 是模式开关，两态要能一眼分辨——此前只有 Qt 默认按下阴影，维护者看不出
+    「点亮了没有」（2026-10-13 报障）。"""
+    form = ParamForm(
+        _swap_schema(), {}, variable_groups_provider=lambda: []
+    )
+    py_button, _fx_button, _ = form._expr_rows["text"]
+
+    style = py_button.styleSheet()
+    assert "QToolButton:checked" in style, "缺少「已点亮」态样式"
+    assert "QToolButton {" in style, "缺少「未点亮」态样式"
+
+
+def test_py_button_is_widened_for_a_visible_state_block(qapp):
+    """纯文字按钮太窄，底色块看不出来 ⇒ 必须显式加宽。"""
+    form = ParamForm(
+        _swap_schema(), {}, variable_groups_provider=lambda: []
+    )
+    py_button, _fx_button, _ = form._expr_rows["text"]
+    assert py_button.minimumWidth() >= 30
+
+
+def test_fx_button_shares_the_same_frame(qapp):
+    """fx 也带描边：只给 Py 加样式会让同一行按钮一实一虚（此前 fx 是 autoRaise 裸文字）。"""
+    form = ParamForm(
+        _swap_schema(), {}, variable_groups_provider=lambda: []
+    )
+    _py_button, fx_button, _ = form._expr_rows["text"]
+    assert "border" in fx_button.styleSheet()
+
+
+# ---- 声明键的事实源唯一 ----------------------------------------------------
+_WEB_SRC = (
+    Path(__file__).resolve().parents[2]
+    / "src"
+    / "rpa_core"
+    / "devserver"
+    / "static"
+    / "app.js"
+)
+
+
+def test_both_editors_read_the_same_multiline_declaration(qapp):
+    """``x-multiline`` 只能有一个键名，两端各读一次同一份字段声明。
+
+    若各写各的（桌面 ``x-multiline``、Web ``multiline``），以后加字段就得同时记两个
+    名字，迟早漂移——而漂移的症状是「一端多行、另一端单行」，不会报错。
+    """
+    assert '"x-multiline"' in _SRC.read_text(encoding="utf-8")
+    assert '"x-multiline"' in _WEB_SRC.read_text(encoding="utf-8")
+
+
+def test_multiline_declaration_is_only_used_on_string_fields():
+    """``x-multiline`` 只对（有效类型为）string 的字段生效，挂在别的类型上会被静默忽略。
+
+    有效类型用 ``param_form._effective_type`` 现算，不在这里复写一遍「取首个非 null」
+    ——否则判据和实现在同一个坑上各错一次（``data.setVar.value`` 的 type 就是列表）。
+    """
+    import json
+
+    from rpa_core.gui.param_form import _effective_type
+
+    commands = Path(__file__).resolve().parents[2] / "commands"
+    offenders = []
+    for path in sorted(commands.rglob("*.json")):
+        data = json.loads(path.read_text(encoding="utf-8"))
+        props = (data.get("input_schema") or {}).get("properties") or {}
+        for key, spec in props.items():
+            if spec.get("x-multiline") and _effective_type(spec) != "string":
+                offenders.append(f"{data.get('id')}.{key}: {spec.get('type')!r}")
+    assert offenders == [], f"x-multiline 只对 string 字段有效：{offenders}"

@@ -9,6 +9,8 @@
   提供中文显示文本，itemData 存实际枚举值；
 - ``string`` → QLineEdit：空文本 = 未设置，placeholder 提示默认值；
   **声明了 ``x-fx`` / ``x-python``** 的字段额外挂表达式控件（见 ``_wrap_expr_row``）；
+  **声明了 ``x-multiline``** 的字段改用 QPlainTextEdit 输入区（代码 / 长文本，
+  见 ``_build_textarea``），两种声明可叠加（先输入区、再挂表达式按钮）；
 - ``integer`` / ``number`` → QLineEdit + 校验器：空文本 = 未设置；
 - ``boolean`` → QCheckBox；
 - ``array`` / ``object`` 等复合类型 → QLineEdit 接受 JSON 文本，
@@ -23,7 +25,7 @@ import re
 from typing import Any
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QDoubleValidator, QIntValidator
+from PySide6.QtGui import QDoubleValidator, QIntValidator, QTextCursor
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -32,6 +34,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QMenu,
+    QPlainTextEdit,
     QToolButton,
     QVBoxLayout,
     QWidget,
@@ -39,11 +42,17 @@ from PySide6.QtWidgets import (
 
 from rpa_core.gui.i18n import field_label, load_op_labels
 from rpa_core.gui.theme import (
+    ACCENT,
+    BORDER_HOVER,
+    BORDER_SOFT,
     DANGER,
     SUCCESS,
+    SURFACE,
     SURFACE_HIGHLIGHT,
+    TEXT,
     TEXT_FAINT,
     TEXT_HEADING,
+    TEXT_MUTED,
     TEXT_SECONDARY,
 )
 
@@ -54,6 +63,87 @@ _KIND_INT = "integer"
 _KIND_NUMBER = "number"
 _KIND_BOOL = "boolean"
 _KIND_JSON = "json"
+
+# 多行输入区（``x-multiline``）的固定高度：约三行，够看清代码/长文本的换行，
+# 又不会把参数表单撑开（影刀的参数输入区域同样是固定高度的短区域）。
+_TEXTAREA_HEIGHT = 68
+
+# 表达式按钮样式（对标影刀：未点亮灰、点亮彩）。
+#
+# Py 是**模式开关**，两态必须一眼可辨——此前只有一个 QToolButton、靠 Qt 默认的按下
+# 阴影表示选中，维护者反馈「看不出来」（2026-10-13）。fx 不是开关（点击即弹变量
+# 列表），只给静态描边，否则一个清晰一个发虚，行内视觉不齐。
+_PY_BUTTON_QSS = (
+    f"QToolButton {{ color: {TEXT_MUTED}; background: {SURFACE};"
+    f" border: 1px solid {BORDER_SOFT}; border-radius: 3px; padding: 1px 8px; }}"
+    f"QToolButton:hover {{ border-color: {BORDER_HOVER}; color: {TEXT}; }}"
+    f"QToolButton:checked {{ color: {SURFACE}; background: {ACCENT};"
+    f" border-color: {ACCENT}; font-weight: 600; }}"
+)
+_FX_BUTTON_QSS = (
+    f"QToolButton {{ color: {TEXT_MUTED}; background: {SURFACE};"
+    f" border: 1px solid {BORDER_SOFT}; border-radius: 3px; padding: 1px 8px; }}"
+    f"QToolButton:hover {{ border-color: {BORDER_HOVER}; color: {TEXT}; }}"
+)
+# Py 按钮的最小宽度：让「灰/彩」的底色块有可见面积，纯文字时太窄看不出状态
+_PY_BUTTON_MIN_WIDTH = 36
+
+# 编辑器（单行 QLineEdit / 多行 QPlainTextEdit）适配 ---------------------------------
+#
+# 表达式控件与取值收集都要操作「那个输入控件」，而它按字段声明可能是两种类型之一。
+# 把差异收在这三个函数里，上层逻辑（插变量 / 撤销 fx 态 / 切模式换槽 / 收集值）
+# 只认统一接口——否则每加一处调用点都要 `isinstance` 分叉，漏一处就是静默不生效。
+
+
+def _editor_text(editor: QLineEdit | QPlainTextEdit) -> str:
+    """取编辑器当前文本（两种控件统一）。"""
+    if isinstance(editor, QPlainTextEdit):
+        return editor.toPlainText()
+    return editor.text()
+
+
+def _insert_into_editor(editor: QLineEdit | QPlainTextEdit, text: str) -> None:
+    """在光标处插入文本（有选区则替换选区）。"""
+    if isinstance(editor, QPlainTextEdit):
+        editor.insertPlainText(text)
+    else:
+        editor.insert(text)
+
+
+def _replace_editor_text(editor: QLineEdit | QPlainTextEdit, text: str) -> None:
+    """**静默**替换编辑器内容（阻断 textChanged），并把光标停到末尾。
+
+    切模式换槽时用：内容是被程序换掉的，不该触发 ``_on_expr_text_changed`` 的
+    「标签删光即撤销 fx 态」判定——否则刚取回的那份内容会顺手改掉模式。
+
+    光标必须显式移到末尾：``QPlainTextEdit.setPlainText`` 会把它复位到开头，于是切过去
+    点 fx 插变量会插到**内容最前面**（实测得到 ``web[web]``）。``QLineEdit.setText``
+    本来就落在行尾，这里一并显式写出来，免得依赖 Qt 的版本行为。
+    """
+    previous = editor.blockSignals(True)
+    if isinstance(editor, QPlainTextEdit):
+        editor.setPlainText(text)
+        cursor = editor.textCursor()
+        cursor.movePosition(QTextCursor.MoveOperation.End)
+        editor.setTextCursor(cursor)
+    else:
+        editor.setText(text)
+        editor.end(False)
+    editor.blockSignals(previous)
+
+
+def _style_editor(editor: QLineEdit | QPlainTextEdit, background: str) -> None:
+    """给编辑器上底色提示（表达式态）。
+
+    QSS 的**控件选择器必须跟真实类型一致**，否则内联样式静默不生效——多行控件写成
+    ``QLineEdit`` 就永远看不到表达式态的底色。
+    """
+    if not background:
+        editor.setStyleSheet("")
+        return
+    selector = "QPlainTextEdit" if isinstance(editor, QPlainTextEdit) else "QLineEdit"
+    editor.setStyleSheet(f"{selector} {{ background: {background}; }}")
+
 
 
 class _CollapsibleSection(QWidget):
@@ -137,6 +227,11 @@ class ParamForm(QWidget):
     行内挂「左 Py 右 fx」两个按钮——``Py`` 是 Python 表达式模式开关，``fx``
     **不是开关**、点击即弹出变量列表并把变量插到光标处。两种模式**互斥**，以
     ``_expr_modes`` 为唯一真值（运行期据此走 ``resolve_tags`` 或 ``resolve``）。
+
+    **编辑态双缓冲**（``_expr_slots``）：两种模式各存一份输入内容，来回切不互相
+    覆盖。维护者 2026-10-13 核实影刀语义为「只有**编辑态**两份值，落盘仍是
+    『模式 + 一份值』」——所以缓冲只活在面板内存里，**不落节点、不改模型**，
+    与 ``with`` 一份值 + ``_exprModes`` 的既有形状完全一致。
     """
 
     def __init__(
@@ -156,6 +251,10 @@ class ParamForm(QWidget):
         args = dict(args or {})
         self._required: set[str] = set(schema.get("required", []))
         self._expr_modes: dict[str, str] = dict(expr_modes or {})
+        # 编辑态双缓冲：字段名 → {"text": 普通/标签模式内容, "python": Python 模式内容}。
+        # 惰性建立（首次切换该字段时才建）；只活在面板内存里，**不落节点**——
+        # 落盘永远是「当前模式的这一份值 + _exprModes」，与影刀一致（见类 docstring）。
+        self._expr_slots: dict[str, dict[str, str]] = {}
         self._variable_groups_provider = variable_groups_provider
         # (字段名, 种类, 控件)：顺序即 properties 声明顺序
         self._fields: list[tuple[str, str, QWidget]] = []
@@ -165,8 +264,15 @@ class ParamForm(QWidget):
         # 表达式控件行（字段名 → (Py 按钮 | None, fx 按钮 | None, 取值编辑器)）。
         # 只有声明了 x-fx / x-python 的字段才登记——没登记的字段即使 raw 里残留旧
         # `_exprModes` 也不会被 `expr_modes()` 回传（开发期硬切、不做迁移）。
+        # 编辑器可能是 QLineEdit（单行）或 QPlainTextEdit（声明了 x-multiline），
+        # 上层一律走 _editor_text / _insert_into_editor 等适配函数。
         self._expr_rows: dict[
-            str, tuple[QToolButton | None, QToolButton | None, QLineEdit]
+            str,
+            tuple[
+                QToolButton | None,
+                QToolButton | None,
+                QLineEdit | QPlainTextEdit,
+            ],
         ] = {}
         # 分组模式下的区段引用（section_name → _CollapsibleSection）
         self._sections: dict[str, _CollapsibleSection] = {}
@@ -402,6 +508,10 @@ class ParamForm(QWidget):
         表达式控件（fx / Py）的**门控来自 manifest 字段级** ``x-fx`` / ``x-python``
         ——与 Web 编辑器同一份声明、同一套规则。此前桌面端对所有纯 string 字段一律
         给 fx、且不看声明，两端因此长期分化；本轮统一为「读声明」。
+
+        **输入形态也读声明**：``x-multiline`` 的 string 用多行输入区（QPlainTextEdit），
+        其余仍是单行 QLineEdit——不在 GUI 里按字段名/描述猜「哪个参数像长文本」，
+        否则同一份声明两端（桌面 / Web）无从对齐。
         """
         value_type = _effective_type(field_schema)
         has_value = name in args
@@ -413,7 +523,11 @@ class ParamForm(QWidget):
             widget = self._build_enum(field_schema, args.get(name), has_value)
             kind = _KIND_ENUM
         elif value_type == "string":
-            widget = self._build_text(field_schema, args.get(name), has_value)
+            widget = (
+                self._build_textarea(field_schema, args.get(name), has_value)
+                if field_schema.get("x-multiline")
+                else self._build_text(field_schema, args.get(name), has_value)
+            )
             kind = _KIND_TEXT
             if allow_fx or allow_python:
                 row_widget = self._wrap_expr_row(
@@ -476,6 +590,30 @@ class ParamForm(QWidget):
         default = field_schema.get("default")
         if default is not None:
             edit.setPlaceholderText(f"默认：{default}")
+        return edit
+
+    @staticmethod
+    def _build_textarea(
+        field_schema: dict[str, Any], current: Any, has_value: bool
+    ) -> QPlainTextEdit:
+        """``x-multiline`` 的 string → 多行输入区；空 = 未设置。
+
+        对标影刀「可能会有大量输入的参数以输入区域展现」（维护者 2026-10-13）：
+        代码（执行 JS 脚本）、长文本（填写输入框 / 设置变量 / 对话框输入）这类
+        参数在单行框里既看不全也难编辑。
+
+        - ``setFixedHeight``：多行区不能随内容长高，否则参数表单被撑散；
+        - ``setTabChangesFocus(False)``：Tab 留在控件里插缩进（写代码必然要 Tab），
+          不让它把焦点跳到下一个控件——这是代码输入区的常规约定。
+        """
+        edit = QPlainTextEdit()
+        if has_value and current is not None:
+            edit.setPlainText(str(current))
+        default = field_schema.get("default")
+        if default is not None:
+            edit.setPlaceholderText(f"默认：{default}")
+        edit.setFixedHeight(_TEXTAREA_HEIGHT)
+        edit.setTabChangesFocus(False)
         return edit
 
     @staticmethod
@@ -542,7 +680,7 @@ class ParamForm(QWidget):
     def _wrap_expr_row(
         self,
         name: str,
-        editor: QLineEdit,
+        editor: QLineEdit | QPlainTextEdit,
         *,
         allow_fx: bool,
         allow_python: bool,
@@ -561,6 +699,10 @@ class ParamForm(QWidget):
         杜绝「看着是纯文本、运行期却按标签解析」——字面 CSS 选择器 `a[title]`
         正是这种字段。
 
+        编辑器的两种形态（单行 QLineEdit / ``x-multiline`` 的多行 QPlainTextEdit）
+        由模块级 ``_editor_*`` 适配函数吸收，本方法只把编辑器放进 row、连上
+        ``textChanged`` ⇒ 换槽逻辑（:meth:`_swap_expr_slot`）对两者同样成立。
+
         控件必须创建时就带父级（row）：无父级控件一旦 ``setVisible(True)``，Qt 会把它
         当成**顶层窗口**显示——表现为「切换含 fx 的指令时小框闪现」（维护者报障，
         诊断日志实锤：QToolButton 51x23 以 window 身份 Show）。
@@ -575,6 +717,10 @@ class ParamForm(QWidget):
             py_button = QToolButton(row)
             py_button.setText("Py")
             py_button.setCheckable(True)
+            # 灰/彩两态（对标影刀：未点亮灰、点亮彩）。此前只靠 Qt 默认的按下阴影，
+            # 维护者看不出哪个是「已点亮」，与旁边输入框几乎分不出来（2026-10-13）。
+            py_button.setStyleSheet(_PY_BUTTON_QSS)
+            py_button.setMinimumWidth(_PY_BUTTON_MIN_WIDTH)
             py_button.setToolTip("Python 表达式模式：输入框内容按 Python 表达式求值")
             py_button.toggled.connect(
                 lambda checked, k=name: self._on_py_toggled(k, checked)
@@ -587,7 +733,9 @@ class ParamForm(QWidget):
         if allow_fx:
             fx_button = QToolButton(row)
             fx_button.setText("fx")
-            fx_button.setAutoRaise(True)
+            # 不再 setAutoRaise(True)：本行 QSS 自带描边与底色，autoRaise 在部分样式下
+            # 会让按钮退化成裸文字，跟旁边的 Py 一虚一实。
+            fx_button.setStyleSheet(_FX_BUTTON_QSS)
             fx_button.setToolTip(
                 "选择变量插入：只列流程参数与你命名过的输出/赋值变量；"
                 "标签模式插 [变量名]，可与文本混排"
@@ -601,12 +749,63 @@ class ParamForm(QWidget):
         return row
 
     def _on_py_toggled(self, name: str, checked: bool) -> None:
-        """Py 按钮：选中 = Python 表达式模式；取消 = 回到普通/标签模式。"""
+        """Py 按钮：选中 = Python 表达式模式；取消 = 回到普通/标签模式。
+
+        切换时**先换槽、后改模式**，顺序要紧：``_swap_expr_slot`` 要按**旧模式**把
+        编辑器当前内容存进对应那一格，模式若先改，存进去的就是错格。
+        """
+        self._swap_expr_slot(name, "python" if checked else "text")
         if checked:
             self._expr_modes[name] = "python"
-        elif self._expr_modes.get(name) == "python":
+        else:
             self._expr_modes.pop(name, None)
+            self._restore_fx_mode_for_content(name)
         self._sync_expr_state(name)
+
+    def _restore_fx_mode_for_content(self, name: str) -> None:
+        """切回普通模式后，内容里若还有 ``[变量]`` 就把字段点回 ``fx`` 态。
+
+        与 :meth:`_on_expr_text_changed` 分工不同，方向也不一样，**不能合并**：
+
+        - 那条管「用户敲字删光标签 ⇒ 撤销 fx」——所以手打 ``a[title]`` 不会进 fx 态；
+        - 这条管「程序换内容 ⇒ 有标签就点亮」——换槽是程序换的，不补这一下，用户切
+          一趟模式就把自己刚写的 ``[变量]`` 变成**不解析的死文本**（运行期走
+          ``resolve``，只认整串 ``${var}``）。M57 的「fx 态由插入动作点亮」只覆盖了
+          用户手动那条路，换槽是另一条。
+        """
+        from rpa_core.runtime.resolver import has_tags
+
+        row = self._expr_rows.get(name)
+        if row is None or self._expr_modes.get(name) == "python":
+            return
+        if has_tags(_editor_text(row[2])):
+            self._expr_modes[name] = "fx"
+
+    def _current_slot_key(self, name: str) -> str:
+        """该字段当前内容属于哪一格（python 模式 → ``python``，否则 → ``text``）。"""
+        return "python" if self._expr_modes.get(name) == "python" else "text"
+
+    def _swap_expr_slot(self, name: str, target: str) -> None:
+        """编辑态双缓冲：存当前槽 → 取目标槽填回编辑器。
+
+        影刀语义（维护者 2026-10-13 核实）：**只有编辑态两份值**，落盘仍是「模式 +
+        一份值」。所以这里只管面板内存，节点里永远只有当前模式那一份。
+
+        目标槽**首次使用**时继承刚存下的这份（而非填空）：否则用户点一次 Py 会看到
+        内容凭空消失——而他要的恰恰是「切过去、改一改、切回来还是原样」。此后两格各记各的。
+        """
+        row = self._expr_rows.get(name)
+        if row is None:
+            return
+        editor = row[2]
+        slots = self._expr_slots.setdefault(name, {})
+        current = self._current_slot_key(name)
+        slots[current] = _editor_text(editor)
+        if target == current:
+            return
+        if target not in slots:
+            slots[target] = slots[current]
+        _replace_editor_text(editor, slots[target])
 
     def _show_variable_menu(self, name: str) -> None:
         """点击 fx：按需构建并就地弹出变量菜单。
@@ -625,7 +824,10 @@ class ParamForm(QWidget):
         menu.deleteLater()
 
     def _build_variable_menu(
-        self, name: str, editor: QLineEdit, parent: QWidget
+        self,
+        name: str,
+        editor: QLineEdit | QPlainTextEdit,
+        parent: QWidget,
     ) -> QMenu:
         """构建 fx 变量菜单（点击时调用；也供测试直接驱动）。
 
@@ -655,16 +857,18 @@ class ParamForm(QWidget):
                 )
         return menu
 
-    def _insert_variable(self, name: str, editor: QLineEdit, path: str) -> None:
+    def _insert_variable(
+        self, name: str, editor: QLineEdit | QPlainTextEdit, path: str
+    ) -> None:
         """在光标处插入变量。
 
         Python 模式插**变量名原文**（融进表达式，如 ``parameter += 1``）；否则插
         ``[变量名]`` 标签并把字段置为 ``fx`` 态（标签可与文本混排）。
         """
         if self._expr_modes.get(name) == "python":
-            editor.insert(path)
+            _insert_into_editor(editor, path)
             return
-        editor.insert(f"[{path}]")
+        _insert_into_editor(editor, f"[{path}]")
         self._expr_modes[name] = "fx"
         self._sync_expr_state(name)
 
@@ -681,7 +885,7 @@ class ParamForm(QWidget):
 
         row = self._expr_rows.get(name)
         editor = row[2] if row is not None else None
-        if editor is None or has_tags(editor.text()):
+        if editor is None or has_tags(_editor_text(editor)):
             return
         self._expr_modes.pop(name, None)
         self._sync_expr_state(name)
@@ -697,9 +901,7 @@ class ParamForm(QWidget):
             previous = py_button.blockSignals(True)
             py_button.setChecked(mode == "python")
             py_button.blockSignals(previous)
-        editor.setStyleSheet(
-            f"QLineEdit {{ background: {SURFACE_HIGHLIGHT}; }}" if mode else ""
-        )
+        _style_editor(editor, SURFACE_HIGHLIGHT if mode else "")
 
     # ---- 元素库引用（M52 S4 加入口；M52 S6 去快照 = 唯一真值源） --------------
     def _attach_element_row(
@@ -873,7 +1075,7 @@ class ParamForm(QWidget):
                     continue
                 result[name] = chosen
             elif kind == _KIND_TEXT:
-                text = widget.text()
+                text = _editor_text(widget)
                 if not text:
                     continue
                 result[name] = text
@@ -897,7 +1099,7 @@ class ParamForm(QWidget):
                     continue
                 result[name] = checked
             else:  # JSON 复合字段
-                text = widget.text()
+                text = _editor_text(widget)
                 if not text:
                     continue
                 try:

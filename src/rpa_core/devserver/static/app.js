@@ -1715,11 +1715,12 @@ function schemaField(node, key, propSchema, required) {
     const fxOpts = {};
     if (propSchema["x-fx"]) fxOpts.supportFx = true;
     if (propSchema["x-python"]) fxOpts.supportPython = true;
+    if (propSchema["x-multiline"]) fxOpts.multiline = true;
     if (fxOpts.supportFx || fxOpts.supportPython) {
       fxOpts.node = node;
       fxOpts.fieldKey = key;
     }
-    field = textField(label, value === undefined ? "" : String(value), (v) => setWith(node, key, v), required, key, fxOpts.supportFx || fxOpts.supportPython ? fxOpts : undefined);
+    field = textField(label, value === undefined ? "" : String(value), (v) => setWith(node, key, v), required, key, Object.keys(fxOpts).length ? fxOpts : undefined);
   }
   if (key === "varType" && node.command === "data.setVar") {
     // 变量类型（对标影刀）：选特定类型时运行期格式化 value；缺省为「字符串」，不渲染「（未设置）」
@@ -1883,10 +1884,14 @@ function wrapField(labelText, required, input, hint, rawKey) {
 }
 
 function textField(labelText, value, onChange, required, rawKey, opts) {
-  const input = document.createElement("input");
-  input.type = "text";
+  // x-multiline 的字段用多行输入区（对标影刀「输入区域」）：代码 / 长文本在单行框里
+  // 既看不全也难编辑。桌面端 param_form._build_textarea 做的是同一件事——两端读同一份声明。
+  const multiline = !!(opts && opts.multiline);
+  const input = document.createElement(multiline ? "textarea" : "input");
+  if (!multiline) input.type = "text";
   input.value = value;
   input.placeholder = "${...}";
+  if (multiline) input.rows = 3;
   attachRefCompletion(input);
   input.addEventListener("focus", () => pushUndo());
   input.addEventListener("input", () => {

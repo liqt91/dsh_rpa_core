@@ -17,7 +17,14 @@
 > （`loop.item` / `error.code` / `error.message`）**不进菜单**，但仍可手打引用，运行期语法与编译期校验不变
 > （M57 追加，2026-10-13；见 `MainWindow._reference_groups`）；
 > ⑤ 「影刀侧 fx 语义」另见 `docs/yingdao-web-cmds-benchmark.md` §三-8（影刀的 fx 是**变量选择器**，
-> 其左侧 **Python 图标**才是表达式模式开关）。
+> 其左侧 **Python 图标**才是表达式模式开关）；
+> ⑥ 新增字段级 **`x-multiline`**（2026-10-13 M58 起）：声明它 ⇒ 该 string 参数改用**多行输入区**
+> （桌面 `QPlainTextEdit`、Web `textarea`），对标影刀「可能会有大量输入的参数以输入区域展现」。
+> 与 `x-fx` / `x-python` **可叠加**（先多行输入区、再挂表达式按钮）。当前 4 个字段：
+> `browser.executeScript.script`、`browser.input.text`、`data.setVar.value`、`browser.handleDialog.promptText`；
+> ★ 桌面与 Web **读同一个键名**（有判据钉住），加字段时两端自动同步。
+> 另：表达式控件**编辑态双缓冲**（`ParamForm._expr_slots`）——切 `Py` 时两种模式各记一份内容、互不覆盖；
+> 缓冲**只在面板内存**，落盘仍是「模式 + 一份值」（`with` + `_exprModes`），模型与运行期未变。
 
 ---
 

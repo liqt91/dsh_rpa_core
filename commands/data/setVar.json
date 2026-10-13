@@ -34,6 +34,7 @@
         "type": ["string", "number", "integer", "boolean", "object", "array", "null"],
         "x-fx": true,
         "x-python": true,
+        "x-multiline": true,
         "description": "要赋给变量的值，可为任意类型；支持变量引用与 Python 表达式"
       }
     },
