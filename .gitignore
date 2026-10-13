@@ -54,3 +54,6 @@ node_modules/
 /.harness/spike/_m4*
 /.harness/spike/_m5*
 /.harness/spike/_nv_*
+# 负向验证探针的运行产物（junitxml 报告 / 日志 / stdout）：同上，以忽略收口
+/.harness/spike/_expr_controls_*
+/.harness/spike/_summary_readability_*

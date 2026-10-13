@@ -90,6 +90,16 @@ def resolve_tags(value: Any, scopes: dict[str, Any]) -> Any:
     return value
 
 
+def has_tags(value: Any) -> bool:
+    """文本里是否含 fx 标签（``[name]`` / ``[name.field]``）。
+
+    fx 模式与自带语法的判据只允许有一个事实源：GUI 靠它决定「字段是否仍处于标签
+    模式」（最后一个标签被删 ⇒ 撤销 ``fx`` 态），运行期靠它把 ``[name]`` 就地替换。
+    两边共用同一个 ``_TAG``，避免各写一份正则后悄悄漂移。
+    """
+    return isinstance(value, str) and _TAG.search(value) is not None
+
+
 def resolve_with_modes(
     inputs: dict[str, Any],
     modes: dict[str, str] | None,

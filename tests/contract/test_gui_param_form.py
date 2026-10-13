@@ -28,7 +28,6 @@ from PySide6.QtWidgets import (  # noqa: E402
     QLabel,
     QLineEdit,
     QPushButton,
-    QWidget,
 )
 
 from rpa_core.gui.flow_model import (  # noqa: E402
@@ -308,24 +307,6 @@ def test_switching_nodes_detaches_old_param_form_immediately(window):
     assert old_widget.isVisible() is False
 
 
-def test_fx_var_button_has_no_pre_attached_menu(window):
-    """回归（维护者报障「切换含 fx 的指令时小框闪现」）：fx 行的「＋变量」按钮
-    不得预挂 QMenu——预挂菜单在 Windows 上会随控件树重挂/销毁产生原生弹层残影。
-    改为点击时按需构建（菜单点击后插入标签、变量列表每次取最新）。"""
-    model = window.flow_model
-    item = model.find_by_id("read") or model.find_by_id("open")
-    window.canvas_view.setCurrentIndex(model.indexFromItem(item))
-    form = window.param_holder.findChildren(ParamForm)[-1]
-
-    var_buttons = [
-        widget
-        for name, (fx_btn, widget) in form._fx_buttons.items()
-    ]
-    assert var_buttons, "样例流程应含 fx 可变字段"
-    for button in var_buttons:
-        assert button.menu() is None  # 不预挂菜单（弹层残影根因）
-
-
 def test_prewarm_param_panel_is_safe_and_keeps_panel_usable(window):
     """预热参数面板：不抛异常、不往右栏塞残留控件、之后表单仍可正常挂载。
 
@@ -474,99 +455,47 @@ def test_applying_if_condition_updates_raw_and_title(window):
     assert if_node["condition"]["right"] == 60
 
 
-# ---- fx 变量引用模式（切 C） --------------------------------------------------
-def test_fx_toggle_records_expr_mode(qapp):
-    form = ParamForm(
-        catalog_schema_for_fx(),
-        {"text": "hello"},
-        variable_provider=lambda: [],
-    )
-    fx_button, var_button = form._fx_buttons["text"]
-    assert not fx_button.isChecked()
-    assert not var_button.isVisible()
-
-    fx_button.setChecked(True)
-    assert form.expr_modes() == {"text": "fx"}
-    fx_button.setChecked(False)
-    assert form.expr_modes() == {}
-
-
-def test_fx_initial_mode_from_expr_modes(qapp):
-    form = ParamForm(
-        catalog_schema_for_fx(),
-        {"text": "[web]"},
-        expr_modes={"text": "fx"},
-        variable_provider=lambda: [],
-    )
-    fx_button, _ = form._fx_buttons["text"]
-    assert fx_button.isChecked()
-    assert form.expr_modes() == {"text": "fx"}
-
-
-def test_fx_row_widgets_are_never_windows(qapp):
-    """回归（维护者报障「切换含 fx 的指令时小框闪现」）：fx 行的控件必须创建时就
-    带父级——无父级控件被 setVisible(True) 时 Qt 会把它当顶层窗口显示，产生闪现。
-
-    诊断日志实锤：QToolButton 51x23 以 window 身份 Show。
-    """
-    form = ParamForm(
-        catalog_schema_for_fx(),
-        {"text": "[web]"},
-        expr_modes={"text": "fx"},
-        variable_provider=lambda: ["webpage1"],
-    )
-    _, var_button = form._fx_buttons["text"]
-    assert var_button.parent() is not None
-    assert var_button.isWindow() is False
-    # 整棵表单里不允许出现「窗口」控件（fx 开关按钮同理）
-    windows = [
-        w for w in form.findChildren(QWidget)
-        if w.isWindow()
-    ]
-    assert windows == [], f"表单内不应有顶层窗口控件：{windows}"
-
-
-def test_fx_var_button_inserts_tag_at_cursor(qapp):
-    form = ParamForm(
-        catalog_schema_for_fx(),
-        {"text": "前置"},
-        expr_modes={"text": "fx"},
-        variable_provider=lambda: ["webpage1", "inputs.count"],
-    )
-    editor: QLineEdit = _field(form, "text")
-    _, var_button = form._fx_buttons["text"]
-    # 菜单按需构建（不预挂，避免弹层残影）：直接驱动构建函数
-    menu = form._build_variable_menu(editor, var_button)
-    texts = [action.text() for action in menu.actions()]
-    assert "webpage1" in texts and "inputs.count" in texts
-    menu.actions()[0].trigger()
-    assert editor.text() == "前置[webpage1]"
-
-
-def catalog_schema_for_fx() -> dict:
-    return {
-        "type": "object",
-        "properties": {"text": {"type": "string"}},
-    }
+# ---- 表达式控件（fx / Py）--------------------------------------------------
+# 控件拓扑与门控的判据集中在 tests/contract/test_gui_expr_controls.py；
+# 本文件只留「应用后写回节点 _exprModes」这条端到端接线判据。
 
 
 def test_apply_persists_expr_modes_to_raw(window):
     from rpa_core.gui.flow_model import model_to_workflow
 
     model = window.flow_model
-    item = model.find_by_id("read")  # browser.getText，含 string 字段 selector
+    item = model.find_by_id("open")  # browser.navigate：url 声明了 x-fx
     window.canvas_view.setCurrentIndex(model.indexFromItem(item))
-    form = window.param_holder.findChild(ParamForm)
-    fx_button, _ = form._fx_buttons["selector"]
-    fx_button.setChecked(True)
+    form = window.param_holder.findChildren(ParamForm)[-1]
+
+    # fx 不是开关：插一个变量（走真实入口）即进入 fx 态
+    form._insert_variable("url", _field(form, "url"), "web")
+    assert form.expr_modes() == {"url": "fx"}
     window.param_holder.findChild(QPushButton).click()
 
     holder = item.data(ROLE_ARGS_RAW)
-    assert holder.raw["_exprModes"] == {"selector": "fx"}
+    assert holder.raw["_exprModes"] == {"url": "fx"}
     document = model_to_workflow(model, window._workflow_meta)
-    if_node = next(n for n in document["root"]["children"] if n["id"] == "check")
-    read_node = if_node["then"][0]
-    assert read_node["_exprModes"] == {"selector": "fx"}
+    open_node = _find_node(document, "open")
+    assert open_node is not None, "序列化结果里应能找到 open 节点"
+    assert open_node["_exprModes"] == {"url": "fx"}
+
+
+def _find_node(node, node_id: str):
+    """在序列化文档里按 id 递归找节点。"""
+    if isinstance(node, dict):
+        if node.get("id") == node_id:
+            return node
+        for value in node.values():
+            found = _find_node(value, node_id)
+            if found is not None:
+                return found
+    elif isinstance(node, list):
+        for entry in node:
+            found = _find_node(entry, node_id)
+            if found is not None:
+                return found
+    return None
 
 
 def test_collect_reference_paths_includes_aliases_inputs_steps(window):

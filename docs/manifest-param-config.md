@@ -5,6 +5,17 @@
 > `devserver/static/app.js`（属性面板渲染）、`compiler/compiler.py` + `runtime/orchestrator.py`（门禁）
 > 结论日期：2026-09-10
 
+> ⚠ **已过期（2026-10-13 复核）**：本文是 2026-09-10 的快照，**计数与 fx 语义都已不适用**，引用前先按下列事实校正：
+> ① 命令数 **65 → 86**（`commands/**/*.json` 实有）；② 字段级 `x-fx` **4 → 12**、`x-python` **2 → 4**；
+> ③ 第 59 行「`x-fx`：该字段支持 **`${变量}` 引用**」**口径不对**——我方 fx 模式用的是 **`[变量]` 标签**
+> （`runtime/resolver.py::resolve_tags`），`${变量}` 是**默认模式**的整串语法（`resolve`，且**只认整串**）；
+> ④ 桌面 GUI **已改为读 `x-fx` / `x-python`**（2026-10-13 M57 起）：`param_form._build_field` 按字段级声明给
+> `fx` / `Py` 按钮，与 Web 同一份声明、同一套规则；此前「对**所有**「纯 `string` 且非 `enum`」字段一律给 fx
+> 开关」的宽松行为**已废除**。且 `fx` **不是开关**（`setCheckable(False)`，点击即弹变量列表、选中直接插入），
+> `Py` 才是模式开关；
+> ⑤ 「影刀侧 fx 语义」另见 `docs/yingdao-web-cmds-benchmark.md` §三-8（影刀的 fx 是**变量选择器**，
+> 其左侧 **Python 图标**才是表达式模式开关）。
+
 ---
 
 ## 一、速览

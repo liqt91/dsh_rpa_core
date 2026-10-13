@@ -3,11 +3,12 @@
 把 ``CommandManifest.input_schema``（JSON Schema dict）渲染成原生控件表单，
 并支持把编辑结果收回为参数 dict 写回画布卡片。
 
-控件映射（最小切片，fx 表达式切换在后续切片接入）：
+控件映射：
 
 - ``string`` + ``enum`` → QComboBox：首项「未设置」，``x-enum-labels``
   提供中文显示文本，itemData 存实际枚举值；
 - ``string`` → QLineEdit：空文本 = 未设置，placeholder 提示默认值；
+  **声明了 ``x-fx`` / ``x-python``** 的字段额外挂表达式控件（见 ``_wrap_expr_row``）；
 - ``integer`` / ``number`` → QLineEdit + 校验器：空文本 = 未设置；
 - ``boolean`` → QCheckBox；
 - ``array`` / ``object`` 等复合类型 → QLineEdit 接受 JSON 文本，
@@ -132,10 +133,10 @@ def _effective_type(field_schema: dict[str, Any]) -> str:
 class ParamForm(QWidget):
     """按 input_schema 构建的参数表单；values() 收集当前编辑结果。
 
-    fx 变量引用模式（切 C）：纯文本 string 字段带一个 fx 开关；开启后该字段
-    以 ``[name]`` 标签引用变量（可与文本混排），并出现「＋变量」下拉在光标处
-    插入标签。字段模式经 :meth:`expr_modes` 收回，写回节点 ``_exprModes``。
-    运行期由 resolver.resolve_tags 消费，语义与 Web 编辑器一致。
+    表达式控件（对标影刀 / Web 编辑器）：字段**声明** ``x-fx`` / ``x-python`` 时，
+    行内挂「左 Py 右 fx」两个按钮——``Py`` 是 Python 表达式模式开关，``fx``
+    **不是开关**、点击即弹出变量列表并把变量插到光标处。两种模式**互斥**，以
+    ``_expr_modes`` 为唯一真值（运行期据此走 ``resolve_tags`` 或 ``resolve``）。
     """
 
     def __init__(
@@ -161,7 +162,12 @@ class ParamForm(QWidget):
         # 声明了 default 的布尔字段（名字 → 默认值）：`values()` 靠它把「等于默认」
         # 的布尔认成「未设置」而不写进参数（详见 `values()` 里的说明）。
         self._bool_defaults: dict[str, bool] = {}
-        self._fx_buttons: dict[str, tuple[QToolButton, QToolButton]] = {}
+        # 表达式控件行（字段名 → (Py 按钮 | None, fx 按钮 | None, 取值编辑器)）。
+        # 只有声明了 x-fx / x-python 的字段才登记——没登记的字段即使 raw 里残留旧
+        # `_exprModes` 也不会被 `expr_modes()` 回传（开发期硬切、不做迁移）。
+        self._expr_rows: dict[
+            str, tuple[QToolButton | None, QToolButton | None, QLineEdit]
+        ] = {}
         # 分组模式下的区段引用（section_name → _CollapsibleSection）
         self._sections: dict[str, _CollapsibleSection] = {}
         # 输出别名字段（outField → QLineEdit）
@@ -391,10 +397,17 @@ class ParamForm(QWidget):
         *,
         target: QFormLayout | None = None,
     ) -> None:
-        """按字段类型创建控件并登记；description 进 tooltip。"""
+        """按字段类型创建控件并登记；description 进 tooltip。
+
+        表达式控件（fx / Py）的**门控来自 manifest 字段级** ``x-fx`` / ``x-python``
+        ——与 Web 编辑器同一份声明、同一套规则。此前桌面端对所有纯 string 字段一律
+        给 fx、且不看声明，两端因此长期分化；本轮统一为「读声明」。
+        """
         value_type = _effective_type(field_schema)
         has_value = name in args
         row_widget: QWidget | None = None
+        allow_fx = bool(field_schema.get("x-fx"))
+        allow_python = bool(field_schema.get("x-python"))
 
         if value_type == "string" and "enum" in field_schema:
             widget = self._build_enum(field_schema, args.get(name), has_value)
@@ -402,7 +415,10 @@ class ParamForm(QWidget):
         elif value_type == "string":
             widget = self._build_text(field_schema, args.get(name), has_value)
             kind = _KIND_TEXT
-            row_widget = self._wrap_fx_row(name, widget)
+            if allow_fx or allow_python:
+                row_widget = self._wrap_expr_row(
+                    name, widget, allow_fx=allow_fx, allow_python=allow_python
+                )
         elif value_type == "integer":
             widget = self._build_number_line(
                 field_schema, args.get(name), has_value, QIntValidator(-10**9, 10**9),
@@ -522,80 +538,147 @@ class ParamForm(QWidget):
         self._row_labels[name] = label
         self._row_shown[name] = shown
 
-    # ---- fx 变量引用模式 ---------------------------------------------------
-    def _wrap_fx_row(self, name: str, editor: QLineEdit) -> QWidget:
-        """给纯文本字段加 fx 开关与「＋变量」下拉（fx 开启时显示）。"""
+    # ---- 表达式控件：fx 变量插入 / Py 表达式（对标影刀与 Web） --------------
+    def _wrap_expr_row(
+        self,
+        name: str,
+        editor: QLineEdit,
+        *,
+        allow_fx: bool,
+        allow_python: bool,
+    ) -> QWidget:
+        """给声明了 ``x-fx`` / ``x-python`` 的文本字段挂「左 Py 右 fx」表达式控件。
+
+        控件拓扑对齐影刀参数框（左 Py 模式图标、右 fx 变量选择器）：
+
+        - **Py**（可选中按钮，仅在声明 ``x-python`` 时出现）：Python 表达式模式；
+        - **fx**（普通按钮，仅在声明 ``x-fx`` 时出现）：**不是开关**——点击弹出变量
+          列表，选中即把变量插到光标处（不再有「＋变量」这个中间按钮，少一步）。
+
+        两种模式**互斥**，``_expr_modes`` 是唯一真值（运行期据它选 ``resolve_tags``
+        还是 ``resolve``）：fx 插入变量 ⇒ 置 ``fx``；Py 选中 ⇒ 置 ``python``。
+        变量被删光后 ``fx`` 态自动撤销（见 :meth:`_on_expr_text_changed`），
+        杜绝「看着是纯文本、运行期却按标签解析」——字面 CSS 选择器 `a[title]`
+        正是这种字段。
+
+        控件必须创建时就带父级（row）：无父级控件一旦 ``setVisible(True)``，Qt 会把它
+        当成**顶层窗口**显示——表现为「切换含 fx 的指令时小框闪现」（维护者报障，
+        诊断日志实锤：QToolButton 51x23 以 window 身份 Show）。
+        """
         row = QWidget()
         layout = QHBoxLayout(row)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(4)
+
+        py_button: QToolButton | None = None
+        if allow_python:
+            py_button = QToolButton(row)
+            py_button.setText("Py")
+            py_button.setCheckable(True)
+            py_button.setToolTip("Python 表达式模式：输入框内容按 Python 表达式求值")
+            py_button.toggled.connect(
+                lambda checked, k=name: self._on_py_toggled(k, checked)
+            )
+            layout.addWidget(py_button)
+
         layout.addWidget(editor, 1)
 
-        # 必须带父级创建（row）：无父级的控件一旦 setVisible(True)，Qt 会把它
-        # 当成**顶层窗口**显示——表现为「切换含 fx 的指令时小框闪现」（维护者
-        # 报障，诊断日志实锤：QToolButton 51x23 以 window 身份 Show）。
-        var_button = QToolButton(row)
-        var_button.setText("＋变量")
-        var_button.setToolTip("在光标处插入变量标签 [name]")
-        var_button.setAutoRaise(True)
+        fx_button: QToolButton | None = None
+        if allow_fx:
+            fx_button = QToolButton(row)
+            fx_button.setText("fx")
+            fx_button.setAutoRaise(True)
+            fx_button.setToolTip("选择变量插入：标签模式用 [变量名]，可与文本混排")
+            fx_button.clicked.connect(lambda _c=False, k=name: self._show_variable_menu(k))
+            layout.addWidget(fx_button)
 
-        fx_button = QToolButton(row)
-        fx_button.setText("fx")
-        fx_button.setCheckable(True)
-        fx_button.setChecked(self._expr_modes.get(name) == "fx")
-        fx_button.setToolTip(
-            "fx 变量引用模式：用 [变量名] 标签引用变量，可与文本混排"
-        )
-
-        def show_variable_menu() -> None:
-            """点击时按需构建并就地弹出变量菜单。
-
-            不预挂 QMenu：预挂的菜单在 Windows 上会随控件树重挂/销毁产生原生
-            弹层残影——只有 fx 字段才有这种控件，正是「切换含 fx 的指令时小框
-            闪现」的来源（维护者报障）。按需创建同时保证变量列表每次都是最新。
-            """
-            menu = self._build_variable_menu(editor, var_button)
-            menu.exec(
-                var_button.mapToGlobal(var_button.rect().bottomLeft())
-            )
-            menu.deleteLater()
-
-        def toggle(checked: bool) -> None:
-            if checked:
-                self._expr_modes[name] = "fx"
-            else:
-                self._expr_modes.pop(name, None)
-            var_button.setVisible(checked)
-            # 视觉提示：fx 模式浅蓝底，与 Web 编辑器的 chip 态对应
-            editor.setStyleSheet(
-                f"QLineEdit {{ background: {SURFACE_HIGHLIGHT}; }}" if checked else ""
-            )
-
-        var_button.setVisible(fx_button.isChecked())
-        if fx_button.isChecked():
-            editor.setStyleSheet(f"QLineEdit {{ background: {SURFACE_HIGHLIGHT}; }}")
-        fx_button.toggled.connect(toggle)
-        var_button.clicked.connect(show_variable_menu)
-
-        layout.addWidget(var_button)
-        layout.addWidget(fx_button)
-        # 可见性初始化放在加入布局之后（此时必有父级），杜绝顶层窗口闪现
-        var_button.setVisible(fx_button.isChecked())
-        if fx_button.isChecked():
-            editor.setStyleSheet(f"QLineEdit {{ background: {SURFACE_HIGHLIGHT}; }}")
-        self._fx_buttons[name] = (fx_button, var_button)
+        self._expr_rows[name] = (py_button, fx_button, editor)
+        editor.textChanged.connect(lambda _t, k=name: self._on_expr_text_changed(k))
+        self._sync_expr_state(name)
         return row
 
-    def _build_variable_menu(self, editor: QLineEdit, parent: QWidget) -> QMenu:
-        """构建 fx「＋变量」菜单（点击时调用；也供测试直接驱动）。"""
+    def _on_py_toggled(self, name: str, checked: bool) -> None:
+        """Py 按钮：选中 = Python 表达式模式；取消 = 回到普通/标签模式。"""
+        if checked:
+            self._expr_modes[name] = "python"
+        elif self._expr_modes.get(name) == "python":
+            self._expr_modes.pop(name, None)
+        self._sync_expr_state(name)
+
+    def _show_variable_menu(self, name: str) -> None:
+        """点击 fx：按需构建并就地弹出变量菜单。
+
+        不预挂 QMenu：预挂菜单在 Windows 上会随控件树重挂/销毁产生原生弹层残影——
+        只有表达式字段才有这种控件，正是「切换含 fx 的指令时小框闪现」的来源
+        （维护者报障）。按需创建同时保证变量列表每次都是最新。
+        """
+        row = self._expr_rows.get(name)
+        if row is None:
+            return
+        _py, fx_button, editor = row
+        anchor = fx_button or editor
+        menu = self._build_variable_menu(name, editor, anchor)
+        menu.exec(anchor.mapToGlobal(anchor.rect().bottomLeft()))
+        menu.deleteLater()
+
+    def _build_variable_menu(
+        self, name: str, editor: QLineEdit, parent: QWidget
+    ) -> QMenu:
+        """构建 fx 变量菜单（点击时调用；也供测试直接驱动）。"""
         menu = QMenu(parent)
         menu.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         paths = self._variable_provider() if self._variable_provider else []
         if not paths:
             menu.addAction("（无可引用变量）").setEnabled(False)
         for path in paths:
-            menu.addAction(path, lambda p=path: editor.insert(f"[{p}]"))
+            menu.addAction(path, lambda p=path: self._insert_variable(name, editor, p))
         return menu
+
+    def _insert_variable(self, name: str, editor: QLineEdit, path: str) -> None:
+        """在光标处插入变量。
+
+        Python 模式插**变量名原文**（融进表达式，如 ``parameter += 1``）；否则插
+        ``[变量名]`` 标签并把字段置为 ``fx`` 态（标签可与文本混排）。
+        """
+        if self._expr_modes.get(name) == "python":
+            editor.insert(path)
+            return
+        editor.insert(f"[{path}]")
+        self._expr_modes[name] = "fx"
+        self._sync_expr_state(name)
+
+    def _on_expr_text_changed(self, name: str) -> None:
+        """标签被删光 ⇒ 撤销 ``fx`` 态。
+
+        否则字段会停在「文本里没有任何标签、运行期却按标签解析」的状态里——用户
+        随后手打的字面 CSS 选择器（``a[title]``）就会命中 ``resolve_tags`` 而报
+        ``INVALID_REFERENCE``。
+        """
+        if self._expr_modes.get(name) != "fx":
+            return
+        from rpa_core.runtime.resolver import has_tags
+
+        row = self._expr_rows.get(name)
+        editor = row[2] if row is not None else None
+        if editor is None or has_tags(editor.text()):
+            return
+        self._expr_modes.pop(name, None)
+        self._sync_expr_state(name)
+
+    def _sync_expr_state(self, name: str) -> None:
+        """按 ``_expr_modes`` 刷新控件态：Py 选中态 + 编辑器底色提示。"""
+        row = self._expr_rows.get(name)
+        if row is None:
+            return
+        py_button, _fx_button, editor = row
+        mode = self._expr_modes.get(name)
+        if py_button is not None:
+            previous = py_button.blockSignals(True)
+            py_button.setChecked(mode == "python")
+            py_button.blockSignals(previous)
+        editor.setStyleSheet(
+            f"QLineEdit {{ background: {SURFACE_HIGHLIGHT}; }}" if mode else ""
+        )
 
     # ---- 元素库引用（M52 S4 加入口；M52 S6 去快照 = 唯一真值源） --------------
     def _attach_element_row(
@@ -742,8 +825,12 @@ class ParamForm(QWidget):
         return dict(self._ref_intent)
 
     def expr_modes(self) -> dict[str, str]:
-        """返回各字段当前的表达式模式（仅 fx 开启的字段）。"""
-        return dict(self._expr_modes)
+        """各字段当前的表达式模式（``fx``=变量标签 / ``python``=Python 表达式）。
+
+        只回传**当前界面真的有表达式控件**的字段——未声明 ``x-fx``/``x-python`` 的
+        字段即使 raw 里残留旧模式也不写回（开发期硬切，不做前向兼容迁移）。
+        """
+        return {k: v for k, v in self._expr_modes.items() if k in self._expr_rows}
 
     # ---- 收集 -------------------------------------------------------------
     def values(self) -> dict[str, Any]:

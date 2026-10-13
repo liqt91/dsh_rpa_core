@@ -16,3 +16,4 @@ These rules must be mechanically enforced where practical.
 12. A stable command requires catalog, contract, and runtime integration tests.
 13. Variable references replace complete `${scope.path}` tokens only; embedded string templates and list indexes are unsupported until separately specified.
 14. Reference lookup fails fast on missing or non-mapping path segments; it never silently returns `None`.
+15. Pre-release project: changes are hard cut-overs. Do not add backward-compatibility shims, schema-version migrations, or legacy-value adapters — drop an old shape outright rather than supporting both. Persisted documents (workflows, element descriptors, node `_exprModes`, settings) are not migrated.
