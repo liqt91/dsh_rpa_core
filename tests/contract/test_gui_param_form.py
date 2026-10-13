@@ -498,14 +498,80 @@ def _find_node(node, node_id: str):
     return None
 
 
-def test_collect_reference_paths_includes_aliases_inputs_steps(window):
+def test_reference_groups_list_inputs_in_their_own_group(window):
+    """『流程参数』组 = 流程输入声明（M26）。"""
     window._workflow_meta["inputs"] = {"count": 3}
-    paths = window._collect_reference_paths()
-    assert "inputs.count" in paths
-    assert "steps.read.outputs.text" in paths or any(
-        p.startswith("steps.read.outputs.") for p in paths
+    assert ("流程参数", ["inputs.count"]) in window._reference_groups()
+
+
+def test_reference_groups_exclude_auto_paths_and_builtins(window):
+    """fx 菜单只列用户自己命名的变量（维护者 2026-10-13 拍板）。
+
+    排除 `steps.<节点id>.outputs.<字段>` 自动展开路径与内置作用域根名——实测一条
+    三步流程 20 条里有 17 条是这类噪声。它们不是被删掉了能力：手打仍可引用，
+    运行期语法与编译期校验不变，只是不进菜单。
+    """
+    window._workflow_meta["inputs"] = {"count": 3}
+    flat = [p for _label, paths in window._reference_groups() for p in paths]
+
+    assert not [p for p in flat if p.startswith("steps.")]
+    for builtin in ("loop.item", "error.code", "error.message"):
+        assert builtin not in flat
+
+
+def test_reference_groups_list_named_outputs_and_var_writes(window):
+    """『输出与赋值变量』组 = 输出别名 + 变量写入命令的目标名。
+
+    **认 manifest 的 `x-var-write` 声明、不认命令 id**：此前这里硬编码 `data.setVar`，
+    而 `data.table.getCell` 同样声明了 `x-var-write`，它的目标变量于是只在变量面板
+    里有、fx 菜单里没有（同一事实源：变量面板 / compiler / orchestrator 都读声明）。
+    """
+    from rpa_core.gui.app import SAMPLE_WORKFLOW, MainWindow
+
+    document = json.loads(json.dumps(SAMPLE_WORKFLOW))
+    root = document["root"]
+    # 给「打开网页」的 sessionId 起个输出别名（= 影刀说的「保存网页对象」）
+    root["children"][0]["output_aliases"] = {"sessionId": "webpage1"}
+    root["children"].append(
+        {
+            "type": "action",
+            "id": "cell",
+            "command": "data.table.getCell",
+            "with": {"row": 0, "column": 0, "varName": "cellText"},
+        }
     )
-    assert "loop.item" in paths and "error.code" in paths
+    other = MainWindow(window.catalog, workflow=document)
+    groups = dict(other._reference_groups())
+
+    assert "webpage1" in groups.get("输出与赋值变量", [])
+    assert "cellText" in groups.get("输出与赋值变量", [])
+
+
+def test_reference_groups_list_only_explicitly_named_loop_and_error_vars(window):
+    """循环/错误变量只在**显式取名**时列出（两条作用域分支都要判）。
+
+    判据比「raw 里有没有这个键」严：控制流表单把空值预填成模型默认名
+    （`str(raw.get("item_var") or "item")`），用户点一次「应用」默认名就进 raw 了
+    ——按「键存在」判会把 `loop.item` / `error.code` 这两个内置名又列回来。
+    """
+    from rpa_core.gui.app import SAMPLE_WORKFLOW, MainWindow
+
+    document = json.loads(json.dumps(SAMPLE_WORKFLOW))
+    loop_node = next(
+        c for c in document["root"]["children"] if c.get("type") == "forEach"
+    )
+    assert loop_node["item_var"] == "row"
+    document["root"]["children"].append(
+        {"type": "try", "id": "try1", "children": [], "catch": [], "error_var": "err"}
+    )
+    named = MainWindow(window.catalog, workflow=document)
+    assert ("循环与错误变量", ["loop.row", "err.code"]) in named._reference_groups()
+
+    # 默认名（控制流表单预填后写回 raw 的形状）不算「用户命名」
+    loop_node["item_var"] = "item"
+    document["root"]["children"][-1]["error_var"] = "error"
+    defaulted = MainWindow(window.catalog, workflow=document)
+    assert "循环与错误变量" not in [label for label, _ in defaulted._reference_groups()]
 
 
 # ---- 未应用编辑的自动提交（维护者报障：改完参数点保存无效） --------------------

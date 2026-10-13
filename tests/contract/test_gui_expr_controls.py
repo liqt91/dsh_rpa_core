@@ -1,6 +1,6 @@
 """参数表达式控件契约测试（对标影刀的「左 Py 右 fx」）。
 
-覆盖四件事：
+覆盖五件事：
 
 1. **门控来自 manifest 字段级声明**——``x-fx`` 才给 fx、``x-python`` 才给 Py；
    都没有就不挂表达式行（与 Web 编辑器同一份声明、同一套规则）。
@@ -9,6 +9,9 @@
 3. **fx / Py 互斥**，``_expr_modes`` 是唯一真值（运行期据此选解析器）。
 4. **标签删光自动撤销 fx 态**（否则字段会「看着是纯文本、运行期却按标签解析」，
    字面 CSS 选择器 ``a[title]`` 正是这种字段）。
+5. **菜单按来源分组、只列用户命名的变量**——组标题是不可点的灰行；空组不渲染；
+   菜单内容由 ``variable_groups_provider`` 供给，排除规则见
+   ``MainWindow._reference_groups``。
 
 测试在 offscreen Qt 平台运行；缺 PySide6 时整组跳过。
 """
@@ -44,6 +47,13 @@ def _editor(form: ParamForm, name: str) -> QLineEdit:
     return next(widget for field, _kind, widget in form._fields if field == name)
 
 
+def _trigger(menu, text: str) -> None:
+    """按文本点菜单项（菜单里还有不可点的组标题，不能靠下标取）。"""
+    action = next(a for a in menu.actions() if a.text() == text)
+    assert action.isEnabled(), f"菜单项 {text!r} 不应被禁用"
+    action.trigger()
+
+
 def _expr_schema() -> dict:
     """一份把四种门控组合都摆出来的 schema（外加不应挂表达式行的字段）。"""
     return {
@@ -62,7 +72,7 @@ def _expr_schema() -> dict:
 # ---- 门控 -----------------------------------------------------------------
 def test_expr_controls_gated_by_manifest_declaration(qapp):
     """只有声明 x-fx / x-python 的**纯 string** 字段才挂表达式控件。"""
-    form = ParamForm(_expr_schema(), {}, variable_provider=lambda: [])
+    form = ParamForm(_expr_schema(), {}, variable_groups_provider=lambda: [])
     assert set(form._expr_rows) == {"fx_only", "py_only", "both"}
 
     fx_only_py, fx_only_fx, _ = form._expr_rows["fx_only"]
@@ -77,7 +87,7 @@ def test_expr_controls_gated_by_manifest_declaration(qapp):
 
 def test_undeclared_string_field_gets_no_fx(qapp):
     """回归：桌面端此前对**所有**纯 string 字段一律给 fx、不看声明 ⇒ 与 Web 分化。"""
-    form = ParamForm(_expr_schema(), {}, variable_provider=lambda: [])
+    form = ParamForm(_expr_schema(), {}, variable_groups_provider=lambda: [])
     assert "plain" not in form._expr_rows
 
 
@@ -86,7 +96,7 @@ def test_fx_inserts_tag_at_cursor_and_enters_fx_mode(qapp):
     form = ParamForm(
         {"type": "object", "properties": {"text": {"type": "string", "x-fx": True}}},
         {"text": "前置"},
-        variable_provider=lambda: ["web", "inputs.count"],
+        variable_groups_provider=lambda: [("变量", ["web", "inputs.count"])],
     )
     editor = _editor(form, "text")
     assert editor.text() == "前置"
@@ -96,7 +106,7 @@ def test_fx_inserts_tag_at_cursor_and_enters_fx_mode(qapp):
     menu = form._build_variable_menu("text", editor, fx_button)
     texts = [action.text() for action in menu.actions()]
     assert "web" in texts and "inputs.count" in texts
-    menu.actions()[0].trigger()
+    _trigger(menu, "web")
 
     assert editor.text() == "前置[web]"
     assert form.expr_modes() == {"text": "fx"}
@@ -107,7 +117,7 @@ def test_fx_button_is_not_checkable(qapp):
     form = ParamForm(
         {"type": "object", "properties": {"text": {"type": "string", "x-fx": True}}},
         {},
-        variable_provider=lambda: [],
+        variable_groups_provider=lambda: [],
     )
     _py, fx_button, _ = form._expr_rows["text"]
     assert fx_button.isCheckable() is False
@@ -123,11 +133,68 @@ def test_no_extra_var_button_remains(qapp):
             },
         },
         {},
-        variable_provider=lambda: [],
+        variable_groups_provider=lambda: [],
     )
     button_texts = [b.text() for b in form.findChildren(QToolButton)]
     assert "＋变量" not in button_texts
     assert set(button_texts) == {"Py", "fx"}
+
+
+# ---- 菜单分组（维护者 2026-10-13：分两组加标题） ---------------------------
+def test_variable_menu_renders_group_headers_as_disabled_rows(qapp):
+    """组标题是**不可点的灰行**，组间有分隔条（对齐 Web fx 浮层的分组头）。"""
+    form = ParamForm(
+        {"type": "object", "properties": {"text": {"type": "string", "x-fx": True}}},
+        {},
+        variable_groups_provider=lambda: [
+            ("流程参数", ["inputs.count"]),
+            ("输出与赋值变量", ["web"]),
+        ],
+    )
+    _py, fx_button, _ = form._expr_rows["text"]
+    menu = form._build_variable_menu("text", _editor(form, "text"), fx_button)
+
+    headers = [a for a in menu.actions() if a.text() in ("流程参数", "输出与赋值变量")]
+    assert [a.text() for a in headers] == ["流程参数", "输出与赋值变量"]
+    assert all(a.isEnabled() is False for a in headers), "组标题不能可点"
+
+    texts = [a.text() for a in menu.actions()]
+    assert "inputs.count" in texts and "web" in texts
+    # 两组之间恰好一条分隔条（分组语义，不是纯装饰）
+    assert sum(1 for a in menu.actions() if a.isSeparator()) == 1
+
+
+def test_variable_menu_skips_empty_groups_and_their_separators(qapp):
+    """空组不渲染标题、也不留孤零零的分隔条。"""
+    form = ParamForm(
+        {"type": "object", "properties": {"text": {"type": "string", "x-fx": True}}},
+        {},
+        variable_groups_provider=lambda: [
+            ("流程参数", []),
+            ("输出与赋值变量", ["web"]),
+        ],
+    )
+    _py, fx_button, _ = form._expr_rows["text"]
+    menu = form._build_variable_menu("text", _editor(form, "text"), fx_button)
+
+    texts = [a.text() for a in menu.actions()]
+    assert "流程参数" not in texts
+    assert "web" in texts
+    assert sum(1 for a in menu.actions() if a.isSeparator()) == 0
+
+
+def test_variable_menu_shows_placeholder_when_nothing_is_named(qapp):
+    """一条变量都没有时给占位灰行，而不是弹出一个空菜单。"""
+    form = ParamForm(
+        {"type": "object", "properties": {"text": {"type": "string", "x-fx": True}}},
+        {},
+        variable_groups_provider=lambda: [],
+    )
+    _py, fx_button, _ = form._expr_rows["text"]
+    menu = form._build_variable_menu("text", _editor(form, "text"), fx_button)
+
+    assert [a.text() for a in menu.actions()] == ["（无可引用变量）"]
+    assert menu.actions()[0].isEnabled() is False
 
 
 # ---- fx / Py 互斥 ----------------------------------------------------------
@@ -140,7 +207,7 @@ def test_py_toggle_is_exclusive_with_fx(qapp):
             },
         },
         {},
-        variable_provider=lambda: ["parameter"],
+        variable_groups_provider=lambda: [("变量", ["parameter"])],
     )
     editor = _editor(form, "text")
     py_button, _fx_button, _ = form._expr_rows["text"]
@@ -150,7 +217,7 @@ def test_py_toggle_is_exclusive_with_fx(qapp):
 
     # Python 模式下 fx 插入的是**变量名原文**（融进表达式），不产生标签
     menu = form._build_variable_menu("text", editor, editor)
-    menu.actions()[0].trigger()
+    _trigger(menu, "parameter")
     assert editor.text() == "parameter"
     assert form.expr_modes() == {"text": "python"}
 
@@ -168,7 +235,7 @@ def test_python_mode_initial_state_from_expr_modes(qapp):
         },
         {"text": "count + 1"},
         expr_modes={"text": "python"},
-        variable_provider=lambda: [],
+        variable_groups_provider=lambda: [],
     )
     py_button, _fx_button, _ = form._expr_rows["text"]
     assert py_button.isChecked() is True
@@ -181,7 +248,7 @@ def test_fx_mode_dropped_when_last_tag_removed(qapp):
         {"type": "object", "properties": {"text": {"type": "string", "x-fx": True}}},
         {"text": "[web]"},
         expr_modes={"text": "fx"},
-        variable_provider=lambda: [],
+        variable_groups_provider=lambda: [],
     )
     editor = _editor(form, "text")
     assert form.expr_modes() == {"text": "fx"}
@@ -198,7 +265,7 @@ def test_manual_css_selector_does_not_enter_fx_mode(qapp):
     form = ParamForm(
         {"type": "object", "properties": {"text": {"type": "string", "x-fx": True}}},
         {"text": ""},
-        variable_provider=lambda: [],
+        variable_groups_provider=lambda: [],
     )
     editor = _editor(form, "text")
     editor.setText("a[title]")
@@ -211,7 +278,7 @@ def test_expr_modes_pruned_to_hosted_fields(qapp):
         {"type": "object", "properties": {"plain": {"type": "string"}}},
         {},
         expr_modes={"plain": "fx"},
-        variable_provider=lambda: [],
+        variable_groups_provider=lambda: [],
     )
     assert form.expr_modes() == {}
 
@@ -228,7 +295,7 @@ def test_expr_buttons_have_no_pre_attached_menu(qapp):
             },
         },
         {},
-        variable_provider=lambda: [],
+        variable_groups_provider=lambda: [],
     )
     _py, fx_button, _ = form._expr_rows["text"]
     assert fx_button.menu() is None
@@ -246,7 +313,7 @@ def test_expr_row_widgets_are_never_windows(qapp):
         },
         {"text": "[web]"},
         expr_modes={"text": "fx"},
-        variable_provider=lambda: ["web"],
+        variable_groups_provider=lambda: [("变量", ["web"])],
     )
     windows = [w for w in form.findChildren(QWidget) if w.isWindow()]
     assert windows == [], f"表单内不应有顶层窗口控件：{windows}"

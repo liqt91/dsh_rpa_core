@@ -155,3 +155,105 @@ I4 的 `pop` 行在文件里出现两次（缩进不同）⇒ 锚点带完整上
 - 文档：`docs/yingdao-web-cmds-benchmark.md`（§三-8 / §四 P2.6 / 取证记录）、
   `.harness/yingdao-gap-matrix.md` §六、`docs/manifest-param-config.md` banner ④。
 - 台账：`PROGRESS.md` + `feature_list.json` + `.workbuddy/memory/MEMORY.md` + 当日 memory。
+
+---
+
+## 十一、追加：fx 菜单只列「用户命名的变量」（2026-10-13 同日）
+
+### 11.1 维护者口径（原话）
+
+> 「fx 下拉的变量，内置的不用展示出来，只需要展示流程输入的变量，和每一步明确定义了是输出变量的
+> 变量（就是有变量名的，比如设置变量指令的变量名，或者打开网页指令输出参数的保存网页对象）」
+
+追问确认两点（选项卡）：
+
+1. `steps.<节点id>.outputs.<字段>` 这类**自动展开路径** → **一并去掉**（选「推荐」）。
+2. 菜单 → **分两组加标题**（选「推荐」）。
+
+再追问一点（实现时发现的边界）：循环/错误变量也算「你在节点里亲手取的名字」
+⇒ 维护者选「**有名字就列**」。
+
+### 11.2 取证（动手前，真实流程实测）
+
+用维护者自己保存的 `workflows/test11/workflow.json` 跑 `_collect_reference_paths()`，**共 20 条**：
+
+| 来源 | 条数 | 内容 |
+| --- | --- | --- |
+| `inputs.*` | 0（该流程未声明入参） | — |
+| `output_aliases` 值 | 2 | `webpage1`、`text` |
+| `data.setVar` 的 varName | 1 | `url` |
+| `steps.<节点id>.outputs.<字段>` | **14** | `steps.n6.outputs.sessionId` … |
+| 内置作用域 | 3 | `loop.item` / `error.code` / `error.message` |
+
+⇒ **17 / 20 是噪声**；且 `steps.n6.outputs.sessionId` 与别名 `webpage1`、`steps.n2.outputs.value`
+与别名 `text` **语义重复**。
+
+**取证顺带查出一处真分歧**：`_collect_reference_paths` 硬编码 `raw["command"] == "data.setVar"`，
+而变量面板（`_refresh_variables`）、`compiler`、`orchestrator` 一律读 manifest 的 **`x-var-write`**
+声明。`commands/data/table/getCell.json` **同样声明了 `x-var-write`**，于是它的目标变量
+**只在变量面板里有、fx 菜单里从来没有**。
+
+### 11.3 做法
+
+- **API 换形（开发期硬切，invariants #15）**：
+  `ParamForm(variable_provider=…)` → `variable_groups_provider=…`，
+  形状从 `list[str]` 变成 `list[tuple[组标题, list[str]]]`——分组在**供给方**决定，
+  因为只有它知道一个名字是流程入参、还是某条命令的输出别名／赋值目标。
+  `MainWindow._collect_reference_paths()` → `_reference_groups()`（旧名整条删掉，不留兼容层）。
+- **三组**：`流程参数` / `输出与赋值变量` / `循环与错误变量`（空组整个不出现）。
+- **只列用户命名的**：`inputs.<名>`、`output_aliases` 值、`x-var-write` 命中的字段值、
+  显式命名的 `loop.<item_var>` 与 `<error_var>.code`。
+- ★ **「显式命名」的判据要比「raw 里有这个键」严**：控制流表单把空值**预填成默认名**
+  （`param_form._build_control`：`str(raw.get("item_var") or "item")`），用户点一次「应用」
+  默认名就进 raw 了 ⇒ 按「键存在」判会把 `loop.item` 这个**内置名又列回来**。
+  实际判据 = 与模型默认值不同，默认值从 **`ForEachNode.model_fields` / `TryNode.model_fields` 现算**，
+  不手抄。
+- **菜单渲染**：组标题是不可点的灰行（对齐 Web fx 浮层的 `.fx-var-popup-group`）、组间一条分隔条、
+  空组不留标题也不留孤立分隔条、一条都没有时给「（无可引用变量）」占位灰行。
+- **能力没有被删掉**：`${steps.x.outputs.y}` 仍可手打，运行期语法与编译期引用校验**一字未改**。
+
+### 11.4 判据（新增 6 条 / 改写 5 条）
+
+| 判据 | 位置 | 钉住什么 |
+| --- | --- | --- |
+| `test_reference_groups_list_inputs_in_their_own_group` | `test_gui_param_form.py` | 「流程参数」组 = 输入声明 |
+| `test_reference_groups_exclude_auto_paths_and_builtins` | 同上 | **`steps.*` 与内置作用域不进菜单**（本轮核心） |
+| `test_reference_groups_list_named_outputs_and_var_writes` | 同上 | 别名 + `x-var-write`；**用 `data.table.getCell` 钉住「认声明不认命令 id」** |
+| `test_reference_groups_list_only_explicitly_named_loop_and_error_vars` | 同上 | 两条作用域分支；默认名不算命名 |
+| `test_variable_menu_renders_group_headers_as_disabled_rows` | `test_gui_expr_controls.py` | 灰标题 + 一条分隔条 |
+| `test_variable_menu_skips_empty_groups_and_their_separators` | 同上 | 空组不留标题／分隔条 |
+| `test_variable_menu_shows_placeholder_when_nothing_is_named` | 同上 | 占位灰行 |
+| 改写 `test_reference_groups_*` ×4（原 `test_reference_paths_*`） | `test_gui_flow_inputs_linkage.py` | 改用分组 API（`_input_paths` 摊平 helper） |
+
+### 11.5 负向验证（`.harness/spike/probe_reference_groups_negative.py`，7 注入全中）
+
+| 注入 | 打在哪 | 期望红 | 结果 |
+| --- | --- | --- | --- |
+| G1 自动路径 + 内置作用域**回流** | `_reference_groups` | 排除判据 + 该组精确内容判据 | 2/2 |
+| G2 变量写入退回**硬编码命令 id** | 同上 | 目标名判据（getCell 漏掉） | 1/1 |
+| G3 循环/错误判据**放宽成「键存在」** | 同上 | 命名判据 | 1/1 |
+| G4 空组**不剔除**（provider 侧） | 同上 | 两条标签判据 | 2/2 |
+| G5 组标题**变成可点** | `param_form` | 分组判据 | 1/1 |
+| G6 空组**不剔除**（表单侧） | 同上 | 空组分隔条判据 | 1/1 |
+| G7 无变量时**不给占位** | 同上 | 占位判据 | 1/1 |
+
+逐字节还原核 md5、还原后复绿 122 passed。
+★ G1 首跑「多红一条」，取证后确认是**推理应含**的连带（G1 把 `loop.item` 塞进 `scoped`，而
+`test_reference_groups_list_only_...` 断言的是该组的**精确内容**）⇒ 按推理补进期望集，**非**「把模块打倒」。
+
+### 11.6 验证与门禁
+
+- 定向：`test_gui_expr_controls.py` + `test_gui_param_form.py` + `test_gui_flow_inputs_linkage.py`
+  = **122 passed**。
+- 全量 pytest **1614 passed / 0 failed / 21 skipped / 2 xfailed**（rc=0）。跑出过一次
+  `test_gui_node_edit.py::test_delete_suppressed_while_param_editor_focused` 红——**已知环境级
+  flaky**（offscreen Qt 焦点竞争，见 §四 flaky 清单），单跑即绿，**未动其代码**。
+- `ruff check .` 全绿（自动修掉 2 处导入排序）。
+
+### 11.7 明确不动 / 遗留
+
+- **Web fx 浮层未同步**（仍列 `steps.*` 与「内置作用域」组）——Web 属 **ADR 0016 冻结面**，
+  登记为**已知差异**（benchmark §四 P2.6 / gap-matrix §六）。
+- 「`x-var-write` 的 `field` 值以 `${` 开头时跳过」这条**沿用**旧实现的判断，未改口径。
+- 枚举 / 非字符串字段仍无变量入口（同上文 §九）。
+

@@ -6,12 +6,12 @@ S2 把声明做成了可编辑的 `_workflow_meta["inputs"]`；本文件验证**
 | 消费方 | 实现位置 | 期望行为 |
 |---|---|---|
 | 运行参数对话框 | `RunInputsDialog(declared)` | 新增声明后立即出现一行；删除后不再出现 |
-| 变量面板 / `${` 补全 | `_collect_reference_paths()` | 列出 `inputs.<名>`；删除后消失 |
+| fx 变量菜单 | `_reference_groups()` | 「流程参数」组列出 `inputs.<名>`；删除后消失 |
 | 编译期引用校验 | `compiler.validate_refs` | 删除声明后残留引用**如实报错**（不静默） |
 
 测试在 offscreen Qt 平台运行；缺 PySide6 时整组跳过。
 
-最后一类是**跨层一致性**：`_collect_reference_paths` 产出的 `inputs.<名>` 必须真的是编译器
+最后一类是**跨层一致性**：`_reference_groups` 产出的 `inputs.<名>` 必须真的是编译器
 认的引用形态——两处自己实现一遍「什么算合法引用」是这类功能的经典漂移点。
 """
 
@@ -55,6 +55,12 @@ def window(catalog):
 def _set_inputs(window, declaration: dict) -> None:
     """模拟「编辑声明并确定」（S2 的落点）。"""
     window._workflow_meta["inputs"] = declaration
+
+
+def _input_paths(window) -> list[str]:
+    """「流程参数」组里的路径（菜单是分组的，这里只关心入参那组）。"""
+    groups = window._reference_groups()
+    return [p for label, paths in groups if label == "流程参数" for p in paths]
 
 
 # ------------------------------------------- 1. 运行参数对话框跟着声明走
@@ -121,41 +127,41 @@ def test_empty_declaration_means_no_dialog_is_needed(qapp):
     assert dialog._edits == {}
 
 
-# ------------------------------------------- 2. 变量面板 / 补全列出 inputs.<名>
+# ------------------------------------------- 2. fx 菜单列出 inputs.<名>
 
 
-def test_reference_paths_include_declared_inputs(window):
+def test_reference_groups_include_declared_inputs(window):
     _set_inputs(window, {"url": "http://x", "retries": 3})
-    paths = window._collect_reference_paths()
+    paths = _input_paths(window)
 
     assert "inputs.url" in paths
     assert "inputs.retries" in paths
 
 
-def test_reference_paths_update_when_an_input_is_added(window):
-    """S3 验收点：新增声明后补全立即多出一条路径。"""
+def test_reference_groups_update_when_an_input_is_added(window):
+    """S3 验收点：新增声明后菜单立即多出一条路径。"""
     _set_inputs(window, {"url": "http://x"})
-    before = window._collect_reference_paths()
+    before = _input_paths(window)
     assert "inputs.url" in before
     assert "inputs.timeout" not in before
 
     _set_inputs(window, {"url": "http://x", "timeout": 30})
-    after = window._collect_reference_paths()
+    after = _input_paths(window)
     assert "inputs.timeout" in after
 
 
-def test_reference_paths_drop_deleted_inputs(window):
+def test_reference_groups_drop_deleted_inputs(window):
     _set_inputs(window, {"url": "http://x"})
     _set_inputs(window, {})
-    paths = window._collect_reference_paths()
+    assert _input_paths(window) == []
+    # 空组整个消失（菜单里不留一个空标题）
+    assert "流程参数" not in [label for label, _ in window._reference_groups()]
 
-    assert not [p for p in paths if p.startswith("inputs.")]
 
-
-def test_reference_paths_tolerate_a_missing_declaration(window):
+def test_reference_groups_tolerate_a_missing_declaration(window):
     """没有 inputs 键（旧流程文件）也要能工作，不抛。"""
     window._workflow_meta.pop("inputs", None)
-    assert isinstance(window._collect_reference_paths(), list)
+    assert isinstance(window._reference_groups(), list)
 
 
 def test_variable_panel_refresh_after_edit(window, monkeypatch):

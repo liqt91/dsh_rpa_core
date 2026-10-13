@@ -146,7 +146,7 @@ class ParamForm(QWidget):
         parent: QWidget | None = None,
         *,
         expr_modes: dict[str, str] | None = None,
-        variable_provider: Any = None,
+        variable_groups_provider: Any = None,
         manifest: Any | None = None,
         output_aliases: dict[str, str] | None = None,
         raw: dict[str, Any] | None = None,
@@ -156,7 +156,7 @@ class ParamForm(QWidget):
         args = dict(args or {})
         self._required: set[str] = set(schema.get("required", []))
         self._expr_modes: dict[str, str] = dict(expr_modes or {})
-        self._variable_provider = variable_provider
+        self._variable_groups_provider = variable_groups_provider
         # (字段名, 种类, 控件)：顺序即 properties 声明顺序
         self._fields: list[tuple[str, str, QWidget]] = []
         # 声明了 default 的布尔字段（名字 → 默认值）：`values()` 靠它把「等于默认」
@@ -588,7 +588,10 @@ class ParamForm(QWidget):
             fx_button = QToolButton(row)
             fx_button.setText("fx")
             fx_button.setAutoRaise(True)
-            fx_button.setToolTip("选择变量插入：标签模式用 [变量名]，可与文本混排")
+            fx_button.setToolTip(
+                "选择变量插入：只列流程参数与你命名过的输出/赋值变量；"
+                "标签模式插 [变量名]，可与文本混排"
+            )
             fx_button.clicked.connect(lambda _c=False, k=name: self._show_variable_menu(k))
             layout.addWidget(fx_button)
 
@@ -624,14 +627,32 @@ class ParamForm(QWidget):
     def _build_variable_menu(
         self, name: str, editor: QLineEdit, parent: QWidget
     ) -> QMenu:
-        """构建 fx 变量菜单（点击时调用；也供测试直接驱动）。"""
+        """构建 fx 变量菜单（点击时调用；也供测试直接驱动）。
+
+        内容由 ``variable_groups_provider`` 给，形状是 ``[(组标题, [路径, ...]), ...]``
+        ——分组在供给方（``MainWindow._reference_groups``）决定，因为它才知道一个名字
+        是流程入参、还是某条命令的输出别名／赋值目标。
+
+        组标题是**不可点的灰行**（对齐 Web fx 浮层的 ``.fx-var-popup-group``）：菜单里
+        只出现用户自己命名的变量，自动展开的 ``steps.<节点id>.outputs.<字段>`` 路径与
+        内置作用域不进来——它们不是变量名，铺满菜单会把真变量淹掉（维护者 2026-10-13）。
+        空组不渲染标题，也不留空分隔条。
+        """
         menu = QMenu(parent)
         menu.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
-        paths = self._variable_provider() if self._variable_provider else []
-        if not paths:
+        provider = self._variable_groups_provider
+        groups = provider() if provider else []
+        groups = [(label, paths) for label, paths in groups if paths]
+        if not groups:
             menu.addAction("（无可引用变量）").setEnabled(False)
-        for path in paths:
-            menu.addAction(path, lambda p=path: self._insert_variable(name, editor, p))
+        for index, (label, paths) in enumerate(groups):
+            if index:
+                menu.addSeparator()
+            menu.addAction(label).setEnabled(False)
+            for path in paths:
+                menu.addAction(
+                    path, lambda p=path: self._insert_variable(name, editor, p)
+                )
         return menu
 
     def _insert_variable(self, name: str, editor: QLineEdit, path: str) -> None:

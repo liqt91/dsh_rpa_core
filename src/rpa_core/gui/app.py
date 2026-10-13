@@ -4325,7 +4325,7 @@ class MainWindow(QMainWindow):
             manifest.input_schema,
             args,
             expr_modes=(raw or {}).get("_exprModes"),
-            variable_provider=self._collect_reference_paths,
+            variable_groups_provider=self._reference_groups,
             manifest=manifest,
             output_aliases=(raw or {}).get("output_aliases"),
             raw=raw,
@@ -4509,46 +4509,72 @@ class MainWindow(QMainWindow):
             return
         apply_fn()
 
-    def _collect_reference_paths(self) -> list[str]:
-        """收集可引用的变量/路径（fx「＋变量」下拉内容）。
+    def _reference_groups(self) -> list[tuple[str, list[str]]]:
+        """fx 变量菜单的内容，按来源分组：``[(组标题, [路径, ...]), ...]``。
 
-        口径对齐 Web computeReferencePaths 的常用子集：
-        - 用户变量：output_aliases 值 + data.setVar 的字面量 varName；
-        - inputs.<声明的入参名>；
-        - steps.<节点id>.outputs.<输出字段>（按 manifest output_schema 展开）；
-        - 内置作用域：loop.item / error.code / error.message。
+        只列**用户自己命名的**变量（维护者 2026-10-13 拍板）：
+
+        - 「流程参数」：流程输入声明（M26）的 ``inputs.<名>``；
+        - 「输出与赋值变量」：命令输出别名 ``output_aliases`` 的值（如打开网页的
+          「保存网页对象」）＋ 变量写入命令的目标名（manifest ``x-var-write``，
+          如设置变量 / 读取表格单元格）；
+        - 「循环与错误变量」：``loop.<item_var>`` / ``<error_var>.code``——**仅当节点
+          里显式填了名字**（与模型默认值 ``item`` / ``error`` 不同）时才列。判据必须比
+          「raw 里有没有这个键」更严：控制流表单把空值**预填成默认名**
+          （``str(raw.get("item_var") or "item")``），用户只要点过一次「应用」默认名
+          就会被写进 raw——按「键存在」判会把 ``loop.item`` 这个内置名又列回来。
+          默认值从模型现算（``ForEachNode.model_fields``），不手抄。
+
+        不列 ``steps.<节点id>.outputs.<字段>`` 自动展开路径与内置作用域根名
+        （``loop.item`` / ``error.code`` / ``error.message``）：它们不是变量名，
+        铺在菜单里会把真变量淹掉（实测一条三步流程 20 条里 17 条是噪声）。要引用
+        仍可手打，运行期语法与编译期校验都不变。
+
+        变量写入**认 manifest 声明、不认命令 id**——与 :meth:`_refresh_variables`
+        （变量面板）、``compiler``、``orchestrator`` 同一份事实源；此前这里硬编码
+        ``data.setVar``，而 ``data.table.getCell`` 同样声明了 ``x-var-write``，
+        它的目标变量于是只在变量面板里有、fx 菜单里没有。
         """
-        from rpa_core.gui.flow_model import (
-            ROLE_ARGS_RAW,
-            ROLE_COMMAND_ID,
-            iter_real_nodes,
-        )
+        from rpa_core.gui.flow_model import ROLE_ARGS_RAW, iter_real_nodes
+        from rpa_core.model.workflow import ForEachNode, TryNode
 
-        paths: list[str] = []
+        default_item_var = ForEachNode.model_fields["item_var"].default
+        default_error_var = TryNode.model_fields["error_var"].default
+
+        params: list[str] = []
         for name in (self._workflow_meta.get("inputs") or {}):
-            paths.append(f"inputs.{name}")
+            params.append(f"inputs.{name}")
+
+        variables: list[str] = []
+        scoped: list[str] = []
         for item in iter_real_nodes(self.flow_model):
             holder = item.data(ROLE_ARGS_RAW)
             raw = holder.raw if holder is not None else None
             if not raw:
                 continue
             for alias in (raw.get("output_aliases") or {}).values():
-                paths.append(alias)
-            if raw.get("command") == "data.setVar":
-                var_name = (raw.get("with") or {}).get("varName")
-                if isinstance(var_name, str) and var_name:
-                    paths.append(var_name)
-            command_id = item.data(ROLE_COMMAND_ID)
-            node_id = raw.get("id")
-            if command_id in self.catalog and node_id:
-                outputs = (
-                    self.catalog[command_id].output_schema.get("properties") or {}
-                )
-                for field in outputs:
-                    paths.append(f"steps.{node_id}.outputs.{field}")
-        paths.extend(["loop.item", "error.code", "error.message"])
-        # 去重保序
-        return list(dict.fromkeys(paths))
+                if isinstance(alias, str) and alias:
+                    variables.append(alias)
+            command_id = raw.get("command")
+            manifest = self.catalog[command_id] if command_id in self.catalog else None
+            var_write = manifest.x_var_write if manifest is not None else None
+            if var_write and var_write.get("field"):
+                target = (raw.get("with") or {}).get(var_write["field"])
+                if isinstance(target, str) and target and not target.startswith("${"):
+                    variables.append(target)
+            item_var = raw.get("item_var")
+            if isinstance(item_var, str) and item_var != default_item_var:
+                scoped.append(f"loop.{item_var}")
+            error_var = raw.get("error_var")
+            if isinstance(error_var, str) and error_var != default_error_var:
+                scoped.append(f"{error_var}.code")
+
+        groups = [
+            ("流程参数", list(dict.fromkeys(params))),
+            ("输出与赋值变量", list(dict.fromkeys(variables))),
+            ("循环与错误变量", list(dict.fromkeys(scoped))),
+        ]
+        return [(label, paths) for label, paths in groups if paths]
 
     def _show_control_form(self, node_type: str, raw: dict, index) -> None:
         """控制流节点（sequence/if/forEach/try/return）的结构参数表单。

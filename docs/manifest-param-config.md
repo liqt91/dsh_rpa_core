@@ -12,7 +12,10 @@
 > ④ 桌面 GUI **已改为读 `x-fx` / `x-python`**（2026-10-13 M57 起）：`param_form._build_field` 按字段级声明给
 > `fx` / `Py` 按钮，与 Web 同一份声明、同一套规则；此前「对**所有**「纯 `string` 且非 `enum`」字段一律给 fx
 > 开关」的宽松行为**已废除**。且 `fx` **不是开关**（`setCheckable(False)`，点击即弹变量列表、选中直接插入），
-> `Py` 才是模式开关；
+> `Py` 才是模式开关；菜单内容**只列用户命名的变量**（流程参数 / 输出别名 / 变量写入目标 / 显式命名的循环与
+> 错误变量），按来源分三组、组标题为不可点的灰行——`steps.<节点id>.outputs.<字段>` 自动路径与内置作用域
+> （`loop.item` / `error.code` / `error.message`）**不进菜单**，但仍可手打引用，运行期语法与编译期校验不变
+> （M57 追加，2026-10-13；见 `MainWindow._reference_groups`）；
 > ⑤ 「影刀侧 fx 语义」另见 `docs/yingdao-web-cmds-benchmark.md` §三-8（影刀的 fx 是**变量选择器**，
 > 其左侧 **Python 图标**才是表达式模式开关）。
 

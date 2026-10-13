@@ -57,3 +57,7 @@ node_modules/
 # 负向验证探针的运行产物（junitxml 报告 / 日志 / stdout）：同上，以忽略收口
 /.harness/spike/_expr_controls_*
 /.harness/spike/_summary_readability_*
+/.harness/spike/_ref_groups_*
+/.harness/spike/_fx_menu_probe*
+/.harness/spike/_pytest_*
+/.harness/spike/_probe_*
