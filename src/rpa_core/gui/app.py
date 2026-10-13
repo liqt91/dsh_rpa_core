@@ -105,9 +105,11 @@ NAMESPACE_LABELS = {
     "data": "数据处理",
     "workflow": "流程控制",
     "desktop": "桌面自动化",
+    # M60：OCR 指令族（ocr.recognize / detect / slideMatch）
+    "ocr": "验证码识别",
 }
 # 分组在指令树中的固定展示顺序（高频在前），其余命名空间按名字追加在最后。
-NAMESPACE_ORDER = ["browser", "data", "workflow", "desktop"]
+NAMESPACE_ORDER = ["browser", "data", "workflow", "desktop", "ocr"]
 
 # ---- 控制指令 -------------------------------------------------------------
 # catalog 之外的流程控制指令，固定挂在指令树最前面的「流程控制」组。

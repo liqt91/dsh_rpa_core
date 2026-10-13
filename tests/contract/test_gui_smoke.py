@@ -71,7 +71,7 @@ def test_tree_groups_follow_namespace_order(window, catalog):
 
 def test_every_catalog_command_appears_once_as_leaf(window, catalog):
     tree = window.command_tree
-    # 组数 = 4 个命名空间 + 1 个控制指令组
+    # 组数 = NAMESPACE_ORDER 里的命名空间数 + 1 个控制指令组（不写死数字）
     assert tree.topLevelItemCount() == len(NAMESPACE_ORDER) + 1
     assert _leaf_count(tree) == len(catalog) + len(_CONTROL_COMMANDS)
     leaf_ids = {leaf.data(0, ROLE_COMMAND_ID) for leaf in _all_leaves(tree)}

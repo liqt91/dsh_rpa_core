@@ -1,0 +1,53 @@
+{
+  "id": "ocr.recognize",
+  "version": "1.0.0",
+  "executor": "ocr.ddddocr",
+  "kind": "query",
+  "risk": "read",
+  "capabilities": [],
+  "resources": [],
+  "stability": "stable",
+  "effect": {"kind": "pure", "replay": "safe", "idempotency": "none"},
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "imagePath": {
+        "type": "string",
+        "x-fx": true,
+        "description": "图片文件路径。通常直接引用上一步「网页截图 / 桌面截图」输出的文件路径"
+      },
+      "imageBase64": {
+        "type": "string",
+        "description": "图片的 Base64 内容。与 imagePath 二选一（都填或都不填都会报 INVALID_INPUT）"
+      },
+      "withProbability": {
+        "type": "boolean",
+        "default": false,
+        "description": "是否同时返回识别置信度（0~1）。开启后速度略降"
+      },
+      "modelPath": {
+        "type": "string",
+        "x-fx": true,
+        "description": "自定义 onnx 识别模型路径。留空则使用内置模型"
+      }
+    },
+    "additionalProperties": false
+  },
+  "output_schema": {
+    "type": "object",
+    "required": ["text"],
+    "properties": {
+      "text": {"type": "string"},
+      "confidence": {"type": ["number", "null"]}
+    },
+    "additionalProperties": false
+  },
+  "x-outputs": {
+    "text": {"label": "识别结果"},
+    "confidence": {"label": "置信度"}
+  },
+  "errors": ["INVALID_INPUT", "EXECUTOR_FAILED", "TIMEOUT", "CANCELLED"],
+  "implementation": {"handler": "ocr.ddddocr:recognize"},
+  "default_timeout_seconds": 60,
+  "retryable": true
+}

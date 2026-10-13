@@ -91,6 +91,7 @@ window.RPA_I18N = {
     "browser.getScrollPosition": "获取滚动条位置",
     "desktop.getWindowList": "获取窗口列表（UIA）",
     "desktop.win32.getWindowList": "获取窗口列表（Win32）",
+    "ocr.recognize": "识别验证码",
   },
   kinds: {
     action: "动作",
@@ -245,6 +246,9 @@ window.RPA_I18N = {
     // M53：对标影刀「获取滚动条位置」的「纵向/横向滚动条」与「当前位置/底部位置」。
     // 与 browser.scroll 的 position（滚动位置：顶/底/指定/一屏）**语义不同**，故各写一处。
     "browser.getScrollPosition": { direction: "滚动条方向", position: "位置（当前位置/底部位置）" },
+    // M60：验证码识别指令族（ddddocr）。图片输入与自定义模型路径是字符串字段，
+    // 走 fx 变量引用；withProbability 是布尔开关。
+    "ocr.recognize": { imagePath: "图片路径", imageBase64: "图片内容（Base64）", withProbability: "返回置信度", modelPath: "自定义模型路径" },
   },
   glossary: {
     action: "动作：对外部世界执行一次操作（点击、写入等）",

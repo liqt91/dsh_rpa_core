@@ -25,6 +25,7 @@
 | `browser.*` | `command`（局部别名） | `inputs` |
 | `desktop.*` / `desktop.win32.*` | `command` | `inputs` |
 | `python.worker` | `invocation.command_id` | `invocation.inputs` |
+| `ocr.ddddocr` | `command_id`（worker 内） | `inputs` |
 
 已知盲区（如实写在这里，不假装是形式化证明）：
 
@@ -36,9 +37,13 @@
 - 走**注册表分派**的命令（`python_worker._TABLE_HANDLERS[invocation.command_id]` 对应的
   `data.table.*`、以及 `python.evalExpression`）目前**不在 catalog 里**，因此不参与检查；
   将来若登记为命令，需要给本文件加「按 handler 函数切片」的第三条策略。
+  **M60 的 `ocr.ddddocr` 就是被这条逼着写成显式 `if command_id == "<id>"` 链的**：
+  worker 本来用 `_HANDLERS` 注册表分派，那样两条门禁（本文件 + `check_error_contract`）
+  都会「看得见命令、看不见契约」——即 `checked` 计数会 +1 而实际零覆盖。
+  注册表分派要吃上检查，就得先加第三条切片策略，代价高于让实现侧迁就字面量形状。
 
-覆盖范围：**四类通道全部**——`browser.*`（Playwright/扩展）、`desktop.*`（UIA）、
-`desktop.win32.*`、`python.worker`（`data.*` / `workflow.sleep`），共 78 条命令。
+覆盖范围：**五类通道全部**——`browser.*`（扩展腿）、`desktop.*`（UIA）、
+`desktop.win32.*`、`python.worker`（`data.*` / `workflow.sleep`）、`ocr.ddddocr`，共 81 条命令。
 
 > **历史更正**：M29 时期本文件只登记了 `"browser."` 一条前缀，其余通道被跳过，而 docstring 与
 > BACKLOG 把跳过归因为「桌面/数据通道的分派不是 `command == "<id>"` 字面量形状」。
@@ -65,6 +70,12 @@ EXECUTOR_FILES = {
     "desktop.uia": ("src/rpa_core/executors/desktop.py",),
     "desktop.win32": ("src/rpa_core/executors/desktop_win32.py",),
     "python.worker": ("src/rpa_core/workers/python_worker.py",),
+    # M60 OCR：实现在 worker 子进程（`ocr_worker.handle` 里按 `command_id == "<id>"` 显式分派），
+    # 执行器只负责子进程生命周期，故两处都登记。
+    "ocr.ddddocr": (
+        "src/rpa_core/executors/ocr.py",
+        "src/rpa_core/workers/ocr_worker.py",
+    ),
 }
 
 # 命令变量名（裸名或属性名）——各通道的载体不同，见 docstring 的形状表
@@ -146,8 +157,13 @@ def _analyse_module(path: Path) -> tuple[dict[str, set[str]], set[str], set[str]
         if not names:
             continue
         reads = _inputs_reads(node.body)
-        # 「本期未实现」的命令：分支体里显式返回 COMMAND_NOT_FOUND
-        if "COMMAND_NOT_FOUND" in ast.unparse(node):
+        # 「本期未实现」的命令：**分支体**里显式返回 COMMAND_NOT_FOUND。
+        # ★ 只看 `node.body`，**不**能 `ast.unparse(node)` 把 `orelse` 也算进来：
+        # `if cmd == "x": ... else: return COMMAND_NOT_FOUND` 是最自然的分派写法，
+        # 那种形状下 x **并不是**未实现——连 else 一起算会把它静默豁免，门禁照报 PASS，
+        # 而这条命令的参数/错误码从此零覆盖。负向验证见
+        # `.harness/spike/probe_m60_ocr_gates_negative.py` 第 ③/④ 向。
+        if "COMMAND_NOT_FOUND" in "\n".join(ast.unparse(statement) for statement in node.body):
             unimplemented.update(names)
         for name in names:
             per_command.setdefault(name, set()).update(reads)

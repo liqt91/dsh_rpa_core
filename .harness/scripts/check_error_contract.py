@@ -77,7 +77,9 @@ def _analyse_module(path: Path) -> tuple[dict[str, set[str]], set[str]]:
         names = _command_names(node.test)
         if not names:
             continue
-        if "COMMAND_NOT_FOUND" in ast.unparse(node):
+        # 只看分支体（不连 `orelse`），理由与负向验证见
+        # `check_param_consumption._analyse_module` 的同款注释。
+        if "COMMAND_NOT_FOUND" in "\n".join(ast.unparse(statement) for statement in node.body):
             unimplemented.update(names)
         codes = _error_codes(node.body)
         for name in names:

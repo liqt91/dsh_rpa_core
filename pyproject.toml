@@ -7,6 +7,11 @@ requires-python = ">=3.12"
 dependencies = [
   "pydantic>=2.10,<3",
   "jsonschema>=4.23,<5",
+  # OCR 指令族（M60）。ddddocr 是 C 扩展 + 全局单例模型 + 首载秒级，官方明说不要反复初始化
+  # ⇒ 运行期必须走常驻 worker 子进程（workers/ocr_worker.py），不进主编排进程。
+  # 传递依赖：numpy / onnxruntime / Pillow / opencv-python(win,mac) 或 headless(linux)。
+  # 体积代价已实测登记：win_amd64 压缩合计约 141MB、解包约 250MB（M60 §六 / M61 §4.2）。
+  "ddddocr>=1.5,<2",
   "pywinauto>=0.6.9,<0.7; sys_platform == 'win32'",
   # desktop.screenshot 的回落路径用 capture_as_image()——pywinauto 内部就是 PIL
   # （未装时 Image=None，save 处炸 'NoneType' has no attribute 'save'，M38 任务单 §1.5）

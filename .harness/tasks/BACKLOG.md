@@ -263,6 +263,30 @@
     （三因子打分 唯一/稳定/长度 + 排序落盘 + 推荐 UI）。软依赖 M51-B；编辑期优选与运行期
     自愈共用同一份排序候选。**未动 `project_state` 排期字段**（`next_milestone` 仍 M51）。
 
+- [x] **M60 验证码识别指令族（ddddocr）**（`planned`，2026-10-13 维护者口径插入；**S1 已落地**）
+  - **S1（2026-10-13）已落地**：依赖进 **required** 档（`pyproject.toml` + `uv.lock`，不做
+    optional extra）· `workers/ocr_worker.py`（**常驻** worker，一行一 JSON）· `executors/ocr.py`
+    （子进程生命周期 / 取消 / 关闭）· `commands/ocr/recognize.json` · `cli.py` registry 接线 ·
+    `i18n.js` 标签 · `tests/commands/cases/ocr.json` · 契约测试 9 条。
+    代价已实测登记：解包 **258MB**（ddddocr 84.3 + cv2 112.4 + onnxruntime 41.6 + numpy 19.6）。
+  - **两条静态门禁的漏检被本片撞出来并修掉**：`ocr.ddddocr` 原先不在 `EXECUTOR_FILES` 里，
+    参数消费 / 错误契约两条门禁都把它算成 `skipped`（**「跳过」不是「通过」**）；补登记后
+    `checked 77→78、skipped 1→0`。同时发现门禁判「本期未实现」用了 `ast.unparse(整条 If)`——
+    **把 `orelse` 也算了进去**，于是 `if cmd == "x": … else: return COMMAND_NOT_FOUND` 这种
+    最自然的分派写法会让 x 被**静默豁免**（门禁照报 PASS、覆盖归零）；改为**只看分支体**。
+    四向负向验证见 `.harness/spike/probe_m60_ocr_gates_negative.py`（逐字节还原核 md5）。
+  - 计划：`M60-ocr-captcha.md`（S1–S4）。承接维护者「评估下，能否增加 dddd 验证码识别相关指令」；
+    拍板三项：**完整档**能力 / 依赖进 **required** / **不做组合指令**。
+  - **与打包调研的关系**：`M61-standalone-runner-packaging.md`（纯运行器打包，`planned`）
+    本轮先做了「dddd 集成是否打破打包结论」的复核——**不打破，但把体积权衡反转了**
+    （见 M61 §4：纯运行器口径下带 dddd 会**比现在带编辑器的完整包还大**），
+    并落了一条可执行建议：M60 写 worker 时就把子进程启动方式做成 **exe 兼容形态**
+    （`_worker_argv()` 已按 `sys.frozen` 分支），将来打包该处零改动。
+  - **排期字段未动**（`active_milestone` / `active_plan` / `active_feature` 仍 M52，沿用上一条先例）：
+    M60 是维护者口径下的**插入推进**，是否让它占 active 位待拍板。
+  - 已知偏离（详见 M60 §八）：ddddocr 1.6.1 **没有** `set_charset_range` ⇒ S2 的「字符集收敛」
+    接口需重设计；`ocr.recognize` 的 `effect.kind` 实取 `pure`（方案稿写的 `read`）。
+
 - [x] **里程碑编号口径定案：M48 = 桌面契约一片，M49 = GUI 体验**（`done`，**已拍板**，2026-10-08）
   - **冲突曾存在**：`docs/yingdao-gap-catchup.md` §4 里 M48 = 桌面契约一片（D1+D2+D3）、
     M49 = 系统层 + 新能力立项（E1/D4/E2/E3）；而实际执行的 M49 是「GUI 体验 P0–P3」，

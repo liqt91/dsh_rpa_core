@@ -1,0 +1,92 @@
+{
+  "ocr.recognize": {
+    "notes": "OCR 验证码识别（M60 S1）。输入是「图片字节」，catalog 里**没有**任何命令能生成图片（screenshot 需要浏览器/桌面会话）⇒ 用例表无法用 pre 步自备 fixture。因此：① 需要真实图片的变体统一用**内联 imageBase64**（64x26 PNG，内容 58，876 字符，离线可复现）；② imagePath 变体用 {tmp} 占位路径，只承担**静态参数覆盖**，真实路径读写行为由 tests/contract/test_ocr_contract.py 用 PIL 现场生成图片覆盖（该测试进默认门禁，本表默认不被执行）。",
+    "variants": [
+      {
+        "name": "image-path-is-accepted",
+        "inputs": {
+          "imagePath": "{tmp}/ocr/captcha.png"
+        },
+        "expect": {
+          "outputKeys": [
+            "text"
+          ]
+        }
+      },
+      {
+        "name": "image-base64-recognizes-known-digits",
+        "inputs": {
+          "imageBase64": "iVBORw0KGgoAAAANSUhEUgAAAEAAAAAaCAIAAACIHs0YAAACVklEQVR42u2Xu2vqUBzHTzS+glIj+FrUQUFB6gOjURAl2E2hs5N0EVzcC479JwSLguILHaTQQenUQV1EBJ0UHBXRGi2oseQOKaL3drtDLOQ75ZcvgXw43+85CUTTNPjN4oFfLg6AA+AALmW326FL3d/fn9z393eCIBQKhUqlCofDg8GAdQD4fKAoajQaBYPBQCBwumk2m5mLbrdLEITT6Uyn0xRFPT094Tje6XSsViubBPSZ+v0+AKBQKNA/KRaLSSSS9XrNjNPpFACQSCRoVnURIQbA4XD8iLpcLoVCoVQqZUaVSgXD8GazuaIO9Pt9BEG63a7JZBKLxRiGvby8nNyHhweSJJPJ5GKxmM1m8XicWRaWS3C+HKFQiM/nB4PBer2ezWZvb28hCDpPVC6Xg+Hv2ggEglqtRrOtCwAcxz0ez+FwYMbPz0+dTqdUKvf7PU3TxWIRhmGCIMrlcj6fxzAMQZC3t7crAvhXj4+PAIB2u73dblEUxTDs6+uLsXa7ncVi0ev1x+PxWkr88fHxVynVajUAgCTJ4XC4Wq2i0SiP9/2ISCSKRqPT6XQ8Hl9FiSeTCYqiqVTq3GZezmAwMF/dfD7/4hCBYQDA8Xi8lhIbjUatVkuSJDPO53O5XO5yuZjAoCiK4/gpQhRF2Ww2jUbDboQuAJrNJgRBbre7UqlkMhmj0SiTyXq9HuM+Pz8DAO7u7mq1WqlU8vv9PB6vWq1eV4lfX1+9Xq9YLL65uYlEIoPB4NxtNBo+n08ikSAIEggEWq0W69soxP1ScgAcAAfAAfyP/gBjnwScjBKmqQAAAABJRU5ErkJggg=="
+        },
+        "expect": {
+          "outputs": {
+            "text": "58"
+          },
+          "outputKeys": [
+            "text"
+          ]
+        }
+      },
+      {
+        "name": "probability-adds-confidence",
+        "inputs": {
+          "imageBase64": "iVBORw0KGgoAAAANSUhEUgAAAEAAAAAaCAIAAACIHs0YAAACVklEQVR42u2Xu2vqUBzHTzS+glIj+FrUQUFB6gOjURAl2E2hs5N0EVzcC479JwSLguILHaTQQenUQV1EBJ0UHBXRGi2oseQOKaL3drtDLOQ75ZcvgXw43+85CUTTNPjN4oFfLg6AA+AALmW326FL3d/fn9z393eCIBQKhUqlCofDg8GAdQD4fKAoajQaBYPBQCBwumk2m5mLbrdLEITT6Uyn0xRFPT094Tje6XSsViubBPSZ+v0+AKBQKNA/KRaLSSSS9XrNjNPpFACQSCRoVnURIQbA4XD8iLpcLoVCoVQqZUaVSgXD8GazuaIO9Pt9BEG63a7JZBKLxRiGvby8nNyHhweSJJPJ5GKxmM1m8XicWRaWS3C+HKFQiM/nB4PBer2ezWZvb28hCDpPVC6Xg+Hv2ggEglqtRrOtCwAcxz0ez+FwYMbPz0+dTqdUKvf7PU3TxWIRhmGCIMrlcj6fxzAMQZC3t7crAvhXj4+PAIB2u73dblEUxTDs6+uLsXa7ncVi0ev1x+PxWkr88fHxVynVajUAgCTJ4XC4Wq2i0SiP9/2ISCSKRqPT6XQ8Hl9FiSeTCYqiqVTq3GZezmAwMF/dfD7/4hCBYQDA8Xi8lhIbjUatVkuSJDPO53O5XO5yuZjAoCiK4/gpQhRF2Ww2jUbDboQuAJrNJgRBbre7UqlkMhmj0SiTyXq9HuM+Pz8DAO7u7mq1WqlU8vv9PB6vWq1eV4lfX1+9Xq9YLL65uYlEIoPB4NxtNBo+n08ikSAIEggEWq0W69soxP1ScgAcAAfAAfyP/gBjnwScjBKmqQAAAABJRU5ErkJggg==",
+          "withProbability": true
+        },
+        "expect": {
+          "outputs": {
+            "text": "58"
+          },
+          "outputKeys": [
+            "text",
+            "confidence"
+          ]
+        }
+      },
+      {
+        "name": "empty-model-path-uses-builtin-model",
+        "inputs": {
+          "imageBase64": "iVBORw0KGgoAAAANSUhEUgAAAEAAAAAaCAIAAACIHs0YAAACVklEQVR42u2Xu2vqUBzHTzS+glIj+FrUQUFB6gOjURAl2E2hs5N0EVzcC479JwSLguILHaTQQenUQV1EBJ0UHBXRGi2oseQOKaL3drtDLOQ75ZcvgXw43+85CUTTNPjN4oFfLg6AA+AALmW326FL3d/fn9z393eCIBQKhUqlCofDg8GAdQD4fKAoajQaBYPBQCBwumk2m5mLbrdLEITT6Uyn0xRFPT094Tje6XSsViubBPSZ+v0+AKBQKNA/KRaLSSSS9XrNjNPpFACQSCRoVnURIQbA4XD8iLpcLoVCoVQqZUaVSgXD8GazuaIO9Pt9BEG63a7JZBKLxRiGvby8nNyHhweSJJPJ5GKxmM1m8XicWRaWS3C+HKFQiM/nB4PBer2ezWZvb28hCDpPVC6Xg+Hv2ggEglqtRrOtCwAcxz0ez+FwYMbPz0+dTqdUKvf7PU3TxWIRhmGCIMrlcj6fxzAMQZC3t7crAvhXj4+PAIB2u73dblEUxTDs6+uLsXa7ncVi0ev1x+PxWkr88fHxVynVajUAgCTJ4XC4Wq2i0SiP9/2ISCSKRqPT6XQ8Hl9FiSeTCYqiqVTq3GZezmAwMF/dfD7/4hCBYQDA8Xi8lhIbjUatVkuSJDPO53O5XO5yuZjAoCiK4/gpQhRF2Ww2jUbDboQuAJrNJgRBbre7UqlkMhmj0SiTyXq9HuM+Pz8DAO7u7mq1WqlU8vv9PB6vWq1eV4lfX1+9Xq9YLL65uYlEIoPB4NxtNBo+n08ikSAIEggEWq0W69soxP1ScgAcAAfAAfyP/gBjnwScjBKmqQAAAABJRU5ErkJggg==",
+          "modelPath": ""
+        },
+        "expect": {
+          "outputs": {
+            "text": "58"
+          },
+          "outputKeys": [
+            "text"
+          ]
+        }
+      },
+      {
+        "name": "both-image-inputs-are-rejected",
+        "inputs": {
+          "imagePath": "{tmp}/ocr/captcha.png",
+          "imageBase64": "iVBORw0KGgoAAAANSUhEUgAAAEAAAAAaCAIAAACIHs0YAAACVklEQVR42u2Xu2vqUBzHTzS+glIj+FrUQUFB6gOjURAl2E2hs5N0EVzcC479JwSLguILHaTQQenUQV1EBJ0UHBXRGi2oseQOKaL3drtDLOQ75ZcvgXw43+85CUTTNPjN4oFfLg6AA+AALmW326FL3d/fn9z393eCIBQKhUqlCofDg8GAdQD4fKAoajQaBYPBQCBwumk2m5mLbrdLEITT6Uyn0xRFPT094Tje6XSsViubBPSZ+v0+AKBQKNA/KRaLSSSS9XrNjNPpFACQSCRoVnURIQbA4XD8iLpcLoVCoVQqZUaVSgXD8GazuaIO9Pt9BEG63a7JZBKLxRiGvby8nNyHhweSJJPJ5GKxmM1m8XicWRaWS3C+HKFQiM/nB4PBer2ezWZvb28hCDpPVC6Xg+Hv2ggEglqtRrOtCwAcxz0ez+FwYMbPz0+dTqdUKvf7PU3TxWIRhmGCIMrlcj6fxzAMQZC3t7crAvhXj4+PAIB2u73dblEUxTDs6+uLsXa7ncVi0ev1x+PxWkr88fHxVynVajUAgCTJ4XC4Wq2i0SiP9/2ISCSKRqPT6XQ8Hl9FiSeTCYqiqVTq3GZezmAwMF/dfD7/4hCBYQDA8Xi8lhIbjUatVkuSJDPO53O5XO5yuZjAoCiK4/gpQhRF2Ww2jUbDboQuAJrNJgRBbre7UqlkMhmj0SiTyXq9HuM+Pz8DAO7u7mq1WqlU8vv9PB6vWq1eV4lfX1+9Xq9YLL65uYlEIoPB4NxtNBo+n08ikSAIEggEWq0W69soxP1ScgAcAAfAAfyP/gBjnwScjBKmqQAAAABJRU5ErkJggg=="
+        },
+        "expect": {
+          "errorCode": "INVALID_INPUT"
+        },
+        "negative": true
+      },
+      {
+        "name": "neither-image-input-is-rejected",
+        "inputs": {},
+        "expect": {
+          "errorCode": "INVALID_INPUT"
+        },
+        "negative": true
+      },
+      {
+        "name": "missing-image-file-is-rejected",
+        "inputs": {
+          "imagePath": "{tmp}/ocr/does-not-exist.png"
+        },
+        "expect": {
+          "errorCode": "INVALID_INPUT"
+        },
+        "negative": true
+      }
+    ]
+  }
+}

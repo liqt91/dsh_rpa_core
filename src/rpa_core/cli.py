@@ -794,6 +794,7 @@ def main() -> int:
         from rpa_core.executors import (
             DesktopExecutor,
             ExecutorRegistry,
+            OcrExecutor,
             PlaywrightExecutor,
             PythonWorkerExecutor,
         )
@@ -803,6 +804,8 @@ def main() -> int:
             "browser.playwright": browser,
             "desktop.uia": DesktopExecutor(),
             "python.worker": PythonWorkerExecutor(),
+            # OCR 指令族（M60）：常驻 worker 承载 ddddocr，首次调用才拉起子进程
+            "ocr.ddddocr": OcrExecutor(),
         }
         # Win32DesktopExecutor仅在Windows上可用
         if sys.platform == "win32":

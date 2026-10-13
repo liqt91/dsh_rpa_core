@@ -27,7 +27,10 @@ def test_catalog_is_loaded_and_digest_is_stable():
     clear_catalog_cache()
     second = catalog()
     assert first is not second
-    assert len(first) == 86
+    # ★ 条数从**事实源现算**（`commands/**/*.json`），不写死数字：写死的话每加一条命令
+    #   都要改这里，而这条判据的本意是「读盘没漏文件 / 没重复计入」。M60 加 ocr.recognize
+    #   时正是硬编码的 86 先红了。
+    assert len(first) == len(list((ROOT / "commands").rglob("*.json")))
     assert first.digest == second.digest
     with pytest.raises(TypeError):
         first._commands["x"] = None
@@ -36,9 +39,9 @@ def test_catalog_is_loaded_and_digest_is_stable():
 def test_catalog_snapshot_is_reused_while_directory_is_unchanged():
     """目录内容未变时复用同一份快照。
 
-    这条用例是性能契约的守卫：命令目录有 83 条 manifest，每次重新解析都要读
-    83 个文件 + 166 次 JSON Schema 自检；一旦缓存被去掉，整套门禁会从分钟级
-    回到十几分钟级（devserver 测试的 `server` fixture 每个都要加载一次）。
+    这条用例是性能契约的守卫：命令目录里每条 manifest 都要读一遍文件 + 做一次
+    JSON Schema 自检；一旦缓存被去掉，整套门禁会从分钟级回到十几分钟级
+    （devserver 测试的 `server` fixture 每个都要加载一次）。
     """
     assert catalog() is catalog()
 
