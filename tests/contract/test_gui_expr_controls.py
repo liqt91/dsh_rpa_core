@@ -41,7 +41,11 @@ from PySide6.QtWidgets import (  # noqa: E402
     QWidget,
 )
 
-from rpa_core.gui.param_form import ParamForm  # noqa: E402
+from rpa_core.gui.param_form import (  # noqa: E402
+    _FX_BUTTON_TEXT,
+    _PY_BUTTON_TEXT,
+    ParamForm,
+)
 
 _SRC = Path(__file__).resolve().parents[2] / "src" / "rpa_core" / "gui" / "param_form.py"
 
@@ -147,7 +151,9 @@ def test_no_extra_var_button_remains(qapp):
     )
     button_texts = [b.text() for b in form.findChildren(QToolButton)]
     assert "＋变量" not in button_texts
-    assert set(button_texts) == {"Py", "fx"}
+    # 文案从模块常量现算，不抄字面量：M59 把 Py/fx 改成详细名（Python / 插入变量），
+    # 抄字面量的话换个文案就要改判据，而判据的本意是「只有这两个按钮、没有多余的」。
+    assert set(button_texts) == {_PY_BUTTON_TEXT, _FX_BUTTON_TEXT}
 
 
 # ---- 菜单分组（维护者 2026-10-13：分两组加标题） ---------------------------

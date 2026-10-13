@@ -61,7 +61,10 @@ node_modules/
 /.harness/spike/_fx_menu_probe*
 /.harness/spike/_pytest_*
 /.harness/spike/_probe_*
+# 一次性诊断脚本（打印真实中间态用，结论已写进探针/任务文档，脚本本身不留）
+/.harness/spike/_diag_*
 # 只读探针渲染出的参数面板截图（本地核对行高/对齐用，仅本地）
 /.harness/spike/_panel_*
 # 门禁逐条取证时重定向到仓库根的日志（§ 门禁：输出重定向到文件再读）
 /_gate_*.log
+/.harness/spike/_gate_*.log

@@ -27,6 +27,7 @@ from PySide6.QtWidgets import (  # noqa: E402
     QComboBox,
     QLabel,
     QLineEdit,
+    QPlainTextEdit,
     QPushButton,
 )
 
@@ -627,6 +628,173 @@ def test_multiline_expr_row_does_not_absorb_leftover_panel_height(qapp):
         f"表达式行被撑到 {expr_row.height()}px"
         f"（sizeHint {expr_row.sizeHint().height()}px）——剩余高度被塞进了行内"
     )
+
+
+# ---- 参数行形态：标签一行 / 控件一行（M59） -----------------------------------
+def _expr_form(qapp, *, multiline: bool = False) -> ParamForm:
+    """一个带 Python + 变量两个按钮的 string 字段（M59 里最窄的那一行形态）。"""
+    schema: dict = {"type": "string", "x-fx": True, "x-python": True}
+    if multiline:
+        schema["x-multiline"] = True
+    return ParamForm(
+        {"type": "object", "properties": {"text": schema}},
+        {"text": "a\nb"} if multiline else {"text": "hi"},
+        variable_groups_provider=lambda: [],
+    )
+
+
+def test_param_row_puts_label_above_control(qapp):
+    """参数行是「标签一行 / 控件一行」，控件吃满**整行宽度**。
+
+    M59 之前是 QFormLayout 双列：标签列按**整张表最宽的标签**定宽，并从**每一行**
+    扣除 —— 300px 侧边栏里固定吃掉 88px，于是带 Python / 变量 两个按钮的字段输入框
+    只剩 **76px**（实测 `browser.input` 的「文本内容」），比两个按钮加起来还窄。
+    """
+    form = _expr_form(qapp)
+    _size_form(form, qapp, width=300)
+
+    bundle = form._row_shown["text"]
+    label = form._row_labels["text"]
+    editor = _field(form, "text")
+
+    assert editor.y() > label.y(), "标签应独占一行、落在控件上方"
+    assert editor.width() >= bundle.width() - 2, (
+        f"控件只剩 {editor.width()}px（行宽 {bundle.width()}px）——标签列又在抢宽度"
+    )
+    form.hide()
+
+
+def test_expr_buttons_share_the_label_row(qapp):
+    """Python / 变量 两个按钮都在**标签行右端**：不再夹在输入框两侧。
+
+    夹在两侧时它们直接吃掉输入框的宽度；搬到标签行之后输入框才拿得回整行。
+    顺序仍是 Python 在前、变量在后（先选模式、再插变量）。
+    """
+    form = _expr_form(qapp)
+    _size_form(form, qapp, width=300)
+
+    label = form._row_labels["text"]
+    py_button, fx_button, editor = form._expr_rows["text"]
+    assert py_button is not None and fx_button is not None
+
+    assert py_button.y() == label.y(), "Python 按钮应与标签同行"
+    assert fx_button.y() == label.y(), "变量按钮应与标签同行"
+    assert py_button.x() < fx_button.x(), "Python 应排在变量之前"
+    assert editor.y() > label.y(), "输入框应独占标签行下方那一行"
+    form.hide()
+
+
+def test_real_commands_multiline_row_does_not_absorb_leftover_panel_height(catalog, qapp):
+    """**真机命令**里的多行行不被面板剩余高度撑开——覆盖维护者实际走的那条路。
+
+    M58 那条判据用的是合成 schema。这里直接拿 manifest 跑：判据覆盖了「实现」不等于
+    覆盖了「用户实际走的那条路」（M52 S3 的教训——展示数据只落了一条产出路径，
+    另一条路径上全绿、用户却看不到）。
+
+    ★ 这条判据**能红**的前提是行里有 QPlainTextEdit：它的 sizePolicy 是 ``Expanding``，
+      而 ``setFixedHeight`` 只改 min/max、**不改 sizePolicy** ⇒ 「能长」的信号还在，
+      QFormLayout 才会把余高分给它。实测去掉表单末尾的弹性空隙后：
+      ``data.setVar`` 的「变量值」89 → **224px**、``browser.handleDialog`` 的
+      「输入文本」86 → **270px**。
+      （元素库行、单行 QLineEdit 行**没有**这个信号，给它们写断言只会恒绿——本轮先写过
+      一条元素库行的版本，被负向验证 I18 判为「未命中」后删掉，换成这条。）
+    """
+    seen = 0
+    for cmd_id, manifest in catalog.items():
+        schema = manifest.input_schema
+        properties = schema.get("properties") or {}
+        if not any(
+            isinstance(spec, dict) and spec.get("x-multiline")
+            for spec in properties.values()
+        ):
+            continue
+        form = ParamForm(
+            schema,
+            {},
+            manifest=manifest,
+            raw={},
+            element_provider=lambda: [],
+            variable_groups_provider=lambda: [],
+        )
+        _size_form(form, qapp, width=300)
+        for field_name, bundle in form._row_shown.items():
+            if not isinstance(_field(form, field_name), QPlainTextEdit):
+                continue
+            seen += 1
+            assert bundle.height() <= bundle.sizeHint().height(), (
+                f"{cmd_id}.{field_name} 被撑到 {bundle.height()}px"
+                f"（sizeHint {bundle.sizeHint().height()}px）——剩余高度被塞进了行内"
+            )
+        form.hide()
+
+    assert seen > 0, "没有扫到任何多行字段——判据空转，先修筛选条件"
+
+
+def test_control_form_rows_use_the_same_bundle_shape(qapp):
+    """控制流表单与指令参数表单**同一行形态**。
+
+    两者在同一个右侧栏里前后出现，切个节点就换一种排版最刺眼；共用 `_field_bundle`
+    是唯一事实源，判据也成对写（只测一侧的话，另一侧退化了没人知道）。
+    """
+    form = ControlNodeForm("if", {"condition": {"op": "eq", "left": "${n}", "right": 3}})
+    _size_form(form, qapp, width=300)
+
+    control = form._widgets["left"]
+    bundle = control.parentWidget()
+    labels = bundle.findChildren(QLabel)
+    assert labels, "字段束里应有一个标签"
+    assert control.y() > labels[0].y(), "标签应落在控件上方"
+    assert control.width() >= bundle.width() - 2, (
+        f"控制流控件只剩 {control.width()}px（行宽 {bundle.width()}px）"
+    )
+    assert bundle.height() <= bundle.sizeHint().height(), "字段束不应吸收剩余高度"
+    form.hide()
+
+
+def test_expr_button_text_fits_the_default_sidebar(catalog, qapp):
+    """默认侧边栏宽度下，Python / 变量 两个按钮都必须**完整显示**（不裁字）。
+
+    标签行 = 标签 + 按钮们，而 QLabel 与 QToolButton 都**不能**缩到 sizeHint 以下
+    （``minimumSizeHint() == sizeHint()``），所以文案长度是**有硬预算的**。这条判据
+    横跨全部带按钮的命令把预算钉住：以后谁把文案改长（比如 Python → 「Python 表达式」
+    要 165px），会在这里变红，而不是在用户屏幕上变成一个裁掉一半的按钮。
+
+    实测预算：内容宽 284px − 最宽标签 88px − 间距 8px = 188px 给两个按钮；平台给出的
+    QToolButton 地板是 69px ⇒ 只有 50px 的「文字预算」，「Python」要 48px、刚好花光。
+    """
+    from rpa_core.gui.app import DEFAULT_SPLITTER_SIZES
+
+    sidebar = DEFAULT_SPLITTER_SIZES[2]
+    checked = 0
+    for cmd_id, manifest in catalog.items():
+        schema = manifest.input_schema
+        properties = schema.get("properties") or {}
+        if not any(
+            isinstance(spec, dict) and (spec.get("x-fx") or spec.get("x-python"))
+            for spec in properties.values()
+        ):
+            continue
+        form = ParamForm(
+            schema,
+            {},
+            manifest=manifest,
+            raw={},
+            variable_groups_provider=lambda: [],
+        )
+        _size_form(form, qapp, width=sidebar)
+        for field_name, (py_button, fx_button, _editor) in form._expr_rows.items():
+            for button in (py_button, fx_button):
+                if button is None:
+                    continue
+                assert button.width() >= button.sizeHint().width(), (
+                    f"{cmd_id}.{field_name} 的按钮 {button.text()!r} 被压到 "
+                    f"{button.width()}px（自然 {button.sizeHint().width()}px）"
+                    f"——默认侧边栏 {sidebar}px 下会裁字"
+                )
+                checked += 1
+        form.hide()
+
+    assert checked > 0, "没有扫到任何带表达式按钮的字段——判据空转，先修筛选条件"
 
 
 # ---- 未应用编辑的自动提交（维护者报障：改完参数点保存无效） --------------------

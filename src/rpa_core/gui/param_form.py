@@ -8,7 +8,7 @@
 - ``string`` + ``enum`` → QComboBox：首项「未设置」，``x-enum-labels``
   提供中文显示文本，itemData 存实际枚举值；
 - ``string`` → QLineEdit：空文本 = 未设置，placeholder 提示默认值；
-  **声明了 ``x-fx`` / ``x-python``** 的字段额外挂表达式控件（见 ``_wrap_expr_row``）；
+  **声明了 ``x-fx`` / ``x-python``** 的字段额外挂表达式控件（见 ``_attach_expr_buttons``）；
   **声明了 ``x-multiline``** 的字段改用 QPlainTextEdit 输入区（代码 / 长文本，
   见 ``_build_textarea``），两种声明可叠加（先输入区、再挂表达式按钮）；
 - ``integer`` / ``number`` → QLineEdit + 校验器：空文本 = 未设置；
@@ -75,18 +75,42 @@ _TEXTAREA_HEIGHT = 68
 # 列表），只给静态描边，否则一个清晰一个发虚，行内视觉不齐。
 _PY_BUTTON_QSS = (
     f"QToolButton {{ color: {TEXT_MUTED}; background: {SURFACE};"
-    f" border: 1px solid {BORDER_SOFT}; border-radius: 3px; padding: 1px 8px; }}"
+    f" border: 1px solid {BORDER_SOFT}; border-radius: 3px; padding: 1px 6px; }}"
     f"QToolButton:hover {{ border-color: {BORDER_HOVER}; color: {TEXT}; }}"
     f"QToolButton:checked {{ color: {SURFACE}; background: {ACCENT};"
     f" border-color: {ACCENT}; font-weight: 600; }}"
 )
 _FX_BUTTON_QSS = (
     f"QToolButton {{ color: {TEXT_MUTED}; background: {SURFACE};"
-    f" border: 1px solid {BORDER_SOFT}; border-radius: 3px; padding: 1px 8px; }}"
+    f" border: 1px solid {BORDER_SOFT}; border-radius: 3px; padding: 1px 6px; }}"
     f"QToolButton:hover {{ border-color: {BORDER_HOVER}; color: {TEXT}; }}"
 )
 # Py 按钮的最小宽度：让「灰/彩」的底色块有可见面积，纯文字时太窄看不出状态
 _PY_BUTTON_MIN_WIDTH = 36
+
+# 按钮文案（M59）：由缩写改为详细名。`Py` / `fx` 是行话，维护者看不出是干什么的
+# （2026-10-13「py 开关不是很明显」→「按钮名称还能写详细一点」）。改成「标签一行 /
+# 控件一行」之后标签行有独立的横向空间，写详细名不再挤占输入框。
+#
+# ★ 文案长度是**有硬预算的**，改文案前先算这笔账：标签行 = 标签 + 按钮们，而 QLabel
+# 与 QToolButton 都**不能**缩到 sizeHint 以下（实测 minimumSizeHint == sizeHint），
+# 三者宽度直接相加就是这一行的最小宽。
+#
+#   侧边栏默认 300px ⇒ 内容宽 284px
+#   带按钮的字段里最宽的标签 = 88px（`browser.input` 的「文本内容 *」）
+#   ⇒ 两个按钮共分 284 - 88 - 8(间距) = **188px**
+#   而 QToolButton 的平台地板是 69px（`Py` / `fx` / `变量` 实测都是 69）
+#   ⇒ 只剩 **50px** 的「文字预算」
+#
+# 「Python」要 48px 额外宽度（117-69）⇒ 刚好花光预算（88+117+69+8 = 282 ≤ 284）；
+# 而「插入变量」还要再 24px（93-69）⇒ 306px **溢出**，会在 300px 下被裁字。
+# 所以这里是「还能写多详细」的上限：Py 敢写全，fx 只能到「变量」。
+# （要更详细就得同时缩短 Py，或接受侧边栏被顶宽到 ~320px。）
+_PY_BUTTON_TEXT = "Python"
+_FX_BUTTON_TEXT = "变量"
+
+# 字段束里「标签行」与「控件行」的间距
+_BUNDLE_HEAD_GAP = 2
 
 # 编辑器（单行 QLineEdit / 多行 QPlainTextEdit）适配 ---------------------------------
 #
@@ -144,6 +168,35 @@ def _style_editor(editor: QLineEdit | QPlainTextEdit, background: str) -> None:
     selector = "QPlainTextEdit" if isinstance(editor, QPlainTextEdit) else "QLineEdit"
     editor.setStyleSheet(f"{selector} {{ background: {background}; }}")
 
+
+def _field_bundle(label: QLabel, control: QWidget) -> tuple[QWidget, QHBoxLayout]:
+    """「标签（右端可挂按钮）一行 / 控件满宽一行」的字段束；返回 ``(字段束, 标签行)``。
+
+    M59 起参数行不再走 ``QFormLayout`` 的「标签列 / 控件列」双列。那一列按**整张表
+    最宽的标签**定宽，并从**每一行**扣除：300px 侧边栏里固定吃掉 88px，于是带 Py+fx
+    的字段输入框只剩 76px（实测 ``browser.input`` 的「文本内容」）——比两个按钮加
+    起来还窄。改用 ``addRow(字段束)``（横跨两列）后标签与控件各占一行，每个控件都
+    能吃到侧边栏的整个宽度（同一字段实测 76px → 284px）。
+
+    这与 Web 端本就是同一口径——``devserver/static/styles.css`` 里
+    ``.field label { display: block }`` + ``.field input { width: 100% }``；Web 已被
+    ADR 0016 冻结，所以方向只能是桌面端向它收敛，不能反过来。
+
+    标签行由调用方后续往右端挂按钮（Py / 变量）：按钮与字段束是**同一条** ``QVBoxLayout``
+    里的两行，所以「按钮属于哪个输入框」由分组本身表达，不再靠左右相邻去猜。
+    """
+    bundle = QWidget()
+    box = QVBoxLayout(bundle)
+    box.setContentsMargins(0, 0, 0, 0)
+    box.setSpacing(_BUNDLE_HEAD_GAP)
+    head = QHBoxLayout()
+    head.setContentsMargins(0, 0, 0, 0)
+    head.setSpacing(4)
+    head.addWidget(label)
+    head.addStretch(1)
+    box.addLayout(head)
+    box.addWidget(control)
+    return bundle, head
 
 
 class _CollapsibleSection(QWidget):
@@ -288,6 +341,8 @@ class ParamForm(QWidget):
         self._element_rows: dict[str, QComboBox] = {}
         # 元素行的行标签：引用态称「操作目标」、非引用态称「元素库」（见 _apply_element_state）
         self._element_row_labels: dict[str, QLabel] = {}
+        # 元素行的字段束：非引用态整束显隐（引用态只剩这一束）
+        self._element_row_bundles: dict[str, QWidget] = {}
         # M52 S6：引用生效时该参数**只显元素名**、值控件整行隐藏，故需留下这些把手
         self._element_picked: dict[str, QLabel] = {}
         self._element_clears: dict[str, QToolButton] = {}
@@ -399,7 +454,9 @@ class ParamForm(QWidget):
             edit.setToolTip(f"为输出 {field} 命名，后续节点可通过 ${{别名}} 引用")
             edit.textChanged.connect(lambda text, e=edit: self._style_alias_field(e))
             self._alias_fields[field] = edit
-            self._form.addRow(QLabel(label_text), edit)
+            row_label = QLabel(label_text)
+            bundle, _head = _field_bundle(row_label, edit)
+            self._form.addRow(bundle)
 
     def _style_alias_field(self, edit: QLineEdit) -> None:
         """别名内容不合法时红框提示（对齐 Web 别名校验）。"""
@@ -440,7 +497,8 @@ class ParamForm(QWidget):
                 self._timeout_field.setText(str(current_timeout))
             self._timeout_field.setPlaceholderText("可选，如 30")
             self._timeout_field.setToolTip("节点级超时（秒），覆盖工作流级默认值")
-            self._form.addRow(QLabel("超时（秒）"), self._timeout_field)
+            bundle, _head = _field_bundle(QLabel("超时（秒）"), self._timeout_field)
+            self._form.addRow(bundle)
 
         # 重试次数：仅 manifest.retryable=true 时渲染
         replay = getattr(getattr(manifest, "effect", None), "replay", None)
@@ -459,7 +517,8 @@ class ParamForm(QWidget):
                 self._retry_field.setText(str(current_retry))
             self._retry_field.setPlaceholderText("默认 0（不重试）")
             self._retry_field.setToolTip("重试次数（仅声明 retryable 的指令生效）")
-            self._form.addRow(QLabel("重试次数"), self._retry_field)
+            bundle, _head = _field_bundle(QLabel("重试次数"), self._retry_field)
+            self._form.addRow(bundle)
         elif current_retry:
             # 不支持重试但 raw 有遗留值 → 警告 + 清除按钮
             if not has_own_timeout and self._timeout_field is None:
@@ -528,9 +587,13 @@ class ParamForm(QWidget):
         """
         value_type = _effective_type(field_schema)
         has_value = name in args
-        row_widget: QWidget | None = None
         allow_fx = bool(field_schema.get("x-fx"))
         allow_python = bool(field_schema.get("x-python"))
+
+        # 表达式控件的门控 = 「落在**纯文本**分支」∧「声明了 x-fx / x-python」。
+        # 必须用这个**分支内**置起的标志，不能事后写 `value_type == "string"`：enum
+        # 字段的有效类型也是 string，那样会把 `x-fx` 声明的枚举也挂上按钮。
+        expr_capable = False
 
         if value_type == "string" and "enum" in field_schema:
             widget = self._build_enum(field_schema, args.get(name), has_value)
@@ -542,10 +605,7 @@ class ParamForm(QWidget):
                 else self._build_text(field_schema, args.get(name), has_value)
             )
             kind = _KIND_TEXT
-            if allow_fx or allow_python:
-                row_widget = self._wrap_expr_row(
-                    name, widget, allow_fx=allow_fx, allow_python=allow_python
-                )
+            expr_capable = True
         elif value_type == "integer":
             widget = self._build_number_line(
                 field_schema, args.get(name), has_value, QIntValidator(-10**9, 10**9),
@@ -574,7 +634,18 @@ class ParamForm(QWidget):
             widget.setPlaceholderText("JSON，如 [\"a\", \"b\"]")
             kind = _KIND_JSON
 
-        self._attach(name, kind, widget, field_schema, row_widget=row_widget, target=target)
+        bundle, head = self._attach(name, kind, widget, field_schema, target=target)
+        # 表达式按钮挂在**标签行右端**（M59）：不再夹在输入框两侧。顺序仍是
+        # Py 在前、变量在后，读起来与「先选模式、再插变量」一致。
+        if expr_capable and (allow_fx or allow_python):
+            self._attach_expr_buttons(
+                name,
+                widget,
+                bundle,
+                head,
+                allow_fx=allow_fx,
+                allow_python=allow_python,
+            )
         self._attach_element_row(name, widget, target=target)
 
     @staticmethod
@@ -659,14 +730,15 @@ class ParamForm(QWidget):
         widget: QWidget,
         field_schema: dict[str, Any],
         *,
-        row_widget: QWidget | None = None,
         target: QFormLayout | None = None,
-    ) -> None:
-        """登记字段并挂到表单；label 带必填星号，description 进 tooltip。
+    ) -> tuple[QWidget, QHBoxLayout]:
+        """登记字段、造字段束并挂到表单；label 带必填星号，description 进 tooltip。
 
-        row_widget 用于 fx 行容器这类「取值控件 ≠ 行展示控件」的场景：
-        登记取值的仍是 widget，挂到表单行的是 row_widget。
-        target 为分组区段的 body_layout；None 时回退到主表单 self._form。
+        字段以**字段束**（标签一行 / 控件一行）横跨两列挂进 ``QFormLayout``
+        —— 见 :func:`_field_bundle`，那里记了为什么不再用双列。
+
+        返回 ``(字段束, 标签行布局)``：表达式控件还要往标签行右端补挂 Py / 变量按钮。
+        ``target`` 为分组区段的 body_layout；None 时回退到主表单 self._form。
         """
         self._fields.append((name, kind, widget))
         # M54 S1：字段标签走 i18n.js 的中文层（命令级覆盖 → 公共键 → 键名原文）；
@@ -683,52 +755,57 @@ class ParamForm(QWidget):
         if description:
             label.setToolTip(description)
         layout = target if target is not None else self._form
-        shown = row_widget if row_widget is not None else widget
-        layout.addRow(label, shown)
-        # M52 S6：元素型参数引用生效时要整行隐藏值控件 ⇒ 把 label 与行内展示控件都留档
+        bundle, head = _field_bundle(label, widget)
+        layout.addRow(bundle)
+        # M52 S6：元素型参数引用生效时要整行隐藏值控件 ⇒ 把 label 与值字段束都留档。
+        # 标签现在**在字段束里**，所以隐藏字段束本身就够了；label 仍单独留档，是因为
+        # 引用态还要单独改它的显隐语义（见 _apply_element_state）。
         self._row_labels[name] = label
-        self._row_shown[name] = shown
+        self._row_shown[name] = bundle
+        return bundle, head
 
-    # ---- 表达式控件：fx 变量插入 / Py 表达式（对标影刀与 Web） --------------
-    def _wrap_expr_row(
+    # ---- 表达式控件：Python 模式 / 变量插入（对标影刀与 Web） ----------------
+    def _attach_expr_buttons(
         self,
         name: str,
         editor: QLineEdit | QPlainTextEdit,
+        parent: QWidget,
+        head: QHBoxLayout,
         *,
         allow_fx: bool,
         allow_python: bool,
-    ) -> QWidget:
-        """给声明了 ``x-fx`` / ``x-python`` 的文本字段挂「左 Py 右 fx」表达式控件。
+    ) -> None:
+        """给声明了 ``x-fx`` / ``x-python`` 的文本字段，在**标签行右端**挂表达式按钮。
 
-        控件拓扑对齐影刀参数框（左 Py 模式图标、右 fx 变量选择器）：
+        两个入口对齐影刀参数框，但位置从「夹在输入框两侧」搬到「标签行右端」（M59）：
 
-        - **Py**（可选中按钮，仅在声明 ``x-python`` 时出现）：Python 表达式模式；
-        - **fx**（普通按钮，仅在声明 ``x-fx`` 时出现）：**不是开关**——点击弹出变量
-          列表，选中即把变量插到光标处（不再有「＋变量」这个中间按钮，少一步）。
+        - **Python**（可选中按钮，仅在声明 ``x-python`` 时出现）：Python 表达式模式；
+        - **插入变量**（普通按钮，仅在声明 ``x-fx`` 时出现）：**不是开关**——点击弹出
+          变量列表，选中即把变量插到光标处（不再有「＋变量」这个中间按钮，少一步）。
+
+        搬位置是因为侧边栏窄：夹在两侧时 ``browser.input`` 的「文本内容」输入框只剩
+        **76px**（Py + 变量两个按钮加起来比输入框还宽）；搬到标签行后输入框独占整行
+        （实测 284px）。按钮与输入框仍在**同一个字段束**里（见 :func:`_field_bundle`），
+        所以「这按钮管哪个输入框」由分组表达，不靠左右相邻去猜。
 
         两种模式**互斥**，``_expr_modes`` 是唯一真值（运行期据它选 ``resolve_tags``
-        还是 ``resolve``）：fx 插入变量 ⇒ 置 ``fx``；Py 选中 ⇒ 置 ``python``。
+        还是 ``resolve``）：插入变量 ⇒ 置 ``fx``；Python 选中 ⇒ 置 ``python``。
         变量被删光后 ``fx`` 态自动撤销（见 :meth:`_on_expr_text_changed`），
         杜绝「看着是纯文本、运行期却按标签解析」——字面 CSS 选择器 `a[title]`
         正是这种字段。
 
         编辑器的两种形态（单行 QLineEdit / ``x-multiline`` 的多行 QPlainTextEdit）
-        由模块级 ``_editor_*`` 适配函数吸收，本方法只把编辑器放进 row、连上
-        ``textChanged`` ⇒ 换槽逻辑（:meth:`_swap_expr_slot`）对两者同样成立。
+        由模块级 ``_editor_*`` 适配函数吸收，本方法只负责建按钮 + 连 ``textChanged``
+        ⇒ 换槽逻辑（:meth:`_swap_expr_slot`）对两者同样成立。
 
-        控件必须创建时就带父级（row）：无父级控件一旦 ``setVisible(True)``，Qt 会把它
-        当成**顶层窗口**显示——表现为「切换含 fx 的指令时小框闪现」（维护者报障，
-        诊断日志实锤：QToolButton 51x23 以 window 身份 Show）。
+        按钮必须**创建时就带父级**（传进来的 ``parent`` 就是字段束）：无父级控件一旦
+        ``setVisible(True)``，Qt 会把它当成**顶层窗口**显示——表现为「切换含 fx 的指令
+        时小框闪现」（维护者报障，诊断日志实锤：QToolButton 51x23 以 window 身份 Show）。
         """
-        row = QWidget()
-        layout = QHBoxLayout(row)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(4)
-
         py_button: QToolButton | None = None
         if allow_python:
-            py_button = QToolButton(row)
-            py_button.setText("Py")
+            py_button = QToolButton(parent)
+            py_button.setText(_PY_BUTTON_TEXT)
             py_button.setCheckable(True)
             # 灰/彩两态（对标影刀：未点亮灰、点亮彩）。此前只靠 Qt 默认的按下阴影，
             # 维护者看不出哪个是「已点亮」，与旁边输入框几乎分不出来（2026-10-13）。
@@ -738,28 +815,25 @@ class ParamForm(QWidget):
             py_button.toggled.connect(
                 lambda checked, k=name: self._on_py_toggled(k, checked)
             )
-            layout.addWidget(py_button)
-
-        layout.addWidget(editor, 1)
+            head.addWidget(py_button)
 
         fx_button: QToolButton | None = None
         if allow_fx:
-            fx_button = QToolButton(row)
-            fx_button.setText("fx")
-            # 不再 setAutoRaise(True)：本行 QSS 自带描边与底色，autoRaise 在部分样式下
-            # 会让按钮退化成裸文字，跟旁边的 Py 一虚一实。
+            fx_button = QToolButton(parent)
+            fx_button.setText(_FX_BUTTON_TEXT)
+            # 不 setAutoRaise(True)：按钮自带描边与底色，autoRaise 在部分样式下会让按钮
+            # 退化成裸文字，跟旁边的 Python 一虚一实。
             fx_button.setStyleSheet(_FX_BUTTON_QSS)
             fx_button.setToolTip(
                 "选择变量插入：只列流程参数与你命名过的输出/赋值变量；"
                 "标签模式插 [变量名]，可与文本混排"
             )
             fx_button.clicked.connect(lambda _c=False, k=name: self._show_variable_menu(k))
-            layout.addWidget(fx_button)
+            head.addWidget(fx_button)
 
         self._expr_rows[name] = (py_button, fx_button, editor)
         editor.textChanged.connect(lambda _t, k=name: self._on_expr_text_changed(k))
         self._sync_expr_state(name)
-        return row
 
     def _on_py_toggled(self, name: str, checked: bool) -> None:
         """Py 按钮：选中 = Python 表达式模式；取消 = 回到普通/标签模式。
@@ -963,6 +1037,7 @@ class ParamForm(QWidget):
         clear.setAutoRaise(True)
         clear.setToolTip("摘除元素引用，回到手填")
 
+        # 值控件那一横排（下拉 | 元素名 | ✕）作为字段束的「控件行」，标签另起一行
         row = QWidget()
         layout = QHBoxLayout(row)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -984,11 +1059,13 @@ class ParamForm(QWidget):
         layout_target = target if target is not None else self._form
         element_label = QLabel("元素库")
         element_label.setObjectName(f"elementLabel::{name}")
-        layout_target.addRow(element_label, row)
+        bundle, _head = _field_bundle(element_label, row)
+        layout_target.addRow(bundle)
         self._element_rows[name] = combo
         self._element_picked[name] = picked
         self._element_clears[name] = clear
         self._element_row_labels[name] = element_label
+        self._element_row_bundles[name] = bundle
         self._apply_element_state(name)
 
     def _current_ref(self, name: str) -> str | None:
@@ -1183,8 +1260,16 @@ class ControlNodeForm(QWidget):
     ) -> None:
         super().__init__(parent)
         self.node_type = node_type
-        self._form = QFormLayout(self)
+        # 与 ParamForm 同构：表单外层套一条弹性空隙，剩余高度落到表单**底部**，而不是
+        # 被某个「纵向能长」的行吸收、再把定高控件垂直居中。本表单同样挂在
+        # ``QScrollArea(widgetResizable=True)`` 下，会拿到不小于视口的高度——不套这层
+        # 就会复现 M58 那个「标签钉顶、输入框浮中间」的形态。理由详见 ParamForm.__init__。
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        self._form = QFormLayout()
         self._form.setContentsMargins(8, 8, 8, 8)
+        outer.addLayout(self._form)
+        outer.addStretch(1)
         self._widgets: dict[str, QWidget] = {}
 
         if node_type == "if":
@@ -1194,18 +1279,18 @@ class ControlNodeForm(QWidget):
                 op_combo.addItem(CONDITION_OP_LABELS.get(op, op), op)
             current = op_combo.findData(condition.get("op", "truthy"))
             op_combo.setCurrentIndex(current if current >= 0 else 0)
-            self._form.addRow(QLabel("条件操作符 *"), op_combo)
+            self._add_field("条件操作符 *", op_combo)
             self._widgets["op"] = op_combo
 
             left = QLineEdit(format_literal(condition.get("left")))
             left.setPlaceholderText("${steps.x.outputs.y} 或字面量")
-            self._form.addRow(QLabel("左值 *"), left)
+            self._add_field("左值 *", left)
             self._widgets["left"] = left
 
             right = QLineEdit(format_literal(condition.get("right")))
             right.setPlaceholderText("truthy 时留空")
             right.setToolTip("引用 ${...} 或 JSON 字面量；留空则不设置 right")
-            self._form.addRow(QLabel("右值"), right)
+            self._add_field("右值", right)
             self._widgets["right"] = right
 
         elif node_type == "forEach":
@@ -1215,18 +1300,18 @@ class ControlNodeForm(QWidget):
             )
             items_edit.setPlaceholderText('["a", "b"] 或带引号的引用 "${rows}"')
             items_edit.setToolTip("JSON 数组；值支持 ${...} 引用（需带引号）")
-            self._form.addRow(QLabel("items（数组或引用） *"), items_edit)
+            self._add_field("items（数组或引用） *", items_edit)
             self._widgets["items"] = items_edit
 
             item_var = QLineEdit(str(raw.get("item_var") or "item"))
             item_var.setToolTip("循环变量名（标识符）")
-            self._form.addRow(QLabel("循环变量名 *"), item_var)
+            self._add_field("循环变量名 *", item_var)
             self._widgets["item_var"] = item_var
 
         elif node_type == "try":
             error_var = QLineEdit(str(raw.get("error_var") or "error"))
             error_var.setToolTip("错误变量名（标识符）")
-            self._form.addRow(QLabel("错误变量名 *"), error_var)
+            self._add_field("错误变量名 *", error_var)
             self._widgets["error_var"] = error_var
 
         elif node_type == "return":
@@ -1236,7 +1321,7 @@ class ControlNodeForm(QWidget):
             )
             value_edit.setPlaceholderText('JSON，如 "ok"；留空返回 null')
             value_edit.setToolTip("JSON 值；引用 ${...} 需带引号书写")
-            self._form.addRow(QLabel("返回值"), value_edit)
+            self._add_field("返回值", value_edit)
             self._widgets["value"] = value_edit
 
             hint = QLabel("return 节点会终止整个工作流并返回该值。")
@@ -1249,6 +1334,15 @@ class ControlNodeForm(QWidget):
             hint.setWordWrap(True)
             hint.setStyleSheet(f"color: {TEXT_SECONDARY};")
             self._form.addRow(hint)
+
+    def _add_field(self, label_text: str, widget: QWidget) -> None:
+        """按「标签一行 / 控件一行」的字段束挂一行——与 ParamForm 同一口径。
+
+        控制流节点与指令参数在同一个侧边栏里前后出现，行形态必须一致，否则用户切
+        个节点就换一种排版。共用 :func:`_field_bundle`，不各写一份。
+        """
+        bundle, _head = _field_bundle(QLabel(label_text), widget)
+        self._form.addRow(bundle)
 
     @staticmethod
     def _name_or_raise(widget: QLineEdit, field: str) -> str:

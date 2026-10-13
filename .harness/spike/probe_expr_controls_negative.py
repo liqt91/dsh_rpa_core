@@ -83,7 +83,12 @@ T_PY_WIDE = "test_py_button_is_widened_for_a_visible_state_block"
 # 这条是「声明键真被读」的闸：注入把 get("x-multiline") 换成 False 时它会红
 T_BOTH_READ_DECL = "test_both_editors_read_the_same_multiline_declaration"
 
-_A_GATE = "            if allow_fx or allow_python:"
+# M59 起门控挪到 `_build_field` 末尾（改成字段束之后不能再靠「落在 string 分支里」），
+# 锚点跟着变；注入也改成 `if expr_capable:`——若还写 `if True:` 会把整数/枚举/布尔的
+# 控件也塞进 `_attach_expr_buttons`，而 QComboBox / QCheckBox 没有 `textChanged` 信号，
+# 会变成收集期报错（红名单里只有模块名），判不出「打到哪条判据」。
+# M59 起这一行在**方法体层**（8 空格），不再嵌在 `elif value_type == "string"` 里（12 空格）
+_A_GATE = "        if expr_capable and (allow_fx or allow_python):"
 # M58 起 `_restore_fx_mode_for_content` 里也有一行 `_expr_modes[name] = "fx"`
 # （12 空格），而 8 空格的锚点是它的**子串** ⇒ 必须带上一行上下文才唯一。
 _A_FX_SET = (
@@ -128,9 +133,9 @@ INJECTIONS = [
     (
         "I1",
         _A_GATE,
-        f"            if True:  {SENTINEL}",
+        f"        if expr_capable:  {SENTINEL}",
         {T_GATED, T_UNDECLARED, T_PRUNED},
-        "门控失效：所有 string 字段都给表达式行 ⇒ 三处判据连带红",
+        "门控失效：所有 string 字段都给表达式行（不看 x-fx / x-python）⇒ 三处判据连带红",
     ),
     (
         "I2",
