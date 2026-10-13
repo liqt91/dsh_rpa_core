@@ -22,8 +22,9 @@ from rpa_core.gui.theme import FONT_MONO
 
 # 基准字号：与旧基准 9pt（96dpi 下 12px）等价，保证观感不变
 BASE_PX = 12
-# 次级说明（画布参数摘要、命令面板副标题等）
-SUB_PX = 10
+# 次级说明（画布参数摘要、命令面板副标题等）。
+# 2026-10-13 由 10 调到 11：维护者反馈画布卡片上的灰色参数摘要看不清（10px 太小）。
+SUB_PX = 11
 # 等宽文本（命令 id、快捷键提示）
 MONO_PX = 10
 # 面板小节标题
@@ -61,9 +62,14 @@ def scaled(base: QFont, *, delta: int) -> QFont:
     return font
 
 
-def mono_font(base: QFont | None = None) -> QFont:
-    """等宽字体（命令 id / 代码用），同样走像素口径。"""
+def mono_font(base: QFont | None = None, *, size: int | None = None) -> QFont:
+    """等宽字体（命令 id / 代码用），同样走像素口径。
+
+    ``size`` 供「要等宽、但属于别的字阶」的场合使用：画布卡片的参数摘要是
+    **次级说明**（:data:`SUB_PX`），不是命令 id/快捷键那种 :data:`MONO_PX`。
+    缺省（``None``）仍是 :data:`MONO_PX`，既有消费面不受影响。
+    """
     font = QFont(base) if base is not None else QFont()
     font.setFamily(MONO_FAMILY)
-    font.setPixelSize(MONO_PX)
+    font.setPixelSize(MONO_PX if size is None else size)
     return font

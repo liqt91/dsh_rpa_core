@@ -12,7 +12,9 @@
    setPointSize/setPointSizeF``）——这是「口径统一」真正的那条腿；
 3. QSS 里的 ``font-size`` 不再写死数字，只能由 token 拼出来（并给 must-have 名单，
    防「把字号声明整段删掉」的假绿灯）；
-4. ``apply_theme`` 的基准字体确实走 ``fonts.base_font``（接线层，纯函数正确 ≠ 用上了）。
+4. ``apply_theme`` 的基准字体确实走 ``fonts.base_font``（接线层，纯函数正确 ≠ 用上了）；
+5. ``mono_font(size=...)`` 能落到指定字阶，且**画布参数摘要**确实走「次级说明」
+   :data:`SUB_PX` 而不是快捷键用的 :data:`MONO_PX`（2026-10-13：10px 的摘要看不清）。
 """
 
 from __future__ import annotations
@@ -118,6 +120,30 @@ def test_mono_font_is_pixel_sized_and_monospace() -> None:
     assert font.pixelSize() == fonts.MONO_PX
 
 
+def test_mono_font_accepts_explicit_size() -> None:
+    """``size`` 让等宽字体能用在**别的字阶**上（画布参数摘要走 SUB_PX）。
+
+    缺省仍是 MONO_PX —— 快捷键一览等既有消费面不受影响。
+    """
+    from rpa_core.gui import fonts
+
+    summary = fonts.mono_font(size=fonts.SUB_PX)
+    assert summary.family() == fonts.MONO_FAMILY, "显式字号不该把族名也改掉"
+    assert summary.pixelSize() == fonts.SUB_PX
+    assert fonts.mono_font().pixelSize() == fonts.MONO_PX, "缺省字阶被改变了"
+
+
+def test_summary_font_is_at_least_11px() -> None:
+    """画布参数摘要的字号不得小于 11px（10px 时维护者反馈看不清）。
+
+    这条是**需求本身**的锚：将来谁再把 SUB_PX 调小，必须是有意识的行为。
+    """
+    from rpa_core.gui import fonts
+
+    assert fonts.SUB_PX >= 11, f"参数摘要字号 {fonts.SUB_PX}px 太小"
+    assert fonts.SUB_PX < fonts.BASE_PX, "次级说明必须仍比基准字号小一号"
+
+
 # ---- 接线层 ----------------------------------------------------------------
 
 
@@ -162,3 +188,17 @@ def test_apply_theme_sets_pixel_base_font() -> None:
     )
     body = ast.get_source_segment(source, apply_theme) or ""
     assert "fonts.base_font(" in body, "apply_theme 未使用 fonts.base_font 设置基准字体"
+
+
+def test_canvas_summary_uses_sub_px_not_mono_px() -> None:
+    """接线：画布卡片的参数摘要必须走 SUB_PX，而不是快捷键用的 MONO_PX。
+
+    纯函数层绿（``mono_font(size=)`` 能设对）≠ 画布真的用了它——
+    ``canvas.py`` 曾写死 ``fonts.mono_font(option.font)``（= ``MONO_PX`` 10px），
+    这正是「灰色参数小字看不清」的形态。两件事各判一次，缺哪条都会静默退回 10px。
+    """
+    source = (GUI_DIR / "canvas.py").read_text(encoding="utf-8")
+    assert "size=fonts.SUB_PX" in source, "画布参数摘要没走 SUB_PX 字阶"
+    assert "fonts.mono_font(option.font)" not in source, (
+        "画布参数摘要退回 MONO_PX（10px）了——那正是看不清的字号"
+    )

@@ -130,3 +130,85 @@ I1/I2 的连带来自搜索判据同时断言「中文名可搜」；I8 的两�
 
 **注意**：`i18n.js` **本次零改动**——`commands` / `fields` 两块的中文名 M54 时已补齐，
 画布只需要读它。因此本里程碑**不涉及** `test_editor_i18n.py` 的四契约同步面。
+
+---
+
+## 十、追加：卡片参数摘要的可读性（2026-10-13 同日，维护者反馈）
+
+**维护者原话**：「画布中指令，灰色的参数小字有点看不清楚，看是不是调大字号。另外有的指令
+有个 `+1`、`+2` 的后缀显示，是什么意思？」⇒ 两个问题，一个改、一个删。
+
+### 10.1 取证（只读，动手前）
+
+- 卡片由 `canvas.py::CardDelegate.paint` 自绘：标题 `BASE_PX`(12px) 粗体，
+  摘要走 `fonts.mono_font(option.font)` —— 而 `mono_font` **写死 `MONO_PX`(10px)**，
+  即摘要比标题小 2px 且是全应用最小字号；颜色 `TEXT_SECONDARY`(#64707d) 对白底
+  对比度 **5.05:1**（刚过 WCAG AA 的 4.5）。
+- **`SUB_PX` 是「死 token」**：它的注释写着「次级说明（**画布参数摘要**、命令面板副标题等）」，
+  但全仓**零处使用** —— 摘要实际用了语义不符的 `MONO_PX`（那个是给命令 id / 快捷键一览用的）。
+  所以「摘要太小」不只是取值问题，是**用错了 token**。
+- `+N` 来自 `summarize_args` 末尾的 `extra = len(with_args) - limit`：摘要最多展示 2 对，
+  其余折成 `+N`（如 5 参数的 `browser.input` → `操作目标=#kw  文本内容=hello  +3`）。
+- **Web 端本来就没有这个后缀**：`devserver/static/app.js::summarize` 直接
+  `JSON.stringify(with)` 全部参数 —— 删掉它反而**收敛**了两端口径。
+- 行高预算充足：`_ROW_HEIGHT = 46`，11px 摘要不会挤（原 10px 也只是留白多）。
+
+### 10.2 维护者拍板（选项卡）
+
+1. 字号：**只调大到 11px**（不改颜色）。
+2. `+N`：**不再展示** ——「解释成本太高」。
+
+### 10.3 改动
+
+| 文件 | 改动 |
+| --- | --- |
+| `gui/fonts.py` | `SUB_PX` 10 → **11**（并补上「为何是 11」的注释）；`mono_font` 新增 **`size` 关键字参数**（缺省仍是 `MONO_PX`，快捷键一览等既有消费面不变） |
+| `gui/canvas.py` | 摘要改走 `fonts.mono_font(option.font, size=fonts.SUB_PX)` —— 让死 token `SUB_PX` **名实相符**，而不是去动 `MONO_PX`（那会顺带放大快捷键一览） |
+| `gui/flow_model.py` | 删掉 `extra` / `+N` 追加段；docstring 记明**为何删**（维护者拍板 + Web 本来就无此后缀） |
+
+**为什么字阶走 `SUB_PX` 而不是 `MONO_PX`**：两者当前值都会是 11，差别在**语义与联动** ——
+`MONO_PX` 属于「命令 id / 快捷键」这一档，摘要把它借来用正是当初「用错 token」的根因；
+`SUB_PX` 才是次级说明这一档。同时 `mono_font` 缺省行为不变 ⇒ 快捷键一览维持 10px，
+**改动面严格限定在维护者要求的那一处**。
+
+### 10.4 判据（+3，全部落在 `tests/contract/test_gui_fonts.py`）
+
+1. `test_mono_font_accepts_explicit_size` —— **纯函数层**：`size=` 能落到指定字阶、
+   缺省仍是 `MONO_PX`（防「显式字号改了族名」与「缺省被顺手改掉」）。
+2. `test_summary_font_is_at_least_11px` —— **需求锚**：`SUB_PX >= 11` 且 `< BASE_PX`
+   （次级说明仍要比基准小一号）。将来谁再调小，必须是有意识的行为。
+3. `test_canvas_summary_uses_sub_px_not_mono_px` —— **接线层**：`canvas.py` 必须出现
+   `size=fonts.SUB_PX` 且不得再有 `fonts.mono_font(option.font)`。
+   ★ 纯函数层绿 ≠ 画布真的用了它 —— 正是「两层各判一次」才拦得住静默退回 10px。
+
+连带同步既有判据 3 处（`test_gui_canvas.py` / `test_gui_param_form.py` 里原本断言
+`+1` / `+2` 出现的地方，改为断言「**没有** `+`」与两对的确切文本）。
+
+### 10.5 负向验证（`.harness/spike/probe_summary_readability_negative.py`）
+
+4 注入**全命中、期望集与实际集逐项相等**、逐字节还原核 md5、复绿 132 passed：
+
+| # | 注入 | 期望红 |
+| --- | --- | --- |
+| I1 | `canvas.py` 摘要退回 `mono_font(option.font)`（丢 `size`） | `test_canvas_summary_uses_sub_px_not_mono_px` |
+| I2 | `mono_font` 忽略 `size`（恒 `MONO_PX`） | `test_mono_font_accepts_explicit_size` |
+| I3 | `flow_model` 把 `+N` 加回去 | `test_summarize_args_limits_pairs_and_truncates` + `test_summarize_args_limit_respected` |
+| I4 | `SUB_PX` 调回 10 | `test_summary_font_is_at_least_11px` |
+
+探针带三样自保：哨兵自检（带注入即拒绝运行）、锚点**唯一性**自检（`count == 1`，
+防注入落到别的函数上）、`try/finally` 逐字节还原。
+
+### 10.6 门禁
+
+`FULL GATE PASSED`（rc=0）：pytest **1600 passed** / 0 failed / 21 skipped / 2 xfailed
+（较 M56 主体的 1597 正好 **+3 = 本次新增判据数**）+ ruff + 5 组静态 + 15 个 `check_*.mjs`。
+
+### 10.7 顺带改正的过期记录
+
+- `.harness/tasks/M31-gui-crossplatform-audit.md` 表 B 的 **B4** 行原写着
+  「`+N` 是否出现得比 Win 早」——该项已随行为移除，标注作废。
+- `.harness/adr/0014-editor-desktop-shell.md` §10 里「前 2 个参数 + `+N` 计数」是
+  **当时的视觉契约记录**，按本仓惯例 ADR 不改写，在此登记**已被本节取代**。
+- `.harness/PROGRESS.md` 的 `2026-09-15 | desktop-gui-slice2` 行是历史记录（append-only），
+  保留原样。
+

@@ -135,6 +135,10 @@ def summarize_args(
     对齐 Web 卡片摘要行为。键名走 :func:`rpa_core.gui.i18n.field_label`
     （命令级覆盖 → 公共键 → 键名原文）——否则卡片会**裸露出 schema 键名**
     （``selector=#kw``），与参数面板同源的漏点。
+
+    超出 ``limit`` 的参数**直接不显示**。曾经在末尾补一个 ``+N``（还有 N 个
+    未展示），2026-10-13 维护者判定「解释成本高于收益」⇒ 已移除；Web 端
+    ``app.js::summarize`` 本来就无此后缀，去掉后两端反而更一致。
     """
     if not with_args:
         return ""
@@ -149,9 +153,6 @@ def summarize_args(
         if len(text) > 18:
             text = text[:17] + "…"
         pairs.append(f"{field_label(key, command_id)}={text}")
-    extra = len(with_args) - limit
-    if extra > 0:
-        pairs.append(f"+{extra}")
     return "  ".join(pairs)
 
 

@@ -192,8 +192,11 @@ def test_summarize_args_limits_pairs_and_truncates():
     # M56：键名走中文标签（path → 文件路径）；无标签的键回退键名原文
     assert summarize_args({"path": "a.txt"}) == "文件路径=a.txt"
     assert summarize_args({"a": "1"}) == "a=1"
+    # 超出 limit 的参数**直接不显示**：曾有的 "+N" 折叠后缀已移除
+    # （2026-10-13 维护者：解释成本高于收益；Web 端本来也没有）
     summary = summarize_args({"a": "1", "b": "2", "c": "3"})
-    assert summary.endswith("+1")
+    assert summary == "a=1  b=2", summary
+    assert "+" not in summary
 
 
 def _drop(model, source_id: str, target_item, row: int = -1) -> bool:

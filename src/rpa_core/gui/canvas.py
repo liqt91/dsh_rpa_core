@@ -972,11 +972,13 @@ class CardDelegate(QStyledItemDelegate):
             index.data(Qt.ItemDataRole.DisplayRole))
         name_w = min(name_w + 4, title_rect.width())
 
-        # 参数摘要（等宽、灰色，跟在命令名后，剩余空间省略）
+        # 参数摘要（等宽、灰色，跟在命令名后，剩余空间省略）。
+        # 字阶走 SUB_PX（次级说明）而不是 mono_font 缺省的 MONO_PX：
+        # 后者是给命令 id/快捷键用的 10px，用在摘要上会小到看不清（2026-10-13）。
         if not suppress_summary:
             summary = index.data(ROLE_ARGS_SUMMARY) or ""
             if summary:
-                painter.setFont(fonts.mono_font(option.font))
+                painter.setFont(fonts.mono_font(option.font, size=fonts.SUB_PX))
                 painter.setPen(QPen(QColor(_ARGS_TEXT)))
                 summary_x = x + min(name_w, title_rect.width() - 60)
                 summary_rect = QRect(summary_x, content.top(),

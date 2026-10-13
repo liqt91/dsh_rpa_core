@@ -1248,7 +1248,7 @@ def test_summarize_args_prioritizes_url_and_selector():
     result = summarize_args(args)
     # url 是最高优先级，排在最前（键名中文化为「网址」）
     assert result.startswith("网址=")
-    # action 也是优先字段，排第二；browserType 被 +1 溢出
+    # action 也是优先字段，排第二；browserType 超出 limit 不显示
     assert "操作=goto" in result
 
 
@@ -1268,14 +1268,14 @@ def test_summarize_args_empty_returns_empty():
 
 
 def test_summarize_args_limit_respected():
-    """limit 参数控制展示数量。"""
+    """limit 参数控制展示数量；超出部分直接省略（不再有 "+N" 折叠后缀）。"""
     from rpa_core.gui.flow_model import summarize_args
 
     args = {"url": "a", "selector": "b", "text": "c"}
     result = summarize_args(args, limit=1)
-    assert "网址=a" in result
+    assert result == "网址=a", result
     assert "操作目标" not in result
-    assert "+2" in result
+    assert "+" not in result
 # ---- 菜单栏（M23 次级项：菜单栏 + 快捷键一览） --------------------------------
 def test_menu_bar_has_four_menus(catalog):
     """菜单栏包含文件/编辑/运行/帮助四个菜单。"""
