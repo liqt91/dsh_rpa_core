@@ -237,6 +237,11 @@ ddddocr 是 **C 扩展 + 全局单例模型 + 首次构造慢（秒级）**，�
 - 环境级噪声（如实记）：本机 pytest 收尾阶段的临时目录清理会撞 WorkBuddy 的批量删除守卫
   （`SystemExit: 1` 落在 atexit，rc 不变）；**另记一个自找的坑**——`--basetemp` 指到**仓内**
   目录会让**第二次**运行 pytest 整体 ERROR（它先 `rmtree` 那个目录）。
+- **提交后同树复跑一次**（`e59f3bf` 之后）：pytest `1 failed, 1644 passed, 21 skipped, 2 xfailed`。
+  唯一红是 `tests/contract/test_gui_node_edit.py::test_delete_suppressed_while_param_editor_focused`
+  ——已登记的环境级 flaky（offscreen Qt 焦点竞争，M57 条目录过同一条）；**单文件复跑两次各
+  `25 passed` / rc=0** ⇒ 判 flaky 而非回归（M60 未触碰该模块）。两次全量的 `passed + failed`
+  之和一致（1645 = 1645）。
 
 ### 8.7 未做（明确留给后续切片）
 
