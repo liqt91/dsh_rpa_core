@@ -231,7 +231,8 @@ def test_selecting_action_card_shows_form_and_apply_updates_item(window):
     assert holder.args["url"] == "https://trae.example.cn/path"
     assert holder.args["browserType"] == "msedge"
     summary = item.data(ROLE_ARGS_SUMMARY)
-    assert "browserType=msedge" in summary
+    # M56：摘要键名中文化（browserType → 浏览器类型）
+    assert "浏览器类型=msedge" in summary
 
 
 def test_second_edit_after_save_is_committed(window):
@@ -1240,24 +1241,24 @@ def test_format_unknown_event_falls_back_to_json(window):
     assert "customEvent" in result
 # ---- 卡片摘要优先级（M23 次级项：卡片摘要优化） --------------------------------
 def test_summarize_args_prioritizes_url_and_selector():
-    """url/selector 等关键字段优先展示。"""
+    """url/selector 等关键字段优先展示（M56：键名以中文标签呈现）。"""
     from rpa_core.gui.flow_model import summarize_args
 
     args = {"browserType": "chrome", "url": "https://example.com", "action": "goto"}
     result = summarize_args(args)
-    # url 是最高优先级，排在最前
-    assert result.startswith("url=")
+    # url 是最高优先级，排在最前（键名中文化为「网址」）
+    assert result.startswith("网址=")
     # action 也是优先字段，排第二；browserType 被 +1 溢出
-    assert "action=goto" in result
+    assert "操作=goto" in result
 
 
 def test_summarize_args_shows_selector_before_other_fields():
-    """selector 优先于普通字段。"""
+    """selector 优先于普通字段；元素槽位跟影刀口径叫「操作目标」（M54+M56）。"""
     from rpa_core.gui.flow_model import summarize_args
 
     args = {"kind": "css", "selector": "#btn", "timeout": 5000}
     result = summarize_args(args)
-    assert result.startswith("selector=")
+    assert result.startswith("操作目标=")
 
 
 def test_summarize_args_empty_returns_empty():
@@ -1272,8 +1273,8 @@ def test_summarize_args_limit_respected():
 
     args = {"url": "a", "selector": "b", "text": "c"}
     result = summarize_args(args, limit=1)
-    assert "url=a" in result
-    assert "selector" not in result
+    assert "网址=a" in result
+    assert "操作目标" not in result
     assert "+2" in result
 # ---- 菜单栏（M23 次级项：菜单栏 + 快捷键一览） --------------------------------
 def test_menu_bar_has_four_menus(catalog):

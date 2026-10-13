@@ -3184,7 +3184,10 @@ class MainWindow(QMainWindow):
         if holder.raw is not None:
             holder.raw.setdefault("with", {}).pop(key, None)
             holder.raw.setdefault("elementRefs", {})[key] = name
-        item.setData(summarize_args(holder.args), ROLE_ARGS_SUMMARY)
+        item.setData(
+            summarize_args(holder.args, command_id=item.data(ROLE_COMMAND_ID)),
+            ROLE_ARGS_SUMMARY,
+        )
         self._end_edit()
         self._set_dirty(True)
         # 重渲染表单让引用可见 + 重绘画布（元素填入可能补上必填项，红色感叹号要消失）
@@ -4304,6 +4307,7 @@ class MainWindow(QMainWindow):
         """在右栏挂载「滚动表单 + 应用按钮」。"""
         from rpa_core.gui.flow_model import (
             ROLE_ARGS_SUMMARY,
+            ROLE_COMMAND_ID,
             ROLE_NODE_ID,
             summarize_args,
         )
@@ -4400,7 +4404,10 @@ class MainWindow(QMainWindow):
                     holder.raw["retry_count"] = rt["retry_count"]
                 else:
                     holder.raw.pop("retry_count", None)
-            item.setData(summarize_args(values), ROLE_ARGS_SUMMARY)
+            item.setData(
+                summarize_args(values, command_id=item.data(ROLE_COMMAND_ID)),
+                ROLE_ARGS_SUMMARY,
+            )
             self._end_edit()
             self._set_dirty(True)
             # 重绘画布：编号栏的「必填参数缺失」红色感叹号由 delegate 现算

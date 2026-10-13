@@ -26,6 +26,7 @@ from typing import Any
 from PySide6.QtCore import QMimeData, QModelIndex, Qt, Signal
 from PySide6.QtGui import QStandardItem, QStandardItemModel
 
+from rpa_core.gui.i18n import field_label, load_command_display_names
 from rpa_core.model.workflow import Workflow
 
 # ---- item 数据角色 -------------------------------------------------------
@@ -115,10 +116,25 @@ _PRIORITY_KEYS = (
 )
 
 
-def summarize_args(with_args: dict[str, Any], limit: int = 2) -> str:
-    """把 action 的 with 参数压成一行等宽摘要（key=value，最多 limit 对）。
+def command_label(command_id: str) -> str:
+    """命令 id → 中文显示名（画布卡片标题）；缺标签回退 id 原文。
 
-    关键字段（url/selector/text 等）优先展示，对齐 Web 卡片摘要行为。
+    与 Web ``app.js`` 的 ``commandName`` 逐字同口径。事实源是
+    :mod:`rpa_core.gui.i18n`（唯一权威，读 ``devserver/static/i18n.js``）——
+    本模块**不另建映射表**（在 Python 再抄一张就是第二套权威，漂移无症状）。
+    """
+    return load_command_display_names().get(command_id, command_id)
+
+
+def summarize_args(
+    with_args: dict[str, Any], limit: int = 2, *, command_id: str | None = None
+) -> str:
+    """把 action 的 with 参数压成一行等宽摘要（中文标签=值，最多 limit 对）。
+
+    关键字段（url/selector/text 等）优先展示（按**原始键名**判优先级），
+    对齐 Web 卡片摘要行为。键名走 :func:`rpa_core.gui.i18n.field_label`
+    （命令级覆盖 → 公共键 → 键名原文）——否则卡片会**裸露出 schema 键名**
+    （``selector=#kw``），与参数面板同源的漏点。
     """
     if not with_args:
         return ""
@@ -132,7 +148,7 @@ def summarize_args(with_args: dict[str, Any], limit: int = 2) -> str:
         text = value if isinstance(value, str) else repr_json(value)
         if len(text) > 18:
             text = text[:17] + "…"
-        pairs.append(f"{key}={text}")
+        pairs.append(f"{field_label(key, command_id)}={text}")
     extra = len(with_args) - limit
     if extra > 0:
         pairs.append(f"+{extra}")
@@ -829,7 +845,11 @@ def _node_dict(node: Any) -> dict:
 def build_item(node: Any, *, label: Callable[[str], str] | None = None) -> QStandardItem:
     """递归把单个 AST 节点构造成树 item。
 
-    label: 可选的命令 id → 中文名映射（GUI 暂无 i18n 时直接用命令 id）。
+    label: 可选的命令 id → 显示名映射；**缺省走 :func:`command_label`**，
+        即画布卡片默认显示中文名（与 Web ``commandName`` 同口径）。
+        做成缺省值而非要求调用方逐个传参，是为了让**所有产出路径**
+        （装载 / 新增 / 粘贴 / 撤销重做）自动一致——只改一条会得到
+        「有的卡片中文、有的还是英文」。
     """
     raw = _node_dict(node)
     node_type = raw["type"]
@@ -838,8 +858,8 @@ def build_item(node: Any, *, label: Callable[[str], str] | None = None) -> QStan
     if node_type == "action":
         with_args = raw.get("with", {})
         command_id = node["command"] if isinstance(node, dict) else node.command
-        summary = summarize_args(with_args)
-        title = (label(command_id) if label else command_id) or command_id
+        summary = summarize_args(with_args, command_id=command_id)
+        title = (label or command_label)(command_id) or command_id
         return _make_item(
             title=title, node_type="action", node_id=node_id,
             command_id=command_id, args_summary=summary,

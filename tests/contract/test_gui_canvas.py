@@ -23,6 +23,7 @@ from rpa_core.gui.flow_model import (  # noqa: E402
     model_to_workflow,
     summarize_args,
 )
+from rpa_core.gui.i18n import field_label  # noqa: E402
 from rpa_core.model.workflow import Workflow  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -99,7 +100,9 @@ def test_real_workflow_maps_to_sequence_with_actions(real_workflow):
         if "=" in part
     ]
     assert shown, summary
-    assert set(shown) <= set(args), f"摘要字段应来自节点参数：{shown} ⊄ {list(args)}"
+    # M56：摘要键名是**中文标签**（不再是 schema 键名），故按 field_label 映回后比对
+    expected = {field_label(key, "browser.navigate") for key in args}
+    assert set(shown) <= expected, f"摘要字段应来自节点参数：{shown} ⊄ {sorted(expected)}"
     hidden = len(args) - len(shown)
     if hidden > 0:
         assert summary.endswith(f"+{hidden}")
@@ -186,7 +189,9 @@ def test_if_without_else_has_no_else_row():
 
 def test_summarize_args_limits_pairs_and_truncates():
     assert summarize_args({}) == ""
-    assert summarize_args({"path": "a.txt"}) == "path=a.txt"
+    # M56：键名走中文标签（path → 文件路径）；无标签的键回退键名原文
+    assert summarize_args({"path": "a.txt"}) == "文件路径=a.txt"
+    assert summarize_args({"a": "1"}) == "a=1"
     summary = summarize_args({"a": "1", "b": "2", "c": "3"})
     assert summary.endswith("+1")
 

@@ -234,6 +234,25 @@
     ④ Web 编辑器**不跟**（ADR 0016 冻结）⇒ 浏览器句柄只在 GUI 可用，须登记为**有意分歧**。
   - 状态：**未开工、未排期**（不占用 active 位；`project_state.next_milestone` 仍为 M51）。
 
+- [x] **M56 GUI 画布中文化（i18n 中文名接入）**（`done`，**2026-10-13 当日立项 → 当日落地**）
+  - 起因：维护者问「画布中的指令，能显示成中文名吗」。**能**——`build_item` /
+    `build_model_from_workflow` 本来就带 `label: 命令 id → 显示名` 参数，只是
+    `app.py:2012` 调用时没传，画布一直在画裸 id（`browser.input`）。
+  - **这同时是 ADR 0014 §9「后续切片边界」里那项「i18n 中文名接入」的收口**
+    （该 ADR 是历史决策记录，不改写，只在 M56 文档里登记落地）。
+  - 做法：新增 `flow_model.command_label()`（走 `gui/i18n`，**不另建映射表**），
+    `build_item` 的 `label` **缺省**改走它 ⇒ 装载 / 新增 / 粘贴三条产出路径**自动一致**；
+    `summarize_args` 增加 `command_id`，键名走 `field_label`（命令级覆盖 → 公共键 → 原文），
+    并给 `app.py` 的两处摘要重算点（元素引用 / 参数应用）补上 `command_id`。
+  - 判据 7 条（`tests/contract/test_gui_canvas_i18n.py`），含 **AST 闸**（每处
+    `summarize_args` 调用必须喂 `command_id`）与 **三路逐字节相等 + 字面独立证人**；
+    连带同步既有判据 6 处。负向验证 8 注入全命中（首轮 3 处「多红」经取证为**期望集漏项**、
+    非缺陷，已修正）。全量 pytest **1597 passed**、ruff + 5 静态 + 15 个 mjs 逐条全 rc=0。
+  - 计划：`M56-gui-canvas-i18n.md`。**未动 Web 一行**（`i18n.js` 本次零改动）。
+  - 遗留（未做、用户未要求）：摘要的**枚举值**仍是原值（`点击方式=single`）——
+    `x-enum-labels` 在 manifest 里，`summarize_args` 拿不到；卡片**无英文副标**
+    （维护者选「只中文名，跟 Web」，英文 id 靠搜索与 Ctrl+P tip 可达）。
+
 - [ ] **M52 选择器优选（唯一 · 稳定 · 短）**（`active`，2026-10-10 立项；**S1 已落地**）
   - **S1（2026-10-10）已落地**：桌面 penalty 引擎（`model.desktop.choose_best_locator` /
     `locator_penalty`，字典序唯一硬门）+ `capture_at` 接线（`_pick_best_candidate`）；
