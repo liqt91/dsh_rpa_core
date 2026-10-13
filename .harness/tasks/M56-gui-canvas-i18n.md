@@ -108,10 +108,13 @@ I1/I2 的连带来自搜索判据同时断言「中文名可搜」；I8 的两�
 - 元素槽位**键名**（`selector`/`locator`/`elementId`）、扩展线协议（不 bump `EXT_BUILD`）、
   ADR-002 的 ref-only 口径。
 
-## 八、遗留（**未做，用户未要求**）
+## 八、遗留（**维护者 2026-10-13 明确「本轮不做」，非遗忘**）
 
 1. **摘要的枚举值仍是原值**：如 `点击方式=single`。`x-enum-labels` 在**manifest** 里，
    而 `summarize_args` 是 `flow_model` 的纯函数、拿不到 manifest ⇒ 要中文化需把 manifest
    解析器接到卡片摘要（成本高于收益）。注意**参数面板的枚举下拉早已是中文**（M54 G3）。
+   ⇒ 维护者 2026-10-13 拍板：**本轮不做**（不是漏了）。若将来要做，落点是在
+   `summarize_args` 增加一个「枚举标签解析器」参数（由 `app.py` 用 catalog 提供），
+   而不是让 `flow_model` 反向依赖 catalog。
 2. **卡片无英文副标**：维护者选「只中文名（跟 Web）」。英文 id 靠画布搜索与
    Ctrl+P 条目的 `command_id · executor` tip 可达，卡片上不显示。
