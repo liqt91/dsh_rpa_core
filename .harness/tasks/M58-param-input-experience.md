@@ -1,9 +1,10 @@
 # M58 — 参数输入体验：编辑态双缓冲 / 输入区域 / Py 两态
 
+Status: `done`
+
 > 里程碑：M58（承接 M57 的参数表达式控件）
 > 日期：2026-10-13
 > 范围：`gui/param_form.py`（主）、`devserver/static/app.js`（一行级）、4 个 manifest 加声明
-> Status: `done`
 
 ## 一、起因（维护者原话）
 
@@ -176,3 +177,37 @@ self._expr_slots: dict[str, dict[str, str]]   # 字段 → {"text": ..., "python
   `.harness/spike/probe_m58_expr_slots.py`（只读探针，打印中间态）。
 - 文档：benchmark §四 P2.6（+3 项打勾）、gap-matrix §六（+3 行）、`manifest-param-config.md` banner ⑥。
 - 台账：`PROGRESS.md` + `feature_list.json` + `.workbuddy/memory/MEMORY.md` + 当日 memory。
+
+## 十、后续修复：多行输入区被面板剩余高度撑开（同日）
+
+**报障**（维护者截图，2026-10-13）：`data.setVar` 面板里「变量值 *」标签钉在顶部，而值控件
+（`Py | 输入区 | fx`）浮在整行的**垂直中央**，中间一大片空白。
+
+**根因（探针实测，不猜）**：`_wrap_expr_row` 造的行容器是裸 `QWidget`，纵向策略取默认的
+`Preferred`（**可以长**）；而它内部的编辑器是**定高**的（`QPlainTextEdit` 固定 68px）。
+参数面板由 `QScrollArea(widgetResizable=True)` 撑到不小于视口，表单比内容高时
+`QFormLayout` 就把多出的高度分给这一行，行内布局再把 68px 的编辑器垂直居中
+（`setLabelAlignment(AlignTop)` 让标签留在顶部）。取证：`data.setVar` 在 250×760 下，
+该行 **584px**、编辑器居中在 y+196。
+
+**修法**：给 `ParamForm` 套一层外层 `QVBoxLayout`（`self._form` 仍是那个 `QFormLayout`），
+末尾 `addStretch(1)` —— 剩余高度落到表单**底部**，与 M58 之前单行输入时的观感一致。
+选这一层而不是逐个给行设纵向策略：对 `QLabel` 表头、分组区段同样生效，不必维护一串例外。
+
+**判据**：`tests/contract/test_gui_param_form.py::test_multiline_expr_row_does_not_absorb_leftover_panel_height`
+—— 把表单撑到 900px 高，该行高度必须 `<=` 自己的 `sizeHint`。
+**负向验证**：把 `outer.addStretch(1)` 注入成 `addStretch(0)` ⇒ 判据精确变红（**434px vs 68px**），
+逐字节还原核 md5、复绿。
+
+**★ 探针自己否掉了两条「恒绿」判据**（差点写进测试，靠注入逐条验才拦下）：
+
+- **元素库行**（`_attach_element_row` 的裸 `QWidget`）看着是「同款行容器」，实测**从来不会**
+  被撑开——即使整个表单撑到 900px、即使它是唯一一行，行高都恰好等于 `sizeHint`；
+- **`x-multiline` 但没有 fx/py** 的字段（`executeScript.script` / `handleDialog.promptText`）
+  行控件就是裸 `QPlainTextEdit`，`setFixedHeight` 本身就封了顶。
+- 真正会撑开的**只有**「行容器 + 定高子控件」这一种形状。给前两者写判据只会得到恒绿的
+  假判据（真出问题时照样绿）——与记忆里「覆盖『实现』≠覆盖『用户实际走的那条路』」同源。
+
+**回归门禁**：`check_tasks.py` 要求任务文档里 `Status:` **顶格**（正则 `^(?:Status:|状态：)\s*\`…\``）；
+本文件原先写成 `> Status: \`done\``（块引用里）⇒ `missing task status` 失败，已改为顶格独立一行。
+

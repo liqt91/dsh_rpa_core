@@ -297,9 +297,22 @@ class ParamForm(QWidget):
         # 调用方据此区分「用户接管了该参数」与「用户只是打开面板又应用」。
         self._ref_intent: dict[str, str | None] = {}
 
-        self._form = QFormLayout(self)
+        self._form = QFormLayout()
         self._form.setContentsMargins(8, 8, 8, 8)
         self._form.setLabelAlignment(Qt.AlignmentFlag.AlignTop)
+        # 表单只占它需要的高度，**剩余纵向空间全部落到末尾的弹性空隙**。
+        #
+        # 参数面板往往比内容高（指令字段少时尤其明显）。若不套这层 stretch，
+        # QFormLayout 会把多出的高度分给「纵向能长」的行，而行内布局再把定高的
+        # 控件**垂直居中** ⇒ 标签钉在顶部、输入框浮在整行中央、中间一大片空白
+        # （维护者 2026-10-13 报障：setVar 的「变量值」多行输入区。实测该行被撑到
+        # 584px，68px 的编辑器居中在 y+196）。套上 stretch 后多余空间落在表单
+        # 底部，与 M58 之前单行输入时的观感一致；对 QLabel 表头、分组区段同样生效，
+        # 不必逐个行去设置纵向策略。
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.addLayout(self._form)
+        outer.addStretch(1)
 
         properties = schema.get("properties", {})
         groups = schema.get("x-param-groups")

@@ -574,6 +574,61 @@ def test_reference_groups_list_only_explicitly_named_loop_and_error_vars(window)
     assert "循环与错误变量" not in [label for label, _ in defaulted._reference_groups()]
 
 
+# ---- 参数行高：不被面板剩余高度撑开（M58 回归） -------------------------------
+def _size_form(form: ParamForm, qapp, *, width: int = 280, height: int = 900) -> None:
+    """把表单撑到**明显高于内容**（制造「面板剩余高度」）并让它完成布局。
+
+    直接改表单自身尺寸即可——真实宿主是 QScrollArea(widgetResizable=True)，它会
+    把表单撑到不小于视口（见 app.py 的 `_show_param_panel`）。不另起宿主容器，
+    免得容器被回收时连表单的 C++ 对象一起带走（libshiboken already deleted）。
+    """
+    form.resize(width, height)
+    form.show()
+    qapp.processEvents()
+
+
+def test_multiline_expr_row_does_not_absorb_leftover_panel_height(qapp):
+    """多行表达式行不得吸收面板的**剩余高度**（M58 回归：setVar 的「变量值」输入区）。
+
+    行容器（`_wrap_expr_row` 造的 QWidget）装的是**定高**编辑器（QPlainTextEdit 固定
+    68px），但容器自身没有高度上限、纵向策略是默认的 Preferred ⇒ 表单比内容高时，
+    QFormLayout 把多出的高度分给这一行，行内布局再把编辑器**垂直居中** ⇒ 标签钉在
+    顶部、输入框浮在整行中央（维护者 2026-10-13 报障：该行被撑到 584px，68px 的
+    编辑器居中在 y+196）。修法 = ParamForm 末尾留一条弹性空隙，把剩余高度赶出表单。
+
+    判据 = 表单被撑高后，该行高度仍不超过自己的 sizeHint。
+    负向验证：把 `outer.addStretch(1)` 改成 `outer.addStretch(0)` ⇒ 本判据变红
+    （实测行高 434px vs sizeHint 68px）。
+
+    ⚠ 只测这一条产出路径，是因为实测**别的行本来就不会被撑开**：单行表达式行
+    （内部 QLineEdit）与元素库行（下拉 + 标签 + 按钮）即使把整个表单撑到 900px，
+    行高也恰好等于 sizeHint；`x-multiline` 但**没有** fx/py 的字段是裸 QPlainTextEdit
+    直接当行控件、`setFixedHeight` 本身就封了顶。给它们各写一条只会得到**恒绿**的
+    假判据——真出问题时也照样绿。
+    """
+    form = ParamForm(
+        {
+            "type": "object",
+            "properties": {
+                "value": {
+                    "type": "string",
+                    "x-fx": True,
+                    "x-python": True,
+                    "x-multiline": True,
+                }
+            },
+        },
+        {"value": "a\nb"},
+        variable_groups_provider=lambda: [],
+    )
+    _size_form(form, qapp)
+    expr_row = form._row_shown["value"]
+    assert expr_row.height() <= expr_row.sizeHint().height(), (
+        f"表达式行被撑到 {expr_row.height()}px"
+        f"（sizeHint {expr_row.sizeHint().height()}px）——剩余高度被塞进了行内"
+    )
+
+
 # ---- 未应用编辑的自动提交（维护者报障：改完参数点保存无效） --------------------
 def test_save_commits_pending_form_edits(window, tmp_path):
     """改了参数不点「应用参数」直接保存，也必须落盘（Web 即改即生效对齐）。"""
