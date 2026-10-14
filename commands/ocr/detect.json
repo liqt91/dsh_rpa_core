@@ -1,0 +1,56 @@
+{
+  "id": "ocr.detect",
+  "version": "1.0.0",
+  "executor": "ocr.ddddocr",
+  "kind": "query",
+  "risk": "read",
+  "capabilities": [],
+  "resources": [],
+  "stability": "stable",
+  "effect": {"kind": "pure", "replay": "safe", "idempotency": "none"},
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "imagePath": {
+        "type": "string",
+        "x-fx": true,
+        "description": "图片文件路径。通常直接引用上一步「网页截图 / 桌面截图」输出的文件路径"
+      },
+      "imageBase64": {
+        "type": "string",
+        "description": "图片的 Base64 内容。与 imagePath 二选一（都填或都不填都会报 INVALID_INPUT）"
+      }
+    },
+    "additionalProperties": false
+  },
+  "output_schema": {
+    "type": "object",
+    "required": ["boxes", "count"],
+    "properties": {
+      "boxes": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "required": ["x", "y", "width", "height"],
+          "properties": {
+            "x": {"type": "integer"},
+            "y": {"type": "integer"},
+            "width": {"type": "integer"},
+            "height": {"type": "integer"}
+          },
+          "additionalProperties": false
+        }
+      },
+      "count": {"type": "integer", "minimum": 0}
+    },
+    "additionalProperties": false
+  },
+  "x-outputs": {
+    "boxes": {"label": "目标框列表"},
+    "count": {"label": "目标数量"}
+  },
+  "errors": ["INVALID_INPUT", "EXECUTOR_FAILED", "TIMEOUT", "CANCELLED"],
+  "implementation": {"handler": "ocr.ddddocr:detect"},
+  "default_timeout_seconds": 60,
+  "retryable": true
+}

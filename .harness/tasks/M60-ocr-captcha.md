@@ -2,7 +2,10 @@
 
 Status: `planned`
 
-> **本里程碑进度**：**S1 已落地**（2026-10-13，一手证据见 **§八**）；S2~S4 未启动。
+> **本里程碑进度**：**S1 已落地**（2026-10-13，一手证据见 **§八**）；**S2 + S3 已落地**
+> （2026-10-14，一手证据见 **§九**——并按维护者口径「补齐原切片」把三条命令补全）；**S4 未启动**。
+> ★ **§8.3 ① 的结论已被实测推翻**（`charsetRange` 不是不存在，是我查错了方法名）——
+> 订正见 §8.3 ①，**以订正为准**。
 
 > 里程碑：M60（**新能力族**，非承接任何既有里程碑）
 > 日期：2026-10-13
@@ -63,12 +66,17 @@ Status: `planned`
 
 | 命令 | 输入 | 输出 | ddddocr 入口 |
 |---|---|---|---|
-| `ocr.recognize` | 图片 + 可选 ~~`charsetRange`~~（**不存在，见 §8.3 ①**）/ `modelPath` / `withProbability` | `text`（+ `confidence`） | `DdddOcr().classification()` |
-| `ocr.detect` | 图片 + 可选 `modelPath` | `boxes[]` / `count` | `DdddOcr(det=True).detection()` |
-| `ocr.slideMatch` | `templateImage` + `backgroundImage` | `x` / `y` / `confidence` | `DdddOcr(ocr=False, det=False).slide_match()` |
+| `ocr.recognize` | 图片 + `charsetRange`（**S2 已实现**，真名 `set_ranges`，见 §8.3 ①）+ `modelPath` + `withProbability` | `text`（+ `confidence`） | `DdddOcr().classification()` |
+| `ocr.detect` | 图片（**无** `modelPath`，见 §8.3 ⑦） | `boxes[]` / `count` | `DdddOcr(det=True).detection()` |
+| `ocr.slideMatch` | `templateImage*` + `backgroundImage*` + `simpleTarget` + `minConfidence` | `x` / `y` / `confidence` | `DdddOcr(det=False, ocr=False).slide_match()` |
 
-「自定义模型」**不是独立命令**，而是 `ocr.recognize` / `ocr.detect` 的可选参数
-`modelPath`（ddddocr 的 `import_onnx_path`）。
+> **S2/S3 落地后的三处口径修正**（以 §九 为准）：`charsetRange` **存在**（`set_ranges`）；
+> `ocr.detect` **不声明** `modelPath`（det 模式忽略它）；`slideMatch` 的 `x`/`y` 是**中心**坐标、
+> `confidence` 是**相关系数不是概率**、且库**没有失配分支**。
+
+「自定义模型」**不是独立命令**，而是 `ocr.recognize` 的可选参数 `modelPath`
+（ddddocr 的 `import_onnx_path`）——**只有 recognize 有**：det 模式构造函数根本不透传该参数，
+而 slide 模式若传非空值会落进 OCR 分支、把滑块引擎顶掉（实测均见 §九 9.2）。
 
 **输入图片字段统一**（三条命令同一形状）：
 - `imagePath`：文件路径（**主路径**，直接接 `screenshot.filePath`）；
@@ -89,8 +97,8 @@ ddddocr 是 **C 扩展 + 全局单例模型 + 首次构造慢（秒级）**，�
 
 ⇒ 新建 `workers/ocr_worker.py`，**常驻**（不是 `python_worker` 的「每次 spawn」形态）：
 - 父子协议沿用 `python_worker` 的 stdin/stdout JSON 一请求一响应；
-- worker 内按 ~~`(mode, modelPath, charsetRange)`~~ **`(mode, model_path)`** 缓存 `DdddOcr` 实例
-  （`charsetRange` 不存在，见 §8.3 ①），摊薄首次加载；
+- worker 内按 **`(mode, model_path, charset_range)`** 缓存 `DdddOcr` 实例（S2 补上 `charset_range`：
+  `set_ranges` 改的是**实例自身状态**，不进键就会串味，见 §九 9.2），摊薄首次加载；
 - executor 持有常驻进程，`close()` / 取消 / **resume 跨进程**时重建；
 - 放主进程的代价（已排除）：拖慢启动、模型加载阻塞事件循环、单例跨 run 污染。
 
@@ -104,12 +112,12 @@ ddddocr 是 **C 扩展 + 全局单例模型 + 首次构造慢（秒级）**，�
 
 ## 四、切片
 
-| 片 | 内容 | 关键判据 |
-|---|---|---|
-| **S1** | 依赖进 required（`pyproject.toml` + `uv lock`）；`ocr_worker` + `OcrExecutor`；`ocr.recognize`（path/base64 → text）；registry 接线；i18n 标签；命令矩阵用例表 | 真图片识别出文本；extra/worker 生命周期；门禁四契约全绿 |
-| **S2** | `charsetRange`（`set_charset_range`）+ `withProbability`；`ocr.detect`（bbox + count） | 字符集收敛真的生效（对照：给错字符集必失败/降精度）；detect 输出形状 |
-| **S3** | `ocr.slideMatch`（双图输入 → 缺口坐标） | 双图互斥/缺失守卫；坐标落在图内 |
-| **S4** | `modelPath` 自定义模型；文档（`docs/ocr-commands.md`）；四处台账同步；full gate | 自定义模型覆盖默认；FULL GATE PASSED |
+| 片 | 内容 | 关键判据 | 状态 |
+|---|---|---|---|
+| **S1** | 依赖进 required（`pyproject.toml` + `uv lock`）；`ocr_worker` + `OcrExecutor`；`ocr.recognize`（path/base64 → text）；registry 接线；i18n 标签；命令矩阵用例表 | 真图片识别出文本；extra/worker 生命周期；门禁四契约全绿 | ✅ done（§八） |
+| **S2** | `charsetRange`（**真名 `set_ranges`**，见 §8.3 ①）+ `ocr.detect`（bbox + count） | 字符集收敛真的生效（对照：给错字符集退化成空串）；detect 输出形状；缓存键不串味 | ✅ done（§九） |
+| **S3** | `ocr.slideMatch`（双图输入 → 缺口坐标）+ `minConfidence` | 四条输入路径守卫；坐标落在图内；阈值真的能拦住错坐标 | ✅ done（§九） |
+| **S4** | `modelPath` 自定义模型（**仅 recognize**）；文档（`docs/ocr-commands.md`）；四处台账同步；full gate | 自定义模型覆盖默认；FULL GATE PASSED | ⬜ 未启动 |
 
 **负向验证**（每片）：探针注入破坏 → 门禁必红 → 逐字节还原核 md5。判据不得恒绿。
 
@@ -175,10 +183,38 @@ ddddocr 是 **C 扩展 + 全局单例模型 + 首次构造慢（秒级）**，�
 
 ### 8.3 与方案稿的偏离（逐条登记，以本节为准）
 
-1. **`charsetRange` 不存在**：ddddocr 1.6.1 的 `DdddOcr.__init__` **没有** `charset_range` 参数，
+1. ~~**`charsetRange` 不存在**：ddddocr 1.6.1 的 `DdddOcr.__init__` **没有** `charset_range` 参数，
    也**没有** `set_charset_range` 方法（`inspect.signature` 实测）。本切片**未实现**该参数，
    **S2 必须重设计**（候选口径：自建字符集表做后处理过滤 / 换 `import_onnx_path` 自定义模型）。
-   方案稿 §3.1/§3.2 里的 `charsetRange` 属**未验证的设想**。
+   方案稿 §3.1/§3.2 里的 `charsetRange` 属**未验证的设想**。~~
+   ★ **【2026-10-14 订正 —— 以本段为准】原结论错了，而且错在方法名上。**
+
+   事实：ddddocr **有**字符集收敛能力，真名是 **`set_ranges(charset_range)`**（在
+   `ddddocr/compat/v1.py`，而 `ddddocr.DdddOcr` 就是 `compat.v1.DdddOcr` 本身）。
+   S1 查的是 `set_charset_range` 与 `__init__(charset_range=…)`——两个都确实不存在，
+   于是把「名字猜错」结论成了「能力不存在」，**险些据此把 S2 的设计改成自建后处理过滤**。
+
+   实测语义（`.harness/spike/probe_ocr_detect_slide.py`，一手）：
+
+   | 传参 | 对「5834」数字图的识别结果 |
+   |---|---|
+   | `str "0123456789"` | `'5834'`（逐字符生效） |
+   | `list ["5","8","3"]` | `'583'` |
+   | `str "abc"` | `''`（模型字符集里没有字母 ⇒ 静默丢弃 ⇒ **空串**，不报错） |
+   | `int 10` | `''`（= 默认字符集前 11 个，不含数字） |
+   | `str ""` | 抛 `DDDDOCRError: 字符集范围字符串不能为空` |
+
+   两条必须记住的推论：① 它**不是白名单过滤**，只在「模型认得的字符」里生效、认不得的**静默丢弃**，
+   一个都不认得就退化成**空串**——这是库的行为，本层如实透传由流程判；② `get_charset()`
+   恒返回模型**全量**字符集（实测 8210 项）、**不反映** `set_ranges` 的过滤
+   ⇒ 唯一可观测面是 `classification()` 的输出（判据只能打输出，不能打字符集表）。
+   另：`det=True` 模式下调用 `set_ranges` 抛 `DDDDOCRError: 目标检测模式不支持字符集设置`。
+
+   **落地**：S2 已按真名实现（`ocr.recognize.charsetRange`，形态选**只字符串**，见 §九 9.1）。
+   §3.1 / §3.2 里原先划掉的两处已改回。
+   **教训（已写进 `.workbuddy/memory/`）**：`inspect.signature` 只能证明「某个名字不存在」，
+   证明不了「能力不存在」；下「不存在」这种否定结论前，必须先把**类的方法表**打出来
+   （`dir()` / `inspect.getmembers`）逐条看，而不是试一两个想当然的名字。
 2. **`withProbability` 的输出键是 `confidence`**（不是方案稿写的 `probability`）：
    `probability=True` 的返回体里 `text` + `confidence` 才是真值，`probabilities`（按整个字符集的
    概率矩阵）与 `charset`（数千项的表）是**单张 64×26 图即可达数 MB** 的附带品 ⇒ **绝不透传**，
@@ -187,8 +223,17 @@ ddddocr 是 **C 扩展 + 全局单例模型 + 首次构造慢（秒级）**，�
    与 `executor` 同名便于目视对齐；`check_architecture.py` 只校验 `module:func` 形状，都合法。
 4. **`effect.kind` 实取 `pure`**（方案稿写 `read`）：语义是「同输入必同输出、不触碰外部状态」，
    `pure` 更准。`replay: safe` + `retryable: true` 与方案稿一致。
-5. **worker 缓存键 `(mode, model_path)`**（同 ①）。
+5. ~~**worker 缓存键 `(mode, model_path)`**（同 ①）。~~ → **订正为 `(mode, model_path, charset_range)`**
+   （同 ① 的订正：`set_ranges` 改的是实例状态，不进键会把字符集串味给后续请求，见 §九 9.2）。
 6. **解包体积 258MB**（方案稿 §六写「300MB+」）：结论不变——进 required 的代价照付。
+7. **（S2/S3 新增）`ocr.detect` 不声明 `modelPath`**：`det=True` 时构造函数走第一个分支、
+   **根本不透传** `import_onnx_path`（实测传一个不存在的路径也照样不报错），
+   声明了就是**什么都不做的参数** ⇒ manifest 里不写它。契约测试
+   `test_detect_declares_no_model_path_because_det_mode_ignores_it` 钉住这条（防「好心补上一个没用的参数」）。
+8. **（S2/S3 新增）`slideMatch` 的坐标与相关度语义**：`x`/`y` 是缺口**中心**（不是左上角）、
+   `confidence` 是 `TM_CCOEFF_NORMED` 的**归一化相关系数**（**不是概率**）、
+   库**没有「找不到」分支**（纯色底图也返回 `confidence == 1.0`）。三条都写进了 manifest 的
+   `description`，并加了 `minConfidence`（默认 0 = 不判）作为**唯一**的用户侧闸门。详见 §九 9.2/9.3。
 
 ### 8.4 ★ 本片撞出的两条门禁漏检（已修 + 已负向验证）
 
@@ -245,11 +290,123 @@ ddddocr 是 **C 扩展 + 全局单例模型 + 首次构造慢（秒级）**，�
 
 ### 8.7 未做（明确留给后续切片）
 
-- S2：`charsetRange` 重设计（见 8.3 ①）+ `ocr.detect`；S3：`ocr.slideMatch`；
-  S4：`modelPath` 自定义模型（字段已在 manifest 里，但**「覆盖默认模型」的判据未做**）+
+- ~~S2：`charsetRange` 重设计（见 8.3 ①）+ `ocr.detect`；S3：`ocr.slideMatch`；~~
+  → **S2/S3 已于 2026-10-14 落地**（见 §九）。
+- **S4 剩余**：`modelPath` 自定义模型（字段已在 manifest 里，但**「覆盖默认模型」的判据未做**）+
   `docs/ocr-commands.md` + 四处台账 + full gate 收口。
 - **模型路径非法时的错误码**现落到 `EXECUTOR_FAILED`；方案稿 §七 提过 `OCR_MODEL_MISSING`，
-  本轮**不加新码**（能用既有码就不扩枚举），S4 再定。
+  本轮**不加新码**（能用既有码就不扩枚举），S4 再定。**S2/S3 沿用同一口径**：滑块失配也走
+  `EXECUTOR_FAILED`（输入合法、只是这一对图匹配得不够好），不新造 `OCR_NO_MATCH`。
 - **识别率不承诺**（模型对样式的拟合问题，官方自称玄学）——文档如实写。
 - 验收口径 4 的 **`resume` 跨进程重建**目前只由「`close()` 后重建结果一致」+「取消后无泄漏」
   覆盖，**编排层 resume 的真机路径未单独取证**，属 S4 收口项。
+
+## 九、S2 + S3 落地记录（2026-10-14）
+
+维护者口径（AskUserQuestion）：
+
+| 问题 | 选择 |
+|---|---|
+| 「验证码识别 感觉就是个 ocr？」往下走哪条路 | **补齐原切片**（补 `ocr.detect` + `ocr.slideMatch`，保持「OCR 原语」定位；**不做**组合命令、**不接**第三方打码平台） |
+| `slideMatch` 没有「找不到」信号（错坐标也报 `confidence 1.0`）怎么填 | **默认透传 + 可选阈值**（`minConfidence`，默认 0 = 不判） |
+| `ocr.recognize` 新加的 `charsetRange` 暴露哪种形态 | **只字符串**（不暴露 `list` / `int`） |
+
+### 9.1 交付物
+
+| 文件 | 改动 |
+|---|---|
+| `src/rpa_core/workers/ocr_worker.py` | `_ENGINES` 键加 `charset_range`；新增 `_OcrNoMatch`；`recognize()` 加 `charset_range`；**新增 `detect()`**（`[x1,y1,x2,y2]` → `{x,y,width,height}` + `count`）；**新增 `slide_match()`**（返回 `{x,y,confidence}`，`min_confidence` 不达标抛 `_OcrNoMatch`）；`handle()` 补两条 `if command_id == …` 分支 |
+| `commands/ocr/recognize.json` | 加 `charsetRange`（`type: string`、`x-fx`） |
+| `commands/ocr/detect.json` | **新建**（`imagePath`/`imageBase64` 互斥；**无 `modelPath`**；输出 `boxes[]`/`count`） |
+| `commands/ocr/slideMatch.json` | **新建**（四路二选一 + `simpleTarget` + `minConfidence`；输出 `x`/`y`/`confidence`） |
+| `src/rpa_core/devserver/static/i18n.js` | `commands` 补两条标题；`commandFields` 补两个新命令的字段 + `charsetRange` 标签 |
+| `tests/commands/cases/ocr.json` | 重写：`recognize` 8 变体 + `detect` 4 + `slideMatch` 6 = **18 变体**（原 7） |
+| `tests/contract/test_ocr_contract.py` | 9 → **16 条**（新增 7 条：族契约 / det 无 modelPath / 三条装载 / 字符集不串味 / detect 双通道一致 / 滑块阈值因果 / 四条输入路径 / 分派链） |
+| `.harness/spike/probe_ocr_detect_slide.py` 等 4 个探针 | 取证用（只读），见 9.2/9.3/9.5 |
+
+### 9.2 一手实测（`probe_ocr_detect_slide.py` / `probe_ocr_slide_fixture.py`）
+
+| 项 | 实测 |
+|---|---|
+| `set_ranges` 真名与语义 | 见 §8.3 ① 订正表；`list` 原样、`str` 逐字符、`int` 取默认前 N+1 |
+| `set_ranges` 进缓存键的必要性 | 它改的是**实例状态**——不进键则「先设过范围的请求」会把范围串味给后续请求。已落判据（同进程顺序跑 3 种字符集，第 3 次不填必须回到完整字符集） |
+| `det=True` 与 `import_onnx_path` | **被忽略**（传不存在的路径也接受）⇒ `ocr.detect` 不声明 `modelPath` |
+| `det=False, ocr=False` + 非空 `import_onnx_path` | 落进 OCR 分支、抛 `ModelLoadError` ⇒ 滑块模式必须传**空串** |
+| `detection()` 返回 | 四元 `[x1,y1,x2,y2]` 列表；**不保证找全**（同一张 4 字符图实测 4 个框，早期探针 3 个）⇒ 判据只取 `count >= 1` 与形状，**不钉数量** |
+| `slide_match()` 返回 | `{'target','target_x','target_y','confidence'}`；源码（`core/slide_engine.py`）两分支都是 `max_loc + 尺寸//2` ⇒ `x`/`y` 是**中心**；`confidence` 是 `TM_CCOEFF_NORMED` 的 `max_val`（**相关系数，不是概率**） |
+| 「找不到」分支 | **不存在**。纯色底图 + 任意块图照样返回 `confidence == 1.0` ⇒ 只有用户开的 `minConfidence` 能拦 |
+| `slide_comparison()` | 用 `cv2.absdiff` ⇒ 要求两图**同尺寸**（否则 `ImageProcessError`）；返回体**没有** `confidence` 键 ⇒ 本切片**不接**它 |
+
+### 9.3 ★ 合成图为什么证不了滑块坐标（机制，一手）
+
+`x`/`y` 的计算公式（源码）与文档一致，但**合成夹具反推不出坐标真值**——两条路各自退化：
+
+1. `simple_target=False`（默认）走 `_edge_based_match`：块图与背景都先过 Canny，
+   而**光滑合成图**的内部是均匀色 ⇒ Canny 后两侧全零 ⇒ `matchTemplate` 的
+   `max_loc == (0, 0)` ⇒ 恒返回「块图自身中心」且 `confidence == 1.0`。
+   **实测「匹配对」与「错配对」返回完全一样**（都是 `{x:17, y:17, confidence:1.0}`）。
+2. `simple_target=True` 走 `_simple_template_match`：条纹背景是**周期纹理**，
+   同一块图在多个位置都是完美匹配，`minMaxLoc` 取到**最左的别名**——
+   已知裁剪框 `(140, 30, 175, 65)`（真值中心 157/47）却返回 `x=37` / `97`。
+
+⇒ 判据只能钉「形状、键、类型、在框内、阈值因果」，坐标精度**留给真实滑块图**（真实站点抓图，
+S4 收口项）。这条同时解释了为什么用例表里滑块的正路径只断言 `outputKeys`。
+
+### 9.4 ★ 为什么用例表整表重写成「真跑也成立」
+
+`ocr` 命名空间**不在执行层**：`tests/commands/test_data_matrix.py` 的 `NAMESPACES = ("data","workflow")`
+不含 `ocr`，且那里的执行器是 `PythonWorkerExecutor`，跑不了 `ocr.ddddocr` ⇒ 本表**只被
+`check_command_matrix.py` 静态校验，从不执行**。而矩阵校验只看得见「参数被设置过」，
+看不见「这条变体写成真的会怎样」。原表里 `image-path-is-accepted` 用的 `{tmp}/ocr/captcha.png`
+**永远不存在**（`prepare_setup.files` 只 `write_text` 文本、预置不了二进制 PNG）——这是一条
+**假判据**（跑不了，但静态层永远绿）。S2/S3 把整表改成「真跑也成立」的形状：
+图片字节类走内联 base64（离线可复现），路径类只声明**不存在的路径**并期望 `INVALID_INPUT`。
+
+并用探针 `.harness/spike/probe_ocr_cases_live.py` 把这张表**真的跑了一遍**
+（同一个 `ocr_worker.handle`，与执行器子进程里跑的是同一份代码）：
+**18 变体 → 18 PASS / 0 FAIL**。夹具也顺手换成 Pillow **自带**的可缩放字体
+（`load_default(44)`，不依赖 `arial.ttf` 之类的系统字体），重跑生成器两次 md5 一致。
+
+### 9.5 负向验证
+
+见 **§十**（8 个方向全部落在预期，含 3 处「期望绿」反向对照；`.harness/spike/probe_m60_s23_negative.py`）。
+
+### 9.6 未做（S4 承接）
+
+- `docs/ocr-commands.md` 用户面文档（当前坐标/相关度语义只写在 manifest `description` 里）。
+- `modelPath` 覆盖默认模型的**判据**（字段在，判据不在）。
+- 真实滑块图的坐标精度验收（9.3 明确留给真机）。
+- `ocr.detect` 的「找全率」不承诺（9.2），如需点选型落地要在流程侧配合人工确认。
+
+## 十、负向验证（S2/S3，`.harness/spike/probe_m60_s23_negative.py`）
+
+判据不是「有没有红」，而是「**红在预期的那几条上**」：每个注入都同时声明 `expect_red`
+（必须红）与 `expect_green`（必须仍绿）——只做一个方向的话，一个「把什么都判红」的坏判据
+也能骗过检查。探针三道自保：起手**问文件本身**「此刻是不是注入态」（不靠备份目录）、
+注入包 `try/finally` + 收尾**逐字节还原核 md5**、调用侧**输出重定向到文件**（不接管道）。
+
+| 向 | 注入 | 期望红 | 实际 |
+|---|---|---|---|
+| ① | `charsetRange` 不喂给引擎 | 契约::charset + 用例表真跑 | ✅ 红在「`"abc"` 应退化成空串」那一格 |
+| ② | 引擎缓存键丢掉 `charset_range` | 同上 | ✅ 红在「第 3 次不填」那一格（**串味只有这一格抓得到**） |
+| ③ | `detect` 把 `right`/`bottom` 当 `width`/`height` | 契约::detect | ✅ 红在**越界**断言（用例表仍绿 ⇒ 只判形状拦不住） |
+| ④ | `minConfidence` 恒不拦 | 契约::slide + 用例表真跑 | ✅ 红在 `low-match-is-rejected-…` |
+| ⑤ | `minConfidence` 恒拦（默认 0 也拦） | 同上 | ✅ 红在 `min-confidence-zero-passes-…` |
+| ⑥ | 坐标从左边界数（卸掉 `+ 尺寸//2`） | 契约::slide | ✅ 红在 `tpl_w // 2` 那条必要条件（用例表仍绿，见下） |
+| ⑦ | handler 丢掉 `ocr.detect` 分支 | 契约::dispatch/detect + 用例表真跑 + 门禁::param | ✅ 见下「一条被修正的期望」 |
+| ⑧ | manifest 少声明 `EXECUTOR_FAILED` | 门禁::error | ✅ 红且点名 `ocr.slideMatch` |
+
+**★ 一条被修正的期望（首轮我写错了）**：⑦ 我原以为错误契约门禁也会红，实测**是绿的**——
+该门禁的判据是**单向包含** `returned ⊆ declared`（源码先 `returned |= per_command.get(command_id, set())`
+再算 `missing = returned - declared`），分支消失后 `returned = ∅` ⇒ `missing = ∅` ⇒ **空过**。
+⇒ 「命令从分派器里消失」这件事**只有参数门禁看得见**（声明了参数却没人读），
+错误门禁对「压根没接线」无感。已按实测把该期望改为「期望绿」，并把机制登记在 BACKLOG。
+
+**★ ⑥ 的已知边界（如实写）**：合成夹具只能钉住 `x >= 模板宽 // 2` 这条**公式必要条件**
+（左边界语义在 `max_loc` 小的时候会跌破它）；这条能红是因为本探针的块图恰好 35×35 且
+边缘模式退化到 `max_loc=(0,0)`。**坐标真值仍只能靠真实滑块图**——本片没有把它做成判据，
+这是明确的缺口而不是「已经验过了」。
+
+**★ 用例表的两处「仍绿」是证据不是漏洞**：③ 和 ⑥ 里用例表都保持绿——
+因为它对 `detect`/`slideMatch` 只断言 `outputKeys`。这正好量化了静态表的能力边界：
+**形状判据拦不住语义错**，所以真正的语义判据必须落在 `tests/contract/`（进默认门禁）。

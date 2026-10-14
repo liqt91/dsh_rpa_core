@@ -25,6 +25,11 @@
         "default": false,
         "description": "是否同时返回识别置信度（0~1）。开启后速度略降"
       },
+      "charsetRange": {
+        "type": "string",
+        "x-fx": true,
+        "description": "允许的字符集，例如 \"0123456789\"。留空用模型内置的全量字符集。注意：只有模型字符集里认得的字符才生效，其余字符会被静默忽略；若一个都不认得，识别结果会退化成空串（库的行为，如实透传、不做额外降级）"
+      },
       "modelPath": {
         "type": "string",
         "x-fx": true,

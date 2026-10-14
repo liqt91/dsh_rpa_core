@@ -92,6 +92,8 @@ window.RPA_I18N = {
     "desktop.getWindowList": "获取窗口列表（UIA）",
     "desktop.win32.getWindowList": "获取窗口列表（Win32）",
     "ocr.recognize": "识别验证码",
+    "ocr.detect": "识别验证码目标位置",
+    "ocr.slideMatch": "识别滑块缺口位置",
   },
   kinds: {
     action: "动作",
@@ -248,7 +250,10 @@ window.RPA_I18N = {
     "browser.getScrollPosition": { direction: "滚动条方向", position: "位置（当前位置/底部位置）" },
     // M60：验证码识别指令族（ddddocr）。图片输入与自定义模型路径是字符串字段，
     // 走 fx 变量引用；withProbability 是布尔开关。
-    "ocr.recognize": { imagePath: "图片路径", imageBase64: "图片内容（Base64）", withProbability: "返回置信度", modelPath: "自定义模型路径" },
+    "ocr.recognize": { imagePath: "图片路径", imageBase64: "图片内容（Base64）", withProbability: "返回置信度", charsetRange: "允许的字符集", modelPath: "自定义模型路径" },
+    // M60 S2/S3：目标检测（点选型验证码「点哪几个字」）与滑块缺口（拖到哪）。
+    "ocr.detect": { imagePath: "图片路径", imageBase64: "图片内容（Base64）" },
+    "ocr.slideMatch": { templateImagePath: "滑块块图路径", templateImageBase64: "滑块块图（Base64）", backgroundImagePath: "背景图路径", backgroundImageBase64: "背景图（Base64）", simpleTarget: "简单块图模式", minConfidence: "最低匹配相关度" },
   },
   glossary: {
     action: "动作：对外部世界执行一次操作（点击、写入等）",

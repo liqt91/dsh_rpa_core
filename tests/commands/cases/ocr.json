@@ -1,18 +1,7 @@
 {
   "ocr.recognize": {
-    "notes": "OCR 验证码识别（M60 S1）。输入是「图片字节」，catalog 里**没有**任何命令能生成图片（screenshot 需要浏览器/桌面会话）⇒ 用例表无法用 pre 步自备 fixture。因此：① 需要真实图片的变体统一用**内联 imageBase64**（64x26 PNG，内容 58，876 字符，离线可复现）；② imagePath 变体用 {tmp} 占位路径，只承担**静态参数覆盖**，真实路径读写行为由 tests/contract/test_ocr_contract.py 用 PIL 现场生成图片覆盖（该测试进默认门禁，本表默认不被执行）。",
+    "notes": "【整表口径】OCR 指令族（M60 S1/S2/S3）。★ 本表**只被 check_command_matrix.py 静态校验，从不执行**——tests/commands/test_data_matrix.py 的 NAMESPACES 是 (\"data\", \"workflow\")，不含 ocr；而且那里的执行器是 PythonWorkerExecutor，跑不了 ocr.ddddocr。因此本表的变体**全部写成「真跑也成立」的形状**：图片字节类走内联 base64（离线可复现），路径类只声明**不存在的路径**并期望 INVALID_INPUT——因为 prepare_setup.files 只写文本（write_text），预置不了二进制 PNG，写「路径正路径能识别」会是一条永远不会被跑、跑了必红的假判据。真实路径读写与识别精度由 tests/contract/test_ocr_contract.py 用 PIL 现场生成图片覆盖（该测试进默认门禁）。★ 夹具全部是**合成图**，只用于验证「形状与接线」：ocr.detect 不保证找全目标，ocr.slideMatch 的坐标精度也**不能用合成图判**——机制（照 ddddocr `core/slide_engine.py` 与实测）：① simple_target=False 走**边缘匹配**，光滑合成图 Canny 后两侧都是全零，matchTemplate 退化成 max_loc=(0,0)，于是恒回「块图自身中心」(17,17) 且 confidence=1.0，**匹配对与错配看起来一模一样**；② simple_target=True 走模板匹配，而条纹背景是**周期纹理**，同一块图在多个位置都完美匹配，minMaxLoc 取到最左的**别名**（实测裁剪框 (140,30,175,65) → 真值中心 157/47，却回 x=37 / 97）。⇒ 坐标精度只能靠真实滑块图，见 M60 任务单 §40.3。唯一能钉的是**阈值因果关系**：噪声块那一对的相关系数实测约 0.20，低于 0.5 就被拦、等于 0 就透传。★ 本命令：验证码文本识别。图片输入二选一（imagePath / imageBase64），可选字符集收敛与置信度。★ charsetRange 的两条变体钉的是**库的真实行为**：只有「模型字符集里认得的字符」才生效，不认得的被静默丢弃；若一个都不认得，结果退化成空串（不是报错）。",
     "variants": [
-      {
-        "name": "image-path-is-accepted",
-        "inputs": {
-          "imagePath": "{tmp}/ocr/captcha.png"
-        },
-        "expect": {
-          "outputKeys": [
-            "text"
-          ]
-        }
-      },
       {
         "name": "image-base64-recognizes-known-digits",
         "inputs": {
@@ -40,6 +29,36 @@
           "outputKeys": [
             "text",
             "confidence"
+          ]
+        }
+      },
+      {
+        "name": "charset-range-narrows-the-recognized-set",
+        "inputs": {
+          "imageBase64": "iVBORw0KGgoAAAANSUhEUgAAAEAAAAAaCAIAAACIHs0YAAACVklEQVR42u2Xu2vqUBzHTzS+glIj+FrUQUFB6gOjURAl2E2hs5N0EVzcC479JwSLguILHaTQQenUQV1EBJ0UHBXRGi2oseQOKaL3drtDLOQ75ZcvgXw43+85CUTTNPjN4oFfLg6AA+AALmW326FL3d/fn9z393eCIBQKhUqlCofDg8GAdQD4fKAoajQaBYPBQCBwumk2m5mLbrdLEITT6Uyn0xRFPT094Tje6XSsViubBPSZ+v0+AKBQKNA/KRaLSSSS9XrNjNPpFACQSCRoVnURIQbA4XD8iLpcLoVCoVQqZUaVSgXD8GazuaIO9Pt9BEG63a7JZBKLxRiGvby8nNyHhweSJJPJ5GKxmM1m8XicWRaWS3C+HKFQiM/nB4PBer2ezWZvb28hCDpPVC6Xg+Hv2ggEglqtRrOtCwAcxz0ez+FwYMbPz0+dTqdUKvf7PU3TxWIRhmGCIMrlcj6fxzAMQZC3t7crAvhXj4+PAIB2u73dblEUxTDs6+uLsXa7ncVi0ev1x+PxWkr88fHxVynVajUAgCTJ4XC4Wq2i0SiP9/2ISCSKRqPT6XQ8Hl9FiSeTCYqiqVTq3GZezmAwMF/dfD7/4hCBYQDA8Xi8lhIbjUatVkuSJDPO53O5XO5yuZjAoCiK4/gpQhRF2Ww2jUbDboQuAJrNJgRBbre7UqlkMhmj0SiTyXq9HuM+Pz8DAO7u7mq1WqlU8vv9PB6vWq1eV4lfX1+9Xq9YLL65uYlEIoPB4NxtNBo+n08ikSAIEggEWq0W69soxP1ScgAcAAfAAfyP/gBjnwScjBKmqQAAAABJRU5ErkJggg==",
+          "charsetRange": "0123456789"
+        },
+        "expect": {
+          "outputs": {
+            "text": "58"
+          },
+          "outputKeys": [
+            "text"
+          ]
+        }
+      },
+      {
+        "name": "charset-range-outside-the-model-charset-yields-empty",
+        "inputs": {
+          "imageBase64": "iVBORw0KGgoAAAANSUhEUgAAAEAAAAAaCAIAAACIHs0YAAACVklEQVR42u2Xu2vqUBzHTzS+glIj+FrUQUFB6gOjURAl2E2hs5N0EVzcC479JwSLguILHaTQQenUQV1EBJ0UHBXRGi2oseQOKaL3drtDLOQ75ZcvgXw43+85CUTTNPjN4oFfLg6AA+AALmW326FL3d/fn9z393eCIBQKhUqlCofDg8GAdQD4fKAoajQaBYPBQCBwumk2m5mLbrdLEITT6Uyn0xRFPT094Tje6XSsViubBPSZ+v0+AKBQKNA/KRaLSSSS9XrNjNPpFACQSCRoVnURIQbA4XD8iLpcLoVCoVQqZUaVSgXD8GazuaIO9Pt9BEG63a7JZBKLxRiGvby8nNyHhweSJJPJ5GKxmM1m8XicWRaWS3C+HKFQiM/nB4PBer2ezWZvb28hCDpPVC6Xg+Hv2ggEglqtRrOtCwAcxz0ez+FwYMbPz0+dTqdUKvf7PU3TxWIRhmGCIMrlcj6fxzAMQZC3t7crAvhXj4+PAIB2u73dblEUxTDs6+uLsXa7ncVi0ev1x+PxWkr88fHxVynVajUAgCTJ4XC4Wq2i0SiP9/2ISCSKRqPT6XQ8Hl9FiSeTCYqiqVTq3GZezmAwMF/dfD7/4hCBYQDA8Xi8lhIbjUatVkuSJDPO53O5XO5yuZjAoCiK4/gpQhRF2Ww2jUbDboQuAJrNJgRBbre7UqlkMhmj0SiTyXq9HuM+Pz8DAO7u7mq1WqlU8vv9PB6vWq1eV4lfX1+9Xq9YLL65uYlEIoPB4NxtNBo+n08ikSAIEggEWq0W69soxP1ScgAcAAfAAfyP/gBjnwScjBKmqQAAAABJRU5ErkJggg==",
+          "charsetRange": "abc"
+        },
+        "expect": {
+          "outputs": {
+            "text": ""
+          },
+          "outputKeys": [
+            "text"
           ]
         }
       },
@@ -81,6 +100,135 @@
         "name": "missing-image-file-is-rejected",
         "inputs": {
           "imagePath": "{tmp}/ocr/does-not-exist.png"
+        },
+        "expect": {
+          "errorCode": "INVALID_INPUT"
+        },
+        "negative": true
+      }
+    ]
+  },
+  "ocr.detect": {
+    "notes": "（整表口径见 ocr.recognize.notes）验证码目标检测（点选型「点哪几个字」）。输出 boxes 用与 browser.getPosition 同形状的 {x,y,width,height}。★ 库**不保证找全**：合成图四个字符只回了 3 个框，所以变体只判形状与键，不判数量。",
+    "variants": [
+      {
+        "name": "image-base64-returns-target-boxes",
+        "inputs": {
+          "imageBase64": "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"
+        },
+        "expect": {
+          "outputKeys": [
+            "boxes",
+            "count"
+          ]
+        }
+      },
+      {
+        "name": "missing-image-path-is-rejected",
+        "inputs": {
+          "imagePath": "{tmp}/ocr/detect.png"
+        },
+        "expect": {
+          "errorCode": "INVALID_INPUT"
+        },
+        "negative": true
+      },
+      {
+        "name": "both-image-inputs-are-rejected",
+        "inputs": {
+          "imagePath": "{tmp}/ocr/detect.png",
+          "imageBase64": "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"
+        },
+        "expect": {
+          "errorCode": "INVALID_INPUT"
+        },
+        "negative": true
+      },
+      {
+        "name": "neither-image-input-is-rejected",
+        "inputs": {},
+        "expect": {
+          "errorCode": "INVALID_INPUT"
+        },
+        "negative": true
+      }
+    ]
+  },
+  "ocr.slideMatch": {
+    "notes": "（整表口径见 ocr.recognize.notes）滑块缺口定位。两组输入各自二选一（模板块图 / 背景图），共四条路径。★ x/y 是缺口**中心**坐标（不是左边界）；confidence 是归一化相关系数（**不是概率**）；库**没有「找不到」分支**，失配也照样返回最佳位置 —— 所以 minConfidence 是唯一能拦住「错坐标当真」的开关，两条变体分别覆盖「设了阈值拦下」与「阈值为 0 原样透传」。",
+    "variants": [
+      {
+        "name": "template-and-background-base64-report-the-gap",
+        "inputs": {
+          "templateImageBase64": "iVBORw0KGgoAAAANSUhEUgAAACMAAAAjCAIAAACRuyQOAAAAh0lEQVR42u3TMQqDQBBG4bcSG0VslFS5/z1iY2OtVSDERphmEAuxsVL2BLtkmSn/5rEsnxvGL9c9RYGlqe8lFwUOb1lFgcpbXqLAz1tKUWDzll00I9S5bh7ClMK96VGsTWr/ZKX/KLmuT9BTbZ6sFMnTJ0FPu3myUiRP7wQ9tebJSpE8TYE8nc0wanj/rUqHAAAAAElFTkSuQmCC",
+          "backgroundImageBase64": "iVBORw0KGgoAAAANSUhEUgAAAMgAAABkCAIAAABM5OhcAAACJElEQVR42u3cvWoVQQCG4e+IB+GIBDEiFl6LlVhobZNmvTJt0ljHQgRBT2OhFkFBEbRQ8YfRMIQgIYV2nr2AuMwyz1NukyF8zC4vIYv1k5eB03bGr4D/4WxdLpNc3d769+hiqUkORk/+lJpkMXrys9Qkl0ZPrpSa5PvoybLUJCejJ4elJrkwenKt1CSfRk/Ol5rkaPTkuNQk50ZPvpbqzI2f2Y2FVyGGhWGBYTETi/VrHQs3FplLxzrQsZxZx8KrEMMCw8KwSL8d64eOhRuLzKVjvdOxnFnHwqsQwwLDwrBIvx3rlY6FG4vMpWMd6VjOrGPhVYhhwWl/Y/kVtO/O7ZuT/awHe4/cWKThjvVZx2rdcH1nsp91/+muG4uWO9ZHHav1M09pdbitYyE3YFhgWBgW6apjPdexWjfsTNixdnUs0nLHOtGxdKyN1ZaOhY93DAsMC8MifXWsDzpW64YbE3asxzoWabljfdGxdKyN1bGOhY93DAsMC8MifXWsZzpW64a7E3asezoWabljLXQsHWtjdVnHwsc7hgWGhWGRvjrWWx2rdcOtCTvWQx2Llm+svfV+dCxn9n/e8fGOYYFhYVh027F+6Vi4schc/h7rjb/HcmYdC69CDAsMC8Mi/XasfR0LNxaZS8eqOpYz61h4FWJYYFgYFum3Y33TsXBjkbl0rPc6ljPrWHgVYlhgWBgW6bdjvdCxcGORuXSs3zqWM+tYzMRf0nQKO9TX7F4AAAAASUVORK5CYII="
+        },
+        "expect": {
+          "outputKeys": [
+            "x",
+            "y",
+            "confidence"
+          ]
+        }
+      },
+      {
+        "name": "simple-target-switches-the-matcher",
+        "inputs": {
+          "templateImageBase64": "iVBORw0KGgoAAAANSUhEUgAAACMAAAAjCAIAAACRuyQOAAAAh0lEQVR42u3TMQqDQBBG4bcSG0VslFS5/z1iY2OtVSDERphmEAuxsVL2BLtkmSn/5rEsnxvGL9c9RYGlqe8lFwUOb1lFgcpbXqLAz1tKUWDzll00I9S5bh7ClMK96VGsTWr/ZKX/KLmuT9BTbZ6sFMnTJ0FPu3myUiRP7wQ9tebJSpE8TYE8nc0wanj/rUqHAAAAAElFTkSuQmCC",
+          "backgroundImageBase64": "iVBORw0KGgoAAAANSUhEUgAAAMgAAABkCAIAAABM5OhcAAACJElEQVR42u3cvWoVQQCG4e+IB+GIBDEiFl6LlVhobZNmvTJt0ljHQgRBT2OhFkFBEbRQ8YfRMIQgIYV2nr2AuMwyz1NukyF8zC4vIYv1k5eB03bGr4D/4WxdLpNc3d769+hiqUkORk/+lJpkMXrys9Qkl0ZPrpSa5PvoybLUJCejJ4elJrkwenKt1CSfRk/Ol5rkaPTkuNQk50ZPvpbqzI2f2Y2FVyGGhWGBYTETi/VrHQs3FplLxzrQsZxZx8KrEMMCw8KwSL8d64eOhRuLzKVjvdOxnFnHwqsQwwLDwrBIvx3rlY6FG4vMpWMd6VjOrGPhVYhhwWl/Y/kVtO/O7ZuT/awHe4/cWKThjvVZx2rdcH1nsp91/+muG4uWO9ZHHav1M09pdbitYyE3YFhgWBgW6apjPdexWjfsTNixdnUs0nLHOtGxdKyN1ZaOhY93DAsMC8MifXWsDzpW64YbE3asxzoWabljfdGxdKyN1bGOhY93DAsMC8MifXWsZzpW64a7E3asezoWabljLXQsHWtjdVnHwsc7hgWGhWGRvjrWWx2rdcOtCTvWQx2Llm+svfV+dCxn9n/e8fGOYYFhYVh027F+6Vi4schc/h7rjb/HcmYdC69CDAsMC8Mi/XasfR0LNxaZS8eqOpYz61h4FWJYYFgYFum3Y33TsXBjkbl0rPc6ljPrWHgVYlhgWBgW6bdjvdCxcGORuXSs3zqWM+tYzMRf0nQKO9TX7F4AAAAASUVORK5CYII=",
+          "simpleTarget": true
+        },
+        "expect": {
+          "outputKeys": [
+            "x",
+            "y",
+            "confidence"
+          ]
+        }
+      },
+      {
+        "name": "min-confidence-zero-passes-the-match-through",
+        "inputs": {
+          "templateImageBase64": "iVBORw0KGgoAAAANSUhEUgAAABQAAAAUCAIAAAAC64paAAAEz0lEQVR42gHEBDv7A6VNysb/y68LVbYeqM0NDMPI4SgGEKzgYrI4XMsn8jI4FhKQF/C/Ue7LbG97aSILADDqa7+bmRXOyo1CkQBN+tcUJ6Cus/7pIy+K8iEfnuSRxbEL7LVWO/web5NCfsvI/ilV5c2ORtyO1LfCdk0qWk12dwb4XYaQAkoCicPMLPRJGhjO4BLHQy1AA8z9wnP9D0hL9/i+77XXfs626bzJ6VYsYK8bEVeScjk6y/i+80JFFTuo9bkLALZyqHJjes10Zvy2Dg6P8YRjsOSyuilwNHTwZKxo9wD1sCs9xmb0W96qLMrtzStRV0EOTe5K8rNPQwoHNABH3mNsDoBslXumhNZDH7Xq10JNCeFdAkxYSPI9H6b3Nh1/YY0VMucOIOKmZo3n9H6EZ+VG1T7I4qEle9sBJWybGeMgCzKLpu/q3Ikjp1mJXFv7lgnMywVmfi/YXNrIjlyQ3hXyElbp1f8ufPqNdHnY4ZF2MEsILC8IAYUqcZ1dzcZ+b+2ElUHx9jwM4QrhhkAC9Ujy9s2u9mH+iU/sdINDYBmTwHGsEvfSIEzUc1YJQNUvmk9wdAL3bKbJ1xKh31SxMWaPA9lM6Z0BmQwnwV+qC/VRJQcbQsO01o61ZZouhio4iJ0sA0cqLMZuB4058ZwK/VcAGQl9+ocB6SMvIfKBJod4aXbr/MMn9ZMXZSdLqYKbRAb2H/iJMm/6lJLt7u48Zp8r8giU6ifmicZrayYuAUiGuPsJgXfnxT5TDlk475XOn2IGFnjMjelfaQTLl7c7Vx24jUgJBu8UZWC0qAIDGGX2kyLZ4DqtDY0bTQOuo+oIPtqboGY4HxIGKsAQ0gtsIph6nenr1QpcxpA176XPrBgNtGPHOO0eZXeEhdwf3Qhvitg7usGfVjwBxMzkGdMnZHHOseonM87vwLdIjdAWxZve3RYVYxNbym1E+LJFYDCi7BA6gCjriQeRZdcCG1ofDjnG48zGAyEOZw3ripJr7Tj3+pTMePVzOjK9HYPLNxb/mthNLIWjX0L0NlsKO9LB9LqK/I5lxhIR9ZR3IjyyKAKLzgPA7iPKZRIiuus6BErQgHMaMzjhFQ1KhDK6rC1ScWdWCejvAzWCV+utMh4e4mC+rE3SvYQz/xY5pDxuuAEDTWRgaFb6t7sL4v3+48YVZOvtsam9mFGFg2PCje9cmaAVohEEFPkeMP61WfAs/TPjN6sJd1q/7/B0gNXNAALzduW/FJZ3PRlhYya+W+WFAzazbxO8rkgWaIITaAWn0b5enydoEP33INAzyk8uU8uK0ZGd1RqfttTVCQG6ZMgVBDsP6NVc3veAvYSIHMcGxBN1jB31OgilkeVt2S7WRbFdYQXPizeroxKBjgsjb+Gv6++IxyPJlUMBPMfpYBC04wIqPQsZnychn+N36vzjDuLbMHWBunp3BlnmYBaM5vEhHfJg81YiwzARdo5fEDDyC5ik9gwhAYZ5oziZwp+87THZbsjgesIxrR3J4okG9/7D+O3fKswxNiInhgl/c9FMg2yJJjtuQFzUEafqqoA1Aded5ABEaLvzUUQHfEzmMSBKis2HBRyz4/x/VAAWHwzPX3lRHTUGZEjTZtRZniCZGPQDwN/uKedZczWFdhM/q4Z1xk4RRWr+JQAAAABJRU5ErkJggg==",
+          "backgroundImageBase64": "iVBORw0KGgoAAAANSUhEUgAAAMgAAABkCAIAAABM5OhcAAACJElEQVR42u3cvWoVQQCG4e+IB+GIBDEiFl6LlVhobZNmvTJt0ljHQgRBT2OhFkFBEbRQ8YfRMIQgIYV2nr2AuMwyz1NukyF8zC4vIYv1k5eB03bGr4D/4WxdLpNc3d769+hiqUkORk/+lJpkMXrys9Qkl0ZPrpSa5PvoybLUJCejJ4elJrkwenKt1CSfRk/Ol5rkaPTkuNQk50ZPvpbqzI2f2Y2FVyGGhWGBYTETi/VrHQs3FplLxzrQsZxZx8KrEMMCw8KwSL8d64eOhRuLzKVjvdOxnFnHwqsQwwLDwrBIvx3rlY6FG4vMpWMd6VjOrGPhVYhhwWl/Y/kVtO/O7ZuT/awHe4/cWKThjvVZx2rdcH1nsp91/+muG4uWO9ZHHav1M09pdbitYyE3YFhgWBgW6apjPdexWjfsTNixdnUs0nLHOtGxdKyN1ZaOhY93DAsMC8MifXWsDzpW64YbE3asxzoWabljfdGxdKyN1bGOhY93DAsMC8MifXWsZzpW64a7E3asezoWabljLXQsHWtjdVnHwsc7hgWGhWGRvjrWWx2rdcOtCTvWQx2Llm+svfV+dCxn9n/e8fGOYYFhYVh027F+6Vi4schc/h7rjb/HcmYdC69CDAsMC8Mi/XasfR0LNxaZS8eqOpYz61h4FWJYYFgYFum3Y33TsXBjkbl0rPc6ljPrWHgVYlhgWBgW6bdjvdCxcGORuXSs3zqWM+tYzMRf0nQKO9TX7F4AAAAASUVORK5CYII=",
+          "minConfidence": 0
+        },
+        "expect": {
+          "outputKeys": [
+            "x",
+            "y",
+            "confidence"
+          ]
+        }
+      },
+      {
+        "name": "low-match-is-rejected-when-min-confidence-is-set",
+        "inputs": {
+          "templateImageBase64": "iVBORw0KGgoAAAANSUhEUgAAABQAAAAUCAIAAAAC64paAAAEz0lEQVR42gHEBDv7A6VNysb/y68LVbYeqM0NDMPI4SgGEKzgYrI4XMsn8jI4FhKQF/C/Ue7LbG97aSILADDqa7+bmRXOyo1CkQBN+tcUJ6Cus/7pIy+K8iEfnuSRxbEL7LVWO/web5NCfsvI/ilV5c2ORtyO1LfCdk0qWk12dwb4XYaQAkoCicPMLPRJGhjO4BLHQy1AA8z9wnP9D0hL9/i+77XXfs626bzJ6VYsYK8bEVeScjk6y/i+80JFFTuo9bkLALZyqHJjes10Zvy2Dg6P8YRjsOSyuilwNHTwZKxo9wD1sCs9xmb0W96qLMrtzStRV0EOTe5K8rNPQwoHNABH3mNsDoBslXumhNZDH7Xq10JNCeFdAkxYSPI9H6b3Nh1/YY0VMucOIOKmZo3n9H6EZ+VG1T7I4qEle9sBJWybGeMgCzKLpu/q3Ikjp1mJXFv7lgnMywVmfi/YXNrIjlyQ3hXyElbp1f8ufPqNdHnY4ZF2MEsILC8IAYUqcZ1dzcZ+b+2ElUHx9jwM4QrhhkAC9Ujy9s2u9mH+iU/sdINDYBmTwHGsEvfSIEzUc1YJQNUvmk9wdAL3bKbJ1xKh31SxMWaPA9lM6Z0BmQwnwV+qC/VRJQcbQsO01o61ZZouhio4iJ0sA0cqLMZuB4058ZwK/VcAGQl9+ocB6SMvIfKBJod4aXbr/MMn9ZMXZSdLqYKbRAb2H/iJMm/6lJLt7u48Zp8r8giU6ifmicZrayYuAUiGuPsJgXfnxT5TDlk475XOn2IGFnjMjelfaQTLl7c7Vx24jUgJBu8UZWC0qAIDGGX2kyLZ4DqtDY0bTQOuo+oIPtqboGY4HxIGKsAQ0gtsIph6nenr1QpcxpA176XPrBgNtGPHOO0eZXeEhdwf3Qhvitg7usGfVjwBxMzkGdMnZHHOseonM87vwLdIjdAWxZve3RYVYxNbym1E+LJFYDCi7BA6gCjriQeRZdcCG1ofDjnG48zGAyEOZw3ripJr7Tj3+pTMePVzOjK9HYPLNxb/mthNLIWjX0L0NlsKO9LB9LqK/I5lxhIR9ZR3IjyyKAKLzgPA7iPKZRIiuus6BErQgHMaMzjhFQ1KhDK6rC1ScWdWCejvAzWCV+utMh4e4mC+rE3SvYQz/xY5pDxuuAEDTWRgaFb6t7sL4v3+48YVZOvtsam9mFGFg2PCje9cmaAVohEEFPkeMP61WfAs/TPjN6sJd1q/7/B0gNXNAALzduW/FJZ3PRlhYya+W+WFAzazbxO8rkgWaIITaAWn0b5enydoEP33INAzyk8uU8uK0ZGd1RqfttTVCQG6ZMgVBDsP6NVc3veAvYSIHMcGxBN1jB31OgilkeVt2S7WRbFdYQXPizeroxKBjgsjb+Gv6++IxyPJlUMBPMfpYBC04wIqPQsZnychn+N36vzjDuLbMHWBunp3BlnmYBaM5vEhHfJg81YiwzARdo5fEDDyC5ik9gwhAYZ5oziZwp+87THZbsjgesIxrR3J4okG9/7D+O3fKswxNiInhgl/c9FMg2yJJjtuQFzUEafqqoA1Aded5ABEaLvzUUQHfEzmMSBKis2HBRyz4/x/VAAWHwzPX3lRHTUGZEjTZtRZniCZGPQDwN/uKedZczWFdhM/q4Z1xk4RRWr+JQAAAABJRU5ErkJggg==",
+          "backgroundImageBase64": "iVBORw0KGgoAAAANSUhEUgAAAMgAAABkCAIAAABM5OhcAAACJElEQVR42u3cvWoVQQCG4e+IB+GIBDEiFl6LlVhobZNmvTJt0ljHQgRBT2OhFkFBEbRQ8YfRMIQgIYV2nr2AuMwyz1NukyF8zC4vIYv1k5eB03bGr4D/4WxdLpNc3d769+hiqUkORk/+lJpkMXrys9Qkl0ZPrpSa5PvoybLUJCejJ4elJrkwenKt1CSfRk/Ol5rkaPTkuNQk50ZPvpbqzI2f2Y2FVyGGhWGBYTETi/VrHQs3FplLxzrQsZxZx8KrEMMCw8KwSL8d64eOhRuLzKVjvdOxnFnHwqsQwwLDwrBIvx3rlY6FG4vMpWMd6VjOrGPhVYhhwWl/Y/kVtO/O7ZuT/awHe4/cWKThjvVZx2rdcH1nsp91/+muG4uWO9ZHHav1M09pdbitYyE3YFhgWBgW6apjPdexWjfsTNixdnUs0nLHOtGxdKyN1ZaOhY93DAsMC8MifXWsDzpW64YbE3asxzoWabljfdGxdKyN1bGOhY93DAsMC8MifXWsZzpW64a7E3asezoWabljLXQsHWtjdVnHwsc7hgWGhWGRvjrWWx2rdcOtCTvWQx2Llm+svfV+dCxn9n/e8fGOYYFhYVh027F+6Vi4schc/h7rjb/HcmYdC69CDAsMC8Mi/XasfR0LNxaZS8eqOpYz61h4FWJYYFgYFum3Y33TsXBjkbl0rPc6ljPrWHgVYlhgWBgW6bdjvdCxcGORuXSs3zqWM+tYzMRf0nQKO9TX7F4AAAAASUVORK5CYII=",
+          "minConfidence": 0.5
+        },
+        "expect": {
+          "errorCode": "EXECUTOR_FAILED"
+        },
+        "negative": true
+      },
+      {
+        "name": "missing-template-path-is-rejected",
+        "inputs": {
+          "templateImagePath": "{tmp}/ocr/piece.png",
+          "backgroundImageBase64": "iVBORw0KGgoAAAANSUhEUgAAAMgAAABkCAIAAABM5OhcAAACJElEQVR42u3cvWoVQQCG4e+IB+GIBDEiFl6LlVhobZNmvTJt0ljHQgRBT2OhFkFBEbRQ8YfRMIQgIYV2nr2AuMwyz1NukyF8zC4vIYv1k5eB03bGr4D/4WxdLpNc3d769+hiqUkORk/+lJpkMXrys9Qkl0ZPrpSa5PvoybLUJCejJ4elJrkwenKt1CSfRk/Ol5rkaPTkuNQk50ZPvpbqzI2f2Y2FVyGGhWGBYTETi/VrHQs3FplLxzrQsZxZx8KrEMMCw8KwSL8d64eOhRuLzKVjvdOxnFnHwqsQwwLDwrBIvx3rlY6FG4vMpWMd6VjOrGPhVYhhwWl/Y/kVtO/O7ZuT/awHe4/cWKThjvVZx2rdcH1nsp91/+muG4uWO9ZHHav1M09pdbitYyE3YFhgWBgW6apjPdexWjfsTNixdnUs0nLHOtGxdKyN1ZaOhY93DAsMC8MifXWsDzpW64YbE3asxzoWabljfdGxdKyN1bGOhY93DAsMC8MifXWsZzpW64a7E3asezoWabljLXQsHWtjdVnHwsc7hgWGhWGRvjrWWx2rdcOtCTvWQx2Llm+svfV+dCxn9n/e8fGOYYFhYVh027F+6Vi4schc/h7rjb/HcmYdC69CDAsMC8Mi/XasfR0LNxaZS8eqOpYz61h4FWJYYFgYFum3Y33TsXBjkbl0rPc6ljPrWHgVYlhgWBgW6bdjvdCxcGORuXSs3zqWM+tYzMRf0nQKO9TX7F4AAAAASUVORK5CYII="
+        },
+        "expect": {
+          "errorCode": "INVALID_INPUT"
+        },
+        "negative": true
+      },
+      {
+        "name": "missing-background-path-is-rejected",
+        "inputs": {
+          "templateImageBase64": "iVBORw0KGgoAAAANSUhEUgAAACMAAAAjCAIAAACRuyQOAAAAh0lEQVR42u3TMQqDQBBG4bcSG0VslFS5/z1iY2OtVSDERphmEAuxsVL2BLtkmSn/5rEsnxvGL9c9RYGlqe8lFwUOb1lFgcpbXqLAz1tKUWDzll00I9S5bh7ClMK96VGsTWr/ZKX/KLmuT9BTbZ6sFMnTJ0FPu3myUiRP7wQ9tebJSpE8TYE8nc0wanj/rUqHAAAAAElFTkSuQmCC",
+          "backgroundImagePath": "{tmp}/ocr/background.png"
         },
         "expect": {
           "errorCode": "INVALID_INPUT"
