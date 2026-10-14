@@ -45,6 +45,11 @@
   **M60 的 `ocr.ddddocr` 是被同一条盲区逼着写成显式 `if command_id == "<id>"` 链的**——
   显式 if 链仍是**首选形状**（零解释成本，人读门禁也一眼看懂）；注册表分派现在也能查，
   但代价是门禁必须自带第三条策略，而它的正确性只由那一条负向验证守着。
+- **「值不是函数」的命令表**（`{"<id>": "<JS 方法名>"}`、`("<id>", …)` 元组）：本文件切不出
+  参数（没有函数体可切，参数的归属仍停在模块级覆盖），但它的 **id** 由 `_command_tables`
+  收出来给错误门禁的**接线哨兵**用——本文件自己不用它。**这里要说清一件事**：
+  「值不是函数」不等于「参数查不了」，更不等于「命令没接线」；两者的处置完全不同
+  （前者只能接受模块级覆盖，后者是缺陷）。
 
 覆盖范围：**五类通道全部**——`browser.*`（扩展腿）、`desktop.*`（UIA）、
 `desktop.win32.*`、`python.worker`（`data.*` / `data.table.*` / `workflow.sleep`）、
@@ -205,6 +210,66 @@ def _registry_members(
                 if handler is not None:
                     members[key.value] = (handler, dispatchers.get(name))
     return members
+
+
+def _command_tables(tree: ast.Module) -> set[str]:
+    """模块级「命令表」里的命令 id —— 供**接线哨兵**判断「这条命令被实现认领了吗」。
+
+    覆盖前三条策略拿不到的形态（它们的**值不是同模块函数**，没有函数体可切）：
+
+    - `_EXT_PAGE_METHODS = {"browser.hover": "hover", …}`（值是字符串：扩展通道注入的 JS 方法名），
+      由 `if command in _EXT_PAGE_METHODS:` + `_EXT_PAGE_METHODS[command]` 消费；
+    - `_NO_SESSION_COMMANDS = ("browser.attach", …)`，
+      由 `if command in _NO_SESSION_COMMANDS:` 消费。
+
+    它们切不出参数也切不出错误码，但「这个 id 被实现表认领了」是**可证的**——而这恰好就是
+    错误门禁判别「命令从分派器里消失」所需要的唯一东西。
+
+    ★ 只认**被命令载体消费过**的容器（`<载体> in C` / `C[<载体>]` / `C.get(<载体>)`），
+    不认「模块级字典的键」这个更宽的口径：后者会把标签表、风险分层表也算成接线证据，
+    那反而**掩盖**「分派被删」。判据形态与 `_registry_members` 认 dispatcher 同源。
+
+    实测（M63 S7，`.harness/spike/probe_error_vacuity.py`）：五类通道的实现文件里，
+    这样的容器一共 3 个（`_EXT_PAGE_METHODS` / `_NO_SESSION_COMMANDS` / `_TABLE_HANDLERS`），
+    全都是分派或路由表，没有一张是纯标注表 ⇒ 当前口径零假红、零假阴性。
+    """
+    tables: dict[str, set[str]] = {}
+    for node in tree.body:
+        if not isinstance(node, ast.Assign):
+            continue
+        if isinstance(node.value, ast.Dict):
+            ids = [
+                key.value
+                for key in node.value.keys
+                if isinstance(key, ast.Constant) and isinstance(key.value, str)
+            ]
+        else:
+            ids = _literal_strings(node.value)
+        if not ids:
+            continue
+        for target in node.targets:
+            if isinstance(target, ast.Name):
+                tables.setdefault(target.id, set()).update(ids)
+
+    consumed: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Compare):
+            for op, comparator in zip(node.ops, node.comparators, strict=True):
+                if isinstance(op, (ast.In, ast.NotIn)) and isinstance(comparator, ast.Name):
+                    consumed |= tables.get(comparator.id, set())
+        elif isinstance(node, ast.Subscript):
+            if isinstance(node.value, ast.Name) and _is_carrier(node.slice, COMMAND_CARRIERS):
+                consumed |= tables.get(node.value.id, set())
+        elif (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "get"
+            and isinstance(node.func.value, ast.Name)
+            and node.args
+            and _is_carrier(node.args[0], COMMAND_CARRIERS)
+        ):
+            consumed |= tables.get(node.func.value.id, set())
+    return consumed
 
 
 def _registry_reads(tree: ast.Module) -> tuple[dict[str, set[str]], set[int], list[str]]:

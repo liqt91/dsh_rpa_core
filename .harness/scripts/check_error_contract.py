@@ -24,6 +24,22 @@ GUI 的错误面板、重试策略、上层工作流的分支都读它。但它�
    `COMMAND_NOT_FOUND` ⇒ 假红；而假红最终会被人用「加豁免」消掉，豁免一加，真漂移也就
    跟着漏过去了。宁可诚实报 `unsliced 6`。
 
+5. **接线哨兵**（M63 S7 补，用于关闭 M60 登记、M63 拍板修掉的「第四条同族漏检」）：
+   每条**非 `skipped`、非豁免、非 `unsliced`** 的命令，必须在实现里**可定位到一个分派点**
+   —— `_command_names` 命中的字面量分支，或 `_command_tables` 从模块级命令表
+   （`{"<id>": "<JS 方法名>"}`、`("browser.attach", …)` 这类**值不是函数**的表）里收出的 id。
+   判不出即 `unwired` 报错。
+
+   ★ **为什么不能退化成「`returned` 非空」**（这是登记时的候选，实测当场证否）：
+   80 条 `checked` 里 **53 条的 `returned` 本来就是空的** —— `browser.*` / `desktop.*` 的错误码
+   大多由**不带命令字面量的辅助函数**返回（正是下面第一条盲区的形状）。空集 ≠ 没接线：
+   硬加会一次造出 **53 条假红**，而假红最终会被人用「加豁免」消掉，真漂移也就跟着漏过去。
+   `per_command` 的**键**（分派点被定位到）与它的**值**（切出的码）是两件事，哨兵用的是前者；
+   实测口径与假红规模见 `.harness/spike/probe_error_vacuity.py`。
+6. `unsliced` 桶**必须与声明台账逐条相符（双向）**：桶里出现未登记的 ⇒ 某条命令**悄悄**
+   失去了错误契约检查；登记了但已不在桶里 ⇒ 台账过期。与参数门禁的 `KNOWN_GAPS` 同构，
+   所以它只会变短、不会长成长期豁免名单。
+
 只做**单向**要求（实现了但没声明 = 错）。**不反向**要求「声明的每个码都被返回过」：
 防御性声明、跨后端兼容的声明都是合理的，反过来卡会逼着人删掉真话。
 
@@ -35,11 +51,15 @@ GUI 的错误面板、重试策略、上层工作流的分支都读它。但它�
 - 错误码由**不带命令字面量的辅助函数**返回时（例如某个命令分支调用的 `_ensure_*`），
   会被算进「无命令归属」而看不见——所以要么把返回点搬进 `if command == ...` 分支，
   要么在 `check_param_consumption.py` 的 docstring 盲区清单里一并登记。
+  （这也是判定口径第 5 条**不能**用「`returned` 非空」当哨兵的原因。）
 - **单向 = 单向的负向验证**。本门禁只查「实现了但没声明」，因此它的负向验证必须
   打在同一个方向上（往分支里塞一个未声明的码 → 必须报红）。反过来「删掉某个已声明的
   返回点」**不会**报错，那是**设计如此**：声明比实现多是合理的（防御性声明、跨后端兼容），
   反向卡会逼着人删掉真话。M30 S4 曾误用后一种方式做负向验证，得到一个「删了也不红」的
   假结论——记在这里，免得下一个人重复踩。
+- **「分派分支被整个拿掉 ⇒ 空过」已由接线哨兵关闭**（M63 S7）。它关掉的是**命令消失**
+  （实现不再认领这个 id），**不是**「分支体内的某个返回点被删」——后者仍按上一条放过。
+  两者的区别就是「键在不在」与「值空不空」，别在下一轮又混起来。
 
 运行：uv run python .harness/scripts/check_error_contract.py
 """
@@ -57,9 +77,28 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from check_param_consumption import (  # noqa: E402
     COMMANDS_DIR,
     _command_names,
+    _command_tables,
     _executor_files,
     _registry_members,
 )
+
+# `unsliced` 的**声明台账**（判定口径第 6 条）。这些命令的 handler 函数体里没有 `ErrorCode.X`
+# ——错误码由外层 `_execute_table_command` 的框架级映射统一给出——所以它们的错误契约
+# 「不可由静态切片证明」。对这种情形，诚实的表述只有「没查」；把它记成 `checked` 就是假判据。
+#
+# 为什么非要用台账而不是任其自由增长：`unsliced` 是**静默的出口**，任何命令落进来就再也不受
+# 错误契约检查，而门禁照样 PASS。写成台账后两个方向都会红：
+#   ① 桶里出现未登记的 ⇒ 某条命令**悄悄**失去了检查（有人把它搬进注册表、或新注册一条）；
+#   ② 登记了却不在桶里 ⇒ 台账过期（handler 体真的开始返回码了，它已被自动纳入受检）⇒ 删条目。
+# 与 `check_param_consumption.KNOWN_GAPS` 同构：**只会变短**，不会长成长期豁免名单。
+UNSLICED_DECLARED: dict[str, str] = {
+    "data.table.appendRow": "handler 体无 ErrorCode.X（码由 _execute_table_command 统一映射）",
+    "data.table.clear": "同上",
+    "data.table.deleteRow": "同上",
+    "data.table.exportCsv": "同上",
+    "data.table.getCell": "同上",
+    "data.table.setCell": "同上",
+}
 
 
 def _error_codes(nodes) -> set[str]:
@@ -76,8 +115,8 @@ def _error_codes(nodes) -> set[str]:
     return codes
 
 
-def _analyse_module(path: Path) -> tuple[dict[str, set[str]], set[str], set[str]]:
-    """返回 `(命令 → 该命令分支里返回的错误码, 未实现命令, 注册表分派但切不出返回码的命令)`。"""
+def _analyse_module(path: Path) -> tuple[dict[str, set[str]], set[str], set[str], set[str]]:
+    """返回 `(命令 → 分支里返回的错误码, 未实现命令, 注册表分派但切不出码的命令, 命令表 id)`。"""
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
     per_command: dict[str, set[str]] = {}
     unimplemented: set[str] = set()
@@ -110,7 +149,8 @@ def _analyse_module(path: Path) -> tuple[dict[str, set[str]], set[str], set[str]
             # handler 体里没有 `ErrorCode.X` ⇒ 这条命令的错误契约**不可由静态切片证明**。
             # 单列 `unsliced`、不计 `checked`：宁可如实报「没查」，也不能报「查过了、没问题」。
             unsliced.add(command_id)
-    return per_command, unimplemented, unsliced
+    # 接线证据（判定口径第 5 条）：模块级命令表里的 id。与 `per_command` 的键一起供 main() 用。
+    return per_command, unimplemented, unsliced, _command_tables(tree)
 
 
 def main() -> int:
@@ -119,7 +159,8 @@ def main() -> int:
     exempt = 0
     skipped: list[str] = []
     unsliced: list[str] = []
-    analysis: dict[str, tuple[dict[str, set[str]], set[str], set[str]]] = {}
+    unwired: list[str] = []
+    analysis: dict[str, tuple[dict[str, set[str]], set[str], set[str], set[str]]] = {}
     unimplemented_commands: set[str] = set()
     unsliced_commands: set[str] = set()
 
@@ -139,17 +180,29 @@ def main() -> int:
 
             declared = set(manifest.get("errors") or [])
             returned: set[str] = set()
+            # 接线证据：`if command == ...` 分支的**键**（切出的码为空也算）或模块级命令表的 id。
+            # 注意与 `returned` 的区别——`returned` 空是**常态**（错误码走辅助函数），
+            # 而「两个证据都没有」才说明实现根本不认识这个 id。
+            wired = False
             for path in files:
                 key = str(path)
                 if key not in analysis:
                     analysis[key] = _analyse_module(path)
-                per_command, unimplemented, module_unsliced = analysis[key]
+                per_command, unimplemented, module_unsliced, table_ids = analysis[key]
                 returned |= per_command.get(command_id, set())
+                if command_id in per_command or command_id in table_ids:
+                    wired = True
                 unimplemented_commands |= unimplemented
                 unsliced_commands |= module_unsliced
 
             if command_id in unimplemented_commands:
                 exempt += 1
+                continue
+
+            if not wired:
+                # 判定口径第 5 条：实现里找不到这个 id ⇒ 命令从分派器里消失了（或压根没接线）。
+                # 这是错误契约这一轴上唯一能看见「没接线」的位置（M60 登记、M63 修掉的漏检）。
+                unwired.append(command_id)
                 continue
 
             if command_id in unsliced_commands:
@@ -165,9 +218,32 @@ def main() -> int:
                     "（补进 errors，或改掉实现里那个返回点）"
                 )
 
-    if errors:
+    # 判定口径第 6 条：`unsliced` 桶与声明台账**双向**相符。
+    undeclared = sorted(set(unsliced) - set(UNSLICED_DECLARED))
+    stale = sorted(set(UNSLICED_DECLARED) - set(unsliced))
+
+    if errors or unwired or undeclared or stale:
         print("ERROR CONTRACT CHECK FAILED")
-        print("\n".join(f"- {item}" for item in errors))
+        for item in errors:
+            print(f"- {item}")
+        if unwired:
+            print(
+                "- 在实现里找不到分派点（命令从分派器里消失，或压根没接线）："
+                f"{', '.join(sorted(unwired))}"
+                "（查实现在哪条分支/哪张表里认领这个 id；"
+                "确属未实现就按 COMMAND_NOT_FOUND 显式登记）"
+            )
+        if undeclared:
+            print(
+                "- unsliced 出现**未声明**的命令（它们不再受错误契约检查）："
+                f"{', '.join(undeclared)}"
+                " ⇒ 要么补进 UNSLICED_DECLARED 并写明理由，要么把 handler 改成可切片的形状"
+            )
+        if stale:
+            print(
+                "- unsliced 声明台账**过期**（这些命令已不在桶里 ⇒ handler 体已能切片）："
+                f"{', '.join(stale)} ⇒ 删掉台账条目"
+            )
         return 1
 
     total = checked + exempt + len(skipped) + len(unsliced)

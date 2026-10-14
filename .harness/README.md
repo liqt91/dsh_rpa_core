@@ -60,6 +60,20 @@
   且**错误契约切不出来**（那 6 条 `data.table.*` 只能记 `unsliced`、不计 `checked`）。
   ★ 改这两条门禁的切片逻辑后，必须复跑 `.harness/spike/probe_m63_registry_negative.py`：
   它盯着「**跨命令掩蔽**」这个复发点（只有 A 命令读的参数加进 B 命令的 manifest ⇒ 必须红）。
+- ★ **「命令压根没接线」在错误契约轴上也有判据了**（M63-S7 加**接线哨兵**）：每条非 `skipped`、
+  非豁免命令必须在实现里**可定位到一个分派点**——`if command == "<id>"` 的字面量分支，或
+  **模块级命令表**（`{"<id>": "<JS 方法名>"}` / `("<id>", …)`，且被命令载体以 `in` / 下标 /
+  `.get()` 消费）里的 id。判不出即 `unwired` 报错。
+  ★ **别把它退化成「`returned` 非空」**（这是登记时的候选，实测当场证否）：80 条 `checked` 里
+  **53 条的 `returned` 本来就是空**的（错误码由不带命令字面量的辅助函数返回）——硬加会造出
+  53 条假红，而假红最终被「加豁免」消掉，真漂移跟着漏过去。`per_command` 的**键**（分派点）
+  与它的**值**（切出的码）是两件事，哨兵看键。
+  口径与假红规模：`.harness/spike/probe_error_vacuity.py`；负向验证（**含元验证** —— 关掉哨兵
+  后同一注入必须变绿，证明红色确由它产生）：`.harness/spike/probe_m63b_error_wiring_negative.py`。
+- ★ **`unsliced` 不是自由桶**：错误门禁里切不出 `ErrorCode` 的注册表命令（当前 6 条
+  `data.table.*`）必须与 `check_error_contract.UNSLICED_DECLARED` **双向相符** —— 桶里冒出
+  未登记的 ⇒ 某条命令**悄悄**失去了错误契约检查；登记了却没进桶 ⇒ 台账过期。
+  形态与 `check_param_consumption.KNOWN_GAPS` 同构：**只会变短**，不会长成长期豁免名单。
 - 跑测试 / 门禁只用 `./.venv/Scripts/python.exe`（或 `uv run`）。
 - ★ **改台账要显式 `newline="\n"`**：`Path.write_text` 在 Windows 上默认把 `\n` 翻成 `\r\n`，
   会把**整个**文件变成 CRLF —— 实锤：`set_feature.py`（改 `passes` 的官方入口）一次调用让

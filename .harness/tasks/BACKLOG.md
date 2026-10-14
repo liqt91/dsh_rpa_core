@@ -327,15 +327,19 @@
     **恰好还在工作区**时的**瞬时值**，却被当成稳定真值写进了台账与提交信息
     ⇒ **共享工作区里，一次门禁读数可能混入邻座尚未定稿的实验态**；要引用数字，先确认被测
     脚本自身没被别人改动（`git status <script>`），或直接 `git show HEAD:<script>` 复核。
-  - **★ S2/S3 又撞出第四条同族漏检（**未修**，登记待拍板）**：`check_error_contract.py` 的判据是
+  - **★ S2/S3 又撞出第四条同族漏检**：`check_error_contract.py` 的判据是
     **单向包含** `returned ⊆ declared`（`returned |= per_command.get(command_id, set())` 后算
     `missing = returned - declared`）⇒ **把某条命令的分派分支整个拿掉，`returned = ∅`、
     `missing = ∅`，门禁照报 PASS**。负向验证里 ⑦ 向（把 `if command_id == "ocr.detect":`
     改成 `… "ocr.detect-lost":`）实测：参数门禁**红**（声明了参数没人读），错误门禁**绿**（空过）。
     ⇒ 「命令从分派器里消失 / 压根没接线」这件事**只有参数门禁看得见**。
-    候选加固：要求每条非豁免命令的 `returned` 非空，或要求命令 id 在实现里**真的有分支**
-    （`per_command` 命中或显式登记未实现）——但两者都要先查清「通用分派型执行器」的现状，
-    不能拍脑袋加。**登记待拍板**。
+    **〔2026-10-14 已修，M63 S7〕**：判据改为**接线哨兵** —— 命令 id 必须能定位到**一个分派点**
+    （`if command == "<id>"` 字面量分支，或 `check_param_consumption._command_tables` 从
+    **模块级命令表**里收出的 id）；判不出即 `unwired` 报错。登记时给的候选
+    「要求 `returned` 非空」**被实测证否**：80 条 `checked` 里 **53 条的 `returned` 本来就是空的**
+    （错误码由不带命令字面量的辅助函数返回）⇒ 硬加会造出 53 条假红。
+    这一向的负向验证就是 ⑦ 本身（`M63-ledger-governance.md` §九、
+    `spike/probe_m63b_error_wiring_negative.py`，含**元验证**）。
   - 计划：`M60-ocr-captcha.md`（S1–S4）。承接维护者「评估下，能否增加 dddd 验证码识别相关指令」；
     拍板三项：**完整档**能力 / 依赖进 **required** / **不做组合指令**。
   - **与打包调研的关系**：`M61-standalone-runner-packaging.md`（纯运行器打包，`planned`）

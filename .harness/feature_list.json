@@ -419,7 +419,7 @@
     },
     {
       "id": "harness-docs-hygiene",
-      "title": "Harness/doc hygiene: STATE.md entry point, doc + ledger gates",
+      "title": "Harness/doc hygiene: STATE.md entry point, doc + ledger gates; error-gate wiring sentinel",
       "passes": true
     }
   ]

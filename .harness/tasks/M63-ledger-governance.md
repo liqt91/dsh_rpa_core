@@ -28,6 +28,7 @@ Status: `wip`
 | **S4** | ④ `check_tasks.py` 增 `wip` + README 合法值列同步 + M60/M62/M63 置 `wip` | 门禁绿；`active` 仍**恰好一个**；负向验证 **N2/N3** | ✅ |
 | **S5** | ③ 新增 `.harness/scripts/check_ledger.py`（`title ≤ 120` / `notes ≤ 2000` / `PROGRESS` cutoff 之后 `evidence ≤ 400`）+ 存量治理（46 条超长 title、35443 字符 notes） | 门禁绿；负向验证 **4/4**（含「删掉 cutoff 标记必须红」的防空转自检） | ✅ |
 | **S6** | 收口：四处台账同步 + `check_all.py` | 末行 `FULL GATE PASSED` | ✅ |
+| **S7** | （**收口后追加**，维护者拍板）错误门禁加**接线哨兵** + `unsliced` 声明台账 —— 清 M60 登记的「第四条同族漏检」 | 错误门禁读数**不变**（`80+6+3=89`）且零假红；负向验证 **4 向 + 1 元验证**全中 | ✅ |
 
 ## 三、★ 动手前实测（两条与决策时假设不符）
 
@@ -189,3 +190,82 @@ Status: `wip`
   写的是**运行期产物**（结果 JSON / checkpoint / 扩展 manifest），不是仓库台账、也不受「全仓 LF」
   约束 ⇒ **不在本任务范围**（本任务不触产品代码），仅记录在案。
   `scripts/scrape_yingdao_docs.py` 早已有包装函数处理此坑（可作正面先例）。
+
+## 九、S7 接线哨兵 + `unsliced` 台账（2026-10-14，收口后追加）
+
+**来源**：`tasks/BACKLOG.md` 里 M60 段登记的「第四条同族漏检」——`check_error_contract.py` 的判据是
+**单向包含** `returned ⊆ declared`，于是**把某条命令的分派分支整个拿掉 ⇒ `returned = ∅` ⇒ PASS 空过**。
+后果是「命令从分派器里消失 / 压根没接线」**只有参数门禁看得见**。M63 拍板修掉，S7 落地。
+
+### 1. ★ 登记时的候选被**实测证否**（这是本节最该被记住的一条）
+
+登记时给的候选是「**要求每条非豁免命令的 `returned` 非空**」，并附带一句「两者都要先查清
+『通用分派型执行器』的现状，**不能拍脑袋加**」。照这句话先实测（`.harness/spike/probe_error_vacuity.py`）：
+
+| 量 | 值 | 含义 |
+|---|---|---|
+| `checked` 里 `returned == ∅` 的 | **53 / 80** | ⇒ 该候选会一次造出 **53 条假红** |
+
+**53 条**不是边角：`browser.*` / `desktop.*` 的错误码**大多由不带命令字面量的辅助函数返回**
+（`_resolve_element`、`_ensure_session` 一路），正是本门禁 docstring 已登记的那条盲区。
+空集 **≠** 没接线 —— 两者的区别是 `per_command` 的**键在不在**，而不是**值空不空**。
+
+⇒ 真判据改为**接线哨兵**：命令 id 必须能**定位到一个分派点**——
+`_command_names` 命中的字面量分支，或 `check_param_consumption._command_tables` 从**模块级命令表**
+里收出的 id。假红规模实测为 **0**。
+
+### 2. `_command_tables`：两种此前看不见的分派形态
+
+| 形态 | 实例 | 为何前三条策略都看不见 |
+|---|---|---|
+| `{"<id>": "<JS 方法名>"}` | `browser._EXT_PAGE_METHODS` | 值的类型是 `str` ⇒ `_registry_members`（要求值是同模块函数）不收；`_command_names` 认的是比较表达式 |
+| `if command in <模块级元组>` | `browser._NO_SESSION_COMMANDS` | 比较右侧是**名字**不是字面量 ⇒ `_command_names` 读不到 |
+
+判据口径刻意收窄为「**被命令载体消费过的**容器」（`<载体> in C` / `C[<载体>]` / `C.get(<载体>)`），
+**不**用更松的「模块级 dict 的键」——后者会把标签表/风险分层表也算成接线证据，那反而**掩盖**
+「分派被删」。实测两种口径在本仓**结果相同**（只有 `browser.hover` 依赖它，且它确实被
+`if command in _EXT_PAGE_METHODS:` 分派），故按更严的口径落地。
+
+- `browser.hover` 是**唯一**一条没有 `if command ==` 字面量分支的命令（`returned` 也是空的），
+  它走的就是 `_EXT_PAGE_METHODS` + `if command in _EXT_PAGE_METHODS:` 这条腿。
+  若不加第四节策略，接线哨兵会当场误杀它 —— 这是「先实测再动手」直接换来的一个假红。
+
+### 3. `unsliced` 从「自由桶」变成**声明台账**（`UNSLICED_DECLARED`）
+
+`unsliced` 是 M63-S1 为诚实报「没查」而设的桶，但它同时是个**静默出口**：命令一旦落进去，
+就再也不受错误契约检查，而门禁照样 PASS。改为与台账**双向**相符：
+未登记的进桶 ⇒ 红；登记了却没进桶 ⇒ 红（台账过期）。形态与 `KNOWN_GAPS` 同构，**只会变短**。
+
+### 4. 落地与验收
+
+- 改动：`check_param_consumption.py`（新增 `_command_tables`，两条门禁共用）、
+  `check_error_contract.py`（`_analyse_module` 多返回命令表 id、`main()` 加 `unwired` 与台账双向判据、
+  docstring 记下被证否的候选）。
+- **读数不变**：错误门禁 `80 checked / 6 unsliced / 3 exempt / 0 skipped = 89`、参数门禁 `86+3=89`。
+  **新判据零假红**；`unwired = 0`。
+- **负向验证**：`.harness/spike/probe_m63b_error_wiring_negative.py`，**4 注入 4/4 HIT + 1 元验证 HIT**、
+  逐字节还原核 md5、复绿。
+
+| 注入 | 期望 | 结果 |
+|---|---|---|
+| N1 ★ `ocr_worker.py` 的 `if command_id == "ocr.detect":` 改名 | 错误门禁红（**这正是登记的那一向**，旧判据下是 PASS 空过） | **HIT** |
+| N2 删掉 `_TABLE_HANDLERS` 的 `data.table.getCell` 条目 | 红（哨兵 + 台账过期） | **HIT** |
+| N3 往 `_table_clear` 体塞**已声明**的码 `INVALID_INPUT` | 红，且**只由台账过期引起**（断言不许出现「manifest.errors 未声明」） | **HIT** |
+| N5 从 `UNSLICED_DECLARED` 删掉 `data.table.clear` | 红（台账方向①：桶里出现未声明） | **HIT** |
+| N4 ★ **元验证** | 关掉哨兵后**重做 N1** ⇒ 门禁必须**变绿** | **HIT**（证明 N1 的红确由新判据产生，不是别的判据顺带抓到） |
+
+> N4 的理由：这一轮的全部教训都是「**别把巧合当判据**」。报了绿要负向验证，**报了红也要证明是谁报的**——
+> 否则「新判据生效了」和「某条既有判据凑巧打中」在输出上长得一样。
+
+- 证据件：`.harness/spike/probe_error_vacuity.py`（**随仓提交**，`probe_*.py` 是只读证据件那一类；
+  `_` 前缀才是 scratch）—— 它同时是「登记候选被证否」的**可复跑证据**。
+- 门禁实测失败输出（N1，留档）：
+  `- 在实现里找不到分派点（命令从分派器里消失，或压根没接线）：ocr.detect（…）`
+
+### 5. 未做 / 待拍板
+
+- **M63 的全部切片（S1~S7）已 ✅，但 Status 仍留 `wip`** —— 是否转 `done`、以及它要不要占
+  `active` 位，沿用 M60 先例**留待维护者拍板**（本任务从立项起就**不占 active**，M52 仍未收口）。
+- 接线哨兵**只覆盖错误契约这一轴**：参数门禁对 `_command_tables` 那 6 条（`_EXT_PAGE_METHODS`）
+  仍只有模块级覆盖 —— 它们的参数读取在 `_ext_page_command` 里按 `command` 分流，**逐命令归属不可静态切**。
+  已如实写在 `check_param_consumption` 的盲区清单里，**未修**。
