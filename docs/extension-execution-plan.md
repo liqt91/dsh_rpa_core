@@ -18,7 +18,7 @@
 > - 代码现状以 `src/rpa_core/extension_exec.py`（执行器客户端）与
 >   `src/rpa_core/workers/ext_bridge.py`（host）为准。
 
-> **2026-09-11 更新（现状覆盖）**：playwright 已**彻底移除**（执行 + 捕获 + 依赖），浏览器执行/捕获统一收敛到**自研扩展单通道**。旧的「扩展在线优先 / 离线静默回退 playwright / transport+channel 双轴」均不再成立：`browser.navigate` 已无 `transport`/`channel` 参数；扩展离线时命令**立即失败**（不白等、不回退）。本计划文档保留为历史提案记录，现行行为以 `ADR 0009` 为准。下文中凡把 playwright 作为可用通道讲述的段落均属历史描述，不再适用。
+> **2026-09-11 更新（现状覆盖）**：playwright 已**彻底移除**（执行 + 捕获 + 依赖），浏览器执行/捕获统一收敛到**自研扩展单通道**。旧的「扩展在线优先 / 离线静默回退 playwright / transport+channel 双轴」均不再成立：`browser.navigate` 已无 `transport`/`channel` 参数；扩展离线时命令**立即失败**（不白等、不回退）。本计划文档保留为历史提案记录，现行行为以 `ADR 0013`（`.harness/adr/0013-remove-playwright-single-extension.md`）为准。下文中凡把 playwright 作为可用通道讲述的段落均属历史描述，不再适用。
 
 > **落地记录 2026-09-10（Phase 1）**：协议 v2 + 通道骨架完成。
 > - 宿主侧 `rpa_core/extension_exec.py`：`ExtensionExecHub`（命令队列 + 长轮询 + 结果回收 + 权限钩子）与 `ExtensionExecClient`（执行器侧 HTTP 客户端）。

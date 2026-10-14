@@ -50,21 +50,11 @@ node_modules/
 /_t.txt
 /_t2.txt
 /_commit_msg*.txt*
-/.harness/spike/_m[0-9]*
-/.harness/spike/_m4*
-/.harness/spike/_m5*
-/.harness/spike/_nv_*
-# 负向验证探针的运行产物（junitxml 报告 / 日志 / stdout）：同上，以忽略收口
-/.harness/spike/_expr_controls_*
-/.harness/spike/_summary_readability_*
-/.harness/spike/_ref_groups_*
-/.harness/spike/_fx_menu_probe*
-/.harness/spike/_pytest_*
-/.harness/spike/_probe_*
-# 一次性诊断脚本（打印真实中间态用，结论已写进探针/任务文档，脚本本身不留）
-/.harness/spike/_diag_*
-# 只读探针渲染出的参数面板截图（本地核对行高/对齐用，仅本地）
-/.harness/spike/_panel_*
+# `.harness/spike/` 下的**下划线前缀**文件一律是本机 scratch：负向验证探针的产物、
+# 门禁逐条取证的日志、一次性诊断脚本、渲染出的面板截图、临时记事等。
+# 实测该目录下**没有**任何被跟踪的 `_` 前缀文件——证据件是**不带下划线**的
+# `probe_*.py` / `add_l2_*.py`（源码注释按名引用它们，故必须留）。删除守卫在本机
+# 故障（rm 被 fail-closed 拦下），照惯例以忽略收口而不是删除。
+/.harness/spike/_*
 # 门禁逐条取证时重定向到仓库根的日志（§ 门禁：输出重定向到文件再读）
 /_gate_*.log
-/.harness/spike/_gate_*.log
