@@ -58,6 +58,13 @@ packages = ["src/rpa_core"]
 addopts = "-q"
 asyncio_mode = "auto"
 testpaths = ["tests"]
+# `slow` = 耗时来自「必须等够真实时间」的用例（idle 退出阈值 / 连接超时 / 等真实进程
+# 退出），不是算力。它们合计约 50s，占全量套件的四分之一。日常开发可用
+# `pytest -m "not slow"` 跳过；**提交前必须全量**——`.harness/scripts/check_all.py`
+# 刻意不带 `-m` 表达式，门禁永远是全集。
+markers = [
+    "slow: 需等待真实时间（阈值 / 超时 / 进程退出），日常可跳过，提交前必跑",
+]
 
 [tool.ruff]
 target-version = "py312"

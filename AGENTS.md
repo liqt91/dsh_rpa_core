@@ -18,11 +18,13 @@ This repository is a clean-room RPA core experiment. Do not import runtime code 
 
 ```text
 Sync:        uv sync --all-groups --extra gui
-Test:        uv run pytest
+Test:        uv run pytest                       # 全量（提交前必跑）
+Test (fast): uv run pytest -m "not slow"         # 日常：跳过 6 项「等真实时间」用例，省约 50s
 Lint:        uv run ruff check .
 Architecture:uv run python .harness/scripts/check_architecture.py
 Full gate:   uv run python .harness/scripts/check_all.py
              （默认不含真实桌面 E2E——弹窗抢前台；需要时加 --with-desktop-e2e）
+             （门禁里的 pytest **不带** `-m`，永远是全集）
 CLI:         uv run python -m rpa_core.cli
 ```
 

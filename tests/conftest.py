@@ -216,8 +216,28 @@ def pytest_unconfigure(config):
         shutil.rmtree(_provisioned, ignore_errors=True)
 
 
+_deselected_slow: list[str] = []
+
+
+def pytest_deselected(items) -> None:
+    """记录被 `-m` / `-k` 表达式排除的 slow 用例，交给 summary 如实报出。"""
+    for item in items:
+        if item.get_closest_marker("slow"):
+            _deselected_slow.append(item.nodeid)
+
+
 def pytest_terminal_summary(terminalreporter) -> None:
-    """桌面 E2E 被跳过时明确告知启用方式，避免误以为覆盖丢了。"""
+    """跳过了什么就明确告知，避免误以为覆盖丢了。"""
+    if _deselected_slow:
+        terminalreporter.write_sep("-", "slow tests deselected")
+        terminalreporter.write_line(
+            f"本次按 -m/-k 表达式排除了 {len(_deselected_slow)} 项 slow 用例"
+            "（耗时来自等待真实时间）——它们**本次没有被验证**。"
+        )
+        terminalreporter.write_line(
+            "提交前必须全量：去掉表达式，或直接跑 "
+            ".harness/scripts/check_all.py（它刻意不带 -m）。"
+        )
     if DESKTOP_E2E_ENABLED:
         return
     skipped = terminalreporter.stats.get("skipped") or []

@@ -645,6 +645,7 @@ def _wait_exit(proc: subprocess.Popen[bytes], timeout: float) -> int | None:
         return None
 
 
+@pytest.mark.slow  # 等满真实 idle 阈值（4s）后进程才退出：时间不可压缩
 def test_idle_exit_fires_without_clients(tmp_path: Path) -> None:
     """无客户端连接 + 静置超过阈值 → 宿主自动退出（rc=0）。
 
@@ -663,6 +664,7 @@ def test_idle_exit_fires_without_clients(tmp_path: Path) -> None:
     assert "idle exit" in log, log[-1500:]
 
 
+@pytest.mark.slow  # 「不退出」只能靠等满观察窗（8s）来证明
 def test_idle_exit_disabled_when_threshold_zero(tmp_path: Path) -> None:
     """threshold=0 关闭自杀：无客户端也不退出（避免误杀长会话）。"""
     host = _HostProc(idle_exit_seconds=0)
@@ -678,6 +680,7 @@ def test_idle_exit_disabled_when_threshold_zero(tmp_path: Path) -> None:
     assert "idle exit disabled" in log
 
 
+@pytest.mark.slow  # 「不退出」只能靠等满观察窗（8s）来证明
 def test_idle_exit_suppressed_while_client_connected(tmp_path: Path) -> None:
     """有客户端连接 → 即便无消息也不自杀（执行器正握着宿主）。"""
     host = _HostProc(idle_exit_seconds=4)
@@ -698,6 +701,7 @@ def test_idle_exit_suppressed_while_client_connected(tmp_path: Path) -> None:
     assert rc is None, f"有客户端却自杀了：{log[-800:]}"
 
 
+@pytest.mark.slow  # 需持续发消息 8s 模拟真实操作：时间不可压缩
 def test_idle_exit_suppressed_while_extension_messages_flow(tmp_path: Path) -> None:
     """扩展持续发消息 → 即便无客户端也不自杀（用户正在操作）。"""
     host = _HostProc(idle_exit_seconds=4)

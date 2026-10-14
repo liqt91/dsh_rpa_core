@@ -45,6 +45,23 @@
 4. 前端纯函数切片 `scripts/check_*.mjs`（在**仓库根 `scripts/`**，不是本目录；无 node 时跳过）
    —— **名目以 `check_all.py` 的 `PURE_FUNCTION_SCRIPTS` 为准**，个数不在此写死
 
+### 日常跑什么 / 提交前跑什么
+
+全量约 **215s**，其中 **`pytest` 占 214s、其余 27 条命令加起来约 5s**（2026-10-14 实测）。
+所以分层跑才是常态：
+
+- **改一个模块** → `uv run pytest tests/contract/test_<相关>.py`，
+  顺手带上门禁里对应的那几条静态脚本（7 条合计约 4s，**每次都跑不心疼**）。
+- **想快速过一遍全量测试** → `uv run pytest -m "not slow"`。`slow` 标记当前覆盖 **6 项**用例
+  （合计约 50s ≈ 套件四分之一），它们的耗时**全部来自「必须等够真实时间」**：
+  `ext_bridge` 的 idle 退出阈值（4s）+ 观察窗（8s）、`closeBrowser` 真的 `taskkill` 后
+  在最长 10s 内轮询等进程退出、`win32.attachWindow` 等真实超时。**不是算力**，把阈值调小
+  就等于改被测语义，所以只能整条标注、不能改快。
+- ★ **提交前必须全量**：`check_all.py` 里的 pytest **刻意不带 `-m`**，门禁永远是全集。
+  用 `-m "not slow"` 跑时收尾会显式报出「本次排除了 N 项 slow 用例——它们**本次没有被验证**」
+  （`tests/conftest.py` 的 `pytest_deselected` + `pytest_terminal_summary`），
+  不给人「以为跑全了」的空间。
+
 `set_feature.py`：改 `feature_list.json` 的 `passes`。
 
 **铁律**（踩过的坑，别重犯）：

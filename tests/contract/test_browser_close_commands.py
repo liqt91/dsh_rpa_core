@@ -391,6 +391,7 @@ def test_close_browser_waits_for_processes_and_writes_evidence(proc_stub):
     assert result.effects[0].details["allExited"] is True
 
 
+@pytest.mark.slow  # 真去终止目标浏览器进程，并在最长 10s 内轮询等它退出
 def test_close_browser_is_exempt_from_session_gate():
     """closeBrowser 不依赖会话：扩展掉线/无会话时也必须可用（正是它该被用的场景）。"""
     calls: list[str] = []

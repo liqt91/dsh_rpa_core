@@ -137,6 +137,7 @@ def test_uia_attach_unknown_window_reports_element_not_found():
         assert result.error.code == "PLATFORM_UNSUPPORTED"
 
 
+@pytest.mark.slow  # 等真实 attach 超时（枚举窗口的轮询循环）：时间不可压缩
 def test_win32_attach_timeout_reports_element_not_found():
     if sys.platform != "win32":
         pytest.skip("Windows-only：Win32DesktopExecutor 在非 win32 上是占位 None")
