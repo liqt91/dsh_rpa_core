@@ -1,0 +1,149 @@
+{
+  "_comment": "变量可见范围的共享用例表（2026-10-14）：Python 侧 tests/contract/test_variable_scope_visibility.py 与 JS 侧 scripts/check_scope_visibility.mjs 跑同一份数据——两侧各自实现一遍「哪些变量在这个节点可见」是这类功能的经典漂移点。expected* 是**手写**的期望（不是从实现里导出的），所以它对两侧都是独立判据；Python 侧另有一条用编译器当裁判的逐格对账（visible_scope 的判定 == 编译能否通过）。",
+  "_rule": "当前节点不能引用【自身】或【之后】节点声明的变量；循环/错误变量只在词法嵌套内可见。遍历顺序与 compiler.WorkflowCompiler.compile 的 walk() 一致：children 顺序 / if 的 then→else / try 的 body→catch。",
+  "workflow": {
+    "schema_version": "1.0",
+    "id": "scope.cases",
+    "name": "scope cases",
+    "inputs": { "threshold": "x" },
+    "root": {
+      "type": "sequence",
+      "id": "root",
+      "children": [
+        {
+          "type": "action",
+          "id": "a1",
+          "command": "data.setVar",
+          "with": { "varName": "alpha", "value": "1" }
+        },
+        {
+          "type": "if",
+          "id": "iff",
+          "condition": { "op": "eq", "left": "1", "right": "1" },
+          "then": [
+            {
+              "type": "action",
+              "id": "a2",
+              "command": "data.setVar",
+              "with": { "varName": "thenvar", "value": "1" }
+            }
+          ],
+          "else": [
+            {
+              "type": "action",
+              "id": "a3",
+              "command": "data.setVar",
+              "with": { "varName": "elsevar", "value": "1" }
+            }
+          ]
+        },
+        {
+          "type": "forEach",
+          "id": "loop",
+          "items": [1, 2],
+          "item_var": "row",
+          "children": [
+            {
+              "type": "action",
+              "id": "a4",
+              "command": "data.setVar",
+              "with": { "varName": "innervar", "value": "1" }
+            }
+          ]
+        },
+        {
+          "type": "try",
+          "id": "try",
+          "children": [
+            {
+              "type": "action",
+              "id": "a5",
+              "command": "data.setVar",
+              "with": { "varName": "tryvar", "value": "1" }
+            }
+          ],
+          "catch": [
+            {
+              "type": "action",
+              "id": "a6",
+              "command": "data.setVar",
+              "with": { "varName": "catchvar", "value": "1" }
+            }
+          ],
+          "error_var": "err"
+        },
+        {
+          "type": "action",
+          "id": "a7",
+          "command": "data.setVar",
+          "with": { "varName": "finalvar", "value": "1" }
+        }
+      ]
+    }
+  },
+  "cases": [
+    {
+      "nodeId": "a1",
+      "path": [{ "key": "children", "index": 0 }],
+      "note": "首个节点：什么都还没有",
+      "variables": [],
+      "loopVars": [],
+      "errorVars": []
+    },
+    {
+      "nodeId": "a2",
+      "path": [{ "key": "children", "index": 1 }, { "key": "then", "index": 0 }],
+      "note": "then 分支：看得见 a1 的声明，看不见自己的 thenvar",
+      "variables": ["alpha"],
+      "loopVars": [],
+      "errorVars": []
+    },
+    {
+      "nodeId": "a3",
+      "path": [{ "key": "children", "index": 1 }, { "key": "else", "index": 0 }],
+      "note": "★ else 分支看得见 then 里声明的 thenvar —— 编译器先序遍历放行，菜单同口径",
+      "variables": ["alpha", "thenvar"],
+      "loopVars": [],
+      "errorVars": []
+    },
+    {
+      "nodeId": "a4",
+      "path": [{ "key": "children", "index": 2 }, { "key": "children", "index": 0 }],
+      "note": "循环体内：loop.row 可见（item_var 显式命名）",
+      "variables": ["alpha", "thenvar", "elsevar"],
+      "loopVars": ["row"],
+      "errorVars": []
+    },
+    {
+      "nodeId": "a5",
+      "path": [{ "key": "children", "index": 3 }, { "key": "children", "index": 0 }],
+      "note": "try 体内：循环结束 ⇒ loop.row 不再可见；error_var 也还不能用",
+      "variables": ["alpha", "thenvar", "elsevar", "innervar"],
+      "loopVars": [],
+      "errorVars": []
+    },
+    {
+      "nodeId": "a6",
+      "path": [{ "key": "children", "index": 3 }, { "key": "catch", "index": 0 }],
+      "note": "★ catch 里看得见 try 体声明的 tryvar（同 else 那条），并且 err 可用",
+      "variables": ["alpha", "thenvar", "elsevar", "innervar", "tryvar"],
+      "loopVars": [],
+      "errorVars": ["err"]
+    },
+    {
+      "nodeId": "a7",
+      "path": [{ "key": "children", "index": 4 }],
+      "note": "末节点：前面六个都看得见，catchvar 也算已声明过；err 出了 catch 即不可用",
+      "variables": [
+        "alpha",
+        "thenvar",
+        "elsevar",
+        "innervar",
+        "tryvar",
+        "catchvar"
+      ],
+      "loopVars": [],
+      "errorVars": []
+    }
+  ]
+}

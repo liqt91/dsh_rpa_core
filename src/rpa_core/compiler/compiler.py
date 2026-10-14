@@ -1,4 +1,5 @@
 import re
+from dataclasses import dataclass
 from typing import Any
 
 from jsonschema import Draft202012Validator
@@ -110,6 +111,92 @@ def _is_var_write_node(node: ActionNode, catalog: CommandCatalog) -> bool:
     return bool(manifest and manifest.x_var_write)
 
 
+def _declared_names(node: ActionNode, catalog: CommandCatalog) -> list[str]:
+    """**单个节点自己**声明的变量名，按声明顺序：output_aliases + x-var-write 目标。
+
+    动态变量名（varName 是引用）静态无法确定，与前向引用判定同口径地跳过。
+    """
+    names = [alias for alias in (node.output_aliases or {}).values() if alias]
+    manifest = catalog.get(node.command)
+    var_write = manifest.x_var_write if manifest else None
+    if var_write and var_write.get("field"):
+        target = node.with_.get(var_write["field"])
+        if isinstance(target, str) and target and not target.startswith("${"):
+            names.append(target)
+    return names
+
+
+@dataclass(frozen=True)
+class VisibleScope:
+    """某个节点上「可引用」的作用域（用户变量 + 词法可见的循环/错误变量）。
+
+    ``variables`` 是**严格在该节点之前**声明的用户变量名（声明顺序、去重）；
+    它**不含**该节点自身声明的名字——这正是编译器的口径：``walk()`` 先
+    ``validate_refs(node.with_, …)``、之后才登记本节点的别名。
+    """
+
+    variables: tuple[str, ...]
+    loop_vars: tuple[str, ...]
+    error_vars: tuple[str, ...]
+
+
+def visible_scope(root: WorkflowNode, catalog: CommandCatalog, node_id: str) -> VisibleScope | None:
+    """算出 ``node_id`` 这个节点上可见的作用域；节点不存在时返回 ``None``。
+
+    遍历顺序必须与 :meth:`WorkflowCompiler.compile` 的 ``walk()`` **逐条对齐**
+    （sequence 顺序 / if 的 then→else / forEach 的 children / try 的 body→catch），
+    否则菜单会给出一份「编译器并不这么认为」的可见集。这条约束由
+    ``tests/contract/test_variable_scope_visibility.py`` 用编译器当**裁判**逐格钉住
+    （能过 = 可见，不能过 = 不可见），实现一旦漂移即红。Web 侧另有一份 JS 实现，
+    由 ``scripts/check_scope_visibility.mjs`` 拿**同一张用例表**（
+    ``tests/contract/data/scope_visibility_cases.json``）两头对齐。
+
+    ★ 已知的编译器口径（不是本函数的缺陷，是照抄）：then 里声明的变量在 **else** 里
+    可见、try 体里声明的在 **catch** 里可见。菜单与它**同口径**，因为维护者
+    2026-10-14 拍板「菜单 ⊆ 编译通过，两端口径必须一致」。
+    """
+    seen: list[str] = []
+    hit: VisibleScope | None = None
+
+    def visit(node: WorkflowNode, loop_vars: set[str], error_vars: set[str]) -> None:
+        nonlocal hit
+        if hit is not None:
+            return
+        if node.id == node_id:
+            ordered = list(dict.fromkeys(seen))
+            hit = VisibleScope(
+                tuple(ordered),
+                tuple(dict.fromkeys(loop_vars)),
+                tuple(dict.fromkeys(error_vars)),
+            )
+            return
+        if isinstance(node, ActionNode):
+            seen.extend(_declared_names(node, catalog))
+            return
+        if isinstance(node, SequenceNode):
+            for child in node.children:
+                visit(child, loop_vars, error_vars)
+        elif isinstance(node, IfNode):
+            for child in node.then:
+                visit(child, loop_vars, error_vars)
+            for child in node.otherwise:
+                visit(child, loop_vars, error_vars)
+        elif isinstance(node, ForEachNode):
+            child_vars = loop_vars | {node.item_var}
+            for child in node.children:
+                visit(child, child_vars, error_vars)
+        elif isinstance(node, TryNode):
+            for child in node.children:
+                visit(child, loop_vars, error_vars)
+            catch_vars = error_vars | {node.error_var}
+            for child in node.catch:
+                visit(child, loop_vars, catch_vars)
+        # ReturnNode 无子节点
+
+    visit(root, set(), set())
+    return hit
+
+
 def _collect_output_aliases(node: WorkflowNode, catalog: CommandCatalog) -> set[str]:
     """遍历整棵 workflow 树，收集所有声明的变量名（供前向引用判定）。
 
@@ -120,14 +207,7 @@ def _collect_output_aliases(node: WorkflowNode, catalog: CommandCatalog) -> set[
 
     def visit(n: WorkflowNode) -> None:
         if isinstance(n, ActionNode):
-            for alias in (n.output_aliases or {}).values():
-                found.add(alias)
-            manifest = catalog.get(n.command)
-            var_write = manifest.x_var_write if manifest else None
-            if var_write and var_write.get("field"):
-                target = n.with_.get(var_write["field"])
-                if isinstance(target, str) and target and not target.startswith("${"):
-                    found.add(target)
+            found.update(_declared_names(n, catalog))
         elif isinstance(n, SequenceNode):
             for child in n.children:
                 visit(child)
@@ -168,7 +248,20 @@ class WorkflowCompiler:
         except InputDeclarationError as exc:
             raise WorkflowCompileError(f"Invalid workflow inputs declaration: {exc}") from exc
 
-        def validate_refs(value: Any, loop_vars: set[str], error_vars: set[str]) -> None:
+        def validate_refs(
+            value: Any,
+            loop_vars: set[str],
+            error_vars: set[str],
+            own_names: set[str],
+        ) -> None:
+            """校验一处引用。``own_names`` = 当前节点自己声明的变量名。
+
+            判定次序（改动前请先读 `visible_scope` 的说明）：
+            已可见 → **自身声明** → 更靠后声明 → 词法可见的 error_var → 不可用。
+            「自身声明」必须排在「更靠后声明」**之前**，否则自引用会报成
+            「declared later」（文案误导）；又必须排在「已可见」**之后**，
+            否则 ``v = ${v}``（读自己写入目标的旧值）这类合法写法会被误判。
+            """
             for reference in _iter_references(value):
                 root, *parts = reference.split(".")
                 if root == "inputs":
@@ -185,6 +278,11 @@ class WorkflowCompiler:
                 elif root in output_aliases:
                     # ${alias} 或 ${alias.field} — 前序已声明的 output_alias 变量
                     pass
+                elif root in own_names:
+                    # 变量就由**当前节点自己**声明 → 引用它必然取不到（赋值还没发生）
+                    raise WorkflowCompileError(
+                        f"Self variable reference (declared by this node): {reference}"
+                    )
                 elif root in all_output_aliases:
                     # 变量在流程更靠后节点才声明 → 前向引用
                     raise WorkflowCompileError(
@@ -211,7 +309,12 @@ class WorkflowCompiler:
                 manifest = self.catalog.get(node.command)
                 if manifest is None:
                     raise WorkflowCompileError(f"Unknown command: {node.command}")
-                validate_refs(node.with_, loop_vars, error_vars)
+                validate_refs(
+                    node.with_,
+                    loop_vars,
+                    error_vars,
+                    set(_declared_names(node, self.catalog)),
+                )
                 if node.retry_count > 0 and manifest.effect.replay == ReplayPolicy.UNSAFE:
                     raise WorkflowCompileError(
                         f"Unsafe replay command cannot be retried: {manifest.id}"
@@ -219,30 +322,24 @@ class WorkflowCompiler:
                 Draft202012Validator(manifest.input_schema).check_schema(manifest.input_schema)
                 required.update(manifest.capabilities)
                 step_ids.add(node.id)
-                for alias in (node.output_aliases or {}).values():
-                    output_aliases.add(alias)
-                # 变量写入命令：varName 为字面量时即声明了一个可后续引用的变量。
-                # 若 varName 本身是引用（动态变量名），静态无法确定，跳过收集。
-                if _is_var_write_node(node, self.catalog):
-                    manifest = self.catalog.get(node.command)
-                    name_field = (manifest.x_var_write or {}).get("field") if manifest else None
-                    target = node.with_.get(name_field) if name_field else None
-                    if isinstance(target, str) and target and not target.startswith("${"):
-                        output_aliases.add(target)
-                        all_output_aliases.add(target)
+                # 本节点声明的变量：output_aliases + 变量写入命令的字面量 varName
+                # （varName 是引用时静态无法确定，跳过）。**唯一来源是
+                # `_declared_names`**——`validate_refs` 的「自身声明」判定与
+                # `visible_scope` 的可见集都读它，三处不得各写一份。
+                output_aliases.update(_declared_names(node, self.catalog))
                 return
 
             if isinstance(node, SequenceNode):
                 for child in node.children:
                     walk(child, loop_vars, error_vars)
             elif isinstance(node, IfNode):
-                validate_refs(node.condition.model_dump(), loop_vars, error_vars)
+                validate_refs(node.condition.model_dump(), loop_vars, error_vars, set())
                 for child in node.then:
                     walk(child, loop_vars, error_vars)
                 for child in node.otherwise:
                     walk(child, loop_vars, error_vars)
             elif isinstance(node, ForEachNode):
-                validate_refs(node.items, loop_vars, error_vars)
+                validate_refs(node.items, loop_vars, error_vars, set())
                 child_vars = loop_vars | {node.item_var}
                 for child in node.children:
                     walk(child, child_vars, error_vars)
@@ -253,7 +350,7 @@ class WorkflowCompiler:
                 for child in node.catch:
                     walk(child, loop_vars, catch_error_vars)
             elif isinstance(node, ReturnNode):
-                validate_refs(node.value, loop_vars, error_vars)
+                validate_refs(node.value, loop_vars, error_vars, set())
 
         walk(workflow.root, set(), set())
         denied = required - granted_capabilities

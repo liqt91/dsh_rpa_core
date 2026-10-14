@@ -445,43 +445,106 @@ const manifestOf = (command) => state.catalog.find((c) => c.id === command);
 
 // ---------------------------------------------------------------------------
 // 变量补全：属性表单输入 ${ 时提示可引用路径（inputs / 各节点 outputs / loop / error）
+//
+// ★ 可见范围（2026-10-14，与桌面端 `MainWindow._reference_groups` 同口径）：变量有
+//   作用域，**当前节点不能引用自身或之后节点声明的变量** —— 编译期就是这么判的
+//   （`compiler/compiler.py` 先 `validate_refs`、之后才登记本节点别名）。此前这里
+//   遍历**全流程**收集，于是菜单给出编译器不放行的选项：在 `data.setVar` 节点自己的
+//   浮层里就能看到**它正在写的那个名字**，选中保存即报 `Forward variable reference`。
+//   口径与 Python 侧 `compiler.visible_scope` 同源同序，由
+//   scripts/check_scope_visibility.mjs 用**同一份用例表**逐格钉住。
 // ---------------------------------------------------------------------------
 
-// 收集流程中所有用户变量（别名 + 变量写入命令的 varName 字面量）。
-// 返回 [{name, source}]，source 用于下拉分组展示（如「用户变量」）。
-function collectUserVariables() {
-  const found = new Map(); // name -> source 描述
-  const visit = (node) => {
-    if (!node) return;
-    if (node.type === "action") {
-      for (const alias of Object.values(node.output_aliases || {})) {
-        if (alias && !found.has(alias)) found.set(alias, "输出别名");
-      }
-      const manifest = manifestOf(node.command);
-      const varWrite = manifest && manifest["x-var-write"];
-      if (varWrite && varWrite.field) {
-        const target = node["with"] ? node["with"][varWrite.field] : undefined;
-        if (typeof target === "string" && target && !target.startsWith("${") && !found.has(target)) {
-          found.set(target, "变量赋值");
-        }
-      }
-    }
-    for (const key of CONTAINER_LISTS[node.type] || []) {
-      for (const child of listOf(node, key) || []) visit(child);
-    }
-  };
-  if (state.workflow && state.workflow.root) visit(state.workflow.root);
-  return [...found.entries()].map(([name, source]) => ({ name, source }));
+// [scope-helpers:start]
+// 这一段被 scripts/check_scope_visibility.mjs **切片真求值**（`new Function`），所以
+// 必须自包含：只依赖入参，不读 `state` / `CONTAINER_LISTS`（切片里没有这些）。
+
+function scopeStepsEqual(a, b) {
+  if (!a || !b || a.length !== b.length) return false;
+  return a.every((step, i) => step.key === b[i].key && step.index === b[i].index);
 }
 
-function computeReferencePaths() {
+// 单个节点自己声明的变量（别名 + 变量写入目标的字面量），按声明顺序。
+function declaredNamesOf(node, manifestOf) {
+  const out = [];
+  for (const alias of Object.values(node.output_aliases || {})) {
+    if (alias) out.push({ name: alias, source: "输出别名" });
+  }
+  const manifest = manifestOf ? manifestOf(node.command) : null;
+  const varWrite = manifest && manifest["x-var-write"];
+  if (varWrite && varWrite.field) {
+    const target = node["with"] ? node["with"][varWrite.field] : undefined;
+    if (typeof target === "string" && target && !target.startsWith("${")) {
+      out.push({ name: target, source: "变量赋值" });
+    }
+  }
+  return out;
+}
+
+// targetPath 这个节点上可见的作用域：**严格在它之前**声明的用户变量，加上词法嵌套
+// 内的循环/错误变量名。遍历顺序必须与编译器一致（children 顺序 / if 的 then→else /
+// try 的 body→catch）；目标节点不存在时返回空作用域。
+function visibleScopeAt(root, targetPath, manifestOf) {
+  const before = new Map(); // name -> source（保留首个声明者，顺序 = 声明顺序）
+  const found = { hit: false, variables: [], loopVars: [], errorVars: [] };
+  const step = (path, key, index) => [...path, { key, index }];
+  const visit = (node, path, loopVars, errorVars) => {
+    if (!node || found.hit) return;
+    if (scopeStepsEqual(path, targetPath)) {
+      found.hit = true;
+      found.loopVars = loopVars;
+      found.errorVars = errorVars;
+      return;
+    }
+    if (node.type === "action") {
+      for (const entry of declaredNamesOf(node, manifestOf)) {
+        if (!before.has(entry.name)) before.set(entry.name, entry.source);
+      }
+      return;
+    }
+    if (node.type === "forEach") {
+      const inner = loopVars.concat([node.item_var || "item"]);
+      (node.children || []).forEach((child, i) =>
+        visit(child, step(path, "children", i), inner, errorVars));
+    } else if (node.type === "try") {
+      (node.children || []).forEach((child, i) =>
+        visit(child, step(path, "children", i), loopVars, errorVars));
+      const inner = errorVars.concat([node.error_var || "error"]);
+      (node.catch || []).forEach((child, i) =>
+        visit(child, step(path, "catch", i), loopVars, inner));
+    } else if (node.type === "if") {
+      (node.then || []).forEach((child, i) =>
+        visit(child, step(path, "then", i), loopVars, errorVars));
+      (node["else"] || []).forEach((child, i) =>
+        visit(child, step(path, "else", i), loopVars, errorVars));
+    } else {
+      (node.children || []).forEach((child, i) =>
+        visit(child, step(path, "children", i), loopVars, errorVars));
+    }
+  };
+  if (root) visit(root, [], [], []);
+  if (!found.hit) return { variables: [], loopVars: [], errorVars: [] };
+  found.variables = [...before.entries()].map(([name, source]) => ({ name, source }));
+  return found;
+}
+// [scope-helpers:end]
+
+// 收集**当前节点可见**的用户变量（别名 + 变量写入命令的 varName 字面量）。
+// 返回 [{name, source}]，source 用于下拉分组展示（如「用户变量」）。
+// targetPath 缺省 = 当前选中节点（属性面板与 fx 浮层都是它的）。
+function collectUserVariables(targetPath = state.selected) {
+  if (!state.workflow || !state.workflow.root) return [];
+  return visibleScopeAt(state.workflow.root, targetPath, manifestOf).variables;
+}
+
+function computeReferencePaths(targetPath = state.selected) {
   const paths = [];
   if (!state.workflow) return paths;
   for (const key of Object.keys(state.workflow.inputs || {})) {
     paths.push(`\${inputs.${key}}`);
   }
   // 用户变量优先展示：别名/赋值变量是用户可读的主路径，直接 ${name} 即可引用
-  for (const v of collectUserVariables()) {
+  for (const v of collectUserVariables(targetPath)) {
     paths.push(`\${${v.name}}`);
   }
   const walk = (node) => {
@@ -497,10 +560,17 @@ function computeReferencePaths() {
     for (const key of CONTAINER_LISTS[node.type] || []) {
       for (const child of listOf(node, key) || []) walk(child);
     }
-    if (node.type === "forEach") paths.push(`\${loop.${node.item_var || "item"}}`);
-    if (node.type === "try") paths.push(`\${${node.error_var || "error"}.code}`);
+    // 已知欠账：这里列的是 `steps.<节点id>.outputs.*` 自动路径，仍是**全流程**收集；
+    // 前向的 `steps.<后续节点>` 引用同样会被编译器拒（"Unknown or forward step
+    // reference"）。它不属于「用户变量」，本轮（变量可见范围）未动，待与菜单口径
+    // 一并收口（见 BACKLOG）。
   };
   walk(state.workflow.root);
+  // 循环/错误变量按**词法作用域**给：此前遍历全流程 ⇒ 在循环外也提示 loop.row，
+  // 选中即报 `Unknown loop reference`。
+  const scope = visibleScopeAt(state.workflow.root, targetPath, manifestOf);
+  for (const item of scope.loopVars) paths.push(`\${loop.${item}}`);
+  for (const error of scope.errorVars) paths.push(`\${${error}.code}`);
   return paths;
 }
 
@@ -2084,7 +2154,8 @@ function replaceWithVarSelect(wrap, origInput, node, fieldKey, onChange) {
 
   const openVarPopup = () => {
     if (varPopup) return;
-    const userVars = collectUserVariables();
+    // 显式喂当前节点（属性面板就是它的）：可见范围按它算，别靠缺省值
+    const userVars = collectUserVariables(state.selected);
     const userNames = new Set(userVars.map((v) => v.name));
     varPopup = document.createElement("div");
     varPopup.className = "ref-completion fx-var-popup";
@@ -2107,7 +2178,7 @@ function replaceWithVarSelect(wrap, origInput, node, fieldKey, onChange) {
       }
     };
     addGroup("用户变量", userVars.map((v) => ({ name: v.name, label: `${v.name}（${v.source}）` })));
-    addGroup("内置作用域", computeReferencePaths()
+    addGroup("内置作用域", computeReferencePaths(state.selected)
       .map((p) => p.replace(/^\$\{|\}$/g, ""))
       .filter((bare) => bare.includes(".") || !userNames.has(bare))
       .map((bare) => ({ name: bare, label: bare })));

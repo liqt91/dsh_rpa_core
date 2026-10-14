@@ -580,6 +580,19 @@
     `workers/python_worker.py:209`（报错文案来源）· `gui/param_form.py::_swap_expr_slot`（切模式继承内容）。
   - 明确不动：**不改维护者的 `workflows/xiaohongshu/workflow.json`**（他选择自己在界面上点掉
     n1 的 Py 开关）；**不动运行期求值语义**（子进程隔离执行是本条的前提，不是问题）。
+  - ★ 补（2026-10-14）：(c) 要的「已知变量集合」现在有了权威函数——`compiler.visible_scope`
+    （按**当前节点**算可见范围，见下一条）；开工时从这里取，别再各写一份。
+
+- [ ] **Web 的 `${` 补全仍列全流程的 `steps.<节点id>.outputs.*`**（`planned`，2026-10-14 立）
+  - 形状与「变量可见范围」（同日落地）**同类**：`app.js::computeReferencePaths` 的自动路径部分
+    遍历全流程收集 `steps.*`，而编译器对**前向**引用同样拒绝
+    （`Unknown or forward step reference`）⇒ 菜单给出编译器不放行的选项，只是它列的不是「变量」。
+  - 本轮**只收口了用户变量**：`visibleScopeAt` 给出「别名/赋值目标」+ 词法内的 `loop.*` / `err.*`
+    三类判定，`steps.*` 未动——要收口它得让同一条遍历再吐一个「该节点之前出现过的节点 id 序列」，
+    影响的是 fx 浮层的「内置作用域」分组与 `${` 补全候选两个消费面。
+  - 相关：`compiler.visible_scope`（可见范围的权威函数，2026-10-14 新增）·
+    `docs/manifest-param-config.md` ④ 的追加说明 · 判据在
+    `tests/contract/test_variable_scope_visibility.py` + `scripts/check_scope_visibility.mjs`。
 
 ## 远期任务
 

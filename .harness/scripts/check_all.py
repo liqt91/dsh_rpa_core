@@ -75,6 +75,12 @@ PURE_FUNCTION_SCRIPTS = (
     # 活体校验（M47）：content.js verify-helpers 纯求值 + background runVerify
     # 调用矩阵（只发活跃页/补注入重试/结构化报错）+ content 应答接线断言。
     "check_verify.mjs",
+    # 变量可见范围（app.js 的 visibleScopeAt，2026-10-14）：与 Python 侧
+    # tests/contract/test_variable_scope_visibility.py 跑**同一份用例表**
+    # （tests/contract/data/scope_visibility_cases.json）。桌面端菜单读 Python 的
+    # compiler.visible_scope，Web 属性面板是另一份 JS 实现——Python 侧读源码只能
+    # 证明「写了 visibleScopeAt」，证明不了它对每个节点的判定与编译器一致。
+    "check_scope_visibility.mjs",
 )
 node = shutil.which("node")
 if node:

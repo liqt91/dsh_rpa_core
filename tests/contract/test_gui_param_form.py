@@ -500,9 +500,13 @@ def _find_node(node, node_id: str):
 
 
 def test_reference_groups_list_inputs_in_their_own_group(window):
-    """『流程参数』组 = 流程输入声明（M26）。"""
+    """『流程参数』组 = 流程输入声明（M26）。
+
+    菜单按**当前节点**算可见范围（`_reference_groups(node_id)`）；流程入参到处可见，
+    取哪个节点都一样，这里用示例流程首节点 `open`。
+    """
     window._workflow_meta["inputs"] = {"count": 3}
-    assert ("流程参数", ["inputs.count"]) in window._reference_groups()
+    assert ("流程参数", ["inputs.count"]) in window._reference_groups("open")
 
 
 def test_reference_groups_exclude_auto_paths_and_builtins(window):
@@ -513,7 +517,7 @@ def test_reference_groups_exclude_auto_paths_and_builtins(window):
     运行期语法与编译期校验不变，只是不进菜单。
     """
     window._workflow_meta["inputs"] = {"count": 3}
-    flat = [p for _label, paths in window._reference_groups() for p in paths]
+    flat = [p for _label, paths in window._reference_groups("open") for p in paths]
 
     assert not [p for p in flat if p.startswith("steps.")]
     for builtin in ("loop.item", "error.code", "error.message"):
@@ -541,11 +545,22 @@ def test_reference_groups_list_named_outputs_and_var_writes(window):
             "with": {"row": 0, "column": 0, "varName": "cellText"},
         }
     )
+    # 被问的节点：**必须排在两个声明者之后**，否则（按可见范围）它一个也不该看见
+    root["children"].append(
+        {
+            "type": "action",
+            "id": "probe",
+            "command": "data.setVar",
+            "with": {"varName": "probeTarget", "value": "1"},
+        }
+    )
     other = MainWindow(window.catalog, workflow=document)
-    groups = dict(other._reference_groups())
+    groups = dict(other._reference_groups("probe"))
 
     assert "webpage1" in groups.get("输出与赋值变量", [])
     assert "cellText" in groups.get("输出与赋值变量", [])
+    # 本节点自己写的目标名**不在**自己的菜单里（写还没发生，引用必然取不到）
+    assert "probeTarget" not in groups.get("输出与赋值变量", [])
 
 
 def test_reference_groups_list_only_explicitly_named_loop_and_error_vars(window):
@@ -554,6 +569,10 @@ def test_reference_groups_list_only_explicitly_named_loop_and_error_vars(window)
     判据比「raw 里有没有这个键」严：控制流表单把空值预填成模型默认名
     （`str(raw.get("item_var") or "item")`），用户点一次「应用」默认名就进 raw 了
     ——按「键存在」判会把 `loop.item` / `error.code` 这两个内置名又列回来。
+
+    2026-10-14 起还要判**词法范围**：这些名字只在相应容器**内部**可见。所以探针
+    节点放在「循环体里套的 try 的 catch 里」——它同时处在 `loop.row` 与 `err.code`
+    的作用域内；换个循环外的节点，两者**都**不该出现。
     """
     from rpa_core.gui.app import SAMPLE_WORKFLOW, MainWindow
 
@@ -562,17 +581,144 @@ def test_reference_groups_list_only_explicitly_named_loop_and_error_vars(window)
         c for c in document["root"]["children"] if c.get("type") == "forEach"
     )
     assert loop_node["item_var"] == "row"
-    document["root"]["children"].append(
-        {"type": "try", "id": "try1", "children": [], "catch": [], "error_var": "err"}
-    )
+    loop_node["children"] = [
+        {
+            "type": "try",
+            "id": "try1",
+            "error_var": "err",
+            "children": [],
+            "catch": [
+                {
+                    "type": "action",
+                    "id": "probe",
+                    "command": "data.setVar",
+                    "with": {"varName": "t", "value": "1"},
+                }
+            ],
+        }
+    ]
     named = MainWindow(window.catalog, workflow=document)
-    assert ("循环与错误变量", ["loop.row", "err.code"]) in named._reference_groups()
+    assert ("循环与错误变量", ["loop.row", "err.code"]) in named._reference_groups("probe")
+    # 循环外的节点：两者都不在作用域内（此前是全流程收集，会照样列出来）
+    assert "循环与错误变量" not in [
+        label for label, _ in named._reference_groups("open")
+    ]
 
     # 默认名（控制流表单预填后写回 raw 的形状）不算「用户命名」
     loop_node["item_var"] = "item"
-    document["root"]["children"][-1]["error_var"] = "error"
+    loop_node["children"][0]["error_var"] = "error"
     defaulted = MainWindow(window.catalog, workflow=document)
-    assert "循环与错误变量" not in [label for label, _ in defaulted._reference_groups()]
+    assert "循环与错误变量" not in [
+        label for label, _ in defaulted._reference_groups("probe")
+    ]
+
+
+def test_reference_groups_hide_the_nodes_own_and_later_variables(window):
+    """可见范围（维护者 2026-10-14）：本节点自身 / 之后节点声明的变量不进菜单。
+
+    此前菜单遍历全流程 ⇒ `data.setVar` 节点自己的菜单里就有**它正在写的那个名字**，
+    以及后面节点才声明的名字；选中保存即报 `Forward variable reference` ——
+    菜单提供了编译器不放行的选项。
+    """
+    from rpa_core.gui.app import SAMPLE_WORKFLOW, MainWindow
+
+    document = json.loads(json.dumps(SAMPLE_WORKFLOW))
+    root = document["root"]
+    root["children"][0]["output_aliases"] = {"sessionId": "webpage1"}
+    root["children"].insert(
+        -1,
+        {
+            "type": "action",
+            "id": "seta",
+            "command": "data.setVar",
+            "with": {"varName": "target", "value": "1"},
+        },
+    )
+    root["children"].insert(
+        -1,
+        {
+            "type": "action",
+            "id": "probe",
+            "command": "data.setVar",
+            "with": {"varName": "probeTarget", "value": "1"},
+        },
+    )
+    probes = MainWindow(window.catalog, workflow=document)
+
+    def flat(node_id: str) -> list[str]:
+        return [p for _label, paths in probes._reference_groups(node_id) for p in paths]
+
+    # 首个节点：webpage1 是它自己声明的，target / probeTarget 都在它之后
+    assert "webpage1" not in flat("open")
+    assert "target" not in flat("open")
+    assert "probeTarget" not in flat("open")
+    # 中间节点：看得到前面的 webpage1，看不见自身的 target 与后面的 probeTarget
+    assert "webpage1" in flat("seta")
+    assert "target" not in flat("seta")
+    assert "probeTarget" not in flat("seta")
+    # 末节点：前面两个都看得到，自身的 probeTarget 不在
+    assert {"webpage1", "target"} <= set(flat("probe"))
+    assert "probeTarget" not in flat("probe")
+
+
+def test_reference_groups_only_offer_paths_the_compiler_accepts(window):
+    """★ 菜单给出的**每一条**路径，塞进该节点都必须编译得过。
+
+    M57 只判了「菜单里有什么」，没判「菜单里的能不能用」——于是菜单会给出
+    编译器不放行的选项（选中→保存→``Forward variable reference``）。这里用
+    **编译器当裁判**把口径钉住：可见范围的正确性不靠约定，靠判据。
+    """
+    from rpa_core.compiler.compiler import WorkflowCompileError, WorkflowCompiler
+    from rpa_core.devserver.app import DEFAULT_CAPABILITIES
+    from rpa_core.gui.app import SAMPLE_WORKFLOW, MainWindow
+    from rpa_core.model.workflow import Workflow
+
+    document = json.loads(json.dumps(SAMPLE_WORKFLOW))
+    root = document["root"]
+    root["children"][0]["output_aliases"] = {"sessionId": "webpage1"}
+    root["children"].insert(
+        -1,
+        {
+            "type": "action",
+            "id": "seta",
+            "command": "data.setVar",
+            "with": {"varName": "target", "value": "1"},
+        },
+    )
+    probe_window = MainWindow(window.catalog, workflow=document)
+
+    checked = 0
+    for node_id in ("open", "read", "wait", "append", "seta", "done"):
+        paths = [
+            p for _label, group in probe_window._reference_groups(node_id) for p in group
+        ]
+        for path in paths:
+            candidate = json.loads(json.dumps(document))
+            node = _find_node(candidate, node_id)
+            assert node is not None, node_id
+            # return 节点的引用槽是 value，action 是 with.value —— 两者都要真塞进去
+            if node.get("type") == "return":
+                node["value"] = "${" + path + "}"
+            else:
+                node.setdefault("with", {})["value"] = "${" + path + "}"
+            try:
+                WorkflowCompiler(probe_window.catalog).compile(
+                    Workflow.model_validate(candidate), set(DEFAULT_CAPABILITIES)
+                )
+            except WorkflowCompileError as exc:
+                raise AssertionError(
+                    f"菜单给了编译不过的引用：{node_id} × ${{{path}}} → {exc}"
+                ) from exc
+            checked += 1
+    assert checked > 0, "至少要有一条路径被真正校验过（否则这条判据是空转）"
+
+
+def test_reference_groups_give_nothing_when_the_node_is_unknown(window):
+    """``node_id`` 不在文档里 ⇒ 空菜单，**不**降级成「列全流程」。
+
+    降级会把这次修复悄悄退回旧行为（菜单给出编译器不放行的选项），正是本片要修的形状。
+    """
+    assert window._reference_groups("no-such-node") == []
 
 
 # ---- 参数行高：不被面板剩余高度撑开（M58 回归） -------------------------------

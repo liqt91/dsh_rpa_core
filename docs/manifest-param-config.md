@@ -16,6 +16,21 @@
 > 错误变量），按来源分三组、组标题为不可点的灰行——`steps.<节点id>.outputs.<字段>` 自动路径与内置作用域
 > （`loop.item` / `error.code` / `error.message`）**不进菜单**，但仍可手打引用，运行期语法与编译期校验不变
 > （M57 追加，2026-10-13；见 `MainWindow._reference_groups`）；
+> ★ **菜单还要守「变量可见范围」**（2026-10-14 维护者拍板：**与编译器同口径**）：当前节点
+> **不能引用自身或之后节点声明的变量**，循环/错误变量只在词法嵌套内可见。三组内容由
+> `compiler.compiler.visible_scope(root, catalog, node_id)` 现算（遍历序与 `compile()` 逐条对齐：
+> children 顺序 / if 的 then→else / try 的 body→catch），**GUI 与 Web 都不再自己遍历一遍**：
+> 桌面 `_reference_groups(node_id)`（节点 id 由 `_show_action_form` 挂载时喂入）读它，
+> Web `app.js::visibleScopeAt` 是另一份实现但其判定由共享用例表
+> `tests/contract/data/scope_visibility_cases.json` 与 node 门禁
+> `scripts/check_scope_visibility.mjs` 钉住（JS == 用例表 == `visible_scope` == 编译器）。
+> 端到端判据：菜单给出的**每一条**路径塞进该节点都必须编译得过（`test_gui_param_form.py`）。
+> 刻意照抄编译器的一条语义：`then` 里声明的变量在 `else` 里、`try` 体里的在 `catch` 里**可见**
+> （先序遍历累积别名所致）—— 要改的是编译器，不是菜单。
+> 另：自引用与「之后节点」不再共用报错文案（`Self variable reference (declared by this node)`
+> vs `Forward variable reference (declared later)`）；`v = ${v}`（读目标旧值）仍合法。
+> 已知欠账：Web 的 `${` 补全里 `steps.<节点id>.outputs.*` 仍是**全流程**收集，前向 steps 引用同样
+> 会被编译器拒（见 `tasks/BACKLOG.md`）。
 > ⑤ 「影刀侧 fx 语义」另见 `docs/yingdao-web-cmds-benchmark.md` §三-8（影刀的 fx 是**变量选择器**，
 > 其左侧 **Python 图标**才是表达式模式开关）；
 > ⑥ 新增字段级 **`x-multiline`**（2026-10-13 M58 起）：声明它 ⇒ 该 string 参数改用**多行输入区**

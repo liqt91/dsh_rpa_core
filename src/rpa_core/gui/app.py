@@ -4327,7 +4327,8 @@ class MainWindow(QMainWindow):
             manifest.input_schema,
             args,
             expr_modes=(raw or {}).get("_exprModes"),
-            variable_groups_provider=self._reference_groups,
+            # 可见范围按**本节点**算：菜单只给这个节点真能引用的变量（见 _reference_groups）
+            variable_groups_provider=lambda: self._reference_groups(own_id),
             manifest=manifest,
             output_aliases=(raw or {}).get("output_aliases"),
             raw=raw,
@@ -4511,21 +4512,29 @@ class MainWindow(QMainWindow):
             return
         apply_fn()
 
-    def _reference_groups(self) -> list[tuple[str, list[str]]]:
+    def _reference_groups(self, node_id: str) -> list[tuple[str, list[str]]]:
         """fx 变量菜单的内容，按来源分组：``[(组标题, [路径, ...]), ...]``。
 
-        只列**用户自己命名的**变量（维护者 2026-10-13 拍板）：
+        **只列 ``node_id`` 这个节点在编译器眼里可引用的名字**（维护者 2026-10-14
+        拍板「与编译器同口径」）——变量有可见范围，当前节点**不能**引用**自身**或
+        **之后**节点声明的变量：
 
-        - 「流程参数」：流程输入声明（M26）的 ``inputs.<名>``；
-        - 「输出与赋值变量」：命令输出别名 ``output_aliases`` 的值（如打开网页的
-          「保存网页对象」）＋ 变量写入命令的目标名（manifest ``x-var-write``，
-          如设置变量 / 读取表格单元格）；
-        - 「循环与错误变量」：``loop.<item_var>`` / ``<error_var>.code``——**仅当节点
-          里显式填了名字**（与模型默认值 ``item`` / ``error`` 不同）时才列。判据必须比
-          「raw 里有没有这个键」更严：控制流表单把空值**预填成默认名**
-          （``str(raw.get("item_var") or "item")``），用户只要点过一次「应用」默认名
-          就会被写进 raw——按「键存在」判会把 ``loop.item`` 这个内置名又列回来。
-          默认值从模型现算（``ForEachNode.model_fields``），不手抄。
+        - 「流程参数」：流程输入声明（M26）的 ``inputs.<名>``（到处可见）；
+        - 「输出与赋值变量」：**严格在该节点之前**的节点声明的输出别名
+          ``output_aliases`` 与变量写入目标（manifest ``x-var-write``）；
+        - 「循环与错误变量」：词法嵌套在它外层的 ``loop.<item_var>`` /
+          ``<error_var>.code``，**仅当显式填了名字**（与模型默认值 ``item`` /
+          ``error`` 不同）时才列。判据必须比「raw 里有没有这个键」更严：控制流表单
+          把空值**预填成默认名**（``str(raw.get("item_var") or "item")``），用户
+          只要点过一次「应用」默认名就会被写进 raw——按「键存在」判会把
+          ``loop.item`` 这个内置名又列回来。默认值从模型现算
+          （``ForEachNode.model_fields``），不手抄。
+
+        可见范围**不在这里重新实现**：口径由 :func:`visible_scope`
+        （``compiler/compiler.py``）现算，与 ``WorkflowCompiler.compile`` 同一份
+        遍历序。此前此处（与 Web 的 ``collectUserVariables``）遍历**全流程**，
+        于是 ``data.setVar`` 节点自己的 fx 菜单里会出现**它自己正在写的那个变量名**，
+        选中保存即报 ``Forward variable reference``——菜单给了编译器不放行的选项。
 
         不列 ``steps.<节点id>.outputs.<字段>`` 自动展开路径与内置作用域根名
         （``loop.item`` / ``error.code`` / ``error.message``）：它们不是变量名，
@@ -4533,48 +4542,42 @@ class MainWindow(QMainWindow):
         仍可手打，运行期语法与编译期校验都不变。
 
         变量写入**认 manifest 声明、不认命令 id**——与 :meth:`_refresh_variables`
-        （变量面板）、``compiler``、``orchestrator`` 同一份事实源；此前这里硬编码
-        ``data.setVar``，而 ``data.table.getCell`` 同样声明了 ``x-var-write``，
-        它的目标变量于是只在变量面板里有、fx 菜单里没有。
+        （变量面板）、``compiler``、``orchestrator`` 同一份事实源。
+
+        文档建不起来（半配置状态）或 ``node_id`` 不在树里时返回空列表：**可见集
+        无法确定就什么都不给**，绝不在这种情况下降级成「列全流程」——那正是本方法
+        要修掉的行为，静默降级等于把 bug 藏回去。
         """
-        from rpa_core.gui.flow_model import ROLE_ARGS_RAW, iter_real_nodes
-        from rpa_core.model.workflow import ForEachNode, TryNode
+        from rpa_core.compiler.compiler import visible_scope
+        from rpa_core.model.workflow import ForEachNode, TryNode, Workflow
 
         default_item_var = ForEachNode.model_fields["item_var"].default
         default_error_var = TryNode.model_fields["error_var"].default
 
         params: list[str] = []
-        for name in (self._workflow_meta.get("inputs") or {}):
+        for name in self._workflow_meta.get("inputs") or {}:
             params.append(f"inputs.{name}")
 
-        variables: list[str] = []
+        try:
+            workflow = Workflow.model_validate(self._current_document())
+        except Exception:  # noqa: BLE001 - 半配置状态：可见集无法确定 ⇒ 不给候选
+            return []
+        scope = visible_scope(workflow.root, self.catalog, node_id)
+        if scope is None:
+            return []
+
         scoped: list[str] = []
-        for item in iter_real_nodes(self.flow_model):
-            holder = item.data(ROLE_ARGS_RAW)
-            raw = holder.raw if holder is not None else None
-            if not raw:
-                continue
-            for alias in (raw.get("output_aliases") or {}).values():
-                if isinstance(alias, str) and alias:
-                    variables.append(alias)
-            command_id = raw.get("command")
-            manifest = self.catalog[command_id] if command_id in self.catalog else None
-            var_write = manifest.x_var_write if manifest is not None else None
-            if var_write and var_write.get("field"):
-                target = (raw.get("with") or {}).get(var_write["field"])
-                if isinstance(target, str) and target and not target.startswith("${"):
-                    variables.append(target)
-            item_var = raw.get("item_var")
-            if isinstance(item_var, str) and item_var != default_item_var:
+        for item_var in scope.loop_vars:
+            if item_var != default_item_var:
                 scoped.append(f"loop.{item_var}")
-            error_var = raw.get("error_var")
-            if isinstance(error_var, str) and error_var != default_error_var:
+        for error_var in scope.error_vars:
+            if error_var != default_error_var:
                 scoped.append(f"{error_var}.code")
 
         groups = [
             ("流程参数", list(dict.fromkeys(params))),
-            ("输出与赋值变量", list(dict.fromkeys(variables))),
-            ("循环与错误变量", list(dict.fromkeys(scoped))),
+            ("输出与赋值变量", list(scope.variables)),
+            ("循环与错误变量", scoped),
         ]
         return [(label, paths) for label, paths in groups if paths]
 

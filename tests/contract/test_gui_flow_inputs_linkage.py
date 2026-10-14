@@ -6,7 +6,7 @@ S2 把声明做成了可编辑的 `_workflow_meta["inputs"]`；本文件验证**
 | 消费方 | 实现位置 | 期望行为 |
 |---|---|---|
 | 运行参数对话框 | `RunInputsDialog(declared)` | 新增声明后立即出现一行；删除后不再出现 |
-| fx 变量菜单 | `_reference_groups()` | 「流程参数」组列出 `inputs.<名>`；删除后消失 |
+| fx 变量菜单 | `_reference_groups(node_id)` | 「流程参数」组列出 `inputs.<名>`；删除后消失 |
 | 编译期引用校验 | `compiler.validate_refs` | 删除声明后残留引用**如实报错**（不静默） |
 
 测试在 offscreen Qt 平台运行；缺 PySide6 时整组跳过。
@@ -57,9 +57,14 @@ def _set_inputs(window, declaration: dict) -> None:
     window._workflow_meta["inputs"] = declaration
 
 
+# 菜单现在按**当前节点**的可见范围产出（`_reference_groups(node_id)`）：这里统一用
+# 示例流程的首个节点「打开网页」（id 写死是刻意的——它变了这条断言就该红）。
+_MENU_NODE = "open"
+
+
 def _input_paths(window) -> list[str]:
     """「流程参数」组里的路径（菜单是分组的，这里只关心入参那组）。"""
-    groups = window._reference_groups()
+    groups = window._reference_groups(_MENU_NODE)
     return [p for label, paths in groups if label == "流程参数" for p in paths]
 
 
@@ -155,13 +160,15 @@ def test_reference_groups_drop_deleted_inputs(window):
     _set_inputs(window, {})
     assert _input_paths(window) == []
     # 空组整个消失（菜单里不留一个空标题）
-    assert "流程参数" not in [label for label, _ in window._reference_groups()]
+    assert "流程参数" not in [
+        label for label, _ in window._reference_groups(_MENU_NODE)
+    ]
 
 
 def test_reference_groups_tolerate_a_missing_declaration(window):
     """没有 inputs 键（旧流程文件）也要能工作，不抛。"""
     window._workflow_meta.pop("inputs", None)
-    assert isinstance(window._reference_groups(), list)
+    assert isinstance(window._reference_groups(_MENU_NODE), list)
 
 
 def test_variable_panel_refresh_after_edit(window, monkeypatch):
