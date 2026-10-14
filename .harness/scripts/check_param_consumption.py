@@ -34,16 +34,23 @@
 - 读取发生在**不带命令字面量的辅助函数**里时，会算进「通用读取」而让所有命令都通过
   （例如 `browser.waitFor` 的 `state` 读在 `_ext_wait_for(inputs, ...)` 里）。收窄办法是
   把这类读取搬进 `if command == ...` 分支，或在此显式登记；
-- 走**注册表分派**的命令（`python_worker._TABLE_HANDLERS[invocation.command_id]` 对应的
-  `data.table.*`、以及 `python.evalExpression`）目前**不在 catalog 里**，因此不参与检查；
-  将来若登记为命令，需要给本文件加「按 handler 函数切片」的第三条策略。
-  **M60 的 `ocr.ddddocr` 就是被这条逼着写成显式 `if command_id == "<id>"` 链的**：
-  worker 本来用 `_HANDLERS` 注册表分派，那样两条门禁（本文件 + `check_error_contract`）
-  都会「看得见命令、看不见契约」——即 `checked` 计数会 +1 而实际零覆盖。
-  注册表分派要吃上检查，就得先加第三条切片策略，代价高于让实现侧迁就字面量形状。
+- **注册表分派**（`_X_HANDLERS = {"<id>": <handler 函数名>}`，由 dispatcher 按载体取值后调用）：
+  M63 S1 之前 `data.table.*` 6 条是**假覆盖**——它们**进得了 catalog**（`checked` 计数 +1）
+  却一条契约都没检查到：handler 体的读取全部落进「通用读取」⇒ 每条命令的参数都被判为
+  已消费（**跨命令掩蔽**，实测把只有 `getCell` 读的 `varName` 加进 `appendRow` ⇒ PASSED）。
+  现由**第三条切片策略**（`_registry_reads`）修正：按注册表把 handler **函数体**的读取归到
+  该命令（**逐命令**，不共享）、dispatcher 体的读取算该注册表全部命令的**公共**读取
+  （如 `flowDir` / `table`），且这两类读取**不再计入通用读取**——否则仍是模块级覆盖。
+  负向验证必须打在「跨命令」这个复发点上（见 `.harness/spike/probe_m63_registry_negative.py`）。
+  **M60 的 `ocr.ddddocr` 是被同一条盲区逼着写成显式 `if command_id == "<id>"` 链的**——
+  显式 if 链仍是**首选形状**（零解释成本，人读门禁也一眼看懂）；注册表分派现在也能查，
+  但代价是门禁必须自带第三条策略，而它的正确性只由那一条负向验证守着。
 
 覆盖范围：**五类通道全部**——`browser.*`（扩展腿）、`desktop.*`（UIA）、
-`desktop.win32.*`、`python.worker`（`data.*` / `workflow.sleep`）、`ocr.ddddocr`，共 81 条命令。
+`desktop.win32.*`、`python.worker`（`data.*` / `data.table.*` / `workflow.sleep`）、
+`ocr.ddddocr`。扫描口径 = `commands/` 下的**全部** manifest（`rglob`，M63 S1 起；
+此前是**一层 `glob`**，漏掉 `commands/data/table/` 的 6 条 —— 那条漏扫是 M60 登记、
+M63 S1 连同第三条切片策略一并清掉的）。**条数以汇总行为准，本文件不写死计数**。
 
 > **历史更正**：M29 时期本文件只登记了 `"browser."` 一条前缀，其余通道被跳过，而 docstring 与
 > BACKLOG 把跳过归因为「桌面/数据通道的分派不是 `command == "<id>"` 字面量形状」。
@@ -143,8 +150,106 @@ def _inputs_reads(nodes) -> set[str]:
     return reads
 
 
-def _analyse_module(path: Path) -> tuple[dict[str, set[str]], set[str], set[str]]:
-    """返回 `(命令 → 该命令分支里的读取键, 通用读取键, 未实现命令)`。"""
+def _registry_members(
+    tree: ast.Module,
+) -> dict[str, tuple[ast.FunctionDef, ast.FunctionDef | None]]:
+    """发现模块级「命令注册表」，返回 `命令 id → (handler 函数节点, dispatcher 函数节点或 None)`。
+
+    第三类分派形状（前两类是 `command == "<id>"` 与 `... in (...)`）：
+
+        _X_HANDLERS = {"<id>": _handler_a, ...}   # 模块级 dict 字面量，值是同模块函数名
+
+    它**必须**单独处理：`_command_names` 认的是比较表达式，注册表里没有比较 ⇒ 整张表对
+    前两条策略不可见，而 handler 体的读取又会全落进「通用读取」⇒ 跨命令掩蔽（假绿）。
+
+    dispatcher = 函数体里出现 `_X_HANDLERS[...]` 下标访问的那个模块级函数；它的读取是
+    全部注册表命令共享的公共读取。自动发现，**不硬编码注册表名**（硬编码会随改名静默失效）。
+    """
+    module_funcs = {node.name: node for node in tree.body if isinstance(node, ast.FunctionDef)}
+    if not module_funcs:
+        return {}
+
+    registry_names: set[str] = set()
+    for node in tree.body:
+        if not isinstance(node, ast.Assign) or not isinstance(node.value, ast.Dict):
+            continue
+        registry_names.update(
+            target.id for target in node.targets if isinstance(target, ast.Name)
+        )
+
+    dispatchers: dict[str, ast.FunctionDef] = {}
+    for name in sorted(registry_names):
+        for func in module_funcs.values():
+            # 引用的形状放宽到「函数体里出现这个名字」：`_H[...]` 下标与 `_H.get(...)` 都算，
+            # 否则换一种取值写法就认不出 —— 而认不出的后果是**静默降级**（见调用方注释）。
+            referenced = any(
+                isinstance(sub, ast.Name) and sub.id == name for sub in ast.walk(func)
+            )
+            if referenced:
+                dispatchers[name] = func
+                break
+
+    members: dict[str, tuple[ast.FunctionDef, ast.FunctionDef | None]] = {}
+    for name in sorted(registry_names):
+        for node in tree.body:
+            if not isinstance(node, ast.Assign) or not isinstance(node.value, ast.Dict):
+                continue
+            if not any(isinstance(t, ast.Name) and t.id == name for t in node.targets):
+                continue
+            for key, value in zip(node.value.keys, node.value.values, strict=True):
+                if not (isinstance(key, ast.Constant) and isinstance(key.value, str)):
+                    continue
+                if not isinstance(value, ast.Name):
+                    continue
+                handler = module_funcs.get(value.id)
+                if handler is not None:
+                    members[key.value] = (handler, dispatchers.get(name))
+    return members
+
+
+def _registry_reads(tree: ast.Module) -> tuple[dict[str, set[str]], set[int], list[str]]:
+    """第三条切片策略：`命令 id → 该命令的读取键`、注册表子树节点 id 集合、**致命错误**。
+
+    子树集合供调用方把注册表子树**排除出「通用读取」**——不排除的话 handler 体的读取会被
+    每条命令共享，跨命令掩蔽立刻回来（那正是 M63 S1 要修的假绿）。
+
+    第三条返回值是**硬失败**：注册表存在却找不到 dispatcher 时必须报错，**不能**默默放过。
+    原因是失效方向不对称：dispatcher 认不出来 ⇒ 它的读取（`flowDir`/`table`）退回「通用读取」
+    ⇒ 该注册表的命令又变成**模块级覆盖**。当前 `_execute_table_command` 的读取恰好都是共享参数，
+    所以后果看起来「一样」—— 但那是**巧合**；哪天有人在 dispatcher 里加一个命令特有的判断，
+    那些读取就会泄漏给全部命令，而门禁照样全绿。把巧合变成判据，是这里硬失败的全部理由。
+    （M63 S1 的负向验证 N3 就是先做出这个假绿才发现的。）
+    """
+    members = _registry_members(tree)
+    per_command: dict[str, set[str]] = {}
+    subtree_ids: set[int] = set()
+    no_dispatcher: set[str] = set()
+    for command_id, (handler, dispatcher) in members.items():
+        for sub in ast.walk(handler):
+            subtree_ids.add(id(sub))
+        if dispatcher is None:
+            no_dispatcher.add(command_id)
+            continue
+        reads = _inputs_reads(list(handler.body)) | _inputs_reads(list(dispatcher.body))
+        for sub in ast.walk(dispatcher):
+            subtree_ids.add(id(sub))
+        per_command[command_id] = reads
+
+    errors: list[str] = []
+    if no_dispatcher:
+        errors.append(
+            "注册表分派注册了 "
+            + ", ".join(sorted(no_dispatcher))
+            + "，但**找不到引用该注册表的 dispatcher 函数** —— 调用点形态与第三条切片策略不符。"
+            "拒绝按「通用读取」口径放行（那等于静默降级成模块级覆盖、命令契约零检查）"
+        )
+    return per_command, subtree_ids, errors
+
+
+def _analyse_module(
+    path: Path,
+) -> tuple[dict[str, set[str]], set[str], set[str], dict[str, set[str]], list[str]]:
+    """返回 `(命令 → 分支读取键, 通用读取键, 未实现命令, 注册表命令读取键, 致命错误)`。"""
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
     per_command: dict[str, set[str]] = {}
     inside_ids: set[int] = set()
@@ -171,6 +276,9 @@ def _analyse_module(path: Path) -> tuple[dict[str, set[str]], set[str], set[str]
             for sub in ast.walk(statement):
                 inside_ids.add(id(sub))
 
+    # 注册表子树的读取**不**计入「通用读取」：算进去就等于模块级覆盖 ⇒ 跨命令掩蔽（假绿）。
+    registry_reads, registry_ids, registry_errors = _registry_reads(tree)
+
     inside: set[str] = set()
     outside: set[str] = set()
     for node in ast.walk(tree):
@@ -178,8 +286,11 @@ def _analyse_module(path: Path) -> tuple[dict[str, set[str]], set[str], set[str]
             keys = _inputs_reads([node])
             if not keys:
                 continue
-            (inside if id(node) in inside_ids else outside).update(keys)
-    return per_command, outside, unimplemented
+            if id(node) in inside_ids:
+                inside.update(keys)
+            elif id(node) not in registry_ids:
+                outside.update(keys)
+    return per_command, outside, unimplemented, registry_reads, registry_errors
 
 
 def _executor_files(executor: str) -> tuple[Path, ...]:
@@ -198,12 +309,18 @@ def main() -> int:
     stale_gaps: list[str] = []
     all_command_ids: set[str] = set()
     unimplemented_commands: set[str] = set()
-    analysis: dict[str, tuple[dict[str, set[str]], set[str], set[str]]] = {}
+    registry_commands: dict[str, set[str]] = {}
+    registry_errors: set[str] = set()
+    analysis: dict[
+        str, tuple[dict[str, set[str]], set[str], set[str], dict[str, set[str]], list[str]]
+    ] = {}
 
     for directory in sorted(COMMANDS_DIR.iterdir()):
         if not directory.is_dir():
             continue
-        for manifest_path in sorted(directory.glob("*.json")):
+        # ★ 必须 `rglob`：`commands/data/table/` 是第二层，一层 `glob` 会让那 6 条命令
+        # 从「检查过」变成「压根没进目录」——**计数看不出来**（它连 skipped 都不算）。
+        for manifest_path in sorted(directory.rglob("*.json")):
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
             command_id = manifest.get("id") or manifest_path.stem
             all_command_ids.add(command_id)
@@ -223,9 +340,18 @@ def main() -> int:
                 key = str(path)
                 if key not in analysis:
                     analysis[key] = _analyse_module(path)
-                per_command, generic, unimplemented = analysis[key]
-                allowed |= per_command.get(command_id, set()) | generic
+                per_command, generic, unimplemented, module_registry, module_errors = analysis[
+                    key
+                ]
+                allowed |= (
+                    per_command.get(command_id, set())
+                    | generic
+                    | module_registry.get(command_id, set())
+                )
                 unimplemented_commands |= unimplemented
+                registry_errors |= set(module_errors)
+                if command_id in module_registry:
+                    registry_commands[command_id] = module_registry[command_id]
 
             if command_id in unimplemented_commands:
                 exempt += 1
@@ -260,6 +386,18 @@ def main() -> int:
         if command_id not in all_command_ids:
             stale_gaps.append(f"KNOWN_GAPS 里的 {command_id} 已不存在，请删掉该条目")
 
+    # 防空转自检：注册表解析出的命令必须**都对得上 manifest**。对不上 = 注册表 id 或实现文件
+    # 映射漂移，那时第三条策略会**静默退回**只按通用读取判（6 条 table 命令立刻变成假绿），
+    # 而汇总行只是数字变小，没人会注意 —— 所以这里硬失败，不靠人看。
+    for command_id in sorted(registry_commands):
+        if command_id not in all_command_ids:
+            errors.append(
+                f"注册表分派解析出 {command_id}，但 commands/ 下没有对应 manifest —— "
+                "注册表 id 与 manifest id 漂移了（第三条切片策略已失效）"
+            )
+
+    # 第三条切片策略的致命错误优先报出（它意味着口径已降级，其余 missing 都不可信）。
+    errors.extend(sorted(registry_errors))
     errors.extend(stale_gaps)
 
     if errors:
@@ -274,6 +412,14 @@ def main() -> int:
         f"豁免明细：未实现 {len(unimplemented_commands)} 条整表 + 台账 {len(KNOWN_GAPS)} 条命令"
         f"共 {gap_params_total} 个参数)"
     )
+    # 始终报出（含 0 条）：这条数字掉了就是第三条策略失效，不能靠「有没有这行」来判断。
+    if registry_commands:
+        print(
+            f"  第三条策略（注册表分派，逐命令切片）{len(registry_commands)} 条："
+            f"{', '.join(sorted(registry_commands))}"
+        )
+    else:
+        print("  第三条策略（注册表分派）：解析到 0 条 —— 若实现里有注册表分派，说明该策略已失效")
     if unimplemented_commands:
         names = ", ".join(sorted(unimplemented_commands))
         print(f"  未实现命令（整表豁免，实现后自动纳入）：{names}")

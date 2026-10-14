@@ -5,7 +5,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 HARNESS = ROOT / ".harness"
-VALID_STATUSES = {"planned", "active", "blocked", "done"}
+# `wip`（M63-④）：任务**在动但非主线**。`active` 仍**恰好一个**（= `project_state.active_plan`）；
+# 多线并行时旁支用 `wip` 表达「已开工」——此前只能拿 `planned` 顶替，台账与实际脱节。
+VALID_STATUSES = {"planned", "active", "wip", "blocked", "done"}
 STATUS_LINE = re.compile(r"^(?:Status:|状态：)\s*`([^`]+)`$", re.MULTILINE)
 
 

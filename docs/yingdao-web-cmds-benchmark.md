@@ -245,7 +245,7 @@
 - [ ] **文件上传/下载与原生对话框**（#38~#42）：`browser.upload` / `browser.download` /
       `browser.handleDialog` 三条命令**已登记但本期未实现**（`COMMAND_NOT_FOUND`）。
       扩展通道缺 CDP，`<input type=file>` 的赋值与原生对话框都无法从 service worker 完成
-      ——落地路径与代价见 `docs/element-mvp-boundaries.md` §2.6/§2.7/§2.8 与 `.harness/BACKLOG.md` P4 三片。
+      ——落地路径与代价见 `docs/element-mvp-boundaries.md` §2.6/§2.7/§2.8 与 `.harness/commands-plan.md` P4 三片。
 
 **P2.5 — 影刀有、我方无的「行为性参数」补齐（2026-10-12 反向复核新增，按命令归口）**
 

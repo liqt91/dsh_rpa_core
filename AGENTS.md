@@ -55,7 +55,11 @@ CLI:         uv run python -m rpa_core.cli
 
 ## Workflow
 
-- Read `.harness/PROGRESS.md` and `.harness/feature_list.json` at session start.
+- Read `.harness/STATE.md` at session start — it is the single entry point (current milestone,
+  active plan, next, and how to find everything else).
+- Read `.harness/PROGRESS.md` / `.harness/feature_list.json` only when details are needed;
+  they are ~640 KB combined and mostly history. Do not read the whole `project_state.json`
+  `notes` field either.
 - Select one incomplete feature.
 - Implement the smallest coherent slice.
 - Run the full gate before marking it complete.

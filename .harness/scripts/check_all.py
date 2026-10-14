@@ -10,6 +10,13 @@ commands = [
     [sys.executable, "-m", "ruff", "check", "."],
     [sys.executable, str(ROOT / ".harness" / "scripts" / "check_architecture.py")],
     [sys.executable, str(ROOT / ".harness" / "scripts" / "check_tasks.py")],
+    # 现役导航文档（AGENTS.md / .harness/README.md / architecture / invariants）里的仓库内
+    # 相对路径引用必须真实存在（M62）。**故意不扫历史台账**（PROGRESS / ADR / 已完成任务单）
+    # ——那里的引用是历史记录，被指文件后来被删改属正常；扫进来只会让门禁长期恒红。
+    [sys.executable, str(ROOT / ".harness" / "scripts" / "check_docs.py")],
+    # 台账字段的上限与换行（M63 S5）：title ≤ 120 / notes ≤ 2000 / PROGRESS cutoff 之后
+    # evidence ≤ 400 / 三个台账文件必须 LF。**没有这条闸门，存量治理当天做完、下周就长回来**。
+    [sys.executable, str(ROOT / ".harness" / "scripts" / "check_ledger.py")],
     # manifest 声明的输入参数必须被实现消费（M29：把「漂移清单」变成机器门禁）
     [sys.executable, str(ROOT / ".harness" / "scripts" / "check_param_consumption.py")],
     # manifest 声明的 errors 必须覆盖实现会返回的错误码（M30 S3：同一种病的另一根轴）

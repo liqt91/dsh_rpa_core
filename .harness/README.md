@@ -3,7 +3,8 @@
 本目录是 rpa_core 的「**留痕 + 门禁 + 一手证据**」中枢：事实源在这里，门禁脚本在这里，
 排查与对标的一手证据也在这里。
 
-- **会话开始**：读本文件的「顶层台账」两张表 + `PROGRESS.md` 尾部 + `feature_list.json`。
+- **会话开始**：先读 **`STATE.md`**（当前状态单一入口，~1 KB）；只在需要细节时才去取 `PROGRESS.md`（append-only 时间线，**最大件**）或 `feature_list.json`（M63-S5 起已压到十几 KB，每条 `title` ≤ 120 字符）。
+- **台账字段有长度闸门**（`check_ledger.py`）：`title ≤ 120` / `notes ≤ 2000` / `PROGRESS` cutoff 之后 `evidence ≤ 400`。它们都是「会话开始扫一眼」的字段，被当成报告字段用就会把开机预算烧在过去——超限即红。
 - **每次实质改动后**：照文末「改动后同步」收口。
 
 ---
@@ -12,23 +13,24 @@
 
 | 文件 | 职责 | 写法约定 |
 |---|---|---|
-| `PROGRESS.md` | 时间线台账 | **append-only**：一行 `YYYY-MM-DD \| feature \| status \| evidence`。历史条目**永不改写**——多处任务文档按「`PROGRESS.md` 的 Mxx 条目」引用它 |
-| `feature_list.json` | 特性台账（现 **82** 项；`id` / `title` / `passes`） | 改 `passes` 用 `scripts/set_feature.py <id> true\|false`；`title` 可追加一句说明 |
-| `project_state.json` | 排期 / 阶段事实源（`phase`、`active_milestone`、`active_plan`、`active_feature`、`next_milestone`、`task_index`、`scope`、`decision_gate`） | 动 `active_*` 排期是**决策**：先拍板再改 |
-| `invariants.md` | **15 条不变量**（工程铁律） | 新增不变量要**同时在门禁脚本里落地**，否则只是文档 |
+| `PROGRESS.md` | 时间线台账 | **append-only**：一行 `YYYY-MM-DD \| feature \| status \| evidence`。历史条目**永不改写**——多处任务文档按「`PROGRESS.md` 的 Mxx 条目」引用它。**`evidence` 只留一行索引**：`check_ledger.py` 的 cutoff 标记（文件内 `M63-S5 evidence cutoff`）**之下**追加的条目，`evidence` 超 400 字符即红；详情落当日 memory |
+| `feature_list.json` | 特性台账（`id` / `title` / `passes`） | 改 `passes` 用 **`.harness/scripts/set_feature.py <id> true\|false`**；`title` 只写**一句话**（≤ 120 字符，门禁在 `check_ledger.py`）。**条数不在此写死**——要数就现算 |
+| `project_state.json` | 排期 / 阶段事实源（`phase`、`active_milestone`、`active_plan`、`active_feature`、`next_milestone`、`task_index`、`scope`、`decision_gate`） | 动 `active_*` 排期是**决策**：先拍板再改。`notes` ≤ 2000 字符且**只记跨里程碑仍成立的决策**——不记进度叙述 |
+| `feature-titles-archive.md` / `notes-archive.md` | M63-S5 缩短 `title` / `notes` 时的**原文存档** | 只回答「原文去哪了」，**仅存档、不再维护**；不参与门禁、不要求与现状同步 |
+| `invariants.md` | **不变量**（工程铁律，编号列表） | 新增不变量要**同时在门禁脚本里落地**，否则只是文档 |
 | `architecture.md` | 依赖方向与分层 | — |
-| `BACKLOG.md` | **指令优化规划**（对标影刀 72 条指令，四 Phase） | ⚠️ 与 `tasks/BACKLOG.md` **不是一回事**，见下 |
+| `commands-plan.md` | **指令优化规划**（对标影刀 72 条指令，四 Phase） | **原名 `BACKLOG.md`**（M63-② 改名消歧）；⚠️ 与 `tasks/BACKLOG.md` **不是一回事**，见下 |
 | `yingdao-gap-matrix.md` | 影刀能力差距矩阵 | 对标复核用（改动时**双向**查漏） |
 
-> ⚠️ **两个 BACKLOG**：`BACKLOG.md`（本目录）= 指令参数/优化的分片规划；
-> `tasks/BACKLOG.md` = **里程碑总表**（Mxx 清单 + 已完成段）。别混。
+> ⚠️ **别再把这两个搞混**：`commands-plan.md`（本目录，**原名 `BACKLOG.md`**）= 指令参数/优化的分片规划；
+> `tasks/BACKLOG.md` = **里程碑总表**（Mxx 清单 + 已完成段）。
 
 ## 二、子目录
 
 | 目录 | 内容 | 保留 / 新增约定 |
 |---|---|---|
-| `adr/` | 架构决策记录，`NNNN-slug.md`（现 **17** 篇：0001–0008、0010–0018，**0009 缺号**；`0013` = 移除 playwright / 扩展单通道） | 决策变了**新增**一篇，不原地改写；被引用的编号**永不重编号** |
-| `tasks/` | 里程碑细则 `Mxx-slug.md`（**71** 篇）+ `BACKLOG.md`（总表） | 新任务文档**照抄 M56/M57 头部**；`Status:` **必须顶格独立一行**，值仅 `planned` / `active` / `blocked` / `done`；**编号不重编号** |
+| `adr/` | 架构决策记录，`NNNN-slug.md`（编号递增，**0009 缺号**不补；`0013` = 移除 playwright / 扩展单通道） | 决策变了**新增**一篇，不原地改写；被引用的编号**永不重编号** |
+| `tasks/` | 里程碑细则 `Mxx-slug.md` + `BACKLOG.md`（总表） | 新任务文档**照抄 M56/M57 头部**；`Status:` **必须顶格独立一行**，值仅 `planned` / `active` / `wip` / `blocked` / `done`（`wip` = **在动但非主线**，`active` 仍唯一，M63-④）；**编号不重编号** |
 | `spike/` | 只读探针 + 负向验证探针（按 M 编号命名） | **两类，务必分清**：<br>① **不带下划线**的 `probe_*.py` / `add_l2_*.py` = **证据件**——源码注释、用例、门禁按名引用它们，**不许删**；<br>② **下划线前缀** `_*` = 本机 scratch（探针产物 / 取证日志 / 诊断脚本），`.gitignore` 已整体收口（`/.harness/spike/_*`） |
 | `demo/` | GUI 可行性 demo（PySide6 / fluent / QML 视觉对比） | `.py` / `.qml` 多被引用，属证据件；`*.png` 截图已忽略 |
 | `scripts/` | 门禁脚本（见下） | 新增门禁要登记进 `check_all.py` |
@@ -39,8 +41,9 @@
 
 1. `pytest`
 2. `ruff check .`
-3. `check_architecture.py` / `check_tasks.py` / `check_param_consumption.py` / `check_error_contract.py` / `check_command_matrix.py`
-4. 前端纯函数切片 `scripts/check_*.mjs`（**15** 个，在**仓库根 `scripts/`**，不是本目录；无 node 时跳过）
+3. `check_architecture.py` / `check_tasks.py` / `check_docs.py` / `check_ledger.py` / `check_param_consumption.py` / `check_error_contract.py` / `check_command_matrix.py`
+4. 前端纯函数切片 `scripts/check_*.mjs`（在**仓库根 `scripts/`**，不是本目录；无 node 时跳过）
+   —— **名目以 `check_all.py` 的 `PURE_FUNCTION_SCRIPTS` 为准**，个数不在此写死
 
 `set_feature.py`：改 `feature_list.json` 的 `passes`。
 
@@ -51,9 +54,17 @@
 - 门禁输出**重定向到文件再读**（接 `| head` 会 SIGPIPE 打断，且可能让探针的还原逻辑半途而废）。
 - `check_param_consumption` / `check_error_contract` 靠 **`EXECUTOR_FILES` 前缀映射**切片源码：
   **新执行器必须登记**，否则该命令被判 `skipped` —— rc=0 且汇总行照报 PASS，**覆盖实为零（假绿）**。
-- 实现侧的分派写**显式 `if command_id == "<id>"` 链**，别用 handler 注册表：两条门禁只认字面量分支体，
-  注册表会让命令「看着被检查、实则零覆盖」。
+- ★ **注册表分派现在也能查了**（M63 S1 加「第三条切片策略」）：`_X_HANDLERS = {"<id>": <handler>}`
+  会被自动发现，按 handler **函数体**逐命令切参数、dispatcher 体的读取算公共。但**显式
+  `if command_id == "<id>"` 链仍是首选形状**——零解释成本，而注册表分派要求门禁自带第三条策略，
+  且**错误契约切不出来**（那 6 条 `data.table.*` 只能记 `unsliced`、不计 `checked`）。
+  ★ 改这两条门禁的切片逻辑后，必须复跑 `.harness/spike/probe_m63_registry_negative.py`：
+  它盯着「**跨命令掩蔽**」这个复发点（只有 A 命令读的参数加进 B 命令的 manifest ⇒ 必须红）。
 - 跑测试 / 门禁只用 `./.venv/Scripts/python.exe`（或 `uv run`）。
+- ★ **改台账要显式 `newline="\n"`**：`Path.write_text` 在 Windows 上默认把 `\n` 翻成 `\r\n`，
+  会把**整个**文件变成 CRLF —— 实锤：`set_feature.py`（改 `passes` 的官方入口）一次调用让
+  `feature_list.json` 漂出 **426** 个 CRLF，一行 `passes` 的改动被埋进几千行噪声里。
+  该脚本已修，`check_ledger.py` 现在盯着三个台账文件的换行。
 
 ## 四、改动后同步（收口清单）
 

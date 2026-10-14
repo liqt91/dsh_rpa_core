@@ -1,8 +1,31 @@
 # 任务总表
 
-任务状态使用：`planned`（计划中）、`active`（进行中）、`blocked`（受阻）、`done`（已完成）。
+任务状态使用：`planned`（计划中）、`active`（进行中，**全仓唯一**=主线）、`wip`（**在动但非主线**，M63-④）、
+`blocked`（受阻）、`done`（已完成）。
 
 ## 当前任务
+
+- [x] **M62 harness / 文档层梳理（AI 协作视角）**（`done`，2026-10-14）——
+  起因：审计「harness 层与文档层从 AI 协作角度需要哪些梳理」。细则见
+  `M62-harness-docs-hygiene.md`。
+  - **S1–S4 全部落地**：`.harness/README.md` 三处漂移修正 + 四处计数去硬编码；新增
+    `.harness/scripts/check_docs.py`（现役导航文档引用存在性 + `STATE.md` 与
+    `project_state.json` 一致性 + 防空转自检），已登记 `check_all.py` 与 README 清单；
+    新增 `.harness/STATE.md` 开机入口，`AGENTS.md` / README 的开机指示改指向它；
+    负向验证 5 注入全中（含一处首轮 MISS：判据用 `in text`，被 `M52-selector-advisor.md`
+    兜底 ⇒ 改锚定表格单元格）。
+  - **S4（一层 `glob` → `rglob`）由 M63-S1 一并清掉**，且**不是**照原登记直接改：实测发现
+    直接加宽会给错误门禁塞 6 条零覆盖假计数 ⇒ 必须连**第三条切片策略**一起落地。
+
+- [ ] **M63 台账治理（M62 审计决策落地）**（`wip`，2026-10-14）——
+  细则见 `M63-ledger-governance.md`；⑤ 的两次实测反转见其 §七。
+  - **已落地**：①`WORKLOG.md` 归档冻结 → `docs/archive/WORKLOG-2026H1.md`；②`.harness/BACKLOG.md`
+    改名 `commands-plan.md`（消歧，5 处引用同步）；③新增 `.harness/scripts/check_ledger.py`
+    （`title ≤ 120` / `notes ≤ 2000` / `PROGRESS` cutoff 之后 `evidence ≤ 400`）+ 存量治理
+    （46 条超长 title、35443 字符 notes，**原文存档** → `feature-titles-archive.md` /
+    `notes-archive.md`）；④`check_tasks.py` 增 `wip` 状态；⑤第三条切片策略 + `rglob`
+    （两条门禁真覆盖 89 条，错误门禁把 6 条 `unsliced` 如实报出）。
+  - **未决**：提交策略（工作区仍混着 M60 未提交改动；`workflows/test/` 两处删除未处理）。
 
 - [x] **M38 指令测试 L1 契约矩阵**（`done`）——已入表：浏览器通道 32 条命令 / 180 个变体、
   数据+工作流 18 条 / 88 个变体（S3）；覆盖率静态校验 `check_command_matrix.py` 已进默认门禁
@@ -263,18 +286,56 @@
     （三因子打分 唯一/稳定/长度 + 排序落盘 + 推荐 UI）。软依赖 M51-B；编辑期优选与运行期
     自愈共用同一份排序候选。**未动 `project_state` 排期字段**（`next_milestone` 仍 M51）。
 
-- [x] **M60 验证码识别指令族（ddddocr）**（`planned`，2026-10-13 维护者口径插入；**S1 已落地**）
+- [x] **M60 验证码识别指令族（ddddocr）**（`planned`，2026-10-13 维护者口径插入；
+  **S1 + S2 + S3 已落地**，S4 未启动）
   - **S1（2026-10-13）已落地**：依赖进 **required** 档（`pyproject.toml` + `uv.lock`，不做
     optional extra）· `workers/ocr_worker.py`（**常驻** worker，一行一 JSON）· `executors/ocr.py`
     （子进程生命周期 / 取消 / 关闭）· `commands/ocr/recognize.json` · `cli.py` registry 接线 ·
     `i18n.js` 标签 · `tests/commands/cases/ocr.json` · 契约测试 9 条。
     代价已实测登记：解包 **258MB**（ddddocr 84.3 + cv2 112.4 + onnxruntime 41.6 + numpy 19.6）。
-  - **两条静态门禁的漏检被本片撞出来并修掉**：`ocr.ddddocr` 原先不在 `EXECUTOR_FILES` 里，
+  - **S2 + S3（2026-10-14）已落地**：维护者报障「验证码识别有点弱，感觉就是个 ocr？」⇒
+    拍板 **补齐原切片**（`ocr.detect` + `ocr.slideMatch`，**不做**组合命令、**不接**第三方打码平台）。
+    catalog 87 → **89** 条；用例表 7 → **18 变体**；契约测试 9 → **16 条**。
+    ★ 同时**订正 S1 的一条错结论**：`charsetRange` **不是不存在**，真名是 `compat/v1` 的
+    **`set_ranges`**（S1 查的 `set_charset_range` 确实是错的名称）——详见 `M60` §8.3 ①。
+    ★ 新登记两条库事实：`det=True` **忽略** `import_onnx_path` ⇒ `ocr.detect` 不声明 `modelPath`；
+    `slide_match` 恒返回**最佳猜测**（**没有失配分支**，纯色底图也报 `confidence 1.0`）
+    ⇒ 新增 `minConfidence` 当唯一闸门（默认为 0 = 透传）。
+  - **两条静态门禁的漏检被 S1 撞出来并修掉**：`ocr.ddddocr` 原先不在 `EXECUTOR_FILES` 里，
     参数消费 / 错误契约两条门禁都把它算成 `skipped`（**「跳过」不是「通过」**）；补登记后
     `checked 77→78、skipped 1→0`。同时发现门禁判「本期未实现」用了 `ast.unparse(整条 If)`——
     **把 `orelse` 也算了进去**，于是 `if cmd == "x": … else: return COMMAND_NOT_FOUND` 这种
     最自然的分派写法会让 x 被**静默豁免**（门禁照报 PASS、覆盖归零）；改为**只看分支体**。
     四向负向验证见 `.harness/spike/probe_m60_ocr_gates_negative.py`（逐字节还原核 md5）。
+  - **★ S2/S3 又撞出第三条同类漏检：一层 `glob` 漏扫深目录**。`check_param_consumption.py` /
+    `check_error_contract.py` 枚举 manifest 用的是 `commands/<dir>/*.json` —— **只扫一层**，
+    于是 `commands/data/table/*.json` 里那 **6 条 `data.table.*` 从未被这两条门禁检查过**
+    （汇总行自称 `= 83 条命令`，而 catalog 是 **89**；两条门禁 docstring 写的都是「全部命令」）。
+    本片用副本改 `rglob` 试算：**`86 checked / 3 exempt / 0 skipped = 89 条命令`，rc=0 全绿**
+    —— ★ **「零代价、纯增益」这个结论当场被推翻**：`data.table.*` 走
+    `python_worker._TABLE_HANDLERS` **注册表分派**（非 `if command ==` 字面量），**直接**加宽
+    扫描口径会让错误门禁把它们记成 `checked` 而**覆盖为零**（假计数）。
+    ⇒ **已由 M63-S1 正确修掉**：加宽扫描口径的**同时**落地**第三条切片策略**（按 handler
+    **函数体**逐命令切参数、dispatcher 体算公共读取），错误门禁另把这 6 条单列 `unsliced`、
+    **不计 `checked`**。现行读数：参数门禁 `86 checked / 3 exempt = 89`、错误门禁
+    `80 checked / 6 unsliced / 3 exempt = 89`。负向验证 **5 向全中**（含「跨命令掩蔽必须红」
+    这个复发点），见 `M63-ledger-governance.md` §七 与
+    `.harness/spike/probe_m63_registry_negative.py`。
+    ★ **教训一（这条欠账的成因）**：登记时写的「试算 89/89 全绿、零代价」是**推理**不是**实测**
+    —— 照抄登记就动手，等于亲手往门禁里塞 6 条假计数。
+    ★ **教训二（比漏扫本身更重要）**：全量门禁里读到的那次 `… = 89 条命令`，是 M63-S1 试改
+    **恰好还在工作区**时的**瞬时值**，却被当成稳定真值写进了台账与提交信息
+    ⇒ **共享工作区里，一次门禁读数可能混入邻座尚未定稿的实验态**；要引用数字，先确认被测
+    脚本自身没被别人改动（`git status <script>`），或直接 `git show HEAD:<script>` 复核。
+  - **★ S2/S3 又撞出第四条同族漏检（**未修**，登记待拍板）**：`check_error_contract.py` 的判据是
+    **单向包含** `returned ⊆ declared`（`returned |= per_command.get(command_id, set())` 后算
+    `missing = returned - declared`）⇒ **把某条命令的分派分支整个拿掉，`returned = ∅`、
+    `missing = ∅`，门禁照报 PASS**。负向验证里 ⑦ 向（把 `if command_id == "ocr.detect":`
+    改成 `… "ocr.detect-lost":`）实测：参数门禁**红**（声明了参数没人读），错误门禁**绿**（空过）。
+    ⇒ 「命令从分派器里消失 / 压根没接线」这件事**只有参数门禁看得见**。
+    候选加固：要求每条非豁免命令的 `returned` 非空，或要求命令 id 在实现里**真的有分支**
+    （`per_command` 命中或显式登记未实现）——但两者都要先查清「通用分派型执行器」的现状，
+    不能拍脑袋加。**登记待拍板**。
   - 计划：`M60-ocr-captcha.md`（S1–S4）。承接维护者「评估下，能否增加 dddd 验证码识别相关指令」；
     拍板三项：**完整档**能力 / 依赖进 **required** / **不做组合指令**。
   - **与打包调研的关系**：`M61-standalone-runner-packaging.md`（纯运行器打包，`planned`）
@@ -284,8 +345,12 @@
     （`_worker_argv()` 已按 `sys.frozen` 分支），将来打包该处零改动。
   - **排期字段未动**（`active_milestone` / `active_plan` / `active_feature` 仍 M52，沿用上一条先例）：
     M60 是维护者口径下的**插入推进**，是否让它占 active 位待拍板。
-  - 已知偏离（详见 M60 §八）：ddddocr 1.6.1 **没有** `set_charset_range` ⇒ S2 的「字符集收敛」
-    接口需重设计；`ocr.recognize` 的 `effect.kind` 实取 `pure`（方案稿写的 `read`）。
+  - 已知偏离（详见 M60 §8.3）：~~ddddocr 1.6.1 **没有** `set_charset_range` ⇒ S2 的「字符集收敛」
+    接口需重设计~~ 〔**2026-10-14 订正**：能力存在，真名 `set_ranges`，S2 已按真名实现〕；
+    `ocr.recognize` 的 `effect.kind` 实取 `pure`（方案稿写的 `read`）。
+  - **S4 剩余**：`modelPath` 覆盖默认模型的**判据**；`docs/ocr-commands.md` 用户面文档
+    （坐标是**中心**、`confidence` 是**相关系数不是概率**这两条目前只写在 manifest `description` 里）；
+    真实滑块图的坐标精度验收（合成图证不了，M60 §9.3 给了机制）；编排层 `resume` 真机路径。
 
 - [x] **里程碑编号口径定案：M48 = 桌面契约一片，M49 = GUI 体验**（`done`，**已拍板**，2026-10-08）
   - **冲突曾存在**：`docs/yingdao-gap-catchup.md` §4 里 M48 = 桌面契约一片（D1+D2+D3）、

@@ -225,4 +225,4 @@ node scripts/check_retry_policy.mjs     # 重试能力判定 vs manifest.retryab
 | `docs/m2_1_legacy_element_inventory.md` | 旧元素静态盘点（clean-room 边界） |
 | `.harness/adr/` | ADR 0001-0008：replay 契约、桌面驱动、checkpoint、pause、API 面、devserver、编辑器 UI |
 | `.harness/architecture.md` / `invariants.md` | 架构与不可变规则 |
-| `.harness/PROGRESS.md` / `BACKLOG.md` / `feature_list.json` | 进度 / 计划 / feature 门禁 |
+| `.harness/PROGRESS.md` / `commands-plan.md` / `feature_list.json` | 进度 / 计划 / feature 门禁 |
