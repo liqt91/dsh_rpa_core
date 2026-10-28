@@ -16,13 +16,20 @@ work `(0,-1080,1920,-40)`，虚拟桌面 `1920x2160`、原点 `(0,-1080)`。PPX 
 用法：
     ./.venv/Scripts/python.exe run_probe.py            # 不干预多屏布局
     ./.venv/Scripts/python.exe run_probe.py --primary  # 强制放主屏中央
+    ./.venv/Scripts/python.exe run_probe.py --reuse    # 端口上已有前端时复用它
 
 Ctrl-C 退出；窗口关掉后脚本随之结束。
+
+**端口 5173 是硬约束。** 启动前会先探一次：空着才开新前端；被占着就报出占用者 PID 并退出
+（除非 `--reuse`）。原因不是洁癖 —— `ppx dev` 起不了 vite 时**不报错退出**，只写一行
+`[失败] 端口 5173 已被占用` 然后照样弹窗（连的是那个旧前端），脚本只看「http 通不通」就会
+误报「已启动」。（真实来源：上一次 `ppx dev` 被强杀，vite 成了孤儿；关窗是干净的。）
 """
 
 from __future__ import annotations
 
 import ctypes
+import socket
 import subprocess
 import sys
 import time
@@ -143,15 +150,91 @@ def center_in(rect: Box, screen: Box) -> Box:
     return (x, y, x + width, y + height)
 
 
-def wait_vite(timeout: float = 60.0) -> bool:
+def someone_serving(port: int = PORT, timeout: float = 0.6) -> bool:
+    """端口上有没有人在听。用 connect 判而不 bind：
+
+    `bind` 会被 TIME_WAIT 的残留连接干扰（这台机器上关掉 vite 之后 5173 常留几条 TIME_WAIT），
+    而 TIME_WAIT **不代表**有人服务。connect 成功才等价于「有 listener」。
+
+    ★ 两个地址都要探。`vite` 不指定 host 时绑的是 **`::1`**（本轮实测验出来的：`urlopen
+    (localhost)` 通、`connect(127.0.0.1)` 拒），只探 IPv4 会把「端口被占」判成「空着」，
+    于是又起一个；而窗口里加载的是 `localhost`，可能正好落到别人那个前端上。
+    """
+    for family, address in ((socket.AF_INET, "127.0.0.1"), (socket.AF_INET6, "::1")):
+        try:
+            with socket.socket(family, socket.SOCK_STREAM) as probe:
+                probe.settimeout(timeout)
+                if probe.connect_ex((address, port)) == 0:
+                    return True
+        except OSError:
+            continue
+    return False
+
+
+def listening_pid(port: int = PORT) -> str:
+    """谁在听这个端口（只用于报错文案；取不到就返回 "?"，不影响判断）。
+
+    ★ `text=True` 单独用会炸：netstat 在这台机器上吐 **GBK**，而这里的解释器默认按 UTF-8 解码
+    （`UnicodeDecodeError: 0xbb`），`run()` 内部的 reader 线程挂掉后 `stdout` 直接变 `None`，
+    接着 `.splitlines()` 报 `AttributeError` —— 报错路径本身把报错逻辑搞崩一次（本轮实测）。
+    所以显式指定 `mbcs`（Windows 的 ANSI 码页）并兜住 `None`。
+    """
+    try:
+        done = subprocess.run(
+            # 不带 `-p tcp`：那会把 IPv6 的监听行整片漏掉，绑在 `::1` 上的前端就查不到 PID
+            ["netstat", "-ano"],
+            capture_output=True,
+            encoding="mbcs",
+            errors="replace",
+            timeout=10,
+        )
+    except Exception:
+        return "?"
+    if not done.stdout:
+        return "?"
+    for line in done.stdout.splitlines():
+        parts = line.split()
+        if len(parts) >= 5 and parts[0].upper() == "TCP" and parts[3].upper() == "LISTENING":
+            if parts[1].endswith(f":{port}"):
+                return parts[4]
+    return "?"
+
+
+def log_failure() -> str:
+    """ppx dev 起不来时**不退出**，只在日志里留一行 `[失败] …`，窗口照样弹出来。
+
+    ★ 这是本轮实测踩到的：5173 被上次留下的 vite 占着，`ppx dev` 报 `[失败] 端口 5173 已被占用`
+    却继续开窗（连的是那个旧前端），而脚本只看「http 通不通」⇒ 打印「已启动 / 已就绪」，
+    假绿整整一小时。所以判据必须**同时**看日志里的失败行，不能只看端口通。
+    """
+    try:
+        text = LOG.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+    for line in text.splitlines():
+        if line.startswith("[失败]"):
+            return line.strip()
+    return ""
+
+
+def wait_vite(proc: subprocess.Popen | None = None, timeout: float = 60.0) -> str:
+    """等前端就绪。返回空串 = 就绪，否则返回「为什么没就绪」。"""
     deadline = time.time() + timeout
     while time.time() < deadline:
+        failed = log_failure()
+        if failed:
+            return failed
+        if proc is not None and proc.poll() is not None:
+            return f"ppx dev 已退出（退出码 {proc.returncode}）"
         try:
-            with urllib.request.urlopen(f"http://127.0.0.1:{PORT}/", timeout=2):
-                return True
+            # ★ 必须用 localhost：`socket.create_connection` 会按 getaddrinfo 逐个地址试，
+            #   而 `127.0.0.1` 是字面量、只打 IPv4 —— 前端绑在 ::1 时会一路等到超时，
+            #   窗口却已经弹出来了（本轮实测：reuse 路径 rc=1 但窗口在）。
+            with urllib.request.urlopen(f"http://localhost:{PORT}/", timeout=2):
+                return ""
         except Exception:
             time.sleep(0.5)
-    return False
+    return f"前端 {timeout:.0f}s 内没就绪"
 
 
 def wait_window(timeout: float = 40.0) -> int:
@@ -241,21 +324,44 @@ def watch(hwnd: int, proc: subprocess.Popen, force_primary: bool, interval: floa
 
 def main() -> int:
     force_primary = "--primary" in sys.argv[1:]
+    reuse = "--reuse" in sys.argv[1:]
     ppx = HERE / ".venv" / "Scripts" / "ppx.exe"
     if not ppx.is_file():
         print(f"找不到 {ppx}，先在 ppx_probe 目录建 venv 并装 ppx-py", flush=True)
+        return 1
+
+    args = [str(ppx), "dev"]
+    # 启动前先确认端口是空的：ppx dev 起不了 vite 时**不报错退出**，只写一行
+    # `[失败] 端口 5173 已被占用` 然后照样开窗（连的可能是上一个没收干净的前端）。
+    if someone_serving():
+        pid = listening_pid()
+        if reuse:
+            print(f"端口 {PORT} 上已有前端（PID {pid}），按 --reuse 复用它", flush=True)
+            args.append("--skip-frontend")
+        else:
+            print(f"端口 {PORT} 已被占用（PID {pid}）——多半是上次被强杀时留下的 vite。", flush=True)
+            print(f"  先关掉：taskkill /F /PID {pid}", flush=True)
+            print("  确认那个前端可用就复用：run_probe.py --reuse", flush=True)
+            return 1
+
+    # 既有的同名窗口一律不认：`wait_window` 只是按标题找窗，找不到也不知道是**谁的**。
+    # 残留窗口会让脚本对着上次的窗口「就绪」一整天（本轮实测：对一个旧窗口看了一小时）。
+    if user32.FindWindowW(None, TITLE):
+        print(f"已经有一个「{TITLE}」窗口 —— 多半是上次残留的，先关掉它再启动", flush=True)
         return 1
 
     areas = work_areas()
     print("屏幕工作区：" + "；".join(str(box) for box in areas), flush=True)
 
     log = LOG.open("w", encoding="utf-8")
-    proc = subprocess.Popen([str(ppx), "dev"], cwd=APP, stdout=log, stderr=subprocess.STDOUT)
-    print(f"ppx dev 已启动 (pid {proc.pid})，日志 {LOG.name}", flush=True)
+    proc = subprocess.Popen(args, cwd=APP, stdout=log, stderr=subprocess.STDOUT)
+    print(f"ppx dev 已拉起 (pid {proc.pid})，日志 {LOG.name}", flush=True)
 
     try:
-        if not wait_vite():
-            print("前端 60s 内没就绪，看日志：", LOG, flush=True)
+        reason = wait_vite(proc)
+        if reason:
+            print(f"前端没就绪：{reason}", flush=True)
+            print("日志：", LOG, flush=True)
             return 1
         hwnd = wait_window()
         if not hwnd:
@@ -270,6 +376,9 @@ def main() -> int:
         return 0
     finally:
         log.close()
+        # 关窗这条路径**不用**我们收端口：ppx dev 自己会把 vite 收掉（负向验证过 ——
+        # 把清理整段拿掉，关窗后 5173 照样腾空）。它只在**被强杀**时才留下孤儿 vite，
+        # 那种情况这里也来不及跑；兜底就是上面启动前的那次预检。
         if proc.poll() is None:
             proc.terminate()
 
