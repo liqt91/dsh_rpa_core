@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <title>Studio fixture</title>
+    <style>
+      body { font-family: sans-serif; margin: 24px; }
+      .row { margin: 10px 0; }
+      .css-1a2b3c { color: #333; }
+      .btn-primary { padding: 4px 10px; }
+    </style>
+  </head>
+  <body>
+    <h1>登录</h1>
+    <div class="row"><input id="username" name="user" placeholder="用户名" /></div>
+    <div class="row"><input id="password" type="password" placeholder="密码" /></div>
+    <div class="row"><button data-testid="submit-login" class="btn-primary">登录</button></div>
+    <div class="row"><span class="css-1a2b3c">构建产物类名（不该被当成选择器）</span></div>
+    <div class="row" id="dup"><em>重复 id 之一</em></div>
+    <div class="row" id="dup"><em>重复 id 之二</em></div>
+    <div class="row"><ul><li>alpha</li><li>beta</li><li id="gamma">gamma</li></ul></div>
+    <div class="row" id="shadow-host"></div>
+    <script>
+      // 影子根里放一个只靠类名的按钮：验证 shadow 标记与「选择器穿不过去」的诚实上报
+      const host = document.getElementById('shadow-host')
+      const root = host.attachShadow({ mode: 'open' })
+      root.innerHTML = '<div class="wrap"><button class="go">影子按钮</button></div>'
+    </script>
+  </body>
+</html>

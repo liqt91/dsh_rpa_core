@@ -1,0 +1,54 @@
+[project]
+name = "WorkBuddy Studio"
+slug = "workbuddy-studio"
+version = "1.0.0"
+identifier = "studio.workbuddy.editor"
+developer = "w"
+description = "轻量编辑窗口：给 WorkBuddy Agent 一个能被人类直接改、直接确认的地方。"
+website = "https://www.workbuddy.cn"
+windowsAppId = "EC512129-F966-4BDC-8602-42398A99AD55"
+format = 6
+
+[python]
+modules = ["api.api"]
+
+[paths]
+frontend = "gui"
+resources = "api/resources"
+assets = "ppx/assets"
+
+[window]
+widthRatio = 0.72
+heightRatio = 0.78
+minWidthRatio = 0.42
+minHeightRatio = 0.46
+resizable = true
+fullscreen = false
+alwaysOnTop = false
+confirmClose = false
+backgroundColor = "#0E1116"
+softwareRendering = false
+
+[development]
+port = 5273
+
+[storage]
+filename = "storage.json"
+
+[application]
+singleInstance = true
+
+[applicationUpdate]
+enabled = false
+releaseUrl = ""
+
+[compatibility]
+pythonApi = "6.0"
+javascriptApi = "6.0"
+dataSchema = "1"
+
+[framework]
+python = "6.0.1"
+javascript = "6.0.1"
+channel = "stable"
+releaseUrl = "https://api.github.com/repos/pangao1990/PPX/releases/latest"

@@ -1,0 +1,21 @@
+# 前端依赖与构建产物
+editor/gui/node_modules/
+editor/gui/dist/
+editor/ppx/__pycache__/
+
+# ppx build 的产物（便携版 28MB + PyInstaller 缓存 18MB，绝不入库）
+editor/build/
+
+# 打包产物
+dist/
+
+# 本地会话状态 / 测试现场（含端点 token，绝不入库）
+.tmp-test/
+_sandbox/
+**/endpoint.json
+**/events.jsonl
+**/*.pyc
+**/__pycache__/
+
+# 截图之外的临时抓图
+listing/screenshots/_*.png

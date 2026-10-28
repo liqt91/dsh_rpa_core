@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="stylesheet" href="popup.css" />
+    <title>WorkBuddy Studio</title>
+  </head>
+  <body>
+    <header class="head">
+      <img class="logo" src="icons/icon-48.png" alt="" />
+      <div class="titles">
+        <strong>WorkBuddy Studio</strong>
+        <span class="sub">Element Picker</span>
+      </div>
+      <span id="status" class="pill">检测中…</span>
+    </header>
+
+    <button id="pick" class="pick" type="button">
+      <span class="crosshair">⌖</span>
+      <span>开始拾取元素</span>
+      <kbd>Alt+Shift+P</kbd>
+    </button>
+
+    <p id="hint" class="hint">在页面上点一个元素，选择器会直接交给正在等待的 Agent。</p>
+
+    <section class="port">
+      <label for="port">本地会话端口</label>
+      <input id="port" type="number" min="1024" max="65535" spellcheck="false" />
+      <button id="portSave" class="mini" type="button">保存</button>
+    </section>
+
+    <section class="recent">
+      <div class="recentHead">
+        <span>最近拾取</span>
+        <button id="clear" class="mini ghost" type="button">清空</button>
+      </div>
+      <ul id="recentList" class="recentList">
+        <li class="empty">还没有记录</li>
+      </ul>
+    </section>
+
+    <footer class="foot">
+      没有独立运行模式：先让 Agent 运行 <code>studio serve</code>，再点这里。
+    </footer>
+
+    <script src="popup.js"></script>
+  </body>
+</html>

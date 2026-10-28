@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="icon" href="/icon.png" />
+    <title>WorkBuddy Studio</title>
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand" title="WorkBuddy Studio">
+        <span class="mark">W</span>
+        <span class="brandText">Studio</span>
+      </div>
+      <div class="docinfo">
+        <span id="fileName" class="fileName">未打开文件</span>
+        <span id="dirtyDot" class="dirtyDot" hidden title="有未保存的改动"></span>
+        <span id="docPath" class="docPath"></span>
+      </div>
+      <div class="actions">
+        <span id="sessionPill" class="pill offline" title="与 Agent 会话通道的状态">
+          <span class="dot"></span><span id="sessionText">会话离线</span>
+        </span>
+        <button id="openBtn" class="btn" type="button" title="打开文件（Ctrl+O）">打开</button>
+        <button id="saveBtn" class="btn primary" type="button" title="保存（Ctrl+S）">保存</button>
+        <button id="findBtn" class="btn icon" type="button" title="查找（Ctrl+F）" aria-label="查找">⌕</button>
+        <button id="helpBtn" class="btn icon" type="button" title="快捷键（F1）" aria-label="快捷键">?</button>
+      </div>
+    </header>
+
+    <div id="banner" class="banner" hidden>
+      <span id="bannerText" class="bannerText"></span>
+      <span class="bannerActions">
+        <button id="bannerAccept" class="btn small" type="button">接受</button>
+        <button id="bannerLater" class="btn small ghost" type="button">稍后</button>
+      </span>
+    </div>
+
+    <main class="stage">
+      <div id="editorHost" class="editorHost"></div>
+
+      <div id="findBar" class="findBar" hidden>
+        <input id="findInput" class="findInput" type="text" placeholder="查找内容" autocomplete="off" spellcheck="false" />
+        <span id="findCount" class="findCount">0/0</span>
+        <button id="findPrev" class="findBtn" type="button" title="上一个（Shift+Enter）">↑</button>
+        <button id="findNext" class="findBtn" type="button" title="下一个（Enter）">↓</button>
+        <button id="findClose" class="findBtn" type="button" title="关闭（Esc）">✕</button>
+      </div>
+    </main>
+
+    <footer class="statusbar">
+      <span id="statusMsg" class="statusMsg">就绪</span>
+      <span class="spacer"></span>
+      <span id="stSel" class="st" hidden></span>
+      <span id="stPos" class="st">行 1，列 1</span>
+      <span id="stIndent" class="st">空格: 2</span>
+      <span id="stLang" class="st">plain</span>
+      <span id="stEol" class="st">LF</span>
+      <span id="stEnc" class="st">UTF-8</span>
+    </footer>
+
+    <div id="toasts" class="toasts" aria-live="polite"></div>
+
+    <dialog id="openDialog" class="dialog">
+      <form method="dialog" class="dialogBody">
+        <h2 class="dialogTitle">打开文件</h2>
+        <p class="dialogHint">输入绝对路径，或把文件拖进窗口。</p>
+        <input id="openPath" class="dialogInput" type="text" placeholder="D:\path\to\workflow.json" autocomplete="off" />
+        <div class="dialogActions">
+          <button id="openCancel" class="btn ghost" value="cancel" type="submit">取消</button>
+          <button id="openConfirm" class="btn primary" value="ok" type="submit">打开</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="helpDialog" class="dialog wide">
+      <div class="dialogBody">
+        <h2 class="dialogTitle">快捷键</h2>
+        <div class="keys">
+          <div><kbd>Ctrl</kbd>+<kbd>S</kbd><span>保存</span></div>
+          <div><kbd>Ctrl</kbd>+<kbd>Z</kbd><span>撤销</span></div>
+          <div><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd><span>重做</span></div>
+          <div><kbd>Ctrl</kbd>+<kbd>F</kbd><span>查找</span></div>
+          <div><kbd>Ctrl</kbd>+<kbd>O</kbd><span>打开文件</span></div>
+          <div><kbd>Ctrl</kbd>+<kbd>/</kbd><span>切换行注释</span></div>
+          <div><kbd>Ctrl</kbd>+<kbd>D</kbd><span>复制当前行/选区</span></div>
+          <div><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>K</kbd><span>删除当前行</span></div>
+          <div><kbd>Tab</kbd><span>缩进 / 多行缩进</span></div>
+          <div><kbd>Shift</kbd>+<kbd>Tab</kbd><span>反缩进</span></div>
+          <div><kbd>Alt</kbd>+<kbd>↑</kbd><kbd>↓</kbd><span>移动行</span></div>
+          <div><kbd>Ctrl</kbd>+<kbd>G</kbd><span>跳到行</span></div>
+        </div>
+        <div class="dialogActions">
+          <button id="helpClose" class="btn" type="button">知道了</button>
+        </div>
+      </div>
+    </dialog>
+
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
