@@ -103,7 +103,7 @@ def test_compile_accepts_explicit_references_and_capabilities():
                 "type": "action",
                 "id": "open",
                 "command": "browser.navigate",
-                "with": {"url": "https://x", "headless": True},
+                "with": {"url": "https://x", "browserType": "msedge"},
             }
         ),
         {"browser.control", "process.start"},
@@ -138,7 +138,7 @@ def test_compile_rejects_unknown_command_and_forward_step():
                             "type": "action",
                             "id": "future",
                             "command": "browser.navigate",
-                            "with": {"url": "https://x"},
+                            "with": {"url": "https://x", "browserType": "msedge"},
                         },
                     ],
                 }
@@ -160,7 +160,7 @@ def test_compile_accepts_output_name_reference_after_declaration():
                         "id": "open",
                         "command": "browser.navigate",
                         "output_aliases": {"sessionId": "web"},
-                        "with": {"url": "https://x", "headless": True},
+                        "with": {"url": "https://x", "browserType": "msedge"},
                     },
                     {
                         "type": "action",
@@ -197,7 +197,7 @@ def test_compile_rejects_forward_variable_reference():
                             "id": "open",
                             "command": "browser.navigate",
                             "output_aliases": {"sessionId": "web"},
-                            "with": {"url": "https://x"},
+                            "with": {"url": "https://x", "browserType": "msedge"},
                         },
                     ],
                 }
@@ -220,7 +220,7 @@ def test_compile_rejects_undeclared_variable_reference():
                             "type": "action",
                             "id": "open",
                             "command": "browser.navigate",
-                            "with": {"url": "https://x", "headless": True},
+                            "with": {"url": "https://x", "browserType": "msedge"},
                         },
                         {
                             "type": "action",
@@ -250,7 +250,7 @@ def test_compile_rejects_duplicate_alias():
                             "id": "open1",
                             "command": "browser.navigate",
                             "output_aliases": {"sessionId": "web"},
-                            "with": {"url": "https://x"},
+                            "with": {"url": "https://x", "browserType": "msedge"},
                         },
                         {
                             "type": "action",
@@ -282,7 +282,7 @@ def test_compile_rejects_reserved_alias_root(reserved):
                             "id": "open",
                             "command": "browser.navigate",
                             "output_aliases": {"sessionId": reserved},
-                            "with": {"url": "https://x"},
+                            "with": {"url": "https://x", "browserType": "msedge"},
                         },
                     ],
                 }
@@ -373,3 +373,120 @@ def test_compile_rejects_forward_reference_to_var_write():
             ),
             set(),
         )
+
+
+# ---- 节点参数 vs manifest input_schema（编译期与运行期同口径）----------------
+#
+# 背景：运行期 `orchestrator` 在取执行器**之前**用 `Draft202012Validator` 全量校验
+# 节点参数（`additionalProperties: false`），而编译期过去只 `check_schema`（校验
+# schema 自身合法）。于是「编译通过、第一个节点就 INVALID_INPUT」的漂移能一路走到
+# 运行期——`examples/baidu-news-top10`、`examples/search-and-save` 就这样坏了很久。
+# 下面的用例把新增的编译期判据钉住，包括**两条容易误伤的边界**：
+#   ① 含 `${...}` 的值必须放行（运行期才求值成 array/integer）；
+#   ② required 要扣掉 `elementRefs` 里的键（引用模型下被引用参数有意不写进 `with`）。
+
+
+def test_compile_rejects_parameter_not_in_schema():
+    """`with` 里出现 manifest 没声明的键 → 编译期拦截（运行期必 INVALID_INPUT）。"""
+    with pytest.raises(WorkflowCompileError, match="Unknown parameter\\(s\\) headless"):
+        WorkflowCompiler(catalog()).compile(
+            workflow(
+                {
+                    "type": "action",
+                    "id": "open",
+                    "command": "browser.navigate",
+                    "with": {"url": "https://x", "browserType": "msedge", "headless": True},
+                }
+            ),
+            {"browser.control", "process.start"},
+        )
+
+
+def test_compile_rejects_missing_required_parameter():
+    """缺 manifest 的 required 键 → 编译期拦截，而不是等到运行期才红。"""
+    with pytest.raises(WorkflowCompileError, match="Missing required parameter\\(s\\) browserType"):
+        WorkflowCompiler(catalog()).compile(
+            workflow(
+                {
+                    "type": "action",
+                    "id": "open",
+                    "command": "browser.navigate",
+                    "with": {"url": "https://x"},
+                }
+            ),
+            {"browser.control", "process.start"},
+        )
+
+
+def test_compile_defers_value_validation_to_runtime():
+    """★ 值（类型/枚举/范围）**有意**留给运行期，编译期只判键集合。
+
+    这条判据钉的是**界面**，不是实现细节：把值也搬进编译器看起来更"严谨"，
+    但静态看到的值与运行期校验的值根本不是同一个东西——
+    ① `"${steps.x.outputs.items}"` 静态是字符串、运行期才是 array；
+    ② `expr_modes[key] == "python"` 的字段里存的是 **Python 源码**（如 `len(rows)`），
+       拿它对 `integer` 判类型必然误伤；
+    ③ `INVALID_INPUT` 的错误码/上下文契约（`tests/unit/test_runtime_correctness.py`）
+       要靠「能走到运行期」才验得了。
+    所以这里明确断言：字面量类型不符、python 模式源码，**都必须编译通过**。
+    """
+    WorkflowCompiler(catalog()).compile(
+        Workflow.model_validate(
+            {
+                "id": "test",
+                "name": "test",
+                "inputs": {},
+                "root": {
+                    "type": "sequence",
+                    "id": "root",
+                    "children": [
+                        {
+                            "type": "action",
+                            "id": "wrongType",
+                            "command": "browser.navigate",
+                            # timeoutMs 是 integer，这里给字符串：运行期才红
+                            "with": {
+                                "url": "https://x",
+                                "browserType": "msedge",
+                                "timeoutMs": "not-a-number",
+                            },
+                        },
+                        {
+                            "type": "action",
+                            "id": "pythonMode",
+                            "command": "browser.navigate",
+                            # python 模式下存的是源码，不是值
+                            "with": {
+                                "url": "https://x",
+                                "browserType": "msedge",
+                                "timeoutMs": "len('abc') * 1000",
+                            },
+                            "_exprModes": {"timeoutMs": "python"},
+                        },
+                    ],
+                },
+            }
+        ),
+        {"browser.control", "process.start"},
+    )
+
+
+def test_compile_accepts_element_ref_covering_required_parameter():
+    """★ `elementRefs` 覆盖的 required 键不许判成「缺参数」。
+
+    引用模型（M52 S6 / ADR-002）下被引用的参数**有意不写进 `with`**，运行期由
+    `resolve_element_refs` 在 schema 校验之前换入元素库的路由值。漏了这条，
+    `workflows/xiaohongshu` 的 `browser.input.selector` 就会编译红。
+    """
+    WorkflowCompiler(catalog()).compile(
+        workflow(
+            {
+                "type": "action",
+                "id": "input",
+                "command": "browser.input",
+                "with": {"text": "hello"},
+                "elementRefs": {"selector": "input_el_textarea"},
+            }
+        ),
+        {"browser.read", "browser.control", "process.start"},
+    )

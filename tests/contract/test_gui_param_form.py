@@ -696,11 +696,15 @@ def test_reference_groups_only_offer_paths_the_compiler_accepts(window):
             candidate = json.loads(json.dumps(document))
             node = _find_node(candidate, node_id)
             assert node is not None, node_id
-            # return 节点的引用槽是 value，action 是 with.value —— 两者都要真塞进去
+            # return 节点的引用槽是 value；action 要塞进**该命令真声明过的**字段——
+            # 塞一个没声明过的键（曾经用的 `with.value`）会撞编译期的
+            # `Unknown parameter(s)`，那是夹具的错，判据本身反而失去意义。
             if node.get("type") == "return":
                 node["value"] = "${" + path + "}"
             else:
-                node.setdefault("with", {})["value"] = "${" + path + "}"
+                slot = _declared_reference_slot(probe_window.catalog[node["command"]])
+                assert slot is not None, f"{node['command']} 没有可塞引用的字符串字段"
+                node.setdefault("with", {})[slot] = "${" + path + "}"
             try:
                 WorkflowCompiler(probe_window.catalog).compile(
                     Workflow.model_validate(candidate), set(DEFAULT_CAPABILITIES)
@@ -711,6 +715,18 @@ def test_reference_groups_only_offer_paths_the_compiler_accepts(window):
                 ) from exc
             checked += 1
     assert checked > 0, "至少要有一条路径被真正校验过（否则这条判据是空转）"
+
+
+def _declared_reference_slot(manifest) -> str | None:
+    """该命令声明过的、最像「引用槽」的字段。
+
+    fx 模式允许把变量塞进**任何**声明过的字段（`workflow.sleep` 只有 integer 的
+    `ms` 也是合法槽位），所以优先挑非 enum 的字符串字段，挑不到就退到第一个声明字段。
+    """
+    properties = dict((manifest.input_schema or {}).get("properties") or {})
+    strings = [k for k, sub in properties.items() if dict(sub or {}).get("type") == "string"]
+    plain = [k for k in strings if not dict(properties[k] or {}).get("enum")]
+    return (plain or strings or list(properties) or [None])[0]
 
 
 def test_reference_groups_give_nothing_when_the_node_is_unknown(window):

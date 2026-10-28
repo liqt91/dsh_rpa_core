@@ -431,6 +431,11 @@
       "id": "ppx-save-loop",
       "title": "PPX prototype can edit node params, write workflow back byte-stably and recompile",
       "passes": true
+    },
+    {
+      "id": "compile-node-input-schema",
+      "title": "Compile-time node param keys vs manifest input_schema (unknown keys / missing required; elementRefs exempt)",
+      "passes": true
     }
   ]
 }

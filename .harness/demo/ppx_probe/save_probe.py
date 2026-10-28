@@ -12,7 +12,7 @@
 5. `x-hidden` / `hidden` 字段不给入口（`flowDir` 由运行期注入）
 
 保存
-6. 改三个参数 → ok、changed=True、编译通过
+6. 改两个参数 + 新增一个 → ok、changed=True；编译红**只因**夹具里合成的未声明键
 7. 落盘后只有被改的那几行变化（未触碰的字节不许动）
 8. 同值再存 → changed=False、文件 SHA 不变
 9. 类型不符（"abc" 给 integer）→ INVALID_VALUE、文件 SHA 不变
@@ -70,6 +70,14 @@ def disk_node(node_id: str) -> dict:
 def main() -> int:
     SANDBOX.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(SOURCE, TARGET)
+    # ★ 样例本身已经修干净（`headless`/`userAgent` 是 playwright 时代的死键，2026-10-28 删除），
+    #   但本探针要验「manifest 未声明的键」这条路（字段表归组、可改、全量替换不冲掉）。
+    #   所以在**沙箱副本**里合成一个未声明键——判据不该依赖样例恰好带着漂移。
+    _document = json.loads(TARGET.read_text(encoding="utf-8"))
+    _document["root"]["children"][0]["with"]["userAgent"] = "probe-ua"
+    TARGET.write_bytes(
+        (json.dumps(_document, ensure_ascii=False, indent=2) + "\n").replace("\r\n", "\n").encode("utf-8")
+    )
 
     sys.path.insert(0, str(HERE / "app"))
     import api.api as A  # noqa: E402 - 必须在 sys.path 之后导入
@@ -91,10 +99,14 @@ def main() -> int:
     # ---- 1. 声明了但没写的参数也在字段表里 ---------------------------------
     declared = set(by_key)
     unset = sorted(f["key"] for f in detail["fields"] if not f["set"])
+    marked = {f["key"] for f in detail["fields"] if f["set"]}
+    # ★ 判据从「`browserType` 必须未设置」改成「声明的字段都在、`set` 与磁盘一致」：
+    #   原判据把样例数据的**漂移**（required 的 browserType 没写）当成了期望值，
+    #   样例修好之后它就反过来红了 —— 判据不该钉在坏数据上。
     check(
-        "声明了但未设置的参数也给出入口（set=False）",
-        len(unset) >= 1 and "browserType" in by_key and by_key["browserType"]["set"] is False,
-        f"未设置：{unset}",
+        "声明了但未设置的参数也给出入口（set 与磁盘一致）",
+        bool(unset) and marked == set(on_disk) and set(unset).isdisjoint(on_disk),
+        f"未设置：{unset}；磁盘有：{sorted(on_disk)}",
     )
     check(
         "字段表覆盖 with 里的全部键（不丢既有内容）",
@@ -103,15 +115,22 @@ def main() -> int:
     )
 
     # ---- 2. 类型契约 ------------------------------------------------------
+    # 用**合成节点**验「未声明键按既有值推断」，不再依赖样例里恰好有未声明的键
+    # （样例修干净后就没有了；靠数据会让这条判据静默失效）。
+    probe_node = {
+        "type": "action",
+        "with": {"url": "https://x", "browserType": "msedge", "headless": False},
+    }
+    probed = {f["key"]: f for f in A._field_descriptors("browser.navigate", probe_node)["fields"]}
     check(
         "类型契约：声明优先 / 未声明按既有值推断",
         by_key["url"]["type"] == "string"
         and by_key["url"]["typeSource"] == "manifest"
         and by_key["timeoutMs"]["type"] == "integer"
-        and by_key["headless"]["type"] == "boolean"
-        and by_key["headless"]["typeSource"] == "existing",
+        and probed["headless"]["type"] == "boolean"
+        and probed["headless"]["typeSource"] == "existing",
         f"url={by_key['url']['type']}/{by_key['url']['typeSource']} "
-        f"headless={by_key['headless']['type']}/{by_key['headless']['typeSource']}",
+        f"headless={probed['headless']['type']}/{probed['headless']['typeSource']}",
     )
 
     # ---- 3. type 是列表（联合类型）----------------------------------------
@@ -211,10 +230,12 @@ def main() -> int:
     # ---- 6 / 7. 保存 -------------------------------------------------------
     before_text = TARGET.read_text(encoding="utf-8")
     sha_before = sha()
+    before_with = dict(disk_node(first["id"])["with"])
     full = {key: field["valueText"] for key, field in by_key.items()}
     full["url"] = "https://www.baidu.com/s?wd=PPX"
     full["timeoutMs"] = "30000"
-    full["headless"] = "true"
+    # `onTimeout` 是**声明了但未设置**的枚举字段：既测「未设置 → 设置」，也测枚举改写。
+    full["onTimeout"] = "stop"
 
     saved = A.save_node_params(REL, first["id"], full)
     check(
@@ -223,23 +244,27 @@ def main() -> int:
         json.dumps({k: saved.get(k) for k in ("code", "error")}, ensure_ascii=False)[:160],
     )
     check("changed=True", saved.get("changed") is True, f"bytes {saved.get('bytes')}")
+    # ★ 这里**必须**红：夹具里那个合成的 `userAgent` 是 manifest 未声明的键，
+    #   编译期现在按 `additionalProperties: false` 拦它（2026-10-28 起）。
+    #   这条断言把「编辑器能存」与「编译不过」同时钉住——正是当年样例漂移的形状。
+    _compile = saved.get("compile") or {}
     check(
-        "保存后编译通过",
-        bool((saved.get("compile") or {}).get("ok")),
-        str((saved.get("compile") or {}).get("error", ""))[:100],
+        "保存成功，但编译红并点名未声明键",
+        _compile.get("ok") is False and "userAgent" in str(_compile.get("error", "")),
+        str(_compile.get("error", ""))[:90],
     )
     node = disk_node(first["id"])
     check(
         "磁盘上确实是新值、且类型没变",
         node["with"]["url"].endswith("wd=PPX")
         and node["with"]["timeoutMs"] == 30000
-        and node["with"]["headless"] is True,
+        and node["with"]["onTimeout"] == "stop",
         json.dumps(node["with"], ensure_ascii=False)[:100],
     )
     check(
         "未声明的键原样保留（没被全量替换冲掉）",
-        "userAgent" in node["with"],
-        f"with={list(node['with'])}",
+        node["with"].get("userAgent") == "probe-ua",
+        f"with={json.dumps(node['with'], ensure_ascii=False)[:80]}",
     )
 
     after_text = TARGET.read_text(encoding="utf-8")
@@ -250,10 +275,15 @@ def main() -> int:
         )
         if line.startswith(("+", "-")) and not line.startswith(("+++", "---"))
     ]
+    # ★ 期望行数**现算**：改一个已存在的键 = 1 删 + 1 增；新增一个键 = 1 增。
+    #   原来这里写死 6，样例一变就得改判据——写死的数字不是判据，是抄写。
+    planned = ("url", "timeoutMs", "onTimeout")
+    expected_lines = sum(1 if key not in before_with else 2 for key in planned)
     check(
-        "未触碰的行逐字节不变（改 3 个参数只动 3 行）",
-        len(diff) == 6,
-        f"{len(diff)} 条 +/-：{[d.strip()[:44] for d in diff]}",
+        "未触碰的行逐字节不变（改 2 个参数 + 新增 1 个 → 5 行）",
+        len(diff) == expected_lines
+        and all(any(key in line for key in planned) for line in diff),
+        f"{len(diff)} 条（期望 {expected_lines}）：{[d.strip()[:44] for d in diff]}",
     )
 
     # ---- 8. 幂等 ----------------------------------------------------------

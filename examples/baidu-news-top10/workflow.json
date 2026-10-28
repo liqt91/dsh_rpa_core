@@ -17,9 +17,8 @@
         "command": "browser.navigate",
         "with": {
           "url": "https://www.baidu.com/s?wd=%E6%96%B0%E9%97%BB",
-          "timeoutMs": 20000,
-          "headless": false,
-          "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+          "browserType": "msedge",
+          "timeoutMs": 20000
         }
       },
       {

@@ -32,7 +32,7 @@
 13. 删 if1 → 它的 then/else 里 3 个节点一起没（`removed.ids` 报全）
 14. 删 root → ROOT_NOT_DELETABLE
 15. 删不存在的 id → NODE_NOT_FOUND
-16. 删除后编译通过
+16. 删除后仍只因插入的空参数节点红（不是删除弄坏结构）
 """
 
 from __future__ import annotations
@@ -211,12 +211,18 @@ def main() -> int:
         json.dumps(new_nodes[0].get("with") if new_nodes else None),
     )
 
-    # ---- 8. 插入后编译通过 -----------------------------------------------
+    # ---- 8. 插入空参数节点后编译**红**（2026-10-28 起）---------------------
+    # 编译期现在按 manifest 的 required 判，而新节点的 `with` 为空（同 Qt
+    # `create_action_item`）⇒ 插入即红，且错误必须**点名缺哪个参数**。
+    # 这不是回归：Qt 侧 `app.py` 的 `_validate` 早就有同一句「缺少必填参数」——
+    # 判据只是从 GUI 一个消费方搬到了编译期，CLI / devserver 因此同口径。
     compiled = A.compile_check(REL)
     check(
-        "插入空参数节点后编译通过（编译期不校验 required）",
-        compiled.get("ok") is True,
-        str(compiled.get("error", ""))[:100],
+        "插入空参数节点后编译红，并点名缺哪个必填参数",
+        compiled.get("ok") is False
+        and "Missing required parameter(s)" in str(compiled.get("error", ""))
+        and "data.log" in str(compiled.get("error", "")),
+        str(compiled.get("error", ""))[:110],
     )
 
     # ---- 9 / 10. 拒收 ----------------------------------------------------
@@ -278,11 +284,14 @@ def main() -> int:
         str(missing.get("error", ""))[:60],
     )
 
-    # ---- 16. 删除后编译通过 ----------------------------------------------
+    # ---- 16. 删除后仍然只因「插入的空参数节点」红（删除本身没弄坏结构）-------
+    after_delete = A.compile_check(REL)
     check(
-        "删除后编译通过",
-        A.compile_check(REL).get("ok") is True,
-        str(A.compile_check(REL).get("error", ""))[:100],
+        "删除后仍只因插入的空参数节点红（错误点名它，不是结构错误）",
+        after_delete.get("ok") is False
+        and "Missing required parameter(s)" in str(after_delete.get("error", ""))
+        and "data.log" in str(after_delete.get("error", "")),
+        str(after_delete.get("error", ""))[:110],
     )
 
     # ---- 11. SHA 闸门（放最后：会改文件）---------------------------------

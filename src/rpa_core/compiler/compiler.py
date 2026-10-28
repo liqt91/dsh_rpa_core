@@ -46,6 +46,52 @@ def _iter_references(value: Any):
             yield from _iter_references(item)
 
 
+def _validate_node_inputs(node: ActionNode, manifest: Any) -> None:
+    """编译期校验节点参数的**键集合**，与运行期同口径。
+
+    ★ 为什么要有这条：运行期 `orchestrator` 在取执行器**之前**用
+    `Draft202012Validator` 全量校验节点参数（`additionalProperties: false`），
+    而编译期过去只 `check_schema`（校验 schema 自身合法），**从不看节点参数**——
+    于是「编译通过、第一个节点就 INVALID_INPUT」这种漂移能一路走到运行期。
+    `examples/baidu-news-top10` / `search-and-save` 正是这样坏了却没人发现：
+    它们的 `browser.navigate` 带 `headless` / `userAgent` / `transport` 三个
+    manifest 没声明的键，又缺 required 的 `browserType`。
+
+    ★★ 只查键、**不查值**（类型/枚举/范围留给运行期），这是有意划的界，不是没做完：
+    运行期校验的是 `resolve_with_modes` 求值 + python 字段子进程求值**之后**的值，
+    静态看到的是另一种东西——
+    ① `"${steps.x.outputs.items}"` 静态是个字符串，运行期才是 array
+       （`examples/windows-desktop` 就靠这个）；
+    ② `expr_modes[key] == "python"` 的字段里存的是**Python 源码**（`len(rows)`），
+       拿它去对 `integer` 判类型必然误伤（M57 python 模式）；
+    ③ 运行期 `INVALID_INPUT` 的错误码/上下文契约要靠「能走到运行期」才验得了。
+    「键集合」没有这三处歧义：它不依赖求值，所以静态结论与运行期必然一致。
+
+    ★ required 要**扣掉 `elementRefs` 里的键**：引用模型（M52 S6 / ADR-002）下
+    被引用的参数**有意不写进 `with`**，运行期由 `resolve_element_refs` 在 schema 校验
+    **之前**换入元素库的路由值（`workflows/xiaohongshu` 的 `browser.input.selector`
+    就是这样：`with` 里没有，`elementRefs` 里有）。漏了这条，所有元素引用流程全编译红。
+    """
+    schema = dict(manifest.input_schema or {})
+    properties = dict(schema.get("properties") or {})
+    extra_schema = schema.get("additionalProperties")
+
+    unknown = sorted(set(node.with_) - set(properties))
+    if unknown and extra_schema is False:
+        raise WorkflowCompileError(
+            f"Unknown parameter(s) {', '.join(unknown)} for command {manifest.id} "
+            f"(node {node.id}): not declared in input_schema"
+        )
+
+    provided = set(node.with_) | set(node.element_refs or {})
+    missing = sorted(set(schema.get("required") or ()) - provided)
+    if missing:
+        raise WorkflowCompileError(
+            f"Missing required parameter(s) {', '.join(missing)} for command {manifest.id} "
+            f"(node {node.id})"
+        )
+
+
 def _iter_action_nodes(node: WorkflowNode):
     """按流程顺序遍历所有 ActionNode（用于别名声明顺序与查重）。"""
     if isinstance(node, ActionNode):
@@ -320,6 +366,9 @@ class WorkflowCompiler:
                         f"Unsafe replay command cannot be retried: {manifest.id}"
                     )
                 Draft202012Validator(manifest.input_schema).check_schema(manifest.input_schema)
+                # schema 自身合法之后，再看节点参数的**键集合**是否满足它。
+                # 值不在这里判：运行期校验的是求值后的结果，静态看不到（见函数 docstring）。
+                _validate_node_inputs(node, manifest)
                 required.update(manifest.capabilities)
                 step_ids.add(node.id)
                 # 本节点声明的变量：output_aliases + 变量写入命令的字面量 varName

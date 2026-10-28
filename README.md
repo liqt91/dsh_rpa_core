@@ -112,6 +112,8 @@ AST 节点：`sequence` / `action` / `if` / `forEach` / `try` / `return`。
 
 编译期校验：变量名唯一（重复声明报 `Duplicate alias`）、不得占用内置作用域根名（`inputs` / `steps` / `loop`，报 `Reserved alias name`）、不得前向引用（先引用后声明报 `Forward variable reference`）。
 
+节点参数的**键集合**也在编译期按 manifest 的 `input_schema` 校验（与运行期同一份 schema）：出现未声明的键报 `Unknown parameter(s)`、缺 `required` 报 `Missing required parameter(s)`。两类例外是有意的：`elementRefs` 覆盖的键不算缺（引用模型下被引用参数不写进 `with`，运行期由元素库换入）。**值**（类型/枚举/范围）不在这里判，留给运行期——运行期校验的是 `resolve` 求值 + python 字段子进程求值之后的值，静态看到的是另一样东西（`"${steps.x.outputs.items}"` 是字符串、`expr_modes=python` 的字段里存的是源码）。这条判据的意义是「编译即 dry-run」要成立——过去只校验 schema 自身合法，不看节点参数，于是「编译通过、第一个节点就 `INVALID_INPUT`」的漂移能一路走到运行期。
+
 内置作用域（始终可用）：`${inputs.<key>}`、`${steps.<id>.outputs.<key>}`、`${loop.<item_var>}`、catch 块内的 `${<error_var>.code}`。
 
 ## 快速开始

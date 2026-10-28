@@ -238,7 +238,7 @@
 
 ## 后续任务
 
-- [ ] **样例流程与 catalog 漂移：3 个样例带着未声明参数、且缺必填参数**（`planned`，2026-10-28 发现）
+- [x] **样例流程与 catalog 漂移：3 个样例带着未声明参数、且缺必填参数**（`done`，2026-10-28 发现并处置）
   - **证据**：`examples/baidu-news-top10/workflow.json` 的 `openHome`（`browser.navigate`）带
     `headless` / `userAgent`，而 `commands/browser/navigate.json` 的 `input_schema` 里
     **没有任何 manifest 声明这两个键**（`grep -rln '"headless"' commands/` 为空），且缺
@@ -248,11 +248,32 @@
   - **后果**：`runtime/orchestrator.py:798` 在 `stepStarted` 前按 `input_schema` 校验
     （`additionalProperties: false`）⇒ 这些样例真跑会被 `INVALID_INPUT` 拦下；也就是说
     「样例能编译通过」**不等价于**「样例能跑」——编译期只 `check_schema`，不校验节点参数。
-  - **未处置原因**：属能力层/样例数据（`commands/` 与 `examples/`），M65 明确「不触产品代码」；
-    且要定的是「补 manifest 声明」还是「删样例里的键」（`headless` 是否本来就该支持，需先查
-    `browser.py` 是否消费它——若消费则说明是**假开关/漏声明**，性质比数据漂移更重）。
-  - **下一步**：先查 `browser.navigate` 执行器是否读 `headless`；据此二选一，并给编译期加一条
-    「节点参数是否满足 manifest schema」的判据（现在没有，所以这类漂移能一路走到运行期）。
+  - **已实测（2026-10-28，不再是推断）**：`python -m rpa_core.cli run examples/baidu-news-top10/workflow.json`
+    ⇒ `rc=1`、`status: failed`、`error.code: INVALID_INPUT`、`message: 'browserType' is a required
+    property`（第一个节点即红，因为是**全量** schema 校验，不是逐条报）。好消息：校验位置在
+    `executor = self.executors.get(...)` **之前** ⇒ 这类流程不会真的拉起浏览器再失败。
+    对照组 `examples/api-usage/workflow.json` 同命令 `rc=0`、`status: succeeded`（0.7 s，
+    两个 `idempotent-write` 都 `committed`）⇒ 说明 run 通路本身是好的，红的就是样例数据。
+  - **处置（2026-10-28）**：先查执行器——`grep -rn "headless" src/ --include=*.py` 只命中
+    `cli.py` 的 `capture browser --headless` 与 GUI 冒烟测试注释，**`browser.navigate` 从不读它**；
+    `userAgent` 只作为扩展上报的浏览器信息出现；`transport` 只是 `cli.py` 内部选通道的细节。
+    三者都是 playwright 时代（ADR 0013 前）的死键 ⇒ **删键、不补声明**，并补 `browserType: msedge`
+    （三个流程：`baidu-news-top10`、`search-and-save/workflow.json`、
+    `search-and-save/workflow-headed-demo.json`）。编译期判据已加（见 `compiler._validate_node_inputs`）。
+    复跑：`examples/` + `workflows/` 共 9 份流程编译全绿；`api-usage` 实跑 `succeeded`。
+    ★ `workflow-headed-demo.json` 的「有头模式」前提随 playwright 一起消失（扩展必然在用户
+    真实浏览器里开标签页），文件保留是因为它走 `${steps.*.outputs.*}` 引用风格、覆盖不重叠；
+    `name` 暂未改，属可选清理。
+
+- [ ] **GUI 的「缺少必填参数」与编译器的 `Missing required parameter(s)` 重复报**（`planned`，2026-10-28 发现）
+  - **来源**：编译期新增参数**键**校验（`compiler._validate_node_inputs`）后，`gui/app.py:_validate`
+    里那段自查（`缺少必填参数：...`，含同样的 `elementRefs` 豁免）在语义上已经冗余——同一个缺口
+    会在错误面板出现两条：一条带节点 id 的中文、一条来自编译器的英文。
+  - **为什么没顺手删**：`src/rpa_core/gui/` 在 ADR 0019 下**逐文件哈希冻结**（`gui-freeze.json`），
+    删它要走 `--update-freeze` 显式签字；且解冻后要一并处理「GUI 自己那条带 nodeId 的定位信息
+    比编译器文案更有用」这件事（编到 issue 里带 `nodeId` 而不是拼进字符串）。
+  - **下一步**：解冻 GUI 时删掉 `_validate` 的必填自查，改为让编译错误结构化成
+    `(message, nodeId)`；顺带把 `missing_element_param_hint` 的「元素型参数缺失」提示接进去。
 
 - [x] **M54 GUI 参数呈现补完（字段中文化 + 元素槽位口径）**（`planned` → `done`，**2026-10-12 立项 → 同日重评估 → 同日拍板落地 G1~G4 → 同日收口**）
   - 起因：维护者问「填写输入框(web) 的 `selector` 参数为什么还在？如果是引用，那元素参数就够了呀？」
