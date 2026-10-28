@@ -21,8 +21,15 @@
     灰/洋红 **0.0%** ⇒ 真透明（截图看得到下层终端文字）；抠色区在 `WindowFromPoint` 直接落到下层
     窗口，连红框采样点也不命中自身 ⇒ **覆盖层收不到点击，交互控件须另开非穿透窗口**；穿透时页面
     `mousemove` **0 次**（不穿透 3 次）⇒ 只能轮询 `GetCursorPos`，实测红框 (0,0)→(412,252) 跟随可用。
-  - **未决**：S5 编辑保存闭环未开工；打包分发 / 桌面集成（单实例·热键·托盘）未碰；轮询频率与
-    CPU 占用未测。
+  - **S5 保存闭环已实证**（`save_probe.py` 15 条 + 真实窗口端到端）：改 `timeoutMs` 20000→4500 →
+    保存 → `1924→1923 B`、`sha 6ab2bcea1460`、27 ms、编译通过，磁盘 `diff` 只有那一行。
+    ★ 决定性读数：`model_dump(by_alias=True)` 对 8 个样例流程 **0 个无损**（会灌进
+    `elementRefs`/`retry_*`/`_exprModes` 等默认值）⇒ 保存改为「原始 dict 定点改键 + 模型复校 +
+    Qt 同款编码」；★ 另一坑：未声明参数若按 string 兜底，`headless: true` 会被存成 `"true"`
+    （保存成功、编译通过、运行期才炸）⇒ 未声明参数按既有值推断类型且改完类型必须一致。
+    负向验证：关掉类型转换 ⇒ 探针 9 条变红，还原后 md5 一致复绿。
+  - **未决**：S6 新增参数/节点未做（要移植 `param_form.py` 的 require/default/oneOf 语义）；
+    打包分发 / 桌面集成（单实例·热键·托盘）未碰；轮询频率与 CPU 占用未测。
 
 - [x] **M62 harness / 文档层梳理（AI 协作视角）**（`done`，2026-10-14）——
   起因：审计「harness 层与文档层从 AI 协作角度需要哪些梳理」。细则见
@@ -223,6 +230,22 @@
     `Chrome_RenderWidgetHostHWND`，Firefox 的 `MozillaWindowClass` 在 hybrid 下不让位（与本条无关）。
 
 ## 后续任务
+
+- [ ] **样例流程与 catalog 漂移：3 个样例带着未声明参数、且缺必填参数**（`planned`，2026-10-28 发现）
+  - **证据**：`examples/baidu-news-top10/workflow.json` 的 `openHome`（`browser.navigate`）带
+    `headless` / `userAgent`，而 `commands/browser/navigate.json` 的 `input_schema` 里
+    **没有任何 manifest 声明这两个键**（`grep -rln '"headless"' commands/` 为空），且缺
+    `required` 的 `browserType`。用 `Draft202012Validator` 直校验该节点 `with`：**2 条错误**
+    （`'browserType' is a required property` / `Additional properties are not allowed
+    ('headless','userAgent' were unexpected)`）。同现象见 `examples/search-and-save/` 的两个流程。
+  - **后果**：`runtime/orchestrator.py:798` 在 `stepStarted` 前按 `input_schema` 校验
+    （`additionalProperties: false`）⇒ 这些样例真跑会被 `INVALID_INPUT` 拦下；也就是说
+    「样例能编译通过」**不等价于**「样例能跑」——编译期只 `check_schema`，不校验节点参数。
+  - **未处置原因**：属能力层/样例数据（`commands/` 与 `examples/`），M65 明确「不触产品代码」；
+    且要定的是「补 manifest 声明」还是「删样例里的键」（`headless` 是否本来就该支持，需先查
+    `browser.py` 是否消费它——若消费则说明是**假开关/漏声明**，性质比数据漂移更重）。
+  - **下一步**：先查 `browser.navigate` 执行器是否读 `headless`；据此二选一，并给编译期加一条
+    「节点参数是否满足 manifest schema」的判据（现在没有，所以这类漂移能一路走到运行期）。
 
 - [x] **M54 GUI 参数呈现补完（字段中文化 + 元素槽位口径）**（`planned` → `done`，**2026-10-12 立项 → 同日重评估 → 同日拍板落地 G1~G4 → 同日收口**）
   - 起因：维护者问「填写输入框(web) 的 `selector` 参数为什么还在？如果是引用，那元素参数就够了呀？」

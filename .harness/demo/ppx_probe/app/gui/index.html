@@ -27,8 +27,22 @@
         <div id="cards" class="cardList"></div>
       </section>
       <aside id="right">
-        <div class="paneHead"><span class="paneTitle">节点详情</span><span id="rpcMs" class="count"></span></div>
-        <pre id="detail" class="detail">点击中间卡片查看节点 AST</pre>
+        <div class="paneHead">
+          <span class="paneTitle">节点详情</span>
+          <span id="dirty" class="dirty"></span>
+          <span id="rpcMs" class="count"></span>
+        </div>
+        <div id="paramForm" class="paramForm">
+          <div class="hint">点击中间卡片查看参数</div>
+        </div>
+        <div class="formBar">
+          <button id="saveBtn" type="button" disabled>保存</button>
+          <button id="revertBtn" type="button" disabled>撤销</button>
+        </div>
+        <details class="astBox">
+          <summary>节点 AST</summary>
+          <pre id="detail" class="detail"></pre>
+        </details>
         <div id="compileOut" class="compileOut"></div>
       </aside>
     </main>

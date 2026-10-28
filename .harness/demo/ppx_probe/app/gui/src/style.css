@@ -41,7 +41,7 @@ body {
 main { flex: 1; display: grid; grid-template-columns: 216px minmax(0, 1fr) 340px; min-height: 0; }
 aside, section { min-height: 0; overflow: auto; background: var(--surface); }
 #left { border-right: 1px solid var(--border); }
-#right { border-left: 1px solid var(--border); display: flex; flex-direction: column; }
+#right { border-left: 1px solid var(--border); display: flex; flex-direction: column; overflow: hidden; }
 #mid { background: var(--sunken); }
 
 .paneHead {
@@ -126,7 +126,68 @@ aside, section { min-height: 0; overflow: auto; background: var(--surface); }
   font: 11.5px/1.6 Consolas, "Microsoft YaHei", monospace;
   color: var(--muted);
 }
-.compileOut { border-top: 1px solid var(--border); padding: 10px 12px; font-size: 12px; }
+
+/* ---- 参数编辑（S5） ---------------------------------------------------- */
+.dirty { color: var(--danger); font-size: 11.5px; }
+.dirty::before { content: ""; }
+
+.paramForm {
+  flex: 0 1 auto; min-height: 0; overflow: auto;
+  padding: 10px 12px 4px;
+}
+.paramForm .hint { color: var(--faint); font-size: 12px; }
+
+.field { margin-bottom: 10px; }
+.field .labelRow {
+  display: flex; align-items: center; gap: 6px; margin-bottom: 3px;
+}
+.field .key { font: 11.5px/1.4 Consolas, "Microsoft YaHei", monospace; color: var(--muted); }
+.field .type {
+  padding: 0 5px; border-radius: 8px; background: var(--sunken);
+  color: var(--faint); font-size: 10.5px; line-height: 15px;
+}
+.field .warn { color: #9a6700; background: #fff8c5; }
+.field .req { color: var(--danger); font-size: 11px; }
+.field input, .field select, .field textarea {
+  width: 100%; box-sizing: border-box;
+  padding: 4px 7px;
+  border: 1px solid var(--border); border-radius: 6px;
+  background: var(--surface); color: var(--text);
+  font: 12px/1.5 Consolas, "Microsoft YaHei", monospace;
+}
+.field textarea { min-height: 58px; resize: vertical; }
+.field input:focus, .field select:focus, .field textarea:focus {
+  outline: none; border-color: var(--info);
+}
+.field .desc { margin-top: 3px; color: var(--faint); font-size: 11px; line-height: 1.45; }
+
+.formBar {
+  flex: 0 0 auto;
+  display: flex; gap: 8px; align-items: center;
+  padding: 8px 12px;
+  border-top: 1px solid var(--border);
+}
+.formBar button { height: 26px; }
+.formBar #saveBtn:not(:disabled) { border-color: var(--info); color: var(--info); }
+
+.formError {
+  margin: 0 12px 8px; padding: 6px 8px;
+  border: 1px solid #ffcecb; border-radius: 6px;
+  background: #ffebe9; color: var(--danger);
+  font-size: 11.5px; line-height: 1.5; white-space: pre-wrap;
+}
+
+.astBox { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; border-top: 1px solid var(--border); }
+.astBox > summary {
+  padding: 6px 12px; cursor: pointer; color: var(--faint); font-size: 12px;
+  user-select: none;
+}
+.astBox[open] > summary { border-bottom: 1px solid var(--border); }
+.astBox .detail { padding: 8px 12px; }
+.compileOut {
+  flex: 0 0 auto; max-height: 42%; overflow: auto;
+  border-top: 1px solid var(--border); padding: 10px 12px; font-size: 12px;
+}
 .compileOut .ok { color: var(--success); }
 .compileOut .bad { color: var(--danger); }
 .compileOut pre { margin: 6px 0 0; white-space: pre-wrap; font: 11.5px/1.6 Consolas, monospace; }

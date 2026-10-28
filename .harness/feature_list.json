@@ -426,6 +426,11 @@
       "id": "host-boundary-freeze",
       "title": "Qt sources frozen by per-file hash; PPX prototype isolated from gui/PySide6; gate enforced",
       "passes": true
+    },
+    {
+      "id": "ppx-save-loop",
+      "title": "PPX prototype can edit node params, write workflow back byte-stably and recompile",
+      "passes": true
     }
   ]
 }

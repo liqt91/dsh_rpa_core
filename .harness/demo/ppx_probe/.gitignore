@@ -4,3 +4,5 @@ _*.log
 _*.out
 _shot*.png
 _overlay_*.png
+_sandbox/
+_*.png

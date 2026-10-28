@@ -24,7 +24,7 @@ Status: `wip`
 | **S2** | 项目要求写入：ADR 0019 / `AGENTS.md`（产品方向 + 规则 14）/ `invariants.md`（#16） | `check_docs` 绿；三条渠道读到的口径一致 | ✅ |
 | **S3** | PPX 原型：三栏编辑器 + 真实目录 + 编译校验 | 89 条命令、8 个样例流程全部编译通过；bootstrap 热态 20 ms | ✅ |
 | **S4** | PPX 原型：**覆盖层实证**（透明置顶 + 鼠标穿透 + 高亮框跟随） | 见 §五；四条读数全落（`transparent=True` 假透明 98.09% 灰 / 抠色真透明 / 整窗不可命中 / mousemove 0 vs 3 / 轮询跟随可用） | ✅ |
-| **S5** | PPX 原型：编辑 + 保存闭环（改参数、加节点、落盘） | 与 Qt 版逐项对比记录差异，不追平功能面 | ⬜ |
+| **S5** | PPX 原型：编辑 + 保存闭环（改参数 → 落盘 → 复编译） | 15 条判据全中（见 §六）；**新增节点不做**（涉及 require/default/oneOf，属 S6） | ✅ |
 
 ## 三、判据设计（为什么长这样）
 
@@ -81,12 +81,56 @@ WebView2 的渲染跑在独立进程（`msedgewebview2.exe`）里，`Chrome_Rend
 **永远**不等于本进程 ⇒ 这个判据恒假。正确判法是 `GetAncestor(hwnd, GA_ROOT) == 我们的 hwnd`。
 判据写错比没判据更坏：它会让「其实穿透了」看起来像「没穿透」。
 
-## 六、未决
+## 六、S5 保存闭环实证（已做）
 
-- **S5 编辑 + 保存闭环**未开工（改参数、加节点、落盘），与 Qt 版逐项对比差异。
+两个探针，都是读数：
+
+**`roundtrip_probe.py`（保存保真度，8 个样例流程）**
+
+| 层 | 读数 | 结论 |
+|---|---|---|
+| 文本层：`json.loads` → Qt 编码口径重排 | **5 个逐字节相同 / 3 个不同** | 3 个不同是原文把数组写在单行（`"menuPath": [ ... ]`），换谁保存都会重排；**不是 PPX 的问题** |
+| 模型层：`model_validate(...).model_dump(by_alias=True)` 对原文 | **0 个无损**，每个多 14~70 处 | `elementRefs`/`output_aliases`/`retry_*`/`_exprModes`/`timeout_seconds` 等默认值会被灌进文件 |
+
+⇒ **保存不走 `model_dump`**：在原始 dict 上定点改键 + `Workflow.model_validate` 复校 + Qt 同款
+编码（`indent=2` / `ensure_ascii=False` / 末尾换行 / `write_bytes` 保 LF）。
+
+**`save_probe.py`（15 条判据，headless 直调 RPC）**
+
+| # | 判据 | 读数 |
+|---|---|---|
+| 1 | 沙盒流程进列表 | 9 个流程 |
+| 2 | 字段类型：manifest 优先、未声明按既有值推断 | `url/string/manifest`、`timeoutMs/integer/manifest`、`headless/boolean/existing`、`userAgent/string/existing` |
+| 3 | 改 3 个参数 | ok、changed、编译通过 |
+| 4 | 磁盘值是新的且类型没变 | `timeoutMs: 30000`（int）、`headless: true`（bool） |
+| 5 | **未触碰的行逐字节不变** | 改 3 个参数 = 6 条 `+/-`，无其它漂移 |
+| 6-7 | 同值再存 | `changed=False`、文件 SHA 不变（不做无谓写盘） |
+| 8-9 | 类型不符 / JSON 合法但类型不符 | 都 `INVALID_VALUE`，文件 SHA 不变 |
+| 10-11 | 新增键 / 非 action 节点 | `INVALID_VALUE`（指向 S6）/ `NODE_NOT_EDITABLE` |
+| 12-13 | 外部改过文件 | `FLOW_CHANGED`，且**不覆盖**外部内容 |
+| 14-15 | 真实窗口端到端 | 改 `timeoutMs` 20000→4500 → 保存 → `1924→1923 B`、`sha 6ab2bcea1460`、27 ms、编译通过；磁盘 `diff` **只有那一行** |
+
+**负向验证**：把 `_coerce` 改成恒返回原文（等于关掉类型系统）⇒ 探针 **9 条变红**，还原后 md5
+逐字节一致、复绿。
+
+★ **本片自己踩的坑（判据被合法用法打中）**：首版按「manifest 声明类型」强制转换，而未声明的
+`headless` 落到 `string` 默认 ⇒ 用户输入 `true` 被存成 `"true"`：**保存成功、编译通过、运行期才炸**。
+改成「声明优先、未声明按既有值推断，且改完类型必须一致」才对。
+
+★ **顺带挖到的仓库级漂移**：`examples/baidu-news-top10/workflow.json` 的 `browser.navigate` 节点
+带 `headless` / `userAgent` 两个**没有任何 manifest 声明**的参数，且缺 `required` 的 `browserType`；
+按 `orchestrator.py:798` 的 `additionalProperties: false` 校验，这个样例真跑会被 `INVALID_INPUT`
+拦下。已登记 BACKLOG（不属于 M65 范围，没动它）。
+
+## 七、未决
+
+- **S6（新增参数 / 新增节点）**：需要 `required`/`default`/`oneOf`/enum 语义与 manifest 字段级声明
+  渲染，等于移植 `param_form.py`（1391 行）的核心，本片没做。
 - **覆盖层的工程形状**已清楚但未实现进原型：抠色基色 + 整窗穿透 + 轮询 `GetCursorPos` 三件套，
   交互控件必须另开非穿透小窗口。轮询频率与 CPU 占用未测。
 - **打包分发**（ADR 0019 §2.3 第二条）与**桌面集成**（第三条：单实例/全局热键/托盘）都还没碰。
 - **`gui.i18n` 的位置债**（ADR 0019 §4-1）：原型依赖它，但冻结期内不能搬。
 - 原型目录在 ruff `exclude` 里，不进 lint/文档门禁 —— 有意如此（脚手架 ≠ 产品代码），
   代价是质量只能靠人工与实证。
+- 原型**只写 `_sandbox/` 里的副本**（`sandbox/` 在流程下拉里单独分组）：保存试验绝不碰
+  `examples/` 与 `workflows/` 的真实流程。
