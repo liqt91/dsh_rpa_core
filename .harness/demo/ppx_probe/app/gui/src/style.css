@@ -112,6 +112,15 @@ aside, section { min-height: 0; overflow: auto; background: var(--surface); }
   padding: 1px 6px; border-radius: 10px;
   background: var(--sunken); color: var(--faint); font-size: 11px;
 }
+/* 删除按钮默认隐形：46px 高的行里常驻一个红叉太吵，hover 才出现 */
+.card .del {
+  flex: 0 0 auto; width: 20px; height: 20px; padding: 0;
+  border: none; border-radius: 4px; background: transparent;
+  color: var(--faint); font-size: 15px; line-height: 1; cursor: pointer;
+  opacity: 0; transition: opacity .1s ease;
+}
+.card:hover .del { opacity: 1; }
+.card .del:hover { background: #ffebe9; color: var(--danger); }
 .card.group {
   height: 26px; background: var(--sunken);
   border-style: dashed; cursor: default;

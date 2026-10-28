@@ -707,6 +707,218 @@ def compile_check(path: str) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# 插入 / 删除节点
+#
+# 落点语义对齐 Qt `FlowTreeModel.insert_command`：**插到 anchor 所属分支的末尾**，
+# 不是「紧接 anchor 之后」。anchor 本身是容器就进它（if 进 then），是叶子就进
+# 它的父容器、沿用父容器里那条分支。Qt 用「否则」虚拟行的行号来表达分支，
+# AST 里 then/else 本来就是两个列表，直接按列表分即可。
+# ---------------------------------------------------------------------------
+
+_CONTAINERS = ("sequence", "forEach", "try", "if")
+# 容器里"新节点默认进哪条分支"
+_DEFAULT_BRANCH = {"sequence": "children", "forEach": "children", "try": "children", "if": "then"}
+
+
+def _locate(
+    node: dict[str, Any],
+    node_id: str,
+    parent: dict[str, Any] | None = None,
+    key: str | None = None,
+    index: int | None = None,
+) -> tuple[dict[str, Any] | None, str | None, int | None, dict[str, Any]] | None:
+    """返回 (parent, 分支键, 下标, 节点本身)；找不到返回 None。root 的 parent 为 None。"""
+    if not isinstance(node, dict):
+        return None
+    if node.get("id") == node_id:
+        return parent, key, index, node
+    for branch in _NESTED:
+        for i, child in enumerate(node.get(branch) or []):
+            found = _locate(child, node_id, node, branch, i)
+            if found is not None:
+                return found
+    return None
+
+
+def _collect_ids(node: dict[str, Any], out: list[str]) -> None:
+    if not isinstance(node, dict):
+        return
+    if node.get("id"):
+        out.append(node["id"])
+    for branch in _NESTED:
+        for child in node.get(branch) or []:
+            _collect_ids(child, out)
+
+
+def _allocate_id(document: dict[str, Any]) -> str:
+    """`n1` / `n2`…跳过已占用——与 Qt `allocate_node_id` 同一个命名习惯。"""
+    used: list[str] = []
+    _collect_ids(document.get("root") or {}, used)
+    used_set = set(used)
+    counter = 1
+    while f"n{counter}" in used_set:
+        counter += 1
+    return f"n{counter}"
+
+
+def _insert_plan(
+    document: dict[str, Any], anchor_id: str
+) -> tuple[dict[str, Any], str, dict[str, Any] | None]:
+    """算出「插到哪个 dict 的哪个列表里」。
+
+    返回 (目标容器, 分支键, 锚点节点)。第三个值只用于回报位置：真正的落点由
+    「分支末尾」决定，锚点本身不参与定位（这正是与「紧跟锚点之后」的区别）。
+    """
+    root = document.get("root") or {}
+    if not anchor_id:
+        if root.get("type") not in _CONTAINERS:
+            raise ValueError(f"根节点是 {root.get('type')}，不是一个可以追加子节点的容器")
+        return root, _DEFAULT_BRANCH[root["type"]], None
+
+    located = _locate(root, anchor_id)
+    if located is None:
+        raise ValueError(f"锚点节点不存在：{anchor_id}")
+    parent, key, _index, anchor = located
+    kind = anchor.get("type")
+    if kind in _CONTAINERS:
+        return anchor, _DEFAULT_BRANCH[kind], anchor
+    if parent is None:
+        raise ValueError("锚点是根节点且不是容器，无处可插")
+    return parent, key or "children", anchor
+
+
+@api_method("rpa.insertNode")
+def insert_node(path: str, command: str, anchor_id: str = "") -> dict[str, Any]:
+    """按命令插一个新 action 节点（`with` 为空，与 Qt `create_action_item` 一致）。"""
+    started = time.perf_counter()
+    target = _flow_path(path)
+    document, raw = _read_document(target)
+
+    entry = _flows.get(path)
+    if entry is not None and entry["sha"] != _sha256(raw):
+        return {
+            "ok": False,
+            "code": "FLOW_CHANGED",
+            "error": "文件在打开后被其他程序改过，已拒绝覆盖（重新打开流程再改）",
+            "ms": round((time.perf_counter() - started) * 1000, 1),
+        }
+    if command not in _catalog_snapshot():
+        return {
+            "ok": False,
+            "code": "UNKNOWN_COMMAND",
+            "error": f"目录里没有这个命令：{command}",
+            "ms": round((time.perf_counter() - started) * 1000, 1),
+        }
+
+    try:
+        container, branch, anchor = _insert_plan(document, anchor_id)
+    except ValueError as exc:
+        return {
+            "ok": False,
+            "code": "INVALID_ANCHOR",
+            "error": str(exc),
+            "ms": round((time.perf_counter() - started) * 1000, 1),
+        }
+
+    node_id = _allocate_id(document)
+    new_node = {"type": "action", "id": node_id, "command": command, "with": {}}
+    bucket = container.setdefault(branch, [])
+    bucket.append(new_node)
+
+    try:
+        Workflow.model_validate(document)
+    except Exception as exc:  # noqa: BLE001 - 校验失败按「不写盘」处理
+        return {
+            "ok": False,
+            "code": "INVALID_WORKFLOW",
+            "error": f"插入后结构不合法，未写盘：{type(exc).__name__}: {exc}",
+            "ms": round((time.perf_counter() - started) * 1000, 1),
+        }
+
+    encoded = _encode_document(document)
+    target.write_bytes(encoded)
+    compile_result = _compile(document)
+    flow = open_flow(path)
+    return {
+        "ok": True,
+        "newNodeId": node_id,
+        "placed": {
+            "parent": container.get("id") or "root",
+            "branch": branch,
+            "index": len(bucket) - 1,
+            "anchor": anchor.get("id") if anchor else None,
+        },
+        "bytes": [len(raw), len(encoded)],
+        "sha": _sha256(encoded)[:12],
+        "ms": round((time.perf_counter() - started) * 1000, 1),
+        "compile": compile_result,
+        "flow": flow,
+    }
+
+
+@api_method("rpa.deleteNode")
+def delete_node(path: str, node_id: str) -> dict[str, Any]:
+    """删一个节点连同它的整棵子树。根节点不可删。"""
+    started = time.perf_counter()
+    target = _flow_path(path)
+    document, raw = _read_document(target)
+
+    entry = _flows.get(path)
+    if entry is not None and entry["sha"] != _sha256(raw):
+        return {
+            "ok": False,
+            "code": "FLOW_CHANGED",
+            "error": "文件在打开后被其他程序改过，已拒绝覆盖（重新打开流程再改）",
+            "ms": round((time.perf_counter() - started) * 1000, 1),
+        }
+
+    located = _locate(document.get("root") or {}, node_id)
+    if located is None:
+        return {
+            "ok": False,
+            "code": "NODE_NOT_FOUND",
+            "error": f"节点不存在：{node_id}",
+            "ms": round((time.perf_counter() - started) * 1000, 1),
+        }
+    parent, branch, index, node = located
+    if parent is None or branch is None or index is None:
+        return {
+            "ok": False,
+            "code": "ROOT_NOT_DELETABLE",
+            "error": "根节点不能删（流程至少要有一个 root）",
+            "ms": round((time.perf_counter() - started) * 1000, 1),
+        }
+
+    doomed: list[str] = []
+    _collect_ids(node, doomed)
+    parent[branch].pop(index)
+
+    try:
+        Workflow.model_validate(document)
+    except Exception as exc:  # noqa: BLE001
+        return {
+            "ok": False,
+            "code": "INVALID_WORKFLOW",
+            "error": f"删除后结构不合法，未写盘：{type(exc).__name__}: {exc}",
+            "ms": round((time.perf_counter() - started) * 1000, 1),
+        }
+
+    encoded = _encode_document(document)
+    target.write_bytes(encoded)
+    compile_result = _compile(document)
+    flow = open_flow(path)
+    return {
+        "ok": True,
+        "removed": {"id": node_id, "type": node.get("type"), "ids": doomed},
+        "bytes": [len(raw), len(encoded)],
+        "sha": _sha256(encoded)[:12],
+        "ms": round((time.perf_counter() - started) * 1000, 1),
+        "compile": compile_result,
+        "flow": flow,
+    }
+
+
+# ---------------------------------------------------------------------------
 # 结构节点（if / forEach / try / return）：直接编辑 AST 结构字段
 #
 # 语义对齐 Qt 的 `ControlNodeForm`：字面量字段走 `parse_literal`（`${...}` 原样保留，

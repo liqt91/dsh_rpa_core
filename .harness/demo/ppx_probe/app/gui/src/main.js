@@ -57,26 +57,68 @@ function renderCommands(list) {
       const row = mk('div', 'cmd')
       row.append(mk('span', null, c.label))
       row.title = c.id
-      row.addEventListener('click', () => appendDraft(c))
+      row.addEventListener('click', () => insertCommand(c))
       el.cmds.append(row)
     }
   }
   el.cmdCount.textContent = `${list.length} 条`
 }
 
-function appendDraft(command) {
+/** 插入一个真节点。落点由服务端按「anchor 所属分支末尾」决定，前端只出 anchor。 */
+async function insertCommand(command) {
   if (!currentPath) return
-  cards.push({
-    kind: 'action',
-    draft: true,
-    no: cards.filter((c) => c.kind !== 'group').length + 1,
-    depth: 0,
-    command: command.id,
-    label: command.label,
-    summary: '（原型：仅演示插入观感，不改真实 AST）',
-  })
-  renderCards()
-  el.cards.lastElementChild?.scrollIntoView({ block: 'nearest' })
+  const anchor = selected?.id || ''
+  const t0 = performance.now()
+  try {
+    const res = await ppx.call('rpa.insertNode', {
+      path: currentPath,
+      command: command.id,
+      anchor_id: anchor,
+    })
+    if (!res.ok) {
+      el.status.textContent = `插入失败 ${res.code}：${res.error}`
+      return
+    }
+    cards = res.flow.cards
+    const placed = res.placed
+    renderCards()
+    renderCompile(res.compile)
+    el.status.textContent = `插入 ${command.label} → ${placed.parent}/${placed.branch}[${placed.index}] · ${res.bytes[0]}→${res.bytes[1]} B · ${res.ms} ms（anchor ${placed.anchor || 'root'}）`
+    // 新节点 with 是空的（与 Qt 一致），参数全未设置 ⇒ 直接跳到它，省一次点击
+    const fresh = cards.find((c) => c.id === res.newNodeId)
+    if (fresh) await selectCard(fresh)
+  } catch (error) {
+    el.status.textContent = `${error.code}: ${error.message}`
+  } finally {
+    el.rpcMs.textContent = `${(performance.now() - t0).toFixed(0)} ms`
+  }
+}
+
+async function removeCard(card) {
+  if (!currentPath) return
+  const doomed = cards.find((c) => c.id === card.id)
+  if (!doomed) return
+  if (!window.confirm(`删除「${doomed.label}」？容器节点会连同里面的节点一起删。`)) return
+  try {
+    const res = await ppx.call('rpa.deleteNode', { path: currentPath, node_id: card.id })
+    if (!res.ok) {
+      el.status.textContent = `删除失败 ${res.code}：${res.error}`
+      return
+    }
+    cards = res.flow.cards
+    if (selected && res.removed.ids.includes(selected.id)) {
+      selected = null
+      fields = []
+      groups = []
+      renderForm()
+    }
+    renderCards()
+    renderCompile(res.compile)
+    const extra = res.removed.ids.length > 1 ? `（连带 ${res.removed.ids.length - 1} 个子节点）` : ''
+    el.status.textContent = `删除 ${res.removed.id}${extra} · ${res.bytes[0]}→${res.bytes[1]} B · ${res.ms} ms`
+  } catch (error) {
+    el.status.textContent = `${error.code}: ${error.message}`
+  }
 }
 
 function renderCards() {
@@ -94,7 +136,16 @@ function renderCards() {
     row.append(mk('span', 'grip', '⋮'), mk('span', 'no', String(card.no)), mk('span', 'name', card.label))
     if (card.summary) row.append(mk('span', 'sum', card.summary))
     if (card.command) row.append(mk('span', 'badge', card.command.split('.')[0]))
-    if (!card.draft) row.addEventListener('click', () => selectCard(card))
+    if (!card.draft) {
+      const del = mk('button', 'del', '×')
+      del.title = '删除这个节点（容器会连同里面的一起删）'
+      del.addEventListener('click', (event) => {
+        event.stopPropagation()
+        removeCard(card)
+      })
+      row.append(del)
+      row.addEventListener('click', () => selectCard(card))
+    }
     el.cards.append(row)
   }
 }
