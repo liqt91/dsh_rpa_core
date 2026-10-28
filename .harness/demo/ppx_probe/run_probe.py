@@ -1,12 +1,21 @@
-"""一键启动 PPX 原型窗口，并把窗口钳制到主屏工作区内。
+"""一键启动 PPX 原型窗口；窗口完全跑到所有屏幕之外时把它救回来。
 
-为什么需要这个脚本：PPX 只给 webview 传 width/height，不传 x/y（`ppx_py/application.py`
-里 `create_window` 没有 position 参数，也不记忆上次位置），位置由 pywebview/WinForms
-自己居中。实测出现过 `GetWindowRect().top = -932` —— 窗口整个在屏幕上方外侧，
-进程正常、日志正常、屏幕上什么都没有。
+**这个脚本不再假设只有一块屏幕。** 曾经的版本用 `SPI_GETWORKAREA`（只返回主屏）判「窗口是否
+可见」，在这台接了两块屏的机器上把「窗口在副屏」误判成「窗口在屏幕外」，于是每秒把用户的
+窗口从副屏拽回主屏 —— 用户把窗口拖过去，它就自己跳回来。
+
+实测布局（必须按多屏算，不能取主屏）：主屏 work `(0,0,1920,1040)`，副屏在主屏**上方**
+work `(0,-1080,1920,-40)`，虚拟桌面 `1920x2160`、原点 `(0,-1080)`。PPX 把窗口居中到副屏时
+算出 `y ≈ -1080 + (1080-777)/2 = -929`，与实测 `-932 / -959` 一致 —— **它没错，是判据错**。
+
+现在的规则：
+- 窗口与**任一块**屏幕工作区的交集 ≥ 窗口面积 50% ⇒ 视为可见，**一个字都不动**；
+- 否则救回到「与它交集最大的那块屏幕」中央（完全无交集则主屏），尺寸夹进该屏工作区。
+- `--primary` 显式要求放主屏（用户说「我要它在主屏」时才用）。
 
 用法：
-    ./.venv/Scripts/python.exe run_probe.py
+    ./.venv/Scripts/python.exe run_probe.py            # 不干预多屏布局
+    ./.venv/Scripts/python.exe run_probe.py --primary  # 强制放主屏中央
 
 Ctrl-C 退出；窗口关掉后脚本随之结束。
 """
@@ -43,12 +52,95 @@ user32.MoveWindow.argtypes = [
 user32.SetForegroundWindow.argtypes = [wt.HWND]
 
 
-def screen_box() -> tuple[int, int, int, int]:
-    """主屏工作区（去掉任务栏）的左、上、右、下。"""
-    rect = wt.RECT()
-    if not user32.SystemParametersInfoW(0x0030, 0, ctypes.byref(rect), 0):  # SPI_GETWORKAREA
-        return (0, 0, 1920, 1040)
-    return (rect.left, rect.top, rect.right, rect.bottom)
+class MONITORINFO(ctypes.Structure):
+    _fields_ = [
+        ("cbSize", wt.DWORD),
+        ("rcMonitor", wt.RECT),
+        ("rcWork", wt.RECT),
+        ("dwFlags", wt.DWORD),
+    ]
+
+
+MONITORENUMPROC = ctypes.WINFUNCTYPE(
+    wt.BOOL, wt.HMONITOR, wt.HDC, ctypes.POINTER(wt.RECT), wt.LPARAM
+)
+
+Box = tuple[int, int, int, int]  # left, top, right, bottom
+
+
+def work_areas() -> list[Box]:
+    """所有显示器的**工作区**（去掉任务栏），主屏排第一。"""
+    found: list[tuple[Box, bool]] = []
+
+    def collect(hmon, _hdc, _lprc, _data) -> bool:
+        info = MONITORINFO()
+        info.cbSize = ctypes.sizeof(MONITORINFO)
+        if user32.GetMonitorInfoW(hmon, ctypes.byref(info)):
+            work = info.rcWork
+            box = (work.left, work.top, work.right, work.bottom)
+            found.append((box, bool(info.dwFlags & 1)))  # MONITORINFOF_PRIMARY
+        return True
+
+    callback = MONITORENUMPROC(collect)  # 必须留引用，否则回调被 GC 掉
+    user32.EnumDisplayMonitors(None, None, callback, 0)
+
+    if not found:
+        rect = wt.RECT()
+        if user32.SystemParametersInfoW(0x0030, 0, ctypes.byref(rect), 0):
+            return [(rect.left, rect.top, rect.right, rect.bottom)]
+        return [(0, 0, 1920, 1040)]
+
+    found.sort(key=lambda item: not item[1])  # 主屏在前
+    return [box for box, _primary in found]
+
+
+def primary_box() -> Box:
+    return work_areas()[0]
+
+
+def overlap(a: Box, b: Box) -> int:
+    w = min(a[2], b[2]) - max(a[0], b[0])
+    h = min(a[3], b[3]) - max(a[1], b[1])
+    return w * h if w > 0 and h > 0 else 0
+
+
+def visible_on_any_screen(rect: Box, areas: list[Box], need: float = 0.35) -> bool:
+    """判断「用户能不能看见 / 能不能抓回来」。宁可少动，不要抢用户的窗口。
+
+    两条任一成立就算可见：
+    1. **合并**在所有屏幕上的可见面积 ≥ `need`。必须合并算：窗口跨两块屏时，
+       每块屏单独看都只有一半，按单屏判会把「跨屏摆着」误判成「跑飞了」。
+    2. 窗口顶部能抓：高 40px 的标题条与某块工作区横向重叠 ≥ 100px、纵向也真的露出
+       一块（哪怕只有 40px），用户就能用鼠标把它拖回来。
+    """
+    area = max(1, (rect[2] - rect[0]) * (rect[3] - rect[1]))
+    covered = sum(overlap(rect, screen) for screen in areas)
+    if covered >= area * need:
+        return True
+
+    title_bar = (rect[0], rect[1], rect[2], min(rect[3], rect[1] + 40))
+    for screen in areas:
+        shared = overlap(title_bar, screen)
+        if shared > 0:
+            width = min(title_bar[2], screen[2]) - max(title_bar[0], screen[0])
+            if width >= 100:
+                return True
+    return False
+
+
+def best_screen(rect: Box, areas: list[Box]) -> Box:
+    """与窗口交集最大的那块屏；完全没有交集时给主屏。"""
+    scored = [(overlap(rect, screen), screen) for screen in areas]
+    return max(scored, key=lambda item: item[0])[1]
+
+
+def center_in(rect: Box, screen: Box) -> Box:
+    """把窗口尺寸夹进屏幕，然后居中。"""
+    width = min(rect[2] - rect[0], screen[2] - screen[0])
+    height = min(rect[3] - rect[1], screen[3] - screen[1])
+    x = screen[0] + max(0, (screen[2] - screen[0] - width) // 2)
+    y = screen[1] + max(0, (screen[3] - screen[1] - height) // 2)
+    return (x, y, x + width, y + height)
 
 
 def wait_vite(timeout: float = 60.0) -> bool:
@@ -72,54 +164,60 @@ def wait_window(timeout: float = 40.0) -> int:
     return 0
 
 
-def clamp_into_screen(hwnd: int, tries: int = 8) -> str:
-    """反复确保窗口完整可见，返回最后一句人话描述。
+def current_rect(hwnd: int) -> Box | None:
+    rect = wt.RECT()
+    if not user32.GetWindowRect(hwnd, ctypes.byref(rect)):
+        return None
+    return (rect.left, rect.top, rect.right, rect.bottom)
 
-    只做一次不够：pywebview 在 `created` 之后还会再定位一次，早移动会被覆盖。
-    实测第一次 MoveWindow 到 (100,80) 后窗口又跑回 top=-959。
-    """
-    last = "未取到窗口矩形"
+
+def apply(hwnd: int, target: Box) -> None:
+    left, top, right, bottom = target
+    user32.MoveWindow(hwnd, left, top, right - left, bottom - top, True)
+    user32.SetForegroundWindow(hwnd)
+
+
+def rescue(hwnd: int, force_primary: bool = False, tries: int = 4) -> str:
+    """窗口完全看不见时才动它；已经可见就原样返回。"""
+    areas = work_areas()
     moved = False
+    report = "取窗口矩形失败"
     for _ in range(tries):
-        rect = wt.RECT()
-        if not user32.GetWindowRect(hwnd, ctypes.byref(rect)):
+        rect = current_rect(hwnd)
+        if rect is None:
             return "取窗口矩形失败，跳过位置修正"
 
-        left, top, right, bottom = screen_box()
-        width, height = rect.right - rect.left, rect.bottom - rect.top
-        fully_visible = (
-            rect.left >= left
-            and rect.top >= top
-            and rect.right <= right
-            and rect.bottom <= bottom
-        )
-        if fully_visible:
+        if not force_primary and visible_on_any_screen(rect, areas):
             if moved:
-                return last + "（复查已可见）"
-            return f"窗口位置正常 ({rect.left},{rect.top}) {width}x{height}"
+                return report + "（复查已可见）"
+            return f"窗口可见于 {describe(rect, areas)}，不动它"
 
-        height = min(height, bottom - top)
-        width = min(width, right - left)
-        x = left + max(0, (right - left - width) // 2)
-        y = top + max(0, (bottom - top - height) // 2)
-        user32.MoveWindow(hwnd, x, y, width, height, True)
-        user32.SetForegroundWindow(hwnd)
+        screen = primary_box() if force_primary else best_screen(rect, areas)
+        target = center_in(rect, screen)
+        apply(hwnd, target)
         moved = True
-        last = (
-            f"窗口原本在 ({rect.left},{rect.top})，已移到 ({x},{y}) {width}x{height}"
-            f"（工作区 {left},{top}-{right},{bottom}）"
+        report = (
+            f"窗口原本在 ({rect[0]},{rect[1]}) 不完整落在任何屏幕内，"
+            f"已移到 {'主屏' if force_primary else '最近屏幕'} 中央 {target}"
         )
         time.sleep(0.6)
-    return last
+        if force_primary:
+            break
+    return report
 
 
-def watch(hwnd: int, proc: subprocess.Popen, interval: float = 1.0) -> int:
-    """守着窗口位置：只要出界就拉回，直到 ppx 进程退出。
+def describe(rect: Box, areas: list[Box]) -> str:
+    for index, screen in enumerate(areas):
+        if overlap(rect, screen) > 0:
+            name = "主屏" if index == 0 else f"副屏{index}"
+            return f"{name} ({rect[0]},{rect[1]})-({rect[2]},{rect[3]})"
+    return f"({rect[0]},{rect[1]})"
 
-    单次 clamp 不够。实测窗口被拉回 (320,131) 之后过一会儿又自己跳到 (593,-901)
-    ——顶部正好在屏幕上方的窗口高度处。PPX 只给 webview 传 width/height、不传坐标
-    （`ppx_py/application.py`），位置完全由下层自己算，触发条件未定位。
-    与其追根因，不如守住可见性。
+
+def watch(hwnd: int, proc: subprocess.Popen, force_primary: bool, interval: float = 1.0) -> int:
+    """只在窗口完全看不见时出手。
+
+    注意：不要在这里「定期归位」。用户会手动把窗口拖到任何一块屏，动它就是抢他的窗口。
     """
     last_report = ""
     while proc.poll() is None:
@@ -127,35 +225,32 @@ def watch(hwnd: int, proc: subprocess.Popen, interval: float = 1.0) -> int:
         current = user32.FindWindowW(None, TITLE)
         if not current:
             continue
-        rect = wt.RECT()
-        if not user32.GetWindowRect(current, ctypes.byref(rect)):
+        if force_primary:
+            continue  # 显式要求主屏时，启动那一次已经放过，不再纠缠
+        rect = current_rect(current)
+        if rect is None:
             continue
-        left, top, right, bottom = screen_box()
-        visible = (
-            rect.left >= left
-            and rect.top >= top
-            and rect.right <= right
-            and rect.bottom <= bottom
-        )
-        if visible:
+        if visible_on_any_screen(rect, work_areas()):
             continue
-        report = clamp_into_screen(current)
+        report = rescue(current)
         if report != last_report:
-            print(f"[守窗] {report}", flush=True)
+            print(f"[救窗] {report}", flush=True)
             last_report = report
     return 0
 
 
 def main() -> int:
+    force_primary = "--primary" in sys.argv[1:]
     ppx = HERE / ".venv" / "Scripts" / "ppx.exe"
     if not ppx.is_file():
         print(f"找不到 {ppx}，先在 ppx_probe 目录建 venv 并装 ppx-py", flush=True)
         return 1
 
+    areas = work_areas()
+    print("屏幕工作区：" + "；".join(str(box) for box in areas), flush=True)
+
     log = LOG.open("w", encoding="utf-8")
-    proc = subprocess.Popen(
-        [str(ppx), "dev"], cwd=APP, stdout=log, stderr=subprocess.STDOUT
-    )
+    proc = subprocess.Popen([str(ppx), "dev"], cwd=APP, stdout=log, stderr=subprocess.STDOUT)
     print(f"ppx dev 已启动 (pid {proc.pid})，日志 {LOG.name}", flush=True)
 
     try:
@@ -166,10 +261,10 @@ def main() -> int:
         if not hwnd:
             print("窗口 40s 内没出现（前端起来了但没有窗口），看日志：", LOG, flush=True)
             return 1
-        time.sleep(2.0)  # 等 pywebview 自己那一次定位落地，否则会被覆盖
-        print(clamp_into_screen(hwnd), flush=True)
-        print("窗口已就绪，关掉窗口或 Ctrl-C 结束", flush=True)
-        return watch(hwnd, proc)
+        time.sleep(2.0)  # 等 pywebview 自己那次定位落地
+        print(rescue(hwnd, force_primary=force_primary), flush=True)
+        print("窗口已就绪；拖到任意一块屏幕都行，关窗或 Ctrl-C 结束", flush=True)
+        return watch(hwnd, proc, force_primary)
     except KeyboardInterrupt:
         print("\n收到 Ctrl-C，关闭窗口", flush=True)
         return 0
