@@ -122,7 +122,30 @@ WebView2 的渲染跑在独立进程（`msedgewebview2.exe`）里，`Chrome_Rend
 按 `orchestrator.py:798` 的 `additionalProperties: false` 校验，这个样例真跑会被 `INVALID_INPUT`
 拦下。已登记 BACKLOG（不属于 M65 范围，没动它）。
 
-## 七、未决
+## 七、启动器与窗口位置（`run_probe.py`）
+
+原型不能只靠 `ppx.exe dev` 启动 —— 它会**在屏幕外开窗**，看起来像没启动。
+
+实测四次启动，两次窗口 `GetWindowRect().top` 分别是 **-932 / -959**（窗口高 777，也就是整个
+窗口落在屏幕上方外侧），而 `_ppx_dev.log` 一切正常：`before_load` → `_pywebviewready` →
+`loaded event fired`，退出码 0。另两次正常（`(104,104)` / `(234,234)`）。**偶发，约一半**。
+
+根因未定位：`ppx_py/application.py` 的 `create_window` 只传 `width`/`height`，不传坐标，也不记忆
+上次位置（全仓 grep `position` / `StartPosition` 零命中），位置由 pywebview/WinForms 自己算。
+还观察到一次「拉回 (320,131) 之后过一会儿又跳到 (593,-901)」，所以不是一次性的初始定位问题。
+
+`run_probe.py` 因此做三件事：等 Vite / 等窗口 / **每秒复查位置，出界就 `MoveWindow` 拉回工作区
+中央**（`SPI_GETWORKAREA`，避开任务栏）。
+
+负向验证：人为 `MoveWindow(hwnd, 300, -900, 1280, 777)`，3 秒内被拉回 `(320,131)`，脚本打印
+`[守窗] 窗口原本在 (300,-900)，已移到 (320,131) …（复查已可见）`。
+
+★ **判据写错一次**：首版用 `last.startswith("移到")` 判断「是否搬过」，而 `last` 的开头是
+「窗口原本在」⇒ 恒假，于是真搬了却报「窗口位置正常 (320,131)」。改成显式 `moved` 布尔。
+同一类错误在覆盖层那轮也犯过（用 `pid == 自己` 判穿透）。**「判据看不见自己刚做的事」是这轮
+第二次犯**，写状态判断时先问：这个字符串真的会以我以为的方式开头吗。
+
+## 八、未决
 
 - **S6（新增参数 / 新增节点）**：需要 `required`/`default`/`oneOf`/enum 语义与 manifest 字段级声明
   渲染，等于移植 `param_form.py`（1391 行）的核心，本片没做。
