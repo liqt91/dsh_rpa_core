@@ -127,9 +127,11 @@ aside, section { min-height: 0; overflow: auto; background: var(--surface); }
   color: var(--muted);
 }
 
-/* ---- 参数编辑（S5） ---------------------------------------------------- */
+/* ---- 参数编辑（S5 / S6） ----------------------------------------------- */
 .dirty { color: var(--danger); font-size: 11.5px; }
 .dirty::before { content: ""; }
+.unsetCount { color: var(--faint); font-size: 11px; }
+.unsetCount.partial { color: #9a6700; }
 
 .paramForm {
   flex: 0 1 auto; min-height: 0; overflow: auto;
@@ -137,7 +139,17 @@ aside, section { min-height: 0; overflow: auto; background: var(--surface); }
 }
 .paramForm .hint { color: var(--faint); font-size: 12px; }
 
+.paramGroup { margin-bottom: 8px; }
+.paramGroup > summary {
+  padding: 4px 2px; cursor: pointer; user-select: none;
+  color: var(--muted); font-size: 11.5px; letter-spacing: .3px;
+  border-bottom: 1px dashed var(--border);
+  margin-bottom: 8px;
+}
+.paramGroup[open] > summary { margin-bottom: 10px; }
+
 .field { margin-bottom: 10px; }
+.field.unset .key { color: var(--faint); }
 .field .labelRow {
   display: flex; align-items: center; gap: 6px; margin-bottom: 3px;
 }
@@ -159,7 +171,12 @@ aside, section { min-height: 0; overflow: auto; background: var(--surface); }
 .field input:focus, .field select:focus, .field textarea:focus {
   outline: none; border-color: var(--info);
 }
-.field .desc { margin-top: 3px; color: var(--faint); font-size: 11px; line-height: 1.45; }
+.field .desc {
+  margin-top: 3px; color: var(--faint); font-size: 11px; line-height: 1.45;
+  /* 两行封顶：manifest 的 description 常有四五句，全铺开会把侧栏撑成一片空白 */
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  overflow: hidden; cursor: help;
+}
 
 .formBar {
   flex: 0 0 auto;

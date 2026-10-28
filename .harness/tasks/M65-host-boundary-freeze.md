@@ -25,6 +25,9 @@ Status: `wip`
 | **S3** | PPX 原型：三栏编辑器 + 真实目录 + 编译校验 | 89 条命令、8 个样例流程全部编译通过；bootstrap 热态 20 ms | ✅ |
 | **S4** | PPX 原型：**覆盖层实证**（透明置顶 + 鼠标穿透 + 高亮框跟随） | 见 §五；四条读数全落（`transparent=True` 假透明 98.09% 灰 / 抠色真透明 / 整窗不可命中 / mousemove 0 vs 3 / 轮询跟随可用） | ✅ |
 | **S5** | PPX 原型：编辑 + 保存闭环（改参数 → 落盘 → 复编译） | 15 条判据全中（见 §六）；**新增节点不做**（涉及 require/default/oneOf，属 S6） | ✅ |
+| **S6a** | 参数面板**覆盖声明的全部字段**（不是「只列文件里已有的键」）+ 未设置三态 + `x-param-groups` 分组 + 联合类型 | `save_probe.py` 26 条判据全中（见 §八） | ✅ |
+| **S6b** | 结构节点表单：if / forEach / try / return 的 AST 字段编辑 | `struct_probe.py` 22 条判据全中（见 §八） | ✅ |
+| **S6c** | 插入节点 / 删除节点 | 未做 | ⬜ |
 
 ## 三、判据设计（为什么长这样）
 
@@ -160,15 +163,95 @@ WebView2 的渲染跑在独立进程（`msedgewebview2.exe`）里，`Chrome_Rend
 报「位置正常」；② 单屏可见比例判跨屏 ⇒ 把正常摆放判成跑飞。教训不是「字符串要用状态量」，
 而是**动手改别人的窗口之前，先确认「我以为的异常」在这个环境里真的是异常**。
 
+## 七·五、S6a / S6b 参数面板与结构节点实证（已做）
+
+### S6a 为什么不是「加个功能」而是修一个偏离
+
+S5 的字段表只遍历 `node["with"]` 里**已有的键**。Qt 的 `ParamForm` 遍历的是
+`schema["properties"]`——**声明的全部字段**，空 = 未设置。两者不是「多一个功能」的差别：
+只渲染已有键，等于让「命令支持但当前没写」的参数在界面上**根本没有入口**。
+`browser.navigate` 的 `browserType`（required）就是这样被彻底藏起来的。
+
+修完之后，那屏直接暴露了 §六末尾记的仓库级漂移：`browserType` **必填但 `set=False`**，
+旁边挂着 `headless` / `userAgent` 两个「manifest 未声明」的字段。以前看不见，现在一眼是红的。
+
+### 保存语义随之改成「全量替换」
+
+Qt 是 `holder.raw["with"] = dict(values)`——表单提交整份参数，不是补丁。跟着改之后
+必须同时加一道**提交完整性闸门**：前端漏传一个键就成了「悄悄删掉一个参数」。
+`INCOMPLETE_SUBMIT` 拒绝了这种可能，宁可报错也不猜。
+
+`save_probe.py` 从 15 条扩到 **26 条**，新增的关键几条：
+
+| # | 判据 | 读数 |
+|---|---|---|
+| 1 | 声明了但没写的参数也给出入口 | `browserType` / `action` / `onTimeout` / `commandLineArgs` 四个 `set=False` |
+| 3 | `type` 为**列表**时取第一个非 null | `data.setVar.value` → `string`（不是 `"['string', 'number', …]"`） |
+| 4 | 分组顺序取自 `x-param-groups` | `['常规','高级','未声明']`，`高级` 折叠 |
+| 5 | `x-hidden` 字段不给入口 | `data.table.setCell` 的 `flowDir` 被滤掉，`row/column/value` 还在 |
+| 11 | **漏传键 → `INCOMPLETE_SUBMIT`** | 文件不动 |
+| 13 | 空文本 → 键从 `with` 里删除 | `removed=['userAgent']` |
+| 17 | `_` 前缀私有键不受影响 | `_exprModes` 保存后原样留住 |
+
+★ **这一片自己撞出来的两个真 bug**（都是判据逼出来的，不是我读出来的）：
+
+1. `_SKIP_KEYS = ("_",)` 是**精确匹配字符串 `"_"`**，不是前缀判断。写成 `_is_reserved()` 才对。
+2. `with` 里带着 `x-hidden` 字段（`data.table.*` 的 `flowDir`）时，前端不渲染它、也就不提交它，
+   于是永远撞 `INCOMPLETE_SUBMIT`——**这类节点一个都保存不了**。修法是 hidden 字段既不作
+   提交要求、也不参与替换，原样透传。
+
+### S6b 结构节点：四种节点各有各的语义
+
+`ControlNodeForm`（Qt）的做法是「直接编辑 AST 结构字段」，`apply_values()` 返回字段 dict、
+由调用方写回。原样搬过来：
+
+| 节点 | 字段 | 解析口径 |
+|---|---|---|
+| `if` | `op`（enum，8 个操作符）/ `left` / `right` | 字面量：`${...}` 原样保留；数字与 `[ { t f n " -` 开头尝试 JSON；**右值留空 = 删键** |
+| `forEach` | `items` / `item_var` | items 走 JSON；item_var 必须匹配 `^[A-Za-z_]\w*$` |
+| `try` | `error_var` | 同上标识符约束 |
+| `return` | `value` | JSON；留空 = `null` |
+
+字段形状与指令参数**完全一致**（复用同一个前端渲染器），只是 `semantic` 不同。
+操作符选项**从 `Condition.op` 的 Literal 实参现取**，不手抄一份枚举。
+
+`struct_probe.py`（新，22 条）覆盖四种节点的字段表 + 写回 + 拒收 + 编译。
+
+★ **两次「期望值写错」**（都是我推理错、实现对）：
+
+1. 断言「改 if 只动 condition 那几行 = 3 删 3 增」，实际 **5 条**——原 `condition` 没有
+   `right` 键，所以是 2 删 3 增。**我按想象里的文件写期望，没按实际文件写。**
+2. 夹具里写 `"${row}"` 引用循环变量，编译报 `Unsupported reference root: row`。
+   循环变量在作用域里是 `loop.<变量名>` → 必须写 `"${loop.row}"`。顺带把这条写进
+   `item_var` 字段的描述里（用户同样会踩）。
+
+★ **一次「不该加的严」**：首版给 `forEach.items` 加了 `isinstance(items, list)` 硬校验。
+但 `resolve()` 对纯引用字符串会求值成实际列表，`items: "${inputs.rows}"` 是**合法写法**，
+硬拦等于禁掉整个引用写法；而编译期本来就只查引用可解析性、不查类型。改成
+**接受 + 警告**（`warnings: [{key, reason}]`），并在状态栏显示——不接受「编译通过、
+运行期 INVALID_INPUT」这种沉默。
+
+### 前端渲染
+
+同一屏里并排验证过两种节点：参数表单（`4/8 已设置`、分组折叠、`（未设置 · 默认 msedge）`）
+与结构表单（`2/3 已设置`、`条件操作符` 显示中文「为真（非空）」、`右值` 显示 `未设置` 占位）。
+manifest 的 `description` 动辄四五句，收成两行 + `title` 全文，否则 340px 侧栏被撑成一片空白。
+
+★ 顺带把默认演示流程从 baidu 副本换成 `_sandbox/struct.json`：它同时含 action / if / forEach /
+try / return，五种形态都能点到；原来那份一个 if 都没有，结构表单等于没法看。
+
 ## 八、未决
 
-- **S6（新增参数 / 新增节点）**：需要 `required`/`default`/`oneOf`/enum 语义与 manifest 字段级声明
-  渲染，等于移植 `param_form.py`（1391 行）的核心，本片没做。
+- **S6c（插入节点 / 删除节点）**：未做。插入要决定「新节点的 `with` 填什么」（required 的空值？
+  声明的 default？都不填？）以及插入位置（同级之前/之后、进容器内），删除要处理「删掉 if 的
+  唯一子节点」这类结构残缺。比 S6a/S6b 的结构风险高，单独一片。
 - **覆盖层的工程形状**已清楚但未实现进原型：抠色基色 + 整窗穿透 + 轮询 `GetCursorPos` 三件套，
   交互控件必须另开非穿透小窗口。轮询频率与 CPU 占用未测。
 - **打包分发**（ADR 0019 §2.3 第二条）与**桌面集成**（第三条：单实例/全局热键/托盘）都还没碰。
 - **`gui.i18n` 的位置债**（ADR 0019 §4-1）：原型依赖它，但冻结期内不能搬。
 - 原型目录在 ruff `exclude` 里，不进 lint/文档门禁 —— 有意如此（脚手架 ≠ 产品代码），
-  代价是质量只能靠人工与实证。
+  代价是质量只能靠人工与实证。**S6a/S6b 之后这笔债更实了**：`api.py` 里的
+  `_Flattener` / `_field_descriptors` / `_parse_literal` 已经是真业务逻辑，却仍无 lint 无单测，
+  只有手写探针盖着。
 - 原型**只写 `_sandbox/` 里的副本**（`sandbox/` 在流程下拉里单独分组）：保存试验绝不碰
   `examples/` 与 `workflows/` 的真实流程。

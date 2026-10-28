@@ -2,6 +2,7 @@
 node_modules/
 _*.log
 _*.out
+_*.txt
 _shot*.png
 _overlay_*.png
 _sandbox/
