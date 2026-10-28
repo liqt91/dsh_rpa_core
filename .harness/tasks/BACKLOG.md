@@ -5,6 +5,25 @@
 
 ## 当前任务
 
+- [ ] **M65 宿主边界冻结 + PPX 实验基座**（`wip`，2026-10-28）——
+  起因：维护者「Qt 的代码留着不动、也不改，这个写入项目要求」，同时继续推进 PPX 壳。细则见
+  `M65-host-boundary-freeze.md`，决策见 ADR 0019。
+  - **落地**：①`.harness/gui-freeze.json`（`src/rpa_core/gui/` 22 个 `.py` 的逐文件 sha256）+
+    新增 `.harness/scripts/check_host_boundary.py` 进默认门禁——GUI 冻结（集合 + 逐哈希）、
+    原型不得 import `PySide6` / gui UI 模块（豁免 `rpa_core.gui.i18n`）、能力层不得依赖 `ppx_py`；
+    ②项目要求写进 `AGENTS.md`（产品方向 + 规则 14）与 `invariants.md`（#16）；
+    ③PPX 原型已用真实能力层跑通三栏编辑器（89 条命令 / 8 个样例流程全编译通过）。
+  - **判据教训**：白名单首版用精确相等，把 `from rpa_core.gui.i18n import ...` 判红——**判据自己
+    被自己的合法用法打中**，改按模块前缀放行；删除场景只在临时树里造（探针成批 `unlink` 会撞
+    删除守卫，守卫 fail-closed 会把真结论掩盖掉）。负向验证 14 条全中（含真仓库注入 + md5 还原复绿）。
+  - **S4 覆盖层已实证**（`overlay_probe.py`，四轮读数见 ADR 0019 §2.4）：`transparent=True` 只透
+    WebView 层，Form 仍是 `#F0F0F0` 灰板（98.09% 像素）⇒ 假透明；`TransparencyKey` 抠洋红后
+    灰/洋红 **0.0%** ⇒ 真透明（截图看得到下层终端文字）；抠色区在 `WindowFromPoint` 直接落到下层
+    窗口，连红框采样点也不命中自身 ⇒ **覆盖层收不到点击，交互控件须另开非穿透窗口**；穿透时页面
+    `mousemove` **0 次**（不穿透 3 次）⇒ 只能轮询 `GetCursorPos`，实测红框 (0,0)→(412,252) 跟随可用。
+  - **未决**：S5 编辑保存闭环未开工；打包分发 / 桌面集成（单实例·热键·托盘）未碰；轮询频率与
+    CPU 占用未测。
+
 - [x] **M62 harness / 文档层梳理（AI 协作视角）**（`done`，2026-10-14）——
   起因：审计「harness 层与文档层从 AI 协作角度需要哪些梳理」。细则见
   `M62-harness-docs-hygiene.md`。

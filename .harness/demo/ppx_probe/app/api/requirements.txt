@@ -1,0 +1,3 @@
+# rpa_core 能力层的最小依赖（原型只读 catalog / 编译，不跑执行器）
+pydantic>=2.10,<3
+jsonschema>=4.23,<5

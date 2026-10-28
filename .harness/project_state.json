@@ -10,7 +10,7 @@
   "later_milestones": [
     "M51-selector-supply-expansion"
   ],
-  "notes": "技术路线（ADR 0016）：GUI 是唯一主力形态；Web 编辑器退为可选、冻结演进；GUI 独立运行不需要 web 服务器。\n元素模型（ADR-002，M52 S6 起 ref-only）：被引用参数**不进** `with`，运行期从 `elements/` 解析，取不到即 `ELEMENT_REF_MISSING` 硬失败。\n开发期硬切：不做前向兼容、不写数据迁移（`invariants.md` #15）。\n\n本字段的定位（2026-10-14 起）：只记「跨里程碑仍成立」的技术决策，**不记进度叙述**——进度与取证\n一律落 `.harness/PROGRESS.md`（append-only）与 `.workbuddy/memory/YYYY-MM-DD.md`；当前排期以\n`project_state.json` 的 `active_*` / `next_milestone` 与 `.harness/STATE.md` 为准（后者由\n`check_docs.py` 盯着与前者逐值一致，不许漂移）。\n\n历史存档：本字段 2026-10-14 之前的原文（M30 期技术路线叙述、M39 立项、M42→M49 推进补记、\nM47.12 三轮真机反馈）全文在 `.harness/notes-archive.md`，**仅存档、不再维护**。",
+  "notes": "技术路线（ADR 0016）：GUI 是唯一主力形态；Web 编辑器退为可选、冻结演进；GUI 独立运行不需要 web 服务器。\n宿主实验（ADR 0019，2026-10-28）：`src/rpa_core/gui/` 逐文件哈希冻结（`gui-freeze.json` + `check_host_boundary.py`），改动须显式 `--update-freeze` 签字；PPX 原型只在 `.harness/demo/ppx_probe/` 并行实验，迁移门槛是覆盖层/打包分发/桌面集成三条实证。\n元素模型（ADR-002，M52 S6 起 ref-only）：被引用参数**不进** `with`，运行期从 `elements/` 解析，取不到即 `ELEMENT_REF_MISSING` 硬失败。\n开发期硬切：不做前向兼容、不写数据迁移（`invariants.md` #15）。\n\n本字段的定位（2026-10-14 起）：只记「跨里程碑仍成立」的技术决策，**不记进度叙述**——进度与取证\n一律落 `.harness/PROGRESS.md`（append-only）与 `.workbuddy/memory/YYYY-MM-DD.md`；当前排期以\n`project_state.json` 的 `active_*` / `next_milestone` 与 `.harness/STATE.md` 为准（后者由\n`check_docs.py` 盯着与前者逐值一致，不许漂移）。\n\n历史存档：本字段 2026-10-14 之前的原文（M30 期技术路线叙述、M39 立项、M42→M49 推进补记、\nM47.12 三轮真机反馈）全文在 `.harness/notes-archive.md`，**仅存档、不再维护**。",
   "task_index": ".harness/tasks/BACKLOG.md",
   "scope": {
     "in": [

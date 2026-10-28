@@ -1,0 +1,6 @@
+.venv/
+node_modules/
+_*.log
+_*.out
+_shot*.png
+_overlay_*.png

@@ -1,0 +1,55 @@
+[project]
+name = "RPA Probe"
+slug = "rpa-probe"
+version = "0.1.0"
+identifier = "com.example"
+developer = "Your Name"
+description = "A PPX desktop application"
+website = "https://example.com"
+windowsAppId = "C57B13FB-79D0-4CE0-8B8A-676F91224B42"
+format = 6
+
+[python]
+modules = ["api.api"]
+
+[paths]
+frontend = "gui"
+resources = "api/resources"
+assets = "ppx/assets"
+
+[window]
+widthRatio = 0.6667
+heightRatio = 0.72
+minWidthRatio = 0.5
+minHeightRatio = 0.5
+resizable = true
+fullscreen = false
+alwaysOnTop = false
+confirmClose = false
+backgroundColor = "#FFFFFF"
+# Linux 显卡驱动导致白屏时可开启软件渲染
+softwareRendering = false
+
+[development]
+port = 5173
+
+[storage]
+filename = "storage.json"
+
+[application]
+singleInstance = true
+
+[applicationUpdate]
+enabled = false
+releaseUrl = ""
+
+[compatibility]
+pythonApi = "6.0"
+javascriptApi = "6.0"
+dataSchema = "1"
+
+[framework]
+python = "6.0.1"
+javascript = "6.0.1"
+channel = "stable"
+releaseUrl = "https://api.github.com/repos/pangao1990/PPX/releases/latest"

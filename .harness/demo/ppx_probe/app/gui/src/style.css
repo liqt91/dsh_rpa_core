@@ -1,0 +1,147 @@
+:root {
+  --text: #19232d;
+  --muted: #64707d;
+  --faint: #8b929e;
+  --border: #d0d7de;
+  --border-strong: #c0c4c8;
+  --surface: #ffffff;
+  --sunken: #f6f8fa;
+  --hover: #f3f6f9;
+  --selected: #daedff;
+  --info: #0969da;
+  --success: #1a7f37;
+  --danger: #cf222e;
+}
+
+html, body { height: 100%; margin: 0; }
+
+body {
+  font: 13px/1.5 "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", system-ui, sans-serif;
+  color: var(--text);
+  background: var(--sunken);
+  -webkit-font-smoothing: antialiased;
+}
+
+#app { display: flex; flex-direction: column; height: 100vh; }
+
+#bar {
+  flex: 0 0 auto;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 12px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+.brand { font-weight: 500; letter-spacing: .3px; }
+.status { color: var(--muted); font-size: 12px; }
+.spacer { flex: 1; }
+
+main { flex: 1; display: grid; grid-template-columns: 216px minmax(0, 1fr) 340px; min-height: 0; }
+aside, section { min-height: 0; overflow: auto; background: var(--surface); }
+#left { border-right: 1px solid var(--border); }
+#right { border-left: 1px solid var(--border); display: flex; flex-direction: column; }
+#mid { background: var(--sunken); }
+
+.paneHead {
+  position: sticky; top: 0; z-index: 2;
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 10px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+.paneTitle { font-weight: 500; }
+.count { color: var(--faint); font-size: 12px; margin-left: auto; }
+
+#search {
+  flex: 1; min-width: 0;
+  height: 26px; padding: 0 8px;
+  border: 1px solid var(--border); border-radius: 6px;
+  font: inherit; color: var(--text); background: var(--surface);
+}
+#search:focus { outline: none; border-color: var(--info); }
+
+.cmdList { padding: 4px 0 12px; }
+.nsGroup { padding: 8px 12px 4px; color: var(--faint); font-size: 11.5px; letter-spacing: .4px; }
+.cmd {
+  display: flex; align-items: baseline; gap: 6px;
+  height: 26px; padding: 0 12px; cursor: pointer;
+  white-space: nowrap; overflow: hidden;
+}
+.cmd:hover { background: var(--hover); }
+.cmd .cid { color: var(--faint); font: 11px/1 Consolas, monospace; margin-left: auto; }
+
+.flowTitle {
+  position: sticky; top: 0; z-index: 2;
+  padding: 10px 14px;
+  background: var(--sunken);
+  border-bottom: 1px solid var(--border);
+  font-weight: 500;
+}
+.flowTitle small { color: var(--muted); font-weight: 400; margin-left: 8px; }
+
+.cardList { padding: 10px 12px 40px; }
+
+.card {
+  position: relative;
+  display: flex; align-items: center; gap: 8px;
+  height: 46px; margin-bottom: 6px;
+  padding: 0 10px 0 14px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: box-shadow .12s ease, border-color .12s ease;
+}
+.card:hover { box-shadow: 0 1px 3px rgba(25, 35, 45, .10); border-color: var(--border-strong); }
+.card.selected { background: var(--selected); border-color: var(--info); }
+.card::before {
+  content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 4px;
+  border-radius: 6px 0 0 6px; background: var(--depth);
+}
+.card .grip { color: #b6bfc8; font-size: 11px; letter-spacing: -2px; }
+.card .no { width: 18px; text-align: right; color: var(--faint); font: 11px/1 Consolas, monospace; }
+.card .name { font-weight: 500; }
+.card .sum {
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: var(--muted); font: 11.5px/1 Consolas, "Microsoft YaHei", monospace;
+}
+.card .badge {
+  margin-left: auto; flex: 0 0 auto;
+  padding: 1px 6px; border-radius: 10px;
+  background: var(--sunken); color: var(--faint); font-size: 11px;
+}
+.card.group {
+  height: 26px; background: var(--sunken);
+  border-style: dashed; cursor: default;
+  color: var(--muted); font-size: 12px;
+}
+.card.group::before { display: none; }
+.card.draft { border-style: dashed; border-color: var(--info); }
+
+.detail {
+  flex: 1; margin: 0; padding: 10px 12px;
+  overflow: auto; white-space: pre-wrap; word-break: break-word;
+  font: 11.5px/1.6 Consolas, "Microsoft YaHei", monospace;
+  color: var(--muted);
+}
+.compileOut { border-top: 1px solid var(--border); padding: 10px 12px; font-size: 12px; }
+.compileOut .ok { color: var(--success); }
+.compileOut .bad { color: var(--danger); }
+.compileOut pre { margin: 6px 0 0; white-space: pre-wrap; font: 11.5px/1.6 Consolas, monospace; }
+
+button {
+  height: 26px; padding: 0 10px;
+  border: 1px solid var(--border); border-radius: 6px;
+  background: var(--surface); color: var(--text);
+  font: inherit; cursor: pointer;
+}
+button:hover { background: var(--hover); }
+button:disabled { opacity: .5; cursor: wait; }
+
+select {
+  height: 26px; max-width: 240px;
+  border: 1px solid var(--border); border-radius: 6px;
+  background: var(--surface); color: var(--text); font: inherit;
+}

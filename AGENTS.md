@@ -14,6 +14,19 @@ This repository is a clean-room RPA core experiment. Do not import runtime code 
 - 后端能力层（model/catalog/compiler/runtime/executors/workers/extension_exec/
   local_transport）与宿主形态无关，是唯一事实来源。
 
+## Host experiment（PPX 壳，ADR 0019）
+
+- **Qt 源码冻结**：`src/rpa_core/gui/` 留着不动、也不改 —— 不改功能、不重构、不删文件、
+  不为原型做适配。判据是机械的：`.harness/gui-freeze.json` 记录逐文件 sha256，
+  `.harness/scripts/check_host_boundary.py` 在门禁里比对，任何改动都红。
+- 确需解冻时，**先问维护者**，再跑 `check_host_boundary.py --update-freeze` 重建基线，
+  并在提交信息里写明原因（那一步的基线 diff 就是签字）。
+- PPX 原型只待在 `.harness/demo/ppx_probe/`：不进 `src/`、不进主 `pyproject.toml`、
+  不往主 venv 装 PPX。它只能通过 RPC 薄层消费能力层，不得 import `PySide6` 或 gui 的
+  UI 模块（唯一豁免 `rpa_core.gui.i18n`）；能力层也不得反向依赖 `ppx_py`。
+- 迁移讨论的门槛是 ADR 0019 §2.3 的三条实证（覆盖层 / 打包分发 / 桌面集成）。
+  三条没过之前，不讨论 14.7k 行 Qt 的处置。
+
 ## Commands
 
 ```text
@@ -48,6 +61,8 @@ CLI:         uv run python -m rpa_core.cli
 11. Executors must propagate task cancellation and release attempt-owned resources before `execute()` exits.
 12. A run is successful only after both `runFinished` and `result.json` persist successfully.
 13. Commit locally only; never `git push` unless the user explicitly asks for it in the current message.
+14. `src/rpa_core/gui/` is frozen (ADR 0019): do not edit, refactor, or delete files there while the
+    host experiment runs. Unfreezing is an explicit act — update the freeze baseline and say why.
 
 ## Documentation language
 

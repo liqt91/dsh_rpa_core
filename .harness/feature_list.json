@@ -421,6 +421,11 @@
       "id": "harness-docs-hygiene",
       "title": "Harness/doc hygiene: STATE.md entry point, doc + ledger gates; error-gate wiring sentinel",
       "passes": true
+    },
+    {
+      "id": "host-boundary-freeze",
+      "title": "Qt sources frozen by per-file hash; PPX prototype isolated from gui/PySide6; gate enforced",
+      "passes": true
     }
   ]
 }

@@ -17,3 +17,4 @@ These rules must be mechanically enforced where practical.
 13. Variable references replace complete `${scope.path}` tokens only; embedded string templates and list indexes are unsupported until separately specified.
 14. Reference lookup fails fast on missing or non-mapping path segments; it never silently returns `None`.
 15. Pre-release project: changes are hard cut-overs. Do not add backward-compatibility shims, schema-version migrations, or legacy-value adapters — drop an old shape outright rather than supporting both. Persisted documents (workflows, element descriptors, node `_exprModes`, settings) are not migrated.
+16. `src/rpa_core/gui/**` is frozen while the PPX host experiment runs (ADR 0019): its file set and per-file hashes must equal `.harness/gui-freeze.json`. Unfreezing is an explicit act (rebase the baseline, state why) — never a silent edit. Host experiments may not import `PySide6` or gui UI modules, and `src/` may not depend on the experiment.

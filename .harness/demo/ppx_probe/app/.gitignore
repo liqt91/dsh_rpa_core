@@ -1,0 +1,7 @@
+.venv/
+node_modules/
+gui/node_modules/
+gui/dist/
+build/
+*.py[cod]
+__pycache__/

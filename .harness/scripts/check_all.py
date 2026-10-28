@@ -25,6 +25,10 @@ commands = [
     # 不执行任何命令，毫秒级。全量参数矩阵本身按需跑（RPA_COMMAND_MATRIX=1），
     # 而「新增命令没补用例 / 参数改了没人改表」这类腐烂必须每次提交就拦住。
     [sys.executable, str(ROOT / ".harness" / "scripts" / "check_command_matrix.py")],
+    # 宿主边界（M65）：GUI 冻结基线 + PPX 原型隔离（ADR 0019）。维护者已拍板
+    # 「Qt 代码留着不动、也不改」——冻结必须能被机械证明，否则只是一句会过期的话；
+    # 原型则不许偷偷 import Qt/gui UI 模块，否则「WebView 壳不靠 Qt」的结论作废。
+    [sys.executable, str(ROOT / ".harness" / "scripts" / "check_host_boundary.py")],
 ]
 
 # 真实桌面 E2E（记事本/WinForms 演示程序/捕获悬浮框，会弹窗抢前台）**默认不进

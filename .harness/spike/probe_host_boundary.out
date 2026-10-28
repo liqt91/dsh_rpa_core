@@ -1,0 +1,17 @@
+[PASS] 一致时绿
+[PASS] 改内容 → 红
+[PASS] 新增文件 → 红
+[PASS] 删除文件 → 红
+[PASS] 回填后重新绿
+[PASS] 缺基线 → 红
+[PASS] 原型 import PySide6 → 红
+[PASS] 原型 from rpa_core.gui import app → 红
+[PASS] 原型只用 gui.i18n + 能力层 → 绿
+[PASS] 能力层 import ppx_py → 红
+[PASS] 清掉泄漏后绿
+[PASS] 真仓库注入一个字节 → 门禁红
+[PASS] 逐字节还原（md5 395f1123）
+[PASS] 还原后门禁重新绿
+
+临时树留在 D:\Users\Administrator\Documents\代码\rpa_core\.harness\spike\_host_probe_tmp（不自动删除：批量删除会撞删除守卫）
+PROBE PASSED
