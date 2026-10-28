@@ -1,0 +1,805 @@
+{
+  "generated_by": "workbuddy-connector/tools/gen_capability_reference.py",
+  "digest": "9f4f273419c78a2100ab157dacce33f0ef294b725474b5af7278b6ca0d86b22f",
+  "count": 89,
+  "groups": {
+    "浏览器": 32,
+    "数据 / 文件": 17,
+    "桌面（UIA）": 17,
+    "桌面（Win32）": 19,
+    "OCR / 验证码": 3,
+    "工作流控制": 1
+  },
+  "commands": [
+    {
+      "id": "browser.attach",
+      "label": "获取已打开的网页",
+      "group": "浏览器",
+      "required": [
+        "sessionId",
+        "pattern"
+      ],
+      "risk": "browser-control"
+    },
+    {
+      "id": "browser.check",
+      "label": "设置复选框",
+      "group": "浏览器",
+      "required": [
+        "sessionId",
+        "selector"
+      ],
+      "risk": "browser-control"
+    },
+    {
+      "id": "browser.click",
+      "label": "点击元素",
+      "group": "浏览器",
+      "required": [
+        "selector"
+      ],
+      "risk": "browser-control"
+    },
+    {
+      "id": "browser.close",
+      "label": "关闭网页",
+      "group": "浏览器",
+      "required": [],
+      "risk": "browser-control"
+    },
+    {
+      "id": "browser.closeBrowser",
+      "label": "终止浏览器",
+      "group": "浏览器",
+      "required": [],
+      "risk": "browser-control"
+    },
+    {
+      "id": "browser.closeTabs",
+      "label": "关闭标签页",
+      "group": "浏览器",
+      "required": [],
+      "risk": "browser-control"
+    },
+    {
+      "id": "browser.cookieGet",
+      "label": "读取 Cookie",
+      "group": "浏览器",
+      "required": [
+        "sessionId",
+        "name"
+      ],
+      "risk": "read"
+    },
+    {
+      "id": "browser.cookieGetAll",
+      "label": "获取 Cookie 列表",
+      "group": "浏览器",
+      "required": [
+        "sessionId"
+      ],
+      "risk": "read"
+    },
+    {
+      "id": "browser.cookieRemove",
+      "label": "删除 Cookie",
+      "group": "浏览器",
+      "required": [
+        "sessionId"
+      ],
+      "risk": "browser-control"
+    },
+    {
+      "id": "browser.cookieSet",
+      "label": "设置 Cookie",
+      "group": "浏览器",
+      "required": [
+        "sessionId",
+        "cookies"
+      ],
+      "risk": "browser-control"
+    },
+    {
+      "id": "browser.download",
+      "label": "下载文件",
+      "group": "浏览器",
+      "required": [
+        "saveDir"
+      ],
+      "risk": "browser-control"
+    },
+    {
+      "id": "browser.drag",
+      "label": "拖拽元素",
+      "group": "浏览器",
+      "required": [
+        "sessionId",
+        "selector",
+        "targetSelector"
+      ],
+      "risk": "browser-control"
+    },
+    {
+      "id": "browser.executeScript",
+      "label": "执行JS脚本",
+      "group": "浏览器",
+      "required": [
+        "script"
+      ],
+      "risk": "browser-control"
+    },
+    {
+      "id": "browser.getPosition",
+      "label": "获取元素位置",
+      "group": "浏览器",
+      "required": [
+        "selector"
+      ],
+      "risk": "read"
+    },
+    {
+      "id": "browser.getScrollPosition",
+      "label": "获取滚动条位置",
+      "group": "浏览器",
+      "required": [],
+      "risk": "read"
+    },
+    {
+      "id": "browser.getSelectOptions",
+      "label": "获取下拉框选项",
+      "group": "浏览器",
+      "required": [
+        "selector"
+      ],
+      "risk": "read"
+    },
+    {
+      "id": "browser.getText",
+      "label": "读取元素文本",
+      "group": "浏览器",
+      "required": [
+        "selector"
+      ],
+      "risk": "read"
+    },
+    {
+      "id": "browser.handleDialog",
+      "label": "处理对话框",
+      "group": "浏览器",
+      "required": [],
+      "risk": "browser-control"
+    },
+    {
+      "id": "browser.hover",
+      "label": "鼠标悬停",
+      "group": "浏览器",
+      "required": [
+        "selector"
+      ],
+      "risk": "browser-control"
+    },
+    {
+      "id": "browser.input",
+      "label": "输入文本",
+      "group": "浏览器",
+      "required": [
+        "selector",
+        "text"
+      ],
+      "risk": "browser-control"
+    },
+    {
+      "id": "browser.listPages",
+      "label": "获取网页列表",
+      "group": "浏览器",
+      "required": [
+        "sessionId"
+      ],
+      "risk": "read"
+    },
+    {
+      "id": "browser.navigate",
+      "label": "打开网页",
+      "group": "浏览器",
+      "required": [
+        "browserType"
+      ],
+      "risk": "browser-control"
+    },
+    {
+      "id": "browser.queryAll",
+      "label": "抓取列表文本",
+      "group": "浏览器",
+      "required": [
+        "selector"
+      ],
+      "risk": "read"
+    },
+    {
+      "id": "browser.screenshot",
+      "label": "网页截图",
+      "group": "浏览器",
+      "required": [
+        "savePath"
+      ],
+      "risk": "browser-control"
+    },
+    {
+      "id": "browser.scroll",
+      "label": "滚动网页",
+      "group": "浏览器",
+      "required": [
+        "sessionId",
+        "position"
+      ],
+      "risk": "browser-control"
+    },
+    {
+      "id": "browser.select",
+      "label": "设置下拉框",
+      "group": "浏览器",
+      "required": [
+        "selector",
+        "value"
+      ],
+      "risk": "browser-control"
+    },
+    {
+      "id": "browser.setAttribute",
+      "label": "设置元素属性",
+      "group": "浏览器",
+      "required": [
+        "selector",
+        "name",
+        "value"
+      ],
+      "risk": "browser-control"
+    },
+    {
+      "id": "browser.setValue",
+      "label": "设置元素值",
+      "group": "浏览器",
+      "required": [
+        "selector",
+        "value"
+      ],
+      "risk": "browser-control"
+    },
+    {
+      "id": "browser.stopLoading",
+      "label": "停止网页加载",
+      "group": "浏览器",
+      "required": [],
+      "risk": "browser-control"
+    },
+    {
+      "id": "browser.upload",
+      "label": "上传文件",
+      "group": "浏览器",
+      "required": [
+        "selector",
+        "files"
+      ],
+      "risk": "browser-control"
+    },
+    {
+      "id": "browser.waitFor",
+      "label": "等待元素出现",
+      "group": "浏览器",
+      "required": [
+        "selector"
+      ],
+      "risk": "read"
+    },
+    {
+      "id": "browser.waitLoad",
+      "label": "等待页面加载",
+      "group": "浏览器",
+      "required": [
+        "sessionId"
+      ],
+      "risk": "read"
+    },
+    {
+      "id": "data.appendText",
+      "label": "追加写入文本",
+      "group": "数据 / 文件",
+      "required": [
+        "workspace",
+        "path"
+      ],
+      "risk": "workflow-edit"
+    },
+    {
+      "id": "data.datetimeNow",
+      "label": "获取当前时间",
+      "group": "数据 / 文件",
+      "required": [],
+      "risk": "read"
+    },
+    {
+      "id": "data.deletePath",
+      "label": "删除路径/文件",
+      "group": "数据 / 文件",
+      "required": [
+        "workspace",
+        "path"
+      ],
+      "risk": "workflow-edit"
+    },
+    {
+      "id": "data.fileExists",
+      "label": "判断文件是否存在",
+      "group": "数据 / 文件",
+      "required": [
+        "workspace",
+        "path"
+      ],
+      "risk": "read"
+    },
+    {
+      "id": "data.format",
+      "label": "格式化文本",
+      "group": "数据 / 文件",
+      "required": [
+        "template",
+        "values"
+      ],
+      "risk": "read"
+    },
+    {
+      "id": "data.limit",
+      "label": "截取前 N 条",
+      "group": "数据 / 文件",
+      "required": [
+        "items",
+        "count"
+      ],
+      "risk": "read"
+    },
+    {
+      "id": "data.log",
+      "label": "打印日志",
+      "group": "数据 / 文件",
+      "required": [
+        "message"
+      ],
+      "risk": "read"
+    },
+    {
+      "id": "data.readText",
+      "label": "读取文本文件",
+      "group": "数据 / 文件",
+      "required": [
+        "workspace",
+        "path"
+      ],
+      "risk": "read"
+    },
+    {
+      "id": "data.setVar",
+      "label": "设置变量",
+      "group": "数据 / 文件",
+      "required": [
+        "varName",
+        "value"
+      ],
+      "risk": "read"
+    },
+    {
+      "id": "data.table.appendRow",
+      "label": "追加表格行",
+      "group": "数据 / 文件",
+      "required": [
+        "row"
+      ],
+      "risk": "workflow-edit"
+    },
+    {
+      "id": "data.table.clear",
+      "label": "清空数据表格",
+      "group": "数据 / 文件",
+      "required": [],
+      "risk": "workflow-edit"
+    },
+    {
+      "id": "data.table.deleteRow",
+      "label": "删除表格行",
+      "group": "数据 / 文件",
+      "required": [
+        "row"
+      ],
+      "risk": "workflow-edit"
+    },
+    {
+      "id": "data.table.exportCsv",
+      "label": "导出表格 CSV",
+      "group": "数据 / 文件",
+      "required": [],
+      "risk": "workflow-edit"
+    },
+    {
+      "id": "data.table.getCell",
+      "label": "读取表格单元",
+      "group": "数据 / 文件",
+      "required": [
+        "row",
+        "column",
+        "varName"
+      ],
+      "risk": "read"
+    },
+    {
+      "id": "data.table.setCell",
+      "label": "写入表格单元",
+      "group": "数据 / 文件",
+      "required": [
+        "row",
+        "column",
+        "value"
+      ],
+      "risk": "workflow-edit"
+    },
+    {
+      "id": "data.writeJson",
+      "label": "写入 JSON 文件",
+      "group": "数据 / 文件",
+      "required": [
+        "workspace",
+        "path",
+        "data"
+      ],
+      "risk": "workflow-edit"
+    },
+    {
+      "id": "data.writeText",
+      "label": "写入文本文件",
+      "group": "数据 / 文件",
+      "required": [
+        "workspace",
+        "path"
+      ],
+      "risk": "workflow-edit"
+    },
+    {
+      "id": "desktop.activateWindow",
+      "label": "激活窗口（UIA）",
+      "group": "桌面（UIA）",
+      "required": [],
+      "risk": "desktop-control"
+    },
+    {
+      "id": "desktop.attachWindow",
+      "label": "附着窗口（UIA）",
+      "group": "桌面（UIA）",
+      "required": [],
+      "risk": "desktop-control"
+    },
+    {
+      "id": "desktop.click",
+      "label": "点击控件（UIA）",
+      "group": "桌面（UIA）",
+      "required": [
+        "elementId"
+      ],
+      "risk": "desktop-control"
+    },
+    {
+      "id": "desktop.closeSession",
+      "label": "关闭会话（UIA）",
+      "group": "桌面（UIA）",
+      "required": [],
+      "risk": "desktop-control"
+    },
+    {
+      "id": "desktop.drag",
+      "label": "拖拽元素（UIA）",
+      "group": "桌面（UIA）",
+      "required": [
+        "elementId",
+        "targetX",
+        "targetY"
+      ],
+      "risk": "desktop-control"
+    },
+    {
+      "id": "desktop.findElement",
+      "label": "查找控件（UIA）",
+      "group": "桌面（UIA）",
+      "required": [
+        "locator"
+      ],
+      "risk": "read"
+    },
+    {
+      "id": "desktop.getSelectedText",
+      "label": "获取选中文本（UIA）",
+      "group": "桌面（UIA）",
+      "required": [
+        "elementId"
+      ],
+      "risk": "read"
+    },
+    {
+      "id": "desktop.getText",
+      "label": "读取控件文本（UIA）",
+      "group": "桌面（UIA）",
+      "required": [
+        "elementId"
+      ],
+      "risk": "read"
+    },
+    {
+      "id": "desktop.getWindowList",
+      "label": "获取窗口列表（UIA）",
+      "group": "桌面（UIA）",
+      "required": [],
+      "risk": "read"
+    },
+    {
+      "id": "desktop.getWindowTitle",
+      "label": "获取窗口信息（UIA）",
+      "group": "桌面（UIA）",
+      "required": [],
+      "risk": "read"
+    },
+    {
+      "id": "desktop.input",
+      "label": "控件输入（UIA）",
+      "group": "桌面（UIA）",
+      "required": [
+        "elementId",
+        "text"
+      ],
+      "risk": "desktop-control"
+    },
+    {
+      "id": "desktop.moveWindow",
+      "label": "移动窗口（UIA）",
+      "group": "桌面（UIA）",
+      "required": [
+        "x",
+        "y"
+      ],
+      "risk": "desktop-control"
+    },
+    {
+      "id": "desktop.resizeWindow",
+      "label": "调整窗口大小（UIA）",
+      "group": "桌面（UIA）",
+      "required": [
+        "width",
+        "height"
+      ],
+      "risk": "desktop-control"
+    },
+    {
+      "id": "desktop.screenshot",
+      "label": "元素截图（UIA）",
+      "group": "桌面（UIA）",
+      "required": [
+        "elementId",
+        "savePath"
+      ],
+      "risk": "desktop-control"
+    },
+    {
+      "id": "desktop.select",
+      "label": "设置下拉框（UIA）",
+      "group": "桌面（UIA）",
+      "required": [
+        "elementId",
+        "value"
+      ],
+      "risk": "desktop-control"
+    },
+    {
+      "id": "desktop.setWindowState",
+      "label": "设置窗口状态（UIA）",
+      "group": "桌面（UIA）",
+      "required": [],
+      "risk": "desktop-control"
+    },
+    {
+      "id": "desktop.setWindowVisible",
+      "label": "设置窗口显隐（UIA）",
+      "group": "桌面（UIA）",
+      "required": [],
+      "risk": "desktop-control"
+    },
+    {
+      "id": "desktop.win32.activateWindow",
+      "label": "激活窗口（Win32）",
+      "group": "桌面（Win32）",
+      "required": [],
+      "risk": "desktop-control"
+    },
+    {
+      "id": "desktop.win32.attachWindow",
+      "label": "附着窗口（Win32）",
+      "group": "桌面（Win32）",
+      "required": [],
+      "risk": "desktop-control"
+    },
+    {
+      "id": "desktop.win32.click",
+      "label": "点击控件（Win32）",
+      "group": "桌面（Win32）",
+      "required": [
+        "elementId"
+      ],
+      "risk": "desktop-control"
+    },
+    {
+      "id": "desktop.win32.closeSession",
+      "label": "关闭会话（Win32）",
+      "group": "桌面（Win32）",
+      "required": [],
+      "risk": "desktop-control"
+    },
+    {
+      "id": "desktop.win32.drag",
+      "label": "拖拽元素（Win32）",
+      "group": "桌面（Win32）",
+      "required": [
+        "elementId",
+        "targetX",
+        "targetY"
+      ],
+      "risk": "desktop-control"
+    },
+    {
+      "id": "desktop.win32.findElement",
+      "label": "查找控件（Win32）",
+      "group": "桌面（Win32）",
+      "required": [
+        "locator"
+      ],
+      "risk": "read"
+    },
+    {
+      "id": "desktop.win32.getSelectedText",
+      "label": "获取选中文本（Win32）",
+      "group": "桌面（Win32）",
+      "required": [
+        "elementId"
+      ],
+      "risk": "read"
+    },
+    {
+      "id": "desktop.win32.getText",
+      "label": "读取控件文本（Win32）",
+      "group": "桌面（Win32）",
+      "required": [
+        "elementId"
+      ],
+      "risk": "read"
+    },
+    {
+      "id": "desktop.win32.getWindowList",
+      "label": "获取窗口列表（Win32）",
+      "group": "桌面（Win32）",
+      "required": [],
+      "risk": "read"
+    },
+    {
+      "id": "desktop.win32.getWindowTitle",
+      "label": "获取窗口信息（Win32）",
+      "group": "桌面（Win32）",
+      "required": [],
+      "risk": "read"
+    },
+    {
+      "id": "desktop.win32.hotkey",
+      "label": "组合按键（Win32）",
+      "group": "桌面（Win32）",
+      "required": [
+        "keys"
+      ],
+      "risk": "desktop-control"
+    },
+    {
+      "id": "desktop.win32.input",
+      "label": "控件输入（Win32）",
+      "group": "桌面（Win32）",
+      "required": [
+        "elementId",
+        "text"
+      ],
+      "risk": "desktop-control"
+    },
+    {
+      "id": "desktop.win32.menuSelect",
+      "label": "菜单选择（Win32）",
+      "group": "桌面（Win32）",
+      "required": [
+        "menuPath"
+      ],
+      "risk": "desktop-control"
+    },
+    {
+      "id": "desktop.win32.moveWindow",
+      "label": "移动窗口（Win32）",
+      "group": "桌面（Win32）",
+      "required": [
+        "x",
+        "y"
+      ],
+      "risk": "desktop-control"
+    },
+    {
+      "id": "desktop.win32.resizeWindow",
+      "label": "调整窗口大小（Win32）",
+      "group": "桌面（Win32）",
+      "required": [
+        "width",
+        "height"
+      ],
+      "risk": "desktop-control"
+    },
+    {
+      "id": "desktop.win32.screenshot",
+      "label": "元素截图（Win32）",
+      "group": "桌面（Win32）",
+      "required": [
+        "elementId",
+        "savePath"
+      ],
+      "risk": "desktop-control"
+    },
+    {
+      "id": "desktop.win32.select",
+      "label": "设置下拉框（Win32）",
+      "group": "桌面（Win32）",
+      "required": [
+        "elementId",
+        "value"
+      ],
+      "risk": "desktop-control"
+    },
+    {
+      "id": "desktop.win32.setWindowState",
+      "label": "设置窗口状态（Win32）",
+      "group": "桌面（Win32）",
+      "required": [],
+      "risk": "desktop-control"
+    },
+    {
+      "id": "desktop.win32.setWindowVisible",
+      "label": "设置窗口显隐（Win32）",
+      "group": "桌面（Win32）",
+      "required": [],
+      "risk": "desktop-control"
+    },
+    {
+      "id": "ocr.detect",
+      "label": "识别验证码目标位置",
+      "group": "OCR / 验证码",
+      "required": [],
+      "risk": "read"
+    },
+    {
+      "id": "ocr.recognize",
+      "label": "识别验证码",
+      "group": "OCR / 验证码",
+      "required": [],
+      "risk": "read"
+    },
+    {
+      "id": "ocr.slideMatch",
+      "label": "识别滑块缺口位置",
+      "group": "OCR / 验证码",
+      "required": [],
+      "risk": "read"
+    },
+    {
+      "id": "workflow.sleep",
+      "label": "延时等待",
+      "group": "工作流控制",
+      "required": [
+        "seconds"
+      ],
+      "risk": "read"
+    }
+  ]
+}

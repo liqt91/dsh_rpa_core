@@ -1,16 +1,17 @@
 # WorkBuddy Studio
 
-给 Agent 加一双「人的手」和「人的眼」：**改文件** 和 **点元素**。
+给 Agent 加一双「人的手」和「人的眼」：**改文件**、**点元素**，以及**把已有的 RPA 原子能力真正调起来**。
 
-三件套互相咬合，也能各自单飞：
+三件上架物 + 一个桥接技能：
 
 | # | 产物 | 目录 | 作用 |
 |---|---|---|---|
 | 1 | 轻量编辑窗口（PPX 桌面应用） | `editor/` | 光标/选区/撤销/快捷键/IME 全按编辑器习惯来；保存即把 sha + 校验结果交回 Agent |
-| 2 | 技能包 `workflow-studio` | `skills/workflow-studio/` | Agent 侧的入口：起会话、推文件、等保存、等拾取，一条命令拿结构化结果 |
-| 3 | 浏览器扩展（MV3） | `extension/` | 点一下页面元素，算出稳定选择器（含候选与退化路径）并回传给 Agent |
+| 2 | 能力连接器（CLI + Skill） | `connector/` | 把仓里 **89 条**原子能力整理成 WorkBuddy 能读懂、能触发的接口；**不重写执行器** |
+| 3 | 浏览器扩展（MV3） | `extension/` | 点一下页面元素，算出稳定选择器（含 Shadow DOM 宿主与退化路径）并回传 Agent |
+| — | 桥接技能 `workflow-studio` | `skills/workflow-studio/` | 1 与 3 的 Agent 侧入口：起会话、推文件、等保存、等拾取 |
 
-上架材料在 `listing/`：`LISTING.md`（填表用的全部文案）、`privacy.md`、`CHANGELOG.md`、`screenshots/`。
+上架材料在 `listing/`：`LISTING.md`（填表文案 + 审核问答）、`privacy.md`、`CHANGELOG.md`、`screenshots/`。
 
 ---
 
@@ -54,7 +55,20 @@ python skills/workflow-studio/scripts/studio.py open src/config.json --reason "�
 python skills/workflow-studio/scripts/studio.py capture --timeout 120 --pretty
 ```
 
-返回 `selector` / `strategy` / `alternatives` / `tag` / `text` / `matches` / `shadow`。
+返回 `selector` / `strategy` / `alternatives` / `tag` / `text` / `matches` / `shadow` / `shadowHost`。
+
+### Agent 调 RPA 原子能力
+
+```bash
+rpa-core status                      # {"status": "ready", ...}
+rpa-core catalog                     # 89 条能力的 id / kind / effect + digest
+rpa-core validate my-flow.json       # 静态校验（不进 run）
+rpa-core run my-flow.json            # 跑，输出 RunResult
+```
+
+能力清单见 `connector/skills/rpa-automation/references/commands-index.md`（一行一条）
+与 `commands-reference.md`（参数/默认值/输出/失败码），两份都由
+`connector/tools/gen_capability_reference.py` **从 `commands/**/*.json` 生成**，不手写。
 
 ---
 
@@ -67,72 +81,78 @@ workbuddy-suite/
 │   ├── api/api.py              # Python 侧：只做磁盘读写 + 回环通信，不持有编辑状态
 │   └── gui/
 │       ├── index.html          # 顶栏 / 查找条 / banner / 状态栏 / 两个 dialog
-│       ├── src/editor.js       # 编辑内核：透明 textarea + 着色层 + 自建撤销栈
+│       ├── src/editor.js       # 编辑内核：透明 textarea + 着色层 + 自建撤销栈 + 行首索引
 │       ├── src/highlight.js    # 逐行产出 HTML（保证任一行可独立套错误底色）
 │       ├── src/main.js         # RPC、会话轮询、查找、打开/保存、测试钩子
 │       └── src/style.css       # GitHub Dark 语义色
+├── connector/                  # CLI + Skill（open.workbuddy.cn/docs/connector 规范）
+│   ├── connector-meta.json     # 市场元信息（中英名称/描述/示例）
+│   ├── cli.json                # init / auth / unAuth / status / statusMatch
+│   ├── icon.svg                # 64×64 市场图标
+│   ├── skills/rpa-automation/  # SKILL.md + 生成的能力参考
+│   └── tools/                  # 生成器 + 上架校验/打包器
 ├── extension/                  # MV3，无常驻 content script
 │   ├── background.js           # 徽标 / 命令 / 右键菜单 / 按需注入
 │   ├── content.js              # Shadow DOM 隔离的拾取 UI + 选择器算法
 │   └── popup.*                 # 在线状态、最近拾取、端口设置
-├── skills/workflow-studio/
-│   ├── SKILL.md                # YAML 头 + 三段工作流 + 错误码表 + 边界
-│   ├── references/protocol.md  # 7 个路由、事件字段、安全边界
-│   └── scripts/studio.py       # 会话服务 + CLI（纯标准库）
-├── verify/                     # 六套验证（见下）
+├── skills/workflow-studio/     # 桥接技能：SKILL.md + references/protocol.md + scripts/studio.py
+├── verify/                     # 五套验证 + 负向验证（见下）
 ├── tools/
-│   ├── pack.py                 # 打技能包 / 扩展包（校验 3MB 上限）
+│   ├── pack.py                 # 一条命令打三个 zip（含结构断言）
 │   └── make_icons.py           # 由同一套几何生成 4 个尺寸的图标
 └── listing/                    # 上架材料
 ```
 
 ---
 
-## 六套验证，都能自己复跑
+## 验证：五套正向 + 一套负向
 
 ```bash
 PY=D:/Users/Administrator/Documents/代码/rpa_core/.venv/Scripts/python.exe
 
-# 1) 协议 + 上架材料契约（44 项）
-$PY verify/verify_suite.py
-
-# 2) 编辑器手感：CDP 真键盘 / 真 IME（37 项）
-node verify/editor_ui_test.mjs          # 需先 pnpm run dev --port 5273 起前端
-
-# 3) 选择器质量 + 点击上报（14 项）
-node verify/extension_test.mjs
-
-# 4) 开发态真机开窗：ppx dev + vite，验文件真的进了编辑器
-$PY verify/ppx_boot.py
-
-# 5) 发布态真机开窗：先 ppx build，再用打包出来的 exe 跑一遍
-$PY verify/ppx_exe.py
-
-# 6) 扩展弹窗截图（328×373）
-node verify/popup_shot.mjs
-
-# 打包
-$PY tools/pack.py
+$PY verify/verify_suite.py            # 1) 协议 + 上架契约 + 包结构（49 项）
+$PY verify/negative_probe.py          # 2) 负向验证：注入 4 类坏数据，必须全红后还原
+node verify/editor_ui_test.mjs        # 3) 编辑器手感：CDP 真键盘 / 真 IME（42 项，需先起前端）
+node verify/extension_test.mjs        # 4) 选择器质量 + Shadow DOM + 点击上报（16 项）
+$PY tools/pack.py                     # 5) 打三个 zip（结构断言）
+$PY connector/tools/pack_connector.py --check   # 6) 连接器字段 / 权限 / digest 一致性
 ```
 
-当前结果：44 / 37 / 14 全绿，`ppx_boot.py`、`ppx_exe.py` 都是 0 failed，
-`ruff check workbuddy-suite` 通过。
+真机开窗（可选，需要 PPX 运行时）：
 
-发布态的产物在 `editor/build/WorkBuddy Studio/`（便携版目录，约 28 MB，双击里面的
-`WorkBuddy Studio.exe` 就能跑）。本机没装 Inno Setup 6，所以 `ppx build` 最后一步
-「出安装包」会提示跳过；装上 ISCC 再跑一次就有 `.exe` 安装包了。
+```bash
+$PY verify/ppx_boot.py                # 开发态：ppx dev + vite，验文件真进了编辑器
+$PY verify/ppx_exe.py                 # 发布态：先 ppx build，再用打包出的 exe 跑一遍
+node verify/popup_shot.mjs            # 扩展弹窗截图（328×373）
+```
 
-### 验证都在证明什么
+### 这些验证在证明什么（不是「文件存在」）
 
-- `verify_suite.py` 不是「文件存在」检查。它会**真起一个服务**，跑完 `/open` → `/inbox` →
-  游标不重复 → `/events` 长轮询超时 → `/capture` → 伪造 Origin 必须 `ORIGIN_DENIED` →
-  越界路径必须 `BAD_PATH` → `/shutdown` 后进程真的退出、端点文件真的被清掉。
+- `verify_suite.py` 真起一个服务：`/open` → `/inbox` → 游标不重复 → `/events` 长轮询超时 →
+  `/capture` → 伪造 Origin 必须 `ORIGIN_DENIED` → 越界路径必须 `BAD_PATH` → `/shutdown` 后
+  进程真的退出、端点文件真的被清掉；另外检查扩展**用到的 `chrome.*` API 是否都声明了权限**
+  （`chrome.alarms` 曾经漏声明：代码在跑，定时器根本没起来）。
+- `negative_probe.py` 是**门禁的元验证**：撤掉 `alarms`、塞一条不存在的命令、改假 digest、
+  用 flat 布局重打技能包 —— 四种注入都必须被抓到，且逐字节还原（核 md5）后必须回绿。
 - `editor_ui_test.mjs` 走 CDP 的 `Input.dispatchKeyEvent` / `Input.insertText` /
-  `Input.imeSetComposition`，不是 `element.value = ...`。断言的是**渲染层**：着色层逐行
-  `textContent` 拼起来必须与原文逐字节相等，空行不许塞占位空格。
-- `extension_test.mjs` 把 `window.chrome` 换成记录器，逐个元素验选择器质量：
-  重复 `id` 不许硬用、`css-1a2b3c` 这种构建产物哈希不许当选择器、Shadow DOM 必须如实标
-  `shadow: true`、退化路径至少两级（不许返回裸 `div`）、Esc 退出后页面点击必须恢复正常。
+  `Input.imeSetComposition`，断言的是**渲染层**：着色层逐行 `textContent` 拼起来必须与原文
+  逐字节相等；行号定位在 4000 行文件里**不许逐行扫全文**（数 `_lineOf` 调用次数，8 次以内）。
+- `extension_test.mjs` 把 `window.chrome` 换成记录器：重复 `id` 不许硬用、`css-1a2b3c` 不许当
+  选择器、Shadow DOM 必须**在 shadow root 内**算唯一性并给出宿主选择器、Esc 后页面点击必须恢复。
+
+---
+
+## 这次修掉的几个真问题
+
+| 问题 | 症状 | 修法 |
+|---|---|---|
+| 行号渲染 O(n²) | 4000 行文件每敲一键扫 1600 万字符，手感塌 | 行首偏移表 + 二分定位，`_lineOf` 每帧只调一次 |
+| 闭合符重复 | `()` 里打 `)` 变成 `())` | 右边已有闭合符时「穿过去」 |
+| Home 语义不对 | 永远跳到列 1 | 先到首个非空白，再按一次才回列 1 |
+| `chrome.alarms` 未声明 | 徽标不刷新，看着像扩展没连上 | 补权限，并加一条「API ↔ 权限」门禁 |
+| Shadow DOM 选择器是废的 | 用 `document` 查唯一性永远 0，退化成裸标签 | 在所属 root 内算唯一性 + 报 `shadowHost` |
+| 能力文档停在 26 条 | 仓里 89 条，AI 照着旧文档写不存在的命令 | 生成器 + digest 门禁 + 技能内「以 catalog 为准」 |
+| 技能包 flat 布局 | 平台按 `{skill-name}/SKILL.md` 解析，套错就失败 | 默认 folder，包结构进断言 |
 
 ---
 
@@ -145,28 +165,43 @@ $PY tools/pack.py
   会压过浏览器默认的 `[hidden]{display:none}`。CSS 里补了 `[hidden]{display:none !important}`。
 - **IME 组合期必须把渲染权交回 textarea**：着色层在组合期间 `visibility:hidden`，
   textarea 用 `-webkit-text-fill-color` 还原颜色，否则候选窗飘在空白处。
-- **一次中文输入 = 一步撤销**：`compositionstart` 压一步、`compositionend` 压一步，
-  中间的 `input` 事件不单独记。
-- **窗口关闭时轮询还在飞**：JS 桥已经拆了，会抛 `_returnValuesCallbacks.call is not a function`。
-  `main.js` 在 `pagehide` 和 `beforeunload` 上都会停表、`call()` 见到 `closing` 直接返回。
-  同样的堆栈在**开发态改源码**时也会出现一次——vite HMR 重载页面会冲掉在飞的调用。
-  所以跑 `ppx_boot.py` 的时候别同时改 `editor/gui/src/`，否则会看到一次假红。
+- **一次中文输入 = 一步撤销**：`compositionstart` 压一步、`compositionend` 压一步。
+- **窗口关闭时轮询还在飞**：`main.js` 在 `pagehide` / `beforeunload` 上停表，`call()` 见到
+  `closing` 直接返回。开发态改 `editor/gui/src/` 会让 vite HMR 冲掉在飞的调用 ——
+  跑 `ppx_boot.py` 时别同时改源码，否则会看到一次假红。
+- **发布态产物要重打**：改了 `gui/src/` 必须 `vite build`（`dist/` 被 PPX 直接吃），
+  再 `ppx build` 出 exe。只改源码不重建，双击 exe 的人用的还是旧代码。
+
+---
+
+## 版本对齐（很重要）
+
+PyPI 上的 `rpa-core-runtime` 最新发布是 **0.1.0（26 条命令）**，本仓已是 **89 条**。
+所以连接器的能力文档按**本仓**生成，并在文档头写了 digest；技能里第 0 步要求先跑
+`rpa-core catalog` 对齐 digest，不一致就**以本机为准**、不要照文档硬调。
+发布新版本后重跑：
+
+```bash
+$PY connector/tools/gen_capability_reference.py     # 重新生成三份参考
+$PY connector/tools/pack_connector.py               # 校验 + 打包
+```
 
 ---
 
 ## 边界（不假装支持）
 
-1. 跨域 iframe 里的元素拾取不到（`activeTab` 拿不到跨源子框架注入权）。
-2. Shadow DOM 内部元素只报 `shadow: true`，选择器穿不进去。
+1. 跨域 iframe 里的元素拾取不到（`activeTab` 拿不到跨源子框架注入权）。上报里 `frame` 会如实写。
+2. Shadow DOM 里的元素：给出**宿主选择器 + 内部选择器**，但纯 CSS 选择器本身穿不过去，
+   调用方需要用 `host.shadowRoot.querySelector(inner)` 或 CDP 的 pierce 模式。
 3. 只处理 UTF-8 文本，非 UTF-8 直接 `NOT_UTF8` 拒绝，不冒「存成乱码」的险。
 4. 单文件 8MB、着色 240K 字符上限，超了不着色（仍可编辑）。
 5. 不做语法补全 / LSP —— 这是编辑窗口，不是 IDE。
 
-## 环境上的两处坑（跟代码无关，写在这里省得下次再查）
+## 环境上的两处坑（跟代码无关）
 
 `ppx doctor` 现在 16 项里 14 项通过，剩下两项都是本机环境：
 
 | 失败项 | 原因 | 怎么办 |
 |---|---|---|
-| `pnpm: 12.15.0` | PPX 6.0.1 的 doctor 只认 `>=11.0.0, <12.0.0` | 实测 12.15 下 `dev` 与 `build` 都正常；要消掉这行就 `corepack prepare pnpm@11.25.0 --activate`（会动全局 pnpm，没自动做） |
+| `pnpm: 12.15.0` | PPX 6.0.1 的 doctor 只认 `>=11.0.0, <12.0.0` | 实测 12.15 下 `dev` 与 `build` 都正常；要消掉这行就 `corepack prepare pnpm@11.25.0 --activate` |
 | `Inno Setup 6: 未安装` | 打 Windows 安装包要 ISCC | 便携版已经能跑（`editor/build/WorkBuddy Studio/`）；要 `.exe` 安装包就装 Inno Setup 6 再 `ppx build` |

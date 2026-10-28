@@ -29,6 +29,7 @@ export class Editor {
 
     this.text = ''
     this.baseline = ''
+    this._lineIndex = null
     this.lang = 'plain'
     this.path = null
     this.errorLine = 0
@@ -79,11 +80,11 @@ export class Editor {
       if (this.composing) {
         // 组合输入期间只同步原文，不动着色层、不记历史：候选还在选，
         // 现在记一步会把「一次中文输入」拆成好几步撤销。
-        this.text = input.value
+        this._setText(input.value)
         this._syncCursor()
         return
       }
-      this.text = input.value
+      this._setText(input.value)
       this._record('type')
       this._afterEdit()
     })
@@ -103,7 +104,7 @@ export class Editor {
       this.composing = false
       this.wrap.classList.remove('composing')
       const before = this._snapshotBeforeComposition
-      this.text = input.value
+      this._setText(input.value)
       if (before && before.text !== this.text) {
         // 一次组合输入 = 一步撤销：把组合前状态压栈，再把当前状态作为新的一步。
         this.history.splice(this.hIndex + 1)
@@ -129,7 +130,7 @@ export class Editor {
   setValue(text, { path = null, lang = null, baseline = null } = {}) {
     this.path = path
     this.lang = lang || (path ? languageOf(path) : 'plain')
-    this.text = text
+    this._setText(text)
     this.baseline = baseline == null ? text : baseline
     this.input.value = text
     this.errorLine = 0
@@ -245,18 +246,18 @@ export class Editor {
       })
       .join('')
     this.code.innerHTML = html
-    this._renderGutter(lines.length)
+    this._renderGutter(lines.length, this._lineOf(this.input.selectionStart))
     // 行号列宽 = 位数 * 一个字符宽 + 两侧留白（给 CSS 的 padding 兜底）
     const digits = String(lines.length).length
     this.gutter.style.width = `calc(${digits}ch + 24px)`
     this._syncActiveLine()
   }
 
-  _renderGutter(count) {
+  _renderGutter(count, activeLine) {
     let html = ''
     for (let i = 1; i <= count; i += 1) {
       const bad = this.errorLine === i ? ' bad' : ''
-      const active = this._lineOf(this.input.selectionStart) + 1 === i ? ' active' : ''
+      const active = activeLine + 1 === i ? ' active' : ''
       html += `<div class="ed-ln${active}${bad}">${i}</div>`
     }
     this.gutterInner.innerHTML = html
@@ -341,7 +342,7 @@ export class Editor {
 
   _restore(snapshot) {
     this.restoring = true
-    this.text = snapshot.text
+    this._setText(snapshot.text)
     this.input.value = snapshot.text
     this.input.setSelectionRange(snapshot.s, snapshot.e)
     this.input.scrollTop = snapshot.top
@@ -366,24 +367,44 @@ export class Editor {
     this._syncActiveLine()
   }
 
-  _lineOf(offset) {
-    let count = 0
-    for (let i = 0; i < offset && i < this.text.length; i += 1) {
-      if (this.text.charCodeAt(i) === 10) count += 1
+  /** 唯一改文本的入口：顺手作废行号索引。
+   *  绕开它直接赋值 `this.text` 会让行号/光标列算在旧索引上（曾经就是这么漂的）。 */
+  _setText(text) {
+    if (text === this.text) return
+    this.text = text
+    this._lineIndex = null
+  }
+
+  /** 行首偏移表。按需重建，一次 O(n)，之后每次定位 O(log n)。
+   *  之前 `_lineOf` 是每调一次扫全文，而行号列每渲染一行就调一次 ⇒ O(n²)，
+   *  4000 行文件每敲一键要扫 1600 万字符，手感直接塌。 */
+  _index() {
+    if (this._lineIndex) return this._lineIndex
+    const starts = [0]
+    for (let i = 0; i < this.text.length; i += 1) {
+      if (this.text.charCodeAt(i) === 10) starts.push(i + 1)
     }
-    return count
+    this._lineIndex = starts
+    return starts
+  }
+
+  _lineOf(offset) {
+    const starts = this._index()
+    const at = Math.max(0, Math.min(offset, this.text.length))
+    let low = 0
+    let high = starts.length - 1
+    while (low < high) {
+      const mid = (low + high + 1) >> 1
+      if (starts[mid] <= at) low = mid
+      else high = mid - 1
+    }
+    return low
   }
 
   _lineStart(line) {
+    const starts = this._index()
     if (line <= 1) return 0
-    let seen = 0
-    for (let i = 0; i < this.text.length; i += 1) {
-      if (this.text.charCodeAt(i) === 10) {
-        seen += 1
-        if (seen === line - 1) return i + 1
-      }
-    }
-    return this.text.length
+    return starts[Math.min(line - 1, starts.length - 1)]
   }
 
   _lineEnd(offset) {
@@ -408,7 +429,7 @@ export class Editor {
   _replace(start, end, insert, caret) {
     const top = this.input.scrollTop
     const left = this.input.scrollLeft
-    this.text = this.text.slice(0, start) + insert + this.text.slice(end)
+    this._setText(this.text.slice(0, start) + insert + this.text.slice(end))
     this.input.value = this.text
     const at = caret == null ? start + insert.length : caret
     this.input.setSelectionRange(at, at)
@@ -545,7 +566,7 @@ export class Editor {
       const nextEnd = this._lineEnd(nextStart)
       const neighbour = this.text.slice(nextStart, nextEnd)
       const tail = nextEnd < this.text.length ? this.text.slice(nextEnd) : ''
-      this.text = this.text.slice(0, start) + neighbour + '\n' + block + tail
+      this._setText(this.text.slice(0, start) + neighbour + '\n' + block + tail)
       this.input.value = this.text
       const shift = neighbour.length + 1
       this.input.setSelectionRange(caretS + shift, caretE + shift)
@@ -554,7 +575,7 @@ export class Editor {
       const neighbour = this.text.slice(prevStart, start - 1)
       const head = this.text.slice(0, prevStart)
       const tail = this.text.slice(end)
-      this.text = head + block + '\n' + neighbour + tail
+      this._setText(head + block + '\n' + neighbour + tail)
       this.input.value = this.text
       const shift = start - prevStart
       this.input.setSelectionRange(caretS - shift, caretE - shift)
@@ -627,6 +648,29 @@ export class Editor {
         event.preventDefault()
       }
       return
+    }
+    // 光标右边已经有一个闭合符时，再打一次应当「穿过去」，而不是变出两个。
+    // 这是最容易被一眼看穿的手感问题：`()` 里打 `)` 会变成 `())`。
+    if (CLOSERS.has(key) && !mod && !event.altKey && this.input.selectionStart === this.input.selectionEnd) {
+      const at = this.input.selectionStart
+      if (this.text[at] === key) {
+        event.preventDefault()
+        this.input.setSelectionRange(at + 1, at + 1)
+        this._syncCursor()
+        return
+      }
+    }
+    // Home 先落到本行第一个非空白字符，再按一次才回列 1（VSCode / Sublime 的习惯）
+    if (key === 'Home' && !mod && !event.altKey && !event.shiftKey && this.input.selectionStart === this.input.selectionEnd) {
+      const at = this.input.selectionStart
+      const start = this._lineStart(this._lineOf(at) + 1)
+      const indent = /^[ \t]*/.exec(this.text.slice(start, this._lineEnd(start)))[0].length
+      if (at !== start + indent && start + indent < this._lineEnd(start)) {
+        event.preventDefault()
+        this.input.setSelectionRange(start + indent, start + indent)
+        this._syncCursor()
+        return
+      }
     }
     if (PAIRS[key] && !mod && !event.altKey) {
       if (this._autoPair(key, event)) event.preventDefault()

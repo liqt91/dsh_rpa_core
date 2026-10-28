@@ -68,18 +68,27 @@
   let frame = 0
 
   const esc = (value) => (window.CSS && CSS.escape ? CSS.escape(value) : String(value).replace(/[^\w-]/g, (m) => `\\${m}`))
+  const escAttr = (value) => String(value).replace(/\\/g, '\\\\').replace(/"/g, '\\"')
 
-  function unique(selector) {
+  /** 选择器要在**元素所在的根**里算唯一性：Shadow DOM 里的元素，
+   *  用 document.querySelectorAll 永远查不到，会把「唯一」误判成 false，
+   *  最后退化成一个裸标签名（等于没给选择器）。 */
+  function scopeOf(element) {
+    const root = element.getRootNode && element.getRootNode()
+    return root && typeof root.querySelectorAll === 'function' ? root : document
+  }
+
+  function unique(selector, scope = document) {
     try {
-      return document.querySelectorAll(selector).length === 1
+      return scope.querySelectorAll(selector).length === 1
     } catch {
       return false
     }
   }
 
-  function matchCount(selector) {
+  function matchCount(selector, scope = document) {
     try {
-      return document.querySelectorAll(selector).length
+      return scope.querySelectorAll(selector).length
     } catch {
       return -1
     }
@@ -95,20 +104,20 @@
     return /^[A-Za-z][\w-]*$/.test(name)
   }
 
-  function selectorFor(element) {
+  function selectorFor(element, scope = document) {
     const tagName = element.tagName.toLowerCase()
 
     if (element.id) {
       const candidate = `#${esc(element.id)}`
-      if (unique(candidate)) return { selector: candidate, strategy: 'id' }
+      if (unique(candidate, scope)) return { selector: candidate, strategy: 'id' }
     }
 
     const attrs = ['data-testid', 'data-test-id', 'data-test', 'data-qa', 'data-cy', 'name', 'aria-label', 'placeholder', 'title', 'type']
     for (const name of attrs) {
       const value = element.getAttribute(name)
       if (!value || value.length > 80) continue
-      const candidate = `${tagName}[${name}="${value.replace(/"/g, '\\"')}"]`
-      if (unique(candidate)) return { selector: candidate, strategy: `attr:${name}` }
+      const candidate = `${tagName}[${name}="${escAttr(value)}"]`
+      if (unique(candidate, scope)) return { selector: candidate, strategy: `attr:${name}` }
     }
 
     const classes = Array.from(element.classList || []).filter(stableClass)
@@ -117,7 +126,7 @@
         const picked = classes.slice(0, count)
         if (!picked.length) continue
         const candidate = `${tagName}${picked.map((name) => `.${esc(name)}`).join('')}`
-        if (unique(candidate)) return { selector: candidate, strategy: 'class' }
+        if (unique(candidate, scope)) return { selector: candidate, strategy: 'class' }
       }
     }
 
@@ -136,19 +145,20 @@
       //   整页碰巧只有一个 <span> 就返回 "span"，页面一改就废。
       //   要么至少两级，要么这一级本身就是带下标的精确定位。
       const specific = parts.length >= 2 || /:nth-of-type\(/.test(part)
-      if (specific && unique(candidate)) return { selector: candidate, strategy: 'path' }
+      if (specific && unique(candidate, scope)) return { selector: candidate, strategy: 'path' }
       node = parent
     }
     return { selector: parts.join(' > '), strategy: 'path' }
   }
 
   function describe(element) {
-    const { selector, strategy } = selectorFor(element)
+    const scope = scopeOf(element)
+    const { selector, strategy } = selectorFor(element, scope)
     const alternatives = []
     if (element.id) alternatives.push(`#${esc(element.id)}`)
     for (const name of ['data-testid', 'data-test', 'data-qa', 'name', 'aria-label']) {
       const value = element.getAttribute(name)
-      if (value) alternatives.push(`${element.tagName.toLowerCase()}[${name}="${value.replace(/"/g, '\\"')}"]`)
+      if (value) alternatives.push(`${element.tagName.toLowerCase()}[${name}="${escAttr(value)}"]`)
     }
     const text = (element.innerText || element.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 120)
     const rect = element.getBoundingClientRect()
@@ -160,19 +170,23 @@
       attributes[name] = value
     }
     const root = element.getRootNode()
-    const shadow = root instanceof ShadowRoot
+    const shadow = typeof ShadowRoot !== 'undefined' && root instanceof ShadowRoot
+    // Shadow DOM 里的选择器只在该 shadow root 内有效。要让人/Agent 真能定位，
+    // 必须把「宿主元素怎么找」一起交出去 —— 只报 shadow:true 等于把问题丢回去。
+    const shadowHost = shadow ? selectorFor(root.host, scopeOf(root.host)) : null
     return {
       selector,
       strategy,
       alternatives: alternatives
         .filter((item) => item !== selector)
-        .map((item) => ({ selector: item, matches: matchCount(item) }))
+        .map((item) => ({ selector: item, matches: matchCount(item, scope) }))
         .slice(0, 4),
-      matches: matchCount(selector),
+      matches: matchCount(selector, scope),
       tag: element.tagName.toLowerCase(),
       text,
       shadow,
-      iframe: false,
+      shadowHost: shadow ? { selector: shadowHost.selector, strategy: shadowHost.strategy } : null,
+      iframe: window.top !== window,
       rect: {
         x: Math.round(rect.left),
         y: Math.round(rect.top),
@@ -182,7 +196,7 @@
       attributes,
       url: location.href,
       title: document.title,
-      frame: 'top',
+      frame: window.top === window ? 'top' : 'sub',
       source: 'extension',
     }
   }

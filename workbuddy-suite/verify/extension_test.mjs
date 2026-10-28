@@ -191,6 +191,13 @@ try {
     return window.__wbPicker.describe(root.querySelector('.go'))
   })()`)
   check('Shadow DOM 里的元素被如实标记', shadow.shadow === true, JSON.stringify({ s: shadow.selector, shadow: shadow.shadow, st: shadow.strategy }))
+  // 只在 shadow root 内算唯一性：用 document.querySelectorAll 会得到 0，
+  // 于是「唯一」判据永远不成立、最后退化成一个裸标签名。
+  check('Shadow DOM 的选择器在 shadow root 内唯一', shadow.matches === 1 && shadow.selector.endsWith('.go'),
+    JSON.stringify({ s: shadow.selector, m: shadow.matches }))
+  // 只报 shadow=true 不够用；要给出宿主怎么找，否则调用方无法真正定位
+  check('Shadow DOM 同时给出宿主选择器', shadow.shadowHost?.selector === '#shadow-host',
+    JSON.stringify(shadow.shadowHost))
 
   // 点一下真实元素：走完整链路（高亮 → 点击 → 上报）
   const box = await cdp.evaluate(`(() => {

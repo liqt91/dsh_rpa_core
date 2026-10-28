@@ -153,6 +153,9 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         ok: Boolean(result?.ok),
       }
       await saveRecent(entry)
+      // 送到就立刻刷一次状态：否则徽标会一直停在「Agent 在等」，
+      // 用户以为没送出去（下一次 alarm 要 30 秒后）。
+      if (result?.ok) refreshHealth()
       sendResponse({ ok: Boolean(result?.ok), ...result })
     })()
     return true // 异步响应

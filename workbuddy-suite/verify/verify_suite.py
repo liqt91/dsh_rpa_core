@@ -181,8 +181,42 @@ def check_extension() -> None:
     permissions = set(manifest.get("permissions", []))
     check(
         "权限最小集（无 <all_urls> / tabs 全量）",
-        permissions <= {"activeTab", "scripting", "storage", "contextMenus"},
+        permissions <= {"activeTab", "scripting", "storage", "contextMenus", "alarms"},
         str(sorted(permissions)),
+    )
+    # 用到的 chrome.* API 必须真的在 manifest 里声明过。
+    # 这条是为 `chrome.alarms` 补的：代码里 create 了定时器，manifest 却没给 alarms 权限，
+    # 结果徽标永远停在旧状态 —— 扩展「看起来能装」，功能是死的。
+    strict = {
+        "alarms": "alarms",
+        "contextMenus": "contextMenus",
+        "scripting": "scripting",
+        "storage": "storage",
+        "cookies": "cookies",
+        "downloads": "downloads",
+        "notifications": "notifications",
+        "identity": "identity",
+        "history": "history",
+        "bookmarks": "bookmarks",
+        "webRequest": "webRequest",
+        "tabGroups": "tabGroups",
+        "offscreen": "offscreen",
+    }
+    used: set[str] = set()
+    for name in ("background.js", "popup.js", "content.js"):
+        path = EXT / name
+        if path.is_file():
+            used |= set(re.findall(r"chrome\.(\w+)\.", path.read_text(encoding="utf-8")))
+    missing_permissions = sorted({strict[api] for api in used if api in strict} - permissions)
+    check(
+        "用到的 chrome.* API 都声明了权限",
+        not missing_permissions,
+        "缺 " + ", ".join(missing_permissions) if missing_permissions else f"{len(used)} 个 API",
+    )
+    check(
+        "商店描述长度 <= 132 字符",
+        len(str(manifest.get("description", ""))) <= 132,
+        f"{len(str(manifest.get('description', '')))} 字",
     )
     hosts = manifest.get("host_permissions", [])
     check(
@@ -292,14 +326,19 @@ def check_protocol() -> None:
         )
 
         saved = http(
-            "POST", port, "/events",
+            "POST",
+            port,
+            "/events",
             {"kind": "save", "path": str(target), "sha": "deadbeef", "bytes": 12},
         )
         check("保存事件被接收", bool(saved.get("ok")), f"cursor={saved.get('cursor')}")
 
         waited = http("GET", port, "/events?since=0&kinds=save,capture&timeout=3")
-        check("长轮询立刻返回已有事件", [e["kind"] for e in waited.get("events", [])] == ["save"],
-              str([e["kind"] for e in waited.get("events", [])]))
+        check(
+            "长轮询立刻返回已有事件",
+            [e["kind"] for e in waited.get("events", [])] == ["save"],
+            str([e["kind"] for e in waited.get("events", [])]),
+        )
 
         started = time.time()
         empty = http("GET", port, "/events?since=9999&timeout=1.0")
@@ -311,28 +350,44 @@ def check_protocol() -> None:
         )
 
         capture = http(
-            "POST", port, "/capture",
+            "POST",
+            port,
+            "/capture",
             {"selector": "#ok", "tag": "button", "text": "确定"},
             origin="chrome-extension://abcdef",
         )
-        check("插件能上报拾取结果（带合法 Origin）", bool(capture.get("ok")),
-              f"id={capture.get('id')}")
+        check(
+            "插件能上报拾取结果（带合法 Origin）",
+            bool(capture.get("ok")),
+            f"id={capture.get('id')}",
+        )
         check(
             "拾取结果进了 captures",
             len(http("GET", port, "/captures?since=0").get("captures", [])) == 1,
         )
 
-        forged = http("POST", port, "/capture", {"selector": "#evil"}, origin="https://evil.example.com")
-        check("伪造 Origin 被拒绝（安全边界）", forged.get("code") == "ORIGIN_DENIED",
-              str(forged.get("code")))
+        forged = http(
+            "POST", port, "/capture", {"selector": "#evil"}, origin="https://evil.example.com"
+        )
+        check(
+            "伪造 Origin 被拒绝（安全边界）",
+            forged.get("code") == "ORIGIN_DENIED",
+            str(forged.get("code")),
+        )
 
         outside = http("POST", port, "/open", {"path": str(Path.home() / "not-in-root.txt")})
-        check("越界路径被拒绝（--root 生效）", outside.get("code") == "BAD_PATH",
-              str(outside.get("code")))
+        check(
+            "越界路径被拒绝（--root 生效）",
+            outside.get("code") == "BAD_PATH",
+            str(outside.get("code")),
+        )
 
         relative = http("POST", port, "/open", {"path": "flow.json"})
-        check("相对路径被拒绝（不猜 cwd）", relative.get("code") == "BAD_PATH",
-              str(relative.get("code")))
+        check(
+            "相对路径被拒绝（不猜 cwd）",
+            relative.get("code") == "BAD_PATH",
+            str(relative.get("code")),
+        )
 
         stop = http("POST", port, "/shutdown", {})
         check("服务能受控停止", bool(stop.get("ok")))
@@ -355,11 +410,59 @@ def check_protocol() -> None:
         shutil.rmtree(work, ignore_errors=True)
 
 
+def check_dist() -> None:
+    """上架包的结构：平台按 `{skill-name}/SKILL.md` 找入口，套错层级会解析失败。"""
+    import zipfile
+
+    skill_zip = SUITE / "dist" / "workflow-studio-skill.zip"
+    if not skill_zip.is_file():
+        check("技能包已生成", False, "先跑 python tools/pack.py")
+    else:
+        with zipfile.ZipFile(skill_zip) as bundle:
+            names = bundle.namelist()
+        entry = f"{SKILL_DIR.name}/SKILL.md"
+        check(
+            f"技能包入口是 {entry}（平台目录结构）",
+            entry in names and "SKILL.md" not in names,
+            f"{len(names)} 个文件"
+            + (
+                ""
+                if entry in names
+                else f"，实际入口 {[n for n in names if n.endswith('SKILL.md')]}"
+            ),
+        )
+
+    ext_zip = SUITE / "dist" / "workbuddy-studio-extension.zip"
+    if ext_zip.is_file():
+        with zipfile.ZipFile(ext_zip) as bundle:
+            names = set(bundle.namelist())
+        check(
+            "扩展包根目录就是 manifest.json",
+            "manifest.json" in names and not any(n.endswith("/manifest.json") for n in names),
+        )
+    else:
+        check("扩展包已生成", False, "先跑 python tools/pack.py")
+
+    connector_zip = SUITE / "dist" / "rpa-core-connector.zip"
+    if connector_zip.is_file():
+        with zipfile.ZipFile(connector_zip) as bundle:
+            names = set(bundle.namelist())
+        check(
+            "连接器包含 meta/cli/icon + skills/{name}/SKILL.md",
+            {"connector-meta.json", "cli.json", "icon.svg", "skills/rpa-automation/SKILL.md"}
+            <= names,
+            f"{len(names)} 个文件",
+        )
+    else:
+        check("连接器包已生成", False, "先跑 tools/pack.py")
+
+
 def main() -> int:
     check_skill()
     check_extension()
     check_js()
     check_python()
+    check_dist()
     check_protocol()
 
     failed = [item for item in RESULTS if not item[1]]

@@ -141,7 +141,12 @@ const KEYS = {
   Slash: { key: '/', code: 'Slash', vk: 191, text: '/' },
   brace: { key: '{', code: 'BracketLeft', vk: 219, text: '{' },
   paren: { key: '(', code: 'BracketLeft', vk: 219, text: '(' },
+  parenClose: { key: ')', code: 'BracketRight', vk: 220, text: ')' },
+  braceClose: { key: '}', code: 'BracketRight', vk: 220, text: '}' },
   quote: { key: '"', code: 'Quote', vk: 222, text: '"' },
+  Home: { key: 'Home', code: 'Home', vk: 36 },
+  End: { key: 'End', code: 'End', vk: 35 },
+  ArrowLeft: { key: 'ArrowLeft', code: 'ArrowLeft', vk: 37 },
 }
 
 const MOD = { Alt: 1, Ctrl: 2, Meta: 4, Shift: 8 }
@@ -286,6 +291,27 @@ try {
   const quotes = await cdp.evaluate(`({ text: window.__studio.editor.getValue(), caret: window.__studio.editor.input.selectionStart })`)
   check('连打两个引号只补一对并跳过闭合符', quotes.text === '""' && quotes.caret === 2, JSON.stringify(quotes))
 
+  // -- 4b. 闭合符穿越 / 智能 Home -----------------------------------------
+  // 自动补全之后的必然动作：在 `()` 中间直接把 `)` 打出来。这里如果补成 `())`，
+  // 用的人第一下就会骂——所以它是手感硬指标，不是装饰。
+  await cdp.evaluate(`window.__studio.editor.setValue('()', { path: 'a.py' }); window.__studio.editor.input.setSelectionRange(1, 1); window.__studio.editor.focus()`)
+  await press(cdp, 'parenClose')
+  const skipped = await cdp.evaluate(`({ text: window.__studio.editor.getValue(), caret: window.__studio.editor.input.selectionStart })`)
+  check('光标在 () 中间打 ) 是穿过去，不是补成 ())', skipped.text === '()' && skipped.caret === 2, JSON.stringify(skipped))
+
+  await cdp.evaluate(`window.__studio.editor.setValue('{}', { path: 'a.py' }); window.__studio.editor.input.setSelectionRange(1, 1); window.__studio.editor.focus()`)
+  await press(cdp, 'braceClose')
+  const skippedBrace = await cdp.evaluate(`({ text: window.__studio.editor.getValue(), caret: window.__studio.editor.input.selectionStart })`)
+  check('} 同样穿越', skippedBrace.text === '{}' && skippedBrace.caret === 2, JSON.stringify(skippedBrace))
+
+  await cdp.evaluate(`window.__studio.editor.setValue('    indented\\nplain', { path: 'a.py' }); window.__studio.editor.input.setSelectionRange(12, 12); window.__studio.editor.focus()`)
+  await press(cdp, 'Home')
+  const home1 = await cdp.evaluate('window.__studio.editor.input.selectionStart')
+  check('Home 先落到本行第一个非空白字符', home1 === 4, `caret=${home1}`)
+  await press(cdp, 'Home')
+  const home2 = await cdp.evaluate('window.__studio.editor.input.selectionStart')
+  check('再按一次 Home 才回列 1', home2 === 0, `caret=${home2}`)
+
   // -- 5. Tab / Shift+Tab --------------------------------------------------
   await cdp.evaluate(`window.__studio.editor.setValue('a\\nb\\nc', { path: 'a.py' }); window.__studio.editor.focus()`)
   await cdp.evaluate(`window.__studio.editor.input.setSelectionRange(0, 3)`)
@@ -396,6 +422,20 @@ try {
   const elapsed = Date.now() - t0
   check('4000 行 JSON 载入完成并逐行渲染', hugeShown === 4000, `${elapsed}ms`)
   check('大文件载入耗时在可接受范围（<3s）', elapsed < 3000, `${elapsed}ms`)
+
+  // 结构判据：行号列曾经「每渲染一行就扫一遍全文」= O(n²)。这里数调用次数，
+  // 而不是数耗时 —— 耗时阈值在本机/CI 之间飘，调用次数是硬的。
+  const lineOfCalls = await cdp.evaluate(`(() => {
+    const ed = window.__studio.editor
+    const original = ed._lineOf.bind(ed)
+    let calls = 0
+    ed._lineOf = (offset) => { calls += 1; return original(offset) }
+    ed.setValue(Array.from({ length: 4000 }, (_, i) => 'line ' + i).join('\\n'), { path: 'big.json' })
+    ed._render()
+    ed._lineOf = original
+    return calls
+  })()`)
+  check('渲染 4000 行时行号定位不再逐行扫全文', lineOfCalls <= 12, `_lineOf 调用 ${lineOfCalls} 次（行数 4000）`)
 
   // -- 14. 控制台干净 ------------------------------------------------------
   await sleep(200)

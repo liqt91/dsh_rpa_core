@@ -1,12 +1,12 @@
 {
   "runtime": {
     "type": "python",
-    "version": ">=3.12"
+    "version": "3.12"
   },
   "init": {
-    "darwin": "python -m pip install rpa-core-runtime",
-    "linux": "python -m pip install rpa-core-runtime",
-    "win32": "python -m pip install rpa-core-runtime && rpa-core.exe install-extension"
+    "darwin": "python -m pip install -U rpa-core-runtime",
+    "linux": "python -m pip install -U rpa-core-runtime",
+    "win32": "python -m pip install -U rpa-core-runtime"
   },
   "auth": {
     "darwin": "rpa-core auth",
@@ -23,5 +23,5 @@
     "linux": "rpa-core status",
     "win32": "rpa-core.exe status"
   },
-  "statusMatch": "\"status\": \"ready\""
+  "statusMatch": "\"status\"\\s*:\\s*\"ready\""
 }

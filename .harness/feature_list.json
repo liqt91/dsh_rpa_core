@@ -436,6 +436,11 @@
       "id": "compile-node-input-schema",
       "title": "Compile-time node param keys vs manifest input_schema (unknown keys / missing required; elementRefs exempt)",
       "passes": true
+    },
+    {
+      "id": "workbuddy-suite-triple",
+      "title": "WorkBuddy listing triple: PPX editor perf/UX fixes + catalog-generated capability docs + MV3 picker hardening (all verified)",
+      "passes": true
     }
   ]
 }
