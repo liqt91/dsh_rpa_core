@@ -161,3 +161,12 @@ $PY tools/pack.py
 3. 只处理 UTF-8 文本，非 UTF-8 直接 `NOT_UTF8` 拒绝，不冒「存成乱码」的险。
 4. 单文件 8MB、着色 240K 字符上限，超了不着色（仍可编辑）。
 5. 不做语法补全 / LSP —— 这是编辑窗口，不是 IDE。
+
+## 环境上的两处坑（跟代码无关，写在这里省得下次再查）
+
+`ppx doctor` 现在 16 项里 14 项通过，剩下两项都是本机环境：
+
+| 失败项 | 原因 | 怎么办 |
+|---|---|---|
+| `pnpm: 12.15.0` | PPX 6.0.1 的 doctor 只认 `>=11.0.0, <12.0.0` | 实测 12.15 下 `dev` 与 `build` 都正常；要消掉这行就 `corepack prepare pnpm@11.25.0 --activate`（会动全局 pnpm，没自动做） |
+| `Inno Setup 6: 未安装` | 打 Windows 安装包要 ISCC | 便携版已经能跑（`editor/build/WorkBuddy Studio/`）；要 `.exe` 安装包就装 Inno Setup 6 再 `ppx build` |

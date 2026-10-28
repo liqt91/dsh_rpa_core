@@ -80,6 +80,23 @@ def _icon(size: int) -> Image.Image:
     return composed.resize((size, size), Image.LANCZOS)
 
 
+def _dmg_background(width: int = 540, height: int = 380) -> Image.Image:
+    """macOS 打 DMG 时要的那张背景图（PPX 的 doctor 会查它，缺了报失败）。
+
+    只铺底：深色渐变 + 细网格。不画箭头和文字 —— 不同 Finder 尺寸下文字位置会飘，
+    留白比画歪更稳。
+    """
+    canvas = _gradient(max(width, height), BG_TOP, BG_BOTTOM).resize((width, height), Image.BICUBIC)
+    canvas = canvas.convert("RGBA")
+    draw = ImageDraw.Draw(canvas)
+    step = 24
+    for x in range(0, width, step):
+        draw.line((x, 0, x, height), fill=(255, 255, 255, 8))
+    for y in range(0, height, step):
+        draw.line((0, y, width, y), fill=(255, 255, 255, 8))
+    return canvas
+
+
 def main() -> int:
     EXT_ICONS.mkdir(parents=True, exist_ok=True)
     PPX_ASSETS.mkdir(parents=True, exist_ok=True)
@@ -89,7 +106,10 @@ def main() -> int:
     big.save(PPX_ASSETS / "logo.png")
     sizes = [(16, 16), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)]
     _icon(256).save(PPX_ASSETS / "logo.ico", sizes=sizes)
-    print(f"icons: 4 extension + 2 ppx under {SUITE}")
+    # icns 要 1024 的主图才装得下全尺寸；PNG 那个仍按上架要求留 512
+    _icon(1024).save(PPX_ASSETS / "logo.icns", format="ICNS")
+    _dmg_background().save(PPX_ASSETS / "dmg-background.png")
+    print(f"icons: 4 extension + 4 ppx under {SUITE}")
     return 0
 
 
