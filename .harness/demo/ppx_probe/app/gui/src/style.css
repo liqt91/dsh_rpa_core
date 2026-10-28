@@ -35,14 +35,25 @@ body {
   border-bottom: 1px solid var(--border);
 }
 .brand { font-weight: 500; letter-spacing: .3px; }
-.status { color: var(--muted); font-size: 12px; }
+/* 状态栏里会出现整条绝对路径、几百字节的差异说明。不夹住它会**把按钮挤成两行**
+   （实测「编译校验」被折成「编译/校验」）；夹住之后全文进 tooltip。 */
+.status {
+  flex: 0 1 auto; min-width: 0;
+  color: var(--muted); font-size: 12px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+/* 按钮/下拉不许被状态栏压扁：它们本来就该占固定宽度 */
+#bar > button, #bar > select { flex: 0 0 auto; }
 .spacer { flex: 1; }
 
 main { flex: 1; display: grid; grid-template-columns: 216px minmax(0, 1fr) 340px; min-height: 0; }
 aside, section { min-height: 0; overflow: auto; background: var(--surface); }
 #left { border-right: 1px solid var(--border); }
 #right { border-left: 1px solid var(--border); display: flex; flex-direction: column; overflow: hidden; }
-#mid { background: var(--sunken); }
+/* 中栏改成「流程列表 + 底部运行日志」两段：日志贴着它描述的那张流程图，
+   比塞进右栏更有意义（右栏已放参数、AST、编译回显，再塞第三块就都是缩着的） */
+#mid { background: var(--sunken); display: flex; flex-direction: column; overflow: hidden; }
+#mid > .cardList { flex: 1 1 auto; min-height: 0; overflow: auto; }
 
 .paneHead {
   position: sticky; top: 0; z-index: 2;
@@ -218,6 +229,58 @@ aside, section { min-height: 0; overflow: auto; background: var(--surface); }
 .compileOut .bad { color: var(--danger); }
 .compileOut pre { margin: 6px 0 0; white-space: pre-wrap; font: 11.5px/1.6 Consolas, monospace; }
 
+/* ---- 运行（M18 口径：子进程 + events.jsonl） ---------------------------- */
+.runBox {
+  flex: 0 0 auto; display: flex; flex-direction: column;
+  max-height: 46%; border-top: 1px solid var(--border); background: var(--surface);
+}
+.runBox > summary {
+  padding: 6px 12px; cursor: pointer; user-select: none;
+  color: var(--muted); font-size: 12px;
+  border-bottom: 1px solid var(--border);
+}
+.runBox > summary .badge {
+  margin-left: 6px; padding: 0 6px; border-radius: 8px;
+  background: var(--sunken); color: var(--faint); font-size: 11px;
+}
+.runBox > summary .badge.live { background: #dafbe1; color: var(--success); }
+.runBox > summary .badge.dead { background: #ffebe9; color: var(--danger); }
+.runLog {
+  flex: 1 1 auto; min-height: 0; overflow: auto;
+  padding: 4px 0 6px; font: 11.5px/1.7 Consolas, "Microsoft YaHei", monospace;
+}
+.runLog .hint { color: var(--faint); padding: 6px 12px; font-family: inherit; }
+.runLog .ev {
+  display: flex; align-items: baseline; gap: 8px;
+  padding: 1px 12px; white-space: nowrap;
+}
+.runLog .ev.clickable { cursor: pointer; }
+.runLog .ev.clickable:hover { background: var(--hover); }
+.runLog .ev .t { color: var(--faint); font-size: 11px; }
+.runLog .ev .seq { width: 22px; text-align: right; color: var(--faint); font-size: 11px; }
+.runLog .ev .kind { flex: 0 0 132px; color: var(--muted); }
+.runLog .ev .node { flex: 0 0 auto; max-width: 150px; overflow: hidden; text-overflow: ellipsis; color: var(--info); }
+.runLog .ev .body { min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--faint); }
+.runLog .ev.started .kind { color: var(--info); }
+.runLog .ev.done .kind { color: var(--success); }
+.runLog .ev.failed { background: #ffebe9; }
+.runLog .ev.failed .kind, .runLog .ev.failed .body { color: var(--danger); }
+.runLog .ev.final .kind { font-weight: 500; }
+/* 结论块（成功/失败/停止/启动失败）与事件流分开放：一行行事件里混一段结论会看不出来 */
+.runSummary { margin: 8px 12px 4px; border-top: 1px dashed var(--border); padding-top: 6px; }
+.runSummary .ok { color: var(--success); font-size: 12px; }
+.runSummary .bad { color: var(--danger); font-size: 12px; }
+.runSummary pre {
+  margin: 4px 0 0; white-space: pre-wrap; word-break: break-word;
+  color: var(--muted); font: 11.5px/1.7 Consolas, "Microsoft YaHei", monospace;
+}
+
+/* 正在执行的节点：卡片描边 + 呼吸，运行到哪儿一眼能看出来 */
+.card.running { border-color: var(--success); box-shadow: 0 0 0 2px rgba(26, 127, 55, .18); }
+.card.running .name::after {
+  content: "▶"; margin-left: 6px; color: var(--success); font-size: 10px;
+}
+
 button {
   height: 26px; padding: 0 10px;
   border: 1px solid var(--border); border-radius: 6px;
@@ -226,6 +289,7 @@ button {
 }
 button:hover { background: var(--hover); }
 button:disabled { opacity: .5; cursor: wait; }
+button.primary:not(:disabled) { border-color: var(--success); color: var(--success); font-weight: 500; }
 
 select {
   height: 26px; max-width: 240px;

@@ -11,6 +11,11 @@ const el = {
   status: document.querySelector('#status'),
   picker: document.querySelector('#flowPicker'),
   compile: document.querySelector('#compileBtn'),
+  run: document.querySelector('#runBtn'),
+  stop: document.querySelector('#stopBtn'),
+  runBox: document.querySelector('#runBox'),
+  runTitle: document.querySelector('#runTitle'),
+  runLog: document.querySelector('#runLog'),
   search: document.querySelector('#search'),
   cmds: document.querySelector('#cmds'),
   cmdCount: document.querySelector('#cmdCount'),
@@ -36,6 +41,8 @@ let groups = [] // 分组定义（顺序 + 折叠），服务端给
 let panelMode = 'param' // param | struct —— 决定保存走哪个 RPC
 let baseline = {} // 首次渲染时的原文，用于判断是否改动 / 撤销
 let formError = null
+// 运行态：id/seen 是轮询游标（只追加），activeNode 用来在卡片上标「正在跑」
+const RUN = { id: null, seen: 0, timer: null, running: false, activeNode: null }
 
 function mk(tag, cls, text) {
   const n = document.createElement(tag)
@@ -130,7 +137,10 @@ function renderCards() {
     }
     const row = mk(
       'div',
-      'card' + (card.draft ? ' draft' : '') + (selected && card.id === selected.id ? ' selected' : ''),
+      'card' +
+        (card.draft ? ' draft' : '') +
+        (selected && card.id === selected.id ? ' selected' : '') +
+        (RUN.activeNode && card.id === RUN.activeNode ? ' running' : ''),
     )
     row.style.setProperty('--depth', DEPTH[card.depth % DEPTH.length])
     row.append(mk('span', 'grip', '⋮'), mk('span', 'no', String(card.no)), mk('span', 'name', card.label))
@@ -435,6 +445,7 @@ async function openFlow(path) {
       mk('small', null, `${path} · ${flow.cards.length} 行 · sha ${flow.sha} · ${(performance.now() - t0).toFixed(1)} ms`),
     )
     renderCards()
+    el.run.disabled = RUN.running || !currentPath
     // 打开流程后直接落到第一张可编辑卡片：右栏空着会让用户以为「这东西没参数」
     const firstEditable = cards.find((card) => card.kind !== 'group' && card.id)
     if (firstEditable) await selectCard(firstEditable)
@@ -469,6 +480,289 @@ el.compile.addEventListener('click', async () => {
   } finally {
     el.compile.disabled = false
   }
+})
+
+/* ---- 运行 ---------------------------------------------------------------
+ * 执行不在页面线程里：后端 spawn `rpa-core run` 子进程，这里只轮询事件流。
+ * 三种「结束」必须分开说，混成一个成功/失败会把原因丢掉：
+ *   result      —— 有结论（succeeded / failed / paused / indeterminate）
+ *   cancelled   —— 我们点的停止，所以没有 result，这不是故障
+ *   startupError—— 没有结论就非零退出（编译/加载失败），原因只在 stderr
+ */
+
+const EVENT_KIND = {
+  runStarted: '运行开始',
+  runFinished: '运行结束',
+  runPaused: '已暂停',
+  runResumed: '已继续',
+  stepStarted: '节点开始',
+  stepAttemptStarted: '尝试开始',
+  stepCompleted: '节点完成',
+  stepFailed: '节点失败',
+  stepRetried: '准备重试',
+}
+
+function fmtClock(iso) {
+  const at = new Date(iso)
+  return Number.isNaN(at.getTime()) ? '' : at.toTimeString().slice(0, 8)
+}
+
+function eventBody(event) {
+  const p = event.payload || {}
+  switch (event.type) {
+    case 'runStarted':
+      return p.workflowId || ''
+    case 'stepStarted':
+      return p.command || ''
+    case 'stepAttemptStarted':
+      return `${p.command || ''}${p.attempt ? ` · 第 ${p.attempt} 次` : ''}`
+    case 'stepRetried':
+      return `第 ${p.attempt} 次失败 → 第 ${p.nextAttempt} 次 · 等 ${p.backoffSeconds}s`
+    case 'stepCompleted': {
+      const outputs = Object.keys(p.outputs || {}).length
+      const effects = (p.effects || []).length
+      return [outputs ? `${outputs} 个产出` : '', effects ? `${effects} 个副作用` : ''].join(' · ') || '（无产出）'
+    }
+    case 'stepFailed':
+      return [p.error?.code, p.error?.message].filter(Boolean).join('：')
+    case 'runPaused':
+      return `${p.reason || ''}${p.nodeId ? ` @ ${p.nodeId}` : ''}`
+    case 'runFinished':
+      return p.status === 'succeeded' ? 'succeeded' : `${p.status} · ${p.error?.code || ''} ${p.error?.message || ''}`.trim()
+    default:
+      return ''
+  }
+}
+
+function eventClass(event) {
+  if (event.type === 'stepFailed') return ' failed'
+  if (event.type === 'stepCompleted') return ' done'
+  if (event.type === 'stepStarted' || event.type === 'stepAttemptStarted') return ' started'
+  if (event.type === 'runFinished') {
+    return ` final${event.payload?.status === 'succeeded' ? ' done' : ' failed'}`
+  }
+  if (event.type === 'runPaused') return ' final'
+  return ''
+}
+
+function nodeLabelOf(nodeId) {
+  if (!nodeId) return ''
+  const card = cards.find((c) => c.id === nodeId)
+  return card ? `${card.no} ${card.label}` : nodeId
+}
+
+function eventRow(event) {
+  const row = mk('div', 'ev' + eventClass(event))
+  row.append(mk('span', 't', fmtClock(event.timestamp)))
+  row.append(mk('span', 'seq', String(event.seq ?? '')))
+  row.append(mk('span', 'kind', EVENT_KIND[event.type] || event.type))
+  // 节点列只在事件真的挂在节点上时出现：runStarted/runFinished 没有 node_id，
+  // 留一个空列会让整串日志看起来没对齐
+  if (event.node_id) row.append(mk('span', 'node', nodeLabelOf(event.node_id)))
+  const body = eventBody(event)
+  if (body) {
+    const text = mk('span', 'body', body)
+    text.title = body
+    row.append(text)
+  }
+  row.title = `${event.type}${event.node_id ? ` · ${event.node_id}` : ''}`
+  const target = event.node_id && cards.find((c) => c.id === event.node_id)
+  if (target) {
+    row.classList.add('clickable')
+    row.addEventListener('click', () => selectCard(target))
+  }
+  return row
+}
+
+function appendEvents(events) {
+  if (!events || !events.length) return
+  // 只在用户本来就贴着底部时才自动滚：否则等于抢走他正在翻的历史
+  const atBottom = el.runLog.scrollTop + el.runLog.clientHeight >= el.runLog.scrollHeight - 24
+  for (const event of events) el.runLog.append(eventRow(event))
+  while (el.runLog.children.length > 400) el.runLog.firstElementChild.remove()
+  if (atBottom) el.runLog.scrollTop = el.runLog.scrollHeight
+}
+
+/** 把「正在执行哪个节点」算出来：stepStarted 点亮，同节点的完成/失败熄灭。 */
+function syncActiveNode(events) {
+  let changed = false
+  for (const event of events) {
+    if (event.type === 'stepStarted' && event.node_id && RUN.activeNode !== event.node_id) {
+      RUN.activeNode = event.node_id
+      changed = true
+    } else if (
+      (event.type === 'stepCompleted' || event.type === 'stepFailed') &&
+      event.node_id === RUN.activeNode
+    ) {
+      RUN.activeNode = null
+      changed = true
+    }
+  }
+  if (changed) renderCards()
+}
+
+function setRunTitle(text, badge, badgeClass) {
+  el.runTitle.replaceChildren(mk('span', null, text))
+  if (badge) el.runTitle.append(mk('span', `badge ${badgeClass}`.trim(), badge))
+}
+
+function setRunRunning(on) {
+  RUN.running = on
+  el.run.disabled = on || !currentPath
+  el.stop.disabled = !on
+}
+
+function renderRunSummary(kind, title, lines) {
+  const block = mk('div', 'runSummary')
+  block.append(mk('div', kind, title))
+  if (lines.length) block.append(mk('pre', null, lines.join('\n')))
+  el.runLog.append(block)
+  el.runLog.scrollTop = el.runLog.scrollHeight
+}
+
+function finishRun(res) {
+  setRunRunning(false)
+  RUN.activeNode = null
+  renderCards()
+  const total = `${res.total} 条事件`
+  if (res.result) {
+    const result = res.result
+    const ok = result.status === 'succeeded'
+    // 不加徽章：标题里已经有 status，再加一个同字徽章等于同一句话说两遍
+    setRunTitle(`${res.runId} ${result.status}`)
+    const lines = [
+      `status   ${result.status}`,
+      `workflow ${result.workflowId}`,
+      `return   ${result.returnValue ?? '（无）'}`,
+    ]
+    if (result.error) {
+      lines.push(`error    ${result.error.code}：${result.error.message}`)
+    }
+    const steps = Object.entries(result.outputs || {})
+    if (steps.length) {
+      lines.push(
+        'outputs  ' +
+          steps.map(([id, s]) => `${id}(${s.keys.join(',') || '无键'}${s.effects ? ` · ${s.effects} 副作用` : ''})`).join(' '),
+      )
+    }
+    renderRunSummary(ok ? 'ok' : 'bad', `${ok ? '运行成功' : `运行结束：${result.status}`} · ${total}`, lines)
+    el.status.textContent = `${res.runId} ${result.status} · ${total} · 返回 ${result.returnValue ?? '（无）'}`
+    return
+  }
+  if (res.cancelled) {
+    setRunTitle(`${res.runId} 已停止`)
+    renderRunSummary('bad', `已停止 · 退出码 ${res.exitCode} · ${total}`, [])
+    el.status.textContent = `${res.runId} 已停止（退出码 ${res.exitCode}）· ${total}`
+    return
+  }
+  if (res.startupError) {
+    const error = res.startupError
+    setRunTitle(`${res.runId} 启动失败`, error.code || '失败', 'dead')
+    const lines = error.message ? [error.message] : []
+    if (error.tail?.length) lines.push('', ...error.tail)
+    renderRunSummary(
+      'bad',
+      `${error.code || '失败'} · 运行没起来（退出码 ${res.exitCode}）· ${total}`,
+      lines,
+    )
+    el.status.textContent = `${res.runId} 启动失败 ${error.code || ''}：${error.message || '原因见日志'}`
+    return
+  }
+  setRunTitle(`${res.runId} 结束`, `退出码 ${res.exitCode}`, 'dead')
+  renderRunSummary('bad', `进程退出（退出码 ${res.exitCode}）但没有 result.json · ${total}`, res.stderrTail || [])
+  el.status.textContent = `${res.runId} 退出码 ${res.exitCode}，没有 result.json`
+}
+
+async function pollRun() {
+  if (!RUN.id) return
+  let res
+  try {
+    res = await ppx.call('rpa.runPoll', { run_id: RUN.id, since: RUN.seen })
+  } catch (error) {
+    el.status.textContent = `轮询失败 ${error.code}：${error.message}`
+    setRunRunning(false)
+    return
+  }
+  if (!res.ok) {
+    el.status.textContent = `轮询失败 ${res.code}：${res.error}`
+    setRunRunning(false)
+    return
+  }
+  appendEvents(res.events)
+  RUN.seen = res.total
+  syncActiveNode(res.events)
+  if (res.running) {
+    setRunTitle(
+      `${res.runId} 运行中`,
+      `${res.total} 条 · ${(res.elapsedMs / 1000).toFixed(1)}s`,
+      'live',
+    )
+    RUN.timer = setTimeout(pollRun, 250)
+    return
+  }
+  finishRun(res)
+}
+
+async function runFlow() {
+  if (!currentPath || RUN.running) return
+  if (isDirty() && !window.confirm('参数改动还没保存，运行的是**磁盘上**的版本。继续？')) return
+  el.run.disabled = true
+  RUN.id = null
+  RUN.seen = 0
+  RUN.activeNode = null
+  el.runLog.replaceChildren()
+  el.runBox.hidden = false
+  el.runBox.open = true
+  const t0 = performance.now()
+  try {
+    const res = await ppx.call('rpa.startRun', { path: currentPath })
+    if (!res.ok) {
+      setRunTitle('没起来', res.code, 'dead')
+      renderRunSummary('bad', `${res.code}：${res.error}`, [])
+      el.status.textContent = `运行失败 ${res.code}：${res.error}`
+      return
+    }
+    RUN.id = res.runId
+    setRunRunning(true)
+    setRunTitle(`${res.runId} 启动中`, 'live', 'live')
+    // 解释器与 cwd 是「这个运行到底由谁跑、会往哪写」的证据，但塞进状态栏会把按钮挤坏；
+    // 放进面板的 tooltip，想看的人鼠标一停就有。
+    el.runBox.title = `解释器：${res.python}\ncwd：${res.cwd}\nartifacts：${res.artifacts}`
+    el.status.textContent = `${res.runId} 已启动 · pid ${res.pid}`
+    RUN.timer = setTimeout(pollRun, 80)
+  } catch (error) {
+    setRunTitle('没起来', error.code, 'dead')
+    renderRunSummary('bad', `${error.code}：${error.message}`, [])
+    el.status.textContent = `${error.code}：${error.message}`
+  } finally {
+    el.rpcMs.textContent = `${(performance.now() - t0).toFixed(0)} ms`
+    if (!RUN.running) el.run.disabled = !currentPath
+  }
+}
+
+async function stopRun() {
+  if (!RUN.id || !RUN.running) return
+  el.stop.disabled = true
+  clearTimeout(RUN.timer)
+  try {
+    const res = await ppx.call('rpa.cancelRun', { run_id: RUN.id })
+    if (!res.ok) {
+      el.status.textContent = `停止失败 ${res.code}：${res.error}`
+      return
+    }
+    el.status.textContent = `${res.runId} 已请求停止 · 退出码 ${res.exitCode}`
+    await pollRun() // 立刻收口一次，不必等下一个 tick
+  } catch (error) {
+    el.status.textContent = `${error.code}：${error.message}`
+  }
+}
+
+el.run.addEventListener('click', runFlow)
+el.stop.addEventListener('click', stopRun)
+// 状态栏被省略号截断时，全文得有个地方看：鼠标一停就把它放进 tooltip。
+// 用事件而不是在每个写入点同步，是因为 el.status.textContent 的写入点有 20 多处。
+el.status.addEventListener('mouseenter', () => {
+  el.status.title = el.status.textContent
 })
 
 el.save.addEventListener('click', saveParams)

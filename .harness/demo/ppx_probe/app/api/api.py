@@ -1,8 +1,10 @@
 """PPX 原型后端：把 rpa_core 的真实能力层挂到 PPX 的 RPC 上。
 
 职责——读 catalog 快照、把 workflow AST 摊平成卡片、给节点算出可编辑字段、
-保存一个节点的参数（走与 Qt 完全一致的编码口径）、跑一次编译校验。
-它不承载 run（ADR 0011：编辑进程不承载运行），也不复制任何能力层逻辑。
+保存一个节点的参数（走与 Qt 完全一致的编码口径）、跑一次编译校验、
+把「运行」spawn 成子进程并按行读事件流。
+它**不承载** run（ADR 0011：编辑进程不承载运行），也不复制任何能力层逻辑：
+运行 = `subprocess` 起 `rpa-core run`，进度来自 `events.jsonl`，结论来自 `result.json`。
 
 ★ 保存**不走 `model_dump`**：实测 8 个样例流程里 0 个无损——`model_dump` 会把
 `elementRefs`/`output_aliases`/`retry_*`/`_exprModes` 等默认值全灌进文件。
@@ -11,10 +13,14 @@
 
 from __future__ import annotations
 
+import atexit
 import hashlib
 import json
+import os
 import re
+import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 from typing import Any, get_args
@@ -469,6 +475,9 @@ def bootstrap() -> dict[str, Any]:
         "catalogMs": round((time.perf_counter() - started) * 1000, 1),
         "bootMs": round((time.perf_counter() - _BOOT) * 1000, 1),
         "python": sys.version.split()[0],
+        # 原型进程与「跑流程的子进程」是两个解释器，界面上必须能看出这一点
+        "runnerPython": str(_runner_python()),
+        "runsRoot": str(RUNS),
         "repo": str(REPO),
     }
 
@@ -1196,4 +1205,319 @@ def save_structured_params(path: str, node_id: str, params: dict[str, str]) -> d
         "warnings": warnings,
         "compile": compile_result,
         "flow": flow,
+    }
+
+
+# ---------------------------------------------------------------------------
+# 运行（M18 口径 / ADR 0011）：本进程只 spawn + 读文件，执行全在子进程里
+#
+# 三件事必须在这层落地，界面才可能「看见运行」：
+#   1. 早期 run_id —— CLI 启动后立刻打一行 {"run_id": ...}，据此在运行中就能
+#      定位 `artifacts/<uuid>/events.jsonl`（否则只能等进程退出读末尾 RunResult）；
+#   2. 增量事件 —— 每次都重读整个文件再按 since 切片，所以界面只追加、不重绘；
+#   3. 收口判据 —— `proc.poll()` 结束 + `result.json` 落地才算完；两者不一致时
+#      （非零退出且没有 result）说明是**启动即失败**，原因只在 stderr 里。
+# ---------------------------------------------------------------------------
+
+RUNS = SANDBOX / "runs"
+_runs: dict[str, dict[str, Any]] = {}
+_RUN_ID_RE = re.compile(r"^run-(\d+)$")
+
+
+def _runner_python() -> Path:
+    """跑流程用**仓库自己的 venv**，而不是 ppx 那个 venv。
+
+    原型进程活在 ppx 的 venv 里（只装 pydantic/jsonschema），`rpa-core run` 却要
+    真的拉起执行器。共用一个解释器的话，执行器哪天多一个依赖，错会攒到「点运行」
+    那一刻才炸。找不到仓库 venv 才退回当前解释器（此时靠 PYTHONPATH 找 rpa_core）。
+    """
+    for folder, name in (("Scripts", "python.exe"), ("bin", "python")):
+        candidate = REPO / ".venv" / folder / name
+        if candidate.is_file():
+            return candidate
+    return Path(sys.executable)
+
+
+def _run_env() -> dict[str, str]:
+    env = dict(os.environ)
+    source = str(REPO / "src")
+    existing = env.get("PYTHONPATH", "")
+    env["PYTHONPATH"] = source + (os.pathsep + existing if existing else "")
+    env["PYTHONIOENCODING"] = "utf-8"  # 子进程 stdout 里是 JSON，别让 cp936 插手
+    env["PYTHONUNBUFFERED"] = "1"  # 早期 run_id 那一行必须马上出来
+    return env
+
+
+def _pump(stream: Any, sink: list[str], entry: dict[str, Any]) -> None:
+    """持续读一条管道。不读会写满缓冲把子进程堵死（stderr 尤其）。"""
+    try:
+        for line in stream:
+            text = line.rstrip("\n")
+            sink.append(text)
+            if entry.get("realRunId") is None and '"run_id"' in text:
+                try:
+                    payload = json.loads(text.strip())
+                except json.JSONDecodeError:
+                    payload = None
+                if isinstance(payload, dict) and isinstance(payload.get("run_id"), str):
+                    entry["realRunId"] = payload["run_id"]
+    finally:
+        stream.close()
+
+
+def _next_run_id() -> str:
+    """`run-<n>`：进程内自增，跨进程重启靠扫目录续号（不重复用旧目录）。"""
+    highest = 0
+    if RUNS.is_dir():
+        for child in RUNS.iterdir():
+            match = _RUN_ID_RE.match(child.name)
+            if match:
+                highest = max(highest, int(match.group(1)))
+    for entry in _runs.values():
+        match = _RUN_ID_RE.match(entry["runId"])
+        if match:
+            highest = max(highest, int(match.group(1)))
+    return f"run-{highest + 1}"
+
+
+def _events_of(entry: dict[str, Any]) -> list[dict[str, Any]]:
+    """读全量事件。**坏行跳过**：写入方可能正在追加最后一行。"""
+    real = entry.get("realRunId")
+    if not real:
+        return []
+    path = entry["artifacts"] / real / "events.jsonl"
+    if not path.is_file():
+        return []
+    events: list[dict[str, Any]] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        text = line.strip()
+        if not text:
+            continue
+        try:
+            events.append(json.loads(text))
+        except json.JSONDecodeError:
+            continue
+    return events
+
+
+def _result_of(entry: dict[str, Any]) -> dict[str, Any] | None:
+    real = entry.get("realRunId")
+    if not real:
+        return None
+    path = entry["artifacts"] / real / "result.json"
+    if not path.is_file():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:  # 正在写，下一轮再读
+        return None
+
+
+def _preview(value: Any, limit: int = 200) -> str:
+    text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
+    return text if len(text) <= limit else text[:limit] + f"…（共 {len(text)} 字符）"
+
+
+def _result_summary(result: dict[str, Any]) -> dict[str, Any]:
+    """**摘要**而不是整份 RunResult：一步 `readText` 就能把 outputs 撑到几百 KB，
+    整份塞给 WebView 会让轮询变成卡顿。事件流里的 outputs 仍是原样（那是进度）。"""
+    outputs: dict[str, Any] = {}
+    for node_id, step in (result.get("outputs") or {}).items():
+        step = step or {}
+        outputs[node_id] = {
+            "keys": sorted((step.get("outputs") or {}).keys()),
+            "effects": len(step.get("effects") or []),
+        }
+    return {
+        "status": result.get("status"),
+        "workflowId": result.get("workflow_id"),
+        "runIdReal": result.get("run_id"),
+        "startedAt": result.get("started_at"),
+        "endedAt": result.get("ended_at"),
+        "returnValue": _preview(result.get("return_value")),
+        "error": result.get("error"),
+        "outputs": outputs,
+    }
+
+
+def _startup_error(entry: dict[str, Any]) -> dict[str, Any]:
+    """没有 result 就非零退出 = 编译/加载/校验失败，原因在 stderr 的结构化行里。"""
+    lines = [line for line in entry["stderr"] if line.strip()]
+    message = None
+    code = None
+    used = -1
+    for index in range(len(lines) - 1, -1, -1):
+        text = lines[index].strip()
+        if not text.startswith("{"):
+            continue
+        try:
+            payload = json.loads(text)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(payload, dict) and payload.get("message"):
+            message = str(payload["message"])
+            code = payload.get("error")
+            used = index
+            break
+    # 那一行已经被提成 message 了，别再原样贴一遍（界面上就是同一句话说两次）
+    tail = [line for index, line in enumerate(lines) if index != used][-8:]
+    return {"code": code, "message": message, "tail": tail}
+
+
+def _purge_runs() -> None:
+    """进程退出时收掉还在跑的子进程：不留孤儿浏览器/worker。"""
+    for entry in list(_runs.values()):
+        proc = entry["proc"]
+        if proc.poll() is None:
+            try:
+                proc.terminate()
+            except Exception:  # noqa: BLE001 - 退出路径上不再抛
+                pass
+
+
+atexit.register(_purge_runs)
+
+
+@api_method("rpa.startRun")
+def start_run(path: str) -> dict[str, Any]:
+    """起一个 `rpa-core run` 子进程。同一时刻只允许一个（点两次会起两个浏览器）。"""
+    started = time.perf_counter()
+    busy = [entry["runId"] for entry in _runs.values() if entry["proc"].poll() is None]
+    if busy:
+        return {
+            "ok": False,
+            "code": "RUN_ACTIVE",
+            "error": f"已有运行中的任务：{busy[0]}（先停止它）",
+            "runId": busy[0],
+        }
+    try:
+        target = _flow_path(path)
+    except ValueError as exc:
+        return {"ok": False, "code": "FLOW_NOT_FOUND", "error": str(exc)}
+
+    run_id = _next_run_id()
+    root = RUNS / run_id
+    artifacts = root / "artifacts"
+    work = root / "work"
+    artifacts.mkdir(parents=True, exist_ok=True)
+    work.mkdir(parents=True, exist_ok=True)
+
+    python = _runner_python()
+    argv = [
+        str(python),
+        "-m",
+        "rpa_core.cli",
+        "run",
+        str(target),
+        "--artifacts",
+        str(artifacts),
+    ]
+    entry: dict[str, Any] = {
+        "runId": run_id,
+        "path": path,
+        "proc": None,
+        "artifacts": artifacts,
+        "work": work,
+        "stdout": [],
+        "stderr": [],
+        "realRunId": None,
+        "cancelled": False,
+        # ★ 两个钟不能混用：perf_counter 算时长，time.time 只用于展示。
+        #   混用会算出负数（第一版就是这么错的，探针打出来 -1793149862780 ms）。
+        "t0": time.perf_counter(),
+        "startedAt": time.time(),
+        "argv": argv,
+    }
+    try:
+        proc = subprocess.Popen(
+            argv,
+            cwd=str(work),
+            env=_run_env(),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+    except OSError as exc:
+        return {"ok": False, "code": "SPAWN_FAILED", "error": f"起不了子进程：{exc}"}
+    entry["proc"] = proc
+    threading.Thread(
+        target=_pump, args=(proc.stdout, entry["stdout"], entry), daemon=True
+    ).start()
+    threading.Thread(
+        target=_pump, args=(proc.stderr, entry["stderr"], entry), daemon=True
+    ).start()
+    _runs[run_id] = entry
+    return {
+        "ok": True,
+        "runId": run_id,
+        "pid": proc.pid,
+        "path": path,
+        "argv": argv[1:],
+        "python": str(python),
+        "artifacts": str(artifacts),
+        # 子进程的 cwd 收在 run 目录下：样例里 `"workspace": ""` 会 resolve 成 cwd，
+        # 用仓库根当 cwd 的话点一次运行就在仓库根写出 hello.txt。
+        "cwd": str(work),
+        "ms": round((time.perf_counter() - started) * 1000, 1),
+    }
+
+
+@api_method("rpa.runPoll")
+def run_poll(run_id: str, since: int = 0) -> dict[str, Any]:
+    """轮询：只回传 `since` 之后的事件（界面追加即可，不必重绘）。"""
+    entry = _runs.get(run_id)
+    if entry is None:
+        return {"ok": False, "code": "UNKNOWN_RUN", "error": f"没有这个 run：{run_id}"}
+    proc = entry["proc"]
+    events = _events_of(entry)
+    cursor = max(0, min(int(since or 0), len(events)))
+    running = proc.poll() is None
+    result = _result_of(entry)
+    payload: dict[str, Any] = {
+        "ok": True,
+        "runId": run_id,
+        "running": running,
+        "exitCode": proc.poll(),
+        "pid": proc.pid,
+        "realRunId": entry.get("realRunId"),
+        "artifacts": str(entry["artifacts"]),
+        "cancelled": bool(entry["cancelled"]),
+        "events": events[cursor:],
+        "total": len(events),
+        "elapsedMs": round((time.perf_counter() - entry["t0"]) * 1000, 1) if running else None,
+        "startedAt": entry["startedAt"],
+        "result": _result_summary(result) if result else None,
+    }
+    # 被用户停掉的 run 也会「没有 result 就非零退出」——那是我们干的，不是启动失败
+    if result is None and not running and not entry["cancelled"] and proc.returncode not in (0, None):
+        payload["startupError"] = _startup_error(entry)
+    if not running:
+        payload["stderrTail"] = [line for line in entry["stderr"] if line.strip()][-8:]
+    return payload
+
+
+@api_method("rpa.cancelRun")
+def cancel_run(run_id: str) -> dict[str, Any]:
+    """停止 = 终止子进程；orchestrator 在子进程内落 cancelled 证据（若走到那一步）。"""
+    entry = _runs.get(run_id)
+    if entry is None:
+        return {"ok": False, "code": "UNKNOWN_RUN", "error": f"没有这个 run：{run_id}"}
+    proc = entry["proc"]
+    was_running = proc.poll() is None
+    if was_running:
+        entry["cancelled"] = True
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait(timeout=5)
+    return {
+        "ok": True,
+        "runId": run_id,
+        "cancelled": was_running,
+        "exitCode": proc.returncode,
+        "events": len(_events_of(entry)),
     }

@@ -424,7 +424,7 @@
     },
     {
       "id": "host-boundary-freeze",
-      "title": "Qt sources frozen by per-file hash; PPX prototype isolated from gui/PySide6; gate enforced",
+      "title": "Qt sources frozen by per-file hash; PPX prototype isolated from gui/PySide6; gate enforced · prototype run wired (S7)",
       "passes": true
     },
     {

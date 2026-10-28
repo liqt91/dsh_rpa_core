@@ -13,6 +13,8 @@
       <span class="spacer"></span>
       <select id="flowPicker" aria-label="选择流程"></select>
       <button id="compileBtn" type="button">编译校验</button>
+      <button id="runBtn" type="button" class="primary">▶ 运行</button>
+      <button id="stopBtn" type="button" disabled>■ 停止</button>
     </header>
     <main>
       <aside id="left">
@@ -25,6 +27,10 @@
       <section id="mid">
         <div id="flowTitle" class="flowTitle">未打开流程</div>
         <div id="cards" class="cardList"></div>
+        <details id="runBox" class="runBox" hidden>
+          <summary><span id="runTitle">运行</span></summary>
+          <div id="runLog" class="runLog"></div>
+        </details>
       </section>
       <aside id="right">
         <div class="paneHead">

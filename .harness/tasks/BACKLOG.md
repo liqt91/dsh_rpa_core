@@ -37,6 +37,16 @@
     跑到 `(320,-3000)` 1~2 秒救回 `(320,131)` 且尺寸保真。
   - **未决**：S6 新增参数/节点未做（要移植 `param_form.py` 的 require/default/oneOf 语义）；
     打包分发 / 桌面集成（单实例·热键·托盘）未碰；轮询频率与 CPU 占用未测。
+  - **S6a/S6b/S6c/S7 已落地**（细则见 `M65-host-boundary-freeze.md` §七·五 / §七·六 / §七·七）：
+    参数面板补全（声明的全字段 + 未设置三态 + 分组）、结构化节点表单、插入/删除节点、
+    **运行接线**（`rpa.startRun/runPoll/cancelRun` 三个 RPC + 界面「▶ 运行 / ■ 停止」+ 中栏底部
+    日志抽屉 + 正在执行的卡片描边）。运行 = `subprocess` 起 `rpa-core run`（ADR 0011），
+    进度读 `events.jsonl` 增量、结论读 `result.json`；**停止 / 启动失败 / 有结论**三种结束分开判。
+    判据：`exec_probe.py` 30 条 + `ui_probe.py` 26 条（后者走 pywebview harness + `evaluate_js`
+    点击，不再依赖 PostMessage），负向验证 2 注入全中。
+  - **S7 遗留**：run 产物不清理（`_sandbox/runs/` 每次 +1）；事件流里的 `outputs` 未做体积保护；
+    没有输入参数对话框（一律用 `workflow.json` 的默认 inputs）；暂停/单步/续跑（`control.json`
+    通道）未接。
 
 - [x] **M62 harness / 文档层梳理（AI 协作视角）**（`done`，2026-10-14）——
   起因：审计「harness 层与文档层从 AI 协作角度需要哪些梳理」。细则见
@@ -274,6 +284,16 @@
     比编译器文案更有用」这件事（编到 issue 里带 `nodeId` 而不是拼进字符串）。
   - **下一步**：解冻 GUI 时删掉 `_validate` 的必填自查，改为让编译错误结构化成
     `(message, nodeId)`；顺带把 `missing_element_param_hint` 的「元素型参数缺失」提示接进去。
+
+- [ ] **`examples/api-usage` 开箱跑不起来：默认 `"workspace": ""` 被 `minLength=1` 拦死**（`planned`，2026-10-28 发现）
+  - **来源**：写运行接线探针时想用「空 workspace 落到 cwd」验 cwd 隔离，结果实跑报
+    `INVALID_INPUT: '' should be non-empty`（`data.writeText` 的 `workspace` 有 `minLength: 1`）。
+    即 `rpa-core run examples/api-usage/workflow.json` **不带 `--inputs` 必红**，而它是仓库里
+    唯一一个「不碰浏览器/桌面、纯文件」的样例，最容易被拿来做冒烟。
+  - **为什么没顺手改**：改默认值等于替样例作者选语义（相对路径？临时目录？），且
+    `workflows/` 下的真实流程与 GUI 的输入对话框都依赖「空 = 用户必须填」这个约定。
+  - **下一步**：三选一 —— 默认值写成显式相对路径（如 `"."`，但要写清相对谁）、删掉这个输入
+    让路径写死、或给样例补一个 `README` 说明必须先给 `--inputs`。倾向第一条 + 在样例里注释。
 
 - [x] **M54 GUI 参数呈现补完（字段中文化 + 元素槽位口径）**（`planned` → `done`，**2026-10-12 立项 → 同日重评估 → 同日拍板落地 G1~G4 → 同日收口**）
   - 起因：维护者问「填写输入框(web) 的 `selector` 参数为什么还在？如果是引用，那元素参数就够了呀？」

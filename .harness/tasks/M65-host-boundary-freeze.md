@@ -292,6 +292,94 @@ Qt 用「否则」虚拟行的**行号**来表达分支，AST 里 `then`/`else` 
 `×` 和卡片本体用的是**同一个循环里对同一个 `card` 的闭包**，后者已证明「点哪张选哪张」；
 后端删除路径 23 条全过。但**「没验过」就是没验过**，记在这里而不是含糊过去。
 
+## 七·七、S7 运行接线实证（已做）
+
+### 执行为什么必须离开这个进程
+
+ADR 0011 早就定了「编辑进程不承载执行」，在这里它不只是照抄：原型进程活在 ppx 自己的
+venv 里（只装了 `pydantic` / `jsonschema`），而 `rpa-core run` 要真拉起执行器（playwright /
+pywinauto / ddddocr 的常驻子进程）。**共用一个解释器**的话，执行器哪天多一个依赖，错会攒到
+「点运行」那一刻才炸。所以一律 `subprocess` + `-m rpa_core.cli run`，解释器取
+`REPO/.venv/Scripts/python.exe`（找不到才退回 `sys.executable`，此时靠 `PYTHONPATH` 找
+`rpa_core`），并把实际用的解释器写进界面 tooltip —— 这一条是「跑的是谁的代码」的证据。
+
+### 三种「结束」必须分开判，不能合成一个成功/失败
+
+| 状态 | 判据 | 界面表现 | 为什么不能合并 |
+|---|---|---|---|
+| `result.json` 落地 | 读得到文件 | 成功 / failed / paused，带返回值与产出 | 唯一有结论的情形 |
+| 用户点了停止 | `entry["cancelled"]` | 「已停止 · 退出码 1」 | 它**也没有** `result.json`，且退出码非零 —— 和「启动失败」长得一模一样 |
+| 启动即失败 | 无 result + 非零退出 + 未停止 | 标题挂 `COMPILE_FAILED` + stderr 尾部 | 原因只在 stderr 的结构化行里 |
+
+第三条的 `not entry["cancelled"]` 是这一片唯一一条「不写就会误导人」的分支：漏掉它，用户每
+点一次停止，界面都会告诉他「启动失败」。负向验证专门打了这一处。
+
+### 增量游标
+
+每轮**全量重读** `events.jsonl` 再按 `since` 切片（不是 tail）。理由：文件小、实现简单，而且
+自愈 —— 写入方正在追加的半行这一轮解析失败被跳过，下一轮补齐时游标按「已解析条数」推进，
+不会错位也不会重复。空行与非 JSON 行一律跳过，坏一行不该让整个日志消失。
+
+### cwd 收在 run 目录（否则点一次运行就污染仓库根）
+
+样例里 `"workspace": "."` 相对的是**子进程 cwd**。用仓库根当 cwd，点一次运行就在仓库根写出
+`hello.txt`。所以子进程 cwd = `_sandbox/runs/<runId>/work`，实测文件落在那里。
+
+★ **顺带发现一个样例缺陷**：`examples/api-usage` 的默认 `"inputs": {"workspace": ""}` 被
+`data.writeText` 的 `minLength=1` 拦死（`'' should be non-empty`）⇒ 那个样例**开箱跑不起来**，
+必须先 `--inputs`。已登记 BACKLOG。这一条是探针改用 `"."` 时撞出来的，不是读代码看出来的。
+
+### 读数
+
+| 项 | 读数 |
+|---|---|
+| `exec_probe.py` | 30 条全过；struct `2` 条事件、慢流程 `14` 条 / `74` 次轮询里 `5` 次有增量 |
+| `ui_probe.py` | 26 条全过（含版式判据 header ≤44px，实测 41px） |
+| 运行端到端 | `run-99 succeeded · 2 条事件 · 返回 yes`；停止：`已停止 · 退出码 1 · 3 条事件` |
+| 编译失败 | `COMPILE_FAILED · 运行没起来（退出码 2）· 0 条事件` + `Unknown parameter(s) noSuchKey …` |
+
+### 界面怎么验的（换了一条路，不再用 PostMessage 点击）
+
+上一片删除按钮没点中（`PostMessage` 在 WebView2 上时灵时不灵）。这次改成搭一个 pywebview
+harness：真 WebView2 加载真 `main.js`/`style.css`（vite 起在 5174，不碰 `ppx dev` 的 5173），
+`window.pywebview.api.call` 由 `ui_probe.py` 里的 `Bridge` 按 `bridge.py` 的契约复刻
+（`{ok, data, error, requestId}` + 同名错误码），然后 `window.evaluate_js("… .click()")` 驱动。
+★ 换掉的是**外壳**，被测代码（前端三件套 + `api.py`）一行没动。这条路一次就把「点不中」
+那类问题绕开了，而且能直接读 DOM 断言。
+
+### 判据逼出来的六个坑
+
+1. **混两个钟**：`elapsedMs` 用 `time.perf_counter()` 减 `time.time()`，打出
+   `-1793149862780.1 ms`。器壁上跑得通、数据荒谬 —— 只有把读数打出来才看得见。
+2. **期望值按想象写**：`returnValue` 断言成 `'"yes"'`，实际 `yes`（`_preview` 对 str 原样返回）。
+3. **判据钉在「我以为是的那条数据」上**：`select.value` 要的是 option 的**相对路径**，我给了
+   列表上的标签 `sandbox/bad`，于是静默变成空串、流程根本没切，判据读到的却是上一条成功数据
+   （假绿 + 假红同时发生）。补了一条「切过去了吗」的前置判据。
+4. **版式只有截图能发现**：状态栏里塞进整条绝对路径后，`#bar` 从 40px 涨到 60px，
+   「编译校验」「运行」「停止」全被折成两行。DOM 断言全绿。改 CSS（`.status` 省略号 +
+   `#bar > button { flex: 0 0 auto }`）并把全文放进 tooltip，另加一条 `header ≤ 44px` 判据。
+5. **假判据（第一版）**：「4 ms 跑完的流程只取到一次增量」—— `runStarted` 常在进程收口前被
+   抓到，增量次数在 1/2 之间摆动，基线偶发假红。改成判确定性的事：结构节点**不产生 step 事件**，
+   全流程只有首尾两条。
+6. **重复徽章**：跑完的标题写 `run-99 succeeded` 又挂一个 `succeeded` 徽章 —— 同一句话说两遍。
+
+### 负向验证（`probe_exec_rpc_negative.py`）
+
+两条注入、期望集**按依赖关系推全**：① 丢掉 `events[cursor:]` 的切片 ⇒ 红在「seq 连续」「拼接
+== 全量」「since 越界」三条（第三条第一轮我没想到 —— 越界钳位和切片是同一行的两面）；
+② 去掉 `not entry["cancelled"]` ⇒ **只**红「停止不报 startupError」，而「标了 cancelled」仍绿
+（两件事本来就该分开判）。逐字节还原核 md5、复跑复绿。
+
+### 未做
+
+- **run 产物不清理**：`_sandbox/runs/` 每跑一次 +1 个目录（删目录会撞删除守卫，且原型阶段留着
+  证据更有用）。
+- **事件里的 `outputs` 原样透传**：一步 `readText` 就能把 `stepCompleted.payload` 撑到几百 KB。
+  `result.json` 已做摘要（只给 keys/effects），事件流没做——想保住「进度是真数据」。
+- **没有输入参数对话框**（M18 的 `inputs_dialog.py` 在原型里没有对位物），一律用 `workflow.json`
+  里声明的默认 inputs。
+- **暂停 / 单步 / 续跑**：`control.json` 那条跨进程通道没接（`rpa-core pause` / `resume` 已具备）。
+
 ## 八、未决
 
 - **S6c 剩下的**：拖拽重排（Qt 有 `_insert_item_at_drop`，跨容器移动）；插入控制流节点
