@@ -449,6 +449,7 @@ async function openFlow(path) {
     // 打开流程后直接落到第一张可编辑卡片：右栏空着会让用户以为「这东西没参数」
     const firstEditable = cards.find((card) => card.kind !== 'group' && card.id)
     if (firstEditable) await selectCard(firstEditable)
+    return flow
   } catch (error) {
     el.title.replaceChildren(mk('span', null, `打开失败：${path}`))
     el.cards.replaceChildren(mk('div', 'card group', `${error.code}: ${error.message}`))
@@ -774,6 +775,40 @@ el.search.addEventListener('input', () => {
   renderCommands(list)
 })
 
+/* ---- 会话通道（WorkBuddy Agent 把文件推进来）----------------------------
+   可选依赖：Agent 侧服务不在就静默离线，不影响本地任何功能。
+   协议：workbuddy-suite/skills/workflow-studio/references/protocol.md
+   - 轮询 /inbox（经 Python 侧 studio.pollSession），kind=open 就 openFlow
+   - 回 opened（带 sha）+ 心跳，让 Agent 知道窗口在线、在编辑哪个文件 */
+
+const SESSION = { since: 0, online: false, handled: new Set() }
+
+async function pollSession() {
+  try {
+    const res = await ppx.call('studio.pollSession', { since: SESSION.since })
+    if (!res?.ok) return
+    SESSION.online = Boolean(res.online)
+    SESSION.since = res.cursor ?? SESSION.since
+    for (const request of res.requests || []) {
+      if (request.kind !== 'open' || !request.path || SESSION.handled.has(request.id)) continue
+      SESSION.handled.add(request.id)
+      const flow = await openFlow(request.path)
+      await ppx.call('studio.notify', { kind: 'opened', payload: { path: request.path, sha: flow?.sha } })
+    }
+  } catch {
+    SESSION.online = false
+  }
+}
+
+async function heartbeat() {
+  if (!SESSION.online || !currentPath) return
+  try {
+    await ppx.call('studio.notify', { kind: 'heartbeat', payload: { path: currentPath, dirty: isDirty() } })
+  } catch {
+    /* 心跳失败不影响任何本地功能 */
+  }
+}
+
 async function boot() {
   const t0 = performance.now()
   try {
@@ -804,3 +839,7 @@ async function boot() {
 }
 
 boot()
+// 会话轮询先于首帧数据也无妨：open 请求会等 boot 完成后由 handled/异常路径兜住，
+// 更重要的是 Agent 排队的请求最迟 1.4s 后一定会被看到。
+setInterval(pollSession, 1400)
+setInterval(heartbeat, 5000)

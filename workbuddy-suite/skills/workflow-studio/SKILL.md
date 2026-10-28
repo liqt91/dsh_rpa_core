@@ -2,9 +2,9 @@
 name: workflow-studio
 display_name: WorkBuddyStudio
 display_name_en: WorkBuddyStudio
-description: 用 WorkBuddy Studio 的轻量编辑窗口打开文件、让用户在窗口里改并确认，或在浏览器页面上让用户点选元素拿回稳定选择器。当用户说「打开编辑器」「在窗口里改这个文件」「让我看看这份 JSON」「你改完我确认一下」「帮我把这个文件打开我手动调」「拾取元素」「选一下页面上的按钮/输入框」「要这个元素的 selector」「登录框定位不到」时使用。触发词：打开编辑器、编辑窗口、Studio、让我确认、人工确认、审阅文件、改完保存、拾取元素、选元素、元素定位、selector、选择器、抓元素、页面上点一下。
-description_zh: 让 AI 与人共用同一个文件与同一个页面：文件用轻量编辑窗口改、页面元素用浏览器插件点选，结果都回到对话里。
-description_en: A human-in-the-loop bridge for WorkBuddy. Opens files in a lightweight PPX editor window and captures page elements via a browser extension, returning structured results to the agent.
+description: 用 WorkBuddy Studio 的可视化编排窗口打开工作流（Agent 推文件、用户在窗口里拼流程/改参数/编译/运行并确认），或在浏览器页面上让用户点选元素拿回稳定选择器。当用户说「打开编辑器」「在窗口里改这个流程」「让我看看这个工作流」「你改完我确认一下」「帮我把流程打开我手动调」「拾取元素」「选一下页面上的按钮/输入框」「要这个元素的 selector」「登录框定位不到」时使用。触发词：打开编辑器、编辑窗口、Studio、让我确认、人工确认、审阅流程、改完保存、拾取元素、选元素、元素定位、selector、选择器、抓元素、页面上点一下。
+description_zh: 让 AI 与人共用同一个工作流与同一个页面：流程用 PPX 可视化编排窗口改、页面元素用浏览器插件点选，结果都回到对话里。
+description_en: A human-in-the-loop bridge for WorkBuddy. Opens workflows in a visual PPX editor window (cards, params, compile, run) and captures page elements via a browser extension, returning structured results to the agent.
 examples_zh:
   - "把这个 workflow.json 打开，让我自己改一下参数"
   - "我改完了，你看下保存后的内容对不对"

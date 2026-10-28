@@ -46,6 +46,8 @@
 
 ## 与 PPX 的关系
 
-编辑窗口的 Python 侧（`editor/api/api.py`）用 `@api_method("studio.*")` 把上面几个路由包成 RPC，
-前端 `ppx.call('studio.openFile', …)`。窗口关闭只是客户端消失，服务里的收件箱还在，
+编辑窗口 = `.harness/demo/ppx_probe/app`（可视化工作流编排器）。它的 Python 侧
+（`api/api.py`）用 `@api_method("studio.*")` 把上面几个路由包成 RPC（`studio.pollSession`
+/ `studio.notify`），前端 `main.js` 每 1.4s 轮询收件箱，取到 `open` 请求就 `openFlow` 并回
+`opened` + 心跳。窗口关闭只是客户端消失，服务里的收件箱还在，
 下一个窗口打开仍能取到未消费的请求。

@@ -7,7 +7,8 @@
   · 安全边界拦不拦得住（伪造 Origin、越界路径）。
 
 跑法：python verify/verify_suite.py
-界面与插件的真机测试在 editor_ui_test.mjs / extension_test.mjs / ppx_boot.py。
+编辑窗口（.harness/demo/ppx_probe）的真机探针在它自己的目录：launcher_probe / ui_probe /
+exec_probe / run_probe 等；插件真机测试在 extension_test.mjs。
 """
 
 from __future__ import annotations
@@ -30,7 +31,7 @@ SKILL_DIR = SUITE / "skills" / "workflow-studio"
 SKILL_MD = SKILL_DIR / "SKILL.md"
 STUDIO = SKILL_DIR / "scripts" / "studio.py"
 EXT = SUITE / "extension"
-EDITOR = SUITE / "editor"
+PROBE_APP = SUITE.parent / ".harness" / "demo" / "ppx_probe" / "app"
 PY = sys.executable
 OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
@@ -234,18 +235,10 @@ def check_js() -> None:
     for path in files:
         result = subprocess.run(["node", "--check", str(path)], capture_output=True, text=True)
         check(f"{path.name} 语法正确", result.returncode == 0, result.stderr.strip()[:200])
-    for path in (EDITOR / "gui" / "src").glob("*.js"):
-        result = subprocess.run(
-            ["node", "--input-type=module", "--check"],
-            stdin=path.open("rb"),
-            capture_output=True,
-            text=True,
-        )
-        check(f"{path.name} 语法正确（ESM）", result.returncode == 0, result.stderr.strip()[:200])
 
 
 def check_python() -> None:
-    for path in (STUDIO, EDITOR / "api" / "api.py"):
+    for path in (STUDIO, PROBE_APP / "api" / "api.py"):
         result = subprocess.run([PY, "-m", "py_compile", str(path)], capture_output=True, text=True)
         check(f"{path.name} 可编译", result.returncode == 0, result.stderr.strip()[:200])
 

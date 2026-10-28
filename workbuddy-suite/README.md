@@ -6,10 +6,10 @@
 
 | # | 产物 | 目录 | 作用 |
 |---|---|---|---|
-| 1 | 轻量编辑窗口（PPX 桌面应用） | `editor/` | 光标/选区/撤销/快捷键/IME 全按编辑器习惯来；保存即把 sha + 校验结果交回 Agent |
+| 1 | 工作流编辑窗口（PPX 桌面应用） | `.harness/demo/ppx_probe/app/` | **复用 M65 的可视化编排器**：卡片拼流程、参数编辑、编译校验、真跑 `rpa-core run`；本轮给它接上会话通道（Agent 推文件 → 窗口打开 → 回 opened/心跳） |
 | 2 | 能力连接器（CLI + Skill） | `connector/` | 把仓里 **89 条**原子能力整理成 WorkBuddy 能读懂、能触发的接口；**不重写执行器** |
 | 3 | 浏览器扩展（MV3） | `extension/` | 点一下页面元素，算出稳定选择器（含 Shadow DOM 宿主与退化路径）并回传 Agent |
-| — | 桥接技能 `workflow-studio` | `skills/workflow-studio/` | 1 与 3 的 Agent 侧入口：起会话、推文件、等保存、等拾取 |
+| — | 桥接技能 `workflow-studio` | `skills/workflow-studio/` | 1 与 3 的 Agent 侧入口：起会话、推文件、等打开、等拾取 |
 
 上架材料在 `listing/`：`LISTING.md`（填表文案 + 审核问答）、`privacy.md`、`CHANGELOG.md`、`screenshots/`。
 
@@ -18,11 +18,11 @@
 ## 一条命令跑起来
 
 ```bash
-# 开发态：会话服务 + PPX 窗口（前端走 vite dev）
-python skills/workflow-studio/scripts/studio.py gui --dev
+# 开发态：先起会话服务，再起 PPX 窗口（前端走 vite dev，改 main.js 热更新）
+python skills/workflow-studio/scripts/studio.py serve --root .
+cd ../.harness/demo/ppx_probe/app && ppx dev
 
-# 发布态：窗口用打包好的 exe
-python skills/workflow-studio/scripts/studio.py gui --exe path/to/WorkBuddyStudio.exe
+# 发布态：先在 ppx_probe/app 里 ppx build，产物 build/RPA Probe/
 ```
 
 只想起服务（Agent 侧、CI、或已经手动开了窗口）：
@@ -39,14 +39,16 @@ python skills/workflow-studio/scripts/studio.py stop
 python skills/workflow-studio/scripts/studio.py doctor
 ```
 
-### 人改文件
+### 人改流程（工作流编辑窗口）
 
 ```bash
-# 1) 把文件推到窗口里，等用户保存（--wait 到点就返回，不阻塞太久）
-python skills/workflow-studio/scripts/studio.py open src/config.json --reason "缩进错了，改一下" --wait 300 --pretty
+# 1) 把工作流推到窗口里（ppx_probe 的可视化编排器会自动打开它）
+python skills/workflow-studio/scripts/studio.py open D:/abs/path/flow.json --reason "改一下" --wait 300 --pretty
 ```
 
-返回里有 `changed`、`sha`、`bytes`、`validation`。`changed=false` 说明用户没动就关了，**别假装他改过**。
+窗口轮询收件箱（1.4s）→ 自动 `openFlow` → 回 `opened` 事件与心跳；`status` 里
+`editor.path` 就是窗口当前正在编辑的文件。用户在窗口里保存走的是 ppx_probe 自己的
+保存链路（sha 冲突检测 + 编译校验）。
 
 ### 人点元素
 
@@ -76,15 +78,10 @@ rpa-core run my-flow.json            # 跑，输出 RunResult
 
 ```
 workbuddy-suite/
-├── editor/                     # PPX 应用（PPX 6.0.1）
-│   ├── ppx.toml                # 应用配置：窗口 1040×660、深色底、dev 端口 5273
-│   ├── api/api.py              # Python 侧：只做磁盘读写 + 回环通信，不持有编辑状态
-│   └── gui/
-│       ├── index.html          # 顶栏 / 查找条 / banner / 状态栏 / 两个 dialog
-│       ├── src/editor.js       # 编辑内核：透明 textarea + 着色层 + 自建撤销栈 + 行首索引
-│       ├── src/highlight.js    # 逐行产出 HTML（保证任一行可独立套错误底色）
-│       ├── src/main.js         # RPC、会话轮询、查找、打开/保存、测试钩子
-│       └── src/style.css       # GitHub Dark 语义色
+├── (编辑窗口不在本目录：.harness/demo/ppx_probe/app/ —— PPX 应用，M65 宿主实验)
+│   ├── ppx.toml                # 应用配置；dev 端口 5173
+│   ├── api/api.py              # 能力层接线 + studio.* 会话胶水（本轮加）
+│   └── gui/src/main.js         # 可视化编排 + 会话轮询（本轮加 pollSession/heartbeat）
 ├── connector/                  # CLI + Skill（open.workbuddy.cn/docs/connector 规范）
 │   ├── connector-meta.json     # 市场元信息（中英名称/描述/示例）
 │   ├── cli.json                # init / auth / unAuth / status / statusMatch
@@ -112,18 +109,20 @@ PY=D:/Users/Administrator/Documents/代码/rpa_core/.venv/Scripts/python.exe
 
 $PY verify/verify_suite.py            # 1) 协议 + 上架契约 + 包结构（49 项）
 $PY verify/negative_probe.py          # 2) 负向验证：注入 4 类坏数据，必须全红后还原
-node verify/editor_ui_test.mjs        # 3) 编辑器手感：CDP 真键盘 / 真 IME（42 项，需先起前端）
-node verify/extension_test.mjs        # 4) 选择器质量 + Shadow DOM + 点击上报（16 项）
-$PY tools/pack.py                     # 5) 打三个 zip（结构断言）
-$PY connector/tools/pack_connector.py --check   # 6) 连接器字段 / 权限 / digest 一致性
+node verify/extension_test.mjs        # 3) 选择器质量 + Shadow DOM + 点击上报（16 项）
+$PY tools/pack.py                     # 4) 打三个 zip（结构断言）
+$PY connector/tools/pack_connector.py --check   # 5) 连接器字段 / 权限 / digest 一致性
 ```
 
-真机开窗（可选，需要 PPX 运行时）：
+编辑窗口的真机探针在 ppx_probe 自己的目录（开发态 + 运行 + 事件流 + 插入/删除节点，
+要开真窗口）：
 
 ```bash
-$PY verify/ppx_boot.py                # 开发态：ppx dev + vite，验文件真进了编辑器
-$PY verify/ppx_exe.py                 # 发布态：先 ppx build，再用打包出的 exe 跑一遍
-node verify/popup_shot.mjs            # 扩展弹窗截图（328×373）
+cd ../.harness/demo/ppx_probe
+./.venv/Scripts/python.exe launcher_probe.py     # 启动器不谎报（20 条）
+./.venv/Scripts/python.exe ui_probe.py           # 界面端到端（26 条）
+./.venv/Scripts/python.exe exec_probe.py         # 运行接线（30 条）
+node ../workbuddy-suite/verify/popup_shot.mjs    # 扩展弹窗截图（328×373）
 ```
 
 ### 这些验证在证明什么（不是「文件存在」）
@@ -134,9 +133,9 @@ node verify/popup_shot.mjs            # 扩展弹窗截图（328×373）
   （`chrome.alarms` 曾经漏声明：代码在跑，定时器根本没起来）。
 - `negative_probe.py` 是**门禁的元验证**：撤掉 `alarms`、塞一条不存在的命令、改假 digest、
   用 flat 布局重打技能包 —— 四种注入都必须被抓到，且逐字节还原（核 md5）后必须回绿。
-- `editor_ui_test.mjs` 走 CDP 的 `Input.dispatchKeyEvent` / `Input.insertText` /
-  `Input.imeSetComposition`，断言的是**渲染层**：着色层逐行 `textContent` 拼起来必须与原文
-  逐字节相等；行号定位在 4000 行文件里**不许逐行扫全文**（数 `_lineOf` 调用次数，8 次以内）。
+- **会话胶水的端到端（本轮实测）**：起 `studio.py serve` → 起带 `studio.*` 胶水的 ppx 窗口 →
+  `studio.py open <绝对路径>` → 6 秒内 `status` 里 `editor.path` 变成目标文件、`online=true`、
+  事件流出现 `opened`。心跳 5s 一次，断线只表现为 `editor.online=false`，不影响窗口本地功能。
 - `extension_test.mjs` 把 `window.chrome` 换成记录器：重复 `id` 不许硬用、`css-1a2b3c` 不许当
   选择器、Shadow DOM 必须**在 shadow root 内**算唯一性并给出宿主选择器、Esc 后页面点击必须恢复。
 
@@ -146,9 +145,9 @@ node verify/popup_shot.mjs            # 扩展弹窗截图（328×373）
 
 | 问题 | 症状 | 修法 |
 |---|---|---|
-| 行号渲染 O(n²) | 4000 行文件每敲一键扫 1600 万字符，手感塌 | 行首偏移表 + 二分定位，`_lineOf` 每帧只调一次 |
-| 闭合符重复 | `()` 里打 `)` 变成 `())` | 右边已有闭合符时「穿过去」 |
-| Home 语义不对 | 永远跳到列 1 | 先到首个非空白，再按一次才回列 1 |
+| 编辑器跑偏 | 上轮从零写了个代码编辑器，而用户要的是 ppx_probe 的可视化编排器 | 整个退役（git 历史可找回），编辑窗口回归 `.harness/demo/ppx_probe` 并补上会话胶水 |
+| Agent 推不开文件 | ppx_probe 不认识会话协议，`open` 排队永远没人取 | `api.py` 加 `studio.pollSession/notify`，`main.js` 加 1.4s 轮询 + opened/心跳 |
+| 脱管后台服务被杀 | `( serve & )` 在宿主 shell 退出后死掉，`open` 报 `SESSION_DOWN` | 长命服务走受管后台任务 |
 | `chrome.alarms` 未声明 | 徽标不刷新，看着像扩展没连上 | 补权限，并加一条「API ↔ 权限」门禁 |
 | Shadow DOM 选择器是废的 | 用 `document` 查唯一性永远 0，退化成裸标签 | 在所属 root 内算唯一性 + 报 `shadowHost` |
 | 能力文档停在 26 条 | 仓里 89 条，AI 照着旧文档写不存在的命令 | 生成器 + digest 门禁 + 技能内「以 catalog 为准」 |
@@ -159,16 +158,13 @@ node verify/popup_shot.mjs            # 扩展弹窗截图（328×373）
 ## 几个不显眼但会咬人的地方
 
 - **系统代理**：Windows 上 `http_proxy` 常驻时，`urllib` 和 Chrome 都会把 `127.0.0.1`
-  交给代理，报 `502` / `ERR_CONNECTION_REFUSED`。所以 `studio.py` 和 `api.py` 一律用
-  `build_opener(ProxyHandler({}))`，Chrome 加 `--no-proxy-server`。
-- **`[hidden]` 会被组件类盖掉**：`.banner` / `.findBar` / `.toasts` 都显式声明了 `display`，
-  会压过浏览器默认的 `[hidden]{display:none}`。CSS 里补了 `[hidden]{display:none !important}`。
-- **IME 组合期必须把渲染权交回 textarea**：着色层在组合期间 `visibility:hidden`，
-  textarea 用 `-webkit-text-fill-color` 还原颜色，否则候选窗飘在空白处。
-- **一次中文输入 = 一步撤销**：`compositionstart` 压一步、`compositionend` 压一步。
-- **窗口关闭时轮询还在飞**：`main.js` 在 `pagehide` / `beforeunload` 上停表，`call()` 见到
-  `closing` 直接返回。开发态改 `editor/gui/src/` 会让 vite HMR 冲掉在飞的调用 ——
-  跑 `ppx_boot.py` 时别同时改源码，否则会看到一次假红。
+  交给代理，报 `502` / `ERR_CONNECTION_REFUSED`。所以 `studio.py` 和 ppx_probe 的
+  `api.py` 一律用 `build_opener(ProxyHandler({}))`，Chrome 加 `--no-proxy-server`。
+- **脱管后台进程会被连带杀**：`( cmd & )` 起的服务在宿主 shell 退出时跟着死
+  （本轮 `studio.py serve` 死过一次，`open` 报 `SESSION_DOWN`）。长命服务必须交给
+  受管的后台任务或独立终端。
+- **会话胶水是可选依赖**：Agent 服务不在，编辑窗口照常能用；轮询失败静默离线，
+  心跳 5s 一次，任何一次调用不超 1 秒 —— 别让对端不在卡住 UI。
 - **发布态产物要重打**：改了 `gui/src/` 必须 `vite build`（`dist/` 被 PPX 直接吃），
   再 `ppx build` 出 exe。只改源码不重建，双击 exe 的人用的还是旧代码。
 
@@ -204,4 +200,4 @@ $PY connector/tools/pack_connector.py               # 校验 + 打包
 | 失败项 | 原因 | 怎么办 |
 |---|---|---|
 | `pnpm: 12.15.0` | PPX 6.0.1 的 doctor 只认 `>=11.0.0, <12.0.0` | 实测 12.15 下 `dev` 与 `build` 都正常；要消掉这行就 `corepack prepare pnpm@11.25.0 --activate` |
-| `Inno Setup 6: 未安装` | 打 Windows 安装包要 ISCC | 便携版已经能跑（`editor/build/WorkBuddy Studio/`）；要 `.exe` 安装包就装 Inno Setup 6 再 `ppx build` |
+| `Inno Setup 6: 未安装` | 打 Windows 安装包要 ISCC | 便携版已经能跑（`ppx_probe/app/build/RPA Probe/`，`ppx build` 产出）；要 `.exe` 安装包就装 Inno Setup 6 再 `ppx build` |

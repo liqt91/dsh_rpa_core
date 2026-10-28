@@ -22,6 +22,8 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.error
+import urllib.request
 from pathlib import Path
 from typing import Any, get_args
 
@@ -1521,3 +1523,65 @@ def cancel_run(run_id: str) -> dict[str, Any]:
         "exitCode": proc.returncode,
         "events": len(_events_of(entry)),
     }
+
+
+# ---------------------------------------------------------------------------
+# 会话通道（WorkBuddy Agent 侧，协议见 workbuddy-suite 的 references/protocol.md）
+# 「可选依赖」：Agent 没在跑、端口没起，编辑器照常能用；任何一次调用不超 1 秒。
+# ---------------------------------------------------------------------------
+
+_STUDIO_HOME = Path(
+    os.environ.get("STUDIO_HOME") or (Path(os.environ.get("TEMP") or "/tmp") / "workbuddy-studio")
+)
+_STUDIO_PORT = int(os.environ.get("STUDIO_PORT") or 7788)
+# ★ 关掉代理：Windows 上 http_proxy 常驻，urllib 会把 127.0.0.1 也交给代理。
+_STUDIO_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+
+def _studio_endpoint() -> int:
+    try:
+        meta = json.loads((_STUDIO_HOME / "endpoint.json").read_text(encoding="utf-8"))
+        return int(meta.get("port") or _STUDIO_PORT)
+    except (OSError, ValueError, TypeError):
+        return _STUDIO_PORT
+
+
+def _studio_http(
+    method: str,
+    route: str,
+    payload: dict[str, Any] | None = None,
+    *,
+    timeout: float = 1.0,
+) -> dict[str, Any] | None:
+    port = _studio_endpoint()
+    url = f"http://127.0.0.1:{port}{route}"
+    body = None if payload is None else json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    request = urllib.request.Request(url, data=body, method=method)
+    request.add_header("Content-Type", "application/json")
+    request.add_header("Origin", "http://127.0.0.1:5173")
+    try:
+        with _STUDIO_OPENER.open(request, timeout=timeout) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except (urllib.error.URLError, TimeoutError, OSError, ValueError):
+        return None
+
+
+@api_method("studio.pollSession")
+def studio_poll_session(since: int = 0) -> dict[str, Any]:
+    inbox = _studio_http("GET", f"/inbox?since={int(since)}&client=editor", timeout=1.0)
+    if inbox is None:
+        return {"ok": True, "online": False, "port": _studio_endpoint(), "cursor": since, "requests": []}
+    return {
+        "ok": True,
+        "online": True,
+        "port": inbox.get("port", _studio_endpoint()),
+        "cursor": inbox.get("cursor", since),
+        "requests": inbox.get("requests") or [],
+    }
+
+
+@api_method("studio.notify")
+def studio_notify(kind: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+    body = {"kind": kind, "at": time.time(), "by": "editor", **(payload or {})}
+    result = _studio_http("POST", "/events", body)
+    return {"ok": True, "notified": bool(result and result.get("ok"))}

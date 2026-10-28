@@ -9,7 +9,7 @@
 | 技能包 | `dist/workflow-studio-skill.zip`（15.3 KB） | 发布管理 → 技能 | **folder 布局**：`workflow-studio/SKILL.md`（官方「技能基础结构」要求套一层） |
 | 连接器 | `dist/rpa-core-connector.zip`（23.6 KB） | 发布管理 → 连接器（CLI + Skill） | `connector-meta.json` + `cli.json` + `icon.svg` + `skills/rpa-automation/` |
 | 浏览器扩展 | `dist/workbuddy-studio-extension.zip`（21.9 KB） | 扩展分发（Chrome / Edge 商店，或内部分发） | MV3，解压后「加载已解压的扩展」也能用 |
-| 编辑窗口 | `editor/`（PPX 工程）→ `ppx build` | 技能附件 / 官网下载 | 便携版 `editor/build/WorkBuddy Studio/`（约 28 MB）；本机没装 Inno Setup 6，未出安装包 |
+| 编辑窗口 | `.harness/demo/ppx_probe/app/`（PPX 工程）→ `ppx build` | 技能附件 / 官网下载 | 便携版 `ppx_probe/app/build/RPA Probe/`；本机没装 Inno Setup 6，未出安装包 |
 
 > 生成命令：`python tools/pack.py`（一条命令打三个 zip，并断言包内结构）。
 > 技能包默认 folder 布局；`--layout flat` 只在控制台亲测要求 flat 时用。
@@ -42,9 +42,9 @@
 >
 > WorkBuddy Studio 把这两件事交回给人，但不用人再去开软件、找路径、复制粘贴：
 >
-> - **轻量编辑窗口**：Ctrl+O 打开文件，或是 Agent 直接把文件推到窗口里。原生光标、选区、
->   撤销重做、Tab 多行缩进、Ctrl+/ 注释、Ctrl+F 查找、中文输入法全部按编辑器的习惯来。
->   保存的一瞬间，窗口把 sha、字节数、校验结果交回 Agent。
+> - **可视化编排窗口**：Agent 把工作流推到 PPX 窗口里（1.4 秒内自动打开），人用卡片
+>   拼流程、改参数、点「编译」校验、点「运行」真跑。窗口实时回心跳：Agent 一直知道
+>   你在编辑哪个文件、改没改。
 > - **浏览器拾取**：在页面上点一个元素，插件算出稳定的选择器（优先 id / data-testid，
 >   跳过构建产物类名，退化路径至少两级），并把候选方案、尺寸、属性一起交回。
 > - **会话协议**：两个客户端都只连本机 `127.0.0.1`，Agent 侧一条命令拿结果，不轮询屏幕、
@@ -55,9 +55,9 @@
 
 **详细描述（英文）**
 
-> WorkBuddy Studio gives agents a human-in-the-loop bridge. A lightweight PPX editor window
-> opens files (pushed by the agent or picked by the user), keeps native cursor/selection/undo/IME
-> behaviour, and reports saves back with a content hash and validation result. A Manifest V3
+> WorkBuddy Studio gives agents a human-in-the-loop bridge. A visual PPX workflow editor
+> opens flows pushed by the agent within seconds, lets the user arrange cards, edit params,
+> compile and really run them, and reports heartbeats back. A Manifest V3
 > extension lets the user click one element on a page and returns a stable selector plus
 > fallbacks and metadata. Both talk to a loopback-only session service, so nothing leaves the machine.
 
@@ -82,8 +82,8 @@
 
 | 文件 | 内容 | 建议配文 |
 |---|---|---|
-| `editor-window.png` | **`ppx build` 打包后的应用**真机窗口：Agent 推来的 `weekly-report.json` 已打开，会话在线 | 文件是 Agent 推过来的，改完 Ctrl+S，它就知道 |
-| `editor-browser.png` | 同一套界面的纯前端视图（JSON 着色、行号、状态栏） | 光标、选区、撤销、多行缩进，都是原生手感 |
+| `editor-window.png` | **`ppx build` 打包后的应用**真机窗口：Agent 推来的工作流已打开（卡片视图），会话在线 | 文件是 Agent 推过来的，拼完点保存，它就知道 |
+| `editor-browser.png` | 同一应用的参数面板/编译输出特写 | 参数按 manifest 声明渲染，编译不过不放行 |
 | `extension-popup.png` | 扩展弹窗：Agent 正在等待拾取 | 「Agent 在等元素」时徽标会变黄，点一下就能选 |
 
 ## 四、权限说明（扩展，逐条）
@@ -148,7 +148,7 @@
 - [x] 商店描述 ≤ 132 字符
 - [x] 三张截图 + 配文
 - [x] 隐私政策（`listing/privacy.md`）
-- [x] 头像 512×512（`editor/ppx/assets/logo.png`，PNG，< 500 KB）
+- [x] 头像 512×512（`ppx_probe/app/ppx/assets/logo.png`，PNG，< 500 KB）
 
 ## 八、已知限制（主动写出来，比被问出来好）
 
@@ -157,10 +157,11 @@
 2. **Shadow DOM 里的元素**：上报里给三样东西 —— `shadow: true`、`selector`（在该 shadow root 内
    唯一）、`shadowHost.selector`（宿主怎么找）。纯 CSS 穿不过去，调用方要用
    `host.shadowRoot.querySelector(inner)`；我们**不假装**返回一个能直接用的字符串。
-3. **只处理 UTF-8 文本**：非 UTF-8 文件会被拒绝（`NOT_UTF8`），而不是「打开后保存成乱码」。
-4. **单文件 8MB / 着色 240K 字符上限**：超过就不着色（仍可编辑），轻量窗口不背大文件。
-5. **编辑器不做语法补全 / LSP**：这是编辑窗口，不是 IDE。要补全请用 IDE。
-6. **只提供便携版，且未做代码签名**：`editor/build/WorkBuddy Studio/` 双击即用；首次运行
+3. **编辑窗口只编工作流**：它是面向 `rpa-core` 工作流 JSON 的可视化编排器，不是通用文本
+   编辑器；改任意文本文件请用 IDE。
+4. **窗口暂不回传「保存 diff」**：会话协议里有 `save` 事件，ppx_probe 的保存链路已带
+   sha 冲突检测与编译校验，但 diff 级回传还没接（登记 BACKLOG）。
+5. **只提供便携版，且未做代码签名**：`ppx_probe/app/build/RPA Probe/` 双击即用；首次运行
    Windows SmartScreen 会提示「未知发布者」，点「更多信息 → 仍要运行」即可。要安装包与签名，
    需要 Inno Setup 6 + 一张代码签名证书。
 
