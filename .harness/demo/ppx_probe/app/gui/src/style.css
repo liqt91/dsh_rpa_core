@@ -229,6 +229,25 @@ aside, section { min-height: 0; overflow: auto; background: var(--surface); }
 .compileOut .bad { color: var(--danger); }
 .compileOut pre { margin: 6px 0 0; white-space: pre-wrap; font: 11.5px/1.6 Consolas, monospace; }
 
+/* ---- 元素资产（AI 生成工作流的待补元素 + 捕获入口） ---------------------- */
+.elemBox { flex: 0 1 auto; min-height: 0; display: flex; flex-direction: column; border-top: 1px solid var(--border); }
+.elemBox > summary {
+  padding: 6px 12px; cursor: pointer; color: var(--faint); font-size: 12px; user-select: none;
+}
+.elemBox[open] > summary { border-bottom: 1px solid var(--border); }
+.elemBody { flex: 1 1 auto; min-height: 0; max-height: 34vh; overflow: auto; padding: 2px 0 10px; }
+.elemBody .hint { color: var(--faint); font-size: 11.5px; padding: 6px 12px; }
+.elemHead { padding: 6px 12px 2px; color: var(--muted); font-size: 11px; letter-spacing: .3px; }
+.elemRow { display: flex; align-items: center; gap: 6px; padding: 4px 12px; }
+.elemRow.missing { background: #fff8f8; }
+.elemName { font: 12px/1.4 Consolas, "Microsoft YaHei", monospace; color: var(--text); font-weight: 500; }
+.elemMeta { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--faint); font-size: 11px; }
+.elemRow .capBtn { height: 22px; padding: 0 8px; font-size: 11px; }
+.elemRow .capBtn.web { border-color: var(--info); color: var(--info); }
+
+.card.missing { border-color: var(--danger); box-shadow: 0 0 0 2px rgba(207, 34, 46, .14); }
+.card .cap { margin-left: 4px; flex: 0 0 auto; color: var(--danger); font-size: 11px; }
+
 /* ---- 运行（M18 口径：子进程 + events.jsonl） ---------------------------- */
 .runBox {
   flex: 0 0 auto; display: flex; flex-direction: column;

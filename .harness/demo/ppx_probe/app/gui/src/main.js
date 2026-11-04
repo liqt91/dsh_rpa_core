@@ -29,6 +29,8 @@ const el = {
   revert: document.querySelector('#revertBtn'),
   dirty: document.querySelector('#dirty'),
   unset: document.querySelector('#unset'),
+  elemBody: document.querySelector('#elemBody'),
+  elemCount: document.querySelector('#elemCount'),
 }
 
 let commands = []
@@ -41,6 +43,9 @@ let groups = [] // 分组定义（顺序 + 折叠），服务端给
 let panelMode = 'param' // param | struct —— 决定保存走哪个 RPC
 let baseline = {} // 首次渲染时的原文，用于判断是否改动 / 撤销
 let formError = null
+// 待补元素所在的节点 id 集合：AI 生成的工作流把交互元素写成 elementRefs 占位，
+// 这些节点在卡片上标「⚠ 待补」，并在元素面板里给出捕获入口。
+let missingNodeIds = new Set()
 // 运行态：id/seen 是轮询游标（只追加），activeNode 用来在卡片上标「正在跑」
 const RUN = { id: null, seen: 0, timer: null, running: false, activeNode: null }
 
@@ -140,12 +145,14 @@ function renderCards() {
       'card' +
         (card.draft ? ' draft' : '') +
         (selected && card.id === selected.id ? ' selected' : '') +
-        (RUN.activeNode && card.id === RUN.activeNode ? ' running' : ''),
+        (RUN.activeNode && card.id === RUN.activeNode ? ' running' : '') +
+        (missingNodeIds.has(card.id) ? ' missing' : ''),
     )
     row.style.setProperty('--depth', DEPTH[card.depth % DEPTH.length])
     row.append(mk('span', 'grip', '⋮'), mk('span', 'no', String(card.no)), mk('span', 'name', card.label))
     if (card.summary) row.append(mk('span', 'sum', card.summary))
     if (card.command) row.append(mk('span', 'badge', card.command.split('.')[0]))
+    if (missingNodeIds.has(card.id)) row.append(mk('span', 'cap', '⚠ 待补'))
     if (!card.draft) {
       const del = mk('button', 'del', '×')
       del.title = '删除这个节点（容器会连同里面的一起删）'
@@ -446,6 +453,8 @@ async function openFlow(path) {
     )
     renderCards()
     el.run.disabled = RUN.running || !currentPath
+    // 打开即刷新元素资产：摊开「AI 生成的占位元素」并给出捕获入口
+    await refreshElements()
     // 打开流程后直接落到第一张可编辑卡片：右栏空着会让用户以为「这东西没参数」
     const firstEditable = cards.find((card) => card.kind !== 'group' && card.id)
     if (firstEditable) await selectCard(firstEditable)
@@ -469,6 +478,113 @@ function renderCompile(result) {
     el.compileOut.append(mk('div', 'bad', `编译失败 · ${result.ms ?? ''} ${result.ms != null ? 'ms' : ''}`.trim()))
     el.compileOut.append(mk('pre', null, result.error))
   }
+}
+
+/* ---- 元素资产（AI 生成工作流的待补元素 + 捕获入口） -----------------------
+ * AI 生成的工作流把交互元素写成 elementRefs 占位（模型不知道真实选择器），运行期解析不到
+ * 即 ELEMENT_REF_MISSING。这里把「缺哪个元素、在第几步」摊开，并接上 main 的
+ * `rpa-core capture` 复用捕获器。捕获落盘即用同名 = 自动绑定（引用模型无需单独绑定步骤）。 */
+
+async function refreshElements() {
+  if (!currentPath) {
+    el.elemBody.replaceChildren(mk('div', 'hint', '未打开流程'))
+    el.elemCount.textContent = ''
+    return
+  }
+  try {
+    const [miss, list] = await Promise.all([
+      ppx.call('rpa.missingElements', { path: currentPath }),
+      ppx.call('rpa.listElements', { path: currentPath }),
+    ])
+    missingNodeIds = new Set((miss.missing || []).map((m) => m.nodeId).filter(Boolean))
+    renderCards()
+    renderElementsPanel(miss.missing || [], list.elements || [])
+  } catch (error) {
+    el.elemBody.replaceChildren(mk('div', 'hint', `元素加载失败：${error.code}: ${error.message}`))
+  }
+}
+
+function renderElementsPanel(missing, elements) {
+  el.elemBody.replaceChildren()
+  el.elemCount.textContent = `${elements.length} 已捕获 · ${missing.length} 待补`
+  if (!missing.length && !elements.length) {
+    el.elemBody.append(mk('div', 'hint', '本流程没有元素（纯逻辑流程），无需捕获'))
+    return
+  }
+  if (missing.length) {
+    el.elemBody.append(mk('div', 'elemHead', '待补元素（需捕获或提供）'))
+    for (const m of missing) {
+      const row = mk('div', 'elemRow missing')
+      row.append(mk('span', 'elemName', m.name))
+      row.append(mk('span', 'elemMeta', `${m.nodeId} · ${m.command} · ${m.param}`))
+      const web = mk('button', 'capBtn web', '网页')
+      web.title = '用浏览器扩展捕获：去目标页 Ctrl+Click 元素'
+      web.addEventListener('click', () => captureElement(m.name, 'browser'))
+      const desk = mk('button', 'capBtn', '桌面')
+      desk.title = '用桌面 UIA 捕获：鼠标移到控件按 F9'
+      desk.addEventListener('click', () => captureElement(m.name, 'desktop'))
+      row.append(web, desk)
+      el.elemBody.append(row)
+    }
+  }
+  if (elements.length) {
+    el.elemBody.append(mk('div', 'elemHead', '已捕获'))
+    for (const e of elements) {
+      const row = mk('div', 'elemRow')
+      row.append(mk('span', 'elemName', e.name))
+      row.append(mk('span', 'elemMeta', `${e.kind || '?'} · ${e.selector || ''}`))
+      el.elemBody.append(row)
+    }
+  }
+}
+
+async function captureElement(name, target) {
+  if (!currentPath) return
+  el.status.textContent = `正在启动捕获「${name}」(${target})…`
+  let res
+  try {
+    res = await ppx.call('rpa.startCapture', {
+      path: currentPath,
+      target,
+      name,
+      browserType: 'edge',
+    })
+  } catch (error) {
+    el.status.textContent = `启动捕获失败 ${error.code}: ${error.message}`
+    return
+  }
+  if (!res.ok) {
+    el.status.textContent = `启动捕获失败 ${res.code}：${res.error}`
+    return
+  }
+  el.status.textContent = `${res.instructions} · 落盘后自动绑定；也可把已有元素文件按「${name}」命名放入 elements/`
+  pollCapture(name)
+}
+
+async function pollCapture(name) {
+  const tick = async () => {
+    let res
+    try {
+      res = await ppx.call('rpa.capturePoll', { name })
+    } catch {
+      return
+    }
+    if (!res.ok) {
+      el.status.textContent = `捕获轮询失败 ${res.code}：${res.error}`
+      return
+    }
+    if (res.captured) {
+      el.status.textContent = `已捕获并绑定「${name}」`
+      await refreshElements()
+      return
+    }
+    if (!res.running) {
+      el.status.textContent = `捕获结束但未落盘「${name}」（退出码 ${res.exitCode ?? '?'}）——可能没做手势或取消了`
+      return
+    }
+    setTimeout(tick, 1000)
+  }
+  setTimeout(tick, 800)
 }
 
 el.compile.addEventListener('click', async () => {

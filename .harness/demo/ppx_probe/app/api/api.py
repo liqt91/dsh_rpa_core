@@ -1526,6 +1526,189 @@ def cancel_run(run_id: str) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# 元素：缺失检测 / 资产列表 / 触发捕获（复用 main 的 `rpa-core capture` 命令）
+# 「AI 生成的工作流」只把交互元素写成 elementRefs 占位（模型不知道真实选择器），
+# 运行期解析不到即 ELEMENT_REF_MISSING；这组 RPC 把缺口摊开并接上 main 的捕获器。
+# ---------------------------------------------------------------------------
+
+_CAPTURES: dict[str, dict[str, Any]] = {}
+
+
+def _elements_dir(path: str) -> Path:
+    return _flow_path(path).parent / "elements"
+
+
+def _present_elements(path: str) -> set[str]:
+    ed = _elements_dir(path)
+    return {f.stem for f in ed.glob("*.json")} if ed.is_dir() else set()
+
+
+@api_method("rpa.missingElements")
+def missing_elements(path: str) -> dict[str, Any]:
+    """扫描 workflow 的 elementRefs：引用了、但 elements/ 下没有同名文件 = 待补元素。
+
+    这正是「AI 生成的工作流」与「真正能跑的工作流」之间的缺口：生成时交互元素只能
+    写成 elementRefs 占位（模型不知道真实选择器），运行期解析不到即 ELEMENT_REF_MISSING。
+    这里把缺口摊开，前端据此提示用户「去捕获 / 提供」每个待补元素。
+    """
+    started = time.perf_counter()
+    data, _ = _read_document(_flow_path(path))
+    present = _present_elements(path)
+    missing: list[dict[str, Any]] = []
+
+    def walk(node: dict[str, Any]) -> None:
+        if not isinstance(node, dict):
+            return
+        for param, name in (node.get("elementRefs") or {}).items():
+            if name not in present:
+                missing.append(
+                    {
+                        "nodeId": node.get("id"),
+                        "command": node.get("command"),
+                        "param": param,
+                        "name": name,
+                    }
+                )
+        for key in _NESTED:
+            for child in node.get(key) or []:
+                walk(child)
+
+    walk(data.get("root"))
+    return {
+        "ok": True,
+        "missing": missing,
+        "resolved": sorted(present),
+        "ms": round((time.perf_counter() - started) * 1000, 1),
+    }
+
+
+@api_method("rpa.listElements")
+def list_elements(path: str) -> dict[str, Any]:
+    """列出流程已捕获的元素资产（elements/*.json）。"""
+    started = time.perf_counter()
+    ed = _elements_dir(path)
+    items: list[dict[str, Any]] = []
+    if ed.is_dir():
+        for f in sorted(ed.glob("*.json")):
+            try:
+                doc = json.loads(f.read_text(encoding="utf-8"))
+                sel = doc.get("selector") or {}
+                items.append(
+                    {
+                        "name": f.stem,
+                        "kind": doc.get("kind"),
+                        "selector": sel.get("css") or sel.get("locator"),
+                    }
+                )
+            except Exception:
+                items.append({"name": f.stem, "kind": None, "selector": None, "error": "解析失败"})
+    return {
+        "ok": True,
+        "elements": items,
+        "dir": str(ed),
+        "ms": round((time.perf_counter() - started) * 1000, 1),
+    }
+
+
+@api_method("rpa.startCapture")
+def start_capture(
+    path: str,
+    target: str,
+    name: str,
+    browserType: str = "edge",
+) -> dict[str, Any]:
+    """起一个 `rpa-core capture` 子进程，复用 main 的捕获器（扩展 / 桌面）。
+
+    capture 是**阻塞到用户手势**的一次性会话（浏览器 Ctrl+Click / 桌面 F9），所以这里
+    spawn 后立刻返回，前端用 `rpa.capturePoll` 轮询元素文件是否落盘——不要 await 它。
+    元素文件落盘即用 `name` 命名（与节点 elementRefs 同名 = 自动绑定，引用模型无需单独绑定）。
+    """
+    started = time.perf_counter()
+    flow_dir = _flow_path(path).parent.name
+    python = _runner_python()
+    argv = [
+        str(python),
+        "-m",
+        "rpa_core.cli",
+        "capture",
+        target,
+        "--save-as",
+        name,
+        "--flow",
+        flow_dir,
+        "--workflows",
+        str(REPO / "workflows"),
+    ]
+    if target == "browser" and browserType:
+        argv += ["--browser-type", browserType]
+    try:
+        proc = subprocess.Popen(
+            argv,
+            cwd=str(REPO),
+            env=_run_env(),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+    except OSError as exc:
+        return {"ok": False, "code": "SPAWN_FAILED", "error": f"起不了捕获子进程：{exc}"}
+    entry: dict[str, Any] = {
+        "name": name,
+        "flow": flow_dir,
+        "target": target,
+        "proc": proc,
+        "path": path,
+        "stdout": [],
+        "stderr": [],
+        "t0": time.perf_counter(),
+        "startedAt": time.time(),
+        "argv": argv,
+    }
+    _CAPTURES[name] = entry
+    threading.Thread(
+        target=_pump, args=(proc.stdout, entry["stdout"], entry), daemon=True
+    ).start()
+    threading.Thread(
+        target=_pump, args=(proc.stderr, entry["stderr"], entry), daemon=True
+    ).start()
+    return {
+        "ok": True,
+        "name": name,
+        "pid": proc.pid,
+        "argv": argv[1:],
+        "python": str(python),
+        "instructions": (
+            "去浏览器 Ctrl+Click 目标元素（桌面按 F9）；抓完自动落盘并绑定"
+            if target == "browser"
+            else "把鼠标移到目标控件按 F9"
+        ),
+        "ms": round((time.perf_counter() - started) * 1000, 1),
+    }
+
+
+@api_method("rpa.capturePoll")
+def capture_poll(name: str) -> dict[str, Any]:
+    """轮询某个捕获会话：是否还在跑、元素文件是否落盘。"""
+    entry = _CAPTURES.get(name)
+    if entry is None:
+        return {"ok": False, "code": "UNKNOWN_CAPTURE", "error": f"没有这个捕获会话：{name}"}
+    proc = entry["proc"]
+    alive = proc.poll() is None
+    elem = _elements_dir(entry["path"]) / f"{name}.json"
+    captured = elem.is_file()
+    return {
+        "ok": True,
+        "name": name,
+        "running": alive,
+        "captured": captured,
+        "path": str(elem) if captured else None,
+        "exitCode": None if alive else proc.returncode,
+    }
+
+
+# ---------------------------------------------------------------------------
 # 会话通道（WorkBuddy Agent 侧，协议见 workbuddy-suite 的 references/protocol.md）
 # 「可选依赖」：Agent 没在跑、端口没起，编辑器照常能用；任何一次调用不超 1 秒。
 # ---------------------------------------------------------------------------
