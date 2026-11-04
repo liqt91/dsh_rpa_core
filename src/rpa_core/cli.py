@@ -17,7 +17,6 @@ from rpa_core.catalog import load_catalog
 from rpa_core.compiler import WorkflowCompiler
 from rpa_core.compiler.compiler import WorkflowCompileError
 from rpa_core.control_channel import request_pause, reset_control, watch_control_file
-from rpa_core.devserver import DevServer
 from rpa_core.model.runtime import RunResult
 from rpa_core.model.workflow import Workflow
 from rpa_core.runtime import Orchestrator, RunHandle
@@ -364,7 +363,7 @@ def _cmd_install_extension(args) -> int:
                 "browsers": installed,
                 "detected": detect_browsers(),
                 "note": "重启 Chrome/Edge 后静默安装（不可手动卸载）；未加域机器仅接受商店来源；"
-                        "需 devserver 在默认端口运行以托管 CRX",
+                        "需自行托管 update manifest 与 CRX 并经 --update-url 提供",
             }
         else:
             guided = install_external_guided(
@@ -601,28 +600,6 @@ def _cmd_gui(args) -> int:
     )
 
 
-def _serve(args) -> int:
-    server = DevServer(
-        commands_root=_commands_root(),
-        workflows_root=args.workflows,
-        port=args.port,
-        browser_capture_factory=_browser_capture_factory,
-        desktop_capture_factory=_desktop_capture_factory,
-    )
-    print(
-        json.dumps(
-            {"listening": f"http://{server.host}:{server.port}", "workflows": str(args.workflows)},
-            indent=2,
-        ),
-        flush=True,
-    )
-    try:
-        server.serve()
-    except KeyboardInterrupt:
-        pass
-    return 0
-
-
 def main() -> int:
     # 子进程/管道场景 stdout 可能是 cp936——统一 UTF-8，保证 JSON 输出可解码
     # （desktop_agent 同款处理；WorkBuddy statusMatch 契约依赖可解析输出）
@@ -633,14 +610,12 @@ def main() -> int:
         pass
     parser = argparse.ArgumentParser(prog="rpa-core")
     subparsers = parser.add_subparsers(dest="action", required=True)
-    for action in ("validate", "run", "resume", "devserver", "catalog", "capture",
+    # devserver 子命令已随 Web 编辑器形态退役（ADR 0020 §4）：store/app 库保留供
+    # 冻结期 GUI 进程内复用，HTTP 服务与静态 UI 不再提供用户入口。
+    for action in ("validate", "run", "resume", "catalog", "capture",
                    "elements", "auth", "status", "unauth", "install-extension",
                    "env-status", "gui", "pause", "runs"):
         sub = subparsers.add_parser(action)
-        if action == "devserver":
-            sub.add_argument("--port", type=int, default=8765)
-            sub.add_argument("--workflows", type=Path, default=Path("workflows"))
-            continue
         if action == "gui":
             sub.add_argument("--workflow", type=Path, default=None,
                              help="启动时打开指定的 workflow.json 文件")
@@ -675,7 +650,8 @@ def main() -> int:
             sub.add_argument("--policy", action="store_true",
                              help="走 ExtensionInstallForcelist 策略路线（受管环境强制安装）")
             sub.add_argument("--update-url",
-                             help="覆盖 update manifest URL（默认本地 devserver 8765）")
+                             help="覆盖 update manifest URL"
+                                  "（devserver 本地托管已退役，策略安装需自行托管）")
             sub.add_argument("--build-dir", type=Path, help="覆盖 CRX/pem 产物目录")
             sub.add_argument("--elevated", action="store_true", help=argparse.SUPPRESS)
             sub.add_argument("--extension-id", help=argparse.SUPPRESS)
@@ -745,8 +721,6 @@ def main() -> int:
                 help="单步：只执行一个节点，然后在下一个节点边界再次暂停（M24）",
             )
     args = parser.parse_args()
-    if args.action == "devserver":
-        return _serve(args)
     if args.action == "catalog":
         return _cmd_catalog()
     if args.action == "capture":

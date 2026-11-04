@@ -439,7 +439,7 @@
     },
     {
       "id": "workbuddy-suite-triple",
-      "title": "WorkBuddy listing triple: PPX editor perf/UX fixes + catalog-generated capability docs + MV3 picker hardening (all verified)",
+      "title": "WorkBuddy listing triple: PPX editor perf/UX fixes + catalog-generated capability docs + negative-probe hardening",
       "passes": true
     }
   ]

@@ -5,7 +5,7 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-CONNECTOR = ROOT / "workbuddy-connector"
+CONNECTOR = ROOT / "workbuddy-suite" / "connector"
 CLI_JSON = json.loads((CONNECTOR / "cli.json").read_text(encoding="utf-8"))
 META = json.loads((CONNECTOR / "connector-meta.json").read_text(encoding="utf-8"))
 

@@ -368,7 +368,10 @@ class DevServer:
             extension_build_dir=extension_build_dir,
         )
         editor_path = Path(__file__).resolve().parent / "static" / "index.html"
-        self.editor_html = editor_path.read_bytes()
+        # Web 编辑器 UI 已退役（ADR 0020 §2.2）：index.html 不再随仓分发。
+        # server 保留为测试夹具，SPA fallback 对缺失的 UI 文件退化为 404，
+        # /api/* 面不受影响。
+        self.editor_html = editor_path.read_bytes() if editor_path.is_file() else b""
         # 扫描 static/ 目录，支持 Vue 构建产物（子目录 + 哈希文件名）
         self._static_files = _scan_static_files(_STATIC_ROOT)
         self._httpd = ThreadingHTTPServer(("127.0.0.1", port), _RequestHandler)
