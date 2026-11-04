@@ -22,7 +22,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-_I18N_PATH = Path(__file__).resolve().parent.parent / "devserver" / "static" / "i18n.js"
+_I18N_PATH = Path(__file__).resolve().parent / "i18n.js"  # ppx-only：i18n.js 移入本包
 
 # 键可带引号（"browser.navigate"）或不带（sessionId），值一律双引号字符串
 _KV = re.compile(r'"?([A-Za-z_$][\w.$-]*)"?\s*:\s*"((?:[^"\\]|\\.)*)"')

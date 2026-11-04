@@ -143,7 +143,7 @@ def _cmd_unauth() -> int:
 
 def _save_flow_element(workflows_root: Path, flow: str, name: str, descriptor: dict) -> dict:
     """描述符存入流程元素资产（与 devserver `_save_element` 同一能力，store 层复用）。"""
-    from rpa_core.devserver.store import WorkflowDirStore, WorkflowStore
+    from rpa_core.flowstore import WorkflowDirStore, WorkflowStore
     from rpa_core.model.capture import ElementDescriptor
 
     folder = WorkflowDirStore(workflows_root).directory(flow)
@@ -519,7 +519,7 @@ async def _await_with_control(run_dir: Path, handle: RunHandle) -> RunResult:
 
 
 def _cmd_elements(args) -> int:
-    from rpa_core.devserver.store import (
+    from rpa_core.flowstore import (
         WorkflowDirStore,
         WorkflowNameError,
         WorkflowNotFoundError,
@@ -565,41 +565,6 @@ def _cmd_elements(args) -> int:
         return 2
 
 
-def _cmd_gui(args) -> int:
-    """启动原生桌面 GUI（ADR 0014 方案 E，可选 gui extra）。
-
-    Qt 绑定采用延迟导入：未安装 extra 时其它子命令与 --help 完全不受影响，
-    这里给出可操作的安装提示而不是裸 ImportError。
-    `--debug-log [路径]`：开启选中/拖放诊断日志（等价于设 RPA_GUI_DEBUG=1），
-    启动时会把日志路径打到 stdout，方便复现「拖放后选中异常」时取证。
-    """
-    import os  # 仅 GUI 诊断开关用，避免影响顶层导入链
-
-    if getattr(args, "debug_log", None):
-        os.environ["RPA_GUI_DEBUG"] = "1"
-        if str(args.debug_log) not in ("1", "true", "True"):
-            os.environ["RPA_GUI_DEBUG_FILE"] = str(args.debug_log)
-    try:
-        from rpa_core.gui.app import run_gui
-    except ModuleNotFoundError as exc:
-        missing = getattr(exc, "name", "") or "PySide6"
-        _cli_fail(
-            "GUI_EXTRA_MISSING",
-            f"原生 GUI 缺少可选依赖 {missing}；请先执行 uv sync --extra gui"
-            "（或 pip install -e '.[gui]'）后再运行 rpa-core gui。",
-        )
-        return 2
-    if os.environ.get("RPA_GUI_DEBUG"):
-        from rpa_core.gui.debug_log import init as _debug_init
-        from rpa_core.gui.debug_log import log_path
-
-        _debug_init()
-        print(f"[gui] 诊断日志：{log_path()}", flush=True)
-    return run_gui(
-        _commands_root(), flow_path=args.workflow, workflows_root=args.workflows
-    )
-
-
 def main() -> int:
     # 子进程/管道场景 stdout 可能是 cp936——统一 UTF-8，保证 JSON 输出可解码
     # （desktop_agent 同款处理；WorkBuddy statusMatch 契约依赖可解析输出）
@@ -614,18 +579,8 @@ def main() -> int:
     # 冻结期 GUI 进程内复用，HTTP 服务与静态 UI 不再提供用户入口。
     for action in ("validate", "run", "resume", "catalog", "capture",
                    "elements", "auth", "status", "unauth", "install-extension",
-                   "env-status", "gui", "pause", "runs"):
+                   "env-status", "pause", "runs"):
         sub = subparsers.add_parser(action)
-        if action == "gui":
-            sub.add_argument("--workflow", type=Path, default=None,
-                             help="启动时打开指定的 workflow.json 文件")
-            sub.add_argument("--workflows", type=Path, default=Path("workflows"),
-                             help="流程库目录（命名流程的保存/打开/运行根目录）")
-            sub.add_argument("--debug-log", nargs="?", const="1", default=None,
-                             metavar="PATH",
-                             help="开启选中/拖放诊断日志（可给路径；"
-                                  "默认 %%TEMP%% 下 rpa_gui_debug.log）")
-            continue
         if action in ("catalog", "auth", "status", "unauth", "env-status"):
             continue
         if action == "pause":
@@ -741,8 +696,6 @@ def main() -> int:
         return _cmd_pause(args)
     if args.action == "runs":
         return _cmd_runs(args)
-    if args.action == "gui":
-        return _cmd_gui(args)
     try:
         _root, catalog, plan = _compile(args.workflow)
     except FileNotFoundError as exc:

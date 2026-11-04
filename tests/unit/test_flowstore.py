@@ -1,8 +1,7 @@
 import json
 
 import pytest
-
-from rpa_core.devserver.store import (
+from rpa_core.flowstore import (
     WorkflowDirStore,
     WorkflowNameError,
     WorkflowNotFoundError,
