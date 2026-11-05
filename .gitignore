@@ -24,6 +24,8 @@ _tmp_*/
 
 # Node.js
 node_modules/
+# npm pack 的产物（发布前自查 `npm pack --dry-run` 会留在仓库根）
+/*.tgz
 .trae/
 
 # IDE 本机代码索引（10MB 级二进制图数据库，仅本地，不入库）
