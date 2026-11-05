@@ -1,26 +1,6 @@
 {
   "gui": {
     "src/rpa_core/gui/__init__.py": "5647d4558ac41ebd82d539dab79914f714371a3c92272299c1855a4e026d440c",
-    "src/rpa_core/gui/app.py": "f2a94542a103a66cedf7febc0a267beb5d027ea3999610a86b276051767d1374",
-    "src/rpa_core/gui/canvas.py": "837009797ec66a8e8e52929bd27fb8bcd033b645c4e694c2478d4c7f91594154",
-    "src/rpa_core/gui/capture_float.py": "15e13c0284f2a774de72e26c32c7f10d5385bff3406394008aa0185f9f21b4e4",
-    "src/rpa_core/gui/command_matrix.py": "ef9fc622c6e41ce766abcf9bfbddb6efd87d7ecc72d7ed394a20cbd85c091d10",
-    "src/rpa_core/gui/command_palette.py": "f743bcbe675de0917fdd3068541a6486a8a933a0bb1cae0c3a478ba771799d37",
-    "src/rpa_core/gui/debug_log.py": "04396d16077665781a4a3e40f4056a6ea5ff5dcd8bdba0538f25a7c54ed9f27e",
-    "src/rpa_core/gui/element_editor.py": "5512a6dc18775cf261dc24e94713ac3f6aa9a608e586028e4e31bd09baa2907e",
-    "src/rpa_core/gui/element_panel.py": "61e6751683b25d310142e7af1321121f52c80fb892dbcdf268a18cd4a5cc4692",
-    "src/rpa_core/gui/flow_model.py": "af7ae4e940c6452473bfb910fd641e9be2d060b473ef0dc0435628621606e334",
-    "src/rpa_core/gui/fonts.py": "32f1f31ceeac37d6bdb6dbbb0e65ac7f440e5c59460546f0f336af4b552c6c03",
-    "src/rpa_core/gui/home.py": "bd3898ac6366408a3e18d166431b703f89d0bafa23e7cb5c5a4c98e09019b469",
-    "src/rpa_core/gui/i18n.py": "5c7a6cb9025fc4c3f846e052628eb7e36f388ee44c6395fe6e8fea2f20a4058f",
-    "src/rpa_core/gui/inputs_dialog.py": "f9179251908c9e67a1ca56d3be7a3ba8dd50d0a3f8ad539a8927a6dfeb0287e7",
-    "src/rpa_core/gui/motion.py": "49e88c9b7414039362f9d7d7a1b6490b86342ea98b03a7e8ecda2cc091eeba9e",
-    "src/rpa_core/gui/palette.py": "e27359fb97a22ec1871bcb88b6ac81f7e17a15fa76fadc16581559b15986c128",
-    "src/rpa_core/gui/param_form.py": "248fa1127d233f91d68083b3715efdefde74390a39c539ee2f3e779cdb926481",
-    "src/rpa_core/gui/persist.py": "a5e861e727c9935d98c06673b0b4299407beae71a518f2692b407ccdaf7b22b1",
-    "src/rpa_core/gui/run_float.py": "43f35dcc167bbb82d8a0fe86620482f1834e2f96cdc6e1541a894872ecb6d68a",
-    "src/rpa_core/gui/splash.py": "b21314df50c4d949cde3e95f6c31befa19bd99d0c836a36a10f3b902a3e60e7e",
-    "src/rpa_core/gui/table_panel.py": "5f53c3cbe9c534028136e1f03714c6a892bf6534489c1a736622bf628fa31c78",
-    "src/rpa_core/gui/theme.py": "7e14d1c33ee2bea6e2e79e495373578213be3f80887758342f41a0630ebf1eff"
+    "src/rpa_core/gui/i18n.py": "2b5cc0e80062585bbdbf43926940fa311b33edecf4d6a37247440967a3862459"
   }
 }
