@@ -207,6 +207,7 @@ git clone <repo> rpa_core && cd rpa_core
 node bin/rpa-skill.mjs install
 
 # ③ 自查 / 卸载
+rpa-skill doctor           # 装完先跑这个：它会告诉你运行时连没连上
 rpa-skill status
 rpa-skill uninstall --target dsh
 ```
@@ -214,8 +215,24 @@ rpa-skill uninstall --target dsh
 > `npx <pkg> install` 这种写法也能用，但参数归属在各 npm 版本上不完全一致
 > （`install` 可能被当成包名），所以文档里只给 `npm i -g` 与 `node bin/…` 两种确定能跑的形态。
 
-安装器只做三件事：拷目录、把 `SKILL.md` 里的 `{{SKILL_DIR}}` 换成安装后的**绝对路径**
-（agent 的 cwd 通常是项目根，相对写 `scripts/studio.py` 一定找不到）、生成 `skill.json`。
+**技能依赖 `rpa-core` 的 Python 运行时，而 npm 包里不带它**——这是分发包最容易断的一环：
+技能被拷进宿主目录后，原仓库的 `src/`、`editor/`、`extension/` 都不在了，裸命令
+`rpa-core catalog` 会 `command not found`。所以安装器会现场探测「哪个解释器能 import
+`rpa_core`、源码根在哪」，把结果写进技能目录的 `runtime.json`，并把文档里的
+`{{PYTHON}}` / `{{RPA_CORE}}` 换成绝对路径（`{{RPA_CORE}}` 指向技能自带的
+`scripts/rc.py`，它按 `runtime.json` 二次定位，换 venv / 换 PATH 也还能找回）。
+
+探测不到时**安装不会失败**（文件是好的），但会在 `runtime.json` 缺席 + stderr 上报警，
+`rpa-skill doctor` 同步报红。补上只需重装一次并指一下仓库根：
+
+```bash
+rpa-skill install --force --rpa-core-dir <rpa_core 仓库根>
+# 或：--python <能 import rpa_core 的解释器>
+```
+
+安装器做四件事：拷目录、探测运行时并写 `runtime.json`、替换 `{{SKILL_DIR}}` /
+`{{PYTHON}}` / `{{RPA_CORE}}` 三个占位符（agent 的 cwd 通常是项目根，相对写
+`scripts/studio.py` 一定找不到）、生成 `skill.json`。
 它不跑 postinstall、不写注册表；`--force` 时旧目录改名成 `.replaced-<时间戳>` 保留而不删除。
 
 目标目录（不指定 `--target` 时自动装到本机已存在的宿主）：

@@ -3,12 +3,17 @@
 本文件是**宿主无关**的：只描述 `rpa-core` 的契约与校验行为，不假定任何特定的 AI 客户端。
 任何能执行 shell 命令的 agent，按本文件都能产出可编译、可运行的流程。
 
+文中 `{{RPA_CORE}}` 是安装时替成绝对路径的命令（`<python> <技能目录>/scripts/rc.py`），
+原样照抄即可。它比裸 `rpa-core` 多的那层是「自己找运行时」：技能被拷进宿主目录后，
+`rpa-core` 未必在 PATH 上，`rc.py` 会按技能目录下的 `runtime.json` 定位，找不到时打印
+可照抄的修法而不是 `command not found`。
+
 ## 0. 两条铁律
 
 1. **能力清单现取，不靠记忆。** 生成前跑一次
 
    ```bash
-   rpa-core catalog --view agent
+   {{RPA_CORE}} catalog --view agent
    ```
 
    产出全部语义能力的卡片（参数契约、元素参数、输出字段、约束）。**条目数以输出里的
@@ -154,8 +159,8 @@ Python 源码（`"2+3"` → `5`），在子进程里求值，能用 `len(rows)` 
 检查缺口：
 
 ```bash
-rpa-core elements list --flow <流程目录名>     # 已有的元素资产
-rpa-core elements verify --flow <流程目录名> <元素名>
+{{RPA_CORE}} elements list --flow <流程目录名>     # 已有的元素资产
+{{RPA_CORE}} elements verify --flow <流程目录名> <元素名>
 ```
 
 ## 6. 编译器能兜住什么，兜不住什么
@@ -182,7 +187,7 @@ rpa-core elements verify --flow <流程目录名> <元素名>
 
 ## 7. 生成后自检清单
 
-1. `rpa-core validate <workflow.json>` → `{"valid": true}`
+1. `{{RPA_CORE}} validate <workflow.json>` → `{"valid": true}`
 2. 每个 `with` 的键都在对应卡片 `params` 里，没有多也没有少（`elementRefs` 覆盖的键除外）
 3. 每个 `elementRefs` 的元素名都能在 `elements/` 下找到（或明确标为「待补」交给用户捕获）
 4. 每个 `${steps.x.outputs.y}` 的 `x` 在前、`y` 在卡片 `x_outputs` 里

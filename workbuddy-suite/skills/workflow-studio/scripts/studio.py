@@ -33,6 +33,11 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
+# 同目录的定位层。装上之后 editor/ extension/ src/ 都不在本目录，靠它把源码根找回来；
+# 开发态没有 runtime.json，它会向上找到仓库根，行为与本文件以前写死的相对层级一致。
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _runtime  # noqa: E402
+
 VERSION = "1.0.0"
 SERVICE = "workbuddy-studio"
 DEFAULT_PORT = 7788
@@ -645,6 +650,18 @@ def cmd_stop(args: argparse.Namespace) -> int:
     return 0 if result.get("ok") else 2
 
 
+def _suite_dir() -> Path:
+    """workbuddy-suite 目录（editor/ 与 extension/ 的上一级）。
+
+    安装态下 `parents[3]` 是宿主目录（`~/.dsh`），拿它拼 editor/ 会指到不存在的地方；
+    所以先问定位层，拿不到才退回相对层级。
+    """
+    root = _runtime.find_source_root()
+    if root:
+        return root / "workbuddy-suite"
+    return Path(__file__).resolve().parents[3]
+
+
 def _find_ppx() -> str | None:
     override = os.environ.get("PPX_BIN")
     if override and Path(override).is_file():
@@ -677,10 +694,9 @@ def cmd_gui(args: argparse.Namespace) -> int:
             print(json.dumps({"ok": True, "session": "started", "port": port}))
 
     binary = _find_ppx()
-    # studio.py 在 skills/workflow-studio/scripts/ 下：parents[0]=scripts, [1]=workflow-studio,
-    # [2]=skills, [3]=workbuddy-suite —— editor/ 挂在 [3] 下面，少一级就会拿 skills/ 当 cwd，
-    # Popen 直接报 [WinError 267] 目录名称无效。
-    editor = Path(__file__).resolve().parents[3] / "editor"
+    # 编辑窗口工程在 workbuddy-suite/editor 下；安装态要靠定位层找回源码根，
+    # 少一级就会拿 skills/ 当 cwd，Popen 直接报 [WinError 267] 目录名称无效。
+    editor = _suite_dir() / "editor"
     if args.exe:
         # 用户给的可能是相对路径，而下面的 cwd 是 editor/ —— 必须先按当前目录解析成绝对路径，
         # 否则 Popen 会在 editor/ 底下找这个相对路径，报 [WinError 267] 目录名称无效。
@@ -734,15 +750,39 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         label = "在线" if editor.get("online") else "离线（先打开编辑窗口）"
         checks.append(("editor window", bool(editor.get("online")), label))
 
-    editor_dir = Path(__file__).resolve().parents[2] / "editor"
+    # 「装上但跑不动」的根因通常在这一层：技能被拷进宿主目录后，与源码树的关系断了。
+    # 所以先把定位结果、rpa-core 能不能调通摆在最前面。
+    root = _runtime.find_source_root()
+    root_detail = str(root) if root else "未找到（runtime.json 没记；重装加 --rpa-core-dir）"
+    checks.append(("source root", root is not None, root_detail))
+    rc_py = Path(__file__).resolve().with_name("rc.py")
+    try:
+        proc = subprocess.run(
+            [sys.executable, str(rc_py), "--help"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=60,
+            check=False,
+        )
+        rc_ok = proc.returncode == 0
+        first = (proc.stdout or proc.stderr or "").strip().splitlines()
+        rc_detail = "可执行" if rc_ok else (first[0] if first else f"退出码 {proc.returncode}")
+    except (OSError, subprocess.SubprocessError) as exc:
+        rc_ok, rc_detail = False, f"{type(exc).__name__}: {exc}"
+    checks.append(("rpa-core", rc_ok, rc_detail))
+
+    suite = _suite_dir()
+    editor_dir = suite / "editor"
     checks.append(("editor project", (editor_dir / "ppx.toml").is_file(), str(editor_dir)))
-    extension_dir = Path(__file__).resolve().parents[3] / "extension"
+    extension_dir = suite / "extension"
     checks.append(("extension", (extension_dir / "manifest.json").is_file(), str(extension_dir)))
 
     failed = 0
     for name, passed, detail in checks:
         mark = "PASS" if passed else "FAIL"
-        print(f"[{mark}] {name:<14}{detail}")
+        print(f"[{mark}] {name:<15}{detail}")
         if not passed:
             failed += 1
     return 0 if failed == 0 else 1

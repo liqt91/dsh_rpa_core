@@ -387,3 +387,4 @@ un-control-advanced 翻 true——M21 于 2026-09-19 完成后已连续多轮 FU
 2026-11-05 | catalog-compiler | done | **AI 语义投影 tool card**（`catalog --view agent`，186d0e6）：89 manifest → 80 语义条目；「17 对同一语义」实测 8 组有分歧 ⇒ 全等才合并 + `divergent_groups` 审计。判据 12 条 + 三注入负向验证；门禁 FULL PASS。详见当日 memory。
 
 2026-11-05 | workbuddy-connector | done | **技能分发**（`bin/rpa-skill.mjs`，零依赖）：clone 或 `npx` 一条命令装进 dsh / Claude / Codex / Gemini 技能目录；`{{SKILL_DIR}}` 安装时换成绝对路径（agent 的 cwd 是项目根，相对路径必失效）。冒烟 9 条 + 三注入负向验证；门禁 FULL PASS。详见当日 memory。
+2026-11-05 | workbuddy-connector | done | **运行时接线**（dsh 实测报障）：npm 包只带 `rpa-skill`，文档却写裸命令 `rpa-core catalog`，装进技能目录必 `command not found`。安装器改为现场探测（解释器 × 源码根 / pip 包 / PATH exe）→ 写 `runtime.json` → 替换 `{{PYTHON}}`/`{{RPA_CORE}}`（指向 `scripts/rc.py` 垫片，二次定位 + 找不到时给可照抄的修法）；新增 `doctor`，`status` 报 `runtime_ok`。冒烟 18 条（含「文档里那条命令照抄出来真能跑」）+ 5 注入负向验证；门禁 FULL PASS（763 passed，basetemp 见 BACKLOG）。详见当日 memory。

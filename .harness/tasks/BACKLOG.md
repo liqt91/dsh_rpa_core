@@ -288,6 +288,18 @@
   - **下一步**：优先补那几个 4/4 的落盘类命令，模板照 `data.setVar`（有完整中文 description 的
     正面例子）；补一条就降低一分生成流程的运行期失败率。
 
+- [ ] **`test_retry_backoff_cannot_exceed_workflow_deadline` 是计时脆弱用例：0.05s 预算在本机会误红**（`planned`，2026-11-05 实测）
+  - **现象**：单独连跑 5 次 0 次通过，失败形态是 `executor.calls == 0`——第一次调用都还没发生；
+    而同一次会话里把 pytest 的临时目录换到系统盘就 100% 通过。所以红的是「首调落在 50ms 之外」，
+    不是编排器把截止时间判早了。
+  - **成因**：本仓的 agent 沙箱把 Python 的 `tempfile.gettempdir()` 指到**仓库根**（`TMPDIR` 环境变量
+    明明是系统 temp，`gettempdir()` 却返回 cwd），pytest 的 `tmp_path` 于是落在仓库盘上；首次事件
+    写盘实测 102ms，已经超过 50ms 预算。`--basetemp` 指到系统 temp 后立刻转绿。
+  - **旁证**：整轮门禁带 `PYTEST_ADDOPTS="--basetemp=<系统 temp>"` 跑 = 763 passed / `FULL GATE PASSED`。
+  - **下一步**：把该用例的预算改到本机安全的量级（如 timeout 0.5s + backoff 5s，语义仍是「回退期间
+    被截止」），或者按「事件是否真的写过盘」断言，而不是赌 50ms。**别只加 `--basetemp` 了事**：
+    换台慢机器照样红，而这条红会被下一个人误读成编排器回归（本轮就查了一轮）。
+
 - [ ] **GUI 的「缺少必填参数」与编译器的 `Missing required parameter(s)` 重复报**（`planned`，2026-10-28 发现）
   - **来源**：编译期新增参数**键**校验（`compiler._validate_node_inputs`）后，`gui/app.py:_validate`
     里那段自查（`缺少必填参数：...`，含同样的 `elementRefs` 豁免）在语义上已经冗余——同一个缺口

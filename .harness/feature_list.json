@@ -119,7 +119,7 @@
     },
     {
       "id": "workbuddy-connector",
-      "title": "WorkBuddy CLI connector with auth trio and skill package; cross-host skill install via npx/clone",
+      "title": "WorkBuddy CLI connector + auth trio; cross-host skill install (npx/clone) with rpa-core runtime autodetect",
       "passes": true
     },
     {

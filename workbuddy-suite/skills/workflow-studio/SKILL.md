@@ -32,7 +32,30 @@ author: w
 | 本技能 + 会话服务 | Agent 侧的命令行入口，负责排队、等待、取结果 | 每次调用 |
 | 浏览器插件（MV3） | 人在页面上点一个元素，插件算出稳定选择器 | 需要页面元素定位 |
 
+下文命令行里的前半截（解释器绝对路径 / `rc.py` 入口）是安装时写死的，原样照抄即可。
+若命令里还能看到 `{{…}}` 这种没被替换的花括号，说明这份技能是手拷进来的、没走安装器，
+重装一次就能补齐：
+
+```bash
+rpa-skill install --force
+```
+
 ## 零、先有流程：从需求生成 workflow.json
+
+**开工前先确认运行时在位**。这一条不过，下面所有 `catalog` / `validate` 都跑不了，
+而失败会表现成「流程写不出来」而不是「缺个运行时」，很容易误判：
+
+```bash
+{{RPA_CORE}} --help
+```
+
+- 打出 `{validate,run,resume,catalog,…}` ⇒ 往下走。
+- 打出 `RPA_CORE_NOT_FOUND` ⇒ **别硬编流程**，也别说「技能坏了」。把输出里 `fix`
+  的第一条原样抄给用户（通常是重装时指一下仓库根：
+  `rpa-skill install --force --rpa-core-dir <rpa_core 仓库根>`），并说明「技能装好了，
+  只是它要调的那半（Python 运行时）没接上」。
+- 要一次看全：`rpa-skill doctor`；没有 `rpa-skill` 命令时用
+  `{{PYTHON}} "{{SKILL_DIR}}/scripts/studio.py" doctor`（顺带报 PPX 与浏览器扩展在不在）。
 
 用户说「帮我把这个页面上的事自动做一遍」时，产出是一份 `workflow.json`。这一步的知识
 **全部**在 `references/assembly.md`——节点形状、数据流语法、元素引用、编译器兜不住什么，
@@ -40,18 +63,18 @@ author: w
 
 三条最容易踩的：
 
-1. **能力清单现取，不靠记忆**：`rpa-core catalog --view agent`。卡片里的 `params`
+1. **能力清单现取，不靠记忆**：`{{RPA_CORE}} catalog --view agent`。卡片里的 `params`
    决定参数键，`x_outputs` 的键名决定 `${steps.<节点id>.outputs.<键>}` 怎么引用。
 2. **交互元素写 `elementRefs` 占位**，选择器值交给用户捕获（第四节），不要在 `with` 里
    编一个 selector。
-3. **生成后一定跑 `rpa-core validate`**；但要说清楚它的边界——它只查键集合与引用根，
+3. **生成后一定跑 `{{RPA_CORE}} validate`**；但要说清楚它的边界——它只查键集合与引用根，
    数据流写错、混排的 `${}` 不解析、输出的 key 拼错，它都**不会**报。所以过了 validate
    之后仍要按 `references/assembly.md` §7 的清单自查，别把「编译绿」当成「能跑」。
 
 ## 一、开工前先自检
 
 ```bash
-python "{{SKILL_DIR}}/scripts/studio.py" status --pretty
+{{PYTHON}} "{{SKILL_DIR}}/scripts/studio.py" status --pretty
 ```
 
 - 输出里有 `会话 1.0.0 · 端口 7788` → 服务在跑，继续。
@@ -63,7 +86,7 @@ python "{{SKILL_DIR}}/scripts/studio.py" status --pretty
 ## 二、起会话服务（一次即可，常驻）
 
 ```bash
-python "{{SKILL_DIR}}/scripts/studio.py" serve --port 7788
+{{PYTHON}} "{{SKILL_DIR}}/scripts/studio.py" serve --port 7788
 ```
 
 - 只监听 `127.0.0.1`，不对外网开放；端口被占会自动顺延（实际端口写在返回值里）。
@@ -74,7 +97,7 @@ python "{{SKILL_DIR}}/scripts/studio.py" serve --port 7788
 
 ```bash
 # 1. 把文件递进窗口（立刻返回；--wait 会一直等到用户保存/关闭）
-python "{{SKILL_DIR}}/scripts/studio.py" open "D:/work/workflows/report.json" --reason "请把 pageSize 调到 50" --wait 120
+{{PYTHON}} "{{SKILL_DIR}}/scripts/studio.py" open "D:/work/workflows/report.json" --reason "请把 pageSize 调到 50" --wait 120
 ```
 
 - 退出码 `0` + `events` 非空 ⇒ 用户**保存了**（或关了窗口，看 `kind`）。
@@ -83,7 +106,7 @@ python "{{SKILL_DIR}}/scripts/studio.py" open "D:/work/workflows/report.json" --
 
 ```bash
 # 2. 只等保存事件（不重新打开文件）
-python "{{SKILL_DIR}}/scripts/studio.py" wait --kind save --timeout 120
+{{PYTHON}} "{{SKILL_DIR}}/scripts/studio.py" wait --kind save --timeout 120
 ```
 
 返回的事件里带 `sha` / `bytes` / `lines` / `validation`：
@@ -97,7 +120,7 @@ python "{{SKILL_DIR}}/scripts/studio.py" wait --kind save --timeout 120
 
 ```bash
 # 1. 先进入等待（Agent 侧阻塞 ≤60s）
-python "{{SKILL_DIR}}/scripts/studio.py" capture --timeout 60
+{{PYTHON}} "{{SKILL_DIR}}/scripts/studio.py" capture --timeout 60
 # 2. 同时告诉用户：打开目标页面 → 点浏览器工具栏的 Studio 图标 → 开始拾取 → 点目标元素
 ```
 

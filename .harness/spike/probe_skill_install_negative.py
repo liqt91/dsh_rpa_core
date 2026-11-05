@@ -1,11 +1,17 @@
 """负向验证：安装器的冒烟判据真的会红吗？
 
-三处「合法语法的精准放宽」注入 bin/rpa-skill.mjs，每处只破坏一个行为，
-跑 workbuddy-suite/verify/skill_install_test.mjs，断言「实际红 == 期望红」，
+五处「合法语法的精准放宽」注入，每处只破坏一个行为，跑
+workbuddy-suite/verify/skill_install_test.mjs，断言「实际红 == 期望红」，
 然后逐字节还原并核 md5。
 
-期望集是按依赖关系推的：破坏 skill.json 会连带「拷贝了完整技能树」也红，
-因为后者把 skill.json 列为必需文件 —— 这不是判据错，是同源红的两个观测点。
+这一轮的重点变了：上一轮只验证「装出来的文件对不对」，判据看不出
+「`rpa-core` 在用户机器上根本不存在」——所以新增的注入针对的是**运行时这条线**
+（不写 runtime.json、stderr 不喊、rc.py 不认「import 失败」）。
+
+期望集是按依赖关系推的，不是照抄实际输出：
+  · 不写 runtime.json ⇒ 文件清单、形状校验、doctor 三处红；
+    但 rc.py 仍能从源码树兜底，所以「命令能跑」不该红——这正是期望要精确的理由。
+  · 跳过占位符替换 ⇒ 命令里留 {{…}}，shell 起来必失败，所以「命令能跑」跟着红。
 """
 
 from __future__ import annotations
@@ -15,30 +21,65 @@ import subprocess
 import sys
 from pathlib import Path
 
-TARGET = Path("bin/rpa-skill.mjs")
+INSTALLER = Path("bin/rpa-skill.mjs")
+RC = Path("workbuddy-suite/skills/workflow-studio/scripts/rc.py")
 SMOKE = "workbuddy-suite/verify/skill_install_test.mjs"
 SENTINEL = "NEG-INJECT"
 
 INJECTIONS = [
     {
         "name": "跳过占位符替换",
-        "old": "    if (!text.includes(PLACEHOLDER)) continue;\n",
+        "file": INSTALLER,
+        "old": "    if (!PLACEHOLDERS.some((k) => text.includes(k))) continue;\n",
         "new": "    if (true) continue;  // " + SENTINEL + "\n",
-        "expect": {"占位符替换成安装后的绝对路径"},
+        "expect": {
+            "占位符全部替换（三个都查，不只是 SKILL_DIR）",
+            "文档里那条命令照抄出来真的能跑",
+            "doctor 全绿",  # doctor 也数残留占位符，同一处破坏被两个观测点看到
+        },
     },
     {
-        "name": "不写 skill.json",
-        "old": '  writeFileSync(join(dest, "skill.json"), JSON.stringify(manifest, null, 2) + "\\n", "utf8");\n',
-        "new": "  // " + SENTINEL + " 故意不写清单\n",
-        "expect": {"拷贝了完整技能树", "skill.json 可解析且字段齐全"},
+        "name": "不写 runtime.json",
+        "file": INSTALLER,
+        "old": '  if (runtime.ok) {\n    writeFileSync(join(dest, "runtime.json")',
+        "new": '  if (runtime.ok && false) {  // ' + SENTINEL + '\n    writeFileSync(join(dest, "runtime.json")',
+        "expect": {
+            "拷贝了完整技能树（含定位层与 runtime.json）",
+            "runtime.json 指向真实存在的解释器与源码根",
+            "doctor 全绿",
+            # 补运行时那条也靠 runtime.json：没它，rc.py 只能走自身探测，而负向夹具里
+            # 那个裸解释器 import 不到 rpa_core ⇒ 修完了也调不通。
+            "给 --rpa-core-dir 就能补上，rc.py 随之可用",
+        },
+    },
+    {
+        "name": "运行时探不到时不写 stderr 告警",
+        "file": INSTALLER,
+        "old": "    if (warn.length) process.stderr.write(",
+        "new": "    if (warn.length && false) process.stderr.write(",
+        "expect": {"仓库外安装：不报错，但把「没接上运行时」说清楚"},
     },
     {
         "name": "幂等检查失效",
+        "file": INSTALLER,
         "old": "  if (installed && !force) {\n",
-        "new": "  if (false) {  // " + SENTINEL + "\n",
+        "new": "  if (installed && !force && false) {  // " + SENTINEL + "\n",
         "expect": {"重复安装被拒绝（幂等）"},
     },
+    {
+        "name": "rc.py 把「import 失败」当成 rpa-core 的退出码吞掉",
+        "file": RC,
+        "old": '    if proc.returncode == EXIT_IMPORT_FAILED and IMPORT_MARKER in (proc.stderr or ""):\n',
+        "new": "    if False:  # " + SENTINEL + "\n",
+        "expect": {"这种安装里 rc.py 必须 exit 2 并给可照抄的修法"},
+    },
 ]
+
+TARGETS = [INSTALLER, RC]
+
+
+def md5(path: Path) -> str:
+    return hashlib.md5(path.read_bytes()).hexdigest()
 
 
 def run_smoke() -> tuple[int, set[str]]:
@@ -57,13 +98,19 @@ def run_smoke() -> tuple[int, set[str]]:
 
 
 def main() -> int:
-    if SENTINEL in TARGET.read_text(encoding="utf-8"):
-        print("哨兵残留，拒绝运行", file=sys.stderr)
-        return 2
+    for target in TARGETS:
+        if SENTINEL in target.read_text(encoding="utf-8"):
+            print(f"哨兵残留在 {target}，拒绝运行", file=sys.stderr)
+            return 2
 
-    original = TARGET.read_bytes()
-    baseline = hashlib.md5(original).hexdigest()
+    baseline = {t: md5(t) for t in TARGETS}
+    originals = {t: t.read_bytes() for t in TARGETS}
     problems: list[str] = []
+
+    def restore_all() -> None:
+        for t, data in originals.items():
+            if md5(t) != baseline[t]:
+                t.write_bytes(data)
 
     try:
         rc, failed = run_smoke()
@@ -72,15 +119,18 @@ def main() -> int:
             problems.append("基线本身不绿，负向验证无意义")
 
         for item in INJECTIONS:
-            text = TARGET.read_text(encoding="utf-8")
+            target: Path = item["file"]
+            text = target.read_text(encoding="utf-8")
             hits = text.count(item["old"])
             if hits != 1:
                 problems.append(f"{item['name']}: 锚点命中 {hits} 次（应为 1）")
                 continue
-            TARGET.write_bytes(text.replace(item["old"], item["new"]).encode("utf-8"))
-            if SENTINEL not in TARGET.read_text(encoding="utf-8"):
+            target.write_bytes(text.replace(item["old"], item["new"]).encode("utf-8"))
+            # 「注入落盘」按锚点消失判，不按哨兵判：有些精准放宽改在单行语句上，
+            # 塞不进注释，硬塞会把语法搞坏——那就不是「精准」了。
+            if item["old"] in target.read_text(encoding="utf-8"):
                 problems.append(f"{item['name']}: 注入没落盘")
-                TARGET.write_bytes(original)
+                restore_all()
                 continue
 
             rc, failed = run_smoke()
@@ -92,13 +142,12 @@ def main() -> int:
                     f"{item['name']}: 期望 {sorted(item['expect'])} 实际 {sorted(failed)}"
                 )
 
-            TARGET.write_bytes(original)
-            if hashlib.md5(TARGET.read_bytes()).hexdigest() != baseline:
-                problems.append(f"{item['name']}: 还原失败")
+            restore_all()
+            for t in TARGETS:
+                if md5(t) != baseline[t]:
+                    problems.append(f"{item['name']}: {t} 还原失败")
     finally:
-        if hashlib.md5(TARGET.read_bytes()).hexdigest() != baseline:
-            TARGET.write_bytes(original)
-            print("[兜底] 已逐字节还原")
+        restore_all()
 
     rc, failed = run_smoke()
     print(f"[复跑] rc={rc} 红={sorted(failed) or '无'}")
@@ -110,7 +159,7 @@ def main() -> int:
             print("  ! " + p)
         print("\nNEGATIVE VERIFICATION FAILED")
         return 1
-    print("\nNEGATIVE VERIFICATION PASSED（三注入全拦、md5 一致、复跑复绿）")
+    print(f"\nNEGATIVE VERIFICATION PASSED（{len(INJECTIONS)} 注入全拦、md5 一致、复跑复绿）")
     return 0
 
 
