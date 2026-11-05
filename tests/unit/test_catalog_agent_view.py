@@ -106,6 +106,45 @@ def test_example_exactly_covers_required(view: dict, catalog) -> None:
                 assert value in prop["enum"], f"{entry['semantic_id']}.{key} 占位值不在枚举内"
 
 
+def test_cross_field_constraints_are_projected(view: dict) -> None:
+    """property 层面看不见的跨字段约束必须透传。
+
+    实测消费时发现的缺口：`data.writeText` 的 `text` 与 `lines` 互斥（oneOf），
+    但卡片只列 params，模型会把两个一起写——编得过（只查键集合）、运行期才
+    INVALID_INPUT。没有约束的卡片不许凭空长出这个键。
+    """
+    constraints = _by_semantic_id(view, "data.writeText").get("constraints") or {}
+    assert "oneOf" in constraints, "writeText 的 text/lines 互斥丢了"
+    assert "constraints" not in _by_semantic_id(view, "browser.navigate")
+
+
+def test_array_param_items_are_projected(view: dict) -> None:
+    """array 参数的元素类型必须带出：否则 `lines` 会被写成单个字符串。"""
+    lines = _by_semantic_id(view, "data.writeText")["params"]["lines"]
+    assert lines["type"] == "array"
+    assert lines["items"] == {"type": "string"}
+
+
+def test_example_contract_is_published(view: dict) -> None:
+    """example 是不完备的骨架，这个边界必须公开。
+
+    实测事实：`browser.navigate` 的 example 只有 required 的 `browserType`，
+    而默认 `action=goto` 还需要 `url`（url 对 back/reload 不是必填，所以进不了
+    required）。不公开这条边界，模型会把 example 当可跑样例复制。
+    """
+    assert view["example_contract"].strip(), "必须公开 example 的边界"
+    navigate = _by_semantic_id(view, "browser.navigate")
+    assert "url" not in navigate["example"], (
+        "example 变得完备了 ⇒ example_contract 这条判据要跟着重写"
+    )
+
+
+def test_contract_notes_are_published(view: dict) -> None:
+    """三份契约说明随投影一起发出：消费方不一定读组装规范文档。"""
+    for key in ("element_refs_contract", "example_contract", "expression_contract"):
+        assert view[key].strip(), f"{key} 不能为空"
+
+
 def test_synthetic_divergence_is_not_merged(tmp_path: Path) -> None:
     """负向：人为制造 schema 分歧 ⇒ 必须拆两条并上报，不许静默合并。"""
     root = tmp_path / "commands"

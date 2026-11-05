@@ -13,9 +13,13 @@
   7 对 x-outputs 有差，「同一语义」是待审计的假设不是事实，fail-closed；
 - 有分歧的组各自成条目（semantic_id 用完整命令 id 保全局唯一），并在顶层
   `divergent_groups` 报出差异字段——这份审计清单本身就是投影器的产出之一；
-- 每个语义能力带：参数契约（类型/枚举/中文 description/默认值）、最小可用 example
-  （从 input_schema 现算，不硬编码）、元素参数标记（消费 runtime 的引用契约，
-  由调用方注入键集，本模块不复制）、errors、effect；
+- 每个语义能力带：参数契约（类型/枚举/中文 description/默认值/array 元素类型）、
+  最小 example（从 input_schema 现算，不硬编码）、跨字段约束（oneOf 等 property
+  层面看不见的条件原样透传）、元素参数标记（消费 runtime 的引用契约，由调用方
+  注入键集，本模块不复制）、errors、effect；
+- **example 是骨架不是样例**：实测里 `browser.navigate` 的 example 只有
+  `{"browserType": "msedge"}`，而默认 `action=goto` 还需要 `url`——required 表达
+  不了跨字段条件，故顶层 `example_contract` 明确划界；
 - catalog digest 原样透传——AI 生成的工作流绑定这份快照（catalog_version 闸门）。
 """
 
@@ -53,6 +57,38 @@ _CARD_FIELDS = (
 _ELEMENT_REFS_NOTE = (
     "element_params 里的参数通过节点的 elementRefs: {参数名: 元素名} 绑定，"
     "值不写进 with；运行期从流程 elements/ 目录解析，解析不到即 ELEMENT_REF_MISSING"
+)
+
+# example 的边界必须说清：实测消费时 `browser.navigate` 的 example 是
+# {"browserType": "msedge"}——required 只有它，但默认 action=goto 还需要 url。
+# 这类「跨字段条件」在 JSON Schema 的 required 里表达不了（navigate 的 url 对
+# back/reload 确实可选），所以 example 只能是骨架，不能让模型当成可跑样例。
+_EXAMPLE_NOTE = (
+    "example 是按 required 现算的最小骨架，不是可跑样例：可选参数的默认值、"
+    "参数之间的条件依赖（如 browser.navigate 的 action=goto 需同时给 url）都不体现，"
+    "以 params（description/enum/default）与 constraints 为准"
+)
+
+# 数据流语法的极简指引。实测里最贵的一个坑：`${}` 只认**整串**引用，
+# 混在文本里会原样输出字面量（"第 ${loop.row} 项"），而编译器不报错——
+# 属于「编得过、静默出错」。消费方不一定读组装规范，所以在投影里也点一句。
+_EXPRESSION_NOTE = (
+    '数据流：`"${path}"` 是整串引用（保留原类型），path ∈ inputs.<名> / '
+    "steps.<节点id>.outputs.<输出键> / loop.<循环变量> / 前序声明的变量名；"
+    '要与文本混排必须用 fx 模式（`_exprModes: {字段: "fx"}`，值里写 `[变量名]`）。'
+    "混排时用 ${} 会原样输出字面量，编译器不报错"
+)
+
+# properties 之外、却决定「能不能调用」的 schema 关键字。property 层面看不见
+# 跨字段条件，实测里 data.writeText 的 text/lines 互斥（oneOf）就是这样丢的。
+_SCHEMA_CONSTRAINT_KEYS = (
+    "oneOf",
+    "anyOf",
+    "allOf",
+    "not",
+    "dependentRequired",
+    "minProperties",
+    "maxProperties",
 )
 
 
@@ -108,12 +144,21 @@ def _minimal_example(input_schema: dict[str, Any]) -> dict[str, Any]:
     return example
 
 
+def _constraints(input_schema: dict[str, Any]) -> dict[str, Any]:
+    """透传 properties 之外的跨字段约束（没声明就返回空，卡片里不出现该键）。"""
+    return {key: input_schema[key] for key in _SCHEMA_CONSTRAINT_KEYS if key in input_schema}
+
+
 def _param_card(key: str, prop: dict[str, Any], required: bool) -> dict[str, Any]:
     card: dict[str, Any] = {"type": prop.get("type", "any"), "required": required}
     if "description" in prop:
         card["description"] = prop["description"]
     if "default" in prop:
         card["default"] = prop["default"]
+    if isinstance(prop.get("items"), dict) and prop["items"].get("type"):
+        # array 参数的元素类型（data.writeText.lines 是 array of string）：缺了它
+        # 模型会把 lines 写成单个字符串。
+        card["items"] = {"type": prop["items"]["type"]}
     if prop.get("enum"):
         labels = prop.get("x-enum-labels") or {}
         card["enum"] = [
@@ -196,27 +241,27 @@ def build_agent_view(
             schema = base.input_schema
             properties = schema.get("properties") or {}
             required = set(schema.get("required") or [])
-            commands.append(
-                {
-                    # 组内只有一个簇时用合并名（如 desktop.click）；有分歧的簇
-                    # 用首个后端的完整命令 id，保证 semantic_id 全局唯一。
-                    "semantic_id": (
-                        f"{domain}.{action}" if len(clusters) == 1 else base.id
-                    ),
-                    "backends": _backends(cluster),
-                    **{
-                        field: _jsonable(payload[field])
-                        for field in _CARD_FIELDS
-                        if field in payload
-                    },
-                    "params": {
-                        key: _param_card(key, properties[key], key in required)
-                        for key in sorted(properties)
-                    },
-                    "element_params": sorted(element_keys & set(properties)),
-                    "example": _minimal_example(schema),
-                }
-            )
+            constraints = _constraints(schema)
+            card: dict[str, Any] = {
+                # 组内只有一个簇时用合并名（如 desktop.click）；有分歧的簇
+                # 用首个后端的完整命令 id，保证 semantic_id 全局唯一。
+                "semantic_id": f"{domain}.{action}" if len(clusters) == 1 else base.id,
+                "backends": _backends(cluster),
+                **{
+                    field: _jsonable(payload[field])
+                    for field in _CARD_FIELDS
+                    if field in payload
+                },
+                "params": {
+                    key: _param_card(key, properties[key], key in required)
+                    for key in sorted(properties)
+                },
+                "element_params": sorted(element_keys & set(properties)),
+                "example": _minimal_example(schema),
+            }
+            if constraints:
+                card["constraints"] = constraints
+            commands.append(card)
 
     domains: dict[str, int] = {}
     for command in commands:
@@ -229,5 +274,7 @@ def build_agent_view(
         "divergent_groups": divergent_groups,
         "domains": domains,
         "element_refs_contract": _ELEMENT_REFS_NOTE,
+        "example_contract": _EXAMPLE_NOTE,
+        "expression_contract": _EXPRESSION_NOTE,
         "commands": commands,
     }
