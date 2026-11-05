@@ -1,0 +1,86 @@
+# 打 `editor-v<version>` tag 即在 Windows runner 上构建窗口并创建 Release。
+#
+# 为什么需要 CI：窗口是 PPX + PyInstaller 的 Windows 产物（约 16MB），不进 npm 包，
+# 也进不了 git（dist/ 已忽略）。维护者本地 build 一次后手工传 Release 容易漏
+# .sha256 或压错包，而且下次改了前端没人记得重打。tag 是唯一的版本事实源。
+#
+# 发版：
+#   git tag editor-v0.1.0 && git push origin editor-v0.1.0
+# （tag 必须与 .harness/demo/ppx_probe/app/ppx.toml 的 version 一致，
+#   verify_editor_artifact.py 会拦住不一致的 tag。）
+name: Editor Release
+
+on:
+  push:
+    tags:
+      - "editor-v*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: editor-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      # PPX 的前端构建要 pnpm 11 + Node 22；gui/ 没有锁文件，别用 frozen-lockfile。
+      - uses: pnpm/action-setup@v4
+        with:
+          version: "11"
+
+      - name: Install PPX toolchain
+        shell: pwsh
+        run: |
+          python -m pip install uv
+          uv tool install --python 3.12 ppx-py==6.0.1
+
+      # 前端单独构建：build_editor.py 加 --skip-frontend 后就不需要 pnpm 在 PATH 上，
+      # CI 的职责边界更清楚（这一步产 gui/dist，下一步只做 PyInstaller + 打 zip）。
+      - name: Build frontend
+        working-directory: .harness/demo/ppx_probe/app/gui
+        shell: pwsh
+        run: |
+          pnpm install --no-frozen-lockfile
+          pnpm run build
+
+      - name: Build portable editor
+        shell: pwsh
+        run: python .harness/scripts/build_editor.py --release --skip-frontend
+
+      # 上传前把「tag / 包内版本 / exe / sha256」四件事对齐，别让坏包进 Release。
+      - name: Verify artifact
+        shell: pwsh
+        run: python .harness/scripts/verify_editor_artifact.py --tag ${{ github.ref_name }}
+
+      - name: Publish release assets
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Editor ${{ github.ref_name }}
+          body: |
+            编辑窗口（Windows x64 便携包），由本仓 `.harness/scripts/build_editor.py --release` 构建。
+
+            安装：`rpa-skill editor install`，或装技能时加 `--with-editor`。
+            安装器会自动读取同 Release 的 `RPA-Editor-win64.zip.sha256` 做校验；
+            离线可用 `--editor-zip` 指定本地包。
+
+            运行时框架 PPX (https://github.com/pangao1990/PPX) 采用 AGPL-3.0。
+            对应源码见该仓库，本仓的构建说明见 README「编辑窗口」一节与 build_editor.py。
+          files: |
+            dist/RPA-Editor-win64.zip
+            dist/RPA-Editor-win64.zip.sha256
+          fail_on_unmatched_files: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

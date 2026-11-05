@@ -261,10 +261,23 @@ rpa-skill doctor                               # 窗口装好时 editor 那行�
   旁挂文件会自动校验，也可 `--sha256 <hex>` 手工指定。
 - 不装窗口照样能生成流程、跑流程、用 `rpa-core capture` 拾取元素；少的只是「人在窗口里改 + 点选」。
 
-维护者发布新版本（Windows 上构建）：
+维护者发版（推荐走 CI）：仓库有 `.github/workflows/editor-release.yml`，在 Windows
+runner 上装 PPX / pnpm、构建前端与便携包、校验产物，再创建 Release 并上传 zip + `.sha256`。
+一个 tag 就够：
+
+```bash
+git tag editor-v0.1.0
+git push origin editor-v0.1.0
+```
+
+> tag 必须与 `.harness/demo/ppx_probe/app/ppx.toml` 的 `version` 一致 ——
+> `verify_editor_artifact.py` 会在上传前对齐 tag / 包内版本 / exe / sha256，不一致直接失败。
+
+本地手工发版（没有 CI 时）：
 
 ```bash
 ./.venv/Scripts/python.exe .harness/scripts/build_editor.py --release
+./.venv/Scripts/python.exe .harness/scripts/verify_editor_artifact.py
 gh release create editor-v0.1.0 \
   dist/RPA-Editor-win64.zip dist/RPA-Editor-win64.zip.sha256 \
   --title "Editor 0.1.0" --notes "编辑窗口 0.1.0"

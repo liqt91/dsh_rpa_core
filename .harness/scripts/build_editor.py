@@ -234,12 +234,15 @@ def main() -> int:
         print("--release 与 --console 互斥：发布包不该带黑框", file=sys.stderr)
         return 2
 
-    if shutil.which("ppx") is None:
-        print("找不到 ppx。先装： uv tool install ppx-py==6.0.1", file=sys.stderr)
-        return 2
+    # 本脚本只调 ppx-py 的 create_spec，不调 `ppx` 这个 CLI —— CI 上 `uv tool install`
+    # 装完的可执行目录未必在 PATH，要求它只会造出假失败。真正必需的是那个 venv 里的 python。
     python = _ppx_python()
     if python is None:
-        print("找不到 ppx-py 的构建环境（uv tool dir 里没有 ppx-py）", file=sys.stderr)
+        print(
+            "找不到 ppx-py 的构建环境（uv tool dir 里没有 ppx-py）。"
+            "先装： uv tool install ppx-py==6.0.1",
+            file=sys.stderr,
+        )
         return 2
     _ensure_build_deps(python)
     _stage_resources()
