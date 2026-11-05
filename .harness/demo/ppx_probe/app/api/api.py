@@ -86,10 +86,42 @@ def _caps_dir() -> Path:
 CAPS = _caps_dir()
 
 
+def _launcher() -> dict[str, str]:
+    """窗口外部的运行时清单：安装器写 `~/.rpa-core/editor.json`（也可用 env 覆盖）。
+
+    键：`rpa-core`（可执行文件）、`python`（解释器）、`workspace`（工作区根）、
+    `editor`（窗口自己的 exe，只给 studio.py 用）。
+    冻结态**只能**靠它找到 rpa-core —— 窗口包里没有 Python，sys.executable 是
+    `RPA Probe.exe` 自己，拿去跑 `-m rpa_core.cli` 会变成「再开一个窗口」。
+
+    定义在这里而不是用到的地方：`_workspace_root()` 在模块顶层就要读它。
+    """
+    data: dict[str, str] = {}
+    # 注意不是 RPA_CORE_HOME：那个名字在技能侧（scripts/_runtime.py）表示「源码根」。
+    # 一个变量两种含义会互相打脸。三处必须对齐：这里、bin/rpa-skill.mjs 的 coreHome()、
+    # studio.py 的 _core_home()。
+    home = Path(os.environ.get("RPA_HOME") or (Path.home() / ".rpa-core"))
+    explicit = os.environ.get("RPA_EDITOR_MANIFEST")
+    for path in ([Path(explicit)] if explicit else []) + [home / "editor.json"]:
+        try:
+            data.update(json.loads(path.read_text(encoding="utf-8")))
+        except (OSError, ValueError):
+            continue
+    for env_key, key in (
+        ("RPA_CORE_EXE", "rpa-core"),
+        ("RPA_CORE_PYTHON", "python"),
+        ("RPA_WORKSPACE", "workspace"),
+    ):
+        if os.environ.get(env_key):
+            data[key] = os.environ[env_key]
+    return data
+
+
 def _workspace_root() -> Path:
     """工作区根：放 workflows/ 与 _sandbox/，也是界面上「流程路径」的相对基准。
 
-    优先级：`RPA_WORKSPACE` → 源码树仓库根（开发态行为不变）→ `~/.rpa-core/workspace`。
+    优先级：`RPA_WORKSPACE` → 源码树仓库根（开发态行为不变）→ 安装器写进
+    `editor.json` 的 `workspace` → `~/.rpa-core/workspace`。
     冻结态没有仓库，写包内目录也写不进去（_MEIPASS 是临时的），所以必须落到用户目录。
     """
     explicit = os.environ.get("RPA_WORKSPACE")
@@ -97,7 +129,10 @@ def _workspace_root() -> Path:
         return Path(explicit).expanduser()
     if REPO is not None:
         return REPO
-    home = Path(os.environ.get("RPA_CORE_HOME") or (Path.home() / ".rpa-core"))
+    recorded = _launcher().get("workspace")
+    if recorded:
+        return Path(recorded).expanduser()
+    home = Path(os.environ.get("RPA_HOME") or (Path.home() / ".rpa-core"))
     return home / "workspace"
 
 
@@ -1292,31 +1327,6 @@ def save_structured_params(path: str, node_id: str, params: dict[str, str]) -> d
 RUNS = SANDBOX / "runs"
 _runs: dict[str, dict[str, Any]] = {}
 _RUN_ID_RE = re.compile(r"^run-(\d+)$")
-
-
-def _launcher() -> dict[str, str]:
-    """窗口外部的运行时清单：安装器写 `~/.rpa-core/editor.json`（也可用 env 覆盖）。
-
-    键：`rpa-core`（可执行文件）、`python`（解释器）、`workspace`（工作区根）。
-    冻结态**只能**靠它找到 rpa-core —— 窗口包里没有 Python，sys.executable 是
-    `RPA Probe.exe` 自己，拿去跑 `-m rpa_core.cli` 会变成「再开一个窗口」。
-    """
-    data: dict[str, str] = {}
-    home = Path(os.environ.get("RPA_CORE_HOME") or (Path.home() / ".rpa-core"))
-    explicit = os.environ.get("RPA_EDITOR_MANIFEST")
-    for path in ([Path(explicit)] if explicit else []) + [home / "editor.json"]:
-        try:
-            data.update(json.loads(path.read_text(encoding="utf-8")))
-        except (OSError, ValueError):
-            continue
-    for env_key, key in (
-        ("RPA_CORE_EXE", "rpa-core"),
-        ("RPA_CORE_PYTHON", "python"),
-        ("RPA_WORKSPACE", "workspace"),
-    ):
-        if os.environ.get(env_key):
-            data[key] = os.environ[env_key]
-    return data
 
 
 def _runner_python() -> Path | None:

@@ -650,6 +650,54 @@ def cmd_stop(args: argparse.Namespace) -> int:
     return 0 if result.get("ok") else 2
 
 
+def _core_home() -> Path:
+    """运行时数据目录：装好的窗口与 `editor.json` 都在这里。
+
+    **不是** `RPA_CORE_HOME` —— 那个名字在 `_runtime.py` 里表示「rpa_core 源码根」，
+    一个变量两种含义必然互相打脸。三处必须一致：这里、`bin/rpa-skill.mjs` 的
+    `coreHome()`、窗口侧 `api.py` 的 `_launcher()`。
+    """
+    return Path(os.environ.get("RPA_HOME") or (Path.home() / ".rpa-core")).expanduser()
+
+
+def _editor_manifest() -> dict[str, Any]:
+    """`editor.json`：安装器写的窗口清单（exe 路径、版本、工作区）。读不到就是空字典。"""
+    paths: list[Path] = []
+    override = os.environ.get("RPA_EDITOR_MANIFEST")
+    if override:
+        paths.append(Path(override).expanduser())
+    paths.append(_core_home() / "editor.json")
+    data: dict[str, Any] = {}
+    for path in paths:
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if isinstance(payload, dict):
+            data.update(payload)
+    return data
+
+
+def _editor_exe() -> Path | None:
+    """已安装的窗口可执行文件；没装返回 None。
+
+    与 `_editor_dir()` 是两样东西：那个是源码树里的 PPX 工程（要 `ppx dev` + 前端依赖），
+    这个是构建产物（装完即用，不需要 PPX 也不需要 node）。优先级按「谁的依赖更少」排，
+    所以 `cmd_gui` 先试 exe、再退回 `ppx dev`。
+    """
+    candidates: list[Path] = []
+    override = os.environ.get("RPA_EDITOR_EXE")
+    if override:
+        candidates.append(Path(override).expanduser())
+    recorded = _editor_manifest().get("editor")
+    if recorded:
+        candidates.append(Path(str(recorded)).expanduser())
+    for path in candidates:
+        if path.is_file():
+            return path
+    return None
+
+
 def _editor_dir() -> Path | None:
     """编辑窗口工程目录（一个 PPX 应用），找不到返回 None。
 
@@ -707,34 +755,42 @@ def cmd_gui(args: argparse.Namespace) -> int:
             print(json.dumps({"ok": True, "session": "started", "port": port}))
 
     binary = _find_ppx()
-    # 编辑窗口工程不在本脚本旁边：要靠定位层找回源码根，再进 PPX 应用目录。
-    # 找不到就直说这套安装不带窗口，不要拿错目录去 Popen（会报 WinError 267）。
+    # 窗口有三条来路，按「依赖少」排序：--exe 指定 → 安装器装好的 exe
+    # （`rpa-skill editor install`）→ 源码树里的 PPX 工程（`ppx dev`）。
+    # 只认最后一条会让「装完技能也有窗口」看起来不存在 —— 而它就在 ~/.rpa-core 里。
     editor = _editor_dir()
-    if editor is None and not args.exe:
-        payload = {
-            "ok": False,
-            "code": "EDITOR_MISSING",
-            "error": "这套安装不带编辑窗口（窗口是仓库里的 PPX 工程 .harness/demo/ppx_probe/app）。"
-                     "两个办法：① 用 --exe 指定打包好的窗口可执行文件；"
-                     "② 换源码树形态，把 --rpa-core-dir 指到 clone 下来的仓库根后重装技能。"
-                     "只要不涉及「人在窗口里改」，改文件用文件交接、拾取元素用 "
-                     "rpa-core capture，都不需要窗口。",
-        }
-        print(json.dumps(payload, ensure_ascii=False))
-        return 2
+    target_exe: Path | None = None
     if args.exe:
         # 用户给的可能是相对路径，而下面的 cwd 是 editor/ —— 必须先按当前目录解析成绝对路径，
         # 否则 Popen 会在 editor/ 底下找这个相对路径，报 [WinError 267] 目录名称无效。
-        exe = Path(args.exe).expanduser()
-        if not exe.is_absolute():
-            exe = (Path.cwd() / exe).resolve()
-        if not exe.is_file():
-            payload = {"ok": False, "code": "EXE_MISSING", "error": f"找不到可执行文件：{exe}"}
+        target_exe = Path(args.exe).expanduser()
+        if not target_exe.is_absolute():
+            target_exe = (Path.cwd() / target_exe).resolve()
+        if not target_exe.is_file():
+            hint = f"找不到可执行文件：{target_exe}"
+            payload = {"ok": False, "code": "EXE_MISSING", "error": hint}
             print(json.dumps(payload, ensure_ascii=False))
             return 2
-        argv = [str(exe)]
+    else:
+        target_exe = _editor_exe()
+
+    if target_exe is not None:
+        argv = [str(target_exe)]
+        workdir = target_exe.parent
+    elif editor is None:
+        payload = {
+            "ok": False,
+            "code": "EDITOR_MISSING",
+            "error": "这台机器上没有可用的编辑窗口。三种来路：① 装一个（Windows）："
+                     "rpa-skill editor install；② 源码树形态：把技能重装到 clone 下来的仓库后 "
+                     "studio.py gui 会走 ppx dev（需要先装 PPX）；③ 用 --exe 直接指定打包好的窗口。"
+                     "不装窗口也能干活：改文件用文件交接、拾取元素用 rpa-core capture。",
+        }
+        print(json.dumps(payload, ensure_ascii=False))
+        return 2
     elif binary:
         argv = [binary, "dev"]
+        workdir = editor
     else:
         hint = "找不到 ppx：装好 PPX 运行时，或用 --exe 指定打包后的可执行文件"
         print(json.dumps({"ok": False, "code": "PPX_MISSING", "error": hint}, ensure_ascii=False))
@@ -742,9 +798,8 @@ def cmd_gui(args: argparse.Namespace) -> int:
     if args.skip_frontend:
         argv.append("--skip-frontend")
     try:
-        # 给了 --exe 但没找到工程目录时（安装态常见），cwd 退回当前目录：
-        # 打包后的窗口是自足的，不需要工程目录才能跑。
-        child = subprocess.Popen(argv, cwd=str(editor or Path.cwd()))
+        # 打包后的窗口是自足的，cwd 落在它自己那层就够；ppx dev 必须进工程目录。
+        child = subprocess.Popen(argv, cwd=str(workdir))
     except OSError as exc:
         print(json.dumps({"ok": False, "code": "SPAWN_FAILED", "error": str(exc)},
                          ensure_ascii=False))
@@ -817,10 +872,12 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     checks.append(("session", bool(health.get("ok")), session_detail))
     # 先算一次：下面三处都靠它判「这套安装有没有窗口」，不要各算各的。
     editor_dir = _editor_dir()
+    editor_exe = _editor_exe()
+    have_editor = editor_exe is not None or editor_dir is not None
     if health.get("ok"):
         editor = health.get("editor") or {}
-        if editor_dir is None:
-            checks.append(("editor window", None, "不适用（这套安装不带编辑窗口）"))
+        if not have_editor:
+            checks.append(("editor window", None, "不适用（这台机器没装编辑窗口）"))
         else:
             label = "在线" if editor.get("online") else "离线（先打开编辑窗口）"
             checks.append(("editor window", bool(editor.get("online")), label))
@@ -859,23 +916,22 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         rc_ok, rc_detail = False, f"{type(exc).__name__}: {exc}"
     checks.append(("rpa-core", rc_ok, rc_detail))
 
-    # 编辑窗口是仓库内的 PPX 工程，wheel 与 npm 包都不带 ⇒ 找不到时标 SKIP 而不是 FAIL：
-    # 报红会让人以为装在别处坏了，实际是这套安装不提供窗口。
-    # 扩展相反，随 wheel 发布，任何形态都该在，所以单独走 _extension_check，不跟着形态 SKIP。
-    if editor_dir is not None:
-        checks.append(("editor project", True, str(editor_dir)))
-    elif root is None and mode in ("module", "exe"):
-        checks.append(
-            ("editor project", None, "不适用（这种形态不带编辑窗口：窗口是仓库里的 PPX 工程）")
-        )
+    # 编辑窗口现在有两条正当来路：装好的构建产物（rpa-skill editor install）与
+    # 源码树里的 PPX 工程（ppx dev）。两条都没有 = SKIP，不是 FAIL —— 窗口是可选件，
+    # 不装照样能生成流程、跑流程。
+    if editor_exe is not None:
+        version = _editor_manifest().get("version") or "?"
+        checks.append(("editor", True, f"{version} · {editor_exe}"))
+        if any(ord(ch) > 127 for ch in str(editor_exe)):
+            # 实测过的坑：中文路径下 pythonnet 加载 Python.Runtime.dll 会直接失败。
+            checks.append(
+                ("editor path", False, f"含非 ASCII 字符：{editor_exe}")
+            )
+    elif editor_dir is not None:
+        checks.append(("editor", True, f"ppx dev · {editor_dir}"))
     else:
         checks.append(
-            (
-                "editor project",
-                None,
-                "不适用（源码树里也没有 .harness/demo/ppx_probe/app；"
-                "或用 RPA_EDITOR_DIR 指过去）",
-            )
+            ("editor", None, "没装（可选件：Windows 上 rpa-skill editor install）")
         )
     # rpa-core 都跑不动时别再叠一次 120s 超时，直接记红（上面那条已经把原因说了）。
     ext_ok, ext_detail = (

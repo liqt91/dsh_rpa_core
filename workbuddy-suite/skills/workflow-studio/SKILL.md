@@ -2,7 +2,7 @@
 name: workflow-studio
 display_name: WorkBuddyStudio
 display_name_en: WorkBuddyStudio
-description: 把一句自动化需求落成可编译的 workflow.json（原子能力从 rpa-core catalog 现取、交互元素留占位待用户捕获），用可视化编排窗口（PPX 桌面应用）打开工作流（Agent 推文件、用户在窗口里拼流程/改参数/编译/运行并确认），或在浏览器页面上让用户点选元素拿回稳定选择器。**编辑窗口只在源码树形态有；只装了 wheel（pip/uv tool）时没有窗口，改用文件交接 + rpa-core capture 命令行捕获**。当用户说「帮我做个网页自动化」「写个 workflow」「把这几步做成流程」「打开编辑器」「在窗口里改这个流程」「让我看看这个工作流」「你改完我确认一下」「帮我把流程打开我手动调」「拾取元素」「选一下页面上的按钮/输入框」「要这个元素的 selector」「登录框定位不到」时使用。触发词：做个自动化、网页自动化、生成流程、写个 workflow、打开编辑器、编辑窗口、Studio、让我确认、人工确认、审阅流程、改完保存、拾取元素、选元素、元素定位、selector、选择器、抓元素、页面上点一下。
+description: 把一句自动化需求落成可编译的 workflow.json（原子能力从 rpa-core catalog 现取），用 PPX 可视化编排窗口打开工作流（Agent 推文件，人在窗口里拼流程/改参数/编译/运行并确认），或在浏览器页面上让用户点选元素拿回稳定选择器。**编辑窗口是可选件：源码树自带 PPX 工程，wheel 形态可在 Windows 用 rpa-skill editor install 从 Release 补装；没窗口时降级为文件交接 + rpa-core capture**。当用户说「帮我做个网页自动化」「写个 workflow」「把这几步做成流程」「打开编辑器」「在窗口里改这个流程」「让我看看这个工作流」「你改完我确认一下」「帮我把流程打开我手动调」「拾取元素」「选一下页面上的按钮/输入框」「要这个元素的 selector」「登录框定位不到」时使用。触发词：做个自动化、网页自动化、生成流程、写个 workflow、打开编辑器、编辑窗口、Studio、让我确认、人工确认、审阅流程、改完保存、拾取元素、选元素、元素定位、selector、选择器、抓元素、页面上点一下。
 description_zh: 让 AI 与人共用同一个工作流与同一个页面：流程用 PPX 可视化编排窗口改、页面元素用浏览器插件点选，结果都回到对话里。
 description_en: A human-in-the-loop bridge for RPA agents. Opens workflows in a visual PPX editor window (cards, params, compile, run) and captures page elements via a browser extension, returning structured results to the agent.
 examples_zh:
@@ -37,12 +37,13 @@ author: w
 
 ## 形态：先看你手里这版带不带编辑窗口
 
-这套技能有两种落法，差別只在界面这一层：
+窗口是**可选件**，有三条来路，跟 rpa-core 本体怎么装的关系不大：
 
-| 形态 | 怎么来的 | 编辑窗口（PPX） | 元素捕获 |
-|---|---|---|---|
-| 源码树 | `git clone` 仓库，技能从 `workbuddy-suite/skills/` 安装 | 有（仓内 `.harness/demo/ppx_probe/app`，另需 PPX 与前端依赖） | 会话服务 + 浏览器插件，或 CLI |
-| wheel | `pip install` / `uv tool install` 装了 `rpa-core-runtime` | **没有**（窗口是仓库里的 PPX 工程，包不带） | CLI 可用；插件资源随包发布 |
+| 来路 | 怎么来的 | 前置 |
+|---|---|---|
+| 装好的 exe | `rpa-skill editor install`，或装技能时加 `--with-editor`（从 GitHub Release 下 ~16MB） | 仅 Windows；路径别带中文 |
+| 源码树工程 | `git clone` 仓库后由 `studio.py gui` 走 `ppx dev` | PPX + 前端依赖 |
+| 没有窗口 | 只装了 wheel 又没补装 | 不影响生成流程 / 跑流程 / 元素捕获 |
 
 一条命令判定：
 
@@ -50,20 +51,28 @@ author: w
 {{PYTHON}} "{{SKILL_DIR}}/scripts/studio.py" doctor
 ```
 
-看 `editor project` 那行：
+看 `editor` 那行（`editor project` 是旧版名字，别找错行）：
 
-- `[PASS]` ⇒ 有窗口，下文第一到五节都适用。
-- `[SKIP] 不适用（… 不带编辑窗口 …）` ⇒ **没有窗口**，此时：
+- `[PASS] editor … 0.1.0 · <exe 路径>` ⇒ 装好的窗口，下文第一到五节都适用；
+- `[PASS] editor … ppx dev · <工程目录>` ⇒ 源码树形态，同上；
+- `[SKIP] editor … 没装（可选件…）` ⇒ **没有窗口**。Windows 上想补一个：
 
-  - 不要说「我帮你打开编辑器」，也别跑 `studio.py gui` / `open` / `wait`——窗口是仓库里的
-    PPX 工程（`.harness/demo/ppx_probe/app`），包里没有，这些命令只会报 `EDITOR_MISSING`；
+  ```bash
+  rpa-skill editor install
+  ```
+
+  它把便携包解到 `~/.rpa-core/editor/current/`，并写 `~/.rpa-core/editor.json`
+  （窗口的工作区、rpa-core 可执行文件都从这份清单里读）。不装就按下面降级：
+
+  - 不要说「我帮你打开编辑器」，也别跑 `studio.py gui` / `open` / `wait`——它们会报
+    `EDITOR_MISSING`；
   - 走第五节的降级：把改动写成明确的 diff 或整段贴给用户，让他自己改、改完告诉你；
   - 元素捕获改走命令行：`{{RPA_CORE}} capture browser`（浏览器页面）或
     `{{RPA_CORE}} capture desktop`（桌面窗口）。扩展源码在包内，
     `{{RPA_CORE}} install-extension` 照样能装好——`--status` 里的 `_extension_dir`
     应当指向 `site-packages/rpa_core/extension`。
 
-判形态别用「命令跑不跑得动」当依据：`rpa-core` 本体在两种形态下都好用，差的只是
+判形态别用「命令跑不跑得动」当依据：`rpa-core` 本体在几种形态下都好用，差的只是
 编辑窗口这个 PPX 应用，以及由它提供的「在窗口里改 + 插件点选」交互。
 
 下文命令行里的前半截（解释器绝对路径 / `rc.py` 入口）是安装时写死的，原样照抄即可。
@@ -113,7 +122,7 @@ rpa-skill install --force
 
 - 输出里有 `会话 1.0.0 · 端口 7788` → 服务在跑，继续。
 - 报 `NO_SESSION` / `SESSION_DOWN` → 先起服务（下面第二步），**不要**跳过去硬干活。
-- `编辑窗口 离线` → 窗口没开。**先确认这版有没有窗口**（看上面 doctor 的 `editor project`）：
+- `编辑窗口 离线` → 窗口没开。**先确认这版有没有窗口**（看上面 doctor 的 `editor` 那行）：
   有就说「编辑器没开，我开一下」再继续；没有就**不要**去开，直接按第五节的降级走。
   两种情况都不要假装文件已经打开了。
 
@@ -154,8 +163,8 @@ rpa-skill install --force
 
 ## 四、工作流 B：拾取页面元素
 
-**先分形态**（见上文「形态」一节）：`editor project` 是 `[PASS]` 才走本节这种「会话里等插件回传」；
-是 `[SKIP]` 就跳过本节，改用命令行通道（两条都随包发布，不依赖窗口）：
+**先分形态**（见上文「形态」一节）：`editor` 是 `[PASS]` 才走下面这种「会话里等插件回传」；
+是 `[SKIP]` 就跳过那段，改用命令行通道（两条都随包发布，不依赖窗口）：
 
 ```bash
 # 浏览器：自己起浏览器 + 载扩展，等用户按下拾取手势/热键，结果写进工作流
@@ -167,7 +176,7 @@ rpa-skill install --force
 ```
 
 ```bash
-# 有窗口时（editor project = PASS）：Agent 侧等插件回传
+# 有窗口时（doctor 的 editor = PASS）：Agent 侧等插件回传
 # 1. 先进入等待（Agent 侧阻塞 ≤60s）
 {{PYTHON}} "{{SKILL_DIR}}/scripts/studio.py" capture --timeout 60
 # 2. 同时告诉用户：打开目标页面 → 点浏览器工具栏的 Studio 图标 → 开始拾取 → 点目标元素

@@ -178,7 +178,7 @@ check("doctor 全绿", () => {
   const r = run(["doctor", "--dir", dest]);
   assert(r.code === 0, `rc=${r.code}：${r.out.slice(0, 400)}`);
   const payload = json(r.out);
-  const failed = (payload.checks || []).filter((c) => !c.ok).map((c) => c.name);
+  const failed = (payload.checks || []).filter((c) => c.ok === false).map((c) => c.name);
   assert(failed.length === 0, `红的是 ${failed.join(", ")}`);
   return `${payload.checks.length} 项全过`;
 });
@@ -317,7 +317,8 @@ check("这种安装里 doctor 报红", () => {
   assert(r.code === 1, `rc=${r.code}（应为 1）`);
   const payload = json(r.out);
   assert(payload.ok === false, "doctor 竟然说没事");
-  const names = payload.checks.filter((c) => !c.ok).map((c) => c.name);
+  // doctor 的 ok 是三态：null = SKIP（窗口这种可选件），只有 false 才算红。
+  const names = payload.checks.filter((c) => c.ok === false).map((c) => c.name);
   assert(names.includes("runtime.json"), `红的项里没有 runtime.json：${names.join(",")}`);
   return `红：${names.join(", ")}`;
 });
@@ -393,7 +394,7 @@ check("exe 形态（PATH 上只有 rpa-core）：命令直指 exe，不绕 rc.py
   assert(!line.includes("rc.py"), `exe 形态仍然绕了 rc.py：${line}`);
 
   const doc = json(run(["doctor", "--dir", at], { env, cli }).out);
-  const failed = (doc.checks || []).filter((c) => !c.ok).map((c) => `${c.name}(${c.detail})`);
+  const failed = (doc.checks || []).filter((c) => c.ok === false).map((c) => `${c.name}(${c.detail})`);
   assert(failed.length === 0, `doctor 有红：${failed.join(", ")}`);
   return "mode=exe + 命令直指 exe + doctor 全绿";
 });

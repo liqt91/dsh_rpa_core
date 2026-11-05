@@ -242,6 +242,42 @@ rpa-skill install --force --rpa-core-dir <rpa_core 仓库根>
 它不跑 postinstall、不写注册表；`--force` 时旧目录挪到同级的 `.rpa-skill-backups/` 并给里面的
 `SKILL.md` 改名 `.replaced` 保留（不删除）——备份不能留在技能扫描目录里，否则宿主会看到两个同名技能。
 
+### 编辑窗口（可选，只有 Windows）
+
+窗口是仓库里的 PPX 应用（`.harness/demo/ppx_probe/app`），wheel 与 npm 包都不带。
+它单独打成便携包放在 GitHub Release，安装时按需下载（约 16MB）：
+
+```bash
+rpa-skill install --target dsh --with-editor   # 或装完技能后单独补：rpa-skill editor install
+rpa-skill editor status
+rpa-skill doctor                               # 窗口装好时 editor 那行是 [PASS]
+```
+
+- 落到 `~/.rpa-core/editor/current/`，清单 `~/.rpa-core/editor.json`（窗口的工作区与
+  `rpa-core` 可执行文件都从这份清单读）。`RPA_HOME` 换根目录，`--editor-home` 换安装位置。
+- **安装路径不能含中文**：实测 `pythonnet` 加载 `Python.Runtime.dll` 时会把路径里的中文编码弄坏。
+- 没有 Linux/macOS 产物，其它平台返回 `EDITOR_UNSUPPORTED`（SKIP，不算安装失败）。
+- 离线 / 内网：`--editor-zip <本地 zip>` 或 `--editor-url <镜像>`；release 的 `.sha256`
+  旁挂文件会自动校验，也可 `--sha256 <hex>` 手工指定。
+- 不装窗口照样能生成流程、跑流程、用 `rpa-core capture` 拾取元素；少的只是「人在窗口里改 + 点选」。
+
+维护者发布新版本（Windows 上构建）：
+
+```bash
+./.venv/Scripts/python.exe .harness/scripts/build_editor.py --release
+gh release create editor-v0.1.0 \
+  dist/RPA-Editor-win64.zip dist/RPA-Editor-win64.zip.sha256 \
+  --title "Editor 0.1.0" --notes "编辑窗口 0.1.0"
+```
+
+资源名**固定不带版本**：安装器走 `releases/latest/download/<asset>`，省掉一次 API 解析；
+版本号由包内 `editor-version.json` 提供，安装器也拿它当结构判据（随便一个带 exe 的 zip
+不该被当成窗口装上）。构建脚本不调 `ppx build` —— 它会额外要求 Inno Setup 做安装包 ——
+而是让 ppx 生成 spec 后直接跑 PyInstaller，只取那个便携目录。
+
+> 许可：PPX 是 AGPL-3.0。随 Release 分发它的 PyInstaller 产物时，Release 说明里请附上
+> PPX 源码链接与本仓的构建说明（`build_editor.py`），不要只给二进制。
+
 目标目录（不指定 `--target` 时自动装到本机已存在的宿主）：
 
 | target | 路径 |
