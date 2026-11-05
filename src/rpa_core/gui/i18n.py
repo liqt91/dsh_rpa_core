@@ -17,12 +17,18 @@
 
 from __future__ import annotations
 
+import os
 import re
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-_I18N_PATH = Path(__file__).resolve().parent / "i18n.js"  # ppx-only：i18n.js 移入本包
+# ppx-only：i18n.js 移入本包。冻结态（PyInstaller 打的窗口 exe）里包目录没有这个数据
+# 文件——它作为业务资源被打进 `_MEIPASS/resources/`，由调用方用 RPA_I18N_JS 指过来。
+# 读不到时下面的 `_load()` 回退空表（界面显示英文 id），不会崩。
+_I18N_PATH = Path(
+    os.environ.get("RPA_I18N_JS") or (Path(__file__).resolve().parent / "i18n.js")
+)
 
 # 键可带引号（"browser.navigate"）或不带（sessionId），值一律双引号字符串
 _KV = re.compile(r'"?([A-Za-z_$][\w.$-]*)"?\s*:\s*"((?:[^"\\]|\\.)*)"')

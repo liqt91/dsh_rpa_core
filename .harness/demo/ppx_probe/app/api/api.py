@@ -30,34 +30,92 @@ from typing import Any, get_args
 from ppx_py import api_method
 
 
-def _repo_root() -> Path:
+def _find_repo_root() -> Path | None:
+    """源码树形态的仓库根（向上找 src/rpa_core）；冻结态（PyInstaller 打出的 exe）没有。
+
+    有这个根就保持原有开发态行为（工作区 = 仓库）；没有就走「工作区 + 包内 commands」
+    —— 这条是让窗口能脱离仓库运行的前提，不然打包出来的 exe 一启动就找不到 rpa_core。
+    """
     for parent in Path(__file__).resolve().parents:
         if (parent / "src" / "rpa_core").is_dir():
             return parent
-    raise RuntimeError("找不到 rpa_core 仓库根（src/rpa_core 不在任何父目录下）")
+    return None
 
 
-REPO = _repo_root()
-if str(REPO / "src") not in sys.path:
+REPO = _find_repo_root()
+if REPO is not None and str(REPO / "src") not in sys.path:
     sys.path.insert(0, str(REPO / "src"))
 
+def _frozen_resources() -> Path | None:
+    """冻结态（PyInstaller）里业务资源的落地目录 `_MEIPASS/resources`；开发态 None。
+
+    ppx 的 spec 只收三样 data：前端产物、ppx.toml、`api/resources`。所以 rpa_core 的
+    数据文件（commands 目录、i18n.js）一律由构建脚本复制进 `api/resources`，
+    运行时从这里读——包内的 `rpa_core/commands` 在冻结态是不存在的。
+    """
+    base = getattr(sys, "_MEIPASS", None)
+    return (Path(base) / "resources") if base else None
+
+
+FROZEN_RES = _frozen_resources()
+if FROZEN_RES is not None:
+    # i18n.js 的路径在 import 时就定死了，必须赶在 import rpa_core 之前指过去。
+    os.environ.setdefault("RPA_I18N_JS", str(FROZEN_RES / "i18n.js"))
+
+import rpa_core  # noqa: E402
 from rpa_core.catalog import load_catalog  # noqa: E402
 from rpa_core.compiler.compiler import WorkflowCompileError, WorkflowCompiler  # noqa: E402
 from rpa_core.gui.i18n import load_command_display_names, load_op_labels  # noqa: E402
 from rpa_core.model.workflow import Condition, Workflow  # noqa: E402
+
+def _caps_dir() -> Path:
+    """能力目录（每个命令一个 json）的三条来路，按形态选：
+
+    - 冻结态：构建脚本复制进 `_MEIPASS/resources/commands` 的那份；
+    - 源码树：仓库根 `commands/`（pyproject 的 force-include 只在打 wheel 时才把它
+      映射成包内 `rpa_core/commands`，源码树里没有这一层）；
+    - pip 形态：wheel 里的包内 `rpa_core/commands`。
+    """
+    if FROZEN_RES is not None:
+        return FROZEN_RES / "commands"
+    if REPO is not None:
+        return REPO / "commands"
+    return Path(rpa_core.__file__).resolve().parent / "commands"
+
+
+CAPS = _caps_dir()
+
+
+def _workspace_root() -> Path:
+    """工作区根：放 workflows/ 与 _sandbox/，也是界面上「流程路径」的相对基准。
+
+    优先级：`RPA_WORKSPACE` → 源码树仓库根（开发态行为不变）→ `~/.rpa-core/workspace`。
+    冻结态没有仓库，写包内目录也写不进去（_MEIPASS 是临时的），所以必须落到用户目录。
+    """
+    explicit = os.environ.get("RPA_WORKSPACE")
+    if explicit:
+        return Path(explicit).expanduser()
+    if REPO is not None:
+        return REPO
+    home = Path(os.environ.get("RPA_CORE_HOME") or (Path.home() / ".rpa-core"))
+    return home / "workspace"
+
+
+WORKSPACE = _workspace_root()
 
 _BOOT = time.perf_counter()
 _catalog = None
 _labels: dict[str, str] | None = None
 _flows: dict[str, dict[str, Any]] = {}
 # 保存试验台：复制一份样例进来改，绝不碰 examples/ 与 workflows/ 里的既有流程。
-SANDBOX = Path(__file__).resolve().parents[2] / "_sandbox"
+# 放工作区里而不是包内：_MEIPASS 每次启动都是新的临时目录，存那儿等于存到垃圾桶。
+SANDBOX = WORKSPACE / "_sandbox"
 
 
 def _catalog_snapshot():
     global _catalog
     if _catalog is None:
-        _catalog = load_catalog(REPO / "commands")
+        _catalog = load_catalog(CAPS)
     return _catalog
 
 
@@ -80,7 +138,12 @@ def _all_capabilities() -> set[str]:
 
 
 def _flow_path(rel: str) -> Path:
-    target = (REPO / rel).resolve()
+    # rel 是界面拿到的「相对工作区」路径（listFlows 里 relative_to(WORKSPACE) 的同一套），
+    # 不是相对仓库 —— 冻结态没有仓库，拼错就变成「流程文件不存在」。
+    target = (WORKSPACE / rel).resolve()
+    # 越界守卫：界面上给的路径不许跑到工作区外面去（冻结态下这个根就是用户目录）。
+    if not target.is_relative_to(WORKSPACE.resolve()):
+        raise ValueError(f"流程路径越界: {rel}")
     if not target.is_file():
         raise ValueError(f"流程文件不存在: {rel}")
     return target
@@ -451,14 +514,16 @@ def bootstrap() -> dict[str, Any]:
         for cid in sorted(catalog)
     ]
     flows: list[dict[str, str]] = []
-    for base in (REPO / "examples", REPO / "workflows", SANDBOX):
+    # 一律相对 **WORKSPACE**：开发态它就是仓库根（行为与以前一致），冻结态是用户目录。
+    # 以前这里写死 REPO/examples|workflows，打包后这两个目录不在包里 ⇒ 界面流程列表永远空。
+    for base in (WORKSPACE / "examples", WORKSPACE / "workflows", SANDBOX):
         if not base.is_dir():
             continue
         if base == SANDBOX:
             for wf in sorted(base.glob("*.json")):
                 flows.append(
                     {
-                        "path": wf.relative_to(REPO).as_posix(),
+                        "path": wf.relative_to(WORKSPACE).as_posix(),
                         "label": f"sandbox/{wf.stem}",
                     }
                 )
@@ -466,7 +531,7 @@ def bootstrap() -> dict[str, Any]:
         for wf in sorted(base.glob("*/workflow.json")):
             flows.append(
                 {
-                    "path": wf.relative_to(REPO).as_posix(),
+                    "path": wf.relative_to(WORKSPACE).as_posix(),
                     "label": f"{base.name}/{wf.parent.name}",
                 }
             )
@@ -477,10 +542,13 @@ def bootstrap() -> dict[str, Any]:
         "catalogMs": round((time.perf_counter() - started) * 1000, 1),
         "bootMs": round((time.perf_counter() - _BOOT) * 1000, 1),
         "python": sys.version.split()[0],
-        # 原型进程与「跑流程的子进程」是两个解释器，界面上必须能看出这一点
-        "runnerPython": str(_runner_python()),
+        # 原型进程与「跑流程的子进程」是两个解释器，界面上必须能看出这一点。
+        # 冻结态没有 python，只能走 rpa-core 可执行文件（见 _rpa_argv）。
+        "runnerPython": str(_runner_python() or "未配置（用 rpa-core 可执行文件）"),
         "runsRoot": str(RUNS),
-        "repo": str(REPO),
+        "workspace": str(WORKSPACE),
+        # 保留旧键：外部脚本按 `repo` 认工作区，冻结态它为空（没有仓库）。
+        "repo": str(REPO) if REPO is not None else None,
     }
 
 
@@ -1226,25 +1294,77 @@ _runs: dict[str, dict[str, Any]] = {}
 _RUN_ID_RE = re.compile(r"^run-(\d+)$")
 
 
-def _runner_python() -> Path:
-    """跑流程用**仓库自己的 venv**，而不是 ppx 那个 venv。
+def _launcher() -> dict[str, str]:
+    """窗口外部的运行时清单：安装器写 `~/.rpa-core/editor.json`（也可用 env 覆盖）。
+
+    键：`rpa-core`（可执行文件）、`python`（解释器）、`workspace`（工作区根）。
+    冻结态**只能**靠它找到 rpa-core —— 窗口包里没有 Python，sys.executable 是
+    `RPA Probe.exe` 自己，拿去跑 `-m rpa_core.cli` 会变成「再开一个窗口」。
+    """
+    data: dict[str, str] = {}
+    home = Path(os.environ.get("RPA_CORE_HOME") or (Path.home() / ".rpa-core"))
+    explicit = os.environ.get("RPA_EDITOR_MANIFEST")
+    for path in ([Path(explicit)] if explicit else []) + [home / "editor.json"]:
+        try:
+            data.update(json.loads(path.read_text(encoding="utf-8")))
+        except (OSError, ValueError):
+            continue
+    for env_key, key in (
+        ("RPA_CORE_EXE", "rpa-core"),
+        ("RPA_CORE_PYTHON", "python"),
+        ("RPA_WORKSPACE", "workspace"),
+    ):
+        if os.environ.get(env_key):
+            data[key] = os.environ[env_key]
+    return data
+
+
+def _runner_python() -> Path | None:
+    """跑流程用的解释器：源码树优先仓库 venv，其余形态读安装器清单。
 
     原型进程活在 ppx 的 venv 里（只装 pydantic/jsonschema），`rpa-core run` 却要
     真的拉起执行器。共用一个解释器的话，执行器哪天多一个依赖，错会攒到「点运行」
-    那一刻才炸。找不到仓库 venv 才退回当前解释器（此时靠 PYTHONPATH 找 rpa_core）。
+    那一刻才炸。所以按「谁更可能是完整运行时」排序。
+
+    冻结态找不到就返回 None —— 窗口自己（`RPA Probe.exe`）**不是** python，
+    拿它去跑 `-m rpa_core.cli` 等于再开一个窗口（这个错误第一次就踩到了）。
     """
     for folder, name in (("Scripts", "python.exe"), ("bin", "python")):
-        candidate = REPO / ".venv" / folder / name
-        if candidate.is_file():
-            return candidate
+        if REPO is not None:
+            candidate = REPO / ".venv" / folder / name
+            if candidate.is_file():
+                return candidate
+    recorded = _launcher().get("python")
+    if recorded and Path(recorded).is_file():
+        return Path(recorded)
+    if getattr(sys, "_MEIPASS", None):
+        return None
     return Path(sys.executable)
+
+
+def _rpa_argv() -> list[str]:
+    """调 rpa-core 的 argv 前缀：有独立可执行文件就直接用，否则退回 `python -m`。
+
+    冻结态必须走 exe：窗口自己的解释器是 PyInstaller 引导器，不是 python。
+    """
+    exe = _launcher().get("rpa-core")
+    if exe and Path(exe).is_file():
+        return [exe]
+    python = _runner_python()
+    if python is None:
+        raise RuntimeError(
+            "找不到 rpa-core：设 RPA_CORE_EXE，或在 ~/.rpa-core/editor.json 里写 "
+            '{"rpa-core": "<rpa-core.exe 路径>"}（窗口包不带 Python，不能自己跑）'
+        )
+    return [str(python), "-m", "rpa_core.cli"]
 
 
 def _run_env() -> dict[str, str]:
     env = dict(os.environ)
-    source = str(REPO / "src")
-    existing = env.get("PYTHONPATH", "")
-    env["PYTHONPATH"] = source + (os.pathsep + existing if existing else "")
+    if REPO is not None:
+        source = str(REPO / "src")
+        existing = env.get("PYTHONPATH", "")
+        env["PYTHONPATH"] = source + (os.pathsep + existing if existing else "")
     env["PYTHONIOENCODING"] = "utf-8"  # 子进程 stdout 里是 JSON，别让 cp936 插手
     env["PYTHONUNBUFFERED"] = "1"  # 早期 run_id 那一行必须马上出来
     return env
@@ -1406,9 +1526,8 @@ def start_run(path: str) -> dict[str, Any]:
 
     python = _runner_python()
     argv = [
-        str(python),
-        "-m",
-        "rpa_core.cli",
+        # 有独立的 rpa-core 可执行文件就用它（冻结态唯一可行）；否则 python -m。
+        *_rpa_argv(),
         "run",
         str(target),
         "--artifacts",
@@ -1624,12 +1743,14 @@ def start_capture(
     元素文件落盘即用 `name` 命名（与节点 elementRefs 同名 = 自动绑定，引用模型无需单独绑定）。
     """
     started = time.perf_counter()
-    flow_dir = _flow_path(path).parent.name
+    flow_file = _flow_path(path)
+    flow_dir = flow_file.parent.name
+    # --workflows 取**流程目录的父目录**：流程可能在 examples/ 或 workflows/ 或沙箱里，
+    # 写死 WORKSPACE/workflows 会让其它来源的流程捕获时找不到自己的目录。
+    flows_root = flow_file.parent.parent
     python = _runner_python()
     argv = [
-        str(python),
-        "-m",
-        "rpa_core.cli",
+        *_rpa_argv(),
         "capture",
         target,
         "--save-as",
@@ -1637,14 +1758,14 @@ def start_capture(
         "--flow",
         flow_dir,
         "--workflows",
-        str(REPO / "workflows"),
+        str(flows_root),
     ]
     if target == "browser" and browserType:
         argv += ["--browser-type", browserType]
     try:
         proc = subprocess.Popen(
             argv,
-            cwd=str(REPO),
+            cwd=str(WORKSPACE),
             env=_run_env(),
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -1768,3 +1889,63 @@ def studio_notify(kind: str, payload: dict[str, Any] | None = None) -> dict[str,
     body = {"kind": kind, "at": time.time(), "by": "editor", **(payload or {})}
     result = _studio_http("POST", "/events", body)
     return {"ok": True, "notified": bool(result and result.get("ok"))}
+
+
+# ---------------------------------------------------------------------------
+# 诊断入口（冻结态没有控制台，窗口起不来时这是唯一能看到的现场）
+#
+#   set RPA_EDITOR_SELFTEST=1 && "RPA Probe.exe"
+#
+# 它跑一遍 bootstrap（catalog / 中文名 / 流程列表 / 运行器），把结果写成 JSON 到
+# `RPA_EDITOR_SELFTEST` 指定的路径（不指定就写 stdout），然后**不启动窗口**退出。
+# 冻结态最常见的三种崩法（缺数据、缺模块、路径对不上）都能在这一份输出里看出来。
+# ---------------------------------------------------------------------------
+def _selftest_payload() -> dict[str, Any]:
+    import traceback
+
+    payload: dict[str, Any] = {
+        "frozen": bool(getattr(sys, "_MEIPASS", None)),
+        "repo": str(REPO) if REPO is not None else None,
+        "workspace": str(WORKSPACE),
+        "caps": str(CAPS),
+        "capsExists": CAPS.is_dir(),
+        "resources": str(FROZEN_RES) if FROZEN_RES is not None else None,
+        "i18n": os.environ.get("RPA_I18N_JS"),
+    }
+    try:
+        info = bootstrap()
+        payload["bootstrap"] = {
+            "ok": True,
+            "commands": len(info.get("commands") or []),
+            "catalogDigest": info.get("catalogDigest"),
+            "flows": [f.get("path") for f in info.get("flows") or []],
+            "runnerPython": info.get("runnerPython"),
+        }
+        # 再走一遍「打开流程」：bootstrap 只证数据在，openFlow 才证卡片摊平 / 编译链路通。
+        flows = [f.get("path") for f in info.get("flows") or []]
+        if flows:
+            try:
+                flow = open_flow(flows[0])
+                payload["openFlow"] = {
+                    "ok": True,
+                    "path": flows[0],
+                    "cards": len(flow.get("cards") or []),
+                    "sha": flow.get("sha"),
+                }
+            except Exception:
+                payload["openFlow"] = {"ok": False, "traceback": traceback.format_exc()}
+    except Exception:
+        payload["bootstrap"] = {"ok": False, "traceback": traceback.format_exc()}
+    return payload
+
+
+if os.environ.get("RPA_EDITOR_SELFTEST"):
+    import json as _json
+
+    _target = os.environ.get("RPA_EDITOR_SELFTEST")
+    _text = _json.dumps(_selftest_payload(), ensure_ascii=False, indent=2)
+    if _target and _target not in ("1", "true", "stdout"):
+        Path(_target).write_text(_text, encoding="utf-8")
+    else:
+        print(_text)
+    os._exit(0)

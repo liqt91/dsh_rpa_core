@@ -10,6 +10,9 @@ windowsAppId = "C57B13FB-79D0-4CE0-8B8A-676F91224B42"
 format = 6
 
 [python]
+# 只列业务入口。**不要**把 rpa_core 加进来：ppx 会对每个模块调 register_api，
+# 而 rpa_core 没有 @api_method 方法，注册时直接抛「业务 API 没有…注册任何方法」。
+# PyInstaller 会因为 `api.api` 里 `import rpa_core` 自动收集它。
 modules = ["api.api"]
 
 [paths]

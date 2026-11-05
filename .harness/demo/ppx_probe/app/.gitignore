@@ -5,3 +5,5 @@ gui/dist/
 build/
 *.py[cod]
 __pycache__/
+# 构建期从 src/rpa_core 复制进来的数据（commands/ 与 i18n.js 的唯一真源在那边）
+api/resources/

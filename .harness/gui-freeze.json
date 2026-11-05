@@ -1,6 +1,6 @@
 {
   "gui": {
     "src/rpa_core/gui/__init__.py": "5647d4558ac41ebd82d539dab79914f714371a3c92272299c1855a4e026d440c",
-    "src/rpa_core/gui/i18n.py": "2b5cc0e80062585bbdbf43926940fa311b33edecf4d6a37247440967a3862459"
+    "src/rpa_core/gui/i18n.py": "37b0560e0f4b4ac81f4118c0916129618157f30a9ebb336e0c6f889b4e07cfd3"
   }
 }

@@ -907,9 +907,27 @@ async function pollSession() {
     SESSION.since = res.cursor ?? SESSION.since
     for (const request of res.requests || []) {
       if (request.kind !== 'open' || !request.path || SESSION.handled.has(request.id)) continue
+      // 先占位再打开：openFlow 内部会吞异常返回 undefined，靠返回值判成败。
+      // 失败必须回一条 open-failed —— 否则 Agent 侧只能等到超时，原因全丢在窗口里。
       SESSION.handled.add(request.id)
-      const flow = await openFlow(request.path)
-      await ppx.call('studio.notify', { kind: 'opened', payload: { path: request.path, sha: flow?.sha } })
+      try {
+        const flow = await openFlow(request.path)
+        if (!flow) throw new Error('窗口内打开失败（原因见窗口标题与状态栏）')
+        await ppx.call('studio.notify', {
+          kind: 'opened',
+          payload: { path: request.path, sha: flow.sha },
+        })
+      } catch (error) {
+        SESSION.handled.delete(request.id)
+        await ppx.call('studio.notify', {
+          kind: 'open-failed',
+          payload: {
+            path: request.path,
+            code: error?.code || null,
+            message: String(error?.message || error),
+          },
+        })
+      }
     }
   } catch {
     SESSION.online = false
