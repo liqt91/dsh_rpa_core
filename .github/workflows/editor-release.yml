@@ -58,7 +58,28 @@ jobs:
 
       - name: Build portable editor
         shell: pwsh
-        run: python .harness/scripts/build_editor.py --release --skip-frontend
+        run: |
+          python .harness/scripts/build_editor.py --release --skip-frontend *> editor-build.log
+          $code = $LASTEXITCODE
+          if ($code -ne 0) {
+            # 匿名读不到 Actions 日志，但 annotations 是公开的：把构建日志尾部
+            # 编成一条 ::error:: 注释，排错时不用进仓库管理员权限。
+            $tail = (Get-Content editor-build.log -Tail 80) -join "`n"
+            $tail = $tail.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
+            Write-Output "::error::build_editor.py exited $code :: $tail"
+            exit $code
+          }
+          Get-Content editor-build.log
+
+      - name: Diagnose build environment
+        if: failure()
+        shell: pwsh
+        run: |
+          Write-Output "::error::uv tool dir = $(uv tool dir)"
+          python -c "import shutil; print('uv =', shutil.which('uv'))"
+          $tools = Join-Path (uv tool dir) 'ppx-py'
+          Get-ChildItem -LiteralPath $tools -ErrorAction SilentlyContinue |
+            Select-Object -First 10 -ExpandProperty Name
 
       # 上传前把「tag / 包内版本 / exe / sha256」四件事对齐，别让坏包进 Release。
       - name: Verify artifact
