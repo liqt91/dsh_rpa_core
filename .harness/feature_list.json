@@ -14,7 +14,7 @@
     },
     {
       "id": "catalog-compiler",
-      "title": "Immutable catalog and static workflow compiler; AI semantic projection (`catalog --view agent`) with host-agnostic assembly reference",
+      "title": "Immutable catalog, static compiler, and AI semantic projection (catalog --view agent)",
       "passes": true
     },
     {
@@ -119,7 +119,7 @@
     },
     {
       "id": "workbuddy-connector",
-      "title": "WorkBuddy CLI connector with auth trio and skill package",
+      "title": "WorkBuddy CLI connector with auth trio and skill package; cross-host skill install via npx/clone",
       "passes": true
     },
     {

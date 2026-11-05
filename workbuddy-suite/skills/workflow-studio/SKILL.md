@@ -2,9 +2,9 @@
 name: workflow-studio
 display_name: WorkBuddyStudio
 display_name_en: WorkBuddyStudio
-description: 把一句自动化需求落成可编译的 workflow.json（原子能力从 rpa-core catalog 现取、交互元素留占位待用户捕获），用 WorkBuddy Studio 的可视化编排窗口打开工作流（Agent 推文件、用户在窗口里拼流程/改参数/编译/运行并确认），或在浏览器页面上让用户点选元素拿回稳定选择器。当用户说「帮我做个网页自动化」「写个 workflow」「把这几步做成流程」「打开编辑器」「在窗口里改这个流程」「让我看看这个工作流」「你改完我确认一下」「帮我把流程打开我手动调」「拾取元素」「选一下页面上的按钮/输入框」「要这个元素的 selector」「登录框定位不到」时使用。触发词：做个自动化、网页自动化、生成流程、写个 workflow、打开编辑器、编辑窗口、Studio、让我确认、人工确认、审阅流程、改完保存、拾取元素、选元素、元素定位、selector、选择器、抓元素、页面上点一下。
+description: 把一句自动化需求落成可编译的 workflow.json（原子能力从 rpa-core catalog 现取、交互元素留占位待用户捕获），用可视化编排窗口（PPX 桌面应用）打开工作流（Agent 推文件、用户在窗口里拼流程/改参数/编译/运行并确认），或在浏览器页面上让用户点选元素拿回稳定选择器。当用户说「帮我做个网页自动化」「写个 workflow」「把这几步做成流程」「打开编辑器」「在窗口里改这个流程」「让我看看这个工作流」「你改完我确认一下」「帮我把流程打开我手动调」「拾取元素」「选一下页面上的按钮/输入框」「要这个元素的 selector」「登录框定位不到」时使用。触发词：做个自动化、网页自动化、生成流程、写个 workflow、打开编辑器、编辑窗口、Studio、让我确认、人工确认、审阅流程、改完保存、拾取元素、选元素、元素定位、selector、选择器、抓元素、页面上点一下。
 description_zh: 让 AI 与人共用同一个工作流与同一个页面：流程用 PPX 可视化编排窗口改、页面元素用浏览器插件点选，结果都回到对话里。
-description_en: A human-in-the-loop bridge for WorkBuddy. Opens workflows in a visual PPX editor window (cards, params, compile, run) and captures page elements via a browser extension, returning structured results to the agent.
+description_en: A human-in-the-loop bridge for RPA agents. Opens workflows in a visual PPX editor window (cards, params, compile, run) and captures page elements via a browser extension, returning structured results to the agent.
 examples_zh:
   - "把这个 workflow.json 打开，让我自己改一下参数"
   - "我改完了，你看下保存后的内容对不对"
@@ -17,7 +17,7 @@ version: 1.0.0
 author: w
 ---
 
-# WorkBuddy Studio：人机协作三件套
+# 人机协作三件套（Studio）
 
 这个技能解决一件事：**AI 不该替人做「只有人能做的判断」**。
 
@@ -51,7 +51,7 @@ author: w
 ## 一、开工前先自检
 
 ```bash
-python scripts/studio.py status --pretty
+python "{{SKILL_DIR}}/scripts/studio.py" status --pretty
 ```
 
 - 输出里有 `会话 1.0.0 · 端口 7788` → 服务在跑，继续。
@@ -63,7 +63,7 @@ python scripts/studio.py status --pretty
 ## 二、起会话服务（一次即可，常驻）
 
 ```bash
-python scripts/studio.py serve --port 7788
+python "{{SKILL_DIR}}/scripts/studio.py" serve --port 7788
 ```
 
 - 只监听 `127.0.0.1`，不对外网开放；端口被占会自动顺延（实际端口写在返回值里）。
@@ -74,7 +74,7 @@ python scripts/studio.py serve --port 7788
 
 ```bash
 # 1. 把文件递进窗口（立刻返回；--wait 会一直等到用户保存/关闭）
-python scripts/studio.py open "D:/work/workflows/report.json" --reason "请把 pageSize 调到 50" --wait 120
+python "{{SKILL_DIR}}/scripts/studio.py" open "D:/work/workflows/report.json" --reason "请把 pageSize 调到 50" --wait 120
 ```
 
 - 退出码 `0` + `events` 非空 ⇒ 用户**保存了**（或关了窗口，看 `kind`）。
@@ -83,7 +83,7 @@ python scripts/studio.py open "D:/work/workflows/report.json" --reason "请把 p
 
 ```bash
 # 2. 只等保存事件（不重新打开文件）
-python scripts/studio.py wait --kind save --timeout 120
+python "{{SKILL_DIR}}/scripts/studio.py" wait --kind save --timeout 120
 ```
 
 返回的事件里带 `sha` / `bytes` / `lines` / `validation`：
@@ -97,7 +97,7 @@ python scripts/studio.py wait --kind save --timeout 120
 
 ```bash
 # 1. 先进入等待（Agent 侧阻塞 ≤60s）
-python scripts/studio.py capture --timeout 60
+python "{{SKILL_DIR}}/scripts/studio.py" capture --timeout 60
 # 2. 同时告诉用户：打开目标页面 → 点浏览器工具栏的 Studio 图标 → 开始拾取 → 点目标元素
 ```
 

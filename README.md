@@ -187,6 +187,53 @@ uv run python -m rpa_core.cli devserver
 
 端点与编辑器用法详见 `docs/devserver.md`。
 
+## 装进 AI agent（技能分发）
+
+`workbuddy-suite/skills/workflow-studio/` 是一份**宿主无关**的 agent 技能（`SKILL.md` +
+`references/` + `scripts/`），DeepSeek Harness、Claude Code、Codex 共用同一份源文件。
+分发靠 `bin/rpa-skill.mjs`，零依赖、不需要先安装任何东西。
+
+```bash
+# ① npm（发布到 registry 之后；未发布时直接指仓库）
+npx rpa-workflow-studio install
+npx github:<you>/rpa_core install
+
+# ② clone（不想碰 npm 也行）
+git clone <repo> rpa_core && cd rpa_core
+node bin/rpa-skill.mjs install
+
+# ③ 自查 / 卸载
+node bin/rpa-skill.mjs status
+node bin/rpa-skill.mjs uninstall --target dsh
+```
+
+安装器只做三件事：拷目录、把 `SKILL.md` 里的 `{{SKILL_DIR}}` 换成安装后的**绝对路径**
+（agent 的 cwd 通常是项目根，相对写 `scripts/studio.py` 一定找不到）、生成 `skill.json`。
+它不跑 postinstall、不写注册表；`--force` 时旧目录改名成 `.replaced-<时间戳>` 保留而不删除。
+
+目标目录（不指定 `--target` 时自动装到本机已存在的宿主）：
+
+| target | 路径 |
+|---|---|
+| `dsh` | `~/.dsh/skills/workflow-studio` |
+| `claude` | `~/.claude/skills/workflow-studio` |
+| `agents` | `~/.agents/skills/workflow-studio`（Codex 等跨宿主共享） |
+| `gemini` | `~/.gemini/config/skills/workflow-studio` |
+
+`--dir <PATH>` 可装到任意目录（CI / 冒烟测试用）。
+
+**装完还缺什么**（技能只带指令和脚本，不带运行时）：
+
+1. 宿主能执行 shell —— agent 要跑 `studio.py`；
+2. Python 3.10+ —— `studio.py` 只用标准库，无 pip 依赖；
+3. `rpa-core` 可用 —— 生成流程时要用 `rpa-core catalog --view agent` 取能力清单；
+4. 需要可视化窗口时另装 PPX，或给 `studio.py gui` 传 `--exe`。
+
+两个说明：`SKILL.md` frontmatter 里的 `display_name` / `description_zh` 等是 WorkBuddy
+商店的扩展字段，其他宿主只读 `name` 与 `description`（DSH 上限 500 字符，当前 400），
+不影响安装与运行；`dsh plugin --profile web add` 装的是 Cordis 插件（要 package.json、
+要 cordis.yml 声明、要构建），**只分发技能不必走它**。
+
 ## 示例
 
 | 示例 | 内容 |
