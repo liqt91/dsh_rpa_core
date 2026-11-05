@@ -1,6 +1,6 @@
 """负向验证：安装器的冒烟判据真的会红吗？
 
-七处「合法语法的精准放宽」注入，每处只破坏一个行为，跑
+十二处「合法语法的精准放宽」注入，每处只破坏一个行为，跑
 workbuddy-suite/verify/skill_install_test.mjs，断言「实际红 == 期望红」，
 然后逐字节还原并核 md5。
 
@@ -23,6 +23,7 @@ from pathlib import Path
 
 INSTALLER = Path("bin/rpa-skill.mjs")
 RC = Path("workbuddy-suite/skills/workflow-studio/scripts/rc.py")
+STUDIO = Path("workbuddy-suite/skills/workflow-studio/scripts/studio.py")
 SMOKE = "workbuddy-suite/verify/skill_install_test.mjs"
 SENTINEL = "NEG-INJECT"
 
@@ -56,6 +57,11 @@ INJECTIONS = [
             # 或读文件直接 ENOENT（pip 形态改写 runtime.json 前要能读到）。
             "exe 形态（PATH 上只有 rpa-core）：命令直指 exe，不绕 rc.py",
             "pip 形态（mode=module）doctor 不误报「缺源码根」",
+            # 诊断层的两条也是拿这个文件当夹具：一条要先删它看 doctor 怎么答，
+            # 一条要先读它改成 exe 形态。文件根本没被写过 ⇒ 它们红在夹具上，
+            # 不是在行为上 —— 这属于依赖关系，不是判据变强了。
+            "runtime.json 丢了、但运行时就位：修法不该让人去翻仓库根",
+            "studio.py doctor：没有源码树时不假红（src 形态仍要它）",
         },
     },
     {
@@ -104,9 +110,46 @@ INJECTIONS = [
         "new": '  const rpaCoreCmd = `${pythonCmd} "${posixDest}/scripts/rc.py"`;  // ' + SENTINEL + "\n",
         "expect": {"exe 形态（PATH 上只有 rpa-core）：命令直指 exe，不绕 rc.py"},
     },
+    # 诊断层两处：doctor 若只复述「安装那一刻」的历史，就会在「先装技能、后补运行时」
+    # 这种真实时序上给出错修法。两个方向的放宽各注入一次，防止判据被单边蒙过。
+    {
+        "name": "doctor 不现场探测，只复述安装时的快照",
+        "file": INSTALLER,
+        "old": "    const probed = resolveRuntime({});\n",
+        "new": "    const probed = { ok: false, searched: {} };  // " + SENTINEL + "\n",
+        "expect": {"runtime.json 丢了、但运行时就位：修法不该让人去翻仓库根"},
+    },
+    {
+        "name": "doctor 一律声称「现在探得到运行时」",
+        "file": INSTALLER,
+        "old": "    if (probed.ok) {\n",
+        "new": "    if (true) {  // " + SENTINEL + "\n",
+        "expect": {"探不到时仍要指向 --rpa-core-dir（上一条的反向锚）"},
+    },
+    {
+        "name": "studio.py 的 source root 恢复无条件要求",
+        "file": STUDIO,
+        "old": '    elif mode in ("module", "exe"):\n',
+        "new": "    elif False:  # " + SENTINEL + "\n",
+        "expect": {"studio.py doctor：没有源码树时不假红（src 形态仍要它）"},
+    },
+    {
+        "name": "studio.py 对 GUI 两条恢复成按假路径判红",
+        "file": STUDIO,
+        "old": '    if root is None and mode in ("module", "exe"):\n',
+        "new": "    if False:  # " + SENTINEL + "\n",
+        "expect": {"studio.py doctor：没有源码树时不假红（src 形态仍要它）"},
+    },
+    {
+        "name": "备份失败时把异常甩出去（不给修法）",
+        "file": INSTALLER,
+        "old": "    } catch (err) {\n      // Windows 上目录被别的进程按住",
+        "new": "    } catch (err) {\n      throw err;  // " + SENTINEL + "\n      // Windows 上目录被别的进程按住",
+        "expect": {"备份挪不动时：说清怎么收场，别把旧目录弄丢"},
+    },
 ]
 
-TARGETS = [INSTALLER, RC]
+TARGETS = [INSTALLER, RC, STUDIO]
 
 
 def md5(path: Path) -> str:

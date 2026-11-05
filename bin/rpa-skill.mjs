@@ -17,7 +17,7 @@
  *   5. 生成 skill.json（DSH 的清单文件，其他宿主读不读都无害）。
  *
  * 不做的事：不改源文件、不跑 postinstall 偷偷写 home、不 rm 旧目录
- * （--force 时改名成 .replaced-<时间戳>，留证据）。
+ * （--force 时挪到同级的 .rpa-skill-backups/ 下并给 SKILL.md 改名，留证据但不冒充技能）。
  */
 
 import { execFileSync } from "node:child_process";
@@ -32,7 +32,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
-import { delimiter, dirname, join, resolve } from "node:path";
+import { delimiter, basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const PKG_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -349,8 +349,30 @@ function install(dest, { force, dryRun, rpaCoreDir, python }) {
 
   if (installed && force) {
     const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-    const kept = `${dest}.replaced-${stamp}`;
-    renameSync(dest, kept);
+    // 备份不能留在技能扫描目录里：宿主按 <skills>/<dir>/SKILL.md 找技能，
+    // 一个 `xxx.replaced-<ts>` 目录就是**第二个同名技能**（实测 ~/.dsh/skills 里
+    // 已经躺着这么一份，宿主会看到两个 workflow-studio）。所以挪进隐藏目录，
+    // 并把里面的 SKILL.md 改名 —— 双保险：既不进 `*/` 这种 glob，也不会被
+    // 「递归找 SKILL.md」的实现捡走。回滚时把它改回 SKILL.md 即可。
+    const keptDir = join(dirname(dest), ".rpa-skill-backups");
+    const kept = join(keptDir, `${basename(dest)}-${stamp}`);
+    try {
+      mkdirSync(keptDir, { recursive: true });
+      renameSync(dest, kept);
+      const staleSkill = join(kept, "SKILL.md");
+      if (existsSync(staleSkill)) renameSync(staleSkill, join(kept, "SKILL.md.replaced"));
+    } catch (err) {
+      // Windows 上目录被别的进程按住（编辑器、杀软）时 rename 会失败。别把栈甩给用户：
+      // 说清卡在哪一步、手动怎么收场，否则他既没装上、也读不懂那段 stack。
+      fail(
+        {
+          error: `备份旧目录失败（${err.code || err.name}）：${err.message}`,
+          previous: toPosix(dest),
+          fix: [`手动把旧目录挪走：把 "${dest}" 移到别处`, "然后重跑：rpa-skill install --force"],
+        },
+        2,
+      );
+    }
     plan.previous_moved_to = toPosix(kept);
   }
 
@@ -529,7 +551,27 @@ function doctorWith(dest) {
 
   const rt = readRuntime(dest);
   if (!rt) {
-    add("runtime.json", false, "没写（安装时没探到运行时）", "rpa-skill install --force --rpa-core-dir <仓库根>");
+    // 「没写」是安装那一刻的快照，不是现在的结论 —— 常见的时序是先装技能、后补运行时
+    // （uv tool install 之类），这时正确修法只是重装一次，而不是让人去翻仓库根。
+    // 所以这里现场再探一遍，按探到的结果给修法。
+    const probed = resolveRuntime({});
+    if (probed.ok) {
+      add(
+        "runtime.json",
+        false,
+        `没写，但这台上现在找得到运行时（${probed.mode} · ${probed.resolved_by}）`,
+        "重装一次就会写进去：rpa-skill install --force",
+      );
+    } else {
+      const py = probed.searched?.pythons?.length ?? 0;
+      const roots = probed.searched?.source_roots?.length ?? 0;
+      add(
+        "runtime.json",
+        false,
+        `没写，且现场探测也没找到（试过 ${py} 个解释器 / ${roots} 个源码根）`,
+        "rpa-skill install --force --rpa-core-dir <仓库根>",
+      );
+    }
   } else if (rt.broken) {
     add("runtime.json", false, "内容不是合法 JSON", "删掉后重装");
   } else {

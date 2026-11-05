@@ -18,7 +18,17 @@
  */
 
 import { execFileSync, spawnSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  cpSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -180,12 +190,38 @@ check("重复安装被拒绝（幂等）", () => {
   return "rc≠0 + ALREADY_INSTALLED";
 });
 
-check("--force 覆盖时旧目录改名保留（不删除）", () => {
+check("--force 覆盖时旧目录保留，但不再冒充一份技能", () => {
+  // 判据分两层：① 备份还在（可回滚）；② 它不会被宿主当成第二个同名技能。
+  // ② 是实测踩到的：旧版把备份放在 <skills>/<name>.replaced-<ts>/，里面还留着
+  // SKILL.md，宿主扫描时就看到两个 workflow-studio。
   const r = run(["install", "--dir", dest, "--force"]);
-  assert(r.code === 0, `rc=${r.code}`);
+  assert(r.code === 0, `rc=${r.code}：${(r.out || r.err).slice(0, 300)}`);
   const kept = String(json(r.out).previous_moved_to || "").replace(/\//g, "\\");
   assert(kept && existsSync(kept), `旧目录没保留：${kept}`);
-  return `保留为 ${kept.split("\\").pop()}`;
+  assert(kept.includes(".rpa-skill-backups"), `备份还在技能扫描目录里：${kept}`);
+  assert(!existsSync(join(kept, "SKILL.md")), "备份里仍留着 SKILL.md，宿主会看到同名技能");
+  assert(existsSync(join(kept, "SKILL.md.replaced")), "备份内容不见了（改名的 SKILL.md 应在）");
+  const strays = readdirSync(root).filter((n) => /replaced/.test(n) && statSync(join(root, n)).isDirectory());
+  assert(strays.length === 0, `技能目录里还有伪备份目录：${strays.join(", ")}`);
+  return `保留为 .rpa-skill-backups/${kept.split("\\").slice(-1)[0]}`;
+});
+
+check("备份挪不动时：说清怎么收场，别把旧目录弄丢", () => {
+  // Windows 上目录被别的进程按住时 rename 会失败。实测遇到过一次来路不明的 rc=1
+  // （无 message），这类失败最坏的结果是「旧目录也没了、新的也没装上」。
+  // 用「.rpa-skill-backups 被一个文件占住」把它确定性地复现出来。
+  const box = join(root, "boxed");
+  const target = join(box, "workflow-studio");
+  assert(run(["install", "--dir", target]).code === 0, "前置安装失败");
+  writeFileSync(join(box, ".rpa-skill-backups"), "x", "utf8");
+  const r = run(["install", "--dir", target, "--force"]);
+  assert(r.code === 2, `rc=${r.code}（应为 2，不是抛栈）`);
+  const payload = json(r.out);
+  assert(payload.ok === false, "竟然报了成功");
+  assert(/备份旧目录失败/.test(payload.error || ""), `报错没说清卡在哪：${payload.error}`);
+  assert((payload.fix || []).some((f) => /install --force/.test(f)), "没给可照抄的修法");
+  assert(existsSync(join(target, "SKILL.md")), "失败时把旧目录弄丢了");
+  return "exit 2 + 修法 + 旧目录原样";
 });
 
 check("dry-run 不落盘，但先说清运行时连不连得上", () => {
@@ -360,6 +396,79 @@ check("exe 形态（PATH 上只有 rpa-core）：命令直指 exe，不绕 rc.py
   const failed = (doc.checks || []).filter((c) => !c.ok).map((c) => `${c.name}(${c.detail})`);
   assert(failed.length === 0, `doctor 有红：${failed.join(", ")}`);
   return "mode=exe + 命令直指 exe + doctor 全绿";
+});
+
+// ---------------------------------------------------------------------------
+// 诊断层：doctor 不能只复述「安装那一刻」的历史，要按现在的情况给修法
+// ---------------------------------------------------------------------------
+
+check("runtime.json 丢了、但运行时就位：修法不该让人去翻仓库根", () => {
+  // 真实时序：先装技能，后 uv tool install 补运行时。此时 runtime.json 是空的，
+  // 而运行时明明就在 PATH 上 —— 旧版 doctor 只会复述「安装时没探到」，
+  // 给的修法还要求 --rpa-core-dir。正确的修法只是「重装一次」。
+  const rtPath = join(dest, "runtime.json");
+  const original = readFileSync(rtPath, "utf8");
+  try {
+    rmSync(rtPath);
+    const payload = json(run(["doctor", "--dir", dest]).out);
+    const item = payload.checks.find((c) => c.name === "runtime.json");
+    assert(item, "doctor 里没有 runtime.json 这一项");
+    assert(item.ok === false, "runtime.json 明明没了却说没事");
+    assert(/找得到运行时/.test(item.detail), `没说清「现在探得到」：${item.detail}`);
+    assert(!/--rpa-core-dir/.test(item.fix || ""), `修法仍在要仓库根：${item.fix}`);
+    assert(/install --force/.test(item.fix || ""), `修法里没有重装：${item.fix}`);
+    return item.fix;
+  } finally {
+    writeFileSync(rtPath, original, "utf8");
+  }
+});
+
+check("探不到时仍要指向 --rpa-core-dir（上一条的反向锚）", () => {
+  // 没有这条，上一条可以靠「永远只说 install --force」蒙过去，
+  // 而那台真的没运行时的机器就永远修不好。
+  // 注意不能复用 `abroad`：后面那条「给 --rpa-core-dir 就能补上」会把它修好，
+  // 判据顺序一换就变成假绿。这里现装一个仍然坏着的。
+  const stillBroken = join(root, "abroad-broken");
+  const r = run(["install", "--dir", stillBroken, "--python", barePython()], {
+    cli: join(pkgRoot, "bin", "rpa-skill.mjs"),
+    env: noPathEnv(),
+  });
+  assert(r.code === 0, `装文件本身不该失败：rc=${r.code}`);
+  assert(!existsSync(join(stillBroken, "runtime.json")), "夹具：这里不该有 runtime.json");
+
+  const payload = json(run(["doctor", "--dir", stillBroken], { cli: join(pkgRoot, "bin", "rpa-skill.mjs"), env: noPathEnv() }).out);
+  const item = payload.checks.find((c) => c.name === "runtime.json");
+  assert(item && item.ok === false, "仓库外那台居然不红");
+  assert(/--rpa-core-dir/.test(item.fix || ""), `探不到时却没指向仓库根：${item.fix}`);
+  assert(!/找得到运行时/.test(item.detail), `探不到却说探得到：${item.detail}`);
+  return "两种情形给的修法不同";
+});
+
+check("studio.py doctor：没有源码树时不假红（src 形态仍要它）", () => {
+  const py = installed.runtime.python;
+  assert(py && existsSync(py), `夹具缺解释器：${py}`);
+
+  // ① exe 形态：runtime.json 说运行时是 PATH 上的 rpa-core，没有源码树。
+  //    旧版会报 [FAIL] source root，还把 editor/ 拼成宿主目录下的假路径。
+  const exeDir = join(root, "studio-exe");
+  cpSync(dest, exeDir, { recursive: true, filter: () => true });
+  const rtPath = join(exeDir, "runtime.json");
+  const rt = json(readFileSync(rtPath, "utf8"));
+  rt.python = null;
+  rt.source_root = null;
+  rt.rpa_core = { mode: "exe", src: null, exe: "C:/x/rpa-core.exe", module: null, resolved_by: "PATH" };
+  writeFileSync(rtPath, JSON.stringify(rt, null, 2) + "\n", "utf8");
+
+  const exeOut = shell(`"${py}" "${join(exeDir, "scripts", "studio.py").replace(/\\/g, "/")}" doctor`).out;
+  assert(/\[SKIP\] source root/.test(exeOut), `没有源码树却仍判红：\n${exeOut}`);
+  assert(!/\[FAIL\] source root/.test(exeOut), `source root 仍假红：\n${exeOut}`);
+  assert(!/\[FAIL\] (editor project|extension)/.test(exeOut), `GUI 那两条仍假红：\n${exeOut}`);
+
+  // ② src 形态（主安装）：源码树在就必须真的检查它 —— 防上一条被「一律 SKIP」蒙过去
+  const srcOut = shell(`"${py}" "${join(dest, "scripts", "studio.py").replace(/\\/g, "/")}" doctor`).out;
+  assert(/\[PASS\] source root/.test(srcOut), `src 形态没认到源码根：\n${srcOut}`);
+  assert(!/\[SKIP\] source root/.test(srcOut), `src 形态被误标成不适用：\n${srcOut}`);
+  return "exe 形态 SKIP、src 形态仍 PASS";
 });
 
 // 只删自己建的临时目录（名字带 rpa-skill- 前缀）。

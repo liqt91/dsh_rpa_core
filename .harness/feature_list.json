@@ -119,7 +119,7 @@
     },
     {
       "id": "workbuddy-connector",
-      "title": "WorkBuddy CLI connector + auth trio; cross-host skill install (npx/clone); rpa-core runtime autodetect (src/pip/exe)",
+      "title": "WorkBuddy CLI connector + auth trio; cross-host skill install (npx/clone); runtime autodetect (src/pip/exe) + doctor 重探",
       "passes": true
     },
     {

@@ -239,7 +239,8 @@ rpa-skill install --force --rpa-core-dir <rpa_core 仓库根>
 安装器做四件事：拷目录、探测运行时并写 `runtime.json`、替换 `{{SKILL_DIR}}` /
 `{{PYTHON}}` / `{{RPA_CORE}}` 三个占位符（agent 的 cwd 通常是项目根，相对写
 `scripts/studio.py` 一定找不到）、生成 `skill.json`。
-它不跑 postinstall、不写注册表；`--force` 时旧目录改名成 `.replaced-<时间戳>` 保留而不删除。
+它不跑 postinstall、不写注册表；`--force` 时旧目录挪到同级的 `.rpa-skill-backups/` 并给里面的
+`SKILL.md` 改名 `.replaced` 保留（不删除）——备份不能留在技能扫描目录里，否则宿主会看到两个同名技能。
 
 目标目录（不指定 `--target` 时自动装到本机已存在的宿主）：
 

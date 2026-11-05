@@ -730,7 +730,8 @@ def cmd_gui(args: argparse.Namespace) -> int:
 
 
 def cmd_doctor(args: argparse.Namespace) -> int:
-    checks: list[tuple[str, bool, str]] = []
+    # 第三项是状态：True 通过 / False 失败 / None 不适用（SKIP，不计入失败）。
+    checks: list[tuple[str, bool | None, str]] = []
     checks.append(("python", sys.version_info >= (3, 10), sys.version.split()[0]))
     try:
         HOME.mkdir(parents=True, exist_ok=True)
@@ -752,9 +753,20 @@ def cmd_doctor(args: argparse.Namespace) -> int:
 
     # 「装上但跑不动」的根因通常在这一层：技能被拷进宿主目录后，与源码树的关系断了。
     # 所以先把定位结果、rpa-core 能不能调通摆在最前面。
+    #
+    # 但「没有源码树」不等于坏：pip 装进解释器（module）、PATH 上就有 rpa-core（exe）
+    # 这两种正当形态本来就不带源码树，对它们要求 source root 会造出假红，还给出
+    # 「去装源码树」的误导修法。rpa-core 到底能不能用，由下面那条单独证。
+    info = _runtime.describe()
+    mode = str((info.get("rpa_core") or {}).get("mode") or "")
     root = _runtime.find_source_root()
-    root_detail = str(root) if root else "未找到（runtime.json 没记；重装加 --rpa-core-dir）"
-    checks.append(("source root", root is not None, root_detail))
+    if root:
+        checks.append(("source root", True, str(root)))
+    elif mode in ("module", "exe"):
+        why = "PATH 上的 rpa-core" if mode == "exe" else "已装进解释器"
+        checks.append(("source root", None, f"不适用（运行时是{why}，没有源码树）"))
+    else:
+        checks.append(("source root", False, "未找到（runtime.json 没记；重装加 --rpa-core-dir）"))
     rc_py = Path(__file__).resolve().with_name("rc.py")
     try:
         proc = subprocess.run(
@@ -773,17 +785,25 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         rc_ok, rc_detail = False, f"{type(exc).__name__}: {exc}"
     checks.append(("rpa-core", rc_ok, rc_detail))
 
-    suite = _suite_dir()
-    editor_dir = suite / "editor"
-    checks.append(("editor project", (editor_dir / "ppx.toml").is_file(), str(editor_dir)))
-    extension_dir = suite / "extension"
-    checks.append(("extension", (extension_dir / "manifest.json").is_file(), str(extension_dir)))
+    # 编辑窗口工程与浏览器插件都只在源码树里有（wheel 不带 editor/）。没有源码树时
+    # 报 FAIL 会让人以为装在别处坏了，实际是这套形态不提供 GUI 与元素捕获 —— 标 SKIP。
+    if root is None and mode in ("module", "exe"):
+        checks.append(("editor project", None, "不适用（这种形态不带 editor/，GUI 用不了）"))
+        checks.append(("extension", None, "不适用（同上，元素捕获需源码树）"))
+    else:
+        suite = _suite_dir()
+        editor_dir = suite / "editor"
+        checks.append(("editor project", (editor_dir / "ppx.toml").is_file(), str(editor_dir)))
+        extension_dir = suite / "extension"
+        checks.append(
+            ("extension", (extension_dir / "manifest.json").is_file(), str(extension_dir))
+        )
 
     failed = 0
     for name, passed, detail in checks:
-        mark = "PASS" if passed else "FAIL"
+        mark = "PASS" if passed is True else ("SKIP" if passed is None else "FAIL")
         print(f"[{mark}] {name:<15}{detail}")
-        if not passed:
+        if passed is False:
             failed += 1
     return 0 if failed == 0 else 1
 
