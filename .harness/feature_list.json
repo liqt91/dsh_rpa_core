@@ -14,7 +14,7 @@
     },
     {
       "id": "catalog-compiler",
-      "title": "Immutable catalog and static workflow compiler",
+      "title": "Immutable catalog and static workflow compiler; AI semantic projection (`catalog --view agent`) with host-agnostic assembly reference",
       "passes": true
     },
     {
