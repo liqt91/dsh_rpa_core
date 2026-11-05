@@ -14,6 +14,7 @@ from pydantic import ValidationError
 # 因此把这两类导入移到各自子命令内部，保证 GUI 路径（rpa-core gui）经过的
 # 模块链完全不触碰 pywin32 / pywinauto 的 COM 初始化。
 from rpa_core.catalog import load_catalog
+from rpa_core.catalog.agent_view import build_agent_view
 from rpa_core.compiler import WorkflowCompiler
 from rpa_core.compiler.compiler import WorkflowCompileError
 from rpa_core.control_channel import request_pause, reset_control, watch_control_file
@@ -89,9 +90,24 @@ def _desktop_capture_factory(**kwargs):
     return DesktopCaptureSession(**kwargs)
 
 
-def _cmd_catalog() -> int:
-    """能力层 catalog 摘要（ADR 0006 §6 通道对齐：CLI 与 devserver 同权）。"""
+def _cmd_catalog(args) -> int:
+    """能力层 catalog 摘要（ADR 0006 §6 通道对齐：CLI 与 devserver 同权）。
+
+    `--view agent` 是 AI 语义投影（tool card）：89 条 manifest 按 (域, 动作名)
+    合并成 72 个语义能力，后端选择内建，供 LLM 生成 workflow.json 消费。
+    """
     catalog = load_catalog(_commands_root())
+    if getattr(args, "view", "raw") == "agent":
+        from rpa_core.runtime.element_refs import element_capable_keys
+
+        print(
+            json.dumps(
+                build_agent_view(catalog, element_capable_keys()),
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+        return 0
     commands = [
         {
             "id": manifest.id,
@@ -581,7 +597,16 @@ def main() -> int:
                    "elements", "auth", "status", "unauth", "install-extension",
                    "env-status", "pause", "runs"):
         sub = subparsers.add_parser(action)
-        if action in ("catalog", "auth", "status", "unauth", "env-status"):
+        if action == "catalog":
+            sub.add_argument(
+                "--view",
+                choices=("raw", "agent"),
+                default="raw",
+                help="raw=原始摘要（默认）；agent=AI 语义投影（tool card，"
+                     "同语义后端对合并成语义能力，分歧对拆开并上报）",
+            )
+            continue
+        if action in ("auth", "status", "unauth", "env-status"):
             continue
         if action == "pause":
             sub.add_argument("--run-id", required=True,
@@ -677,7 +702,7 @@ def main() -> int:
             )
     args = parser.parse_args()
     if args.action == "catalog":
-        return _cmd_catalog()
+        return _cmd_catalog(args)
     if args.action == "capture":
         return _cmd_capture(args)
     if args.action == "elements":
