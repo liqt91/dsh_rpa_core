@@ -11,7 +11,8 @@
    rpa-core catalog --view agent
    ```
 
-   产出 80 条语义能力的卡片（参数契约、元素参数、输出字段、约束）。命令 id 必须来自
+   产出全部语义能力的卡片（参数契约、元素参数、输出字段、约束）。**条目数以输出里的
+   `semantic_commands` 为准，不要记数字**——manifest 一变它就变。命令 id 必须来自
    它——写一个不存在的 id 编译器会报 `Unknown command`，但写一个**存在却不合适**的
    命令编译器不会拦，所以选型要看 `params` 的 description 而不要凭直觉。
 
