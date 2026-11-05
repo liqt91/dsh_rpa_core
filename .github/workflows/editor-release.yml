@@ -14,6 +14,18 @@ on:
   push:
     tags:
       - "editor-v*"
+    # 改了构建链就先自测一次，不必为了看日志去动已经推上去的 tag。
+    # tag push 不受 paths 过滤影响；发版仍只有 tag 会做（见下面两个 if）。
+    branches:
+      - "ppx-only"
+    paths:
+      - ".github/workflows/editor-release.yml"
+      - ".harness/scripts/build_editor.py"
+      - ".harness/scripts/verify_editor_artifact.py"
+      - ".harness/demo/ppx_probe/app/**"
+      - "commands/**"
+      - "src/rpa_core/gui/i18n.js"
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -46,6 +58,21 @@ jobs:
         run: |
           python -m pip install uv
           uv tool install --python 3.12 ppx-py==6.0.1
+          # 把 tool venv 的 python 显式交给构建脚本，别让它去猜 uv tool dir
+          # 下面的目录名（首次 CI 只跑了 1 秒就退出，八成是猜失败）。
+          $toolDir = (uv tool dir | Out-String).Trim()
+          $dirs = @(Get-ChildItem -LiteralPath $toolDir -Directory -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -like 'ppx-py*' })
+          if ($dirs.Count -eq 0) {
+            $dirs = @(Get-ChildItem -LiteralPath $toolDir -Directory -ErrorAction SilentlyContinue)
+          }
+          $toolPython = $dirs |
+            ForEach-Object { Join-Path $_.FullName 'Scripts/python.exe' } |
+            Where-Object { Test-Path -LiteralPath $_ } |
+            Select-Object -First 1
+          if (-not $toolPython) { throw "uv tool dir 里没有 tool python：$toolDir" }
+          "RPA_PPX_PYTHON=$toolPython" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          Write-Output "RPA_PPX_PYTHON=$toolPython"
 
       # 前端单独构建：build_editor.py 加 --skip-frontend 后就不需要 pnpm 在 PATH 上，
       # CI 的职责边界更清楚（这一步产 gui/dist，下一步只做 PyInstaller + 打 zip）。
@@ -59,6 +86,9 @@ jobs:
       - name: Build portable editor
         shell: pwsh
         run: |
+          # pwsh 默认会让 native 命令非零退出直接抛终止错误，那样下面的
+          # $LASTEXITCODE 判断和 ::error:: 注释根本执行不到。
+          $PSNativeCommandUseErrorActionPreference = $false
           python .harness/scripts/build_editor.py --release --skip-frontend *> editor-build.log
           $code = $LASTEXITCODE
           if ($code -ne 0) {
@@ -75,18 +105,22 @@ jobs:
         if: failure()
         shell: pwsh
         run: |
-          Write-Output "::error::uv tool dir = $(uv tool dir)"
+          $toolDir = (uv tool dir | Out-String).Trim()
+          Write-Output "::error::uv tool dir = $toolDir"
           python -c "import shutil; print('uv =', shutil.which('uv'))"
-          $tools = Join-Path (uv tool dir) 'ppx-py'
-          Get-ChildItem -LiteralPath $tools -ErrorAction SilentlyContinue |
-            Select-Object -First 10 -ExpandProperty Name
+          Get-ChildItem -LiteralPath $toolDir -ErrorAction SilentlyContinue |
+            Select-Object -First 20 -ExpandProperty Name
+          Write-Output "::error::RPA_PPX_PYTHON = $env:RPA_PPX_PYTHON"
+          if (Test-Path editor-build.log) { Get-Content editor-build.log -Tail 40 }
 
       # 上传前把「tag / 包内版本 / exe / sha256」四件事对齐，别让坏包进 Release。
       - name: Verify artifact
+        if: startsWith(github.ref, 'refs/tags/')
         shell: pwsh
         run: python .harness/scripts/verify_editor_artifact.py --tag ${{ github.ref_name }}
 
       - name: Publish release assets
+        if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
           name: Editor ${{ github.ref_name }}

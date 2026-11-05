@@ -48,18 +48,45 @@ def _run(argv: list[str], *, cwd: Path, env: dict[str, str] | None = None) -> in
 
 
 def _ppx_python() -> Path | None:
-    """ppx-py 那个 uv tool 环境里的 python（PyInstaller 跑在它里面）。"""
+    """ppx-py 那个 uv tool 环境里的 python（PyInstaller 跑在它里面）。
+
+    CI 由 workflow 显式写 RPA_PPX_PYTHON；本地才自己去 uv tool dir 里找。
+    不能把 `ppx-py` 这个目录名当前提：uv 版本不同可能改名，那样构建会在
+    进 PyInstaller 之前就静默退出（首次 CI 只跑了 1 秒就是这么红的）。
+    """
+    explicit = os.environ.get("RPA_PPX_PYTHON")
+    if explicit:
+        path = Path(explicit)
+        if not path.is_file():
+            raise SystemExit(f"[ppx] RPA_PPX_PYTHON 指向的 python 不存在：{path}")
+        print(f"[ppx] 用 RPA_PPX_PYTHON = {path}")
+        return path
     try:
         out = subprocess.run(
             ["uv", "tool", "dir"], capture_output=True, text=True, check=False, timeout=30
         )
-    except (OSError, subprocess.SubprocessError):
+    except (OSError, subprocess.SubprocessError) as exc:
+        print(f"[ppx] 跑 `uv tool dir` 失败：{exc}", file=sys.stderr)
         return None
     root = Path(out.stdout.strip())
+    if not root.is_dir():
+        print(f"[ppx] uv tool dir 不是目录：{root!r}（stdout={out.stdout!r}）", file=sys.stderr)
+        return None
     for rel in (("ppx-py", "Scripts", "python.exe"), ("ppx-py", "bin", "python")):
         candidate = root.joinpath(*rel)
         if candidate.is_file():
             return candidate
+    # 兜底按结构认，不按名字认：任何 tool venv 里带解释器都比直接放弃强。
+    for pattern in ("*/Scripts/python.exe", "*/bin/python"):
+        for candidate in sorted(root.glob(pattern)):
+            if candidate.is_file():
+                print(f"[ppx] tool 目录名不是 ppx-py，按结构找到 {candidate}")
+                return candidate
+    tools = sorted(p.name for p in root.iterdir() if p.is_dir())
+    print(
+        f"[ppx] 在 {root} 里没找到 tool 环境的 python；现有 tool：{tools}",
+        file=sys.stderr,
+    )
     return None
 
 

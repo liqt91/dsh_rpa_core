@@ -273,6 +273,12 @@ git push origin editor-v0.1.0
 > tag 必须与 `.harness/demo/ppx_probe/app/ppx.toml` 的 `version` 一致 ——
 > `verify_editor_artifact.py` 会在上传前对齐 tag / 包内版本 / exe / sha256，不一致直接失败。
 
+改了构建链（构建脚本 / 前端 / 命令清单 / workflow 本身）推到 `ppx-only` 时，会先跑一遍
+**只构建、不发版** 的自测；也能在 Actions 页手动 `workflow_dispatch`。失败时构建日志尾部会以
+`::error::` 注释公开 —— 匿名拿不到 job 日志也能排错。CI 把 ppx-py 的解释器路径写进
+`RPA_PPX_PYTHON` 交给构建脚本；本地不设这个变量时，脚本自己去 `uv tool dir` 里按结构找，
+不依赖 tool 目录叫什么名字。
+
 本地手工发版（没有 CI 时）：
 
 ```bash
