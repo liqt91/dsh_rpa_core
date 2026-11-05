@@ -1,0 +1,98 @@
+{
+  "schema_version": "1.0",
+  "id": "probe-control",
+  "name": "控制流形状实测：forEach / if / try",
+  "inputs": {},
+  "root": {
+    "type": "sequence",
+    "id": "root",
+    "children": [
+      {
+        "type": "action",
+        "id": "seed",
+        "command": "data.setVar",
+        "with": {
+          "varName": "rows",
+          "varType": "array",
+          "value": [
+            "a",
+            "b",
+            "c"
+          ]
+        }
+      },
+      {
+        "type": "forEach",
+        "id": "each",
+        "items": "${rows}",
+        "item_var": "row",
+        "children": [
+          {
+            "type": "action",
+            "id": "log_item",
+            "command": "data.log",
+            "with": {
+              "message": "第 [loop.index] 项：[loop.row]"
+            },
+            "_exprModes": {
+              "message": "fx"
+            }
+          }
+        ]
+      },
+      {
+        "type": "if",
+        "id": "guard",
+        "condition": {
+          "op": "truthy",
+          "left": "${rows}"
+        },
+        "then": [
+          {
+            "type": "action",
+            "id": "log_then",
+            "command": "data.log",
+            "with": {
+              "message": "非空分支"
+            }
+          }
+        ],
+        "else": [
+          {
+            "type": "action",
+            "id": "log_else",
+            "command": "data.log",
+            "with": {
+              "message": "空分支（不该出现）"
+            }
+          }
+        ]
+      },
+      {
+        "type": "try",
+        "id": "safe",
+        "error_var": "err",
+        "children": [
+          {
+            "type": "action",
+            "id": "log_try",
+            "command": "data.log",
+            "with": {
+              "message": "try 体"
+            }
+          }
+        ],
+        "catch": [
+          {
+            "type": "action",
+            "id": "log_catch",
+            "command": "data.log",
+            "with": {
+              "message": "catch 体（不该出现）"
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

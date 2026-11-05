@@ -1,0 +1,43 @@
+{
+  "schema_version": "1.0",
+  "id": "probe-datachain",
+  "name": "tool card 消费实测：data 链路",
+  "inputs": {
+    "workspace": "run_artifacts"
+  },
+  "root": {
+    "type": "sequence",
+    "id": "root",
+    "children": [
+      {
+        "type": "action",
+        "id": "seed",
+        "command": "data.setVar",
+        "with": {
+          "varName": "rows",
+          "varType": "array",
+          "value": ["alpha", "bravo", "charlie", "delta"]
+        }
+      },
+      {
+        "type": "action",
+        "id": "top",
+        "command": "data.limit",
+        "with": {
+          "items": "${steps.seed.outputs.value}",
+          "count": 2
+        }
+      },
+      {
+        "type": "action",
+        "id": "save",
+        "command": "data.writeText",
+        "with": {
+          "workspace": "${inputs.workspace}",
+          "path": "probe-datachain.txt",
+          "lines": "${steps.top.outputs.items}"
+        }
+      }
+    ]
+  }
+}

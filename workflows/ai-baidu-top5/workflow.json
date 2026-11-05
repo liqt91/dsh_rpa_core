@@ -1,0 +1,90 @@
+{
+  "schema_version": "1.0",
+  "id": "ai-baidu-top5",
+  "name": "百度搜索取前5条标题",
+  "inputs": {
+    "query": "AI agent",
+    "workspace": "run_artifacts"
+  },
+  "root": {
+    "type": "sequence",
+    "id": "root",
+    "children": [
+      {
+        "type": "action",
+        "id": "open",
+        "command": "browser.navigate",
+        "with": {
+          "action": "goto",
+          "url": "https://www.baidu.com",
+          "browserType": "msedge",
+          "timeoutMs": 20000
+        }
+      },
+      {
+        "type": "action",
+        "id": "fill",
+        "command": "browser.input",
+        "with": {
+          "text": "${inputs.query}",
+          "pressEnter": true,
+          "sessionId": "${steps.open.outputs.sessionId}"
+        },
+        "elementRefs": {
+          "selector": "baidu_kw"
+        }
+      },
+      {
+        "type": "action",
+        "id": "wait",
+        "command": "browser.waitFor",
+        "with": {
+          "state": "visible",
+          "timeoutMs": 15000,
+          "sessionId": "${steps.open.outputs.sessionId}"
+        },
+        "elementRefs": {
+          "selector": "baidu_results"
+        }
+      },
+      {
+        "type": "action",
+        "id": "grab",
+        "command": "browser.queryAll",
+        "with": {
+          "sessionId": "${steps.open.outputs.sessionId}"
+        },
+        "elementRefs": {
+          "selector": "baidu_result_titles"
+        }
+      },
+      {
+        "type": "action",
+        "id": "top",
+        "command": "data.limit",
+        "with": {
+          "items": "${steps.grab.outputs.items}",
+          "count": 5
+        }
+      },
+      {
+        "type": "action",
+        "id": "save",
+        "command": "data.writeText",
+        "with": {
+          "workspace": "${inputs.workspace}",
+          "path": "baidu-top5.txt",
+          "lines": "${steps.top.outputs.items}"
+        }
+      },
+      {
+        "type": "action",
+        "id": "close",
+        "command": "browser.close",
+        "with": {
+          "sessionId": "${steps.open.outputs.sessionId}"
+        }
+      }
+    ]
+  }
+}

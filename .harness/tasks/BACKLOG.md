@@ -275,6 +275,19 @@
     真实浏览器里开标签页），文件保留是因为它走 `${steps.*.outputs.*}` 引用风格、覆盖不重叠；
     `name` 暂未改，属可选清理。
 
+- [ ] **catalog 参数文档覆盖率 46%：投影卡片里 133/283 个参数没有 description**（`planned`，2026-11-05 实测发现）
+  - **来源**：做「实测消费」时照 `catalog --view agent` 手写 workflow.json，`data.writeText` 的
+    `workspace`/`path`/`lines`/`text` **四个参数一个 description 都没有**——`workspace` 的真实语义
+    （绝对路径，`path` 必须落在其内，否则 `CAPABILITY_DENIED`）只能去读 `workers/python_worker.py`
+    才知道。manifest 没有 intent/description 字段，投影器无从补，属上游数据债。
+  - **量化**（80 条语义卡片现算）：283 个参数里 133 个无 description（46%）；重灾区
+    `data.writeText` / `data.appendText`（各 4/4）、`browser.input`（4/10）、`desktop.input`（4/9）、
+    `browser.click`（3/9）。
+  - **影响**：AI 生成流程时这些参数只能猜值——**结构猜不错、语义会错**，而编译器只查键集合，
+    猜错要到运行期才炸，正是「静默错误」的高发面。
+  - **下一步**：优先补那几个 4/4 的落盘类命令，模板照 `data.setVar`（有完整中文 description 的
+    正面例子）；补一条就降低一分生成流程的运行期失败率。
+
 - [ ] **GUI 的「缺少必填参数」与编译器的 `Missing required parameter(s)` 重复报**（`planned`，2026-10-28 发现）
   - **来源**：编译期新增参数**键**校验（`compiler._validate_node_inputs`）后，`gui/app.py:_validate`
     里那段自查（`缺少必填参数：...`，含同样的 `elementRefs` 豁免）在语义上已经冗余——同一个缺口
@@ -780,6 +793,12 @@
   永不生成代码**（规则 6）。调研结论：jev 的**模型**价值低（托管付费、浏览器通用动作空间、无
   流程 AST），但「受限动作空间 + 观测表 grounding + 执行前校验」的模式价值高；详见
   `docs/element-self-healing-plan.md` §6
+  - **2026-11-05 进展**：生成侧的两个前提件已落地 —— ①`rpa-core catalog --view agent` 把 89 条
+    manifest 投影成 80 条语义卡片（参数契约 / 元素参数 / 输出键 / 跨字段约束 / 三份契约说明）；
+    ②`workbuddy-suite/skills/workflow-studio/references/assembly.md` 把组装规范抽成**宿主无关**
+    文档（节点形状 / 三套数据流语法 / 元素引用 / 编译器兜不住什么）。已用「照卡片写流程 + 真跑」
+    实测一轮（`workflows/ai-baidu-top5`、`.harness/spike/probe_{datachain,control,expr}`），
+    结论：卡片决定「选什么命令、传什么键」，组装规范决定「怎么拼、数据怎么流」，两者缺一不可。
 - [ ] 后台标签页焦点模拟（`planned`，**待证**——影刀无此设计且我们无 CDP；仅当后台标签页
   可靠性成为实际问题时再评估）
 - [ ] 画布缩放 / 缩略导航（`planned`——树形画布长流程纵深远超影刀自由画布；M23 切片外）

@@ -1,0 +1,49 @@
+{
+  "schema_version": "1.0",
+  "id": "probe-expr",
+  "name": "数据流语法实测：output_aliases / python / fx",
+  "inputs": {},
+  "root": {
+    "type": "sequence",
+    "id": "root",
+    "children": [
+      {
+        "type": "action",
+        "id": "seed",
+        "command": "data.setVar",
+        "with": {
+          "varName": "n",
+          "varType": "number",
+          "value": 3
+        },
+        "output_aliases": {
+          "value": "n_alias"
+        }
+      },
+      {
+        "type": "action",
+        "id": "py",
+        "command": "data.setVar",
+        "with": {
+          "varName": "m",
+          "varType": "number",
+          "value": "2+3"
+        },
+        "_exprModes": {
+          "value": "python"
+        }
+      },
+      {
+        "type": "action",
+        "id": "log_fx",
+        "command": "data.log",
+        "with": {
+          "message": "m 的值是 [m]（n 是 [n_alias]）"
+        },
+        "_exprModes": {
+          "message": "fx"
+        }
+      }
+    ]
+  }
+}
