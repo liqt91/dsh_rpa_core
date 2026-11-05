@@ -18,9 +18,9 @@
  */
 
 import { execFileSync, spawnSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { delimiter, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -298,6 +298,68 @@ check("给 --rpa-core-dir 就能补上，rc.py 随之可用", () => {
   });
   assert(again.code === 0, `修好后 rc.py 仍失败：${(again.out || again.err).slice(0, 200)}`);
   return "重装即通";
+});
+
+// ---------------------------------------------------------------------------
+// 另两种正当形态：pip 装进解释器、PATH 上有 rpa-core
+// ---------------------------------------------------------------------------
+
+check("pip 形态（mode=module）doctor 不误报「缺源码根」", () => {
+  // 实测踩到的假红：pip 装进 site-packages 时 source_root 必然为空，
+  // 旧判据却要求它存在 —— 于是 import 与 rc.py 都绿，唯独这条红，
+  // 还给出「去装源码树」的误导修法。这里直接改写 runtime.json 造出该形态。
+  const rtPath = join(dest, "runtime.json");
+  const original = readFileSync(rtPath, "utf8");
+  try {
+    const rt = json(original);
+    rt.source_root = null;
+    rt.rpa_core = { ...rt.rpa_core, mode: "module", src: null };
+    writeFileSync(rtPath, JSON.stringify(rt, null, 2) + "\n", "utf8");
+
+    const payload = json(run(["doctor", "--dir", dest]).out);
+    const byName = Object.fromEntries(payload.checks.map((c) => [c.name, c]));
+    assert(byName["source root"], "doctor 里没有 source root 这一项，判据失效");
+    assert(byName["source root"].ok === true, `source root 误红：${byName["source root"].detail}`);
+    assert(/不适用/.test(byName["source root"].detail), `没说清为什么不需要：${byName["source root"].detail}`);
+    // 关键：不能靠「放宽判定」混过去 —— 这种形态必须真的能 import 才算好
+    assert(byName["import rpa_core"]?.ok === true, "module 形态下 import rpa_core 却没绿");
+    return "source root 标为不适用，import 仍绿";
+  } finally {
+    writeFileSync(rtPath, original, "utf8");
+  }
+});
+
+check("exe 形态（PATH 上只有 rpa-core）：命令直指 exe，不绕 rc.py", () => {
+  // uv tool / pipx 装出来的形态：PATH 上有 rpa-core.exe，但没有「能 import 的解释器」。
+  // 这种机器上 {{RPA_CORE}} 若还写成 `python rc.py`，凭空多要一个 python —— 必挂。
+  const exeRel = process.platform === "win32" ? ["Scripts", "rpa-core.exe"] : ["bin", "rpa-core"];
+  const srcExe = join(REPO, ".venv", ...exeRel);
+  assert(existsSync(srcExe), `夹具缺失：${srcExe}（本仓约定跑 .venv，缺了就没法验 exe 形态）`);
+
+  const binDir = join(root, "pathbin");
+  mkdirSync(binDir, { recursive: true });
+  const stub = join(binDir, exeRel[exeRel.length - 1]);
+  cpSync(srcExe, stub, { filter: () => true });
+
+  // PATH 只留这一个目录：所有 python 候选都会失败，exe 是唯一出路。
+  const env = { ...process.env, PATH: binDir, Path: binDir };
+  const at = join(root, "exe-skill");
+  const cli = join(pkgRoot, "bin", "rpa-skill.mjs");
+  const r = run(["install", "--dir", at], { env, cli });
+  assert(r.code === 0, `rc=${r.code}：${(r.out || r.err).slice(0, 300)}`);
+  const payload = json(r.out);
+  assert(payload.runtime?.mode === "exe", `探测到的是 ${payload.runtime?.mode}，不是 exe`);
+
+  const md = readFileSync(join(at, "SKILL.md"), "utf8");
+  const line = md.split(/\r?\n/).find((l) => l.includes("catalog --view agent"));
+  assert(line, "SKILL.md 里找不到 catalog 那条命令");
+  assert(line.includes("rpa-core"), `命令里没有 exe：${line}`);
+  assert(!line.includes("rc.py"), `exe 形态仍然绕了 rc.py：${line}`);
+
+  const doc = json(run(["doctor", "--dir", at], { env, cli }).out);
+  const failed = (doc.checks || []).filter((c) => !c.ok).map((c) => `${c.name}(${c.detail})`);
+  assert(failed.length === 0, `doctor 有红：${failed.join(", ")}`);
+  return "mode=exe + 命令直指 exe + doctor 全绿";
 });
 
 // 只删自己建的临时目录（名字带 rpa-skill- 前缀）。

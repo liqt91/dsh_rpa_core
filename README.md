@@ -194,17 +194,14 @@ uv run python -m rpa_core.cli devserver
 分发靠 `bin/rpa-skill.mjs`，零依赖、不需要先安装任何东西。
 
 ```bash
-# ① npm：发布到 registry 后
-npm i -g rpa-workflow-studio
-rpa-skill install          # 自动装到本机已存在的宿主
-
-#    未发布时直接从 git 源装（同样得到 rpa-skill 命令）
-npm i -g github:<you>/rpa_core
+# ① 技能那一半（Node，零依赖）
+npm i -g github:liqt91/dsh_rpa_core#ppx-only
 rpa-skill install --target dsh
 
-# ② clone（完全不碰 npm）
-git clone <repo> rpa_core && cd rpa_core
-node bin/rpa-skill.mjs install
+# ② 运行时那一半（Python）——也可以全走远端，不必先 clone
+uv tool install "git+https://github.com/liqt91/dsh_rpa_core.git@ppx-only"
+#   没有 uv 时：pip install --user "git+https://github.com/liqt91/dsh_rpa_core.git@ppx-only"
+#   依赖里有 ddddocr（OCR 指令族），解压后约 250MB，装前先有心理准备
 
 # ③ 自查 / 卸载
 rpa-skill doctor           # 装完先跑这个：它会告诉你运行时连没连上
@@ -212,15 +209,24 @@ rpa-skill status
 rpa-skill uninstall --target dsh
 ```
 
+> 顺序无所谓：`②` 装完再跑一次 `rpa-skill install --force` 让安装器重新探测即可。
 > `npx <pkg> install` 这种写法也能用，但参数归属在各 npm 版本上不完全一致
 > （`install` 可能被当成包名），所以文档里只给 `npm i -g` 与 `node bin/…` 两种确定能跑的形态。
+> 包未发布到 npm registry，所以只能写 `github:<owner>/<repo>#<branch>` 这种 git 源形式。
 
 **技能依赖 `rpa-core` 的 Python 运行时，而 npm 包里不带它**——这是分发包最容易断的一环：
 技能被拷进宿主目录后，原仓库的 `src/`、`editor/`、`extension/` 都不在了，裸命令
 `rpa-core catalog` 会 `command not found`。所以安装器会现场探测「哪个解释器能 import
 `rpa_core`、源码根在哪」，把结果写进技能目录的 `runtime.json`，并把文档里的
-`{{PYTHON}}` / `{{RPA_CORE}}` 换成绝对路径（`{{RPA_CORE}}` 指向技能自带的
-`scripts/rc.py`，它按 `runtime.json` 二次定位，换 venv / 换 PATH 也还能找回）。
+`{{PYTHON}}` / `{{RPA_CORE}}` 换成绝对路径。
+
+实测的三种运行时形态，三种都能装（区别只在于 `runtime.json` 里记什么）：
+
+| 形态 | 怎么来的 | 文档里的命令 |
+|---|---|---|
+| `src` | 从仓库跑（开发态） | `<python> <技能目录>/scripts/rc.py …` |
+| `module` | `pip install` / `uv tool install` | `<那个解释器> <技能目录>/scripts/rc.py …` |
+| `exe` | PATH 上已有 `rpa-core.exe` | `"<rpa-core.exe>" …`（不绕 rc.py，免得白要一个 python） |
 
 探测不到时**安装不会失败**（文件是好的），但会在 `runtime.json` 缺席 + stderr 上报警，
 `rpa-skill doctor` 同步报红。补上只需重装一次并指一下仓库根：

@@ -190,7 +190,10 @@ function inferSourceRoot(moduleFile) {
 }
 
 function findRpaCoreExe() {
-  const names = process.platform === "win32" ? ["rpa-core.exe", "rpa-core.cmd"] : ["rpa-core"];
+  // 只认「能直接 spawn」的形态：Windows 的 .exe、POSIX 的 rpa-core。
+  // .cmd / .bat 在 Windows 上不能直接 execFileSync（Node 会拒，且不该为此开 shell），
+  // 列进来只会被选中然后报「退出码 null」—— 假候选比没候选更坏。
+  const names = process.platform === "win32" ? ["rpa-core.exe"] : ["rpa-core"];
   for (const dir of String(process.env.PATH || "").split(delimiter)) {
     if (!dir) continue;
     for (const n of names) {
@@ -366,10 +369,17 @@ function install(dest, { force, dryRun, rpaCoreDir, python }) {
   // 二次定位，换机器 / 换 venv / PATH 变了也还能找到，找不到时给的是可照抄的修法。
   const posixDest = toPosix(dest);
   const pythonCmd = runtime.python ? `"${toPosix(runtime.python)}"` : "python";
+  // exe 形态（pipx / uv tool 装的 rpa-core，或 PATH 上本来就有的）：直接调那个
+  // 可执行文件，不再绕 rc.py。绕一层要多要求一个 python —— 而「只有 exe、
+  // 没有 python 在 PATH 上」正是这种形态存在的场景。
+  const rpaCoreCmd =
+    runtime.mode === "exe" && runtime.exe
+      ? `"${toPosix(runtime.exe)}"`
+      : `${pythonCmd} "${posixDest}/scripts/rc.py"`;
   const values = {
     "{{SKILL_DIR}}": posixDest,
     "{{PYTHON}}": pythonCmd,
-    "{{RPA_CORE}}": `${pythonCmd} "${posixDest}/scripts/rc.py"`,
+    "{{RPA_CORE}}": rpaCoreCmd,
   };
   let replaced = 0;
   for (const file of walk(dest)) {
@@ -527,12 +537,20 @@ function doctorWith(dest) {
     add("runtime.json", true, `${rc.mode || "?"} · ${rc.resolved_by || "?"}`);
     const pyOk = Boolean(rt.python) && existsSync(rt.python);
     add("interpreter", pyOk || rc.mode === "exe", rt.python || rc.exe || "(未记录)", "rpa-skill install --force --python <解释器>");
-    add(
-      "source root",
-      Boolean(rt.source_root) && isSourceRoot(rt.source_root),
-      rt.source_root || "(未记录)",
-      "rpa-skill install --force --rpa-core-dir <仓库根>",
-    );
+    // source root 只有「跑的是源码树」时才必须有。pip 装进 site-packages、
+    // 或 PATH 上的 rpa-core.exe，本来就没有源码树 —— 对它们要求 source root
+    // 会造出假红，还会给一条「去装源码树」的误导修法（实测：module 形态下
+    // import 与 rc.py 都绿，唯独这条红）。
+    if (rc.mode === "src") {
+      add(
+        "source root",
+        Boolean(rt.source_root) && isSourceRoot(rt.source_root),
+        rt.source_root || "(未记录)",
+        "rpa-skill install --force --rpa-core-dir <仓库根>",
+      );
+    } else {
+      add("source root", true, `(不适用：${rc.mode === "exe" ? "PATH 上的 rpa-core" : "已装进解释器"})`);
+    }
     if (pyOk) {
       const probe = runQuiet(rt.python, ["-c", PROBE_SRC, rc.src || "-"]);
       add("import rpa_core", probe.ok, probe.ok ? probe.out.replace(/^OK\s*/, "") : probe.out, "让 runtime.json 里的解释器能 import rpa_core");
@@ -540,6 +558,10 @@ function doctorWith(dest) {
         const call = runQuiet(rt.python, [join(dest, "scripts", "rc.py"), "--help"]);
         add("rc.py 调通 rpa-core", call.ok, call.ok ? "可执行" : call.out.split(/\r?\n/)[0]);
       }
+    } else if (rc.mode === "exe" && rc.exe) {
+      // exe 形态没有解释器可 import，唯一能证的就是「那个 exe 真的跑得起来」。
+      const call = runQuiet(rc.exe, ["--help"]);
+      add("rpa-core 可执行", call.ok, call.ok ? rc.exe : String(call.out).split(/\r?\n/)[0], "重装 rpa-core");
     }
   }
 

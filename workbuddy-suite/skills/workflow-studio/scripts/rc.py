@@ -87,9 +87,18 @@ def _candidates() -> list[dict[str, Any]]:
                 "src": None})
 
     exe = shutil.which("rpa-core")
-    if exe:
+    if exe and _directly_executable(exe):
         out.append({"by": "PATH", "mode": "exe", "exe": exe})
     return out
+
+
+def _directly_executable(path: str) -> bool:
+    """能不能被 subprocess 直接起。
+
+    Windows 上 `.cmd` / `.bat` 必须经 cmd.exe 解释（subprocess 的 shell=True），
+    把它当候选只会选中再失败 —— 假候选比没候选更坏。.exe 才是真的可执行。
+    """
+    return os.name != "nt" or Path(path).suffix.lower() == ".exe"
 
 
 def _run(candidate: dict[str, Any], argv: list[str]) -> tuple[int | None, str]:

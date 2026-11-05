@@ -1,6 +1,6 @@
 """负向验证：安装器的冒烟判据真的会红吗？
 
-五处「合法语法的精准放宽」注入，每处只破坏一个行为，跑
+七处「合法语法的精准放宽」注入，每处只破坏一个行为，跑
 workbuddy-suite/verify/skill_install_test.mjs，断言「实际红 == 期望红」，
 然后逐字节还原并核 md5。
 
@@ -36,6 +36,8 @@ INJECTIONS = [
             "占位符全部替换（三个都查，不只是 SKILL_DIR）",
             "文档里那条命令照抄出来真的能跑",
             "doctor 全绿",  # doctor 也数残留占位符，同一处破坏被两个观测点看到
+            # exe 形态断言「命令里要有 exe、不能有 rc.py」，占位符没替换时两者都不成立
+            "exe 形态（PATH 上只有 rpa-core）：命令直指 exe，不绕 rc.py",
         },
     },
     {
@@ -50,6 +52,10 @@ INJECTIONS = [
             # 补运行时那条也靠 runtime.json：没它，rc.py 只能走自身探测，而负向夹具里
             # 那个裸解释器 import 不到 rpa_core ⇒ 修完了也调不通。
             "给 --rpa-core-dir 就能补上，rc.py 随之可用",
+            # 两条形态判据都拿 runtime.json 当夹具入口：没有它，doctor 必红（exe），
+            # 或读文件直接 ENOENT（pip 形态改写 runtime.json 前要能读到）。
+            "exe 形态（PATH 上只有 rpa-core）：命令直指 exe，不绕 rc.py",
+            "pip 形态（mode=module）doctor 不误报「缺源码根」",
         },
     },
     {
@@ -72,6 +78,31 @@ INJECTIONS = [
         "old": '    if proc.returncode == EXIT_IMPORT_FAILED and IMPORT_MARKER in (proc.stderr or ""):\n',
         "new": "    if False:  # " + SENTINEL + "\n",
         "expect": {"这种安装里 rc.py 必须 exit 2 并给可照抄的修法"},
+    },
+    # 下面两处针对「非源码树形态」。它们的期望是**两条一起红**（第一处）：
+    # source root 的判定一旦回到「无条件要求」，pip 与 exe 两种形态都会误红 ——
+    # 只写一条期望就等于默许另一条继续假绿。
+    {
+        "name": "source root 恢复成无条件要求",
+        "file": INSTALLER,
+        "old": '    if (rc.mode === "src") {\n',
+        "new": '    if (rc.mode === "src" || true) {  // ' + SENTINEL + "\n",
+        "expect": {
+            "pip 形态（mode=module）doctor 不误报「缺源码根」",
+            "exe 形态（PATH 上只有 rpa-core）：命令直指 exe，不绕 rc.py",
+        },
+    },
+    {
+        "name": "exe 形态仍然绕 rc.py",
+        "file": INSTALLER,
+        "old": (
+            "  const rpaCoreCmd =\n"
+            '    runtime.mode === "exe" && runtime.exe\n'
+            '      ? `"${toPosix(runtime.exe)}"`\n'
+            '      : `${pythonCmd} "${posixDest}/scripts/rc.py"`;\n'
+        ),
+        "new": '  const rpaCoreCmd = `${pythonCmd} "${posixDest}/scripts/rc.py"`;  // ' + SENTINEL + "\n",
+        "expect": {"exe 形态（PATH 上只有 rpa-core）：命令直指 exe，不绕 rc.py"},
     },
 ]
 

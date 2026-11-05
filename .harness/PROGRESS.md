@@ -388,3 +388,5 @@ un-control-advanced 翻 true——M21 于 2026-09-19 完成后已连续多轮 FU
 
 2026-11-05 | workbuddy-connector | done | **技能分发**（`bin/rpa-skill.mjs`，零依赖）：clone 或 `npx` 一条命令装进 dsh / Claude / Codex / Gemini 技能目录；`{{SKILL_DIR}}` 安装时换成绝对路径（agent 的 cwd 是项目根，相对路径必失效）。冒烟 9 条 + 三注入负向验证；门禁 FULL PASS。详见当日 memory。
 2026-11-05 | workbuddy-connector | done | **运行时接线**（dsh 实测报障）：npm 包只带 `rpa-skill`，文档却写裸命令 `rpa-core catalog`，装进技能目录必 `command not found`。安装器改为现场探测（解释器 × 源码根 / pip 包 / PATH exe）→ 写 `runtime.json` → 替换 `{{PYTHON}}`/`{{RPA_CORE}}`（指向 `scripts/rc.py` 垫片，二次定位 + 找不到时给可照抄的修法）；新增 `doctor`，`status` 报 `runtime_ok`。冒烟 18 条（含「文档里那条命令照抄出来真能跑」）+ 5 注入负向验证；门禁 FULL PASS（763 passed，basetemp 见 BACKLOG）。详见当日 memory。
+
+2026-11-05 | workbuddy-connector | done | **远端安装形态补齐**（pip / exe 两种正当形态各有一处假判据）：① pip 装进 site-packages 时 `source root` 必然为空，旧判据却要求它存在 ⇒ import 与 rc.py 都绿而这一条红，还给出「去装源码树」的误导修法；改为只对 `mode=src` 要求。② exe 形态（uv tool / pipx）的 `{{RPA_CORE}}` 原先写成 `python rc.py`，凭空多要一个 python ⇒ 直指 exe。③ `rpa-core.cmd` 从候选里去掉（`execFileSync` 起不来，假候选）。冒烟 20 条（新增 pip/exe 两形态）+ 负向 7 注入全拦、md5 一致、复跑复绿；门禁 FULL PASS（763 passed / 20 skipped / 2 xfailed）。
