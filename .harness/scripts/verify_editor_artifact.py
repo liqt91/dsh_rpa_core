@@ -3,7 +3,7 @@
 CI 在 `editor-v*` tag 上构建完调用它；本地也能跑：
 
     ./.venv/Scripts/python.exe .harness/scripts/verify_editor_artifact.py
-    ./.venv/Scripts/python.exe .harness/scripts/verify_editor_artifact.py --tag editor-v0.1.0
+    ./.venv/Scripts/python.exe .harness/scripts/verify_editor_artifact.py --tag editor-v<版本>
 
 为什么不只在安装器里校验：安装器是**用户侧**的兜底，发布侧要是把版本写错、
 漏传 .sha256 或者压了个空包，等到用户装完才发现就晚了。这里把「发布物本身对不对」
@@ -36,7 +36,7 @@ def toml_version() -> str:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="校验编辑窗口发布产物")
-    parser.add_argument("--tag", help="CI 传 github.ref_name，形如 editor-v0.1.0")
+    parser.add_argument("--tag", help="CI 传 github.ref_name，形如 editor-v<版本>")
     args = parser.parse_args()
 
     version = toml_version()

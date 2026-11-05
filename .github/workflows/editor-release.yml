@@ -5,9 +5,10 @@
 # .sha256 或压错包，而且下次改了前端没人记得重打。tag 是唯一的版本事实源。
 #
 # 发版：
-#   git tag editor-v0.1.0 && git push origin editor-v0.1.0
-# （tag 必须与 .harness/demo/ppx_probe/app/ppx.toml 的 version 一致，
-#   verify_editor_artifact.py 会拦住不一致的 tag。）
+#   git tag editor-v<version> && git push origin editor-v<version>
+# （<version> 取自 .harness/demo/ppx_probe/app/ppx.toml；tag 必须与它一致，
+#   verify_editor_artifact.py 会拦住不一致的 tag。首次 0.1.0 的 tag 用过且未发版，
+#   不要 force 改它，直接 bump ppx.toml 并用新 tag。）
 name: Editor Release
 
 on:

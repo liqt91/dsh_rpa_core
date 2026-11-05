@@ -53,7 +53,7 @@ author: w
 
 看 `editor` 那行（`editor project` 是旧版名字，别找错行）：
 
-- `[PASS] editor … 0.1.0 · <exe 路径>` ⇒ 装好的窗口，下文第一到五节都适用；
+- `[PASS] editor … <版本> · <exe 路径>` ⇒ 装好的窗口，下文第一到五节都适用；
 - `[PASS] editor … ppx dev · <工程目录>` ⇒ 源码树形态，同上；
 - `[SKIP] editor … 没装（可选件…）` ⇒ **没有窗口**。Windows 上想补一个：
 

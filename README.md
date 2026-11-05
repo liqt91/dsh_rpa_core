@@ -266,8 +266,8 @@ runner 上装 PPX / pnpm、构建前端与便携包、校验产物，再创建 R
 一个 tag 就够：
 
 ```bash
-git tag editor-v0.1.0
-git push origin editor-v0.1.0
+git tag editor-v<版本>
+git push origin editor-v<版本>
 ```
 
 > tag 必须与 `.harness/demo/ppx_probe/app/ppx.toml` 的 `version` 一致 ——
@@ -289,9 +289,9 @@ git push origin editor-v0.1.0
 ```bash
 ./.venv/Scripts/python.exe .harness/scripts/build_editor.py --release
 ./.venv/Scripts/python.exe .harness/scripts/verify_editor_artifact.py
-gh release create editor-v0.1.0 \
+gh release create editor-v<版本> \
   dist/RPA-Editor-win64.zip dist/RPA-Editor-win64.zip.sha256 \
-  --title "Editor 0.1.0" --notes "编辑窗口 0.1.0"
+  --title "Editor <版本>" --notes "编辑窗口 <版本>"
 ```
 
 资源名**固定不带版本**：安装器走 `releases/latest/download/<asset>`，省掉一次 API 解析；
