@@ -259,6 +259,9 @@ rpa-skill doctor                               # 窗口装好时 editor 那行�
 - 没有 Linux/macOS 产物，其它平台返回 `EDITOR_UNSUPPORTED`（SKIP，不算安装失败）。
 - 离线 / 内网：`--editor-zip <本地 zip>` 或 `--editor-url <镜像>`；release 的 `.sha256`
   旁挂文件会自动校验，也可 `--sha256 <hex>` 手工指定。
+- **走代理才能连 GitHub 时**：Node 内置 `fetch` 默认不读 `HTTP_PROXY`，直接装会报
+  `UND_ERR_CONNECT_TIMEOUT`。设 `NODE_USE_ENV_PROXY=1` 再装（Node 22.22 / 24+ 实测可用，
+  会有一条实验特性警告，不影响结果）；或手工下好 zip 与同名 `.sha256` 后走 `--editor-zip`。
 - 不装窗口照样能生成流程、跑流程、用 `rpa-core capture` 拾取元素；少的只是「人在窗口里改 + 点选」。
 
 维护者发版（推荐走 CI）：仓库有 `.github/workflows/editor-release.yml`，在 Windows
