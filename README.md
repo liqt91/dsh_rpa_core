@@ -279,6 +279,11 @@ git push origin editor-v0.1.0
 `RPA_PPX_PYTHON` 交给构建脚本；本地不设这个变量时，脚本自己去 `uv tool dir` 里按结构找，
 不依赖 tool 目录叫什么名字。
 
+> Windows runner 是 en-US，Python 的 stdout 默认 **cp1252**，构建脚本里第一句中文日志就会抛
+> `UnicodeEncodeError` —— 本机是中文 locale，所以这种失败只会在 CI 上出现。workflow 设了
+> `PYTHONIOENCODING=utf-8`；脚本自身另有 `errors=replace` 兜底，并给生成 spec 的子进程强制
+> UTF-8（那边本来就按 utf-8 解码）。三层互为兜底，别只删其中一层。
+
 本地手工发版（没有 CI 时）：
 
 ```bash

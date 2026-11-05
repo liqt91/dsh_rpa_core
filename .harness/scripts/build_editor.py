@@ -35,6 +35,14 @@ import subprocess
 import sys
 from pathlib import Path
 
+# en-US 的 Windows runner 上 stdout 是 cp1252：脚本里第一句中文 print 就会抛
+# UnicodeEncodeError，构建在进 PyInstaller 之前就没了（CI 首跑只活了 1 秒）。
+# 这里只兜底「写不出去不许崩」；编码本身由 workflow 的 PYTHONIOENCODING 保证，
+# 不强行改成 utf-8 —— 本机中文控制台改了反倒会乱码。
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        _stream.reconfigure(errors="replace")
+
 ROOT = Path(__file__).resolve().parents[2]
 APP = ROOT / ".harness" / "demo" / "ppx_probe" / "app"
 RESOURCES = APP / "api" / "resources"
@@ -275,6 +283,12 @@ def main() -> int:
     _stage_resources()
 
     env = dict(os.environ)
+    # 子进程强制 UTF-8：ppx 生成 spec 时会 print 工程路径，本机仓库路径含中文，
+    # 在 cp1252 的 runner 上这句自己就会炸（父进程的 reconfigure 管不到它）。
+    # _ppx_spec 本来就按 utf-8 解码子进程输出，所以是覆盖、不是 setdefault：
+    # 父环境里若已有 cp1252，留着它就等于没修。
+    env["PYTHONIOENCODING"] = "utf-8"
+    env["PYTHONUTF8"] = "1"
     # PyInstaller 靠 sys.path 找 rpa_core；ppx 的 spec 里 pathex 只有 app 根。
     source = str(ROOT / "src")
     env["PYTHONPATH"] = source + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")

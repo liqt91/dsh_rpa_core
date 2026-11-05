@@ -37,6 +37,12 @@ concurrency:
 jobs:
   build:
     runs-on: windows-latest
+    env:
+      # runner 是 en-US，Python 的 stdout 默认 cp1252；build_editor.py 的中文日志
+      # 会在第一句 print 就抛 UnicodeEncodeError。脚本另有 errors=replace 兜底，
+      # 这一层保证日志里的中文仍然可读。
+      PYTHONIOENCODING: "utf-8"
+      PYTHONUTF8: "1"
     steps:
       - uses: actions/checkout@v4
 
