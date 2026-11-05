@@ -194,18 +194,25 @@ uv run python -m rpa_core.cli devserver
 分发靠 `bin/rpa-skill.mjs`，零依赖、不需要先安装任何东西。
 
 ```bash
-# ① npm（发布到 registry 之后；未发布时直接指仓库）
-npx rpa-workflow-studio install
-npx github:<you>/rpa_core install
+# ① npm：发布到 registry 后
+npm i -g rpa-workflow-studio
+rpa-skill install          # 自动装到本机已存在的宿主
 
-# ② clone（不想碰 npm 也行）
+#    未发布时直接从 git 源装（同样得到 rpa-skill 命令）
+npm i -g github:<you>/rpa_core
+rpa-skill install --target dsh
+
+# ② clone（完全不碰 npm）
 git clone <repo> rpa_core && cd rpa_core
 node bin/rpa-skill.mjs install
 
 # ③ 自查 / 卸载
-node bin/rpa-skill.mjs status
-node bin/rpa-skill.mjs uninstall --target dsh
+rpa-skill status
+rpa-skill uninstall --target dsh
 ```
+
+> `npx <pkg> install` 这种写法也能用，但参数归属在各 npm 版本上不完全一致
+> （`install` 可能被当成包名），所以文档里只给 `npm i -g` 与 `node bin/…` 两种确定能跑的形态。
 
 安装器只做三件事：拷目录、把 `SKILL.md` 里的 `{{SKILL_DIR}}` 换成安装后的**绝对路径**
 （agent 的 cwd 通常是项目根，相对写 `scripts/studio.py` 一定找不到）、生成 `skill.json`。
