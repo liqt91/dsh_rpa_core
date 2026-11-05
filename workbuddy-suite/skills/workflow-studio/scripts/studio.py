@@ -650,16 +650,29 @@ def cmd_stop(args: argparse.Namespace) -> int:
     return 0 if result.get("ok") else 2
 
 
-def _suite_dir() -> Path:
-    """workbuddy-suite 目录（editor/ 与 extension/ 的上一级）。
+def _editor_dir() -> Path | None:
+    """编辑窗口工程目录（一个 PPX 应用），找不到返回 None。
 
-    安装态下 `parents[3]` 是宿主目录（`~/.dsh`），拿它拼 editor/ 会指到不存在的地方；
-    所以先问定位层，拿不到才退回相对层级。
+    窗口从来不在 wheel 与 npm 包里 —— 它是仓库内的 PPX 工程
+    （`.harness/demo/ppx_probe/app`，M65 宿主实验），起它还要装 PPX 与前端依赖。
+    所以「没有窗口」是这套安装的正常形态，不是坏了；doctor 据此标 SKIP 而不是 FAIL。
+
+    先找源码根，再认历史上放过窗口的老路径 `workbuddy-suite/editor`
+    （有些工作树把它挂在那儿，`_suite_dir()` 时期的名字），最后允许
+    `RPA_EDITOR_DIR` 直接指定 —— 三种来源都不写死后面两段的相对层级。
     """
+    candidates: list[Path] = []
+    override = os.environ.get("RPA_EDITOR_DIR")
+    if override:
+        candidates.append(Path(override).expanduser())
     root = _runtime.find_source_root()
     if root:
-        return root / "workbuddy-suite"
-    return Path(__file__).resolve().parents[3]
+        candidates.append(root / ".harness/demo/ppx_probe/app")
+        candidates.append(root / "workbuddy-suite/editor")
+    for path in candidates:
+        if (path / "ppx.toml").is_file():
+            return path
+    return None
 
 
 def _find_ppx() -> str | None:
@@ -694,9 +707,21 @@ def cmd_gui(args: argparse.Namespace) -> int:
             print(json.dumps({"ok": True, "session": "started", "port": port}))
 
     binary = _find_ppx()
-    # 编辑窗口工程在 workbuddy-suite/editor 下；安装态要靠定位层找回源码根，
-    # 少一级就会拿 skills/ 当 cwd，Popen 直接报 [WinError 267] 目录名称无效。
-    editor = _suite_dir() / "editor"
+    # 编辑窗口工程不在本脚本旁边：要靠定位层找回源码根，再进 PPX 应用目录。
+    # 找不到就直说这套安装不带窗口，不要拿错目录去 Popen（会报 WinError 267）。
+    editor = _editor_dir()
+    if editor is None and not args.exe:
+        payload = {
+            "ok": False,
+            "code": "EDITOR_MISSING",
+            "error": "这套安装不带编辑窗口（窗口是仓库里的 PPX 工程 .harness/demo/ppx_probe/app）。"
+                     "两个办法：① 用 --exe 指定打包好的窗口可执行文件；"
+                     "② 换源码树形态，把 --rpa-core-dir 指到 clone 下来的仓库根后重装技能。"
+                     "只要不涉及「人在窗口里改」，改文件用文件交接、拾取元素用 "
+                     "rpa-core capture，都不需要窗口。",
+        }
+        print(json.dumps(payload, ensure_ascii=False))
+        return 2
     if args.exe:
         # 用户给的可能是相对路径，而下面的 cwd 是 editor/ —— 必须先按当前目录解析成绝对路径，
         # 否则 Popen 会在 editor/ 底下找这个相对路径，报 [WinError 267] 目录名称无效。
@@ -717,7 +742,9 @@ def cmd_gui(args: argparse.Namespace) -> int:
     if args.skip_frontend:
         argv.append("--skip-frontend")
     try:
-        child = subprocess.Popen(argv, cwd=str(editor))
+        # 给了 --exe 但没找到工程目录时（安装态常见），cwd 退回当前目录：
+        # 打包后的窗口是自足的，不需要工程目录才能跑。
+        child = subprocess.Popen(argv, cwd=str(editor or Path.cwd()))
     except OSError as exc:
         print(json.dumps({"ok": False, "code": "SPAWN_FAILED", "error": str(exc)},
                          ensure_ascii=False))
@@ -727,6 +754,48 @@ def cmd_gui(args: argparse.Namespace) -> int:
         server.shutdown()
     print(json.dumps({"ok": True, "editorExit": code}))
     return 0
+
+
+def _extension_check(rc_py: Path) -> tuple[bool, str]:
+    """浏览器扩展源码目录在不在（与运行时形态无关）。
+
+    权威是 ``rpa_core.extension_installer.extension_root()``（包内 ``extension/`` 优先，
+    源码树读仓库根），本脚本不复制这套路径规则，直接问 CLI 要它的结论
+    —— ``install-extension --status`` 会回填 ``_extension_dir``。
+
+    不看形态是有原因的：``extension/`` 由 pyproject ``force-include`` 打进 wheel，
+    pip / uv tool 形态一样有。早先这里把 pip/exe 形态标成「元素捕获需源码树」，
+    实测是错的（exe 形态能打包 CRX，native host 也已注册），等于给用户一个
+    假的能力边界。
+    """
+    try:
+        proc = subprocess.run(
+            [sys.executable, str(rc_py), "install-extension", "--status"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=120,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        return False, f"{type(exc).__name__}: {exc}"
+    raw = proc.stdout or ""
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        # 解释器被宿主注入 sitecustomize 时，stderr 首行常是那条无关的 PermissionError
+        # （WorkBuddy 的 shim）。挑掉它，免得 doctor 报出一条跟扩展无关的「原因」。
+        lines = [
+            ln
+            for ln in (raw or proc.stderr or "").strip().splitlines()
+            if ln.strip() and not ln.startswith("Error in sitecustomize")
+        ]
+        return False, (lines[0] if lines else f"退出码 {proc.returncode}")
+    ext = data.get("_extension_dir")
+    if not ext:
+        return False, "状态里没有 _extension_dir（扩展资源没找到）"
+    return (Path(ext) / "manifest.json").is_file(), str(ext)
 
 
 def cmd_doctor(args: argparse.Namespace) -> int:
@@ -746,10 +815,15 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     health = _call("GET", "/health") if meta else {"ok": False}
     session_detail = f"port {meta.get('port')}" if meta else "未启动"
     checks.append(("session", bool(health.get("ok")), session_detail))
+    # 先算一次：下面三处都靠它判「这套安装有没有窗口」，不要各算各的。
+    editor_dir = _editor_dir()
     if health.get("ok"):
         editor = health.get("editor") or {}
-        label = "在线" if editor.get("online") else "离线（先打开编辑窗口）"
-        checks.append(("editor window", bool(editor.get("online")), label))
+        if editor_dir is None:
+            checks.append(("editor window", None, "不适用（这套安装不带编辑窗口）"))
+        else:
+            label = "在线" if editor.get("online") else "离线（先打开编辑窗口）"
+            checks.append(("editor window", bool(editor.get("online")), label))
 
     # 「装上但跑不动」的根因通常在这一层：技能被拷进宿主目录后，与源码树的关系断了。
     # 所以先把定位结果、rpa-core 能不能调通摆在最前面。
@@ -785,19 +859,29 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         rc_ok, rc_detail = False, f"{type(exc).__name__}: {exc}"
     checks.append(("rpa-core", rc_ok, rc_detail))
 
-    # 编辑窗口工程与浏览器插件都只在源码树里有（wheel 不带 editor/）。没有源码树时
-    # 报 FAIL 会让人以为装在别处坏了，实际是这套形态不提供 GUI 与元素捕获 —— 标 SKIP。
-    if root is None and mode in ("module", "exe"):
-        checks.append(("editor project", None, "不适用（这种形态不带 editor/，GUI 用不了）"))
-        checks.append(("extension", None, "不适用（同上，元素捕获需源码树）"))
-    else:
-        suite = _suite_dir()
-        editor_dir = suite / "editor"
-        checks.append(("editor project", (editor_dir / "ppx.toml").is_file(), str(editor_dir)))
-        extension_dir = suite / "extension"
+    # 编辑窗口是仓库内的 PPX 工程，wheel 与 npm 包都不带 ⇒ 找不到时标 SKIP 而不是 FAIL：
+    # 报红会让人以为装在别处坏了，实际是这套安装不提供窗口。
+    # 扩展相反，随 wheel 发布，任何形态都该在，所以单独走 _extension_check，不跟着形态 SKIP。
+    if editor_dir is not None:
+        checks.append(("editor project", True, str(editor_dir)))
+    elif root is None and mode in ("module", "exe"):
         checks.append(
-            ("extension", (extension_dir / "manifest.json").is_file(), str(extension_dir))
+            ("editor project", None, "不适用（这种形态不带编辑窗口：窗口是仓库里的 PPX 工程）")
         )
+    else:
+        checks.append(
+            (
+                "editor project",
+                None,
+                "不适用（源码树里也没有 .harness/demo/ppx_probe/app；"
+                "或用 RPA_EDITOR_DIR 指过去）",
+            )
+        )
+    # rpa-core 都跑不动时别再叠一次 120s 超时，直接记红（上面那条已经把原因说了）。
+    ext_ok, ext_detail = (
+        _extension_check(rc_py) if rc_ok else (False, "跳过（rpa-core 不可执行）")
+    )
+    checks.append(("extension", ext_ok, ext_detail))
 
     failed = 0
     for name, passed, detail in checks:

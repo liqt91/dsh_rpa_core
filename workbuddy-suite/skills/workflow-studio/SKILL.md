@@ -2,7 +2,7 @@
 name: workflow-studio
 display_name: WorkBuddyStudio
 display_name_en: WorkBuddyStudio
-description: 把一句自动化需求落成可编译的 workflow.json（原子能力从 rpa-core catalog 现取、交互元素留占位待用户捕获），用可视化编排窗口（PPX 桌面应用）打开工作流（Agent 推文件、用户在窗口里拼流程/改参数/编译/运行并确认），或在浏览器页面上让用户点选元素拿回稳定选择器。当用户说「帮我做个网页自动化」「写个 workflow」「把这几步做成流程」「打开编辑器」「在窗口里改这个流程」「让我看看这个工作流」「你改完我确认一下」「帮我把流程打开我手动调」「拾取元素」「选一下页面上的按钮/输入框」「要这个元素的 selector」「登录框定位不到」时使用。触发词：做个自动化、网页自动化、生成流程、写个 workflow、打开编辑器、编辑窗口、Studio、让我确认、人工确认、审阅流程、改完保存、拾取元素、选元素、元素定位、selector、选择器、抓元素、页面上点一下。
+description: 把一句自动化需求落成可编译的 workflow.json（原子能力从 rpa-core catalog 现取、交互元素留占位待用户捕获），用可视化编排窗口（PPX 桌面应用）打开工作流（Agent 推文件、用户在窗口里拼流程/改参数/编译/运行并确认），或在浏览器页面上让用户点选元素拿回稳定选择器。**编辑窗口只在源码树形态有；只装了 wheel（pip/uv tool）时没有窗口，改用文件交接 + rpa-core capture 命令行捕获**。当用户说「帮我做个网页自动化」「写个 workflow」「把这几步做成流程」「打开编辑器」「在窗口里改这个流程」「让我看看这个工作流」「你改完我确认一下」「帮我把流程打开我手动调」「拾取元素」「选一下页面上的按钮/输入框」「要这个元素的 selector」「登录框定位不到」时使用。触发词：做个自动化、网页自动化、生成流程、写个 workflow、打开编辑器、编辑窗口、Studio、让我确认、人工确认、审阅流程、改完保存、拾取元素、选元素、元素定位、selector、选择器、抓元素、页面上点一下。
 description_zh: 让 AI 与人共用同一个工作流与同一个页面：流程用 PPX 可视化编排窗口改、页面元素用浏览器插件点选，结果都回到对话里。
 description_en: A human-in-the-loop bridge for RPA agents. Opens workflows in a visual PPX editor window (cards, params, compile, run) and captures page elements via a browser extension, returning structured results to the agent.
 examples_zh:
@@ -31,6 +31,40 @@ author: w
 | 轻量编辑窗口（PPX） | 人改文件、确认改动，保存后自动把 sha 与校验结果交回 Agent | 需要人动手改，或需要人「点头」 |
 | 本技能 + 会话服务 | Agent 侧的命令行入口，负责排队、等待、取结果 | 每次调用 |
 | 浏览器插件（MV3） | 人在页面上点一个元素，插件算出稳定选择器 | 需要页面元素定位 |
+
+> 表格里的「编辑窗口」不是每种安装形态都有。开干之前先看下一节，别对着一个没有窗口
+> 的安装说「我帮你打开编辑器」。
+
+## 形态：先看你手里这版带不带编辑窗口
+
+这套技能有两种落法，差別只在界面这一层：
+
+| 形态 | 怎么来的 | 编辑窗口（PPX） | 元素捕获 |
+|---|---|---|---|
+| 源码树 | `git clone` 仓库，技能从 `workbuddy-suite/skills/` 安装 | 有（仓内 `.harness/demo/ppx_probe/app`，另需 PPX 与前端依赖） | 会话服务 + 浏览器插件，或 CLI |
+| wheel | `pip install` / `uv tool install` 装了 `rpa-core-runtime` | **没有**（窗口是仓库里的 PPX 工程，包不带） | CLI 可用；插件资源随包发布 |
+
+一条命令判定：
+
+```bash
+{{PYTHON}} "{{SKILL_DIR}}/scripts/studio.py" doctor
+```
+
+看 `editor project` 那行：
+
+- `[PASS]` ⇒ 有窗口，下文第一到五节都适用。
+- `[SKIP] 不适用（… 不带编辑窗口 …）` ⇒ **没有窗口**，此时：
+
+  - 不要说「我帮你打开编辑器」，也别跑 `studio.py gui` / `open` / `wait`——窗口是仓库里的
+    PPX 工程（`.harness/demo/ppx_probe/app`），包里没有，这些命令只会报 `EDITOR_MISSING`；
+  - 走第五节的降级：把改动写成明确的 diff 或整段贴给用户，让他自己改、改完告诉你；
+  - 元素捕获改走命令行：`{{RPA_CORE}} capture browser`（浏览器页面）或
+    `{{RPA_CORE}} capture desktop`（桌面窗口）。扩展源码在包内，
+    `{{RPA_CORE}} install-extension` 照样能装好——`--status` 里的 `_extension_dir`
+    应当指向 `site-packages/rpa_core/extension`。
+
+判形态别用「命令跑不跑得动」当依据：`rpa-core` 本体在两种形态下都好用，差的只是
+编辑窗口这个 PPX 应用，以及由它提供的「在窗口里改 + 插件点选」交互。
 
 下文命令行里的前半截（解释器绝对路径 / `rc.py` 入口）是安装时写死的，原样照抄即可。
 若命令里还能看到 `{{…}}` 这种没被替换的花括号，说明这份技能是手拷进来的、没走安装器，
@@ -79,7 +113,9 @@ rpa-skill install --force
 
 - 输出里有 `会话 1.0.0 · 端口 7788` → 服务在跑，继续。
 - 报 `NO_SESSION` / `SESSION_DOWN` → 先起服务（下面第二步），**不要**跳过去硬干活。
-- `编辑窗口 离线` → 窗口没开。告诉用户「编辑器没开，我开一下」再继续；不要假装文件已经打开了。
+- `编辑窗口 离线` → 窗口没开。**先确认这版有没有窗口**（看上面 doctor 的 `editor project`）：
+  有就说「编辑器没开，我开一下」再继续；没有就**不要**去开，直接按第五节的降级走。
+  两种情况都不要假装文件已经打开了。
 
 自检不过时的兜底：直接读文件、把改动写清楚，让用户自己贴回去。**永远不要伪造「用户已确认」。**
 
@@ -118,7 +154,20 @@ rpa-skill install --force
 
 ## 四、工作流 B：拾取页面元素
 
+**先分形态**（见上文「形态」一节）：`editor project` 是 `[PASS]` 才走本节这种「会话里等插件回传」；
+是 `[SKIP]` 就跳过本节，改用命令行通道（两条都随包发布，不依赖窗口）：
+
 ```bash
+# 浏览器：自己起浏览器 + 载扩展，等用户按下拾取手势/热键，结果写进工作流
+# 注意 --flow 是流程目录名（存到 workflows/<flow>/elements/<--save-as>.json），不是文件路径
+{{RPA_CORE}} capture browser --browser-type edge --start-url "https://example.com" \
+  --save-as userField --flow login
+# 桌面：hover 高亮 + 热键捕获（Windows）
+{{RPA_CORE}} capture desktop --hover --save-as saveBtn --flow login
+```
+
+```bash
+# 有窗口时（editor project = PASS）：Agent 侧等插件回传
 # 1. 先进入等待（Agent 侧阻塞 ≤60s）
 {{PYTHON}} "{{SKILL_DIR}}/scripts/studio.py" capture --timeout 60
 # 2. 同时告诉用户：打开目标页面 → 点浏览器工具栏的 Studio 图标 → 开始拾取 → 点目标元素
@@ -144,7 +193,8 @@ rpa-skill install --force
 任何一步拿不到会话，都不要中断任务：
 
 - 改文件 → 直接把 diff 贴给用户，请他确认后再写盘。
-- 要选择器 → 请用户从浏览器 DevTools 里复制，或者退化为「按文案定位」（并说明风险）。
+- 要选择器 → 先试命令行捕获（`{{RPA_CORE}} capture browser` / `capture desktop`，不依赖会话与窗口）；
+  仍拿不到再请用户从 DevTools 里复制，或退化为「按文案定位」并说明风险。
 
 ## 六、错误码对照
 
