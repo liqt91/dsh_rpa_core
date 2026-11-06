@@ -235,18 +235,73 @@ aside, section { min-height: 0; overflow: auto; background: var(--surface); }
   padding: 6px 12px; cursor: pointer; color: var(--faint); font-size: 12px; user-select: none;
 }
 .elemBox[open] > summary { border-bottom: 1px solid var(--border); }
-.elemBody { flex: 1 1 auto; min-height: 0; max-height: 34vh; overflow: auto; padding: 2px 0 10px; }
-.elemBody .hint { color: var(--faint); font-size: 11.5px; padding: 6px 12px; }
-.elemHead { padding: 6px 12px 2px; color: var(--muted); font-size: 11px; letter-spacing: .3px; }
-.elemRow { display: flex; align-items: center; gap: 6px; padding: 4px 12px; }
-.elemRow.missing { background: #fff8f8; }
-.elemName { font: 12px/1.4 Consolas, "Microsoft YaHei", monospace; color: var(--text); font-weight: 500; }
-.elemMeta { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--faint); font-size: 11px; }
-.elemRow .capBtn { height: 22px; padding: 0 8px; font-size: 11px; }
-.elemRow .capBtn.web { border-color: var(--info); color: var(--info); }
+/* ---- 元素拾取（M66）-------------------------------------------------------
+ * 8px 栅格；正文 ≥14px；所有可点区域 ≥24×24（主按钮 32px 高）；
+ * 语义色一律走 :root 的 token，不写死十六进制；焦点环全局可见。
+ * 状态同时用「符号 + 文字 + 颜色」表达，不能只靠颜色。 */
+.elemBody { flex: 1 1 auto; min-height: 0; max-height: 40vh; overflow: auto; padding: 2px 0 10px; }
+.elemBody .hint { color: var(--muted); font-size: 14px; padding: 8px 12px; }
+.elemHead { padding: 8px 12px 4px; color: var(--muted); font-size: 14px; }
+.elemRow { display: flex; align-items: center; gap: 8px; padding: 6px 12px; flex-wrap: wrap; }
+.elemRow.missing { background: var(--sunken); }
+.elemName { font: 14px/1.4 Consolas, "Microsoft YaHei", monospace; color: var(--text); font-weight: 500; }
+.elemMeta { flex: 1 1 120px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 14px; }
+
+.pickBar {
+  display: flex; flex-direction: column; gap: 4px;
+  margin: 4px 12px 8px; padding: 8px 12px;
+  border: 1px solid var(--border); border-left: 3px solid var(--info);
+  border-radius: 6px; background: var(--surface);
+}
+.pickBar[data-state="bound"] { border-left-color: var(--success); }
+.pickBar[data-state="blocked"], .pickBar[data-state="failed"], .pickBar[data-state="timeout"] { border-left-color: var(--danger); }
+.pickLive { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 500; color: var(--text); }
+.pickDot { flex: 0 0 auto; font-size: 16px; line-height: 1; color: var(--info); }
+.pickBar[data-state="bound"] .pickDot { color: var(--success); }
+.pickBar[data-state="blocked"] .pickDot, .pickBar[data-state="failed"] .pickDot,
+.pickBar[data-state="timeout"] .pickDot { color: var(--danger); }
+.pickDetail { display: flex; gap: 8px; flex-wrap: wrap; min-height: 20px; color: var(--muted); font-size: 14px; }
+.pickHintText { color: var(--text); }
+.pickSeconds { color: var(--muted); font-variant-numeric: tabular-nums; }
+.pickActions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+
+/* 唯一主操作；其余都是次级/折叠，不与技术选择并列。 */
+.pickMain, .pickAction, .pickAltBtn, .pickManualSubmit {
+  min-height: 32px; min-width: 32px; height: 32px; padding: 0 12px; font-size: 14px;
+  border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text);
+  cursor: pointer; transition: transform .2s, opacity .2s;
+}
+.pickMain { border-color: var(--info); color: var(--info); font-weight: 500; }
+button:hover:not(:disabled), .pickAlt > summary:hover { background: var(--hover); }
+button:active:not(:disabled) { transform: scale(.95); }
+button:focus-visible, summary:focus-visible, input:focus-visible {
+  outline: 2px solid var(--info); outline-offset: 2px;
+}
+.pickAlt { flex: 1 1 100%; }
+.pickAlt > summary {
+  min-height: 24px; padding: 4px 0; cursor: pointer; list-style: none;
+  color: var(--muted); font-size: 14px;
+}
+.pickAltBox { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 8px 0; }
+.pickHint, .pickManualHint, .pickManualLabel { color: var(--muted); font-size: 14px; }
+.pickManualRow { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; flex: 1 1 100%; padding-top: 4px; }
+.pickManualInput {
+  min-height: 32px; min-width: 160px; flex: 1 1 200px; padding: 0 8px;
+  border: 1px solid var(--border); border-radius: 6px; font: inherit; font-size: 14px;
+  background: var(--surface); color: var(--text);
+}
+.pickBarManual { flex: 1 1 100%; }
+.pickBarManual > summary { min-height: 24px; cursor: pointer; color: var(--muted); font-size: 14px; }
+.pickFlash { animation: pickFlash 1.2s ease-out; }
+@keyframes pickFlash { 0% { opacity: .55; } 100% { opacity: 1; } }
+
+@media (max-width: 960px) {
+  .elemMeta { flex: 1 1 100%; }
+  .pickActions { flex-direction: column; align-items: flex-start; }
+}
 
 .card.missing { border-color: var(--danger); box-shadow: 0 0 0 2px rgba(207, 34, 46, .14); }
-.card .cap { margin-left: 4px; flex: 0 0 auto; color: var(--danger); font-size: 11px; }
+.card .cap { margin-left: 4px; flex: 0 0 auto; color: var(--danger); font-size: 14px; }
 
 /* ---- 运行（M18 口径：子进程 + events.jsonl） ---------------------------- */
 .runBox {

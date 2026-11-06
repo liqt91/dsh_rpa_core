@@ -148,6 +148,7 @@ function renderCards() {
         (RUN.activeNode && card.id === RUN.activeNode ? ' running' : '') +
         (missingNodeIds.has(card.id) ? ' missing' : ''),
     )
+    row.dataset.nodeId = card.id || ''
     row.style.setProperty('--depth', DEPTH[card.depth % DEPTH.length])
     row.append(mk('span', 'grip', '⋮'), mk('span', 'no', String(card.no)), mk('span', 'name', card.label))
     if (card.summary) row.append(mk('span', 'sum', card.summary))
@@ -485,9 +486,81 @@ function renderCompile(result) {
  * 即 ELEMENT_REF_MISSING。这里把「缺哪个元素、在第几步」摊开，并接上 main 的
  * `rpa-core capture` 复用捕获器。捕获落盘即用同名 = 自动绑定（引用模型无需单独绑定步骤）。 */
 
+// 用户可见文案的唯一来源（M66）。静态判据扫这张表的值：出现实现名词即判红。
+// 动态内容一律用 {name} / {seconds} 占位，避免把拼接藏进源码里绕过判据。
+const PICK_TEXT = {
+  main: '补一下',
+  mainHint: '补这个元素，系统自己判断怎么抓',
+  alternate: '换个方式',
+  alternateHint: '通常不用改；这次选的只对这一个元素生效',
+  auto: '自动判断',
+  page: '在网页上',
+  app: '在桌面软件里',
+  wherePage: '网页',
+  whereApp: '桌面软件',
+  checking: '检查环境…',
+  ready: '准备好了，马上去点一下要用的元素',
+  readyCount: '{seconds} 秒后自动开始',
+  startNow: '现在开始',
+  blocked: '现在还不能开始：{fix}',
+  offlineHint: '浏览器还没连上，可以先手动填写',
+  waiting: '等你点一下要用的元素',
+  waitingDefault: '去点一下要用的元素',
+  left: '还剩 {seconds} 秒',
+  cancelled: '已取消，随时可以重来',
+  timeout: '时间到了，没收到这次点选',
+  failed: '这次没成：{reason}',
+  bound: '第 {step} 步已就绪 · {name}',
+  manual: '手动填写',
+  manualHint: '不用点元素，直接写一个选择器（键盘也能用）',
+  manualPlaceholder: '例如 #username',
+  manualSubmit: '写好并绑定',
+  manualDone: '已写好并绑定 · {name}',
+  manualBad: '没写上：{reason}',
+  cancel: '取消',
+  retry: '再试一次',
+  view: '查看这一步',
+  none: '本流程没有元素，不用补',
+  loadFail: '元素没加载出来：{reason}',
+  headMissing: '待补元素',
+  headDone: '已就绪',
+  countDone: '{count} 已就绪',
+  countMissing: '{count} 待补',
+  stepFallback: '这一步',
+}
+
+// 状态符号：与文字、颜色三者并列，任何一条通道失效都还能读出状态。
+const PICK_ICON = {
+  checking: '◌', ready: '◉', waiting: '◌', bound: '✓',
+  blocked: '!', cancelled: '–', timeout: '!', failed: '!',
+}
+
+function pickText(key, vars = {}) {
+  return (PICK_TEXT[key] || key).replace(/\{(\w+)\}/g, (_, k) => String(vars[k] ?? ''))
+}
+
+let pickMissing = []
+let pickElements = []
+let pickCapabilities = null
+let pickState = null // { name, path, override, state, step, nodeId, deadlineAt, hint, reason }
+let pickTimer = null
+let pickPollTimer = null
+
+function stepOf(nodeId) {
+  const card = cards.find((c) => c.id === nodeId)
+  return card && card.no != null ? String(card.no) : PICK_TEXT.stepFallback
+}
+
+function whereOf(m) {
+  const cmd = String(m.command || '')
+  if (cmd.startsWith('browser.')) return PICK_TEXT.wherePage
+  if (cmd.startsWith('desktop.')) return PICK_TEXT.whereApp
+  return m.decision && m.decision.target === 'browser' ? PICK_TEXT.wherePage : PICK_TEXT.whereApp
+}
+
 async function refreshElements() {
   if (!currentPath) {
-    el.elemBody.replaceChildren(mk('div', 'hint', '未打开流程'))
+    el.elemBody.replaceChildren(mk('div', 'hint', pickText('none')))
     el.elemCount.textContent = ''
     return
   }
@@ -496,40 +569,36 @@ async function refreshElements() {
       ppx.call('rpa.missingElements', { path: currentPath }),
       ppx.call('rpa.listElements', { path: currentPath }),
     ])
-    missingNodeIds = new Set((miss.missing || []).map((m) => m.nodeId).filter(Boolean))
+    pickMissing = miss.missing || []
+    pickElements = list.elements || []
+    pickCapabilities = miss.capabilities || null
+    missingNodeIds = new Set(pickMissing.map((m) => m.nodeId).filter(Boolean))
     renderCards()
-    renderElementsPanel(miss.missing || [], list.elements || [])
+    renderElementsPanel()
   } catch (error) {
-    el.elemBody.replaceChildren(mk('div', 'hint', `元素加载失败：${error.code}: ${error.message}`))
+    el.elemBody.replaceChildren(
+      mk('div', 'hint', pickText('loadFail', { reason: `${error.code}: ${error.message}` })),
+    )
   }
 }
 
-function renderElementsPanel(missing, elements) {
+function renderElementsPanel() {
   el.elemBody.replaceChildren()
-  el.elemCount.textContent = `${elements.length} 已捕获 · ${missing.length} 待补`
-  if (!missing.length && !elements.length) {
-    el.elemBody.append(mk('div', 'hint', '本流程没有元素（纯逻辑流程），无需捕获'))
+  el.elemCount.textContent =
+    `${pickText('countDone', { count: pickElements.length })} · ` +
+    pickText('countMissing', { count: pickMissing.length })
+  paintPickBar()
+  if (!pickMissing.length && !pickElements.length) {
+    el.elemBody.append(mk('div', 'hint', pickText('none')))
     return
   }
-  if (missing.length) {
-    el.elemBody.append(mk('div', 'elemHead', '待补元素（需捕获或提供）'))
-    for (const m of missing) {
-      const row = mk('div', 'elemRow missing')
-      row.append(mk('span', 'elemName', m.name))
-      row.append(mk('span', 'elemMeta', `${m.nodeId} · ${m.command} · ${m.param}`))
-      const web = mk('button', 'capBtn web', '网页')
-      web.title = '用浏览器扩展捕获：去目标页 Ctrl+Click 元素'
-      web.addEventListener('click', () => captureElement(m.name, 'browser'))
-      const desk = mk('button', 'capBtn', '桌面')
-      desk.title = '用桌面 UIA 捕获：鼠标移到控件按 F9'
-      desk.addEventListener('click', () => captureElement(m.name, 'desktop'))
-      row.append(web, desk)
-      el.elemBody.append(row)
-    }
+  if (pickMissing.length) {
+    el.elemBody.append(mk('div', 'elemHead', pickText('headMissing')))
+    for (const m of pickMissing) el.elemBody.append(pickRow(m))
   }
-  if (elements.length) {
-    el.elemBody.append(mk('div', 'elemHead', '已捕获'))
-    for (const e of elements) {
+  if (pickElements.length) {
+    el.elemBody.append(mk('div', 'elemHead', pickText('headDone')))
+    for (const e of pickElements) {
       const row = mk('div', 'elemRow')
       row.append(mk('span', 'elemName', e.name))
       row.append(mk('span', 'elemMeta', `${e.kind || '?'} · ${e.selector || ''}`))
@@ -538,54 +607,295 @@ function renderElementsPanel(missing, elements) {
   }
 }
 
-async function captureElement(name, target) {
+function pickRow(m) {
+  const row = mk('div', 'elemRow missing')
+  row.dataset.pickName = m.name
+  row.append(mk('span', 'elemName', m.name))
+  row.append(mk('span', 'elemMeta', `第 ${stepOf(m.nodeId)} 步 · ${whereOf(m)}`))
+
+  // 唯一主操作：怎么抓由后端 resolve_target 决定，界面不提供技术选择题。
+  const main = mk('button', 'pickMain', pickText('main'))
+  main.title = pickText('mainHint')
+  main.addEventListener('click', () => startPickFlow(m, null))
+  row.append(main)
+
+  const alt = mk('details', 'pickAlt')
+  alt.append(mk('summary', null, pickText('alternate')))
+  const box = mk('div', 'pickAltBox')
+  for (const [label, value] of [
+    [pickText('auto'), 'auto'],
+    [pickText('page'), 'browser'],
+    [pickText('app'), 'desktop'],
+  ]) {
+    const btn = mk('button', 'pickAltBtn', label)
+    btn.dataset.override = value
+    btn.addEventListener('click', () => startPickFlow(m, value === 'auto' ? null : value))
+    box.append(btn)
+  }
+  box.append(mk('div', 'pickHint', pickText('alternateHint')))
+  box.append(manualForm(m.name))
+  alt.append(box)
+  row.append(alt)
+  return row
+}
+
+function manualForm(name) {
+  const wrap = mk('div', 'pickManualRow')
+  wrap.append(mk('span', 'pickManualLabel', pickText('manual')))
+  const input = mk('input', 'pickManualInput')
+  input.placeholder = pickText('manualPlaceholder')
+  input.setAttribute('aria-label', pickText('manualHint'))
+  const submit = mk('button', 'pickManualSubmit', pickText('manualSubmit'))
+  submit.addEventListener('click', () => submitManual(name, input.value))
+  input.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') submitManual(name, input.value)
+  })
+  wrap.append(input, submit)
+  wrap.append(mk('span', 'pickManualHint', pickText('manualHint')))
+  return wrap
+}
+
+function paintPickBar() {
+  const bar = mk('div', 'pickBar')
+  bar.setAttribute('role', 'status')
+  const live = mk('div', 'pickLive')
+  live.setAttribute('aria-live', 'polite')
+  const detail = mk('div', 'pickDetail')
+  const actions = mk('div', 'pickActions')
+
+  if (!pickState) {
+    if (!pickCapabilities || !pickCapabilities.fix) return
+    bar.dataset.state = 'offline'
+    live.append(mk('span', 'pickDot', '!'), mk('span', 'pickLiveText', pickText('offlineHint')))
+    detail.textContent = pickCapabilities.fix
+    el.elemBody.append(bar)
+    bar.append(live, detail)
+    return
+  }
+
+  const s = pickState
+  bar.dataset.state = s.state
+  live.append(
+    mk('span', 'pickDot', PICK_ICON[s.state] || '·'),
+    mk('span', 'pickLiveText', pickText(s.state, {
+      name: s.name,
+      step: s.step,
+      fix: s.reason,
+      reason: s.reason,
+    })),
+  )
+  if (s.state === 'waiting' || s.state === 'ready') {
+    detail.append(mk('span', 'pickHintText', s.hint || pickText('waitingDefault')))
+    const seconds = mk('span', 'pickSeconds')
+    detail.append(seconds)
+  } else {
+    detail.textContent = s.hint || ''
+  }
+
+  if (s.state === 'ready') {
+    const go = mk('button', 'pickAction', pickText('startNow'))
+    go.addEventListener('click', () => beginCapture())
+    actions.append(go)
+  }
+  if (s.state === 'checking' || s.state === 'ready' || s.state === 'waiting') {
+    const cancel = mk('button', 'pickAction', pickText('cancel'))
+    cancel.addEventListener('click', () => cancelPick())
+    actions.append(cancel)
+  }
+  if (s.state !== 'checking' && s.state !== 'bound') {
+    const retry = mk('button', 'pickAction', pickText('retry'))
+    retry.addEventListener('click', () => {
+      const m = pickMissing.find((x) => x.name === s.name)
+      if (m) startPickFlow(m, s.override)
+    })
+    actions.append(retry)
+  }
+  if (s.state === 'bound') {
+    const view = mk('button', 'pickAction', pickText('view'))
+    view.addEventListener('click', () => focusNode(s.nodeId))
+    actions.append(view)
+  }
+  if (s.state !== 'bound') {
+    const manual = mk('details', 'pickBarManual')
+    manual.append(mk('summary', null, pickText('manual')))
+    manual.append(manualForm(s.name))
+    actions.append(manual)
+  }
+  bar.append(live, detail, actions)
+  el.elemBody.append(bar)
+  updateSeconds()
+}
+
+function updateSeconds() {
+  const node = document.querySelector('.pickSeconds')
+  if (!node || !pickState) return
+  const end = pickState.state === 'ready' ? pickState.readyAt : pickState.deadlineAt
+  if (!end) return
+  const left = Math.max(0, Math.ceil(end - Date.now() / 1000))
+  node.textContent = pickState.state === 'ready'
+    ? pickText('readyCount', { seconds: left })
+    : pickText('left', { seconds: left })
+}
+
+function setPickState(next) {
+  pickState = next
+  renderElementsPanel()
+  if (pickTimer) clearInterval(pickTimer)
+  pickTimer = null
+  if (next && (next.state === 'ready' || next.state === 'waiting')) {
+    pickTimer = setInterval(updateSeconds, 1000)
+    if (next.state === 'ready') {
+      setTimeout(() => {
+        if (pickState && pickState.state === 'ready') beginCapture()
+      }, 10000)
+    }
+  }
+}
+
+async function startPickFlow(m, override) {
   if (!currentPath) return
-  el.status.textContent = `正在启动捕获「${name}」(${target})…`
+  if (pickState && ['checking', 'ready', 'waiting'].includes(pickState.state)) await cancelPick()
+  const base = {
+    name: m.name,
+    path: currentPath,
+    override,
+    step: stepOf(m.nodeId),
+    nodeId: m.nodeId,
+    reason: null,
+    hint: null,
+  }
+  setPickState({ ...base, state: 'checking' })
+  let plan
+  try {
+    plan = await ppx.call('rpa.pickPlan', {
+      path: currentPath,
+      name: m.name,
+      override,
+    })
+  } catch (error) {
+    setPickState({ ...base, state: 'blocked', reason: error.message })
+    return
+  }
+  pickCapabilities = plan.capabilities
+  // ★ 能力闸在后端 pickPlan 算（与 startCapture 同一个函数），前端不重复判断，
+  //   也不在能力不在线时进等待态让用户空等一分钟。
+  if (plan.blocked) {
+    setPickState({ ...base, state: 'blocked', reason: plan.fix || '' })
+    return
+  }
+  setPickState({
+    ...base,
+    state: 'ready',
+    hint: '',
+    readyAt: Date.now() / 1000 + 10,
+  })
+}
+
+async function beginCapture() {
+  const s = pickState
+  if (!s || s.state !== 'ready') return
   let res
   try {
     res = await ppx.call('rpa.startCapture', {
-      path: currentPath,
-      target,
-      name,
-      browserType: 'edge',
+      path: s.path,
+      name: s.name,
+      override: s.override,
     })
   } catch (error) {
-    el.status.textContent = `启动捕获失败 ${error.code}: ${error.message}`
+    setPickState({ ...s, state: 'failed', reason: error.message })
     return
   }
   if (!res.ok) {
-    el.status.textContent = `启动捕获失败 ${res.code}：${res.error}`
+    setPickState({ ...s, state: 'blocked', reason: res.fix || res.error || '' })
     return
   }
-  el.status.textContent = `${res.instructions} · 落盘后自动绑定；也可把已有元素文件按「${name}」命名放入 elements/`
-  pollCapture(name)
+  setPickState({
+    ...s,
+    state: 'waiting',
+    hint: res.instructions,
+    nodeId: res.nodeId || s.nodeId,
+    deadlineAt: res.deadlineAt,
+  })
+  pollCapture()
 }
 
-async function pollCapture(name) {
+async function pollCapture() {
+  if (pickPollTimer) clearTimeout(pickPollTimer)
   const tick = async () => {
+    const s = pickState
+    if (!s || s.state !== 'waiting') return
     let res
     try {
-      res = await ppx.call('rpa.capturePoll', { name })
-    } catch {
+      res = await ppx.call('rpa.capturePoll', { path: s.path, name: s.name })
+    } catch (error) {
+      setPickState({ ...s, state: 'failed', reason: error.message })
       return
     }
     if (!res.ok) {
-      el.status.textContent = `捕获轮询失败 ${res.code}：${res.error}`
+      setPickState({ ...s, state: 'failed', reason: res.error })
       return
     }
-    if (res.captured) {
-      el.status.textContent = `已捕获并绑定「${name}」`
+    if (res.state === 'bound') {
+      setPickState({ ...s, state: 'bound', nodeId: res.boundNodeId || s.nodeId })
+      focusNode(res.boundNodeId || s.nodeId)
       await refreshElements()
       return
     }
-    if (!res.running) {
-      el.status.textContent = `捕获结束但未落盘「${name}」（退出码 ${res.exitCode ?? '?'}）——可能没做手势或取消了`
+    if (res.state === 'waiting') {
+      pickPollTimer = setTimeout(tick, 1000)
       return
     }
-    setTimeout(tick, 1000)
+    setPickState({ ...s, state: res.state, reason: res.reason })
   }
-  setTimeout(tick, 800)
+  pickPollTimer = setTimeout(tick, 800)
 }
+
+async function cancelPick() {
+  const s = pickState
+  if (!s) return
+  if (pickPollTimer) clearTimeout(pickPollTimer)
+  pickPollTimer = null
+  if (s.state === 'waiting') {
+    try {
+      await ppx.call('rpa.cancelCapture', { path: s.path, name: s.name })
+    } catch {
+      // 取消失败也要退出等待态，否则界面会一直假装在等。
+    }
+  }
+  setPickState({ ...s, state: 'cancelled' })
+}
+
+async function submitManual(name, selector) {
+  let res
+  try {
+    res = await ppx.call('rpa.writeElement', { path: currentPath, name, selector })
+  } catch (error) {
+    setPickState({ ...(pickState || {}), state: 'failed', name, reason: error.message })
+    return
+  }
+  if (!res.ok) {
+    setPickState({ ...(pickState || {}), state: 'failed', name, reason: res.error })
+    return
+  }
+  if (pickState) setPickState({ ...pickState, state: 'bound', name, nodeId: res.boundNodeId })
+  await refreshElements()
+}
+
+function focusNode(nodeId) {
+  if (!nodeId) return
+  const card = Array.from(document.querySelectorAll('.card')).find(
+    (n) => n.dataset.nodeId === nodeId,
+  )
+  if (!card) return
+  card.scrollIntoView({ block: 'nearest' })
+  card.classList.add('pickFlash')
+  setTimeout(() => card.classList.remove('pickFlash'), 1200)
+}
+
+document.addEventListener('keydown', (event) => {
+  if (event.key !== 'Escape' || !pickState) return
+  if (['checking', 'ready', 'waiting'].includes(pickState.state)) cancelPick()
+})
 
 el.compile.addEventListener('click', async () => {
   if (!currentPath) return

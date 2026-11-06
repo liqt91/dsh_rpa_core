@@ -441,6 +441,11 @@
       "id": "workbuddy-suite-triple",
       "title": "WorkBuddy listing triple: PPX editor perf/UX fixes + catalog-generated capability docs + negative-probe hardening",
       "passes": true
+    },
+    {
+      "id": "element-pick-ux",
+      "title": "Element pick: single intent entry, capability probe before spawn, truthful state machine (M66, P0) · 20 gates",
+      "passes": true
     }
   ]
 }

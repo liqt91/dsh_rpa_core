@@ -169,13 +169,28 @@ rpa-skill install --force
 **先分形态**（见上文「形态」一节）：`editor` 是 `[PASS]` 才走下面这种「会话里等插件回传」；
 是 `[SKIP]` 就跳过那段，改用命令行通道（两条都随包发布，不依赖窗口）：
 
+命令行通道**不会替你打开浏览器**：`capture browser` 只是让已在线的扩展进入等待，
+由人在页面上点一个元素。先跑 `{{RPA_CORE}} env-status` 看 `browsers.*.online`，
+离线就先打开装好扩展的浏览器，别在等待态里让用户空点。
+`--browser-type` / `--start-url` / `--page-url` / `--user-data-dir` / `--headless`
+这五个参数目前被实现忽略，不要写进命令里、也不要以为它们会起浏览器或打开网址。
+
 ```bash
-# 浏览器：自己起浏览器 + 载扩展，等用户按下拾取手势/热键，结果写进工作流
-# 注意 --flow 是流程目录名（存到 workflows/<flow>/elements/<--save-as>.json），不是文件路径
-{{RPA_CORE}} capture browser --browser-type edge --start-url "https://example.com" \
-  --save-as userField --flow login
-# 桌面：hover 高亮 + 热键捕获（Windows）
-{{RPA_CORE}} capture desktop --hover --save-as saveBtn --flow login
+# --workflows 相对于当前目录，务必显式给绝对路径，且 capture / elements / run 用同一个根；
+# --flow 是流程目录名（存到 <workflows>/<flow>/elements/<--save-as>.json），不是文件路径；
+# --save-as 与 --flow 必须成对，缺 --flow 会报 BAD_REQUEST。
+{{RPA_CORE}} capture browser --save-as userField --flow login \
+  --workflows "<工作区绝对路径>/workflows" --timeout 60
+# 桌面：hover 实时高亮 + 热键或点击捕获（Windows）
+{{RPA_CORE}} capture desktop --hover --save-as saveBtn --flow login \
+  --workflows "<工作区绝对路径>/workflows"
+```
+
+结果写到 `<workflows>/<flow>/elements/<name>.json`，**落盘即绑定**同名的 `elementRefs`
+（ref-only，值不进 `with`，没有第二个「应用」步骤）。核对：
+
+```bash
+{{RPA_CORE}} elements list --flow login --workflows "<同一个绝对路径>/workflows"
 ```
 
 ```bash

@@ -1660,7 +1660,14 @@ def cancel_run(run_id: str) -> dict[str, Any]:
 # 运行期解析不到即 ELEMENT_REF_MISSING；这组 RPC 把缺口摊开并接上 main 的捕获器。
 # ---------------------------------------------------------------------------
 
-_CAPTURES: dict[str, dict[str, Any]] = {}
+# M66：key 必须是 (path, name) 复合键。同名元素在两个流程里各缺一次时，
+# 单键会让后一次静默盖掉前一次的进程句柄 —— 用户看到的是「等了半天没反应」。
+_CAPTURES: dict[tuple[str, str], dict[str, Any]] = {}
+_CAPTURE_TIMEOUT = {"browser": 60.0, "desktop": 90.0}
+
+
+def _capture_key(path: str, name: str) -> tuple[str, str]:
+    return (path, name)
 
 
 def _elements_dir(path: str) -> Path:
@@ -1672,15 +1679,120 @@ def _present_elements(path: str) -> set[str]:
     return {f.stem for f in ed.glob("*.json")} if ed.is_dir() else set()
 
 
-@api_method("rpa.missingElements")
-def missing_elements(path: str) -> dict[str, Any]:
-    """扫描 workflow 的 elementRefs：引用了、但 elements/ 下没有同名文件 = 待补元素。
+def _session_reachable() -> bool:
+    """会话服务端口是否可达。**只是可达**，不等于「会话里已经有插件回传」。
 
-    这正是「AI 生成的工作流」与「真正能跑的工作流」之间的缺口：生成时交互元素只能
-    写成 elementRefs 占位（模型不知道真实选择器），运行期解析不到即 ELEMENT_REF_MISSING。
-    这里把缺口摊开，前端据此提示用户「去捕获 / 提供」每个待补元素。
+    名字故意叫 reachable：把它当能力真值用，就会重演「进程起来了 ⇒ 能力在线」的假绿灯。
+    """
+    import socket
+
+    try:
+        with socket.create_connection(("127.0.0.1", _studio_endpoint()), timeout=0.3):
+            return True
+    except OSError:
+        return False
+
+
+@api_method("rpa.capabilitySnapshot")
+def capability_snapshot() -> dict[str, Any]:
+    """一次取回能力真值：运行时 / 扩展在线 / 各浏览器 / 会话端口。
+
+    真值来自 `rpa-core env-status`（与 devserver 同一份结构），不猜、不缓存。
+    **探测必须发生在 spawn 之前**：旧实现起完子进程才知道行不行，用户会在
+    「看起来在等」的状态里空等一分钟。任何异常都按离线处理，并给出具体修法。
     """
     started = time.perf_counter()
+    snap: dict[str, Any] = {
+        "ok": True,
+        "runtime": False,
+        "extensionOnline": False,
+        "browsers": {},
+        "sessionReachable": _session_reachable(),
+        "fix": None,
+    }
+    try:
+        argv = _rpa_argv()
+    except RuntimeError:
+        # 异常里带的是实现名词（路径、模块名），不能直接当界面文案。
+        snap["fix"] = "运行时没连上：重新打开窗口，或在设置里重装运行时"
+        snap["ms"] = round((time.perf_counter() - started) * 1000, 1)
+        return snap
+    try:
+        done = subprocess.run(
+            [*argv, "env-status"],
+            cwd=str(WORKSPACE),
+            env=_run_env(),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=3.0,
+        )
+        doc = json.loads(done.stdout)
+    except (OSError, subprocess.SubprocessError, ValueError, TypeError) as exc:
+        snap["fix"] = f"连不上运行时（{type(exc).__name__}）：重新打开窗口再试"
+        snap["ms"] = round((time.perf_counter() - started) * 1000, 1)
+        return snap
+    browsers = doc.get("browsers") or {}
+    snap["browsers"] = browsers
+    snap["runtime"] = done.returncode == 0
+    snap["extensionOnline"] = any(
+        bool(info.get("online")) for info in browsers.values() if isinstance(info, dict)
+    )
+    if not snap["runtime"]:
+        snap["fix"] = "运行时没连上：重新打开窗口再试"
+    elif not snap["extensionOnline"]:
+        installed = [n for n, i in browsers.items() if isinstance(i, dict) and i.get("installed")]
+        snap["fix"] = (
+            f"浏览器还没连上（已装插件：{', '.join(sorted(installed)) or '无'}）；"
+            "先打开装好插件的浏览器，或手动填写选择器"
+        )
+    snap["ms"] = round((time.perf_counter() - started) * 1000, 1)
+    return snap
+
+
+def resolve_target(
+    command: str | None, capabilities: dict[str, Any], override: str | None = None
+) -> dict[str, Any]:
+    """**唯一权威**：把「命令类型 + 能力真值」收敛成一个 target。
+
+    前端不再传 target / browserType，也不再让用户选网页还是桌面。
+    `desktop` 一律带 `--hover`（桌面 hover 本身就是双通道仲裁，混合流程靠它接住先回传者）。
+    返回值带 decidedBy，自动决策可解释；override 只在本次调用生效，不写回任何配置。
+    """
+    if override in ("browser", "desktop"):
+        return {
+            "target": override,
+            "hover": override == "desktop",
+            "reason": "你选的方式（只本次生效）",
+            "decidedBy": "override",
+        }
+    cmd = (command or "").strip().lower()
+    if cmd.startswith("browser."):
+        return {
+            "target": "browser",
+            "hover": False,
+            "reason": "这一步作用在网页上",
+            "decidedBy": "command",
+        }
+    if cmd.startswith("desktop."):
+        return {
+            "target": "desktop",
+            "hover": True,
+            "reason": "这一步作用在桌面控件上",
+            "decidedBy": "command",
+        }
+    online = bool(capabilities.get("extensionOnline"))
+    return {
+        "target": "browser" if online else "desktop",
+        "hover": not online,
+        "reason": "这一步没写明位置，按当前能用的方式",
+        "decidedBy": "capability",
+    }
+
+
+def _scan_missing(path: str) -> list[dict[str, Any]]:
+    """扫 elementRefs 缺口的**唯一权威**；渲染与启动捕获共用，避免两处各算一份。"""
     data, _ = _read_document(_flow_path(path))
     present = _present_elements(path)
     missing: list[dict[str, Any]] = []
@@ -1703,10 +1815,34 @@ def missing_elements(path: str) -> dict[str, Any]:
                 walk(child)
 
     walk(data.get("root"))
+    return missing
+
+
+@api_method("rpa.missingElements")
+def missing_elements(path: str) -> dict[str, Any]:
+    """扫描 workflow 的 elementRefs：引用了、但 elements/ 下没有同名文件 = 待补元素。
+
+    这正是「AI 生成的工作流」与「真正能跑的工作流」之间的缺口：生成时交互元素只能
+    写成 elementRefs 占位（模型不知道真实选择器），运行期解析不到即 ELEMENT_REF_MISSING。
+    这里把缺口摊开，前端据此提示用户「去捕获 / 提供」每个待补元素。
+    """
+    started = time.perf_counter()
+    missing = _scan_missing(path)
+    # M66：能力与缺口同批取，避免「渲染时说在线、点下去已离线」的两次探测漂移。
+    capabilities = capability_snapshot()
+    for item in missing:
+        decision = resolve_target(item.get("command"), capabilities)
+        item["decision"] = decision
+        item["capabilityFix"] = (
+            capabilities["fix"]
+            if decision["target"] == "browser" and not capabilities["extensionOnline"]
+            else None
+        )
     return {
         "ok": True,
         "missing": missing,
-        "resolved": sorted(present),
+        "resolved": sorted(_present_elements(path)),
+        "capabilities": capabilities,
         "ms": round((time.perf_counter() - started) * 1000, 1),
     }
 
@@ -1739,18 +1875,71 @@ def list_elements(path: str) -> dict[str, Any]:
     }
 
 
-@api_method("rpa.startCapture")
-def start_capture(
-    path: str,
-    target: str,
-    name: str,
-    browserType: str = "edge",
-) -> dict[str, Any]:
-    """起一个 `rpa-core capture` 子进程，复用 main 的捕获器（扩展 / 桌面）。
+_PICK_INSTRUCTIONS = {
+    "browser": "在页面上点一下这个元素；抓到后自动写好，不用再点保存",
+    "desktop": "把鼠标移到那个控件上，点一下或按 F9；抓到后自动写好",
+}
 
-    capture 是**阻塞到用户手势**的一次性会话（浏览器 Ctrl+Click / 桌面 F9），所以这里
-    spawn 后立刻返回，前端用 `rpa.capturePoll` 轮询元素文件是否落盘——不要 await 它。
-    元素文件落盘即用 `name` 命名（与节点 elementRefs 同名 = 自动绑定，引用模型无需单独绑定）。
+
+def _capture_result(entry: dict[str, Any], elem: Path) -> dict[str, Any]:
+    """两条腿统一成一份结果形状，前端不再按 target 分叉解析。"""
+    try:
+        doc = json.loads(elem.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        doc = {}
+    sel = doc.get("selector") or {}
+    return {
+        "name": entry["name"],
+        "selector": sel.get("css") or sel.get("locator"),
+        "strategy": doc.get("strategy"),
+        "matches": doc.get("verifyCount"),
+        "kind": doc.get("kind") or entry["decision"]["target"],
+        "boundNodeId": entry.get("nodeId"),
+    }
+
+
+def _pick_plan(path: str, name: str, override: str | None = None) -> dict[str, Any]:
+    """探测 + 决策的**唯一权威**：spawn 之前把「能不能开始、用哪条腿」一次算清。
+
+    `rpa.pickPlan`（点按钮时探测）与 `rpa.startCapture`（真正起子进程）都走这里，
+    两处各自判断就会出现「界面说就绪、后端说离线」的假绿灯。
+    """
+    item = next((m for m in _scan_missing(path) if m.get("name") == name), None)
+    capabilities = capability_snapshot()
+    decision = resolve_target((item or {}).get("command"), capabilities, override)
+    blocked = not capabilities["runtime"] or (
+        decision["target"] == "browser" and not capabilities["extensionOnline"]
+    )
+    return {
+        "item": item,
+        "capabilities": capabilities,
+        "decision": decision,
+        "blocked": blocked,
+        "fix": capabilities["fix"],
+    }
+
+
+@api_method("rpa.pickPlan")
+def pick_plan(path: str, name: str, override: str | None = None) -> dict[str, Any]:
+    """点「补一下」后先问一次：能力在不在、准备怎么抓、被挡住时该做什么。"""
+    plan = _pick_plan(path, name, override)
+    return {
+        "ok": True,
+        "name": name,
+        "path": path,
+        "blocked": plan["blocked"],
+        "fix": plan["fix"],
+        "decision": plan["decision"],
+        "capabilities": plan["capabilities"],
+    }
+
+
+@api_method("rpa.startCapture")
+def start_capture(path: str, name: str, override: str | None = None) -> dict[str, Any]:
+    """起一次性捕获。**target 由后端算**：前端只说「补哪个元素」，不说用哪条线。
+
+    捕获阻塞到用户手势，所以 spawn 后立即返回，前端用 `rpa.capturePoll` 轮询落盘。
+    元素以 `name` 落盘即与节点的 elementRefs 同名绑定（ref-only，无需第二次「应用」）。
     """
     started = time.perf_counter()
     flow_file = _flow_path(path)
@@ -1758,20 +1947,37 @@ def start_capture(
     # --workflows 取**流程目录的父目录**：流程可能在 examples/ 或 workflows/ 或沙箱里，
     # 写死 WORKSPACE/workflows 会让其它来源的流程捕获时找不到自己的目录。
     flows_root = flow_file.parent.parent
-    python = _runner_python()
+
+    # 探测在 spawn **之前**：能力不在线就别让用户进等待态空等一分钟。
+    plan = _pick_plan(path, name, override)
+    item = plan["item"]
+    decision = plan["decision"]
+    if plan["blocked"]:
+        return {
+            "ok": False,
+            "state": "blocked",
+            "code": "CAPABILITY_OFFLINE",
+            "capabilities": plan["capabilities"],
+            "fix": plan["fix"],
+            "ms": round((time.perf_counter() - started) * 1000, 1),
+        }
+
+    timeout = _CAPTURE_TIMEOUT[decision["target"]]
     argv = [
         *_rpa_argv(),
         "capture",
-        target,
+        decision["target"],
         "--save-as",
         name,
         "--flow",
         flow_dir,
         "--workflows",
         str(flows_root),
+        "--timeout",
+        str(timeout),
     ]
-    if target == "browser" and browserType:
-        argv += ["--browser-type", browserType]
+    if decision["hover"]:
+        argv.append("--hover")
     try:
         proc = subprocess.Popen(
             argv,
@@ -1788,16 +1994,19 @@ def start_capture(
     entry: dict[str, Any] = {
         "name": name,
         "flow": flow_dir,
-        "target": target,
-        "proc": proc,
         "path": path,
+        "decision": decision,
+        "nodeId": (item or {}).get("nodeId"),
+        "deadlineAt": time.time() + timeout + 3.0,
+        "cancelled": False,
+        "proc": proc,
         "stdout": [],
         "stderr": [],
         "t0": time.perf_counter(),
         "startedAt": time.time(),
         "argv": argv,
     }
-    _CAPTURES[name] = entry
+    _CAPTURES[_capture_key(path, name)] = entry
     threading.Thread(
         target=_pump, args=(proc.stdout, entry["stdout"], entry), daemon=True
     ).start()
@@ -1806,36 +2015,102 @@ def start_capture(
     ).start()
     return {
         "ok": True,
+        "state": "waiting",
         "name": name,
-        "pid": proc.pid,
+        "path": path,
+        "nodeId": entry["nodeId"],
+        "decision": decision,
+        "deadlineAt": entry["deadlineAt"],
+        "instructions": _PICK_INSTRUCTIONS[decision["target"]],
         "argv": argv[1:],
-        "python": str(python),
-        "instructions": (
-            "去浏览器 Ctrl+Click 目标元素（桌面按 F9）；抓完自动落盘并绑定"
-            if target == "browser"
-            else "把鼠标移到目标控件按 F9"
-        ),
         "ms": round((time.perf_counter() - started) * 1000, 1),
     }
 
 
 @api_method("rpa.capturePoll")
-def capture_poll(name: str) -> dict[str, Any]:
-    """轮询某个捕获会话：是否还在跑、元素文件是否落盘。"""
-    entry = _CAPTURES.get(name)
+def capture_poll(path: str, name: str) -> dict[str, Any]:
+    """轮询状态机：state / deadlineAt / reason / boundNodeId，前端不猜进程。"""
+    entry = _CAPTURES.get(_capture_key(path, name))
     if entry is None:
         return {"ok": False, "code": "UNKNOWN_CAPTURE", "error": f"没有这个捕获会话：{name}"}
     proc = entry["proc"]
-    alive = proc.poll() is None
     elem = _elements_dir(entry["path"]) / f"{name}.json"
     captured = elem.is_file()
+    alive = proc.poll() is None
+    if captured:
+        state, reason = "bound", "已抓到，写好并绑定"
+    elif entry["cancelled"]:
+        state, reason = "cancelled", "你取消了这次拾取"
+    elif alive and time.time() < entry["deadlineAt"]:
+        state, reason = "waiting", "等你点一下"
+    elif not alive and (proc.returncode == 3 or time.time() >= entry["deadlineAt"]):
+        state, reason = "timeout", "时间到了，没收到点选"
+    elif alive:
+        state, reason = "timeout", "时间到了，没收到点选"
+    else:
+        state, reason = "failed", f"这次没成（退出码 {proc.returncode}）"
     return {
         "ok": True,
+        "state": state,
         "name": name,
-        "running": alive,
-        "captured": captured,
-        "path": str(elem) if captured else None,
+        "path": path,
+        "deadlineAt": entry["deadlineAt"],
+        "reason": reason,
+        "boundNodeId": entry.get("nodeId") if state == "bound" else None,
+        "result": _capture_result(entry, elem) if captured else None,
         "exitCode": None if alive else proc.returncode,
+    }
+
+
+@api_method("rpa.cancelCapture")
+def cancel_capture(path: str, name: str) -> dict[str, Any]:
+    """取消一次拾取：把等待态关掉，名字与步骤都留在界面上。"""
+    entry = _CAPTURES.get(_capture_key(path, name))
+    if entry is None:
+        return {"ok": False, "code": "UNKNOWN_CAPTURE", "error": f"没有这个捕获会话：{name}"}
+    proc = entry["proc"]
+    if proc.poll() is None:
+        proc.terminate()
+        try:
+            proc.wait(timeout=2.0)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+    entry["cancelled"] = True
+    return {"ok": True, "state": "cancelled", "name": name, "path": path}
+
+
+@api_method("rpa.writeElement")
+def write_element(path: str, name: str, selector: str) -> dict[str, Any]:
+    """能力不在线时的键盘可达出口：手填一个 CSS 选择器，按同一份 ref-only 契约落盘。
+
+    只收 CSS（桌面 locator 是结构化对象，手填容易写出运行期才炸的假资产）。
+    """
+    selector = (selector or "").strip()
+    if not re.fullmatch(r"[A-Za-z0-9_-]+", name or ""):
+        return {"ok": False, "code": "BAD_NAME", "error": "元素名只能含字母、数字、下划线和短横线"}
+    if not selector or len(selector) > 500:
+        return {"ok": False, "code": "BAD_SELECTOR", "error": "选择器不能为空、也不能超过 500 字"}
+    # 落盘前取：写完之后这个缺口就消失了，再扫会拿不到 nodeId。
+    item = next((m for m in _scan_missing(path) if m.get("name") == name), None)
+    ed = _elements_dir(path)
+    ed.mkdir(parents=True, exist_ok=True)
+    doc = {
+        "kind": "browser",
+        "selector": {"css": selector},
+        "verifyCount": 0,
+        "name": None,
+        "metadata": {"source": "manual"},
+        "capturedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    }
+    target = ed / f"{name}.json"
+    target.write_bytes((json.dumps(doc, ensure_ascii=False, indent=2) + "\n").encode("utf-8"))
+    return {
+        "ok": True,
+        "state": "bound",
+        "name": name,
+        "path": path,
+        "file": str(target),
+        "boundNodeId": (item or {}).get("nodeId"),
     }
 
 

@@ -410,3 +410,7 @@ un-control-advanced 翻 true——M21 于 2026-09-19 完成后已连续多轮 FU
 2026-11-06 | workbuddy-connector | done | **npm GitHub 源偶发 ECONNRESET 取证**：codeload tarball 2.5MB 三次重试全被重置；curl 经 7890 = 200/1.7s、61612 = 200/2.8s。用用户真实 npm 11.6.2 对照：默认代理能装成但耗时 2m，显式 7890+重试 18s，下好的 tarball 本地装 11s ⇒ 非必然失败、非仓库问题。全局旧包仍是 11-05 16:13 版（无 editor install），升级必要。README/SKILL.md 补重试/代理解法与 Node 22/24 差异。
 
 2026-11-06 | workbuddy-connector | done | **修 `--with-editor` 的假警告**：`ALREADY_INSTALLED`（只是没确认覆盖）被当成装失败，窗口已装也喊「没装上/补装」。按用户拍板只修提示、不动跳过语义：SKIPPED 分支先读 `editor.json`，已装则 `skip:true` + installed/version/detail，不再拼 warning。顺带把探针硬编码 `0.1.0` 改成从 `ppx.toml` 现算（bump 后基线本就 58/60 红）。取证：基线 70/70 绿、6 组注入全 negative verified、md5 还原一致、真机端到端 9/9（用户文件 mtime 未变）、逐条门禁 21/21、冒烟绿。
+
+2026-11-06 | element-pick-ux | wip | **M66 立项（元素拾取交互重设计）**：用户问「好 AI 产品怎么定义两条线的交互逻辑」。只读取证见 `tasks/M66-element-pick-interaction.md`：PPX 把网页/桌面两个按钮摊给用户、spawn 后才知能力、状态只有一行文字、22px 按钮、SKILL.md 第四节照抄 5 个被实现忽略的 CLI 参数。设计红线 = 状态反馈必须跟真值对齐（与昨天的假警告同源）。本轮 P0 落编排层 + 单入口 UI + 判据，P1 登记键盘等价路径。
+
+2026-11-06 | element-pick-ux | wip | **M66 P0 落地**：`api.py` 加 `_pick_plan`（探测+决策唯一权威）、`resolve_target`、复合键 `_CAPTURES`、`cancelCapture`、`writeElement`、`capturePoll` 状态机；前端改单主按钮「补一下」+折叠覆盖+六态状态条（aria-live/符号/倒计时/Esc 取消/手动填写）+WCAG 命中区；SKILL.md 第四节删死参数示例。新增门禁两条：`check_element_pick_ui.mjs`（12 条，含最小 DOM shim 真跑渲染与端到端状态流）、`check_element_pick_contract.py`（8 条动态）。取证：基线 20/20，7 组注入全 negative verified（md5 还原），门禁逐条 23/23 rc=0，冒烟绿，vite build rc=0。

@@ -29,6 +29,9 @@ commands = [
     # 「Qt 代码留着不动、也不改」——冻结必须能被机械证明，否则只是一句会过期的话；
     # 原型则不许偷偷 import Qt/gui UI 模块，否则「WebView 壳不靠 Qt」的结论作废。
     [sys.executable, str(ROOT / ".harness" / "scripts" / "check_host_boundary.py")],
+    # 元素拾取编排层的**动态**契约（M66）：真跑 resolve_target / 能力闸 / 状态机，
+    # 只扫源码证明不了「忽略命令类型时也照样返回 browser」这类假绿灯。
+    [sys.executable, str(ROOT / ".harness" / "scripts" / "check_element_pick_contract.py")],
 ]
 
 # 真实桌面 E2E（记事本/WinForms 演示程序/捕获悬浮框，会弹窗抢前台）**默认不进
@@ -47,6 +50,8 @@ PURE_FUNCTION_SCRIPTS = (
     "check_param_groups.mjs",
     "check_retry_policy.mjs",
     "check_capture_helpers.mjs",
+    # 元素拾取 UI 三层判据（M66）：文案禁词 / 样式命中区 / 最小 DOM shim 真跑渲染函数。
+    "check_element_pick_ui.mjs",
     # 捕获高亮框几何（content.js）：框线带必须整条落在元素**之外**、且碰不到指针
     # ±2px 热区（M41「框要躲着鼠标」）。同样是「只在浏览器里跑」的几何——Python
     # 侧读源码只能证明写了 `left - OVERLAY_OUTSET`，证明不了算出来的带落在哪。
