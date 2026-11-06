@@ -414,3 +414,5 @@ un-control-advanced 翻 true——M21 于 2026-09-19 完成后已连续多轮 FU
 2026-11-06 | element-pick-ux | wip | **M66 立项（元素拾取交互重设计）**：用户问「好 AI 产品怎么定义两条线的交互逻辑」。只读取证见 `tasks/M66-element-pick-interaction.md`：PPX 把网页/桌面两个按钮摊给用户、spawn 后才知能力、状态只有一行文字、22px 按钮、SKILL.md 第四节照抄 5 个被实现忽略的 CLI 参数。设计红线 = 状态反馈必须跟真值对齐（与昨天的假警告同源）。本轮 P0 落编排层 + 单入口 UI + 判据，P1 登记键盘等价路径。
 
 2026-11-06 | element-pick-ux | wip | **M66 P0 落地**：`api.py` 加 `_pick_plan`（探测+决策唯一权威）、`resolve_target`、复合键 `_CAPTURES`、`cancelCapture`、`writeElement`、`capturePoll` 状态机；前端改单主按钮「补一下」+折叠覆盖+六态状态条（aria-live/符号/倒计时/Esc 取消/手动填写）+WCAG 命中区；SKILL.md 第四节删死参数示例。新增门禁两条：`check_element_pick_ui.mjs`（12 条，含最小 DOM shim 真跑渲染与端到端状态流）、`check_element_pick_contract.py`（8 条动态）。取证：基线 20/20，7 组注入全 negative verified（md5 还原），门禁逐条 23/23 rc=0，冒烟绿，vite build rc=0。
+
+2026-11-06 | element-pick-ux | wip | **发版 editor-v0.1.2（M66 P0 窗口）**：bump `ppx.toml` → tag `editor-v0.1.2`，CI `42178696437` success（构建+verify+上传）。`releases/latest` = 0.1.2，zip 17,201,456 B、sha 与 sidecar 一致、包内 marker 0.1.2、exe 在。隔离 `RPA_HOME` 实装 `rpa-skill editor install` 走默认 URL 成功（version 0.1.2 / sha_verified sidecar / warnings 空），未动用户现有窗口。P1 欠账（键盘 Enter 等价、5 个吞掉的参数、hybrid 入口）仍未动。

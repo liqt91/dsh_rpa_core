@@ -444,7 +444,7 @@
     },
     {
       "id": "element-pick-ux",
-      "title": "Element pick: single intent entry, capability probe before spawn, truthful state machine (M66, P0) · 20 gates",
+      "title": "Element pick: single entry + capability probe + truthful state (M66 P0) · 20 gates · editor-v0.1.2",
       "passes": true
     }
   ]
