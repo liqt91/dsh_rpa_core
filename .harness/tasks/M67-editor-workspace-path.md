@@ -82,7 +82,14 @@ Status: `wip`
 
 ## 五、发版与验收边界
 
-- `ppx.toml` bump `0.1.3` → tag `editor-v0.1.3` → CI 构建上传 `RPA-Editor-win64.zip` + `.sha256`。
+- `ppx.toml` bump `0.1.3` → 提交 `c6d0742` → tag `editor-v0.1.3` → CI 发版 run
+  `42191470485` **success**（分支自测 `42191464618` 同绿）→ `releases/latest` = 0.1.3，
+  zip 17,249,672 B、实算 sha `087f6c30…` 与旁挂 `.sha256` 一致、包内 marker 0.1.3、顶层 exe 在。
+- **冻结产物端到端取证**（不只是看 marker）：隔离 `RPA_HOME` 实装 `editor install` 得
+  `version 0.1.3 / sha_verified sidecar / warnings []`；再跑
+  `RPA_EDITOR_SELFTEST=<文件> "RPA Probe.exe"`（模块导入阶段即退出，不启窗口），输出含
+  `allowedRoots / sessionRoot / logPath`、bootstrap 89 条命令，`editor.log` 真落盘；把
+  `STUDIO_HOME` 指向一份带 `root` 的 `endpoint.json` 重跑，`allowedRoots` 从 1 条变 2 条。
 - **两侧必须一起更新**：窗口侧（`api.py` / `main.js`）随 Release 升级；会话侧
   （`studio.py` / `SKILL.md`）要 `npm i -g …` + `rpa-skill install --target dsh --force`。
   只升窗口仍能拿到可行动的 `BAD_PATH`，但根没对齐时打开仍会失败。
