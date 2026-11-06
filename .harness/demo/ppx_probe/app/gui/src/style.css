@@ -1,13 +1,16 @@
 :root {
   --text: #19232d;
   --muted: #64707d;
-  --faint: #8b929e;
+  /* 辅助文字原来 #8b929e（白底 3.13:1、灰底 2.94:1），小字读不清。
+     提到 #5f6b7a：白底 5.43、灰底 5.10、选中蓝底 4.88，都在 AA 之上。 */
+  --faint: #5f6b7a;
   --border: #d0d7de;
   --border-strong: #c0c4c8;
   --surface: #ffffff;
   --sunken: #f6f8fa;
   --hover: #f3f6f9;
-  --selected: #daedff;
+  /* 选中底色原来 #daedff：卡内次要文字只有 4.22:1。提亮到 #eaf4ff 后 4.54。 */
+  --selected: #eaf4ff;
   --info: #0969da;
   --success: #1a7f37;
   --danger: #cf222e;
@@ -47,6 +50,14 @@ body {
 .spacer { flex: 1; }
 
 main { flex: 1; display: grid; grid-template-columns: 216px minmax(0, 1fr) 340px; min-height: 0; }
+/* 窗口能被拖到 960 宽（minWidthRatio .5）。三栏都是定宽时中栏会被压到 400 出头，
+   摘要全变省略号。窄窗口收左右栏，把宽度让给画布。 */
+@media (max-width: 1180px) {
+  main { grid-template-columns: 196px minmax(0, 1fr) 300px; }
+}
+@media (max-width: 1000px) {
+  main { grid-template-columns: 172px minmax(0, 1fr) 264px; }
+}
 aside, section { min-height: 0; overflow: auto; background: var(--surface); }
 #left { border-right: 1px solid var(--border); }
 #right { border-left: 1px solid var(--border); display: flex; flex-direction: column; overflow: hidden; }
@@ -74,6 +85,10 @@ aside, section { min-height: 0; overflow: auto; background: var(--surface); }
 #search:focus { outline: none; border-color: var(--info); }
 
 .cmdList { padding: 4px 0 12px; }
+#cmds:empty::after {
+  content: "没有匹配的指令";
+  display: block; padding: 12px; color: var(--faint); font-size: 12px;
+}
 .nsGroup { padding: 8px 12px 4px; color: var(--faint); font-size: 11.5px; letter-spacing: .4px; }
 .cmd {
   display: flex; align-items: baseline; gap: 6px;
@@ -81,64 +96,118 @@ aside, section { min-height: 0; overflow: auto; background: var(--surface); }
   white-space: nowrap; overflow: hidden;
 }
 .cmd:hover { background: var(--hover); }
-.cmd .cid { color: var(--faint); font: 11px/1 Consolas, monospace; margin-left: auto; }
+/* 左栏窄到 172px 时长标签会被硬切（overflow:hidden 没有省略号） */
+.cmd > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .flowTitle {
   position: sticky; top: 0; z-index: 2;
+  display: flex; align-items: baseline; gap: 8px; min-width: 0;
   padding: 10px 14px;
   background: var(--sunken);
   border-bottom: 1px solid var(--border);
   font-weight: 500;
+  white-space: nowrap;
 }
-.flowTitle small { color: var(--muted); font-weight: 400; margin-left: 8px; }
+/* 流程名 + 路径 + 行数 + sha 一行放不下。以前整块换行，窄窗口下一行变两行、
+   顶部凭空多 20px；现在路径自己省略，标题永远一行。 */
+.flowTitle small {
+  min-width: 0; overflow: hidden; text-overflow: ellipsis;
+  color: var(--muted); font-weight: 400; margin-left: 0;
+}
 
 .cardList { padding: 10px 12px 40px; }
+#cards:empty::after {
+  content: "这个流程还没有节点。从左边的指令列表点一条加进来。";
+  display: block; padding: 18px 4px;
+  color: var(--faint); font-size: 12px;
+}
 
+/* ---- 画布卡片：层级靠缩进 + 竖向引导线表达，不靠色条 -------------------
+ * 原来所有卡片左边缘同一条线，`if / forEach / try` 的嵌套只能从 4px 色条的颜色
+ * 去猜（6 色循环，超过 6 层还撞色）。深度现在同时给出：缩进量、引导线、色条。
+ * 三通道里任意一个失效（色盲、灰度打印、色条被裁）都还读得出层级。
+ */
 .card {
+  --indent: calc(var(--depth-n, 0) * 16px);
   position: relative;
+  box-sizing: border-box; /* min-height 要算总高，不含 padding——否则 38 变 50 */
   display: flex; align-items: center; gap: 8px;
-  height: 46px; margin-bottom: 6px;
-  padding: 0 10px 0 14px;
+  min-height: 38px; margin: 0 0 4px var(--indent);
+  padding: 5px 8px 5px 13px;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 6px;
   cursor: pointer;
-  transition: box-shadow .12s ease, border-color .12s ease;
+  /* 不写 overflow:hidden：引导线 ::after 在盒子外侧，会被裁掉。
+     行内文字的截断由 .name / .sum 各自负责。 */
+  transition: box-shadow .12s ease, border-color .12s ease, background .12s ease;
 }
 .card:hover { box-shadow: 0 1px 3px rgba(25, 35, 45, .10); border-color: var(--border-strong); }
 .card.selected { background: var(--selected); border-color: var(--info); }
 .card::before {
-  content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 4px;
-  border-radius: 6px 0 0 6px; background: var(--depth);
+  content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px;
+  border-radius: 6px 0 0 6px; background: var(--accent, var(--faint));
 }
-.card .grip { color: #b6bfc8; font-size: 11px; letter-spacing: -2px; }
-.card .no { width: 18px; text-align: right; color: var(--faint); font: 11px/1 Consolas, monospace; }
-.card .name { font-weight: 500; }
+/* 每一层的竖线：相邻两行的线段首尾相接（-4px 吃掉行间距），连成一条树脊 */
+.card:not([data-depth="0"])::after {
+  content: ""; position: absolute; left: -9px; top: -4px; bottom: -4px;
+  width: 1px; background: var(--border-strong);
+}
+.card:focus-visible { outline: 2px solid var(--info); outline-offset: 1px; }
+/* 名字不许换行，摘要吃掉剩下的宽度：以前 .name 没有收缩约束，长名字会顶到 badge
+   上、46px 固定高下还会溢出卡片 */
+.card .no {
+  flex: 0 0 auto; min-width: 16px; text-align: right;
+  color: var(--faint); font: 11px/1 Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+}
+.card .name {
+  /* 不许收缩：和 .sum 一起按比例缩时，短名字会先被压成「点击元…」而摘要还留着一截。
+     名字保内容宽度，超过 46% 才截。 */
+  flex: 0 0 auto; min-width: 0; max-width: 46%;
+  font-weight: 500;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
 .card .sum {
-  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  color: var(--muted); font: 11.5px/1 Consolas, "Microsoft YaHei", monospace;
+  flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: var(--muted); font: 12px/1.4 Consolas, "Microsoft YaHei", monospace;
 }
 .card .badge {
   margin-left: auto; flex: 0 0 auto;
   padding: 1px 6px; border-radius: 10px;
   background: var(--sunken); color: var(--faint); font-size: 11px;
 }
-/* 删除按钮默认隐形：46px 高的行里常驻一个红叉太吵，hover 才出现 */
+/* 删除按钮默认隐形：40px 高的行里常驻一个红叉太吵。但它是 tab 可达的，
+   所以 `:focus-within` 必须让它显形——否则键盘用户会 tab 进一个看不见的按钮。 */
 .card .del {
-  flex: 0 0 auto; width: 20px; height: 20px; padding: 0;
+  flex: 0 0 auto; width: 24px; height: 24px; padding: 0;
   border: none; border-radius: 4px; background: transparent;
   color: var(--faint); font-size: 15px; line-height: 1; cursor: pointer;
   opacity: 0; transition: opacity .1s ease;
 }
-.card:hover .del { opacity: 1; }
+.card:hover .del, .card:focus-within .del { opacity: 1; }
 .card .del:hover { background: #ffebe9; color: var(--danger); }
+.card .del:focus-visible { outline: 2px solid var(--info); outline-offset: 1px; }
+
+/* 分支标签（则执行 / 否则 / 异常）是「一段的开始」，不是节点：
+   去掉卡片外观，压成一行小字 + ↳ 标记，并同样参与缩进和竖线。 */
 .card.group {
-  height: 26px; background: var(--sunken);
-  border-style: dashed; cursor: default;
-  color: var(--muted); font-size: 12px;
+  display: flex; align-items: center;
+  min-height: 22px; background: transparent;
+  border: none; border-radius: 4px; cursor: default;
+  padding: 1px 8px 1px 13px;
+  color: var(--muted); font-size: 11.5px; letter-spacing: .2px;
 }
+.card.group:hover { box-shadow: none; }
 .card.group::before { display: none; }
+.card.group .gtag { color: var(--faint); margin-right: 2px; }
 .card.draft { border-style: dashed; border-color: var(--info); }
+/* 刚插入的节点闪一下：落点在分支末尾，可能离刚才看的位置很远 */
+.card.flash { animation: cardFlash 1.1s ease-out; }
+@keyframes cardFlash {
+  0% { box-shadow: 0 0 0 3px rgba(9, 105, 218, .38); }
+  100% { box-shadow: 0 0 0 0 rgba(9, 105, 218, 0); }
+}
 
 .detail {
   flex: 1; margin: 0; padding: 10px 12px;
@@ -154,7 +223,9 @@ aside, section { min-height: 0; overflow: auto; background: var(--surface); }
 .unsetCount.partial { color: #9a6700; }
 
 .paramForm {
-  flex: 0 1 auto; min-height: 0; overflow: auto;
+  /* 余高给表单：原来 flex:0 1 auto，余高被下面的 .astBox（flex:1）吃掉，
+     折叠着的「节点 AST」标题下面挂着半屏空白，而参数区被压成一小条。 */
+  flex: 1 1 auto; min-height: 0; overflow: auto;
   padding: 10px 12px 4px;
 }
 .paramForm .hint { color: var(--faint); font-size: 12px; }
@@ -214,7 +285,9 @@ aside, section { min-height: 0; overflow: auto; background: var(--surface); }
   font-size: 11.5px; line-height: 1.5; white-space: pre-wrap;
 }
 
-.astBox { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; border-top: 1px solid var(--border); }
+/* 折叠时不占余高；展开时才长高（min-height 保证内容有地方滚） */
+.astBox { flex: 0 1 auto; min-height: 0; display: flex; flex-direction: column; border-top: 1px solid var(--border); }
+.astBox[open] { flex: 1 1 auto; min-height: 140px; }
 .astBox > summary {
   padding: 6px 12px; cursor: pointer; color: var(--faint); font-size: 12px;
   user-select: none;
@@ -362,7 +435,8 @@ button {
   font: inherit; cursor: pointer;
 }
 button:hover { background: var(--hover); }
-button:disabled { opacity: .5; cursor: wait; }
+/* 禁用 ≠ 忙。cursor:wait 会让「停止」看起来像在执行中，实际它只是不可用 */
+button:disabled { opacity: .5; cursor: not-allowed; }
 button.primary:not(:disabled) { border-color: var(--success); color: var(--success); font-weight: 500; }
 
 select {

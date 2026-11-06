@@ -1,0 +1,31 @@
+[
+  { "name": "after_struct_1280", "width": 1280, "height": 777, "flow": ".harness/demo/ppx_probe/_sandbox/struct.json" },
+  { "name": "after_deep_1280", "width": 1280, "height": 777, "flow": "sandbox/deep-nest.json" },
+  { "name": "after_deep_1024", "width": 1024, "height": 700, "flow": "sandbox/deep-nest.json" },
+  { "name": "after_deep_960", "width": 960, "height": 640, "flow": "sandbox/deep-nest.json" },
+  {
+    "name": "after_short_1280",
+    "width": 1280,
+    "height": 520,
+    "flow": "sandbox/deep-nest.json",
+    "clickFirst": false,
+    "steps": [
+      "(() => { const l=document.querySelector('#cards'); l.scrollTop = 140; const before=l.scrollTop; const rows=[...document.querySelectorAll('#cards .card:not(.group)')]; rows[rows.length-1].click(); return { before, after: l.scrollTop, card: document.querySelector('#cards').scrollHeight } })()"
+    ]
+  },
+  {
+    "name": "after_keyboard",
+    "width": 1280,
+    "height": 777,
+    "flow": "sandbox/deep-nest.json",
+    "clickFirst": false,
+    "steps": [
+      "(() => { const row=document.querySelectorAll('#cards .card')[2]; row.focus(); row.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true})); return { focused: document.activeElement?.dataset?.nodeId, selected: document.querySelector('#cards .card.selected')?.dataset?.nodeId, tabindex: row.tabIndex } })()"
+    ]
+  },
+  { "name": "after_old_mechanism", "width": 1280, "height": 520, "flow": "sandbox/deep-nest.json", "clickFirst": false,
+    "steps": [
+      "(() => { const l=document.querySelector('#cards'); l.scrollTop = 140; const before=l.scrollTop; l.replaceChildren(); const after=l.scrollTop; return { before, after } })()"
+    ]
+  }
+]

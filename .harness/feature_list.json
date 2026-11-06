@@ -451,6 +451,11 @@
       "id": "editor-workspace-path",
       "title": "Editor/session share one workspace root; BAD_PATH + traceback log + open-failed (M67) · 13 gates · editor-v0.1.3",
       "passes": true
+    },
+    {
+      "id": "ppx-canvas-layout",
+      "title": "PPX canvas reads nesting: depth indent + rails, rows don't collapse, cards focusable · 23 invariants",
+      "passes": true
     }
   ]
 }

@@ -7,3 +7,15 @@ _shot*.png
 _overlay_*.png
 _sandbox/
 _*.png
+
+# 布局探针（_layout_shots/）的临时产物
+#   _chrome*      —— CDP 用的独立 profile（正常会删，崩了才留）
+#   report.json   —— probe.mjs 每次跑出来的度量结果，由 assert_layout.mjs 消费
+#   _style_backup —— nv_step.py 注入破坏前的逐字节备份
+#   脚本（probe/assert/nv_step/cases）是**要提交的**，只有产物忽略。
+_layout_shots/_chrome*/
+_layout_shots/report.json
+_style_backup.css
+_style_backup.md5
+# 由 _layout_probe.py 用真实 api.open_flow 生成，probe.html 启动时读它
+app/gui/_layout/mock.json

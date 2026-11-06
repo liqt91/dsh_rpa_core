@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>layout probe</title>
+</head>
+<body>
+  <!-- 与 index.html 完全同构的骨架；改结构时两边要一起改，否则探针测的不是真界面 -->
+  <div id="app">
+    <header id="bar">
+      <span class="brand">RPA Probe</span>
+      <span id="status" class="status">正在连接 Python…</span>
+      <span class="spacer"></span>
+      <select id="flowPicker" aria-label="选择流程"></select>
+      <button id="compileBtn" type="button">编译校验</button>
+      <button id="runBtn" type="button" class="primary">▶ 运行</button>
+      <button id="stopBtn" type="button" disabled>■ 停止</button>
+    </header>
+    <main>
+      <aside id="left">
+        <div class="paneHead">
+          <input id="search" type="search" placeholder="搜索指令" autocomplete="off" />
+          <div id="cmdCount" class="count"></div>
+        </div>
+        <div id="cmds" class="cmdList"></div>
+      </aside>
+      <section id="mid">
+        <div id="flowTitle" class="flowTitle">未打开流程</div>
+        <div id="cards" class="cardList"></div>
+        <details id="runBox" class="runBox" hidden>
+          <summary><span id="runTitle">运行</span></summary>
+          <div id="runLog" class="runLog"></div>
+        </details>
+      </section>
+      <aside id="right">
+        <div class="paneHead">
+          <span class="paneTitle">节点详情</span>
+          <span id="dirty" class="dirty"></span>
+          <span id="unset" class="unsetCount"></span>
+          <span id="rpcMs" class="count"></span>
+        </div>
+        <div id="paramForm" class="paramForm">
+          <div class="hint">点击中间卡片查看参数</div>
+        </div>
+        <div class="formBar">
+          <button id="saveBtn" type="button" disabled>保存</button>
+          <button id="revertBtn" type="button" disabled>撤销</button>
+        </div>
+        <details class="astBox">
+          <summary>节点 AST</summary>
+          <pre id="detail" class="detail"></pre>
+        </details>
+        <div id="compileOut" class="compileOut"></div>
+        <details class="elemBox" id="elemBox">
+          <summary>元素资产 <span id="elemCount" class="count"></span></summary>
+          <div id="elemBody" class="elemBody"></div>
+        </details>
+      </aside>
+    </main>
+  </div>
+
+  <script>
+    // 假 PPX 桥：契约照 ppx-js 的 call()（返回 {ok, data}），数据全部来自真实后端探针。
+    const params = new URLSearchParams(location.search)
+    const flowPath = params.get('flow') || '.harness/demo/ppx_probe/_sandbox/struct.json'
+    const clickFirst = params.get('click') !== '0'
+    window.__MOCK__ = { calls: [] }
+
+    window.pywebview = {
+      api: {
+        call: async (method, p) => {
+          window.__MOCK__.calls.push(method)
+          const mock = window.__MOCK__.data
+          if (!mock) return { ok: false, error: { code: 'NOT_READY', message: 'mock 未加载' } }
+          const key = `${p?.path}::${p?.node_id}`
+          switch (method) {
+            case 'rpa.bootstrap':
+              return { ok: true, data: mock.bootstrap }
+            case 'rpa.openFlow':
+              return { ok: true, data: mock.flows[p?.path] || mock.flows[flowPath] }
+            case 'rpa.nodeDetail':
+            case 'rpa.structuralDetail':
+              return { ok: true, data: mock.details[key] || { fields: [], groups: [], node: { id: p?.node_id } } }
+            case 'rpa.missingElements':
+              return { ok: true, data: mock.missing }
+            case 'rpa.listElements':
+              return { ok: true, data: mock.elements }
+            case 'rpa.compileCheck':
+              return { ok: true, data: { ok: true, ms: 12.4, workflowId: 'struct-probe', digest: 'a8c815b68068', capabilities: [] } }
+            case 'studio.pollSession':
+              return { ok: true, data: { requests: [] } }
+            case 'rpa.runPoll':
+              return { ok: true, data: { events: [], summary: null } }
+            default:
+              return { ok: true, data: {} }
+          }
+        },
+      },
+    }
+
+    ;(async () => {
+      const data = await fetch('/_layout/mock.json').then((r) => r.json())
+      // 让 boot() 打开我们指定的流程（boot 只认 DEMO_FLOW，这里改成探针要的那条）
+      data.bootstrap = { ...data.bootstrap, flows: [
+        { path: flowPath, label: flowPath.includes('deep') ? 'sandbox/deep-nest（深层嵌套）' : 'sandbox/struct' },
+        ...data.bootstrap.flows,
+      ] }
+      window.__MOCK__.data = data
+      window.dispatchEvent(new Event('pywebviewready'))
+    })()
+
+    window.addEventListener('load', () => {
+      setTimeout(() => {
+        if (clickFirst) document.querySelector('.card:not(.group)')?.click()
+        window.__MOCK__.ready = true
+      }, 400)
+    })
+  </script>
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>

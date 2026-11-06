@@ -1,0 +1,5 @@
+[
+  { "name": "before_struct_1280", "width": 1280, "height": 777, "flow": ".harness/demo/ppx_probe/_sandbox/struct.json" },
+  { "name": "before_deep_1280", "width": 1280, "height": 777, "flow": "sandbox/deep-nest.json" },
+  { "name": "before_deep_1024", "width": 1024, "height": 700, "flow": "sandbox/deep-nest.json" }
+]

@@ -56,6 +56,13 @@ function mk(tag, cls, text) {
   return n
 }
 
+/* 顶栏状态是单行省略的。长句会被夹断，所以「显示一行短的 + 全文进 tooltip」必须
+   一起写：只 set textContent 会留下上一次的 tooltip，悬停时报出的是旧消息。 */
+function setStatus(text, detail = '') {
+  el.status.textContent = text
+  el.status.title = detail || text
+}
+
 function renderCommands(list) {
   el.cmds.replaceChildren()
   const groups = new Map()
@@ -88,19 +95,29 @@ async function insertCommand(command) {
       anchor_id: anchor,
     })
     if (!res.ok) {
-      el.status.textContent = `插入失败 ${res.code}：${res.error}`
+      setStatus(`插入失败 ${res.code}：${res.error}`)
       return
     }
     cards = res.flow.cards
     const placed = res.placed
     renderCards()
     renderCompile(res.compile)
-    el.status.textContent = `插入 ${command.label} → ${placed.parent}/${placed.branch}[${placed.index}] · ${res.bytes[0]}→${res.bytes[1]} B · ${res.ms} ms（anchor ${placed.anchor || 'root'}）`
+    setStatus(`插入 ${command.label} → ${placed.parent}/${placed.branch}[${placed.index}] · ${res.bytes[0]}→${res.bytes[1]} B · ${res.ms} ms（anchor ${placed.anchor || 'root'}）`)
     // 新节点 with 是空的（与 Qt 一致），参数全未设置 ⇒ 直接跳到它，省一次点击
     const fresh = cards.find((c) => c.id === res.newNodeId)
-    if (fresh) await selectCard(fresh)
+    if (fresh) {
+      await selectCard(fresh)
+      // 落点是「anchor 所在分支的末尾」，常常不在当前视野里。不滚过去 + 闪一下，
+      // 用户会觉得「点了没反应」，然后再点一次——生成两个重复节点。
+      const row = el.cards.querySelector(`[data-node-id="${CSS.escape(fresh.id)}"]`)
+      if (row) {
+        row.scrollIntoView({ block: 'nearest' })
+        row.classList.add('flash')
+        row.addEventListener('animationend', () => row.classList.remove('flash'), { once: true })
+      }
+    }
   } catch (error) {
-    el.status.textContent = `${error.code}: ${error.message}`
+    setStatus(`${error.code}: ${error.message}`)
   } finally {
     el.rpcMs.textContent = `${(performance.now() - t0).toFixed(0)} ms`
   }
@@ -114,7 +131,7 @@ async function removeCard(card) {
   try {
     const res = await ppx.call('rpa.deleteNode', { path: currentPath, node_id: card.id })
     if (!res.ok) {
-      el.status.textContent = `删除失败 ${res.code}：${res.error}`
+      setStatus(`删除失败 ${res.code}：${res.error}`)
       return
     }
     cards = res.flow.cards
@@ -127,17 +144,26 @@ async function removeCard(card) {
     renderCards()
     renderCompile(res.compile)
     const extra = res.removed.ids.length > 1 ? `（连带 ${res.removed.ids.length - 1} 个子节点）` : ''
-    el.status.textContent = `删除 ${res.removed.id}${extra} · ${res.bytes[0]}→${res.bytes[1]} B · ${res.ms} ms`
+    setStatus(`删除 ${res.removed.id}${extra} · ${res.bytes[0]}→${res.bytes[1]} B · ${res.ms} ms`)
   } catch (error) {
-    el.status.textContent = `${error.code}: ${error.message}`
+    setStatus(`${error.code}: ${error.message}`)
   }
 }
 
 function renderCards() {
+  // replaceChildren 会先把内容清空，滚动容器的 scrollTop 随之被夹到 0；
+  // 于是「滚到第 20 行点它」会在重绘后跳回顶部，选中的卡片跑出视野。
+  const keepTop = el.cards.scrollTop
   el.cards.replaceChildren()
   for (const card of cards) {
+    const depth = card.depth || 0
     if (card.kind === 'group') {
-      el.cards.append(mk('div', 'card group', card.label))
+      const group = mk('div', 'card group')
+      // 组行也要参与缩进与竖线，否则「则执行 / 否则 / 异常」会漂在父节点左边的同一列
+      group.dataset.depth = String(depth)
+      group.style.setProperty('--depth-n', String(depth))
+      group.append(mk('span', 'gtag', '↳'), mk('span', 'gname', card.label))
+      el.cards.append(group)
       continue
     }
     const row = mk(
@@ -149,8 +175,10 @@ function renderCards() {
         (missingNodeIds.has(card.id) ? ' missing' : ''),
     )
     row.dataset.nodeId = card.id || ''
-    row.style.setProperty('--depth', DEPTH[card.depth % DEPTH.length])
-    row.append(mk('span', 'grip', '⋮'), mk('span', 'no', String(card.no)), mk('span', 'name', card.label))
+    row.dataset.depth = String(depth)
+    row.style.setProperty('--depth-n', String(depth))
+    row.style.setProperty('--accent', DEPTH[depth % DEPTH.length])
+    row.append(mk('span', 'no', String(card.no)), mk('span', 'name', card.label))
     if (card.summary) row.append(mk('span', 'sum', card.summary))
     if (card.command) row.append(mk('span', 'badge', card.command.split('.')[0]))
     if (missingNodeIds.has(card.id)) row.append(mk('span', 'cap', '⚠ 待补'))
@@ -163,9 +191,20 @@ function renderCards() {
       })
       row.append(del)
       row.addEventListener('click', () => selectCard(card))
+      // 卡片是 div：不补 tabindex 的话，整个画布对键盘用户是死的（一个节点都选不中）
+      row.tabIndex = 0
+      row.setAttribute('role', 'button')
+      row.setAttribute('aria-current', selected && card.id === selected.id ? 'true' : 'false')
+      row.addEventListener('keydown', (event) => {
+        if (event.key !== 'Enter' && event.key !== ' ') return
+        if (event.target !== row) return // 空格落在删除按钮上时别抢
+        event.preventDefault()
+        selectCard(card)
+      })
     }
     el.cards.append(row)
   }
+  el.cards.scrollTop = keepTop
 }
 
 /* ---- 参数表单 ----------------------------------------------------------
@@ -355,7 +394,12 @@ async function selectCard(card) {
   if (isDirty() && !window.confirm('当前改动还没保存，切换会丢弃。继续？')) return
   selected = card
   formError = null
+  const hadFocus = el.cards.contains(document.activeElement)
   renderCards()
+  if (hadFocus) {
+    const row = el.cards.querySelector(`[data-node-id="${CSS.escape(card.id)}"]`)
+    if (row) row.focus({ preventScroll: true })
+  }
   const rpc = card.kind === 'action' ? 'rpa.nodeDetail' : 'rpa.structuralDetail'
   panelMode = card.kind === 'action' ? 'param' : 'struct'
   const t0 = performance.now()
@@ -415,7 +459,7 @@ async function saveParams() {
     const warned = (res.warnings || []).length
       ? ` · ⚠ ${res.warnings.map((w) => `${w.key}：${w.reason}`).join('；')}`
       : ''
-    el.status.textContent = `保存 ${selected ? selected.label : keepId} · ${bytes}${delta}${warned} · sha ${res.sha} · ${(performance.now() - t0).toFixed(0)} ms`
+    setStatus(`保存 ${selected ? selected.label : keepId} · ${bytes}${delta}${warned} · sha ${res.sha} · ${(performance.now() - t0).toFixed(0)} ms`)
   } catch (error) {
     formError = `${error.code}：${error.message}`
     renderForm()
@@ -450,8 +494,11 @@ async function openFlow(path) {
     el.rpcMs.textContent = ''
     el.title.replaceChildren(
       mk('span', null, flow.name),
-      mk('small', null, `${path} · ${flow.cards.length} 行 · sha ${flow.sha} · ${(performance.now() - t0).toFixed(1)} ms`),
+      // 可见只留「路径 · 行数」；sha 和耗时是排查用的，放 tooltip，不占标题的横向预算
+      mk('small', null, `${path} · ${flow.cards.length} 行`),
     )
+    el.title.title =
+      `${path} · ${flow.cards.length} 行 · sha ${flow.sha} · ${(performance.now() - t0).toFixed(1)} ms`
     renderCards()
     el.run.disabled = RUN.running || !currentPath
     // 打开即刷新元素资产：摊开「AI 生成的占位元素」并给出捕获入口
@@ -1082,13 +1129,13 @@ function finishRun(res) {
       )
     }
     renderRunSummary(ok ? 'ok' : 'bad', `${ok ? '运行成功' : `运行结束：${result.status}`} · ${total}`, lines)
-    el.status.textContent = `${res.runId} ${result.status} · ${total} · 返回 ${result.returnValue ?? '（无）'}`
+    setStatus(`${res.runId} ${result.status} · ${total} · 返回 ${result.returnValue ?? '（无）'}`)
     return
   }
   if (res.cancelled) {
     setRunTitle(`${res.runId} 已停止`)
     renderRunSummary('bad', `已停止 · 退出码 ${res.exitCode} · ${total}`, [])
-    el.status.textContent = `${res.runId} 已停止（退出码 ${res.exitCode}）· ${total}`
+    setStatus(`${res.runId} 已停止（退出码 ${res.exitCode}）· ${total}`)
     return
   }
   if (res.startupError) {
@@ -1101,12 +1148,12 @@ function finishRun(res) {
       `${error.code || '失败'} · 运行没起来（退出码 ${res.exitCode}）· ${total}`,
       lines,
     )
-    el.status.textContent = `${res.runId} 启动失败 ${error.code || ''}：${error.message || '原因见日志'}`
+    setStatus(`${res.runId} 启动失败 ${error.code || ''}：${error.message || '原因见日志'}`)
     return
   }
   setRunTitle(`${res.runId} 结束`, `退出码 ${res.exitCode}`, 'dead')
   renderRunSummary('bad', `进程退出（退出码 ${res.exitCode}）但没有 result.json · ${total}`, res.stderrTail || [])
-  el.status.textContent = `${res.runId} 退出码 ${res.exitCode}，没有 result.json`
+  setStatus(`${res.runId} 退出码 ${res.exitCode}，没有 result.json`)
 }
 
 async function pollRun() {
@@ -1115,12 +1162,12 @@ async function pollRun() {
   try {
     res = await ppx.call('rpa.runPoll', { run_id: RUN.id, since: RUN.seen })
   } catch (error) {
-    el.status.textContent = `轮询失败 ${error.code}：${error.message}`
+    setStatus(`轮询失败 ${error.code}：${error.message}`)
     setRunRunning(false)
     return
   }
   if (!res.ok) {
-    el.status.textContent = `轮询失败 ${res.code}：${res.error}`
+    setStatus(`轮询失败 ${res.code}：${res.error}`)
     setRunRunning(false)
     return
   }
@@ -1155,7 +1202,7 @@ async function runFlow() {
     if (!res.ok) {
       setRunTitle('没起来', res.code, 'dead')
       renderRunSummary('bad', `${res.code}：${res.error}`, [])
-      el.status.textContent = `运行失败 ${res.code}：${res.error}`
+      setStatus(`运行失败 ${res.code}：${res.error}`)
       return
     }
     RUN.id = res.runId
@@ -1164,12 +1211,12 @@ async function runFlow() {
     // 解释器与 cwd 是「这个运行到底由谁跑、会往哪写」的证据，但塞进状态栏会把按钮挤坏；
     // 放进面板的 tooltip，想看的人鼠标一停就有。
     el.runBox.title = `解释器：${res.python}\ncwd：${res.cwd}\nartifacts：${res.artifacts}`
-    el.status.textContent = `${res.runId} 已启动 · pid ${res.pid}`
+    setStatus(`${res.runId} 已启动 · pid ${res.pid}`)
     RUN.timer = setTimeout(pollRun, 80)
   } catch (error) {
     setRunTitle('没起来', error.code, 'dead')
     renderRunSummary('bad', `${error.code}：${error.message}`, [])
-    el.status.textContent = `${error.code}：${error.message}`
+    setStatus(`${error.code}：${error.message}`)
   } finally {
     el.rpcMs.textContent = `${(performance.now() - t0).toFixed(0)} ms`
     if (!RUN.running) el.run.disabled = !currentPath
@@ -1183,13 +1230,13 @@ async function stopRun() {
   try {
     const res = await ppx.call('rpa.cancelRun', { run_id: RUN.id })
     if (!res.ok) {
-      el.status.textContent = `停止失败 ${res.code}：${res.error}`
+      setStatus(`停止失败 ${res.code}：${res.error}`)
       return
     }
-    el.status.textContent = `${res.runId} 已请求停止 · 退出码 ${res.exitCode}`
+    setStatus(`${res.runId} 已请求停止 · 退出码 ${res.exitCode}`)
     await pollRun() // 立刻收口一次，不必等下一个 tick
   } catch (error) {
-    el.status.textContent = `${error.code}：${error.message}`
+    setStatus(`${error.code}：${error.message}`)
   }
 }
 
@@ -1273,7 +1320,14 @@ async function boot() {
     const info = await ppx.call('rpa.bootstrap')
     commands = info.commands
     flows = info.flows
-    el.status.textContent = `catalog ${info.commands.length} 条 · digest ${info.catalogDigest} · Python ${info.python} · 首帧→数据 ${(performance.now() - t0).toFixed(0)} ms（catalog ${info.catalogMs} ms）`
+    // 顶栏只放「看一眼就够」的短句：整条诊断串（digest/首帧/耗时）太长，
+    // 在 1280 宽下会把流程下拉和按钮往右挤，全文进 tooltip。
+    const brief = `catalog ${info.commands.length} · Python ${info.python}`
+    setStatus(
+      brief,
+      `catalog ${info.commands.length} 条 · digest ${info.catalogDigest} · Python ${info.python}` +
+        ` · 首帧→数据 ${(performance.now() - t0).toFixed(0)} ms（catalog ${info.catalogMs} ms）`,
+    )
     renderCommands(commands)
     el.picker.replaceChildren(
       ...flows.map((f) => {
@@ -1292,7 +1346,7 @@ async function boot() {
       await openFlow(flows[0].path)
     }
   } catch (error) {
-    el.status.textContent = `${error.code}: ${error.message}`
+    setStatus(`${error.code}: ${error.message}`)
   }
 }
 
