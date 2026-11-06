@@ -41,6 +41,18 @@ if not PY.is_file():
 ZIP = ROOT / "dist" / "RPA-Editor-win64.zip"
 STUDIO = ROOT / "workbuddy-suite" / "skills" / "workflow-studio" / "scripts" / "studio.py"
 INSTALLER = ROOT / "bin" / "rpa-skill.mjs"
+PPX_TOML = ROOT / ".harness" / "demo" / "ppx_probe" / "app" / "ppx.toml"
+
+
+def editor_version() -> str:
+    """窗口版本从事实源现算，别硬编码（0.1.0 → 0.1.1 时这里曾整片假红）。"""
+    m = re.search(r'^version\s*=\s*"([^"]+)"', PPX_TOML.read_text(encoding="utf-8"), re.M)
+    if not m:
+        raise SystemExit(f"[probe] {PPX_TOML} 里找不到 version")
+    return m.group(1)
+
+
+EDITOR_VERSION = editor_version()
 
 # 必须落在**系统临时目录**：① 纯 ASCII（中文路径会让窗口的 pythonnet 崩）；
 # ② 本机 WorkBuddy 的删除守卫对系统临时目录豁免，安装器清理 .staging/.download.zip
@@ -172,7 +184,7 @@ def case_install_from_zip() -> None:
     check("install: ok", data.get("ok") is True, json.dumps(data, ensure_ascii=False)[:300])
     exe = Path(str(data.get("exe") or ""))
     check("install: exe 存在", exe.is_file(), str(exe))
-    check("install: 版本从包名解析", data.get("version") == "0.1.0", str(data.get("version")))
+    check("install: 版本从包名解析", data.get("version") == EDITOR_VERSION, str(data.get("version")))
 
     manifest_path = HOME / "editor.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8")) if manifest_path.is_file() else {}
@@ -322,6 +334,37 @@ def case_skill_fail_skips_editor() -> None:
     check("技能已存在: 没有装窗口", not (HOME / "editor" / "current").exists())
 
 
+def case_skill_exists_editor_already_installed() -> None:
+    """ALREADY_INSTALLED 只是没确认覆盖：窗口已装时不许再喊「没装上 / 补装」。
+
+    跳过语义不变（技能没变更就不重装窗口），但结果必须如实反映「窗口本来就在」。
+    installed_at 前后相等这条是防「干脆重新装一遍」的假修法。
+    """
+    fresh(HOME)
+    fresh(SKILL_DIR)
+    node("install", "--dir", str(SKILL_DIR))
+    node("editor", "install", "--editor-zip", str(ZIP))
+    before = json.loads((HOME / "editor.json").read_text(encoding="utf-8"))
+    _, data, err = node("install", "--dir", str(SKILL_DIR), "--with-editor", "--editor-zip", str(ZIP))
+    p = "技能已存在+窗口已装"
+    editor = data.get("editor") or {}
+    check(f"{p}: 错误码", data.get("code") == "ALREADY_INSTALLED", str(data.get("code")))
+    check(f"{p}: editor 仍跳过", editor.get("code") == "SKIPPED", json.dumps(editor, ensure_ascii=False)[:200])
+    check(f"{p}: editor 标记已装", editor.get("installed") is True, json.dumps(editor, ensure_ascii=False)[:200])
+    check(f"{p}: 认清单版本", editor.get("version") == EDITOR_VERSION, str(editor.get("version")))
+    check(f"{p}: detail 说已装", "已装" in str(editor.get("detail") or ""), str(editor.get("detail")))
+    warn = " ".join(str(w) for w in (data.get("warnings") or []))
+    check(f"{p}: 没有「没装上」警告", "没装上" not in warn, warn[:200])
+    check(f"{p}: 没有「补装」提示", "补装" not in warn, warn[:200])
+    check(f"{p}: stderr 没有假警告", "没装上" not in err and "补装" not in err, err[:200])
+    after = json.loads((HOME / "editor.json").read_text(encoding="utf-8"))
+    check(f"{p}: 没偷偷重装窗口", before.get("installed_at") == after.get("installed_at"),
+          f"{before.get('installed_at')} vs {after.get('installed_at')}")
+    check(f"{p}: 窗口还在",
+          (HOME / "editor" / "current").is_dir() and Path(str(after.get("editor") or "")).is_file(),
+          str(after.get("editor")))
+
+
 def case_doctor_editor() -> None:
     fresh(HOME)
     fresh(SKILL_DIR)
@@ -356,7 +399,7 @@ def case_studio_sees_exe() -> None:
     node("editor", "install", "--editor-zip", str(ZIP))
     proc = python(str(STUDIO), "doctor")
     line = _editor_line(proc.stdout)
-    check("studio doctor: editor PASS 且认清单版本", line.startswith("[PASS]") and "0.1.0" in line,
+    check("studio doctor: editor PASS 且认清单版本", line.startswith("[PASS]") and EDITOR_VERSION in line,
           line or proc.stdout[-500:].replace("\n", " | "))
     check("studio doctor: 没有 SKIP editor", "[SKIP] editor " not in proc.stdout, line)
 
@@ -364,7 +407,7 @@ def case_studio_sees_exe() -> None:
     proc = python(str(STUDIO), "doctor")
     line = _editor_line(proc.stdout)
     check("studio doctor 未装: editor 不是 FAIL", bool(line) and not line.startswith("[FAIL]"), line)
-    check("studio doctor 未装: 不认已装窗口", "0.1.0" not in line and "current" not in line, line)
+    check("studio doctor 未装: 不认已装窗口", EDITOR_VERSION not in line and "current" not in line, line)
 
 
 def case_gui_uses_exe() -> None:
@@ -397,6 +440,7 @@ CASES = [
     case_status_missing_exe,
     case_install_with_editor,
     case_skill_fail_skips_editor,
+    case_skill_exists_editor_already_installed,
     case_doctor_editor,
     case_studio_sees_exe,
     case_gui_uses_exe,
@@ -443,6 +487,13 @@ INJECTIONS = {
         '    for path in candidates:\n        if path.is_file():\n            return path\n    return None\n\n\ndef _editor_dir()',
         "    for path in candidates:\n        if path.is_file():\n            return None\n    return None\n\n\ndef _editor_dir()",
     ),
+    # 假装没看见已装的窗口：SKIPPED 分支会重新喊「没装上 / 补装」，新判据必须红。
+    # 只把信号抹掉、不改跳过语义，属于合法语法的精准放宽。
+    "skip-editor-blind": (
+        INSTALLER,
+        "        const status = editorStatus(flags.editorHome);\n",
+        "        const status = editorStatus(flags.editorHome);\n        status.installed = false;\n",
+    ),
 }
 
 
@@ -470,6 +521,25 @@ INJECTION_EXPECT = {
     "studio-blind": {
         "must_red": {"studio doctor: editor PASS 且认清单版本"},
         "unchanged": {"gui --exe: 起得来", "doctor 已装: editor PASS", "install: ok"},
+    },
+    "skip-editor-blind": {
+        "must_red": {
+            "技能已存在+窗口已装: editor 标记已装",
+            "技能已存在+窗口已装: 认清单版本",
+            "技能已存在+窗口已装: detail 说已装",
+            "技能已存在+窗口已装: 没有「没装上」警告",
+            "技能已存在+窗口已装: 没有「补装」提示",
+            "技能已存在+窗口已装: stderr 没有假警告",
+        },
+        "unchanged": {
+            "技能已存在+窗口已装: 错误码",
+            "技能已存在+窗口已装: editor 仍跳过",
+            "技能已存在+窗口已装: 没偷偷重装窗口",
+            "技能已存在+窗口已装: 窗口还在",
+            "技能已存在: editor 被跳过",
+            "install: ok",
+            "gui --exe: 起得来",
+        },
     },
 }
 

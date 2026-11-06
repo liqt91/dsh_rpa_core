@@ -408,3 +408,5 @@ un-control-advanced 翻 true——M21 于 2026-09-19 完成后已连续多轮 FU
 2026-11-05 | workbuddy-connector | done | **CI 自动发版跑通**：编码修复后分支自测（run 42013447283）全绿；不动已推的 `editor-v0.1.0`（避免 force），bump ppx.toml→0.1.1 并推 `editor-v0.1.1`，tag 运行 Verify/Publish 全绿，Release 有 zip（17192560B）与 `.sha256`。按安装器真实 URL 下载核 sha 一致、包内 0.1.1；默认 URL 在线安装 ok（`sha_verified=sidecar`）、studio doctor 的 editor=PASS。Node 需 `NODE_USE_ENV_PROXY=1` 才走代理，已写进 README/SKILL.md。
 
 2026-11-06 | workbuddy-connector | done | **npm GitHub 源偶发 ECONNRESET 取证**：codeload tarball 2.5MB 三次重试全被重置；curl 经 7890 = 200/1.7s、61612 = 200/2.8s。用用户真实 npm 11.6.2 对照：默认代理能装成但耗时 2m，显式 7890+重试 18s，下好的 tarball 本地装 11s ⇒ 非必然失败、非仓库问题。全局旧包仍是 11-05 16:13 版（无 editor install），升级必要。README/SKILL.md 补重试/代理解法与 Node 22/24 差异。
+
+2026-11-06 | workbuddy-connector | done | **修 `--with-editor` 的假警告**：`ALREADY_INSTALLED`（只是没确认覆盖）被当成装失败，窗口已装也喊「没装上/补装」。按用户拍板只修提示、不动跳过语义：SKIPPED 分支先读 `editor.json`，已装则 `skip:true` + installed/version/detail，不再拼 warning。顺带把探针硬编码 `0.1.0` 改成从 `ppx.toml` 现算（bump 后基线本就 58/60 红）。取证：基线 70/70 绿、6 组注入全 negative verified、md5 还原一致、真机端到端 9/9（用户文件 mtime 未变）、逐条门禁 21/21、冒烟绿。

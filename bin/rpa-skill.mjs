@@ -1235,11 +1235,31 @@ async function main() {
     // 窗口是可选件：装它失败不算技能装失败（技能已经能生成/跑流程），
     // 只是结果里带 ok:false 与修法。反过来，技能装失败时不装窗口 —— 没有运行时的
     // 窗口只能开不能跑，装它只会让人以为问题出在窗口上。
+    // 但 ALREADY_INSTALLED 不是「装失败」，只是没确认覆盖：这时先读清单，
+    // 窗口本来就装好的话如实报跳过，别喊「没装上 / 补装」让人重复下 17MB。
     if (flags.withEditor) {
       const anchor = results.find((r) => r.ok);
       let editor = null;
       if (!anchor) {
-        editor = { ok: false, code: "SKIPPED", detail: "技能没装成功，跳过窗口" };
+        const status = editorStatus(flags.editorHome);
+        editor = status.ok && status.installed
+          ? {
+              ok: false,
+              skip: true,
+              code: "SKIPPED",
+              installed: true,
+              version: status.version,
+              exe: status.exe,
+              detail: `窗口已装（${status.version || "?"}），本次跳过；技能没变更，不重装窗口`,
+            }
+          : {
+              ok: false,
+              code: "SKIPPED",
+              installed: false,
+              detail: status.ok
+                ? "技能没变更，窗口也没装；想要窗口单独跑 rpa-skill editor install"
+                : "技能没变更；窗口清单异常，单独跑 rpa-skill editor install --force",
+            };
       } else if (flags.dryRun) {
         editor = { ok: true, dryRun: true, detail: `将下载并解压到 ${toPosix(join(coreHome(flags.editorHome), "editor", "current"))}` };
       } else {
