@@ -214,6 +214,28 @@ rpa-skill uninstall --target dsh
 > （`install` 可能被当成包名），所以文档里只给 `npm i -g` 与 `node bin/…` 两种确定能跑的形态。
 > 包未发布到 npm registry，所以只能写 `github:<owner>/<repo>#<branch>` 这种 git 源形式。
 
+`npm i -g github:…` 实际从 `codeload.github.com/<owner>/<repo>/tar.gz/<sha>` 拉一个 tarball。
+走代理的网络里这条大响应偶发 `ECONNRESET`（npm 默认只重试 2 次），报的是 network error，
+跟包内容、命令写法都无关。按下面顺序试，三条都在 Windows / npm 11.6.2 / Node 24 上实测过：
+
+```powershell
+# ① 先加大重试重跑原命令（多数情况这次就过）
+npm i -g --fetch-retries=5 github:liqt91/dsh_rpa_core#ppx-only
+
+# ② 仍红：把 npm 指到本机在监听的代理端口（7890 只是示例，先 netstat 确认）
+netstat -ano | findstr "127.0.0.1:7890"
+npm i -g --proxy http://127.0.0.1:7890 --https-proxy http://127.0.0.1:7890 `
+  --fetch-retries=5 github:liqt91/dsh_rpa_core#ppx-only
+
+# ③ 仍红：绕开 codeload，手工下好 tarball 再本地装（PS 里 curl 是别名，要写 curl.exe）
+curl.exe -L --proxy http://127.0.0.1:7890 -o rpa-skill.tgz `
+  https://github.com/liqt91/dsh_rpa_core/archive/refs/heads/ppx-only.tar.gz
+npm i -g .\rpa-skill.tgz
+```
+
+代理是**本机网络环境**，不是这个包的要求：环境变量 `HTTPS_PROXY` 会让 npm 自动走代理，
+所以原命令里看不见它；能直连 GitHub 的机器以上全都不用加。
+
 **技能依赖 `rpa-core` 的 Python 运行时，而 npm 包里不带它**——这是分发包最容易断的一环：
 技能被拷进宿主目录后，原仓库的 `src/`、`editor/`、`extension/` 都不在了，裸命令
 `rpa-core catalog` 会 `command not found`。所以安装器会现场探测「哪个解释器能 import
@@ -259,9 +281,10 @@ rpa-skill doctor                               # 窗口装好时 editor 那行�
 - 没有 Linux/macOS 产物，其它平台返回 `EDITOR_UNSUPPORTED`（SKIP，不算安装失败）。
 - 离线 / 内网：`--editor-zip <本地 zip>` 或 `--editor-url <镜像>`；release 的 `.sha256`
   旁挂文件会自动校验，也可 `--sha256 <hex>` 手工指定。
-- **走代理才能连 GitHub 时**：Node 内置 `fetch` 默认不读 `HTTP_PROXY`，直接装会报
-  `UND_ERR_CONNECT_TIMEOUT`。设 `NODE_USE_ENV_PROXY=1` 再装（Node 22.22 / 24+ 实测可用，
-  会有一条实验特性警告，不影响结果）；或手工下好 zip 与同名 `.sha256` 后走 `--editor-zip`。
+- **连 GitHub 需要代理时**：`editor install` 用 Node 内置 `fetch` 下载，和 npm 不是同一套配置。
+  部分环境里它不读 `HTTP_PROXY`，会报 `UND_ERR_CONNECT_TIMEOUT`；Node 22 上设
+  `NODE_USE_ENV_PROXY=1`（有一条实验特性警告，不影响结果），Node 24 默认可用（v24.13 实测
+  不设也能通）。仍不通就手工下好 zip 与同名 `.sha256` 后走 `--editor-zip`。
 - 不装窗口照样能生成流程、跑流程、用 `rpa-core capture` 拾取元素；少的只是「人在窗口里改 + 点选」。
 
 维护者发版（推荐走 CI）：仓库有 `.github/workflows/editor-release.yml`，在 Windows

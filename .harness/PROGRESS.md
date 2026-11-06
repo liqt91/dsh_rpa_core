@@ -406,3 +406,5 @@ un-control-advanced 翻 true——M21 于 2026-09-19 完成后已连续多轮 FU
 2026-11-05 | workbuddy-connector | wip | **1 秒失败根因 = 控制台编码**：分支自测的公开 annotation 拿到 `UnicodeEncodeError: cp1252 can't encode \u7528`，en-US runner 的 stdout 打不了中文，脚本第一句 print 就退出（本机中文 locale 恒绿）。三层修：workflow job 设 PYTHONIOENCODING/PYTHONUTF8；脚本 stdout/stderr `reconfigure(errors=replace)`；生成 spec 的子进程**强制**（非 setdefault）UTF-8 以对齐 `_ppx_spec` 的 utf-8 解码。取证：注入删兜底在 cp1252 下真红（同一个 \u7528），带兜底完整构建 rc=0 / 15.8MB / verify 通过。
 
 2026-11-05 | workbuddy-connector | done | **CI 自动发版跑通**：编码修复后分支自测（run 42013447283）全绿；不动已推的 `editor-v0.1.0`（避免 force），bump ppx.toml→0.1.1 并推 `editor-v0.1.1`，tag 运行 Verify/Publish 全绿，Release 有 zip（17192560B）与 `.sha256`。按安装器真实 URL 下载核 sha 一致、包内 0.1.1；默认 URL 在线安装 ok（`sha_verified=sidecar`）、studio doctor 的 editor=PASS。Node 需 `NODE_USE_ENV_PROXY=1` 才走代理，已写进 README/SKILL.md。
+
+2026-11-06 | workbuddy-connector | done | **npm GitHub 源偶发 ECONNRESET 取证**：codeload tarball 2.5MB 三次重试全被重置；curl 经 7890 = 200/1.7s、61612 = 200/2.8s。用用户真实 npm 11.6.2 对照：默认代理能装成但耗时 2m，显式 7890+重试 18s，下好的 tarball 本地装 11s ⇒ 非必然失败、非仓库问题。全局旧包仍是 11-05 16:13 版（无 editor install），升级必要。README/SKILL.md 补重试/代理解法与 Node 22/24 差异。

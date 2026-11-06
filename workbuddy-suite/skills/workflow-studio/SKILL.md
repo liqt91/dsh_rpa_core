@@ -62,9 +62,9 @@ author: w
   ```
 
   它把便携包解到 `~/.rpa-core/editor/current/`，并写 `~/.rpa-core/editor.json`
-  （窗口的工作区、rpa-core 可执行文件都从这份清单里读）。需要代理才能连 GitHub 时，
-  Node 的内置 `fetch` 默认不读 `HTTP_PROXY`：先设 `NODE_USE_ENV_PROXY=1`（较新的
-  Node 22 / 24 支持）再装；连不上就手工下好 `RPA-Editor-win64.zip` 和同名 `.sha256`，
+  （窗口的工作区、rpa-core 可执行文件都从这份清单里读）。连 GitHub 需要代理时，
+  Node 的内置 `fetch` 和 npm 不是同一套配置：Node 22 上先设 `NODE_USE_ENV_PROXY=1`
+  再装（Node 24 默认可用）；连不上就手工下好 `RPA-Editor-win64.zip` 和同名 `.sha256`，
   用 `--editor-zip` 指向本地包。装窗口失败不影响已经装好的技能。不装就按下面降级：
 
   - 不要说「我帮你打开编辑器」，也别跑 `studio.py gui` / `open` / `wait`——它们会报
