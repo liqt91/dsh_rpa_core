@@ -461,8 +461,17 @@ async function openFlow(path) {
     if (firstEditable) await selectCard(firstEditable)
     return flow
   } catch (error) {
+    const failure = {
+      code: error?.code || 'INTERNAL_ERROR',
+      message: String(error?.message || error),
+    }
     el.title.replaceChildren(mk('span', null, `打开失败：${path}`))
-    el.cards.replaceChildren(mk('div', 'card group', `${error.code}: ${error.message}`))
+    const reason = mk('div', 'card group', `${failure.code}: ${failure.message}`)
+    reason.style.whiteSpace = 'pre-wrap'
+    el.cards.replaceChildren(reason)
+    // 不能只把原因写在界面上：会话侧（Agent）在等 open-failed 事件。
+    // 吞掉异常它只能拿到一句「窗口内打开失败」，拿不到 BAD_PATH 和修法。
+    return { ok: false, error: failure }
   }
 }
 
@@ -1217,12 +1226,17 @@ async function pollSession() {
     SESSION.since = res.cursor ?? SESSION.since
     for (const request of res.requests || []) {
       if (request.kind !== 'open' || !request.path || SESSION.handled.has(request.id)) continue
-      // 先占位再打开：openFlow 内部会吞异常返回 undefined，靠返回值判成败。
-      // 失败必须回一条 open-failed —— 否则 Agent 侧只能等到超时，原因全丢在窗口里。
+      // 先占位再打开：openFlow 失败时返回 {ok:false, error:{code,message}}。
+      // 必须把这份结构化原因回进 open-failed，否则 Agent 侧只能等到超时，原因全丢在窗口里。
       SESSION.handled.add(request.id)
       try {
         const flow = await openFlow(request.path)
-        if (!flow) throw new Error('窗口内打开失败（原因见窗口标题与状态栏）')
+        if (!flow || flow.ok === false) {
+          const failure = flow?.error
+          const reason = new Error(failure?.message || '窗口内打开失败')
+          reason.code = failure?.code || 'INTERNAL_ERROR'
+          throw reason
+        }
         await ppx.call('studio.notify', {
           kind: 'opened',
           payload: { path: request.path, sha: flow.sha },

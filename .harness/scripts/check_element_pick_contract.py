@@ -40,7 +40,14 @@ def assert_true(cond: bool, msg: str) -> None:
 
 def load_api():
     stub = types.ModuleType("ppx_py")
+
+    class BridgeError(Exception):
+        def __init__(self, code: str, message: str):
+            super().__init__(message)
+            self.code = code
+
     stub.api_method = lambda _name: (lambda fn: fn)
+    stub.BridgeError = BridgeError
     sys.modules["ppx_py"] = stub
     spec = importlib.util.spec_from_file_location("ppx_probe_api_m66", API)
     assert_true(spec is not None and spec.loader is not None, f"加载不了 {API}")

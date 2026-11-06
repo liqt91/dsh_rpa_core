@@ -446,6 +446,11 @@
       "id": "element-pick-ux",
       "title": "Element pick: single entry + capability probe + truthful state (M66 P0) · 20 gates · editor-v0.1.2",
       "passes": true
+    },
+    {
+      "id": "editor-workspace-path",
+      "title": "Editor/session share one workspace root; BAD_PATH + traceback log + open-failed (M67) · 13 gates · editor-v0.1.3",
+      "passes": true
     }
   ]
 }

@@ -595,7 +595,25 @@ def cmd_open(args: argparse.Namespace) -> int:
         _emit(result, args.pretty)
         return 2
     if args.wait is not None and args.wait >= 0:
-        event = _wait_for(args.wait, {"save", "close"}, result["path"])
+        # 打开失败也是结论：窗口回的 open-failed 带 BAD_PATH 与可照抄的修法。
+        # 不把它算进等待集合，Agent 只会干等到超时，把「窗口拒绝」误读成「用户没动」。
+        event = _wait_for(args.wait, {"save", "close", "open-failed"}, result["path"])
+        failure = next(
+            (row for row in (event.get("events") or []) if row.get("kind") == "open-failed"),
+            None,
+        )
+        if failure is not None:
+            _emit(
+                {
+                    "ok": False,
+                    "code": failure.get("code") or "OPEN_FAILED",
+                    "error": failure.get("message") or "窗口打开失败",
+                    "path": result["path"],
+                    "waited": event,
+                },
+                args.pretty,
+            )
+            return 2
         merged = {**result, "waited": event}
         _emit(merged, args.pretty)
         return 0 if event.get("events") else 3
@@ -741,12 +759,20 @@ def cmd_gui(args: argparse.Namespace) -> int:
     窗口关掉后进程退出，端点文件清掉 —— 不留孤儿端口。
     """
     server = None
+    # 窗口的工作区根必须和会话的 --root 是同一个：会话按这个根放行绝对路径，
+    # 窗口却按自己的 WORKSPACE 做越界守卫，两边不一致时桥会把异常吞成
+    # INTERNAL_ERROR（M67）。常驻服务的 root 写在 /health 里，连上去照样对齐。
+    root = Path(args.root).resolve() if args.root else None
     if args.serve:
         existing = _read_endpoint()
         if existing and _healthy(int(existing.get("port") or 0)):
+            if root is None:
+                health = _call("GET", "/health", timeout=2.0)
+                raw = (health or {}).get("root")
+                if raw:
+                    root = Path(raw).resolve()
             print(json.dumps({"ok": True, "session": "already", "port": existing["port"]}))
         else:
-            root = Path(args.root).resolve() if args.root else None
             server, port = _make_server(args.port, root)
             thread = threading.Thread(
                 target=server.serve_forever, kwargs={"poll_interval": 0.2}, daemon=True
@@ -797,9 +823,14 @@ def cmd_gui(args: argparse.Namespace) -> int:
         return 2
     if args.skip_frontend:
         argv.append("--skip-frontend")
+    # 只改子进程的环境，不动本进程：窗口启动时读 RPA_WORKSPACE 定 WORKSPACE，
+    # 于是会话推来的绝对路径与窗口的越界守卫落在同一个根上。
+    child_env = dict(os.environ)
+    if root is not None:
+        child_env["RPA_WORKSPACE"] = str(root)
     try:
         # 打包后的窗口是自足的，cwd 落在它自己那层就够；ppx dev 必须进工程目录。
-        child = subprocess.Popen(argv, cwd=str(workdir))
+        child = subprocess.Popen(argv, cwd=str(workdir), env=child_env)
     except OSError as exc:
         print(json.dumps({"ok": False, "code": "SPAWN_FAILED", "error": str(exc)},
                          ensure_ascii=False))

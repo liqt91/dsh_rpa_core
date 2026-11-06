@@ -32,6 +32,9 @@ commands = [
     # 元素拾取编排层的**动态**契约（M66）：真跑 resolve_target / 能力闸 / 状态机，
     # 只扫源码证明不了「忽略命令类型时也照样返回 browser」这类假绿灯。
     [sys.executable, str(ROOT / ".harness" / "scripts" / "check_element_pick_contract.py")],
+    # 编辑窗口 ↔ 会话的路径口径（M67）：真跑三种路径形态、桥等价包装、cmd_gui 的 env
+    # 注入与 --wait 的失败回传。只扫源码证明不了「中文会话根真能打开」。
+    [sys.executable, str(ROOT / ".harness" / "scripts" / "check_editor_workspace_contract.py")],
 ]
 
 # 真实桌面 E2E（记事本/WinForms 演示程序/捕获悬浮框，会弹窗抢前台）**默认不进

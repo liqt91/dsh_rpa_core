@@ -16,6 +16,7 @@ from __future__ import annotations
 import atexit
 import hashlib
 import json
+import logging
 import os
 import re
 import subprocess
@@ -27,7 +28,7 @@ import urllib.request
 from pathlib import Path
 from typing import Any, get_args
 
-from ppx_py import api_method
+from ppx_py import BridgeError, api_method
 
 
 def _find_repo_root() -> Path | None:
@@ -136,7 +137,48 @@ def _workspace_root() -> Path:
     return home / "workspace"
 
 
+def _install_bridge_logging() -> Path | None:
+    """把桥层的异常日志落到用户目录 —— 冻结态没有控制台，traceback 不能丢。
+
+    `ppx_py/bridge.py` 对任何 Python 异常只做一次 `LOGGER.exception(...)`，然后给 JS 回
+    `INTERNAL_ERROR: Python API 执行失败`。exe 没有控制台、框架也没配 FileHandler，
+    于是现场只剩「无日志的内部错误」。这里给那个 logger 单独挂滚动文件，不改 ppx 代码；
+    幂等（同一个文件不重复挂），失败也不影响窗口启动。
+    """
+    from logging.handlers import RotatingFileHandler
+
+    home = Path(os.environ.get("RPA_HOME") or (Path.home() / ".rpa-core"))
+    path = Path(os.environ.get("RPA_EDITOR_LOG") or (home / "editor.log"))
+    logger = logging.getLogger("ppx_py.bridge")
+    for handler in logger.handlers:
+        if (
+            isinstance(handler, RotatingFileHandler)
+            and Path(handler.baseFilename) == path.resolve()
+        ):
+            return path
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        handler = RotatingFileHandler(path, maxBytes=1 << 20, backupCount=2, encoding="utf-8")
+        handler.setFormatter(
+            logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s")
+        )
+        logger.addHandler(handler)
+        logger.setLevel(logging.DEBUG)
+        logger.propagate = False
+        return path
+    except OSError:
+        return None
+
+
 WORKSPACE = _workspace_root()
+EDITOR_LOG = _install_bridge_logging()
+if EDITOR_LOG is not None:
+    logging.getLogger("ppx_py.bridge").info(
+        "editor start · workspace=%s · log=%s · frozen=%s",
+        WORKSPACE,
+        EDITOR_LOG,
+        bool(getattr(sys, "_MEIPASS", None)),
+    )
 
 _BOOT = time.perf_counter()
 _catalog = None
@@ -172,15 +214,62 @@ def _all_capabilities() -> set[str]:
     return granted
 
 
+def _session_root() -> Path | None:
+    """会话服务在 endpoint.json 里声明的 `--root`；没声明就是 None。
+
+    会话侧 `check_path` 按这个根放行绝对路径，窗口侧原先只认自己的 `WORKSPACE`，
+    于是同一条路径在桥里必然越界。把它列为第二个允许根，两边才共用一个真值源；
+    窗口独立启动（不经过 `studio.py gui`）时这条是唯一的对齐路径。
+    """
+    home = Path(
+        os.environ.get("STUDIO_HOME")
+        or (Path(os.environ.get("TEMP") or "/tmp") / "workbuddy-studio")
+    )
+    try:
+        meta = json.loads((home / "endpoint.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    raw = meta.get("root")
+    return Path(raw).expanduser().resolve() if raw else None
+
+
+def _allowed_roots() -> list[Path]:
+    roots = [WORKSPACE.resolve()]
+    session = _session_root()
+    if session is not None and session not in roots:
+        roots.append(session)
+    return roots
+
+
+def _bad_path_message(path: str, roots: list[Path], why: str) -> str:
+    expected = " 或 ".join(str(root) for root in roots)
+    return (
+        f"打开流程失败（{why}）：{path}\n"
+        f"窗口认的根：{expected}\n"
+        "把文件放进 <窗口根>/workflows/ 后从窗口下拉框选；或让会话服务用 "
+        "studio.py serve --root <流程所在目录> / studio.py gui --root <流程所在目录> "
+        "起，再重新 open。"
+    )
+
+
 def _flow_path(rel: str) -> Path:
-    # rel 是界面拿到的「相对工作区」路径（listFlows 里 relative_to(WORKSPACE) 的同一套），
-    # 不是相对仓库 —— 冻结态没有仓库，拼错就变成「流程文件不存在」。
+    """把界面/会话给的 path 落到磁盘，并守住工作区边界。
+
+    两种合法口径，共用同一组允许根：
+    - 相对路径：相对 `WORKSPACE`（窗口下拉框与 listFlows 用的就是这套）；
+    - 绝对路径：只要落在 `WORKSPACE` 或会话声明的 `--root` 内。
+      `Path(root) / absolute` 在 pathlib 里直接返回 absolute，所以下面不必分叉。
+
+    ★ 越界/不存在不能抛裸 ValueError：桥层会把任意异常吞成
+    `INTERNAL_ERROR: Python API 执行失败`，Agent 只拿到一句没有原因的话。
+    抛 BridgeError，桥才会把 `BAD_PATH` 和上面那段可照抄的修法原样带回去。
+    """
     target = (WORKSPACE / rel).resolve()
-    # 越界守卫：界面上给的路径不许跑到工作区外面去（冻结态下这个根就是用户目录）。
-    if not target.is_relative_to(WORKSPACE.resolve()):
-        raise ValueError(f"流程路径越界: {rel}")
+    roots = _allowed_roots()
+    if not any(target.is_relative_to(root) for root in roots):
+        raise BridgeError("BAD_PATH", _bad_path_message(rel, roots, "路径越界"))
     if not target.is_file():
-        raise ValueError(f"流程文件不存在: {rel}")
+        raise BridgeError("BAD_PATH", _bad_path_message(rel, roots, "文件不存在"))
     return target
 
 
@@ -2192,6 +2281,9 @@ def _selftest_payload() -> dict[str, Any]:
         "frozen": bool(getattr(sys, "_MEIPASS", None)),
         "repo": str(REPO) if REPO is not None else None,
         "workspace": str(WORKSPACE),
+        "sessionRoot": str(_session_root()) if _session_root() is not None else None,
+        "allowedRoots": [str(root) for root in _allowed_roots()],
+        "logPath": str(EDITOR_LOG) if EDITOR_LOG is not None else None,
         "caps": str(CAPS),
         "capsExists": CAPS.is_dir(),
         "resources": str(FROZEN_RES) if FROZEN_RES is not None else None,

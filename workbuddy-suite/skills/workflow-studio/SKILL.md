@@ -134,11 +134,15 @@ rpa-skill install --force
 ## 二、起会话服务（一次即可，常驻）
 
 ```bash
-{{PYTHON}} "{{SKILL_DIR}}/scripts/studio.py" serve --port 7788
+{{PYTHON}} "{{SKILL_DIR}}/scripts/studio.py" serve --port 7788 --root "<工作流所在目录>"
 ```
 
 - 只监听 `127.0.0.1`，不对外网开放；端口被占会自动顺延（实际端口写在返回值里）。
-- 想限制可打开的文件范围：加 `--root <目录>`，越界的路径会被 `BAD_PATH` 拒绝。
+- **`--root` 要指向 workflows/ 的上一级**：会话按它放行绝对路径，窗口也按它做越界守卫。
+  两边根不一致时，窗口会回 `BAD_PATH` 并写明它认的根——把报错里的 `studio.py serve --root
+  <目录>` 原样照抄重起即可，别去猜路径、也别说「编辑器坏了」。
+  也可以用一条命令起全套：`studio.py gui --root "<工作流所在目录>"`，它会把同一个根
+  注入窗口；连已起的服务时会从 `status` 里读它的根。
 - 后台跑的时候把 stdout 丢掉即可，`studio.py status` 随时能问到状态。
 
 ## 三、工作流 A：让用户改文件并确认
@@ -150,7 +154,8 @@ rpa-skill install --force
 
 - 退出码 `0` + `events` 非空 ⇒ 用户**保存了**（或关了窗口，看 `kind`）。
 - 退出码 `3` ⇒ 超时，用户没动。**不要**自己改文件再说「已按你的要求改好」。
-- 退出码 `2` ⇒ 服务或路径有问题，把 `error` 原文转述给用户。
+- 退出码 `2` ⇒ 服务或路径有问题，把 `error` 原文转述给用户。窗口回的 `open-failed`
+  也会秒回这个码（带 `BAD_PATH` 和可照抄的修法），**不要**当成超时继续等。
 
 ```bash
 # 2. 只等保存事件（不重新打开文件）
@@ -229,9 +234,16 @@ rpa-skill install --force
 |---|---|---|
 | `NO_SESSION` | 服务没起 | 先 `serve`，再重试一次 |
 | `SESSION_DOWN` | 服务挂了/端口变了 | `status` 确认，必要时重起 |
-| `BAD_PATH` | 路径不存在或越界 | 检查 `--root` 与路径拼写，不要猜别的路径 |
+| `BAD_PATH` | 路径不存在或越界（会话侧和窗口侧都会给） | 报错里带窗口认的根和 `studio.py serve --root <目录>`；照它对齐两边，别猜路径 |
 | `EDITOR_OFFLINE` | 窗口没开 | 告知用户并等待，不要写入后声称已确认 |
 | `TIMEOUT` | 用户没在时限内操作 | 询问是否继续等，不要自行代劳 |
+| `INTERNAL_ERROR` | 窗口 Python 侧抛了未预期异常 | 看 `~/.rpa-core/editor.log` 的 traceback，别下「窗口本体坏了」的结论 |
+
+**窗口报错怎么取证**：`0.1.3` 起窗口会把 Python 异常写到 `~/.rpa-core/editor.log`
+（可用 `RPA_EDITOR_LOG` 改路径）。要一眼看全根与资源，设 `RPA_EDITOR_SELFTEST=1` 再启动
+窗口 exe，它不进界面、直接输出 JSON，里面有 `workspace / allowedRoots / sessionRoot / logPath`。
+看到 `INTERNAL_ERROR: Python API 执行失败` 时，**先读日志**——那句话只是桥层的统一包装，
+不是原因本身。
 
 ## 七、边界（写死，不要临场发挥）
 
