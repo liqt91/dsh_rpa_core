@@ -17,6 +17,10 @@
 - 扩展包根必须有 `manifest.json`，且 manifest 引用的文件都在包里；
 - 连接器先跑自己的校验器（字段/权限/能力文档 digest），再复制进本目录 dist。
 
+打包前还会从 `release.json` 把版本写回各产物文件；包内路径 → 源文件的映射统一
+走 `dist_sources.py`（`verify_suite.py` 逐文件比 sha256 时复用它），所以「源改了
+没重打包」会被判据抓住，旧 zip 不再靠入口层级一直绿。
+
 跑法：python tools/pack.py [--layout folder|flat]
 """
 
@@ -31,15 +35,17 @@ import sys
 import zipfile
 from pathlib import Path
 
-SUITE = Path(__file__).resolve().parents[1]
-SKILL = SUITE / "skills" / "workflow-studio"
-EXT = SUITE / "extension"
-CONNECTOR = SUITE / "connector"
-DIST = SUITE / "dist"
-LIMIT = 3 * 1024 * 1024
+from dist_sources import (
+    CONNECTOR,
+    DIST,
+    SKILL,
+    SUITE,
+    extension_sources,
+    skill_sources,
+)
+from release import apply_versions
 
-SKIP_PARTS = {"__pycache__", ".pytest_cache", ".DS_Store"}
-SKIP_SUFFIX = {".pyc", ".pyo"}
+LIMIT = 3 * 1024 * 1024
 
 problems: list[str] = []
 
@@ -52,22 +58,15 @@ def _rel(path: Path) -> str:
         return str(path)
 
 
-def _iter_files(root: Path):
-    for path in sorted(root.rglob("*")):
-        if not path.is_file():
-            continue
-        if any(part in SKIP_PARTS for part in path.parts):
-            continue
-        if path.suffix.lower() in SKIP_SUFFIX:
-            continue
-        yield path
-
-
-def _write(zip_path: Path, root: Path, arc_prefix: str) -> int:
+def _write(zip_path: Path, sources: dict[str, Path]) -> int:
+    """按 dist_sources 的映射写 zip；映射与校验共用，别在这里另造一份路径规则。"""
+    missing = [arc for arc, path in sources.items() if not path.is_file()]
+    if missing:
+        problems.append(f"{zip_path.name} 的映射指向了不存在的源文件：{missing[:5]}")
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as bundle:
-        for path in _iter_files(root):
-            arc = f"{arc_prefix}{path.relative_to(root).as_posix()}"
-            bundle.write(path, arc)
+        for arc, path in sorted(sources.items()):
+            if path.is_file():
+                bundle.write(path, arc)
     return zip_path.stat().st_size
 
 
@@ -77,7 +76,7 @@ def pack_skill(layout: str) -> Path:
         return DIST / "workflow-studio-skill.zip"
     prefix = "" if layout == "flat" else f"{SKILL.name}/"
     target = DIST / "workflow-studio-skill.zip"
-    size = _write(target, SKILL, prefix)
+    size = _write(target, skill_sources(layout))
     if size > LIMIT:
         problems.append(f"技能包 {size} 字节超过平台 3MB 限制")
     entry = f"{prefix}SKILL.md"
@@ -96,7 +95,7 @@ def pack_skill(layout: str) -> Path:
 
 def pack_extension() -> Path:
     target = DIST / "workbuddy-studio-extension.zip"
-    size = _write(target, EXT, "")
+    size = _write(target, extension_sources())
     with zipfile.ZipFile(target) as bundle:
         names = set(bundle.namelist())
         manifest = json.loads(bundle.read("manifest.json")) if "manifest.json" in names else {}
@@ -139,6 +138,11 @@ def main() -> int:
     parser.add_argument("--layout", choices=("folder", "flat"), default="folder")
     args = parser.parse_args()
     DIST.mkdir(exist_ok=True)
+
+    # 版本只有一个事实源（release.json）。打包前写回各产物文件，避免
+    # 「改了 SKILL.md 的版本忘了改 connector-meta / manifest」这类漂移进包。
+    for line in apply_versions():
+        print(f"[版本同步] {line}")
 
     pack_skill(args.layout)
     pack_extension()

@@ -57,6 +57,7 @@ const HOSTS = {
   claude: { label: "Claude Code", base: () => join(homedir(), ".claude") },
   agents: { label: "共享目录（Codex 等）", base: () => join(homedir(), ".agents") },
   gemini: { label: "Antigravity / Gemini", base: () => join(homedir(), ".gemini") },
+  workbuddy: { label: "WorkBuddy", base: () => join(homedir(), ".workbuddy") },
 };
 
 const SKILLS_SUBDIR = {
@@ -64,7 +65,37 @@ const SKILLS_SUBDIR = {
   claude: join("skills"),
   agents: join("skills"),
   gemini: join("config", "skills"),
+  workbuddy: join("skills"),
 };
+
+// WorkBuddy 的技能清单要求 frontmatter 带 agent_created: true，否则技能不被列为
+// agent 可管理资产。源 SKILL.md 已经带了这一行，这里仍做幂等兜底：从旧包升级、
+// 或有人手工改掉源文件时，--force 重装能自动补回来。
+const WB_META_LINE = "agent_created: true";
+
+function isWorkbuddyDest(dest) {
+  const parent = toPosix(dirname(resolve(dest))).toLowerCase();
+  const wbSkills = toPosix(resolve(join(homedir(), ".workbuddy", "skills"))).toLowerCase();
+  return parent === wbSkills;
+}
+
+function ensureWorkbuddyFrontmatter(skillMd) {
+  if (!existsSync(skillMd)) return { present: false, added: false };
+  const text = readFileSync(skillMd, "utf8");
+  if (Object.prototype.hasOwnProperty.call(readFrontmatter(text), "agent_created")) {
+    return { present: true, added: false };
+  }
+  const head = text.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+  if (!head) return { present: false, added: false }; // 没 frontmatter 就别乱插
+  const newline = head[0].includes("\r\n") ? "\r\n" : "\n";
+  const anchor = `${newline}---`;
+  // 锚点唯一性自检：闭合的 --- 在 head 末尾只出现一次，否则宁可不写。
+  const at = head[0].lastIndexOf(anchor);
+  if (at < 0 || head[0].indexOf(anchor) !== at) return { present: false, added: false };
+  const next = text.slice(0, at) + `${newline}${WB_META_LINE}` + text.slice(at);
+  writeFileSync(skillMd, next, "utf8");
+  return { present: true, added: true };
+}
 
 // 探测脚本：能不能 import rpa_core.cli —— 这正是「生成流程」那一步真正依赖的东西。
 // 用 argv 传 src，避免把路径拼进代码（Windows 反斜杠 + 空格会碎）。
@@ -707,13 +738,14 @@ function uninstallEditor(home) {
 // install
 // ---------------------------------------------------------------------------
 
-function install(dest, { force, dryRun, rpaCoreDir, python }) {
+function install(dest, { force, dryRun, rpaCoreDir, python, host }) {
   if (!existsSync(SRC)) {
     fail({ error: `包内找不到技能源目录：${SRC}` }, 2);
   }
   const skillMd = join(SRC, "SKILL.md");
   const meta = readFrontmatter(readFileSync(skillMd, "utf8"));
   const installed = existsSync(join(dest, "SKILL.md"));
+  const workbuddy = host === "workbuddy" || isWorkbuddyDest(dest);
 
   const plan = {
     ok: true,
@@ -759,7 +791,13 @@ function install(dest, { force, dryRun, rpaCoreDir, python }) {
     return {
       ...plan,
       runtime: runtimeReport,
-      steps: ["copy", "探测运行时 → runtime.json", `替换 ${PLACEHOLDERS.join(" / ")}`, "write skill.json"],
+      steps: [
+        "copy",
+        "探测运行时 → runtime.json",
+        `替换 ${PLACEHOLDERS.join(" / ")}`,
+        "write skill.json",
+        ...(workbuddy ? [`ensure ${WB_META_LINE} (WorkBuddy)`] : []),
+      ],
     };
   }
 
@@ -830,6 +868,12 @@ function install(dest, { force, dryRun, rpaCoreDir, python }) {
     replaced += 1;
   }
 
+  // WorkBuddy 宿主：frontmatter 补 agent_created（幂等；源里已带则原样跳过）。
+  // 放在占位符替换之后，避免两次写盘互相覆盖。
+  const wbMeta = workbuddy
+    ? ensureWorkbuddyFrontmatter(join(dest, "SKILL.md"))
+    : { present: false, added: false };
+
   // DSH 的技能目录带 skill.json；其他宿主读到也不影响。
   const manifest = {
     schemaVersion: 1,
@@ -853,6 +897,7 @@ function install(dest, { force, dryRun, rpaCoreDir, python }) {
     ...plan,
     runtime: runtimeReport,
     files_replaced: replaced,
+    workbuddy_frontmatter: wbMeta,
     entry: toPosix(join(dest, "SKILL.md")),
     warnings,
     next: [
@@ -895,6 +940,7 @@ function status() {
     if (present) {
       const meta = readFrontmatter(readFileSync(entry, "utf8"));
       row.version = meta.version || "0.0.0";
+      row.agent_created = Object.prototype.hasOwnProperty.call(meta, "agent_created");
       const md = walk(dest).filter((f) => f.endsWith(".md"));
       row.unresolved_placeholder = md.reduce(
         (n, f) => n + (readFileSync(f, "utf8").match(PLACEHOLDER_RE) || []).length,
@@ -1090,21 +1136,23 @@ function uninstall(host, explicit) {
 const HELP = `rpa-skill ${PKG_VERSION}
 
 用法：
-  rpa-skill install [--target dsh|claude|agents|gemini|all] [--dir PATH] [--force] [--dry-run]
+  rpa-skill install [--target dsh|claude|agents|gemini|workbuddy|all] [--dir PATH] [--force] [--dry-run]
                     [--rpa-core-dir PATH] [--python PATH] [--with-editor]
-  rpa-skill doctor  [--target dsh|claude|agents|gemini] [--dir PATH]
+  rpa-skill doctor  [--target dsh|claude|agents|gemini|workbuddy] [--dir PATH]
   rpa-skill status
   rpa-skill editor  [install|status|uninstall] [--editor-zip PATH] [--editor-url URL]
                     [--sha256 HEX] [--editor-home PATH] [--force]
-  rpa-skill uninstall [--target dsh|claude|agents|gemini] [--dir PATH]
+  rpa-skill uninstall [--target dsh|claude|agents|gemini|workbuddy] [--dir PATH]
 
 目标目录：
-  dsh      ~/.dsh/skills/workflow-studio
-  claude   ~/.claude/skills/workflow-studio
-  agents   ~/.agents/skills/workflow-studio      （Codex 等跨宿主共享）
-  gemini   ~/.gemini/config/skills/workflow-studio
+  dsh         ~/.dsh/skills/workflow-studio
+  claude      ~/.claude/skills/workflow-studio
+  agents      ~/.agents/skills/workflow-studio      （Codex 等跨宿主共享）
+  gemini      ~/.gemini/config/skills/workflow-studio
+  workbuddy   ~/.workbuddy/skills/workflow-studio  （用户级；自动补 agent_created: true）
 
-不指定 --target 时自动装到本机已存在的宿主；--dir 可装到任意目录（CI / 测试用）。
+不指定 --target 时自动装到本机已存在的宿主；--dir 可装到任意目录（CI / 测试用），
+落在 ~/.workbuddy/skills/ 下时同样会补 WorkBuddy 所需的 frontmatter。
 
 运行时（install 会自动探测，探不到才需要手工指定）：
   --rpa-core-dir  rpa_core 源码仓库根（含 src/rpa_core/cli.py）
@@ -1225,12 +1273,15 @@ async function main() {
     } else {
       const detected = detectHosts();
       if (detected.length === 0) {
-        fail({ error: "没探测到宿主（~/.dsh / ~/.claude / ~/.agents / ~/.gemini）", hint: "用 --target 或 --dir 指定" }, 2);
+        fail({ error: "没探测到宿主（~/.dsh / ~/.claude / ~/.agents / ~/.gemini / ~/.workbuddy）", hint: "用 --target 或 --dir 指定" }, 2);
       }
       for (const h of detected) targets.push({ host: h, dest: targetDirFor(h) });
     }
 
-    const results = targets.map((t) => ({ host: t.host, ...install(t.dest, flags) }));
+    const results = targets.map((t) => ({
+      host: t.host,
+      ...install(t.dest, { ...flags, host: t.host }),
+    }));
 
     // 窗口是可选件：装它失败不算技能装失败（技能已经能生成/跑流程），
     // 只是结果里带 ok:false 与修法。反过来，技能装失败时不装窗口 —— 没有运行时的

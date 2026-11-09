@@ -190,7 +190,9 @@ uv run python -m rpa_core.cli devserver
 ## 装进 AI agent（技能分发）
 
 `workbuddy-suite/skills/workflow-studio/` 是一份**宿主无关**的 agent 技能（`SKILL.md` +
-`references/` + `scripts/`），DeepSeek Harness、Claude Code、Codex 共用同一份源文件。
+`references/` + `scripts/`），WorkBuddy、DeepSeek Harness、Claude Code、Codex 共用同一份源文件。
+一份 SKILL.md 覆盖「编排 → 校验 → 人在环 → 运行」全链路；连接器包里那份
+`rpa-core-cli/SKILL.md` 只是平台必带的 CLI 接线说明，不是第二套编排技能。
 分发靠 `bin/rpa-skill.mjs`，零依赖、不需要先安装任何东西。
 
 ```bash
@@ -336,8 +338,11 @@ gh release create editor-v<版本> \
 | `claude` | `~/.claude/skills/workflow-studio` |
 | `agents` | `~/.agents/skills/workflow-studio`（Codex 等跨宿主共享） |
 | `gemini` | `~/.gemini/config/skills/workflow-studio` |
+| `workbuddy` | `~/.workbuddy/skills/workflow-studio`（用户级，自动补 `agent_created: true`） |
 
-`--dir <PATH>` 可装到任意目录（CI / 冒烟测试用）。
+`--dir <PATH>` 可装到任意目录（CI / 冒烟测试用）；落在 `~/.workbuddy/skills/` 下时
+也会按 WorkBuddy 处理。升级用同一条命令加 `--force`（不加会返回 `ALREADY_INSTALLED`），
+旧目录会挪进 `.rpa-skill-backups/`，不删除。
 
 **装完还缺什么**（技能只带指令和脚本，不带运行时）：
 
@@ -347,7 +352,7 @@ gh release create editor-v<版本> \
 4. 需要可视化窗口时另装 PPX，或给 `studio.py gui` 传 `--exe`。
 
 两个说明：`SKILL.md` frontmatter 里的 `display_name` / `description_zh` 等是 WorkBuddy
-商店的扩展字段，其他宿主只读 `name` 与 `description`（DSH 上限 500 字符，当前 400），
+商店的扩展字段，其他宿主只读 `name` 与 `description`（DSH 上限 500 字符，当前在限内），
 不影响安装与运行；`dsh plugin --profile web add` 装的是 Cordis 插件（要 package.json、
 要 cordis.yml 声明、要构建），**只分发技能不必走它**。
 

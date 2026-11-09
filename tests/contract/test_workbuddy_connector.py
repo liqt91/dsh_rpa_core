@@ -78,13 +78,40 @@ def test_cli_json_win32_entries_do_not_reference_cmd_shims():
 
 
 def test_skill_md_frontmatter_required_fields():
-    text = (CONNECTOR / "skills" / "rpa-automation" / "SKILL.md").read_text(encoding="utf-8")
+    text = (CONNECTOR / "skills" / "rpa-core-cli" / "SKILL.md").read_text(encoding="utf-8")
     match = re.match(r"^---\r?\n(.*?)\r?\n---\r?\n", text, re.DOTALL)
     assert match, "SKILL.md missing YAML frontmatter"
     for field in ("name", "description", "description_zh", "description_en", "version", "author"):
         assert re.search(rf"^{field}: .+$", match.group(1), re.MULTILINE), (
             f"SKILL.md frontmatter missing required field: {field}"
         )
+    assert re.search(r"^name: rpa-core-cli$", match.group(1), re.MULTILINE)
+
+
+def test_connector_keeps_only_the_wiring_companion_skill():
+    """编排知识已合并进 workflow-studio，连接器里不许再长出第二份编排技能。"""
+    skill_dirs = sorted(
+        item.name for item in (CONNECTOR / "skills").iterdir() if item.is_dir()
+    )
+    assert skill_dirs == ["rpa-core-cli"], (
+        f"连接器 skills/ 应只有接线配件，实际 {skill_dirs}"
+    )
+
+
+def test_capability_reference_has_one_source_of_truth():
+    """能力参考只维护在主技能包里，连接器打包时从那里复制。"""
+    master = ROOT / "workbuddy-suite" / "skills" / "workflow-studio" / "references"
+    for name in (
+        "catalog.json",
+        "commands-index.md",
+        "commands-reference.md",
+        "error-codes.md",
+        "workflow-format.md",
+    ):
+        assert (master / name).is_file(), f"主技能缺能力文档 {name}"
+        assert not (
+            CONNECTOR / "skills" / "rpa-core-cli" / "references" / name
+        ).exists(), f"连接器里又存了一份 {name}"
 
 
 def test_icon_exists():

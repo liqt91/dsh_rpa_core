@@ -6,13 +6,21 @@
 
 | 上传物 | 文件 | 平台入口 | 说明 |
 |---|---|---|---|
-| 技能包 | `dist/workflow-studio-skill.zip`（15.3 KB） | 发布管理 → 技能 | **folder 布局**：`workflow-studio/SKILL.md`（官方「技能基础结构」要求套一层） |
-| 连接器 | `dist/rpa-core-connector.zip`（23.6 KB） | 发布管理 → 连接器（CLI + Skill） | `connector-meta.json` + `cli.json` + `icon.svg` + `skills/rpa-automation/` |
-| 浏览器扩展 | `dist/workbuddy-studio-extension.zip`（21.9 KB） | 扩展分发（Chrome / Edge 商店，或内部分发） | MV3，解压后「加载已解压的扩展」也能用 |
+| 技能包 | `dist/workflow-studio-skill.zip` | 发布管理 → 技能 | **folder 布局**：`workflow-studio/SKILL.md`（官方「技能基础结构」要求套一层）；唯一的编排技能，含 89 条能力参考 |
+| 连接器 | `dist/rpa-core-connector.zip` | 发布管理 → 连接器（CLI + Skill） | `connector-meta.json` + `cli.json` + `icon.svg` + `skills/rpa-core-cli/`（必带的接线配件，不编排） |
+| 浏览器扩展 | `dist/workbuddy-studio-extension.zip` | 扩展分发（Chrome / Edge 商店，或内部分发） | MV3，解压后「加载已解压的扩展」也能用 |
 | 编辑窗口 | `.harness/demo/ppx_probe/app/`（PPX 工程）→ `ppx build` | 技能附件 / 官网下载 | 便携版 `ppx_probe/app/build/RPA Probe/`；本机没装 Inno Setup 6，未出安装包 |
 
-> 生成命令：`python tools/pack.py`（一条命令打三个 zip，并断言包内结构）。
+> 生成命令：`python tools/pack.py`（一条命令同步版本、打三个 zip，并断言包内结构）。
 > 技能包默认 folder 布局；`--layout flat` 只在控制台亲测要求 flat 时用。
+> 大小以 pack.py 的实际输出为准，别照抄文档里的历史数字。
+
+**技能只有一个**：`workflow-studio` 覆盖「挑能力 → 拼 workflow.json → validate →
+需要人判断时开窗口/拾取 → run → 交结果」全链路。连接器包里的
+`skills/rpa-core-cli/SKILL.md` 是开放平台强制要求的接线说明，只讲 CLI 状态、
+升级与能力目录怎么现取，触发词与编排技能不重叠，也不复制它的步骤。
+连接器包内的 89 条能力参考在打包时从 `skills/workflow-studio/references/`
+复制，不维护第二份。
 
 ## 二、市场展示信息
 
@@ -21,7 +29,7 @@
 | 技能名称（`name`） | `workflow-studio` | 小写 + 连字符 ✅ |
 | 展示名称（`display_name`） | `WorkBuddyStudio` | 无空格、无特殊字符（付费资产硬规则）✅ |
 | 英文展示名 | `WorkBuddyStudio` | ✅ |
-| 版本 | `1.0.0` | 语义化 ✅ |
+| 版本 | `1.1.0`（事实源 `release.json`，`pack.py` 写回 SKILL.md） | 语义化 ✅ |
 | 作者 | `w` | ✅ |
 | 分类 | 开发工具 | 与 `category` 一致 |
 | 服务类目 | 商业服务 - 软件/建站/技术开发 | 建议 1~2 个，别贪多 |
@@ -68,7 +76,7 @@
 | `name` / `name_zh` / `name_en` | RPA Core / RPA 自动化 / RPA Core |
 | `source` | `rpa-core`（kebab-case，全局唯一） |
 | `type` | `cli` |
-| `version` | `0.2.0` |
+| `version` | `0.3.0`（同一 release.json 事实源） |
 | `minWorkbuddyVersion` | `5.0.0`（用了 `runtime: python`，该字段 5.0.0 起支持） |
 | 中文描述 | 把 89 条现成原子能力编排成工作流并确定性运行：浏览器、Windows 桌面、数据与 OCR。 |
 | 英文描述 | Orchestrate 89 typed atomic actions into validated, deterministic workflows. |
@@ -109,10 +117,14 @@
 
 ## 六、用户安装路径（写进详情页）
 
-1. 在 WorkBuddy 里安装技能 `WorkBuddyStudio`；
-2. 解压 `workbuddy-studio-extension.zip` → `edge://extensions` 或 `chrome://extensions` → 开发者模式 →
+1. 在 WorkBuddy 里安装技能 `WorkBuddyStudio`；本机命令行一条也就位：
+   `rpa-skill install --target workbuddy --force`（装到 `~/.workbuddy/skills/workflow-studio`，
+   自动补 `agent_created: true`；`--force` 是升级的关键，不加会返回 `ALREADY_INSTALLED`）；
+2. 可选：安装 `RPA Core` 连接器把 `rpa-core` CLI 接进宿主。它包内的
+   `rpa-core-cli` 只是接线说明，不是第二份编排技能，两个都装不会抢触发；
+3. 解压 `workbuddy-studio-extension.zip` → `edge://extensions` 或 `chrome://extensions` → 开发者模式 →
    加载已解压的扩展；
-3. 双击 `WorkBuddyStudio.exe`（PPX 打包产物），或在终端 `python scripts/studio.py gui`。
+4. 双击 `WorkBuddyStudio.exe`（PPX 打包产物），或在终端 `python scripts/studio.py gui`。
 
 日常用法只有两句话：
 
@@ -127,19 +139,29 @@
 - [x] frontmatter 必填字段齐全：`name` / `display_name` / `display_name_en` / `description` /
       `description_zh` / `description_en` / `examples_zh` / `examples_en` / `version` / `author`
 - [x] `name` 小写连字符，与目录名一致
-- [x] `description` 写清「做什么 + 何时触发」，列了 10 个以上触发词
+- [x] `description` 写清「做什么 + 何时触发」，列了触发词（长度 ≤ 500，宿主上限）
+- [x] 一份 SKILL.md 覆盖「编排 → 校验 → 人在环 → 运行」全链路；连接器里没有第二套编排步骤
 - [x] 正文引用的 `scripts/`、`references/` 全部存在（打包时逐个核过）
 - [x] 无硬编码 token / 密钥；无「下载并执行」类指令
-- [x] zip ≤ 3MB（实际 15.3 KB）
+- [x] zip ≤ 3MB（`pack.py` 打包时断言）
 
 连接器
 
 - [x] `connector-meta.json` 中英名称/描述/示例齐全，`source` 全局唯一、`type: cli`
 - [x] `cli.json` 三平台 `init/auth/unAuth/status` 齐全，`statusMatch` 是合法正则
 - [x] `icon.svg` 64×64（显式宽高，正方形）
-- [x] `skills/rpa-automation/SKILL.md` 覆盖全部 89 条能力的入口与参数查法
+- [x] `skills/rpa-core-cli/SKILL.md` 是接线配件：不生成流程、不与 `workflow-studio` 抢触发；
+      89 条能力参考在打包时从主技能 `references/` 复制，只有一份事实源
 - [x] 能力文档与 `commands/` 的 digest 一致（`pack_connector.py --check` 钉住）
 - [x] 未在任何文件写真实凭证
+
+发布前（机器判据，别只靠清单打勾）
+
+- [x] `python tools/pack.py` 重打三个 zip：它会从 `release.json` 把版本写回各产物文件
+- [x] `python verify/verify_suite.py` 全程绿：其中「版本口径与 release.json 一致」和
+      「包内逐文件与源一致」两条分别拦版本漂移和旧包恒绿（逐文件比 sha256）
+- [x] `python .harness/spike/probe_release_dist_negative.py` 输出 `NEGATIVE OK`：
+      四条注入证明上面两条判据真会红，且关掉判据就变绿
 
 扩展
 

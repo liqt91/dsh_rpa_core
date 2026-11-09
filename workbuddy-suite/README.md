@@ -68,9 +68,11 @@ rpa-core validate my-flow.json       # 静态校验（不进 run）
 rpa-core run my-flow.json            # 跑，输出 RunResult
 ```
 
-能力清单见 `connector/skills/rpa-automation/references/commands-index.md`（一行一条）
+能力清单见 `skills/workflow-studio/references/commands-index.md`（一行一条）
 与 `commands-reference.md`（参数/默认值/输出/失败码），两份都由
 `connector/tools/gen_capability_reference.py` **从 `commands/**/*.json` 生成**，不手写。
+能力参考只维护在这一个目录：连接器打包时从这里复制一份进 `skills/rpa-core-cli/references/`，
+不存在第二份手工副本。
 
 ---
 
@@ -86,32 +88,43 @@ workbuddy-suite/
 │   ├── connector-meta.json     # 市场元信息（中英名称/描述/示例）
 │   ├── cli.json                # init / auth / unAuth / status / statusMatch
 │   ├── icon.svg                # 64×64 市场图标
-│   ├── skills/rpa-automation/  # SKILL.md + 生成的能力参考
-│   └── tools/                  # 生成器 + 上架校验/打包器
+│   ├── skills/rpa-core-cli/    # 连接器必带的接线配件（不编排；编排归 workflow-studio）
+│   └── tools/                  # 生成器 + 上架校验/打包器（能力文档从主技能源复制）
 ├── extension/                  # MV3，无常驻 content script
 │   ├── background.js           # 徽标 / 命令 / 右键菜单 / 按需注入
 │   ├── content.js              # Shadow DOM 隔离的拾取 UI + 选择器算法
 │   └── popup.*                 # 在线状态、最近拾取、端口设置
-├── skills/workflow-studio/     # 桥接技能：SKILL.md + references/protocol.md + scripts/studio.py
+├── skills/workflow-studio/     # 唯一的技能源：编排 + 人在环 + 运行；references/ 含 89 条能力文档
 ├── verify/                     # 五套验证 + 负向验证（见下）
 ├── tools/
-│   ├── pack.py                 # 一条命令打三个 zip（含结构断言）
+│   ├── pack.py                 # 同步版本 + 一条命令打三个 zip（含结构断言）
+│   ├── release.py              # release.json ↔ 各产物版本的读写（唯一事实源）
+│   ├── dist_sources.py         # zip 内路径 → 源文件：打包与哈希判据共用一份映射
 │   └── make_icons.py           # 由同一套几何生成 4 个尺寸的图标
+├── release.json                # 七个产物的版本事实源；改版本只改这里
 └── listing/                    # 上架材料
+
+改版本 / 改技能源码之后，**必须重跑 `python tools/pack.py`**：前者由它把版本写回
+各产物文件，后者由它重打三个 zip。`verify/verify_suite.py` 会逐文件比 zip 与源的
+sha256，旧包再也不能靠「入口层级对」一直绿。
 ```
 
 ---
 
-## 验证：五套正向 + 一套负向
+## 验证：正向 + 负向
 
 ```bash
 PY=D:/Users/Administrator/Documents/代码/rpa_core/.venv/Scripts/python.exe
 
-$PY verify/verify_suite.py            # 1) 协议 + 上架契约 + 包结构（49 项）
+$PY verify/verify_suite.py            # 1) 协议 + 上架契约 + 版本口径 + 包内容哈希
 $PY verify/negative_probe.py          # 2) 负向验证：注入 4 类坏数据，必须全红后还原
-node verify/extension_test.mjs        # 3) 选择器质量 + Shadow DOM + 点击上报（16 项）
-$PY tools/pack.py                     # 4) 打三个 zip（结构断言）
-$PY connector/tools/pack_connector.py --check   # 5) 连接器字段 / 权限 / digest 一致性
+$PY ../.harness/spike/probe_release_dist_negative.py
+                                      # 3) 新判据负向验证：版本/哈希/合并三条 +
+                                      #    「关掉判据就变绿」的元验证
+node verify/extension_test.mjs        # 4) 选择器质量 + Shadow DOM + 点击上报
+node verify/skill_install_test.mjs    # 5) 安装器冒烟（含 --target workbuddy 幂等）
+$PY tools/pack.py                     # 6) 同步版本 + 打三个 zip
+$PY connector/tools/pack_connector.py --check   # 7) 连接器字段 / 权限 / digest 一致性
 ```
 
 编辑窗口的真机探针在 ppx_probe 自己的目录（开发态 + 运行 + 事件流 + 插入/删除节点，

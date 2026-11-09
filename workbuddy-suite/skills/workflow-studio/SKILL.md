@@ -2,27 +2,42 @@
 name: workflow-studio
 display_name: WorkBuddyStudio
 display_name_en: WorkBuddyStudio
-description: 把一句自动化需求落成可编译的 workflow.json（原子能力从 rpa-core catalog 现取），用 PPX 可视化编排窗口打开工作流（Agent 推文件，人在窗口里拼流程/改参数/编译/运行并确认），或在浏览器页面上让用户点选元素拿回稳定选择器。**编辑窗口是可选件：源码树自带 PPX 工程，wheel 形态可在 Windows 用 rpa-skill editor install 从 Release 补装；没窗口时降级为文件交接 + rpa-core capture**。当用户说「帮我做个网页自动化」「写个 workflow」「把这几步做成流程」「打开编辑器」「在窗口里改这个流程」「让我看看这个工作流」「你改完我确认一下」「帮我把流程打开我手动调」「拾取元素」「选一下页面上的按钮/输入框」「要这个元素的 selector」「登录框定位不到」时使用。触发词：做个自动化、网页自动化、生成流程、写个 workflow、打开编辑器、编辑窗口、Studio、让我确认、人工确认、审阅流程、改完保存、拾取元素、选元素、元素定位、selector、选择器、抓元素、页面上点一下。
-description_zh: 让 AI 与人共用同一个工作流与同一个页面：流程用 PPX 可视化编排窗口改、页面元素用浏览器插件点选，结果都回到对话里。
-description_en: A human-in-the-loop bridge for RPA agents. Opens workflows in a visual PPX editor window (cards, params, compile, run) and captures page elements via a browser extension, returning structured results to the agent.
+description: 把一句自动化需求落成可编译、可运行的 workflow.json（原子能力从 rpa-core catalog 现取，只编排不重写），需要人判断时用 PPX 可视化编排窗口改流程/确认，或在浏览器页面上点选元素拿回稳定选择器，最后 validate → run → 交回 result.json。编辑窗口是可选件，没装就降级为文件交接 + rpa-core capture。当用户说「帮我做个网页自动化」「写个 workflow」「打开编辑器」「你改完我确认一下」「拾取元素」「要这个元素的 selector」「抓数据」「这个流程报 ELEMENT_NOT_FOUND」时使用。触发词：做个自动化、生成流程、写个 workflow、打开编辑器、编辑窗口、Studio、让我确认、人工确认、审阅流程、拾取元素、选元素、元素定位、selector、选择器、抓数据、填表、跑流程、定时跑、桌面自动化、RPA。
+description_zh: 从 89 条现成原子能力编排成 workflow.json，校验后运行；改参数、确认流程、点选页面元素这些只有人能做的判断，交给可视化窗口与浏览器插件，结果回到对话里。
+description_en: Orchestrate 89 typed atomic actions into a validated, deterministic workflow, wire in human judgment through a visual editor window and browser element picker, then run it and report the result.
 examples_zh:
   - "把这个 workflow.json 打开，让我自己改一下参数"
   - "我改完了，你看下保存后的内容对不对"
   - "帮我在登录页上拾取用户名输入框，要能定位到的那种"
+  - "打开必应搜 RPA，把前 10 条标题存成 JSON"
+  - "这个流程昨天还能跑，今天报 ELEMENT_NOT_FOUND，帮我修好"
 examples_en:
   - "Open workflow.json in the editor so I can tweak the parameters myself"
   - "I'm done editing — check what I saved"
   - "Pick the username field on the login page and give me a reliable selector"
-version: 1.0.0
+  - "Search Bing for RPA and save the top 10 titles as JSON"
+  - "This flow worked yesterday but now fails with ELEMENT_NOT_FOUND — fix it"
+version: 1.1.0
 author: w
+agent_created: true
 ---
 
-# 人机协作三件套（Studio）
+# RPA 工作流 Studio：编排 → 人在环 → 运行
 
-这个技能解决一件事：**AI 不该替人做「只有人能做的判断」**。
+这条技能覆盖一条完整的流水线：**挑现成能力拼成 `workflow.json` → `validate` →
+需要人判断时把文件递进窗口 / 让人点选页面元素 → `run` → 读 `result.json` 交结果**。
+以前这段被切成「编排」和「人机协作」两份技能，触发词相撞、各写一套生成流程，
+改一处就得改两处；现在只此一份。
 
-改一个参数、确认一版配置、指出页面上到底是哪个按钮 —— 这些事让 AI 猜，猜错了没人发现；
-让人做，人又要自己找文件、自己开编辑器、自己把结果贴回来。本技能把这一来一回压成两条命令。
+两条铁律，先立住：
+
+- **只编排，不重写**。`rpa-core` 已有 89 条原子能力（点击、输入、取值、截图、UIA/Win32
+  控件、文件、OCR……）和一个确定性运行时。**绝对不要**用 Python 脚本 +
+  pyautogui / selenium / requests 重新实现这些动作：那样等于绕开运行时，没有终态、
+  没有 checkpoint、没有证据文件，失败也无从 resume。
+- **AI 不该替人做「只有人能做的判断」**。改一个参数、确认一版配置、指出页面上到底是
+  哪个按钮 —— 让 AI 猜，猜错了没人发现；让人做，人又要自己找文件、自己开编辑器、
+  自己把结果贴回来。本技能把这一来一回压成两条命令。
 
 三件套各管一摊，缺一件就退化成普通工具：
 
@@ -103,19 +118,55 @@ rpa-skill install --force
 - 要一次看全：`rpa-skill doctor`；没有 `rpa-skill` 命令时用
   `{{PYTHON}} "{{SKILL_DIR}}/scripts/studio.py" doctor`（顺带报 PPX 与浏览器扩展在不在）。
 
-用户说「帮我把这个页面上的事自动做一遍」时，产出是一份 `workflow.json`。这一步的知识
-**全部**在 `references/assembly.md`——节点形状、数据流语法、元素引用、编译器兜不住什么，
-都以它为准，本文不重复（重复就会漂移）。
+用户说「帮我把这个页面上的事自动做一遍」时，产出是一份 `workflow.json`。节点形状、
+数据流语法、元素引用、编译器兜不住什么，**全部**以 `references/assembly.md` 为准，
+本文不重复（重复就会漂移）。下面只放三组一上手就会踩的东西。
 
-三条最容易踩的：
+### 0.1 能力清单现取，别靠记忆
 
-1. **能力清单现取，不靠记忆**：`{{RPA_CORE}} catalog --view agent`。卡片里的 `params`
-   决定参数键，`x_outputs` 的键名决定 `${steps.<节点id>.outputs.<键>}` 怎么引用。
-2. **交互元素写 `elementRefs` 占位**，选择器值交给用户捕获（第四节），不要在 `with` 里
-   编一个 selector。
-3. **生成后一定跑 `{{RPA_CORE}} validate`**；但要说清楚它的边界——它只查键集合与引用根，
-   数据流写错、混排的 `${}` 不解析、输出的 key 拼错，它都**不会**报。所以过了 validate
-   之后仍要按 `references/assembly.md` §7 的清单自查，别把「编译绿」当成「能跑」。
+```bash
+{{RPA_CORE}} catalog --view agent
+```
+
+先扫 `references/commands-index.md`（89 条一行一条，带副作用标记）选命令，
+逐条参数看 `references/commands-reference.md`，JSON AST 形状看
+`references/workflow-format.md`，报错恢复看 `references/error-codes.md`。
+`references/catalog.json` 是这些文档的机器快照：把 `catalog` 输出的 `digest`
+和它比一下，**一致**才照文档写；**不一致**说明本机 CLI 与文档不同代，一律以
+`rpa-core catalog` 的实际输出为准，并告诉用户「装到的版本比文档旧，缺 X，需要升级」。
+命令数量对不上同理——不要用文档里的数字去反驳机器的输出，更不许凭文档猜一条
+不存在的命令去跑。
+
+选组的铁律：**能走浏览器就别走桌面**（浏览器会话可控、可无头、可复现）；桌面里
+**能用 UIA 就别用 Win32 坐标**（语义定位比坐标耐改版）。
+
+### 0.2 参数怎么传（最容易错的三件事）
+
+1. **会话必须显式串起来**：`browser.navigate` / `desktop.attachWindow` 返回 `sessionId`，
+   之后每条命令都写 `"sessionId": "${steps.<节点id>.outputs.sessionId}"`。session 不跨进程存活，
+   换一次 run 就要重新开。
+2. **元素优先用元素引用，不要手抄 selector**：
+   ```json
+   { "type": "action", "id": "clickLogin", "command": "browser.click",
+     "elementRefs": { "selector": "登录按钮" },
+     "with": {} }
+   ```
+   `elementRefs` 是「参数键 → `workflows/<流程>/elements/` 里的元素名」。被引用的参数**不要**
+   再写进 `with`（两者同时出现会被模型直接拒绝）；元素取不到是 `ELEMENT_REF_MISSING` 硬失败，
+   不会静默回落到旧快照。生成流程时交互元素先写 `elementRefs` **占位**，选择器值交给用户
+   捕获（第四节），不要在 `with` 里编一个 selector。没有元素库时才写裸 `selector`，
+   并且要在回复里说明「这个定位是手写的」。
+3. **引用语法只有三种**：`${inputs.<key>}`、`${steps.<id>.outputs.<key>}`、`${loop.item}`。
+   字符串拼接写不了复杂表达式——需要加工就用 `data.format`，或先把值落到 inputs。
+
+### 0.3 生成后一定校验，但别把编译绿当成能跑
+
+```bash
+{{RPA_CORE}} validate <workflow.json>
+```
+
+它只查键集合与引用根：数据流写错、混排的 `${}` 不解析、输出的 key 拼错，它**都不会**报。
+过了 validate 之后仍要按 `references/assembly.md` §7 的清单自查。
 
 ## 一、开工前先自检
 
@@ -220,6 +271,9 @@ rpa-skill install --force
 3. `shadow == true` ⇒ 选择器穿不过 Shadow DOM，如实告诉用户需要框架侧支持，别硬编一个假的。
 4. 超时（退出码 `3`）⇒ 问用户是没点、还是插件没连上；给 `studio.py doctor` 让他们自查。
 
+`ELEMENT_NOT_FOUND` 不要靠改 timeout 蒙过去：重新捕获 → 覆盖元素库里那一条
+（`--save-as <同名> --flow <流程>`）→ `{{RPA_CORE}} elements verify --flow <流程>` → 再 run。
+
 ## 五、工作流 C：会话离线时的降级
 
 任何一步拿不到会话，都不要中断任务：
@@ -228,7 +282,36 @@ rpa-skill install --force
 - 要选择器 → 先试命令行捕获（`{{RPA_CORE}} capture browser` / `capture desktop`，不依赖会话与窗口）；
   仍拿不到再请用户从 DevTools 里复制，或退化为「按文案定位」并说明风险。
 
-## 六、错误码对照
+## 六、运行与交付结果
+
+**执行前先过安全确认**。这些命令会改外部世界，必须把「对谁、做什么、能不能撤回」
+说清楚并拿到明确同意：
+
+| 类别 | 例子 | 规矩 |
+|---|---|---|
+| 不可重复写 | `browser.click`、`desktop.input`、`browser.upload` | 同一步骤不要重跑；失败先判断是否已经生效 |
+| 删除/覆盖 | `data.deletePath`、`browser.cookieRemove`、覆盖已有文件 | 必须先说清目标路径，再执行 |
+| 对外发送/提交 | 表单提交、下载到共享目录 | 先确认目标与内容，避免重复提交 |
+| 花时间/花钱 | OCR、长等待 | 说明大概耗时，别让用户干等 |
+
+判据不是「我觉得安全」，而是**能力目录里的「副作用」列**：`只读` / `纯函数` 可以直接跑；
+`可重复写` 可以重试；`不可重复写` 重跑前必须确认。不确定控件长什么样时，先跑一条
+只读命令（`desktop.getWindowList` / `desktop.findElement`）把结果给用户看，再往下写。
+
+```bash
+{{RPA_CORE}} run <workflow.json>
+```
+
+`run` 的 stdout 是 `RunResult`。**先看 `status` 和 `error.code`，再看 `error.message`**：
+
+- `failed` + 明确错误码 → 修 workflow / 重新捕获元素后 `resume`（已完成步骤不会重跑）。
+- `indeterminate` → 外部结果未知。**必须**让用户去目标系统核实，确认后才
+  `resume --run-id <id> --allow-indeterminate`；不要自己加这个开关。
+- `paused` / `cancelled` → 可以直接 resume。
+- 每次都把 `run_artifacts/<run_id>/result.json` 与 `events.jsonl` 的路径告诉用户，那是证据。
+  `result.json` 没落盘就不算成功；没跑就说没跑。产物写到 workflow 的 `inputs.workspace` 下，路径先问清楚。
+
+## 七、错误码对照
 
 | code | 含义 | 该怎么做 |
 |---|---|---|
@@ -245,14 +328,17 @@ rpa-skill install --force
 看到 `INTERNAL_ERROR: Python API 执行失败` 时，**先读日志**——那句话只是桥层的统一包装，
 不是原因本身。
 
-## 七、边界（写死，不要临场发挥）
+## 八、边界（写死，不要临场发挥）
 
+- **不重写原子能力**：没有 selenium、没有 pyautogui、没有「我自己写个 requests 抓一下」；
+  需要自定义逻辑就走 `python.worker` 命令（本机 catalog 有才用）。
 - **不改用户没让改的文件**：`open` 只读，写盘只发生在用户按 Ctrl+S（或在窗口里点保存）。
 - **不伪造事件**：`save` 事件只能由编辑窗口发出；Agent 不许自己 POST 一条来「推进流程」。
 - **不采集页面数据**：插件只上报被点中的那一个元素的属性/文本，不上报页面内容、不发网络请求。
 - **不猜选择器**：拿不到就用工作流 C，不要凭截图编一个 `#submit`。
+- **不伪造成功**：`result.json` 没落盘就不算成功；没跑就说没跑。
 
-## 八、验收样例
+## 九、验收样例
 
 输入：「把 report.json 打开，我改完你确认下格式对不对」
 
@@ -268,3 +354,7 @@ rpa-skill install --force
 - `assembly.md` —— **宿主无关**的 `workflow.json` 组装规范（生成流程时必读）。
   它只依赖 `rpa-core` 的契约，不假定任何特定的 AI 客户端，可以原样搬到别的 agent。
 - `protocol.md` —— 会话服务与插件的协议细节（HTTP 路由、事件字段、插件权限）。
+- `commands-index.md` / `commands-reference.md` / `workflow-format.md` / `error-codes.md`
+  —— 89 条原子能力的一行目录、逐条参数、JSON AST 形状、错误码恢复；由
+  `catalog` 生成，读之前先按 §0.1 对 digest。
+- `catalog.json` —— 上述文档的机器快照（id 列表 + digest + 计数），给自检用。

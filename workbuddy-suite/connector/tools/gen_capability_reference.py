@@ -6,7 +6,8 @@
 - 「AI 该在什么时候调哪条」的前提是它先**看见全部命令和参数**，而不是看见一份过期的摘要；
 - 漂移必须能被门禁抓住，所以本脚本带 `--check`：磁盘文档与当前 manifest 不一致就退出码 1。
 
-产物（都写进 `skills/rpa-automation/references/`）：
+产物（写进唯一的技能源 `workbuddy-suite/skills/workflow-studio/references/`；
+连接器包在打包时从这里复制，不再维护第二份）：
 
   commands-index.md      一行一条，给 Agent 做「先扫一眼」的目录
   commands-reference.md  逐条：参数 / 默认值 / 输出 / 失败码 / 重放语义
@@ -31,7 +32,7 @@ from typing import Any
 CONNECTOR = Path(__file__).resolve().parents[1]
 REPO = CONNECTOR.parents[1]  # rpa_core 根（connector 现在挂在 workbuddy-suite/ 下）
 COMMANDS = REPO / "commands"
-OUT = CONNECTOR / "skills" / "rpa-automation" / "references"
+OUT = CONNECTOR.parent / "skills" / "workflow-studio" / "references"
 
 sys.path.insert(0, str(REPO / "src"))
 

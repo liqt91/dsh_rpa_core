@@ -439,7 +439,7 @@
     },
     {
       "id": "workbuddy-suite-triple",
-      "title": "WorkBuddy listing triple: PPX editor perf/UX fixes + catalog-generated capability docs + negative-probe hardening",
+      "title": "WorkBuddy triple: catalog docs + negative probes; merged one SKILL.md, workbuddy target, release.json + zip hash gates",
       "passes": true
     },
     {

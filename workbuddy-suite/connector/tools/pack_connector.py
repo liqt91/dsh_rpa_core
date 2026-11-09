@@ -6,11 +6,13 @@
     ├── connector-meta.json   # 必须，type 为 cli
     ├── cli.json              # 必须，init / auth / unAuth / status
     ├── icon.svg              # 必须
-    └── skills/{name}/SKILL.md
+    └── skills/{name}/SKILL.md   # 接线配件；编排知识在单独上架的 workflow-studio 技能包里
 
 这份脚本不是「打 zip 就完事」：它把审核会看的点全变成断言 ——
 少一个平台的 init、statusMatch 写成空、示例只有 1 条、图标不是 64 见方、
 SKILL.md 缺 display_name、能力文档与当前 catalog 不同代，统统当场退出码 1。
+能力文档的事实源是 `workbuddy-suite/skills/workflow-studio/references/`，
+打包时复制进连接器包，避免「两份文档各自漂移」。
 
 跑法：
     python workbuddy-connector/tools/pack_connector.py            # 校验 + 打包
@@ -27,10 +29,20 @@ import zipfile
 from pathlib import Path
 
 CONNECTOR = Path(__file__).resolve().parents[1]
+SUITE = CONNECTOR.parent
 REPO = CONNECTOR.parents[1]  # rpa_core 根（connector 现在挂在 workbuddy-suite/ 下）
+# 唯一的技能事实源：能力文档只在这里维护，连接器包在打包时复制一份。
+MASTER_SKILL = SUITE / "skills" / "workflow-studio"
+MASTER_REFS = MASTER_SKILL / "references"
 SKILLS = CONNECTOR / "skills"
+CONNECTOR_SKILL = "rpa-core-cli"  # 连接器必带的接线配件，不是第二套编排技能
 DIST = CONNECTOR / "dist"
 PLATFORMS = ("darwin", "linux", "win32")
+
+# 打包映射与 verify_suite 的哈希判据共用同一份；别在这里另造路径规则。
+sys.path.insert(0, str(SUITE / "tools"))
+from dist_sources import connector_sources  # noqa: E402
+
 SKILL_REQUIRED = (
     "name",
     "display_name",
@@ -165,6 +177,11 @@ def check_skill() -> None:
     if not skill_dirs:
         fail("skills/ 下没有任何技能目录")
         return
+    # 「合并」的机械保障：连接器里不许再长出第二套编排技能。
+    # 编排知识只有 workflow-studio 一份，这里只留平台规范必带的接线配件。
+    names = sorted(item.name for item in skill_dirs)
+    if names != [CONNECTOR_SKILL]:
+        fail(f"连接器 skills/ 只应有 {CONNECTOR_SKILL}，实际 {names}（编排知识归 workflow-studio）")
     for directory in skill_dirs:
         skill_file = directory / "SKILL.md"
         if not skill_file.is_file():
@@ -181,10 +198,21 @@ def check_skill() -> None:
         if "触发" not in triggers:
             fail(f"{directory.name}/SKILL.md 的 description 没写触发词")
         for relative in re.findall(r"`references/([\w.-]+)`", text):
-            if not (directory / "references" / relative).is_file():
+            # 连接器包的能力参考在打包时从主技能源复制，磁盘上不在本目录下。
+            # 校验「源存在」+「打包确实复制了」，比要求这里再存一份副本更不容易漂移。
+            if not (directory / "references" / relative).is_file() and not (
+                MASTER_REFS / relative
+            ).is_file():
                 fail(f"{directory.name}/SKILL.md 引用了不存在的 references/{relative}")
         if SECRET.search(text):
             fail(f"{directory.name}/SKILL.md 里出现了疑似真实密钥")
+
+
+def check_sources() -> None:
+    """打包映射里的每个源文件都必须在磁盘上（--check 也要验，别等写 zip 才炸）。"""
+    for arc, path in connector_sources().items():
+        if not path.is_file():
+            fail(f"连接器包映射缺源文件：{arc} ← {path}")
 
 
 def check_catalog_alignment(meta: dict) -> None:
@@ -192,9 +220,9 @@ def check_catalog_alignment(meta: dict) -> None:
     sys.path.insert(0, str(REPO / "src"))
     from rpa_core.catalog import load_catalog
 
-    snapshot_path = SKILLS / "rpa-automation" / "references" / "catalog.json"
+    snapshot_path = MASTER_REFS / "catalog.json"
     if not snapshot_path.is_file():
-        fail("缺 references/catalog.json（先跑一次 gen_capability_reference.py）")
+        fail("缺主技能 references/catalog.json（先跑一次 gen_capability_reference.py）")
         return
     snapshot = json.loads(snapshot_path.read_text(encoding="utf-8"))
     catalog = load_catalog(REPO / "commands")
@@ -214,8 +242,9 @@ def check_catalog_alignment(meta: dict) -> None:
         fail(f"有 {len(missing)} 条命令没进文档：{missing[:5]}")
     notes.append(f"能力文档覆盖 {len(catalog)} 条命令，digest 一致")
 
-    # 技能正文里提到的命令 id 必须真实存在——手写示例最容易在这里说漏嘴
-    skill_text = (SKILLS / "rpa-automation" / "SKILL.md").read_text(encoding="utf-8")
+    # 技能正文里提到的命令 id 必须真实存在——手写示例最容易在这里说漏嘴。
+    # 编排知识现在只有一份（主技能），连接器配件不写生成流程。
+    skill_text = (MASTER_SKILL / "SKILL.md").read_text(encoding="utf-8")
     mentioned = set(
         re.findall(
             r"`((?:browser|desktop|desktop\.win32|data|ocr|workflow)\.[A-Za-z]\w*)`", skill_text
@@ -239,11 +268,8 @@ def build_zip() -> Path:
     DIST.mkdir(exist_ok=True)
     target = DIST / "rpa-core-connector.zip"
     with zipfile.ZipFile(target, "w", zipfile.ZIP_DEFLATED) as bundle:
-        for name in ("connector-meta.json", "cli.json", "icon.svg"):
-            bundle.write(CONNECTOR / name, name)
-        for path in sorted(SKILLS.rglob("*")):
-            if path.is_file() and "__pycache__" not in path.parts:
-                bundle.write(path, f"skills/{path.relative_to(SKILLS).as_posix()}")
+        for arc, path in sorted(connector_sources().items()):
+            bundle.write(path, arc)
     return target
 
 
@@ -256,6 +282,7 @@ def main() -> int:
     check_cli()
     check_icon()
     check_skill()
+    check_sources()
     check_catalog_alignment(meta)
 
     if problems:

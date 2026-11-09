@@ -1,7 +1,7 @@
 {
   "name": "rpa-workflow-studio",
   "version": "1.1.0",
-  "description": "把一句自动化需求落成 rpa-core workflow.json 的 agent 技能：能力清单现取、交互元素留占位待捕获、窗口内人工确认。宿主无关（DeepSeek Harness / Claude Code / Codex 共用同一份 SKILL.md）。",
+  "description": "把一句自动化需求落成可编译、可运行的 rpa-core workflow.json：能力清单现取、人在环改流程/拾取元素、校验后运行。宿主无关（WorkBuddy / DeepSeek Harness / Claude Code / Codex 共用同一份 SKILL.md）。",
   "license": "MIT",
   "bin": {
     "rpa-skill": "bin/rpa-skill.mjs"

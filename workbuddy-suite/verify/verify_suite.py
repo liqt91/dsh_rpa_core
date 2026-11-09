@@ -13,6 +13,7 @@ exec_probe / run_probe 等；插件真机测试在 extension_test.mjs。
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -34,6 +35,17 @@ EXT = SUITE / "extension"
 PROBE_APP = SUITE.parent / ".harness" / "demo" / "ppx_probe" / "app"
 PY = sys.executable
 OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+# 打包映射 / 版本事实源与 tools/pack.py、pack_connector.py 共用同一份实现，
+# 判据不另造路径规则（否则「打包逻辑改了、校验还照旧」就是恒绿）。
+sys.path.insert(0, str(SUITE / "tools"))
+from dist_sources import (  # noqa: E402
+    DIST,
+    connector_sources,
+    extension_sources,
+    skill_sources,
+)
+from release import version_drift  # noqa: E402
 
 RESULTS: list[tuple[str, bool, str]] = []
 
@@ -403,16 +415,62 @@ def check_protocol() -> None:
         shutil.rmtree(work, ignore_errors=True)
 
 
+def check_versions() -> None:
+    """版本只有一个事实源：release.json；打包前由 pack.py 写回各产物文件。"""
+    drift = version_drift()
+    check("版本口径与 release.json 一致", not drift, "；".join(drift[:4]) if drift else "全部对齐")
+
+
+def _hash_mismatches(bundle, sources) -> tuple[list[str], list[str]]:
+    """返回 (包里缺的/内容不是当前源码的文件, 包里多出来的文件)。"""
+    names = set(bundle.namelist())
+    mismatched: list[str] = []
+    for arc, src in sources.items():
+        if arc not in names:
+            mismatched.append(f"缺 {arc}")
+        elif not src.is_file():
+            mismatched.append(f"源丢失 {arc}")
+        elif hashlib.sha256(bundle.read(arc)).digest() != hashlib.sha256(
+            src.read_bytes()
+        ).digest():
+            mismatched.append(f"内容不是当前源码：{arc}")
+    return mismatched, sorted(names - set(sources))
+
+
 def check_dist() -> None:
-    """上架包的结构：平台按 `{skill-name}/SKILL.md` 找入口，套错层级会解析失败。"""
+    """上架包：结构要能被平台解析，内容还必须就是当前源码。
+
+    只验入口层级时，10/28 的旧 zip 会一直绿——源里的 SKILL.md 已经长到全链路版本、
+    多了 rc.py / _runtime.py / 五份能力文档，包里却还是三份旧文件。所以这里按
+    dist_sources 的映射逐文件比 sha256，并反查包内多余文件。
+    """
     import zipfile
 
-    skill_zip = SUITE / "dist" / "workflow-studio-skill.zip"
-    if not skill_zip.is_file():
-        check("技能包已生成", False, "先跑 python tools/pack.py")
-    else:
+    bundles = (
+        (DIST / "workflow-studio-skill.zip", skill_sources(), "技能包"),
+        (DIST / "workbuddy-studio-extension.zip", extension_sources(), "扩展包"),
+        (DIST / "rpa-core-connector.zip", connector_sources(), "连接器包"),
+    )
+
+    for zip_path, sources, label in bundles:
+        if not zip_path.is_file():
+            check(f"{label}已生成", False, "先跑 python tools/pack.py")
+            continue
+        with zipfile.ZipFile(zip_path) as bundle:
+            count = len(bundle.namelist())
+            mismatched, extra = _hash_mismatches(bundle, sources)
+        detail = "；".join((mismatched + [f"多出 {n}" for n in extra])[:4])
+        check(
+            f"{label}包内逐文件与源一致",
+            not mismatched and not extra,
+            detail or f"{count} 个文件全对",
+        )
+
+    # 结构断言：平台按入口层级解析，形状错了内容再新也没用。
+    skill_zip = DIST / "workflow-studio-skill.zip"
+    if skill_zip.is_file():
         with zipfile.ZipFile(skill_zip) as bundle:
-            names = bundle.namelist()
+            names = set(bundle.namelist())
         entry = f"{SKILL_DIR.name}/SKILL.md"
         check(
             f"技能包入口是 {entry}（平台目录结构）",
@@ -424,8 +482,26 @@ def check_dist() -> None:
                 else f"，实际入口 {[n for n in names if n.endswith('SKILL.md')]}"
             ),
         )
+        # 独立于打包映射的第二只眼：映射被改坏时，打包与哈希判据会一起漏文件，
+        # 这份关键入口清单是按「技能跑起来最少要哪些文件」推出来的，不照抄映射。
+        prefix = f"{SKILL_DIR.name}/"
+        required = {
+            entry,
+            f"{prefix}references/assembly.md",
+            f"{prefix}references/catalog.json",
+            f"{prefix}references/commands-index.md",
+            f"{prefix}scripts/studio.py",
+            f"{prefix}scripts/rc.py",
+            f"{prefix}scripts/_runtime.py",
+        }
+        missing = sorted(required - names)
+        check(
+            "技能包关键文件齐全（独立于打包映射）",
+            not missing,
+            "缺 " + ", ".join(missing) if missing else f"{len(required)} 个关键文件在包里",
+        )
 
-    ext_zip = SUITE / "dist" / "workbuddy-studio-extension.zip"
+    ext_zip = DIST / "workbuddy-studio-extension.zip"
     if ext_zip.is_file():
         with zipfile.ZipFile(ext_zip) as bundle:
             names = set(bundle.namelist())
@@ -436,13 +512,13 @@ def check_dist() -> None:
     else:
         check("扩展包已生成", False, "先跑 python tools/pack.py")
 
-    connector_zip = SUITE / "dist" / "rpa-core-connector.zip"
+    connector_zip = DIST / "rpa-core-connector.zip"
     if connector_zip.is_file():
         with zipfile.ZipFile(connector_zip) as bundle:
             names = set(bundle.namelist())
         check(
             "连接器包含 meta/cli/icon + skills/{name}/SKILL.md",
-            {"connector-meta.json", "cli.json", "icon.svg", "skills/rpa-automation/SKILL.md"}
+            {"connector-meta.json", "cli.json", "icon.svg", "skills/rpa-core-cli/SKILL.md"}
             <= names,
             f"{len(names)} 个文件",
         )
@@ -455,6 +531,7 @@ def main() -> int:
     check_extension()
     check_js()
     check_python()
+    check_versions()
     check_dist()
     check_protocol()
 

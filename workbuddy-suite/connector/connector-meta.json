@@ -7,7 +7,7 @@
   "description_en": "Orchestrate 89 typed atomic actions into validated, deterministic workflows: browser, Windows desktop, data and OCR.",
   "source": "rpa-core",
   "type": "cli",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "minWorkbuddyVersion": "5.0.0",
   "examples_zh": [
     "打开必应搜 RPA，把前 10 条标题存成 JSON",

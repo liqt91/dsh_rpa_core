@@ -22,8 +22,8 @@ from pathlib import Path
 SUITE = Path(__file__).resolve().parents[1]
 PY = sys.executable
 MANIFEST = SUITE / "extension" / "manifest.json"
-SKILL_MD = SUITE / "connector" / "skills" / "rpa-automation" / "SKILL.md"
-CATALOG = SUITE / "connector" / "skills" / "rpa-automation" / "references" / "catalog.json"
+SKILL_MD = SUITE / "skills" / "workflow-studio" / "SKILL.md"
+CATALOG = SUITE / "skills" / "workflow-studio" / "references" / "catalog.json"
 
 failures: list[str] = []
 

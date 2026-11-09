@@ -472,6 +472,69 @@ check("studio.py doctor：没有源码树时不假红（src 形态仍要它）",
   return "exe 形态 SKIP、src 形态仍 PASS";
 });
 
+// ---------------------------------------------------------------------------
+// WorkBuddy 宿主：--target 一条命令到位，frontmatter 幂等且能从旧包补回
+// ---------------------------------------------------------------------------
+
+const wbHome = join(root, "home");
+const wbEnv = { ...process.env, USERPROFILE: wbHome, HOME: wbHome };
+const wbTarget = join(wbHome, ".workbuddy", "skills", "workflow-studio");
+const wbMd = join(wbTarget, "SKILL.md");
+const countAgentCreated = () =>
+  (readFileSync(wbMd, "utf8").match(/^agent_created: true$/gm) || []).length;
+
+check("--target workbuddy 装到用户级技能目录并带 agent_created", () => {
+  // 覆盖 USERPROFILE/HOME，绝不碰真机 ~/.workbuddy 下已装的技能。
+  const r = run(["install", "--target", "workbuddy"], { env: wbEnv });
+  assert(r.code === 0, `rc=${r.code} out=${r.out.slice(0, 300)}`);
+  const payload = json(r.out);
+  assert(
+    payload.target.replace(/\\/g, "/") === wbTarget.replace(/\\/g, "/"),
+    `目标不对：${payload.target}`,
+  );
+  assert(payload.workbuddy_frontmatter?.present === true, "没补 WorkBuddy frontmatter");
+  assert(countAgentCreated() === 1, `agent_created 出现 ${countAgentCreated()} 次`);
+  assert(!/\{\{[A-Z_]+\}\}/.test(readFileSync(wbMd, "utf8")), "占位符没替换");
+  return `${wbTarget} · 1 处 agent_created`;
+});
+
+check("旧包升级：源缺 agent_created 时按 WorkBuddy 目标补写且不重复", () => {
+  // 负向夹具：造一个「源 SKILL.md 没带 agent_created」的安装器副本。
+  // 只删安装后副本是测不到兜底的 —— --force 会从源重新拷贝一份覆盖回来。
+  const pkg = join(root, "wb-pkg");
+  const srcDir = join(pkg, "workbuddy-suite", "skills", "workflow-studio");
+  mkdirSync(join(pkg, "bin"), { recursive: true });
+  mkdirSync(srcDir, { recursive: true });
+  cpSync(CLI, join(pkg, "bin", "rpa-skill.mjs"));
+  cpSync(join(REPO, "package.json"), join(pkg, "package.json"));
+  const src = readFileSync(
+    join(REPO, "workbuddy-suite", "skills", "workflow-studio", "SKILL.md"),
+    "utf8",
+  );
+  const stripped = src.replace(/^agent_created: true\r?\n/m, "");
+  assert(stripped !== src, "源 SKILL.md 已经没有 agent_created，夹具失效");
+  writeFileSync(join(srcDir, "SKILL.md"), stripped, "utf8");
+  const altCli = join(pkg, "bin", "rpa-skill.mjs");
+
+  // --dir 落在 ~/.workbuddy/skills/ 下也要被认成 WorkBuddy（不用显式 --target）。
+  const r = run(["install", "--dir", wbTarget, "--force"], { cli: altCli, env: wbEnv });
+  assert(r.code === 0, `rc=${r.code} out=${r.out.slice(0, 300)}`);
+  assert(json(r.out).workbuddy_frontmatter?.added === true, "源缺字段却没报补写");
+  assert(countAgentCreated() === 1, `补写后 agent_created 出现 ${countAgentCreated()} 次`);
+
+  // 源本来就有这一行时（正式安装器），重装不应重复插入。
+  const again = run(["install", "--dir", wbTarget, "--force"], { env: wbEnv });
+  assert(again.code === 0, `二次 rc=${again.code}`);
+  assert(json(again.out).workbuddy_frontmatter?.added === false, "已经有字段却重复写");
+  assert(countAgentCreated() === 1, "重装后字段重复了");
+  return "源缺字段 → 补写一次；再装 → 幂等";
+});
+
+check("普通 --dir 目标不会被误标成 WorkBuddy 宿主", () => {
+  assert(installed.workbuddy_frontmatter?.present === false, "宿主判定串味");
+  return "host=null · 不写额外 frontmatter";
+});
+
 // 只删自己建的临时目录（名字带 rpa-skill- 前缀）。
 if (root.includes("rpa-skill-") && existsSync(root)) {
   rmSync(root, { recursive: true, force: true });
