@@ -1,6 +1,6 @@
 [project]
 name = "rpa-core-runtime"
-version = "0.1.0"
+version = "0.2.0"
 description = "Clean-room typed RPA runtime core"
 readme = "README.md"
 requires-python = ">=3.12"
