@@ -20,6 +20,8 @@ Workflow AST → validation/compiler → execution plan → orchestrator
 
 FastAPI、数据库、React UI、DSH 插件、MCP、调度器、安装器、分布式 worker、exactly-once、在线命令生成 / 动态模块热替换 / orchestrator 进程内任意 Python 执行。决策记录见 ADR（`.harness/adr/`）与 `.harness/project_state.json` 的 `scope.out`。
 
+此处的「安装器」特指**运行时核心与桌面客户端的打包安装**，解除该排除项需要另立 ADR（见 ADR 0006 / 0008 / 0014）。给各宿主装 agent 技能的分发脚本是独立旁支资产，放在 `workbuddy-suite/`，不进核心运行时的安装链路，见 `workbuddy-suite/README.md`。
+
 ## 核心约束
 
 1. 控制流是 workflow AST，永不落在命令插件里。
@@ -41,9 +43,10 @@ FastAPI、数据库、React UI、DSH 插件、MCP、调度器、安装器、分�
 | M1 垂直切片 → M7 命令面 | done | 运行时/恢复/桌面/数据命令/API 契约打底 |
 | M8 devserver / M9 编辑器 / M11 树画布 / M12 中文层 | done | 设计期工具与可视化编辑器 |
 | M10 元素捕获 / M13 编辑器元素库 | done | 桌面 UIA + 浏览器双传输捕获；库面板 + 插入/删除/verify + 一键捕获 |
-| M14 自研捕获扩展 | **active** | content-script 扩展反连 dev server，无缝捕获免弹窗 |
+| M14 浏览器捕获（bsk 单扩展 + 桌面 hover/hybrid） | done | 执行与登录态捕获三通道分工，见 `.harness/tasks/M14-extension.md` |
+| M52 选择器顾问 | **active** | 当前在做的里程碑，见 `.harness/tasks/M52-selector-advisor.md` |
 
-进度表：`.harness/PROGRESS.md`；完整计划与后续项：`.harness/tasks/BACKLOG.md`；最近完成项由 `.harness/project_state.json` 指向。命令目录当前共 26 条：`browser.*`(8)、`data.*`(4)、`desktop.*`(UIA, 6)、`desktop.win32.*`(8)。
+M15 之后的里程碑不在这里逐一列，状态事实源是 `.harness/project_state.json` 与 `.harness/PROGRESS.md`；完整计划与后续项见 `.harness/tasks/BACKLOG.md`。命令目录当前共 89 条 manifest：`browser.*`(32)、`data.*`(17)、`desktop.*`(UIA, 17)、`desktop.win32.*`(19)、`ocr.*`(3)、`workflow.*`(1)。给 agent 的视图按语义合并为 80 条，用 `rpa-core catalog --view agent` 现取，别照抄这里的分组数。
 
 ## 仓库布局
 
@@ -372,7 +375,7 @@ gh release create editor-v<版本> \
 ```powershell
 uv run pytest                            # unit + contract + e2e（含 Windows 桌面）
 uv run ruff check .
-uv run python .harness/scripts/check_architecture.py   # 架构不变量（43 py / 71 manifest）
+uv run python .harness/scripts/check_architecture.py   # 架构不变量（py / manifest 数由脚本现算）
 uv run python .harness/scripts/check_all.py            # 完整门禁：测试 + 架构 + 任务一致性 + 前端一致性脚本
 ```
 
