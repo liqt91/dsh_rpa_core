@@ -261,10 +261,8 @@ def test_http_serves_index_html(tmp_path: Path) -> None:
 def test_real_runner_surfaces_stderr_when_result_missing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """rpa-core 只在成功时落 result.json；中途失败会打印 run_id 但不写文件。
-
-    _real_runner 必须把子进程 stderr 带进异常，否则 UI 只看到「result.json 不存在」，
-    看不到真正的失败原因（这正是一次真实采集失败被误报为「原因不明」的根因）。
+    """rpa-core 中途失败时不写 result.json；_real_runner 必须把子进程 stderr 带进异常，
+    否则 UI 只看到「result.json 不存在」，看不到真正的失败原因。
     """
 
     class _FakeProc:
@@ -278,5 +276,51 @@ def test_real_runner_surfaces_stderr_when_result_missing(
     with pytest.raises(RuntimeError) as exc:
         _real_runner(ctx, KW, "chrome")
     msg = str(exc.value)
-    assert "deadbeef" in msg
+    assert "result.json" in msg
     assert "BOOM: browser session detached before grabItems" in msg
+
+
+def test_real_runner_locates_result_json_by_filesystem_not_stdout_run_id(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """回归测试：rpa-core 在 stdout 打印的「run 开始」事件 id 与真正写 result.json 的
+    目录名不是同一个。旧实现用 stdout 里的 run_id 拼路径，永远找错目录 → 每次采集都误报
+    「result.json 不存在」。新实现直接到 run_artifacts 下找本次 run 新写出的 result.json。
+    """
+
+    def _fake_run(*args, **kwargs):
+        cmd = kwargs.get("args") or args[0]
+        art = Path(cmd[cmd.index("--artifacts") + 1])
+        final_id = "final-run-id-0000-0000-000000000000"
+        # 模拟 rpa-core：stdout 首行是「开始」事件 id（与目录名不同），结果写在另一目录。
+        (art / final_id / "result.json").parent.mkdir(parents=True, exist_ok=True)
+        (art / final_id / "result.json").write_text(
+            f'{{"run_id": "{final_id}", "status": "succeeded", "outputs": {{}}, "error": null}}',
+            encoding="utf-8",
+        )
+
+        class _P:
+            returncode = 0
+            stdout = '{"run_id": "initial-event-id-0000-0000-000000000000"}'
+            stderr = ""
+
+        return _P()
+
+    monkeypatch.setattr("src.server.subprocess.run", _fake_run)
+
+    ctx = make_context(root=tmp_path)
+    outcome = _real_runner(ctx, KW, "chrome")
+    assert outcome.run_id == "final-run-id-0000-0000-000000000000"
+    assert outcome.status == "succeeded"
+
+
+def test_make_context_resolves_root_to_absolute() -> None:
+    """--data-root 传相对路径时必须转成绝对路径。
+
+    否则 _real_runner 的 artifact 目录会同时被「服务进程 rglob」和「rpa-core 子进程
+    (cwd=REPO_ROOT)」两套不同 cwd 解析，刚写出的 result.json 会被 rglob 找错地方，
+    导致每次采集都误报「未写出 result.json」（真实踩过）。
+    """
+    ctx = make_context(root="some_relative_dir")
+    assert ctx.root.is_absolute()
+    assert str(ctx.root).endswith("some_relative_dir")

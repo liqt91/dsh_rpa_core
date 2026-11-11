@@ -62,21 +62,19 @@ def _cli_env() -> dict[str, str]:
     return dict(os.environ, PYTHONUTF8="1", PYTHONIOENCODING="utf-8")
 
 
-def _find_run_id(stdout: str) -> str:
-    for line in stdout.splitlines():
-        try:
-            obj = json.loads(line)
-        except ValueError:
-            continue
-        if isinstance(obj, dict) and obj.get("run_id"):
-            return str(obj["run_id"])
-    return ""
 
 
 def _real_runner(ctx: AppContext, keyword: str, browser_type: str) -> Any:
-    """真机采集：拼命令 → 跑子进程 → 读 result.json。与 verify_live.run_live 同源。"""
+    """真机采集：拼命令 → 跑子进程 → 读 result.json。与 verify_live.run_live 同源。
+
+    重要：rpa-core 在 stdout 打印的「run 开始」事件 id 和它真正写 ``result.json`` 的
+    目录名**不是同一个**。所以**绝不**用 stdout 里的 run_id 去拼路径，而是直接到
+    ``run_artifacts`` 下找本次 run 新产出的 ``result.json``（用运行前的快照做差集，
+    再按修改时间取最新），从根本上绕开 run_id 不一致的坑。
+    """
     artifacts = ctx.root / "run_artifacts"
     artifacts.mkdir(parents=True, exist_ok=True)
+    before = {p.resolve() for p in artifacts.rglob("result.json")}
     cmd = build_run_command(
         ctx.workflow,
         keyword,
@@ -98,24 +96,21 @@ def _real_runner(ctx: AppContext, keyword: str, browser_type: str) -> Any:
         )
     except subprocess.TimeoutExpired as exc:
         raise RuntimeError(f"run 超过 {ctx.timeout}s 未结束") from exc
+
     out_tail = proc.stdout[-1200:] if proc.stdout else "(无 stdout)"
     err_tail = proc.stderr[-2000:] if proc.stderr else "(无 stderr)"
-    run_id = _find_run_id(proc.stdout)
-    if not run_id:
+    fresh = sorted(
+        (p.resolve() for p in artifacts.rglob("result.json") if p.resolve() not in before),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
+    if not fresh:
+        # rpa-core 没写出 result.json：多半是 workflow 中途失败。真实原因在子进程 stderr。
         raise RuntimeError(
-            f"run 未产出 run_id（rc={proc.returncode}）。\n"
+            f"run 未写出 result.json（rc={proc.returncode}）。多半是 workflow 中途失败。\n"
             f"--- rpa-core stderr ---\n{err_tail}\n--- stdout ---\n{out_tail}"
         )
-    result_path = artifacts / run_id / "result.json"
-    if not result_path.is_file():
-        # rpa-core 只在成功时落 result.json；此处缺文件 = workflow 中途失败。
-        # 真实失败原因在子进程 stderr 里，必须带出来，否则 UI 只看到「没产出结果」。
-        raise RuntimeError(
-            f"run（run_id={run_id}）未写出 result.json（rc={proc.returncode}）。"
-            f" 多半是 workflow 中途失败。\n"
-            f"--- rpa-core stderr ---\n{err_tail}\n--- stdout ---\n{out_tail}"
-        )
-    return parse_result(result_path)
+    return parse_result(fresh[0])
 
 
 def make_context(
@@ -125,7 +120,10 @@ def make_context(
     default_browser: str = "chrome",
     timeout: float = 180.0,
 ) -> AppContext:
-    resolved_root = Path(root) if root else APP_ROOT / "data"
+    # 必须是绝对路径：_real_runner 的 artifact 目录会同时被「服务进程的 rglob」
+    # 和「rpa-core 子进程（cwd=REPO_ROOT）」使用，相对路径会因两侧 cwd 不同而错位，
+    # 导致刚写出的 result.json 被 rglob 找不到（曾致每次采集都误报「未写出 result.json」）。
+    resolved_root = (Path(root) if root else APP_ROOT / "data").resolve()
     ctx = AppContext(
         root=resolved_root,
         store=SnapshotStore(resolved_root),
