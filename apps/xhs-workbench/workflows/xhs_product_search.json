@@ -1,0 +1,87 @@
+{
+  "schema_version": "1.0",
+  "id": "xhs-product-search",
+  "name": "小红书商品搜索采集（P0）",
+  "inputs": {
+    "keyword": "AI效率工具",
+    "workspace": "run_artifacts/xhs"
+  },
+  "root": {
+    "type": "sequence",
+    "id": "root",
+    "children": [
+      {
+        "type": "action",
+        "id": "openHome",
+        "command": "browser.navigate",
+        "with": {
+          "browserType": "chrome",
+          "action": "goto",
+          "url": "https://www.xiaohongshu.com/explore",
+          "timeoutMs": 20000
+        }
+      },
+      {
+        "type": "action",
+        "id": "waitHome",
+        "command": "browser.waitLoad",
+        "with": {
+          "sessionId": "${steps.openHome.outputs.sessionId}",
+          "timeoutMs": 20000
+        }
+      },
+      {
+        "type": "action",
+        "id": "typeKeyword",
+        "command": "browser.input",
+        "with": {
+          "sessionId": "${steps.openHome.outputs.sessionId}",
+          "text": "${inputs.keyword}",
+          "mode": "clipboard",
+          "pressEnter": true,
+          "clickBeforeInput": true
+        },
+        "elementRefs": {
+          "selector": "xhs_search_box"
+        }
+      },
+      {
+        "type": "action",
+        "id": "waitResults",
+        "command": "browser.waitLoad",
+        "with": {
+          "sessionId": "${steps.openHome.outputs.sessionId}",
+          "timeoutMs": 20000
+        }
+      },
+      {
+        "type": "action",
+        "id": "grabItems",
+        "command": "browser.executeScript",
+        "with": {
+          "sessionId": "${steps.openHome.outputs.sessionId}",
+          "timeoutMs": 15000,
+          "script": "(() => { const nodes = Array.from(document.querySelectorAll('a[href*=\"/goods/\"], section.note-item')); return JSON.stringify(nodes.slice(0, 50).map((n) => ({ title: (n.innerText || '').trim().slice(0, 200), href: n.href || (n.querySelector('a') || {}).href || '', text: (n.innerText || '').trim().slice(0, 500) }))); })()"
+        }
+      },
+      {
+        "type": "action",
+        "id": "saveRaw",
+        "command": "data.writeText",
+        "with": {
+          "workspace": "${inputs.workspace}",
+          "path": "xhs-products.json",
+          "text": "${steps.grabItems.outputs.result}"
+        }
+      },
+      {
+        "type": "action",
+        "id": "close",
+        "command": "browser.close",
+        "with": {
+          "sessionId": "${steps.openHome.outputs.sessionId}"
+        }
+      }
+    ]
+  }
+}

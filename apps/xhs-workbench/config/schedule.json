@@ -1,0 +1,14 @@
+{
+  "schema": 1,
+  "schedule": {
+    "mode": "daily",
+    "startAt": "08:00",
+    "windowHours": 12,
+    "cron": "0 8 * * *",
+    "intervalMinutes": 60,
+    "batchSize": 20,
+    "perItemIntervalSeconds": [3, 6],
+    "maxConcurrentRuns": 1
+  },
+  "note": "默认预设取自参考工作台；除 maxConcurrentRuns 外所有数值都可改。并发上限恒为 1，见 ADR 0015 与 .harness/adr/0022-xhs-workbench-scope.md。"
+}

@@ -1,0 +1,43 @@
+{
+  "kind": "browser",
+  "selector": {
+    "css": "#search-input-in-feeds",
+    "path": [
+      {
+        "tag": "textarea",
+        "id": "search-input-in-feeds",
+        "classes": ["textarea"],
+        "nthOfType": null,
+        "fragment": "#search-input-in-feeds"
+      }
+    ],
+    "candidates": [
+      {
+        "kind": "attribute",
+        "selector": "textarea[name=\"aiSearchTextarea\"]",
+        "matchedCount": 3,
+        "penalty": 3
+      },
+      {
+        "kind": "attribute",
+        "selector": "textarea[placeholder=\"我在小红书搞装修\"]",
+        "matchedCount": 3,
+        "penalty": 5
+      }
+    ]
+  },
+  "verifyCount": 1,
+  "name": null,
+  "metadata": {
+    "tag": "textarea",
+    "id": "search-input-in-feeds",
+    "role": "textbox",
+    "placeholder": "我在小红书搞装修",
+    "accessibleName": "我在小红书搞装修",
+    "classes": ["textarea"],
+    "title": "小红书 - 你的生活兴趣社区",
+    "url": "https://www.xiaohongshu.com/explore?channel_id=homefeed_recommend",
+    "text": ""
+  },
+  "capturedAt": "2026-10-12T04:21:03.776113Z"
+}
