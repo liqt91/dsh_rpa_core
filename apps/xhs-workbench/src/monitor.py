@@ -148,17 +148,6 @@ class MonitorPool:
         entry.last_error = "本次采集已暂停（可在编辑器里继续或停止）"
         self._save()
 
-    def resume_running(self, keyword: str, run_id: str) -> None:
-        """被暂停的 run 恢复执行（resume 子进程已拉起）：paused → running。"""
-        entry = self._require(keyword)
-        if entry.state != "paused":
-            raise ValueError(f"{keyword} 当前状态 {entry.state}，不是 paused，无法 resume_running")
-        entry.state = "running"
-        entry._prev = None
-        entry.last_run_id = run_id
-        entry.last_error = None
-        self._save()
-
     def pause(self, keyword: str) -> None:
         entry = self._require(keyword)
         if entry.state == "paused":

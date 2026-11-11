@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from src.runs import list_runs, run_dir_of, summarize_run
+from src.runs import find_run_dirs, list_runs, run_dir_of, summarize_run
 
 
 def _event(kind: str, node: str | None, ts: str, **payload: Any) -> dict[str, Any]:
@@ -128,3 +128,56 @@ def test_run_dir_guard_rejects_traversal(tmp_path: Path) -> None:
         with pytest.raises(ValueError):
             run_dir_of(tmp_path, bad)
     assert run_dir_of(tmp_path, "run-ok") == (tmp_path / "run-ok").resolve()
+
+
+def _write_editor_run(
+    data_root: Path, run_no: str, uuid: str, *, mtime: float | None = None
+) -> Path:
+    """PPX 编辑器的 run 布局：_sandbox/runs/run-N/artifacts/<uuid>/result.json。"""
+    run_dir = data_root / "_sandbox" / "runs" / run_no / "artifacts" / uuid
+    run_dir.mkdir(parents=True)
+    (run_dir / "result.json").write_text(
+        json.dumps({"run_id": uuid, "status": "succeeded", "outputs": {}}), encoding="utf-8"
+    )
+    if mtime is not None:
+        os.utime(run_dir / "result.json", (mtime, mtime))
+    return run_dir
+
+
+def test_list_runs_unions_console_and_editor_roots(tmp_path: Path) -> None:
+    """两个真实产出路径都要看见：控制台采集写 run_artifacts/，编辑器写 _sandbox/runs/...
+
+    只扫一个根的话，「在编辑器里跑完，流程页看不到这次运行」——同一件事两条路径、
+    只接了一条（本项目踩过多次）。
+    """
+    console_root = tmp_path / "run_artifacts"
+    console_root.mkdir()
+    _write_run(console_root, "console-1")
+    _write_editor_run(tmp_path, "run-1", "editor-1", mtime=1_900_000_000)
+
+    ids = [r["run_id"] for r in list_runs([console_root, tmp_path / "_sandbox" / "runs"])]
+    assert ids == ["editor-1", "console-1"]  # 编辑器那次更新，排前面
+
+
+def test_find_run_dirs_does_not_hardcode_depth(tmp_path: Path) -> None:
+    """不写死嵌套深度：换一层目录布局也不该漏（只认「目录里有 result.json」）。"""
+    deep = tmp_path / "a" / "b" / "c" / "run-deep"
+    deep.mkdir(parents=True)
+    (deep / "result.json").write_text('{"status": "succeeded"}', encoding="utf-8")
+    shallow = tmp_path / "run-shallow"
+    shallow.mkdir()
+    (shallow / "result.json").write_text('{"status": "succeeded"}', encoding="utf-8")
+    found = {p.name for p in find_run_dirs(tmp_path)}
+    assert found == {"run-deep", "run-shallow"}
+
+
+def test_run_dir_of_searches_all_roots(tmp_path: Path) -> None:
+    console_root = tmp_path / "run_artifacts"
+    console_root.mkdir()
+    _write_run(console_root, "console-1")
+    editor = _write_editor_run(tmp_path, "run-1", "editor-1", mtime=1_900_000_000)
+    roots = [console_root, tmp_path / "_sandbox" / "runs"]
+    assert run_dir_of(roots, "editor-1") == editor.resolve()
+    assert run_dir_of(roots, "console-1") == (console_root / "console-1").resolve()
+    # 不存在时给规范路径（调用方按 404 处理），不抛越界
+    assert run_dir_of(roots, "nope") == (console_root / "nope").resolve()

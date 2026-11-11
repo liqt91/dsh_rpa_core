@@ -19,7 +19,13 @@ from typing import Any
 
 import pytest
 from src.collector import RunOutcome
-from src.server import _real_runner, make_context, make_server, run_collection
+from src.server import (
+    _real_runner,
+    _record_editor_run,
+    make_context,
+    make_server,
+    run_collection,
+)
 
 KW = "AI效率工具"
 
@@ -440,3 +446,107 @@ def test_http_collect_rejects_paused_keyword(tmp_path: Path) -> None:
         status, body = _post(base, "/api/collect", {"keyword": KW})
     assert status == 409
     assert "暂停" in body["error"]
+
+
+def _flow_with_keyword(tmp_path: Path, keyword: str) -> Path:
+    flow = tmp_path / "flows" / "my_flow.json"
+    flow.parent.mkdir(parents=True, exist_ok=True)
+    flow.write_text(
+        json.dumps(
+            {"id": "my-flow", "name": "我的流程", "inputs": {"keyword": keyword}, "root": {}},
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    return flow
+
+
+def _editor_run_dir(data_root: Path, uuid: str, items: list[dict[str, Any]]) -> Path:
+    run_dir = data_root / "_sandbox" / "runs" / "run-1" / "artifacts" / uuid
+    run_dir.mkdir(parents=True)
+    (run_dir / "result.json").write_text(
+        json.dumps({"run_id": uuid, "status": "succeeded", "error": None,
+                    "outputs": {
+                        "grabItems": {
+                            "outputs": {"result": json.dumps(items, ensure_ascii=False)}
+                        }
+                    }},
+                   ensure_ascii=False),
+        encoding="utf-8",
+    )
+    return run_dir
+
+
+def test_record_editor_run_lands_snapshot_and_monitor(tmp_path: Path) -> None:
+    """编辑器里跑的 run 必须落进快照/监控——它不经过 run_collection，得靠桥层回调补。
+
+    关键词取流程文档的 inputs.keyword（编辑器执行不传 --inputs，跑的就是这个默认值），
+    这样编辑器采集和批量采集的历史能连成同一条线做前后比对。
+    """
+    flow = _flow_with_keyword(tmp_path, "露营装备")
+    ctx = make_context(root=tmp_path / "data", workflow=flow)
+    run_dir = _editor_run_dir(tmp_path / "data", "uuid-1", _items(["a", "b"]))
+
+    res = _record_editor_run(ctx, "workflows/my_flow.json", run_dir / "result.json")
+
+    assert res["ok"] is True
+    assert res["snapshot_items"] == 2
+    latest = ctx.store.latest("露营装备")
+    assert latest is not None and latest.count == 2
+    assert ctx.monitor.get("露营装备").state == "ok"
+    assert ctx.monitor.get("露营装备").last_run_id == "uuid-1"
+
+
+def test_record_editor_run_falls_back_to_flow_stem(tmp_path: Path) -> None:
+    """流程没声明 inputs.keyword 时用文件名记账，不能整轮不落库。"""
+    flow = tmp_path / "flows" / "no_keyword.json"
+    flow.parent.mkdir(parents=True)
+    flow.write_text(
+        json.dumps({"id": "x", "name": "x", "inputs": {}, "root": {}}), encoding="utf-8"
+    )
+    ctx = make_context(root=tmp_path / "data", workflow=flow)
+    run_dir = _editor_run_dir(tmp_path / "data", "uuid-2", _items(["a"]))
+
+    _record_editor_run(ctx, "workflows/no_keyword.json", run_dir / "result.json")
+
+    assert ctx.store.latest("no_keyword") is not None
+
+
+def test_http_runs_lists_editor_runs(tmp_path: Path) -> None:
+    """「流程」页必须能列出编辑器里跑出来的 run（嵌套在 _sandbox/runs/run-N/artifacts/）。"""
+    ctx = make_context(root=tmp_path)
+    _editor_run_dir(tmp_path, "uuid-http", _items(["a", "b"]))
+    with _live_server(ctx) as base:
+        listing = _get(base, "/api/runs")
+        assert [r["run_id"] for r in listing["runs"]] == ["uuid-http"]
+        detail = _get(base, "/api/runs/uuid-http")
+        assert detail["run_id"] == "uuid-http"
+        assert detail["items"] == 2
+
+
+def test_http_editor_ppx_page_rewrites_assets_and_injects_bridge(tmp_path: Path) -> None:
+    """托管 PPX dist 时必须改写 asset 前缀 + 注入 bridge.js + 换掉原型标题。
+
+    三项都是「页面能起来」的前提：路径不改写 → 资源 404；bridge 不先注入 →
+    ppx-js 认不出宿主、退回演示模式；标题不换 → 标签页写着「RPA Probe · PPX」。
+    """
+    ctx = make_context(root=tmp_path)
+    with _live_server(ctx) as base:
+        with urllib.request.urlopen(base + "/editor-ppx/", timeout=5) as resp:  # noqa: S310
+            html = resp.read().decode("utf-8")
+        with urllib.request.urlopen(base + "/editor-ppx/bridge.js", timeout=5) as resp:  # noqa: S310
+            bridge = resp.read().decode("utf-8")
+    assert 'src="/editor-ppx/assets/' in html
+    assert '"/assets/' not in html
+    assert '<script src="/editor-ppx/bridge.js"></script>' in html
+    assert "小红书工作台" in html and "RPA Probe · PPX" not in html
+    assert "window.pywebview" in bridge and "/editor-ppx-rpc" in bridge
+
+
+def test_http_editor_ppx_rejects_path_escape(tmp_path: Path) -> None:
+    """dist 之外的路径不许借道静态托管读出去（run_artifacts 里是用户数据）。"""
+    ctx = make_context(root=tmp_path)
+    with _live_server(ctx) as base:
+        with pytest.raises(urllib.error.HTTPError) as bad:
+            urllib.request.urlopen(base + "/editor-ppx/../../api/health", timeout=5)  # noqa: S310
+    assert bad.value.code in (400, 404)

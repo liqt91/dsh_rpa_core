@@ -25,38 +25,23 @@ from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 from typing import Any
-from urllib.parse import parse_qs, unquote, urlparse
+from urllib.parse import unquote, urlparse
 
-from src import editor_run
+from src import ppx_bridge
 from src.alerts import AlertLog
 from src.collector import build_run_command, parse_result
-from src.commands_catalog import load_command_labels, load_commands
-from src.editor_run import _items_count as _editor_items
 from src.monitor import MonitorPool
 from src.record import archive_screenshot, record_outcome
 from src.runs import list_runs, run_dir_of, summarize_run
 from src.snapshots import SnapshotStore
 from src.workflow_doc import describe as describe_workflow
-from src.workflow_edit import (
-    delete_node,
-    find_node,
-    insert_node,
-    move_node,
-    update_params,
-)
-from src.workflow_edit import (
-    load as load_wf,
-)
-from src.workflow_edit import (
-    save as save_wf,
-)
+from src.workflow_doc import load_command_labels
 
 APP_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = APP_ROOT.parents[1]
 WORKFLOW = APP_ROOT / "workflows" / "xhs_product_search.json"
 CLI_BINARY = REPO_ROOT / ".venv" / "Scripts" / "rpa-core.exe"
 STATIC_DIR = APP_ROOT / "static"
-COMMANDS_DIR = REPO_ROOT / "commands"
 I18N_JS = REPO_ROOT / "src" / "rpa_core" / "gui" / "i18n.js"
 DEFAULT_PORT = 8790
 
@@ -77,11 +62,11 @@ class AppContext:
     default_browser: str = "chrome"
     timeout: float = 180.0
     lock: threading.Lock = field(default_factory=threading.Lock)
-    edit_lock: threading.Lock = field(default_factory=threading.Lock)
-    commands_dir: Path = COMMANDS_DIR
     labels: dict[str, str] = field(default_factory=dict)
-    manifests: dict[str, dict[str, Any]] = field(default_factory=dict)
-    editor: Any = None
+    # run 目录的所有可能根：控制台采集写 run_artifacts/，PPX 编辑器里点运行写
+    # _sandbox/runs/run-N/artifacts/（原型自己的布局）。两个都是真路径，读侧必须并集，
+    # 否则「在编辑器里跑完、流程页看不到这次运行」——同一件事两条产出路径的老毛病。
+    run_roots: list[Path] = field(default_factory=list)
 
 
 def _cli_env() -> dict[str, str]:
@@ -159,14 +144,9 @@ def make_context(
     # 导致刚写出的 result.json 被 rglob 找不到（曾致每次采集都误报「未写出 result.json」）。
     resolved_root = (Path(root) if root else APP_ROOT / "data").resolve()
     labels = load_command_labels(I18N_JS)
-    manifests: dict[str, dict[str, Any]] = {}
-    for mf in sorted(COMMANDS_DIR.rglob("*.json")):
-        try:
-            raw = json.loads(mf.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            continue
-        if isinstance(raw, dict) and raw.get("id"):
-            manifests[str(raw["id"])] = raw
+    # 编辑器 run 落在 <root>/_sandbox/runs（桥层把原型的 SANDBOX/RUNS 覆写到这里），
+    # 与批量采集的 <root>/run_artifacts 一起构成 run 目录的并集。
+    ppx_bridge.configure(resolved_root)
     ctx = AppContext(
         root=resolved_root,
         store=SnapshotStore(resolved_root),
@@ -180,9 +160,48 @@ def make_context(
         default_browser=default_browser,
         timeout=timeout,
         labels=labels,
-        manifests=manifests,
+        run_roots=[
+            resolved_root / "run_artifacts",
+            ppx_bridge.runs_root(resolved_root),
+        ],
+    )
+    # 编辑器里点「运行」走的是原型自己的通道（不经过 run_collection），
+    # 在桥层补一个终态回调，两条路径落库到同一套快照/告警/监控。
+    ppx_bridge.set_recorder(
+        lambda flow_path, result_path: _record_editor_run(ctx, flow_path, result_path)
     )
     return ctx
+
+
+def _flow_keyword(ctx: AppContext, flow_path: str) -> str:
+    """编辑器 run 用哪个关键词记账：流程文档 ``inputs.keyword``，取不到就用文件名。
+
+    编辑器执行时不传 ``--inputs``，跑的就是流程声明的默认值，所以这里读同一份默认值，
+    记账口径与批量采集一致（同一关键词的历史快照才能连起来做前后比对）。
+    """
+    fp = ctx.workflow.parent / Path(flow_path).name if flow_path else ctx.workflow
+    try:
+        doc = json.loads(fp.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return fp.stem
+    inputs = doc.get("inputs") if isinstance(doc, dict) else None
+    keyword = str((inputs or {}).get("keyword") or "").strip()
+    return keyword or fp.stem
+
+
+def _record_editor_run(ctx: AppContext, flow_path: str, result_path: Any) -> dict[str, Any]:
+    """编辑器 run 的终态 → 与批量采集同一套落库（快照 / 告警 / 监控池）。"""
+    outcome = parse_result(Path(result_path))
+    keyword = _flow_keyword(ctx, flow_path)
+    ctx.monitor.register(keyword)
+    entry = ctx.monitor.get(keyword)
+    run_id = outcome.run_id or "editor-run"
+    if entry is not None:
+        if entry.state == "paused":
+            ctx.monitor.resume_running(keyword, run_id)
+        elif entry.state != "running":
+            ctx.monitor.set_running(keyword, run_id)
+    return record_outcome(ctx, keyword, outcome)
 
 
 def run_collection(
@@ -233,95 +252,31 @@ def _collect_thread(ctx: AppContext, keyword: str, browser_type: str) -> None:
 
 
 # --------------------------------------------------------------------------- #
-# 编辑器支撑：校验 / 类型收拢 / 插入默认值
-# --------------------------------------------------------------------------- #
-
-
-def _validate_workflow(ctx: AppContext) -> dict[str, Any]:
-    """跑 ``rpa-core validate`` 子进程。校验器只有能力层一份，这里不自己实现。"""
-    try:
-        proc = subprocess.run(  # noqa: S603
-            [str(ctx.cli_binary), "validate", str(ctx.workflow)],
-            cwd=str(ctx.repo_root),
-            env=_cli_env(),
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=30,
-            check=False,
-        )
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        return {"valid": False, "rc": -1, "output": None, "error": f"validate 子进程异常：{exc}"}
-    parsed: Any = None
-    try:
-        parsed = json.loads(proc.stdout)
-    except json.JSONDecodeError:
-        pass
-    valid = proc.returncode == 0
-    if isinstance(parsed, dict):
-        valid = valid and bool(parsed.get("valid", True))
-    return {
-        "valid": valid,
-        "rc": proc.returncode,
-        "output": parsed if parsed is not None else (proc.stdout or proc.stderr)[-1200:],
-    }
-
-
-def _coerce_params(ctx: AppContext, command: str, params: dict[str, Any]) -> dict[str, Any]:
-    """按 manifest 的字段类型把表单的字符串收拢成正确类型；引用形态（${...} / [...]）不转。"""
-    manifest = ctx.manifests.get(command) or {}
-    props = (manifest.get("input_schema") or {}).get("properties") or {}
-    out: dict[str, Any] = {}
-    for key, value in params.items():
-        spec = props.get(key) or {}
-        ftype = spec.get("type")
-        ftype = ftype[0] if isinstance(ftype, list) else ftype
-        if not isinstance(value, str):
-            out[key] = value
-            continue
-        text = value.strip()
-        if not text or text.startswith("${") or (text.startswith("[") and text.endswith("]")):
-            out[key] = value
-            continue
-        try:
-            if ftype == "integer":
-                out[key] = int(text)
-            elif ftype == "number":
-                out[key] = float(text)
-            elif ftype == "boolean":
-                out[key] = text.lower() in ("true", "1", "yes", "是")
-            elif ftype in ("array", "object"):
-                out[key] = json.loads(text)
-            else:
-                out[key] = value
-        except (ValueError, json.JSONDecodeError) as exc:
-            raise ValueError(f"参数 {key} 无法按 {ftype} 解析：{value!r}") from exc
-    return out
-
-
-def _insert_defaults(ctx: AppContext, command: str) -> dict[str, Any]:
-    """新节点的 with 初值：required 字段按 manifest 类型给占位值（default 优先）。"""
-    manifest = ctx.manifests.get(command) or {}
-    schema = manifest.get("input_schema") or {}
-    props = schema.get("properties") or {}
-    defaults: dict[str, Any] = {}
-    for key in schema.get("required") or []:
-        spec = props.get(key) or {}
-        if "default" in spec:
-            defaults[key] = spec["default"]
-            continue
-        ftype = spec.get("type")
-        ftype = ftype[0] if isinstance(ftype, list) else ftype
-        defaults[key] = {
-            "integer": 0, "number": 0, "boolean": False, "array": [], "object": {},
-        }.get(ftype, "")
-    return defaults
-
-
-# --------------------------------------------------------------------------- #
 # HTTP 层
 # --------------------------------------------------------------------------- #
+
+
+# ppx-js 的桥就是 pywebview：给它一个 HTTP 版 ``window.pywebview.api.call``，
+# 返回值沿用 ``{ok,data,error,requestId}`` 信封（ppx-js 在 JS 侧拆包）。
+# ``?open=workflows/x.json``：把目标流程排到 flows 首位，boot 会默认打开它
+# （新建流程后页面即直接落在新流程上）。
+_BRIDGE_JS = """(() => {
+  const want = new URLSearchParams(location.search).get("open");
+  window.pywebview = { api: { call: async (method, params, requestId) => {
+    const resp = await fetch("/editor-ppx-rpc", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ method, params, requestId }),
+    });
+    const body = await resp.json();
+    const flows = body.ok && body.data && body.data.flows;
+    if (want && method === "rpa.bootstrap" && Array.isArray(flows)) {
+      body.data.flows.sort((a, b) => (a.path === want ? -1 : b.path === want ? 1 : 0));
+    }
+    return body;
+  } } };
+})();
+"""
 
 
 def _snapshots_view(ctx: AppContext) -> list[dict[str, Any]]:
@@ -382,11 +337,55 @@ class _Handler(BaseHTTPRequestHandler):
         path = parsed.path
 
         if path.startswith("/api/"):
-            self._handle_api_get(path, parsed.query)
+            self._handle_api_get(path)
+            return
+        if path == "/editor-ppx" or path.startswith("/editor-ppx/"):
+            self._serve_ppx(path)
             return
         self._serve_static(path)
 
-    def _handle_api_get(self, path: str, query: str = "") -> None:
+    def _send_bytes(self, status: int, data: bytes, content_type: str) -> None:
+        self.send_response(status)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(data)
+
+    def _serve_ppx(self, path: str) -> None:
+        """托管 PPX 编辑器 dist：index.html 改写 asset 路径并注入 bridge.js。"""
+        dist = ppx_bridge.PPX_DIST
+        if path in ("/editor-ppx", "/editor-ppx/"):
+            try:
+                html = (dist / "index.html").read_text(encoding="utf-8")
+            except OSError:
+                self._send(503, {"error": f"PPX 编辑器构建产物不在：{dist}"})
+                return
+            html = html.replace('src="/assets/', 'src="/editor-ppx/assets/').replace(
+                'href="/assets/', 'href="/editor-ppx/assets/'
+            )
+            # 标题按工作台语境改写：原型那份叫「RPA Probe · PPX」，出现在浏览器标签上
+            # 是原型身份，会被当成另一个产品。只改这份托管副本，不动原型构建产物。
+            html = html.replace(
+                "<title>RPA Probe · PPX</title>", "<title>小红书工作台 · 流程编辑器</title>"
+            )
+            html = html.replace(
+                "<head>", '<head>\n  <script src="/editor-ppx/bridge.js"></script>', 1
+            )
+            self._send_bytes(200, html.encode("utf-8"), "text/html; charset=utf-8")
+            return
+        rel = path[len("/editor-ppx/") :]
+        if rel == "bridge.js":
+            self._send_bytes(200, _BRIDGE_JS.encode("utf-8"), "text/javascript; charset=utf-8")
+            return
+        fp = (dist / rel).resolve()
+        if fp.is_file() and (fp == dist or dist in fp.parents):
+            ctype, _ = mimetypes.guess_type(str(fp))
+            self._send_bytes(200, fp.read_bytes(), ctype or "application/octet-stream")
+            return
+        self._send(404, {"error": "not found", "path": path})
+
+    def _handle_api_get(self, path: str) -> None:
         ctx = self.ctx
         if path == "/api/health":
             self._send(200, {"ok": True})
@@ -430,18 +429,8 @@ class _Handler(BaseHTTPRequestHandler):
             except (OSError, ValueError) as exc:
                 self._send(500, {"error": f"流程文件读不出来：{exc}"})
             return
-        if path == "/api/commands":
-            self._send(200, {"commands": load_commands(ctx.commands_dir, ctx.labels)})
-            return
-        if path == "/api/editor/status":
-            run = ctx.editor
-            self._send(200, run.status() if run else {"state": "idle", "lines": 0})
-            return
-        if path == "/api/editor/log":
-            self._get_editor_log(query)
-            return
         if path == "/api/runs":
-            items = list_runs(ctx.root / "run_artifacts")
+            items = list_runs(ctx.run_roots)
             self._send(200, {"runs": items, "count": len(items)})
             return
         if path.startswith("/api/runs/"):
@@ -452,11 +441,10 @@ class _Handler(BaseHTTPRequestHandler):
     def _get_run(self, rest: str) -> None:
         """``/api/runs/<run_id>`` 返回步骤时间线，``/api/runs/<run_id>/shot`` 返回现场截图。"""
         ctx = self.ctx
-        artifacts = ctx.root / "run_artifacts"
         want_shot = rest.endswith("/shot")
         run_id = unquote(rest[: -len("/shot")] if want_shot else rest)
         try:
-            run_dir = run_dir_of(artifacts, run_id)
+            run_dir = run_dir_of(ctx.run_roots, run_id)
         except ValueError as exc:
             self._send(400, {"error": str(exc)})
             return
@@ -480,29 +468,6 @@ class _Handler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
         self.wfile.write(data)
-
-    def _get_editor_log(self, query: str) -> None:
-        ctx = self.ctx
-        run = ctx.editor
-        if run is None:
-            self._send(200, {"lines": [], "cursor": 0, "state": "idle"})
-            return
-        run.drain_log()
-        try:
-            since = int(parse_qs(query).get("since", ["0"])[0])
-        except ValueError:
-            since = 0
-        since = max(0, min(since, len(run.lines)))
-        self._send(
-            200,
-            {
-                "lines": run.lines[since:],
-                "cursor": len(run.lines),
-                "state": run.state,
-                "run_id": run.run_dir.name if run.run_dir else None,
-                "items": _editor_items(run.outcome),
-            },
-        )
 
     def do_POST(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
@@ -530,151 +495,32 @@ class _Handler(BaseHTTPRequestHandler):
             n = ctx.monitor.resume_all()
             self._send(200, {"resumed": n})
             return
-        if path == "/api/validate":
-            self._send(200, _validate_workflow(ctx))
-            return
-        if path == "/api/workflow/update":
-            self._post_wf_update(data)
-            return
-        if path == "/api/workflow/insert":
-            self._post_wf_insert(data)
-            return
-        if path == "/api/workflow/delete":
-            self._post_wf_delete(data)
-            return
-        if path == "/api/workflow/move":
-            self._post_wf_move(data)
-            return
-        if path == "/api/editor/run":
-            self._post_editor_run(data)
-            return
-        if path == "/api/editor/pause":
-            self._post_editor_ctl(editor_run.pause)
-            return
-        if path == "/api/editor/resume":
-            self._post_editor_ctl(editor_run.resume)
-            return
-        if path == "/api/editor/stop":
-            self._post_editor_ctl(editor_run.stop)
+        if path == "/editor-ppx-rpc":
+            self._post_ppx_rpc(data)
             return
         self._send(404, {"error": "not found", "path": path})
 
-    # ---- 工作流编辑 ----
+    # ---- PPX 编辑器桥 ----
 
-    def _wf_after(self, validate: bool = True) -> None:
-        ctx = self.ctx
-        steps = describe_workflow(ctx.workflow, ctx.labels)["steps"]
-        payload: dict[str, Any] = {"ok": True, "steps": steps}
-        if validate:
-            payload["validate"] = _validate_workflow(ctx)
-        self._send(200, payload)
-
-    def _post_wf_update(self, data: dict[str, Any]) -> None:
-        ctx = self.ctx
-        node_id = str(data.get("node_id") or "")
+    def _post_ppx_rpc(self, data: dict[str, Any]) -> None:
+        method = str(data.get("method") or "")
         params = data.get("params")
-        if not node_id or not isinstance(params, dict):
-            self._send(400, {"error": "node_id 与 params 必填"})
-            return
-        with ctx.edit_lock:
-            doc = load_wf(ctx.workflow)
-            try:
-                found = find_node(doc, node_id)
-                if found is None:
-                    raise KeyError(f"节点不存在：{node_id}")
-                node = found[2]
-                coerced = _coerce_params(ctx, str(node.get("command") or ""), params)
-                update_params(doc, node_id, coerced)
-                save_wf(ctx.workflow, doc)
-            except (KeyError, ValueError) as exc:
-                self._send(400, {"error": str(exc)})
-                return
-        self._wf_after()
-
-    def _post_wf_insert(self, data: dict[str, Any]) -> None:
-        ctx = self.ctx
-        command = str(data.get("command") or "")
-        after = str(data.get("after") or "") or None
-        if command not in ctx.manifests:
-            self._send(400, {"error": f"未知指令：{command}"})
-            return
-        with ctx.edit_lock:
-            doc = load_wf(ctx.workflow)
-            node = insert_node(doc, command, after, _insert_defaults(ctx, command))
-            save_wf(ctx.workflow, doc)
-        with ctx.edit_lock:
-            steps = describe_workflow(ctx.workflow, ctx.labels)["steps"]
-            payload = {"ok": True, "steps": steps, "nodeId": node["id"]}
-            payload["validate"] = _validate_workflow(ctx)
-        self._send(200, payload)
-
-    def _post_wf_delete(self, data: dict[str, Any]) -> None:
-        ctx = self.ctx
-        node_id = str(data.get("node_id") or "")
-        if not node_id:
-            self._send(400, {"error": "node_id 必填"})
-            return
-        with ctx.edit_lock:
-            doc = load_wf(ctx.workflow)
-            try:
-                delete_node(doc, node_id)
-                save_wf(ctx.workflow, doc)
-            except (KeyError, ValueError) as exc:
-                self._send(400, {"error": str(exc)})
-                return
-        self._wf_after()
-
-    def _post_wf_move(self, data: dict[str, Any]) -> None:
-        ctx = self.ctx
-        node_id = str(data.get("node_id") or "")
+        request_id = str(data.get("requestId") or "")
         try:
-            direction = int(data.get("direction"))
-        except (TypeError, ValueError):
-            self._send(400, {"error": "direction 必须是 ±1"})
-            return
-        with ctx.edit_lock:
-            doc = load_wf(ctx.workflow)
-            try:
-                move_node(doc, node_id, direction)
-                save_wf(ctx.workflow, doc)
-            except (KeyError, ValueError) as exc:
-                self._send(400, {"error": str(exc)})
-                return
-        self._wf_after()
-
-    # ---- 编辑器执行控制 ----
-
-    def _post_editor_run(self, data: dict[str, Any]) -> None:
-        ctx = self.ctx
-        keyword = str(data.get("keyword", "") or "").strip()
-        if not keyword:
-            self._send(400, {"error": "keyword required"})
-            return
-        browser = str(data.get("browserType") or ctx.default_browser)
-        entry = ctx.monitor.get(keyword)
-        if entry is not None and entry.state == "paused":
-            active = ctx.editor and ctx.editor.active
-            hint = "（本次运行被暂停，可在编辑器「继续」）" if active else ""
-            self._send(409, {"error": f"{keyword} 已暂停{hint}：先恢复/停止再来"})
-            return
-        if not ctx.lock.acquire(blocking=False):
-            self._send(409, {"error": "已有采集在飞"})
-            return
-        try:
-            editor_run.start(ctx, keyword, browser)
-        except BaseException as exc:  # noqa: BLE001 - 放锁兜底
-            ctx.lock.release()
-            self._send(500, {"error": str(exc)})
-            return
-        self._send(202, {"accepted": True, "keyword": keyword, "browserType": browser})
-
-    def _post_editor_ctl(self, action: Any) -> None:
-        try:
-            action(self.ctx)
-        except ValueError as exc:
-            self._send(409, {"error": str(exc)})
-            return
-        self._send(200, {"ok": True})
+            if method == "rpa.bootstrap":
+                # bootstrap 走工作台适配版：追加扁平 workflows/*.json 并排在最前
+                payload = ppx_bridge.bootstrap_with_xhs_flows()
+                envelope = {"ok": True, "data": payload, "error": None, "requestId": request_id}
+            else:
+                envelope = ppx_bridge.dispatch(method, params, request_id or None)
+        except Exception as exc:  # noqa: BLE001 - 原型装载失败的原文要看得见
+            envelope = {
+                "ok": False,
+                "data": None,
+                "error": {"code": "BRIDGE_LOAD_FAILED", "message": str(exc)},
+                "requestId": request_id,
+            }
+        self._send(200, envelope)
 
     def _post_collect(self, data: dict[str, Any]) -> None:
         ctx = self.ctx

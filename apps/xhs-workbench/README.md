@@ -86,23 +86,31 @@ cd apps/xhs-workbench
 | GET | `/api/snapshots`、`/api/snapshots/<关键词>` | 快照列表 / 单关键词历史 |
 | GET | `/api/products`、`/api/alerts`、`/api/monitor` | 商品库、告警、监控池 |
 | GET | `/api/workflow` | 流程文档摊平：节点 id / 命令 / 参数 / 表达式标记 |
-| GET | `/api/commands` | 指令目录（manifest 摊平 + 中文标签），编辑器指令栏/属性表单的事实源 |
 | GET | `/api/runs`、`/api/runs/<run_id>` | 运行记录列表 / 单次步骤时间线（耗时、输出、错误） |
 | GET | `/api/runs/<run_id>/shot` | 该次采集的页面截图（PNG） |
-| GET | `/api/editor/status`、`/api/editor/log?since=N` | 编辑器运行状态 / 增量执行日志 |
+| GET | `/editor-ppx/`、`/editor-ppx/bridge.js`、`/editor-ppx/assets/*` | PPX 编辑器页面 / 桥替身 / 构建产物 |
 | POST | `/api/collect` | 触发采集（后台线程 + 单 run 锁，并发返回 409） |
 | POST | `/api/pause`、`/api/resume`、`/api/pause-all`、`/api/resume-all` | 监控池暂停/恢复 |
-| POST | `/api/validate` | 跑 `rpa-core validate` 校验当前流程 |
-| POST | `/api/workflow/update`、`/insert`、`/delete`、`/move` | 编辑流程（改参数 / 插节点 / 删节点 / 上下移），原子写 + 引用护栏 |
-| POST | `/api/editor/run`、`/pause`、`/resume`、`/stop` | 编辑器执行控制（暂停=节点边界收口成 paused；继续=resume 从检查点续跑；停止=杀进程树） |
+| POST | `/editor-ppx-rpc` | 编辑器 RPC（`{method, params, requestId}` → `{ok,data,error,requestId}`） |
 
-界面「编辑器」页是完整的可视化编辑器：左侧指令栏（89 条指令按分组列出、可搜索、点击
-插入到当前步骤之后）、中间画布（节点卡片，支持选中 / 上移 / 下移 / 删除，运行中当前
-步骤高亮）、右侧属性表单（按 manifest 的 schema 生成：必填标记、枚举下拉、多行文本、
-fx 表达式标记；类型收拢在服务端做，非法值 400 不落盘）、下方执行日志（执行 / 暂停 /
-继续 / 停止按钮 + 实时日志滚动）。每次编辑后自动跑 `rpa-core validate` 并亮校验结果。
+**编辑器页复用 PPX 原型**（ADR 0022-R1）：`/editor-ppx/` 托管 `.harness/demo/ppx_probe`
+的 `gui/dist` 构建产物，注入一个 `window.pywebview.api.call` 的 fetch 替身，后端由
+`src/ppx_bridge.py` 装载原型的 `app/api/api.py`（补一个 `ppx_py` 语义替身，不装原型的
+venv）。所以左侧指令栏 / 中间画布 / 右侧结构属性 / 下方日志、if/forEach/try 的结构编辑、
+元素资产面板、运行-停止-编译校验，都是原型那一份，能力层升级自动对齐。
 
-「流程」页保留为只读诊断视图（看历史 run 的步骤耗时、输出与现场截图）。
+工作台在这层只加了三件事（都在 `ppx_bridge.py`，不动原型一行）：
+
+1. `RPA_WORKSPACE` 指到 `apps/xhs-workbench`：扫到的是本目录 `workflows/`，元素资产目录
+   也随之对齐；`rpa.bootstrap` 追加扁平布局的 `workflows/*.json` 并排最前。
+2. `xhs.createFlow`：新建流程骨架（原型没有「新建」），落到 `workflows/<名>.json`。
+3. 终态落库钩子：编辑器跑完的 run 也要进快照 / 告警 / 监控池（否则「在编辑器里跑完，
+   商品库没数据」）。关键词取流程文档的 `inputs.keyword`，与批量采集同一套口径。
+
+run 目录是**并集**：控制台采集写 `<data>/run_artifacts/`，编辑器写
+`<data>/_sandbox/runs/run-N/artifacts/`（原型布局），「流程」页两边都列。
+
+「流程」页是只读诊断视图（看历史 run 的步骤耗时、输出与现场截图）。
 
 ## 真机 E2E 判据
 
@@ -142,8 +150,9 @@ fx 表达式标记；类型收拢在服务端做，非法值 400 不落盘）、
 ## P0/P1 验收与欠账
 
 已交付：配置化频率、稳定错峰排程、CLI 接线与终态解析、采集 workflow、数据层三块
-（快照库 / 前后比对告警 / 监控池状态机）、本地 HTTP 服务与界面、应用层单测接进仓库
-全门禁（`check_xhs_workbench_tests.py`，带接线哨兵与收集下限）。
+（快照库 / 前后比对告警 / 监控池状态机）、本地 HTTP 服务与界面、**复用 PPX 原型的
+可视化编辑器**（ADR 0022-R1）、应用层单测接进仓库全门禁
+（`check_xhs_workbench_tests.py`，带接线哨兵与收集下限）。
 
 两个真机踩到、已修并写成判据的坑：
 
@@ -164,6 +173,7 @@ fx 表达式标记；类型收拢在服务端做，非法值 400 不落盘）、
 - **跨 run 会话复用**：workflow 末尾仍 `browser.close`。`browser.attach` 的
   `sessionId` 是 run 内逻辑 id，能否跨 run 复用没实测；一天跑几十次时应当改成
   常驻标签页 + attach，否则又慢又像机器人。
-- **编辑器尚无容器节点**：「编辑器」页只编辑 action 步骤，if/loop/try 这类容器
-  节点暂不支持（仓库里的命令清单有，画布还没做结构编辑）。
+- **PPX 编辑器是「运行期消费原型」**：原型在 `.harness/demo/ppx_probe`（归 `ppx-only`，
+  ADR 0019 冻结判据仍生效）。原型大改时桥层要跟着修——这是 ADR 0022-R1 明确接受的代价。
+  浏览器里 `studio.pollSession`（Agent 推流程进窗口）返回「离线」，那个通道只有桌面宿主有。
 - **真机采集仍要手动开浏览器**：Agent 会话内起 Chrome 会被 Crashpad 拒访。

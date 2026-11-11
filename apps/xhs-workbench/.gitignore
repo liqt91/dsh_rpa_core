@@ -1,5 +1,7 @@
 # 运行时数据：快照 / 告警 / 监控池 / run_artifacts（含页面截图，单张几百 KB）
 data/
+# PPX 编辑器的运行沙箱（编辑器里点「运行」的 run 落在这里，默认在 data/ 下）
+_sandbox/
 # 本目录下的临时验证产物
 _verify_*/
 _live*/

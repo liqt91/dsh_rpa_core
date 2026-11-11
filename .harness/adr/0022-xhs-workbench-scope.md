@@ -74,3 +74,41 @@ batchSize / perItemIntervalSeconds 全可改。截图那组数字只是默认预
 采集频率默认值是为降低平台风控风险而设的保守预设，不是对抗平台规则的手段。
 实际运行的频率、范围与数据使用由维护者自行把关；把间隔调到 0 之前，
 UI 应先显示 `estimate()` 给出的每日请求数与峰值 QPS。
+
+---
+
+## 修订 0022-R1（2026-11-11，维护者拍板）：编辑面松绑 import 边界
+
+### 触发
+
+P1 里工作台先自研了一份四区流程编辑器（指令栏/画布/属性/日志 + 执行控制），
+真机验证通过。维护者随后判定：「重写重复、功能对齐麻烦」，要求复用 PPX 原型
+的编辑器（`/.harness/demo/ppx_probe/app/`），并按工作台语境改造（保留新建流程、
+面向小红书将来的多个工作流）。
+
+### 松绑范围（只有一条，且只松编辑面）
+
+- 工作台的**编辑面**允许 import `rpa_core.{catalog,compiler,model}`——通过 PPX 原型
+  的 `app/api/api.py` 承载，复用其「定点改键 + model_validate 复校」的保存语义。
+- **运行路径完全不变**：采集与编辑器内的「运行」仍是 `rpa-core run|resume` 子进程
+  + `--inputs` / `--artifacts` / `elementRefs` / `events.jsonl` / `result.json` /
+  `control.json` 文件契约。调度/快照/告警/监控/批量采集/数据层仍**不 import** 内核。
+- 门禁不动：`check_architecture.py` 只管 `src/rpa_core` 内部方向；`check_branch_scope`
+  管跨分支文件改动，不管 import——松绑不改任何闸门语义（实测全门禁仍绿）。
+
+### 不做什么
+
+- **不改 PPX 原型本体**：`.harness/demo/ppx_probe/` 仍归 `ppx-only`，ADR 0019 的
+  冻结/隔离判据原样生效；工作台只「运行期消费」它，一行不写。
+- **不装 ppx_py 进主 venv**（ADR 0019 §2.2）：桥层注入一个与 `ppx_py/bridge.py`
+  语义一致的 ~40 行替身（`api_method` 打标 + `BridgeError(code, message)` +
+  `Bridge.call` 的参数绑定与 `{ok,data,error,requestId}` 信封），原型转正前不背它的依赖。
+- 原型 gui 的 `dist/` 构建产物按静态文件托管 + 一个 `window.pywebview.api.call` 的
+  fetch 替身（ppx-js 的桥机制就是 pywebview，见 ppx-js/src/index.js）。
+
+### 后果
+
+工作台编辑器 = PPX 原型同款（含 if/forEach/try 结构编辑、元素资产面板、编译校验、
+运行/停止），能力层升级自动对齐；自研四区编辑器退役（其「暂停/继续」由桥层对
+`control.json` 的原子写补足——那是文件契约，不是 import）。风险：原型未转正
+（ADR 0019 退出条件未全过），若原型大改，桥层要跟着修——这是本次松绑明确接受的代价。

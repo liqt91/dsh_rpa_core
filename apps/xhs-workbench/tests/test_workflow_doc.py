@@ -73,3 +73,34 @@ def test_describe_real_workflow_exposes_wait_and_shot_steps() -> None:
     assert doc["inputs"]["keyword"]
     assert "browser.waitFor" in doc["commands"]
     assert doc["raw"].lstrip().startswith("{")
+
+
+def test_labels_parse_only_the_commands_block(tmp_path: Path) -> None:
+    """i18n.js 文本解析的边界：fields 段的「命令.字段」键不能混进命令表。"""
+    from src.workflow_doc import load_command_labels
+
+    fixture = tmp_path / "i18n.js"
+    fixture.write_text(
+        "window.RPA_I18N = {\n"
+        "  commands: {\n"
+        '    "browser.navigate": "打开网页",\n'
+        '    "data.log": "打印日志",\n'
+        "  },\n"
+        "  fields: {\n"
+        '    "browser.navigate.url": "目标网址",\n'
+        "  },\n"
+        "};\n",
+        encoding="utf-8",
+    )
+    labels = load_command_labels(fixture)
+    assert labels == {"browser.navigate": "打开网页", "data.log": "打印日志"}
+    assert "browser.navigate.url" not in labels
+
+
+def test_labels_real_i18n_covers_browser_commands() -> None:
+    from src.workflow_doc import load_command_labels
+
+    labels = load_command_labels(APP.parents[1] / "src" / "rpa_core" / "gui" / "i18n.js")
+    assert labels["browser.navigate"] == "打开网页"
+    assert labels["browser.screenshot"] == "网页截图"
+    assert len(labels) >= 60

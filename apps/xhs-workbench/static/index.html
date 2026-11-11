@@ -115,65 +115,8 @@
       max-width: 260px; max-height: 170px; border: 1px solid var(--line); border-radius: 8px;
       cursor: zoom-in; background: #fff;
     }
-
-    /* ---- 编辑器：左指令栏 / 中画布 / 右属性 / 下日志 ---- */
-    .editor-grid {
-      display: grid; gap: 12px;
-      grid-template-columns: 230px minmax(0, 1fr) 330px;
-      grid-template-areas: "palette canvas props" "log log log";
-    }
-    @media (max-width: 1100px) {
-      .editor-grid { grid-template-columns: 1fr; grid-template-areas: "palette" "canvas" "props" "log"; }
-    }
-    .ed-palette { grid-area: palette; }
-    .ed-canvas { grid-area: canvas; }
-    .ed-props { grid-area: props; }
-    .ed-log { grid-area: log; }
-    .pal-group { font-size: 12px; color: var(--muted); font-weight: 600; margin: 12px 0 4px; }
-    .pal-group:first-child { margin-top: 8px; }
-    .pal-item {
-      padding: 6px 9px; border-radius: 7px; cursor: pointer; font-size: 13px;
-      border: 1px solid transparent; line-height: 1.35;
-    }
-    .pal-item:hover { background: #fff0f2; border-color: #ffd2d9; }
-    .pal-item .cmd { font-family: ui-monospace, Consolas, monospace; font-size: 10.5px; color: var(--muted); }
-    .node-card {
-      border: 1px solid var(--line); border-radius: 9px; padding: 9px 12px; margin-bottom: 9px;
-      background: #fff; cursor: pointer; position: relative;
-    }
-    .node-card:hover { border-color: var(--accent); }
-    .node-card.selected { border-color: var(--brand); box-shadow: inset 0 0 0 1px var(--brand); }
-    .node-card.running { border-color: var(--accent); background: #f6f9ff; }
-    .node-card.ok .nc-dot { background: var(--ok); }
-    .node-card.failed .nc-dot { background: var(--fail); }
-    .nc-dot { width: 8px; height: 8px; border-radius: 50%; background: #d6d9de; flex: none; }
-    .nc-head { display: flex; gap: 8px; align-items: center; }
-    .nc-head .idx {
-      flex: none; width: 20px; height: 20px; border-radius: 6px; background: #f1f3f5;
-      color: var(--muted); font-size: 11px; display: flex; align-items: center; justify-content: center;
-    }
-    .nc-args { font-size: 12px; color: var(--muted); margin-top: 4px; font-family: ui-monospace, Consolas, monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .nc-ops { position: absolute; right: 8px; top: 8px; display: none; gap: 4px; }
-    .node-card:hover .nc-ops { display: flex; }
-    .nc-ops button { border: 1px solid var(--line); background: #fff; border-radius: 5px; cursor: pointer; font-size: 11px; padding: 1px 7px; }
-    .nc-ops button:hover { border-color: var(--brand); color: var(--brand); }
-    .prop-row { margin-bottom: 10px; }
-    .prop-row label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 3px; }
-    .prop-row label .req { color: var(--fail); }
-    .prop-row input, .prop-row select, .prop-row textarea {
-      width: 100%; border: 1px solid var(--line); border-radius: 7px; padding: 7px 9px; font-size: 13px;
-      font-family: inherit;
-    }
-    .prop-row textarea { font-family: ui-monospace, Consolas, monospace; font-size: 12px; min-height: 68px; resize: vertical; }
-    .prop-row .desc { font-size: 11px; color: var(--muted); margin-top: 3px; line-height: 1.5; }
-    pre.log {
-      background: #16181d; color: #d6dbe2; border-radius: 8px; padding: 12px;
-      font-family: ui-monospace, Consolas, monospace; font-size: 12px; line-height: 1.7;
-      min-height: 160px; max-height: 300px; overflow: auto; margin: 0; white-space: pre-wrap; word-break: break-all;
-    }
-    pre.log .lg-fail { color: #ff7a7a; }
-    pre.log .lg-ok { color: #7bd88f; }
-    pre.log .lg-run { color: #8ab4ff; }
+    /* ---- 编辑器 tab：iframe 承载 PPX 编辑器 + 宿主工具条 ---- */
+    .ppx-frame { border: 0; width: 100%; height: calc(100vh - 170px); border-radius: 10px; background: #fff; display: block; }
   </style>
 </head>
 <body>
@@ -196,38 +139,17 @@
     <main>
       <section class="tab active" id="tab-overview"><div class="card"><h2>概览</h2><div id="overview-body">加载中…</div></div></section>
       <section class="tab" id="tab-editor">
-        <div class="editor-grid">
-          <div class="card ed-palette">
-            <h2 style="margin:0 0 8px">指令</h2>
-            <input type="text" id="palette-q" placeholder="搜索指令…" style="width:100%" />
-            <div id="palette-list"></div>
-          </div>
-          <div class="card ed-canvas">
-            <div class="row" style="justify-content:space-between;margin-bottom:10px">
-              <div class="row">
-                <input type="text" id="ed-kw" placeholder="关键词" style="width:150px" />
-                <button class="btn sm" id="ed-validate">校验</button>
-                <button class="btn sm primary" id="ed-run">▶ 执行</button>
-                <button class="btn sm" id="ed-pause">暂停</button>
-                <button class="btn sm" id="ed-resume">继续</button>
-                <button class="btn sm" id="ed-stop">■ 停止</button>
-              </div>
-              <span id="ed-status" class="muted"></span>
-            </div>
-            <div id="canvas-list"></div>
-          </div>
-          <div class="card ed-props">
-            <h2 style="margin:0 0 8px">属性</h2>
-            <div id="props-body"><div class="empty">选中中间画布的一个步骤</div></div>
-          </div>
-          <div class="card ed-log">
-            <div class="row" style="justify-content:space-between;margin-bottom:8px">
-              <b style="font-size:13px">执行日志</b>
-              <span id="log-status" class="muted" style="font-size:12px"></span>
-            </div>
-            <pre id="editor-log" class="log"><span class="muted">还没有执行记录。填关键词点「▶ 执行」。</span></pre>
+        <div class="card" style="padding:10px 14px">
+          <div class="row">
+            <b style="font-size:13px">流程编辑器</b>
+            <button class="btn sm primary" id="ppx-new-flow">+ 新建流程</button>
+            <button class="btn sm" id="ppx-pause">暂停</button>
+            <button class="btn sm" id="ppx-resume">继续</button>
+            <span id="ppx-run-state" class="muted"></span>
+            <span class="muted" style="margin-left:auto;font-size:12px">运行 / 停止 / 编译校验在编辑器页面顶栏；「流程」页看历史运行</span>
           </div>
         </div>
+        <iframe id="ppx-frame" class="ppx-frame" src="/editor-ppx/"></iframe>
       </section>
       <section class="tab" id="tab-flow">
         <div class="card">
@@ -571,236 +493,45 @@
     $("#run-select").onchange = () => loadFlow($("#run-select").value);
     $("#flow-refresh").onclick = () => loadFlow($("#run-select").value);
 
-    // ---------------- 编辑器（指令栏 / 画布 / 属性 / 执行日志） ----------------
-    const ed = {
-      commands: [], byId: {}, doc: null, selected: null,
-      logCursor: 0, logTimer: null, state: "idle", stepStatus: {},
-    };
-    const ED_STATE_TEXT = { idle: "空闲", running: "执行中", paused: "已暂停", finished: "已完成", failed: "失败", stopped: "已停止" };
-
-    async function loadEditor() {
-      const [c, w] = await Promise.all([api("/api/commands"), api("/api/workflow")]);
-      if (c.ok) { ed.commands = c.body.commands || []; ed.byId = Object.fromEntries(ed.commands.map((x) => [x.id, x])); }
-      if (w.ok) { ed.doc = w.body; if (!ed.selected && (w.body.steps || [])[0]) ed.selected = w.body.steps[0].id; }
-      if (w.ok && w.body.inputs && w.body.inputs.keyword && !$("#ed-kw").value) $("#ed-kw").value = w.body.inputs.keyword;
-      renderPalette(); renderCanvas(); renderProps();
-      await syncEditorState();
-    }
-
-    function renderPalette() {
-      const q = ($("#palette-q").value || "").trim().toLowerCase();
-      let lastGroup = null;
-      const html = ed.commands
-        .filter((c) => !q || c.id.toLowerCase().includes(q) || c.label.toLowerCase().includes(q))
-        .map((c) => {
-          const head = c.groupLabel !== lastGroup ? `<div class="pal-group">${esc(c.groupLabel)}</div>` : "";
-          lastGroup = c.groupLabel;
-          return head + `<div class="pal-item" data-cmd="${esc(c.id)}" title="点击插入到当前步骤之后">${esc(c.label)}<div class="cmd">${esc(c.id)}</div></div>`;
-        }).join("");
-      $("#palette-list").innerHTML = html || `<div class="empty">没有匹配的指令</div>`;
-      $("#palette-list").querySelectorAll(".pal-item").forEach((el) => {
-        el.onclick = () => edInsert(el.dataset.cmd);
+    // ---------------- 编辑器 tab：iframe 承载 PPX 编辑器 + 宿主工具条 ----------------
+    async function ppxRpc(method, params) {
+      const res = await fetch("/editor-ppx-rpc", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ method, params: params || null }),
       });
+      const body = await res.json();
+      if (!body.ok) throw new Error((body.error && body.error.message) || method + " 失败");
+      return body.data;
     }
-
-    function renderCanvas() {
-      const steps = (ed.doc && ed.doc.steps) || [];
-      const html = steps.map((s) => {
-        const st = ed.stepStatus[s.id] || "";
-        const brief = Object.entries(s.args || {}).slice(0, 3).map(([k, v]) => `${k}=${String(typeof v === "object" ? JSON.stringify(v) : v).slice(0, 28)}`).join("  ");
-        return `<div class="node-card ${s.id === ed.selected ? "selected" : ""} ${st}" data-id="${esc(s.id)}">
-          <div class="nc-head"><span class="idx">${s.index}</span><span class="nc-dot"></span><b>${esc(s.label || s.command)}</b></div>
-          <div class="nc-args">${esc(s.id)} · ${esc(s.command)}${brief ? "　" + esc(brief) : ""}</div>
-          <div class="nc-ops">
-            <button data-op="up" title="上移">↑</button>
-            <button data-op="down" title="下移">↓</button>
-            <button data-op="del" title="删除">✕</button>
-          </div>
-        </div>`;
-      }).join("");
-      $("#canvas-list").innerHTML = html || `<div class="empty">流程为空：从左侧点指令添加</div>`;
-      $("#canvas-list").querySelectorAll(".node-card").forEach((card) => {
-        card.onclick = () => { ed.selected = card.dataset.id; renderCanvas(); renderProps(); };
-        card.querySelectorAll(".nc-ops button").forEach((b) => {
-          b.onclick = (ev) => {
-            ev.stopPropagation();
-            const id = card.dataset.id;
-            if (b.dataset.op === "up") edMutate("/api/workflow/move", { node_id: id, direction: -1 });
-            if (b.dataset.op === "down") edMutate("/api/workflow/move", { node_id: id, direction: 1 });
-            if (b.dataset.op === "del" && confirm(`删除步骤 ${id}？`)) edMutate("/api/workflow/delete", { node_id: id });
-          };
-        });
-      });
+    async function ppxNewFlow() {
+      const name = prompt("新流程名（会存到 workflows/<名>.json）");
+      if (!name || !name.trim()) return;
+      try {
+        const created = await ppxRpc("xhs.createFlow", { name: name.trim() });
+        $("#ppx-frame").src = "/editor-ppx/?open=" + encodeURIComponent(created.path);
+        toast("已创建：" + created.path);
+      } catch (e) { toast(e.message, true); }
     }
-
-    function renderProps() {
-      const node = ((ed.doc && ed.doc.steps) || []).find((s) => s.id === ed.selected);
-      if (!node) { $("#props-body").innerHTML = `<div class="empty">选中中间画布的一个步骤</div>`; return; }
-      const mf = ed.byId[node.command] || { fields: [] };
-      const args = node.args || {};
-      const modes = node.exprModes || {};
-      const rows = (mf.fields || []).map((f) => {
-        const raw = args[f.key];
-        const value = raw === undefined ? (f.default === undefined || f.default === null ? "" : f.default) : raw;
-        const fxBadge = modes[f.key] === "fx" ? `<span class="badge">fx</span>` : "";
-        const desc = f.description ? `<div class="desc">${esc(f.description)}${f.fx ? "（支持 ${变量} 引用与 [变量] 混排）" : ""}</div>` : "";
-        const label = `<label>${esc(f.key)}${f.required ? '<span class="req">*</span>' : ""}${fxBadge}</label>`;
-        let input;
-        if (f.enum) {
-          input = `<select data-f="${esc(f.key)}">` + f.enum.map((o) => `<option value="${esc(o.value)}" ${String(value) === String(o.value) ? "selected" : ""}>${esc(o.label)}（${esc(o.value)}）</option>`).join("") + "</select>";
-        } else if (f.type === "boolean") {
-          input = `<select data-f="${esc(f.key)}"><option value="true" ${String(value) === "true" ? "selected" : ""}>是（true）</option><option value="false" ${String(value) === "false" ? "selected" : ""}>否（false）</option></select>`;
-        } else if (f.multiline || f.python || f.type === "array" || f.type === "object") {
-          input = `<textarea data-f="${esc(f.key)}">${esc(typeof value === "object" ? JSON.stringify(value, null, 2) : String(value))}</textarea>`;
-        } else {
-          input = `<input type="text" data-f="${esc(f.key)}" value="${esc(typeof value === "object" ? JSON.stringify(value) : String(value))}" />`;
-        }
-        return `<div class="prop-row">${label}${input}${desc}</div>`;
-      }).join("");
-      $("#props-body").innerHTML = `
-        <div class="muted" style="font-size:12px;margin-bottom:10px">${esc(node.id)} · ${esc(node.command)}</div>
-        ${rows || `<div class="muted">该指令没有可配置参数。</div>`}
-        <div class="row" style="margin-top:12px">
-          <button class="btn primary sm" id="props-save">保存</button>
-          <span id="props-msg" class="muted" style="font-size:12px"></span>
-        </div>`;
-      $("#props-save").onclick = edSaveProps;
+    async function ppxCtl(which) {
+      try {
+        const active = await ppxRpc("xhs.activeRun");
+        if (!active) { toast("编辑器里没有正在运行的任务", true); return; }
+        await ppxRpc(which === "pause" ? "xhs.pauseRun" : "xhs.resumeRun", { run_id: active.runId });
+        toast(which === "pause" ? "已请求暂停（在下一步节点边界收口）" : "已继续");
+      } catch (e) { toast(e.message, true); }
     }
-
-    async function edSaveProps() {
-      const node = ((ed.doc && ed.doc.steps) || []).find((s) => s.id === ed.selected);
-      if (!node) return;
-      const params = {};
-      $("#props-body").querySelectorAll("[data-f]").forEach((el) => { params[el.dataset.f] = el.value; });
-      const res = await api("/api/workflow/update", { method: "POST", body: JSON.stringify({ node_id: node.id, params }) });
-      if (!res.ok) { $("#props-msg").textContent = (res.body && res.body.error) || `HTTP ${res.status}`; $("#props-msg").style.color = "var(--fail)"; return; }
-      applySteps(res.body);
-      $("#props-msg").textContent = "已保存"; $("#props-msg").style.color = "var(--ok)";
+    async function ppxPollState() {
+      try {
+        const active = await ppxRpc("xhs.activeRun");
+        $("#ppx-run-state").textContent = active ? `运行中：${active.path}（${active.runId}）` : "";
+        $("#ppx-pause").disabled = !active;
+      } catch (_) { /* 编辑器后端还没起 */ }
     }
-
-    async function edMutate(path, body) {
-      const res = await api(path, { method: "POST", body: JSON.stringify(body) });
-      if (!res.ok) { toast((res.body && res.body.error) || `HTTP ${res.status}`, true); return; }
-      applySteps(res.body);
-    }
-
-    async function edInsert(command) {
-      const res = await api("/api/workflow/insert", { method: "POST", body: JSON.stringify({ command, after: ed.selected }) });
-      if (!res.ok) { toast((res.body && res.body.error) || `HTTP ${res.status}`, true); return; }
-      if (res.body.nodeId) ed.selected = res.body.nodeId;
-      applySteps(res.body);
-      renderProps();
-    }
-
-    function applySteps(body) {
-      ed.doc = Object.assign({}, ed.doc, { steps: body.steps || (ed.doc && ed.doc.steps) || [] });
-      if (ed.selected && !(ed.doc.steps || []).some((s) => s.id === ed.selected)) {
-        ed.selected = (ed.doc.steps || [])[0] ? ed.doc.steps[0].id : null;
-        renderProps();
-      }
-      renderCanvas();
-      const v = body.validate;
-      $("#ed-status").textContent = v ? (v.valid ? "✓ 校验通过" : "✗ 校验失败") : "";
-      $("#ed-status").style.color = v ? (v.valid ? "var(--ok)" : "var(--fail)") : "";
-      if (v && !v.valid) {
-        const out = typeof v.output === "string" ? v.output : fmtJson(v.output);
-        $("#props-msg") && ($("#props-msg").textContent = out.slice(0, 200));
-      }
-    }
-
-    async function edValidate() {
-      $("#ed-status").textContent = "校验中…";
-      const res = await api("/api/validate", { method: "POST", body: "{}" });
-      const v = res.body || {};
-      $("#ed-status").textContent = v.valid ? "✓ 校验通过" : "✗ 校验失败";
-      $("#ed-status").style.color = v.valid ? "var(--ok)" : "var(--fail)";
-      if (!v.valid) toast((typeof v.output === "string" ? v.output : fmtJson(v.output)).slice(0, 300), true);
-    }
-
-    // ---- 执行控制 ----
-    function updateRunButtons() {
-      const st = ed.state;
-      $("#ed-run").disabled = st === "running" || st === "paused";
-      $("#ed-pause").disabled = st !== "running";
-      $("#ed-resume").disabled = st !== "paused" && st !== "running";
-      $("#ed-stop").disabled = st !== "running" && st !== "paused";
-      $("#ed-status").textContent = ED_STATE_TEXT[st] || st;
-      $("#ed-status").style.color = { running: "var(--accent)", paused: "var(--warn)", failed: "var(--fail)", finished: "var(--ok)" }[st] || "var(--muted)";
-    }
-
-    async function syncEditorState() {
-      const res = await api("/api/editor/status");
-      if (res.ok && res.body) {
-        ed.state = res.body.state || "idle";
-        updateRunButtons();
-        if (ed.state === "running" || ed.state === "paused") startLogPolling();
-      }
-    }
-
-    async function edRun() {
-      const kw = $("#ed-kw").value.trim();
-      if (!kw) { toast("先填关键词", true); return; }
-      ed.logCursor = 0; ed.stepStatus = {};
-      $("#editor-log").innerHTML = "";
-      const res = await api("/api/editor/run", { method: "POST", body: JSON.stringify({ keyword: kw, browserType: "chrome" }) });
-      if (!res.ok) { toast((res.body && res.body.error) || `HTTP ${res.status}`, true); return; }
-      ed.state = "running"; updateRunButtons(); startLogPolling();
-    }
-
-    async function edCtl(op) {
-      const res = await api("/api/editor/" + op, { method: "POST", body: "{}" });
-      if (!res.ok) { toast((res.body && res.body.error) || `HTTP ${res.status}`, true); return; }
-      await syncEditorState();
-    }
-
-    function startLogPolling() {
-      if (ed.logTimer) return;
-      ed.logTimer = setInterval(pollLog, 1000);
-      pollLog();
-    }
-
-    function stopLogPolling() {
-      clearInterval(ed.logTimer); ed.logTimer = null;
-    }
-
-    async function pollLog() {
-      const res = await api("/api/editor/log?since=" + ed.logCursor);
-      if (!res.ok || !res.body) return;
-      const body = res.body;
-      ed.logCursor = body.cursor;
-      if (body.lines && body.lines.length) {
-        body.lines.forEach((line) => {
-          const stepMatch = line.match(/[→✓✗] ([\w-]+)/);
-          if (stepMatch) {
-            const id = stepMatch[1];
-            if (line.includes("✗")) ed.stepStatus[id] = "failed";
-            else if (line.includes("✓")) ed.stepStatus[id] = "ok";
-            else ed.stepStatus[id] = "running";
-          }
-          const div = document.createElement("div");
-          div.className = line.includes("✗") ? "lg-fail" : line.includes("✓") ? "lg-ok" : (line.includes("→") || line.includes("▶")) ? "lg-run" : "";
-          div.textContent = line;
-          $("#editor-log").appendChild(div);
-        });
-        $("#editor-log").scrollTop = $("#editor-log").scrollHeight;
-        renderCanvas();
-      }
-      ed.state = body.state || ed.state;
-      updateRunButtons();
-      $("#log-status").textContent = body.run_id ? `run ${String(body.run_id).slice(0, 8)} · ${ED_STATE_TEXT[body.state] || body.state}${body.items != null ? ` · ${body.items} 条` : ""}` : "";
-      if (body.state === "finished" || body.state === "failed" || body.state === "stopped") {
-        stopLogPolling();
-        refreshAll();
-        loadFlow(body.run_id || undefined);
-      }
-    }
-
-    $("#palette-q").oninput = renderPalette;
-    $("#ed-validate").onclick = edValidate;
-    $("#ed-run").onclick = edRun;
-    $("#ed-pause").onclick = () => edCtl("pause");
-    $("#ed-resume").onclick = () => edCtl("resume");
-    $("#ed-stop").onclick = () => { if (confirm("停止会立即终止采集（浏览器里的页面可能留着不关闭）")) edCtl("stop"); };
+    $("#ppx-new-flow").onclick = ppxNewFlow;
+    $("#ppx-pause").onclick = () => ppxCtl("pause");
+    $("#ppx-resume").onclick = () => ppxCtl("resume");
+    setInterval(ppxPollState, 3000);
+    ppxPollState();
 
     // nav
     document.querySelectorAll("#nav button").forEach((b) => {
@@ -810,7 +541,6 @@
         b.classList.add("active");
         $("#tab-" + b.dataset.tab).classList.add("active");
         if (b.dataset.tab === "flow") loadFlow($("#run-select").value);
-        if (b.dataset.tab === "editor") loadEditor();
       };
     });
     $("#collect-btn").onclick = collect;
@@ -818,7 +548,6 @@
     setInterval(() => { $("#clock").textContent = new Date().toLocaleString("zh-CN"); }, 1000);
     refreshAll();
     loadFlow();
-    loadEditor();
     setInterval(refreshAll, 15000);
   </script>
 </body>

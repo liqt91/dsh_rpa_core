@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -33,6 +34,36 @@ CONTAINER_TYPES = {"sequence", "if", "loop", "parallel", "try", "branch"}
 
 def command_label(command: str) -> str:
     return COMMAND_LABELS.get(command or "", command or "")
+
+
+_PAIR_RE = re.compile(r'^\s*"([^"]+)"\s*:\s*"((?:[^"\\]|\\.)*)"\s*,?\s*$')
+
+
+def load_command_labels(i18n_js: str | Path) -> dict[str, str]:
+    """从 ``gui/i18n.js`` 的 ``commands: { ... }`` 块里解析「命令 id → 中文名」。
+
+    该文件的结构稳定：顶层段缩进 2 空格（``commands:`` / ``fields:`` …），
+    命令条目缩进 4 空格。按缩进切分，只收 commands 段内 ``"a.b": "中文"`` 的行。
+    文本级解析是刻意选择：应用层不 import rpa_core，JS 也不能 import。
+    """
+    try:
+        text = Path(i18n_js).read_text(encoding="utf-8")
+    except OSError:
+        return {}
+    labels: dict[str, str] = {}
+    in_commands = False
+    for line in text.splitlines():
+        if re.match(r"^\s{2}commands:\s*\{", line):
+            in_commands = True
+            continue
+        if in_commands and re.match(r"^\s{2}[a-zA-Z_]+:", line):
+            break  # 下一个顶层段开始，commands 段结束
+        if not in_commands:
+            continue
+        m = _PAIR_RE.match(line)
+        if m and "." in m.group(1):
+            labels[m.group(1)] = m.group(2).replace('\\"', '"').replace("\\\\", "\\")
+    return labels
 
 
 def flatten_steps(

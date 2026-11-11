@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -188,16 +189,39 @@ def _artifacts(run_dir: Path) -> dict[str, Any]:
     return {"screenshots": shots, "files": files}
 
 
-def _run_dirs(root: Path) -> list[Path]:
-    try:
-        return [p for p in root.iterdir() if p.is_dir() and (p / "result.json").is_file()]
-    except OSError:
-        return []
+def _roots(root: str | Path | Sequence[str | Path]) -> list[Path]:
+    if isinstance(root, (str, Path)):
+        return [Path(root)]
+    return [Path(r) for r in root]
 
 
-def list_runs(root: str | Path, limit: int = 20) -> list[dict[str, Any]]:
+def find_run_dirs(root: str | Path | Sequence[str | Path]) -> list[Path]:
+    """在所有根下找 run 目录（含 ``result.json`` 的目录）。
+
+    两个根、两种嵌套深度，都是真实存在的事实：
+    - 控制台批量采集：``<data>/run_artifacts/<uuid>/result.json``（深度 1）；
+    - PPX 编辑器里点运行：``<data>/_sandbox/runs/run-N/artifacts/<uuid>/result.json``
+      （深度 3，原型自己的布局）。
+    只认「目录里有 result.json」，不写死深度，免得以后再搬一次目录就漏。
+    """
+    seen: dict[Path, None] = {}
+    for base in _roots(root):
+        if not base.is_dir():
+            continue
+        try:
+            found = list(base.rglob("result.json"))
+        except OSError:
+            continue
+        for item in found:
+            seen.setdefault(item.parent.resolve(), None)
+    return list(seen)
+
+
+def list_runs(
+    root: str | Path | Sequence[str | Path], limit: int = 20
+) -> list[dict[str, Any]]:
     """按修改时间倒序列出最近若干次 run（只读 result.json 与 events 的行数级信息）。"""
-    dirs = _run_dirs(Path(root))
+    dirs = find_run_dirs(root)
     dirs.sort(key=lambda p: (p / "result.json").stat().st_mtime, reverse=True)
     out: list[dict[str, Any]] = []
     for run_dir in dirs[: max(1, limit)]:
@@ -217,9 +241,13 @@ def local_safe_run_id(run_id: str) -> str:
     return cleaned
 
 
-def run_dir_of(root: str | Path, run_id: str) -> Path:
-    base = Path(root).resolve()
-    target = (base / local_safe_run_id(run_id)).resolve()
-    if target.parent != base:
-        raise ValueError(f"run_id 越界：{run_id!r}")
-    return target
+def run_dir_of(root: str | Path | Sequence[str | Path], run_id: str) -> Path:
+    """按 run_id 定位 run 目录（跨多个根搜索；找不到返回最可能的候选路径，由调用方判存在性）。"""
+    safe = local_safe_run_id(run_id)
+    roots = _roots(root)
+    for candidate in find_run_dirs(roots):
+        if candidate.name == safe:
+            return candidate
+    # 没找到：返回第一根下的规范路径，让调用方按「不存在」处理（404），
+    # 而不是抛越界——越界判定只针对 run_id 本身，已在 local_safe_run_id 里做过。
+    return (roots[0].resolve() / safe)
