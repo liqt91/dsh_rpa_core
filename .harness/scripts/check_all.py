@@ -35,6 +35,9 @@ commands = [
     # 编辑窗口 ↔ 会话的路径口径（M67）：真跑三种路径形态、桥等价包装、cmd_gui 的 env
     # 注入与 --wait 的失败回传。只扫源码证明不了「中文会话根真能打开」。
     [sys.executable, str(ROOT / ".harness" / "scripts" / "check_editor_workspace_contract.py")],
+    # 分支职责边界（2026-11-11 拆分）：两条分支共享同一份契约，越界改动直接红。
+    # 事实源 .harness/branch-scope.json；闸门自带接线哨兵，摘掉下面这行它自己会红。
+    [sys.executable, str(ROOT / ".harness" / "scripts" / "check_branch_scope.py")],
 ]
 
 # 真实桌面 E2E（记事本/WinForms 演示程序/捕获悬浮框，会弹窗抢前台）**默认不进
