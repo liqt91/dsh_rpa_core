@@ -1,0 +1,38 @@
+{
+  "schema": 1,
+  "split_point": "ff36ed21e39249375619788a6ccf6531d0167f0f",
+  "branches": {
+    "ppx-only": {
+      "role": "PPX 桌面客户端专用分支",
+      "exclusive": [
+        ".harness/demo/ppx_probe/"
+      ]
+    },
+    "plugin-only": {
+      "role": "WorkBuddy 插件套件专用分支（connector / skill / extension / 上架资产）",
+      "exclusive": [
+        "workbuddy-suite/",
+        "tests/contract/test_workbuddy_connector.py"
+      ]
+    }
+  },
+  "shared_runtime": [
+    "workbuddy-suite/skills/workflow-studio/scripts/studio.py",
+    "workbuddy-suite/skills/workflow-studio/references/protocol.md",
+    "bin/rpa-skill.mjs"
+  ],
+  "governance": [
+    ".harness/branch-scope.json",
+    ".harness/scripts/check_branch_scope.py",
+    ".harness/scripts/check_all.py",
+    ".harness/PROGRESS.md",
+    "docs/branch-ownership.md"
+  ],
+  "must_match_across_branches": [
+    ".harness/branch-scope.json",
+    ".harness/scripts/check_branch_scope.py"
+  ],
+  "branch_local": [
+    "docs/branch-ownership.md"
+  ]
+}
