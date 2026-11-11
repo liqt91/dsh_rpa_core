@@ -5,6 +5,7 @@
   "inputs": {
     "keyword": "AI效率工具",
     "workspace": "run_artifacts/xhs",
+    "shotPath": "run_artifacts/xhs/results.png",
     "browserType": "chrome"
   },
   "root": {
@@ -79,12 +80,32 @@
       },
       {
         "type": "action",
+        "id": "waitItems",
+        "command": "browser.waitFor",
+        "with": {
+          "sessionId": "${steps.gotoResults.outputs.sessionId}",
+          "selector": "section.note-item, a[href*=\"/goods/\"]",
+          "state": "attached",
+          "timeoutMs": 20000
+        }
+      },
+      {
+        "type": "action",
+        "id": "shotResults",
+        "command": "browser.screenshot",
+        "with": {
+          "sessionId": "${steps.gotoResults.outputs.sessionId}",
+          "savePath": "${inputs.shotPath}"
+        }
+      },
+      {
+        "type": "action",
         "id": "grabItems",
         "command": "browser.executeScript",
         "with": {
           "sessionId": "${steps.gotoResults.outputs.sessionId}",
           "timeoutMs": 15000,
-          "script": "const nodes = Array.from(document.querySelectorAll('a[href*=\"/goods/\"], section.note-item')); return JSON.stringify(nodes.slice(0, 50).map((n) => ({ title: (n.innerText || '').trim().slice(0, 200), href: n.href || (n.querySelector('a') || {}).href || '', text: (n.innerText || '').trim().slice(0, 500) })));"
+          "script": "const nodes = Array.from(document.querySelectorAll('section.note-item, a[href*=\"/goods/\"]')); const items = nodes.map((n) => { const a = n.tagName === 'A' ? n : n.querySelector('a[href]'); const text = (n.innerText || '').trim(); return { title: text.slice(0, 200), href: (a && a.href) || n.href || '', text: text.slice(0, 500) }; }).filter((it) => it.href && it.text); return JSON.stringify(items.slice(0, 50));"
         }
       },
       {

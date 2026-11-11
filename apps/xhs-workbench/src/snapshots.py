@@ -35,11 +35,24 @@ class Product:
 
     @classmethod
     def from_raw(cls, raw: Any) -> Product:
+        product = cls.try_from_raw(raw)
+        if product is None:
+            raise ValueError("商品记录缺少稳定身份 href")
+        return product
+
+    @classmethod
+    def try_from_raw(cls, raw: Any) -> Product | None:
+        """宽松版：拿不到 href 的记录返回 None（由调用方计数上报，不静默吞掉）。
+
+        为什么需要宽松版：``grabItems`` 的选择器会命中一些不含链接的容器节点，
+        严格版会让**一整次采集**因为一条脏记录而报错——采集侧的风控/改版噪声
+        不该升级成整轮失败，但也不能悄悄丢，所以调用方必须把丢弃数报出来。
+        """
         if not isinstance(raw, dict):
-            raise ValueError(f"商品记录必须是对象，收到 {type(raw).__name__}")
+            return None
         href = str(raw.get("href") or "").strip()
         if not href:
-            raise ValueError("商品记录缺少稳定身份 href")
+            return None
         title = str(raw.get("title") or "").strip()
         text = str(raw.get("text") or "").strip()
         return cls(href=href, title=title, text=text)
@@ -54,6 +67,7 @@ class Snapshot:
     run_id: str
     collected_at: str
     items: list[Product] = field(default_factory=list)
+    skipped: int = 0
 
     @property
     def count(self) -> int:
@@ -65,6 +79,7 @@ class Snapshot:
             "run_id": self.run_id,
             "collected_at": self.collected_at,
             "items": [item.to_json() for item in self.items],
+            "skipped": self.skipped,
         }
 
     @classmethod
@@ -77,6 +92,7 @@ class Snapshot:
             run_id=str(data.get("run_id", "")),
             collected_at=str(data.get("collected_at", "")),
             items=items,
+            skipped=int(data.get("skipped") or 0),
         )
 
 
@@ -115,6 +131,7 @@ class SnapshotStore:
         run_id: str,
         items: list[Any],
         collected_at: str | None = None,
+        skipped: int = 0,
     ) -> Snapshot:
         """追加一次采集；``items`` 是原始 dict 列表（来自 executeScript 返回值）。"""
         if not keyword or not keyword.strip():
@@ -123,7 +140,13 @@ class SnapshotStore:
             raise ValueError("run_id 不能为空")
         products = [Product.from_raw(r) for r in items]
         stamp = collected_at or datetime.now(UTC).isoformat(timespec="seconds")
-        snap = Snapshot(keyword=keyword, run_id=run_id, collected_at=stamp, items=products)
+        snap = Snapshot(
+            keyword=keyword,
+            run_id=run_id,
+            collected_at=stamp,
+            items=products,
+            skipped=skipped,
+        )
         runs = self._read_runs(keyword)
         runs.append(snap.to_json())
         self._write_runs(keyword, runs)
@@ -172,7 +195,11 @@ class SnapshotStore:
 
 
 def snapshot_from_outcome(store: SnapshotStore, keyword: str, outcome: Any) -> Snapshot:
-    """从 collector.RunOutcome 直接落库：取 grabItems 的 JSON 字符串结果并解析。"""
+    """从 collector.RunOutcome 直接落库：取 grabItems 的 JSON 字符串结果并解析。
+
+    拿不到 href 的记录会被丢弃并**计数上报**（``Snapshot.skipped``）：采集脚本会命中
+    一些不含链接的容器节点，一条脏记录不该让整轮采集失败，但也不能悄悄丢。
+    """
     raw = step_output(outcome, "grabItems", "result")
     if isinstance(raw, str):
         try:
@@ -183,4 +210,14 @@ def snapshot_from_outcome(store: SnapshotStore, keyword: str, outcome: Any) -> S
         items = raw
     else:
         raise ValueError(f"grabItems 返回值形状未知：{type(raw).__name__}")
-    return store.record(keyword, outcome.run_id, items, collected_at=None)
+    if not isinstance(items, list):
+        raise ValueError(f"grabItems 返回值不是数组：{type(items).__name__}")
+    valid = [p for raw_item in items if (p := Product.try_from_raw(raw_item)) is not None]
+    skipped = len(items) - len(valid)
+    return store.record(
+        keyword,
+        outcome.run_id,
+        [p.to_json() for p in valid],
+        collected_at=None,
+        skipped=skipped,
+    )

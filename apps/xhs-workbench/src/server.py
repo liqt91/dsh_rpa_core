@@ -30,7 +30,9 @@ from urllib.parse import unquote, urlparse
 from src.alerts import AlertLog, detect_for_keyword
 from src.collector import build_run_command, parse_result
 from src.monitor import MonitorPool
+from src.runs import list_runs, run_dir_of, summarize_run
 from src.snapshots import SnapshotStore, snapshot_from_outcome
+from src.workflow_doc import describe as describe_workflow
 
 APP_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = APP_ROOT.parents[1]
@@ -80,7 +82,13 @@ def _real_runner(ctx: AppContext, keyword: str, browser_type: str) -> Any:
         keyword,
         artifacts,
         binary=str(ctx.cli_binary),
-        extra_inputs={"browserType": browser_type, "workspace": str(artifacts)},
+        extra_inputs={
+            "browserType": browser_type,
+            "workspace": str(artifacts),
+            # 截图必须是**整串**引用（`${inputs.x}` 只认整串，混在文本里会原样输出字面量），
+            # 所以把文件名也交给这里决定，不能在流程里写 `${inputs.workspace}/results.png`。
+            "shotPath": str(artifacts / "results.png"),
+        },
     )
     try:
         proc = subprocess.run(  # noqa: S603
@@ -110,7 +118,25 @@ def _real_runner(ctx: AppContext, keyword: str, browser_type: str) -> Any:
             f"run 未写出 result.json（rc={proc.returncode}）。多半是 workflow 中途失败。\n"
             f"--- rpa-core stderr ---\n{err_tail}\n--- stdout ---\n{out_tail}"
         )
+    _archive_screenshot(artifacts, fresh[0].parent)
     return parse_result(fresh[0])
+
+
+def _archive_screenshot(artifacts: Path, run_dir: Path) -> None:
+    """把本次 run 的页面截图归到该 run 自己的目录下。
+
+    流程里 ``shotResults`` 写的是 ``<artifacts>/results.png``（工作流拿不到 run_id，只能
+    写固定路径），每跑一次就被覆盖。归档一份到 ``<artifacts>/<run_id>/results.png``，
+    历史 run 的现场图才不会被后一次覆盖掉——定位问题时看的就是这个。
+    """
+    src = artifacts / "results.png"
+    dst = run_dir / "results.png"
+    try:
+        if src.is_file() and src.parent != dst.parent:
+            dst.write_bytes(src.read_bytes())
+    except OSError:
+        # 截图只是诊断附件，归档失败不该让一次成功的采集变成失败
+        return
 
 
 def make_context(
@@ -179,6 +205,7 @@ def run_collection(
             ok=True,
             run_id=run_id,
             snapshot_items=snap.count,
+            skipped=snap.skipped,
             alerts_added=added,
         )
     else:
@@ -304,7 +331,52 @@ class _Handler(BaseHTTPRequestHandler):
                 },
             )
             return
+        if path == "/api/workflow":
+            try:
+                self._send(200, describe_workflow(ctx.workflow))
+            except (OSError, ValueError) as exc:
+                self._send(500, {"error": f"流程文件读不出来：{exc}"})
+            return
+        if path == "/api/runs":
+            items = list_runs(ctx.root / "run_artifacts")
+            self._send(200, {"runs": items, "count": len(items)})
+            return
+        if path.startswith("/api/runs/"):
+            self._get_run(path[len("/api/runs/") :])
+            return
         self._send(404, {"error": "not found", "path": path})
+
+    def _get_run(self, rest: str) -> None:
+        """``/api/runs/<run_id>`` 返回步骤时间线，``/api/runs/<run_id>/shot`` 返回现场截图。"""
+        ctx = self.ctx
+        artifacts = ctx.root / "run_artifacts"
+        want_shot = rest.endswith("/shot")
+        run_id = unquote(rest[: -len("/shot")] if want_shot else rest)
+        try:
+            run_dir = run_dir_of(artifacts, run_id)
+        except ValueError as exc:
+            self._send(400, {"error": str(exc)})
+            return
+        if not (run_dir / "result.json").is_file():
+            self._send(404, {"error": "unknown run", "run_id": run_id})
+            return
+        if want_shot:
+            shot = run_dir / "results.png"
+            if not shot.is_file():
+                self._send(404, {"error": "no screenshot for this run", "run_id": run_id})
+                return
+            self._send_file(shot, "image/png")
+            return
+        self._send(200, summarize_run(run_dir))
+
+    def _send_file(self, path: Path, content_type: str) -> None:
+        data = path.read_bytes()
+        self.send_response(200)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(data)
 
     def do_POST(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)

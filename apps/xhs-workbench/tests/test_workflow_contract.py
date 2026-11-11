@@ -39,7 +39,7 @@ def test_inputs_referenced_are_exactly_the_declared_ones() -> None:
         for value in (node.get("with") or {}).values():
             if isinstance(value, str):
                 used.update(INPUT_RE.findall(value))
-    assert used == {"keyword", "workspace", "browserType"}
+    assert used == {"keyword", "workspace", "shotPath", "browserType"}
     assert used == set(doc["inputs"])
 
 
@@ -58,10 +58,34 @@ def test_step_refs_only_point_to_earlier_actions() -> None:
         "gotoResults",
         "closeExplore",
         "waitResults",
+        "waitItems",
+        "shotResults",
         "grabItems",
         "saveRaw",
         "close",
     }
+
+
+def test_items_are_waited_for_before_scraping() -> None:
+    """真机踩到：`browser.waitLoad` 只认 tab.status=complete，SPA 结果列表还没渲染
+
+    就取数 ⇒ 每次「采集完成」但 items 恒为 0（三份历史 run 里两份是 0 条）。
+    这里钉死「取数前必须显式等结果卡片出现」，否则同一 bug 会静默复活。
+    """
+    order = [n["id"] for n in actions()]
+    by_id = {n["id"]: n for n in actions()}
+    wait = by_id["waitItems"]
+    assert wait["command"] == "browser.waitFor"
+    assert wait["with"]["state"] == "attached"
+    assert "note-item" in wait["with"]["selector"]
+    assert order.index("waitItems") < order.index("grabItems")
+    assert order.index("waitResults") < order.index("waitItems")
+    # 截图落在取数之前：既是「当时页面长什么样」的证据，也不受取数结果影响
+    assert order.index("shotResults") < order.index("grabItems")
+    assert by_id["shotResults"]["command"] == "browser.screenshot"
+    # 必须是**整串**引用：`${}` 只认整串，`${inputs.workspace}/results.png` 会原样
+    # 落成一个叫 `${inputs.workspace}` 的目录（真机踩到过）
+    assert by_id["shotResults"]["with"]["savePath"] == "${inputs.shotPath}"
 
 
 def test_element_ref_resolves_to_a_usable_css_selector() -> None:

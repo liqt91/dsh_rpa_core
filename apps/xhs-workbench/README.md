@@ -71,6 +71,30 @@ Secure Preferences。它此刻报 `online: false` 通常是 host 空闲 4 秒自
 `outputs.grabItems.outputs.result`（`browser.executeScript` 返回的 JSON 字符串），
 同时由 `data.writeText` 落一份 `xhs-products.json`。
 
+## 本地服务与界面（P1）
+
+```bash
+cd apps/xhs-workbench
+../../.venv/Scripts/python.exe -m src.run_server   # 127.0.0.1:8790，数据默认落 apps/xhs-workbench/data
+```
+
+接口（全部只监听 `127.0.0.1`）：
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/api/health` | 存活探测 |
+| GET | `/api/snapshots`、`/api/snapshots/<关键词>` | 快照列表 / 单关键词历史 |
+| GET | `/api/products`、`/api/alerts`、`/api/monitor` | 商品库、告警、监控池 |
+| GET | `/api/workflow` | 流程文档摊平：节点 id / 命令 / 参数 / 表达式标记 |
+| GET | `/api/runs`、`/api/runs/<run_id>` | 运行记录列表 / 单次步骤时间线（耗时、输出、错误） |
+| GET | `/api/runs/<run_id>/shot` | 该次采集的页面截图（PNG） |
+| POST | `/api/collect` | 触发采集（后台线程 + 单 run 锁，并发返回 409） |
+| POST | `/api/pause`、`/api/resume`、`/api/pause-all`、`/api/resume-all` | 监控池暂停/恢复 |
+
+界面「流程」页是 PPX 编辑器三栏视图的移植，但**只读 + 叠加运行态**：左侧步骤列表
+带每步耗时，右侧是选中步骤的参数（含 `fx` 表达式 / 元素引用标记）、本次输出与错误；
+顶部可按 run 切换，并显示采集当时的页面截图。它回答的是「这次采集卡在哪、为什么」。
+
 ## 真机 E2E 判据
 
 `scripts/verify_live.py` 的五条硬判据收敛在唯一函数 `evaluate_run()` 里，
@@ -106,26 +130,32 @@ Secure Preferences。它此刻报 `online: false` 通常是 host 空闲 4 秒自
 | `paused` | `paused` | 运行 |
 | 其它 | `unknown` | 告警（绝不静默当成功） |
 
-## P0 验收与欠账
+## P0/P1 验收与欠账
 
-P0 交付：配置化频率、稳定错峰排程、CLI 接线与终态解析、第一条采集 workflow
-（搜索框元素引用 → `executeScript` 结构化提取 → 落盘）、上述三块各自的单测。
+已交付：配置化频率、稳定错峰排程、CLI 接线与终态解析、采集 workflow、数据层三块
+（快照库 / 前后比对告警 / 监控池状态机）、本地 HTTP 服务与界面、应用层单测接进仓库
+全门禁（`check_xhs_workbench_tests.py`，带接线哨兵与收集下限）。
 
-还没做，按计划归 P1/P2：
+两个真机踩到、已修并写成判据的坑：
 
-- **真机 E2E 已跑通（2026-11-11）**：维护者手动打开 Chrome 后，`--run --browser chrome`
-  连续两次 PASSED，可重复。证据 `run_artifacts/xhs-e2e/e2e-verdict-*.json`：
-  跳到 `search_result?keyword=AI效率工具`、抓到 22 条、落盘 5293 字节且逐字一致、
-  五条判据全绿。中途修了三个真机才暴露的坑：① host 白名单缺本仓扩展 ID；
-  ② `executeScript` 的 `script` 写成了 `(() => {...})()` 表达式（扩展用
-  `new Function` 当函数体执行，没有 `return` 恒为 `null`）→ 改成带 `return` 的语句体；
-  ③ 合成 `pressEnter` 小红书不认，始终停在 `/explore` → 改成新标签显式 `goto`
-  搜索结果页，并加 `search_effective` 判据防假绿灯。
-  仍受 Chrome 手动开关约束（见上「跑起来」段末）。
-- **跨 run 会话复用**：P0 workflow 末尾仍 `browser.close`。`browser.attach` 的
+- **`browser.waitLoad` 不等于「结果渲染好了」**：它只认 `tab.status === "complete"`，
+  小红书的搜索结果页是 SPA——外壳加载完（约 1.1 s）时列表还没渲染，`grabItems`
+  取到 `[]`，于是「采集完成但没有任何数据」。历史 run 里三份有两份是 0 条。
+  修法是取数前显式 `browser.waitFor`（`state=attached`，选择器
+  `section.note-item, a[href*="/goods/"]`），实测该步耗时 0.02 s ~ 1.9 s 波动，
+  0 条的那几次正是卡在这段。判据在 `test_workflow_contract.py`。
+- **`${...}` 只认整串引用**：写成 `"${inputs.workspace}/results.png"` 不会插值，
+  会原样落成一个叫 `${inputs.workspace}` 的目录（真机踩到）。截图路径因此单独开
+  `inputs.shotPath`，由服务端传入绝对路径。
+- 采集脚本会命中不含链接的容器节点；缺 `href` 的记录现在被丢弃并计入
+  `Snapshot.skipped`（UI 显示「跳过 N 条无链接」），不再让整轮采集报错。
+
+还欠：
+
+- **跨 run 会话复用**：workflow 末尾仍 `browser.close`。`browser.attach` 的
   `sessionId` 是 run 内逻辑 id，能否跨 run 复用没实测；一天跑几十次时应当改成
   常驻标签页 + attach，否则又慢又像机器人。
-- **快照库 / 前后比对告警 / 监控池状态机 / 本地 HTTP 与 UI**：截图里那套
-  「739 件商品、告警 12、全暂停/全恢复、8 个 tab」都还没落。
-- **门禁接线**：`apps/xhs-workbench/tests` 目前独立运行，`check_all.py` 还没带上它。
-  接线时要一并加哨兵，证明测试真被跑到。
+- **流程面板只读**：PPX 编辑器那份是可编辑的（改参数、插/删节点、编译校验），
+  这里只搬了查看与定位。要编辑得先定「应用层怎么消费 catalog/compiler」——
+  当前边界是不 import `src/rpa_core`，直接搬会破例。
+- **真机采集仍要手动开浏览器**：Agent 会话内起 Chrome 会被 Crashpad 拒访。

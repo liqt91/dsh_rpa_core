@@ -72,6 +72,49 @@
     .progress { color: var(--accent); }
     a { color: var(--accent); }
     .count { color: var(--muted); font-weight: 400; font-size: 13px; margin-left: 6px; }
+
+    /* ---- 流程面板：对标 PPX 编辑器的「步骤列表 + 节点详情」，只读 + 运行态叠加 ---- */
+    .flow-split { display: grid; grid-template-columns: 336px minmax(0, 1fr); gap: 16px; align-items: start; }
+    @media (max-width: 900px) { .flow-split { grid-template-columns: 1fr; } }
+    .step-item {
+      display: flex; gap: 10px; align-items: flex-start; padding: 9px 11px;
+      border: 1px solid var(--line); border-radius: 8px; margin-bottom: 8px;
+      cursor: pointer; background: #fff;
+    }
+    .step-item:hover { border-color: var(--accent); }
+    .step-item.active { border-color: var(--brand); box-shadow: inset 0 0 0 1px var(--brand); }
+    .step-item .idx {
+      flex: none; width: 22px; height: 22px; border-radius: 6px; background: #f1f3f5;
+      color: var(--muted); font-size: 12px; display: flex; align-items: center; justify-content: center;
+    }
+    .step-item.ok .idx { background: #e8f7ee; color: var(--ok); }
+    .step-item.failed .idx { background: #fdeaea; color: var(--fail); }
+    .step-item .fi-main { min-width: 0; flex: 1; }
+    .step-item .fi-main b { font-size: 13px; font-weight: 600; }
+    .step-item .cmd {
+      font-family: ui-monospace, Consolas, monospace; font-size: 11px; color: var(--muted);
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .step-item .dur { font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; flex: none; }
+    .kv { width: 100%; border-collapse: collapse; font-size: 12px; }
+    .kv td { border-bottom: 1px dashed var(--line); padding: 5px 6px; vertical-align: top; }
+    .kv td.k { color: var(--muted); width: 168px; word-break: break-all; }
+    .kv td.v { word-break: break-all; font-family: ui-monospace, Consolas, monospace; }
+    pre.json {
+      background: #fbfbfc; border: 1px solid var(--line); border-radius: 8px; padding: 10px;
+      font-size: 12px; max-height: 280px; overflow: auto; margin: 0; white-space: pre-wrap; word-break: break-all;
+    }
+    .badge {
+      display: inline-block; font-size: 11px; padding: 1px 6px; border-radius: 5px;
+      background: #eef2ff; color: var(--accent); margin-left: 6px; font-weight: 500;
+    }
+    .badge.ref { background: #fff4e5; color: #b26b00; }
+    h3.sec { font-size: 13px; margin: 16px 0 8px; color: var(--ink); }
+    .shot-bar { display: flex; gap: 14px; align-items: flex-start; margin-top: 12px; }
+    .shot-bar img {
+      max-width: 260px; max-height: 170px; border: 1px solid var(--line); border-radius: 8px;
+      cursor: zoom-in; background: #fff;
+    }
   </style>
 </head>
 <body>
@@ -83,6 +126,7 @@
   <div class="wrap">
     <nav id="nav">
       <button data-tab="overview" class="active">概览</button>
+      <button data-tab="flow">流程</button>
       <button data-tab="monitor">监控池</button>
       <button data-tab="products">商品库</button>
       <button data-tab="alerts">告警</button>
@@ -91,6 +135,25 @@
     </nav>
     <main>
       <section class="tab active" id="tab-overview"><div class="card"><h2>概览</h2><div id="overview-body">加载中…</div></div></section>
+      <section class="tab" id="tab-flow">
+        <div class="card">
+          <div class="row" style="justify-content:space-between">
+            <div class="row">
+              <h2 style="margin:0">采集流程</h2>
+              <span class="count" id="flow-sub"></span>
+            </div>
+            <div class="row">
+              <select id="run-select"></select>
+              <button class="btn sm" id="flow-refresh">刷新</button>
+            </div>
+          </div>
+          <div id="flow-summary" class="muted" style="margin-top:10px">加载中…</div>
+        </div>
+        <div class="flow-split">
+          <div class="card"><div id="flow-list"><div class="empty">加载中…</div></div></div>
+          <div class="card"><div id="flow-detail"><div class="empty">选择左侧任意步骤查看参数与运行结果</div></div></div>
+        </div>
+      </section>
       <section class="tab" id="tab-monitor"><div class="card"><h2>监控池<span class="count" id="monitor-count"></span></h2><div id="monitor-body"></div></div></section>
       <section class="tab" id="tab-products"><div class="card"><h2>商品库<span class="count" id="products-count"></span></h2><div id="products-body"></div></div></section>
       <section class="tab" id="tab-alerts"><div class="card"><h2>告警<span class="count" id="alerts-count"></span></h2><div id="alerts-body"></div></div></section>
@@ -257,8 +320,19 @@
         const e = (m.body && m.body.entries || []).find((x) => x.keyword === kw);
         if (!e) { $("#collect-status").textContent = "状态未知"; break; }
         if (e.state !== "running") {
-          $("#collect-status").textContent = e.state === "ok" ? "采集完成 ✓" : `结束（${e.state}）`;
-          if (e.state === "failed") $("#collect-status").textContent = `失败：${e.last_error || ""}`;
+          if (e.state === "ok") {
+            const s = await api("/api/snapshots");
+            const hit = ((s.body && s.body.keywords) || []).find((x) => x.keyword === kw);
+            const latest = hit && hit.latest;
+            const n = latest ? (latest.items || []).length : 0;
+            const skipped = latest ? (latest.skipped || 0) : 0;
+            $("#collect-status").textContent = n > 0
+              ? `采集完成 ✓ 取到 ${n} 条${skipped ? `（跳过 ${skipped} 条无链接）` : ""}`
+              : "结束但没取到数据 → 切到「流程」页看每步耗时与现场截图";
+          } else {
+            $("#collect-status").textContent = `失败：${e.last_error || ""}`;
+          }
+          loadFlow(e.last_run_id || $("#run-select").value);
           break;
         }
         $("#collect-status").textContent = `采集中…（已 ${waited}s）`;
@@ -267,6 +341,132 @@
       $("#collect-btn").disabled = false;
       refreshAll();
     }
+    // ---------------- 流程面板（对标 PPX 编辑器的步骤列表 + 节点详情） ----------------
+    const flowState = { doc: null, runs: [], detail: null, merged: [], selected: null };
+    const fmtJson = (v) => { try { return JSON.stringify(v, null, 2); } catch (_) { return String(v); } };
+    const shortTime = (ts) => (ts ? String(ts).slice(11, 19) : "—");
+    const runPill = (s) => {
+      const map = { succeeded: ["s-ok", "成功"], failed: ["s-failed", "失败"], cancelled: ["s-failed", "已取消"], paused: ["s-paused", "已暂停"] };
+      const [cls, text] = map[s] || ["s-pending", s || "未知"];
+      return `<span class="pill ${cls}">${esc(text)}</span>`;
+    };
+    async function loadFlow(runId) {
+      const [w, r] = await Promise.all([api("/api/workflow"), api("/api/runs")]);
+      if (!w.ok) {
+        const msg = (w.body && w.body.error) || `HTTP ${w.status}`;
+        $("#flow-list").innerHTML = `<div class="empty">读不到流程文件：${esc(msg)}</div>`;
+        return;
+      }
+      flowState.doc = w.body;
+      flowState.runs = (r.body && r.body.runs) || [];
+      const sel = $("#run-select");
+      const keep = runId || sel.value;
+      sel.innerHTML = flowState.runs.length
+        ? flowState.runs.map((x) => `<option value="${esc(x.run_id)}">${esc(shortTime(x.started_at))} · ${esc(String(x.run_id).slice(0, 8))} · ${x.items} 条 · ${esc(x.status)}</option>`).join("")
+        : `<option value="">（还没有运行记录）</option>`;
+      if (keep && flowState.runs.some((x) => x.run_id === keep)) sel.value = keep;
+      else if (flowState.runs.length) sel.value = flowState.runs[0].run_id;
+      flowState.detail = null;
+      if (sel.value) {
+        const d = await api("/api/runs/" + encodeURIComponent(sel.value));
+        if (d.ok) flowState.detail = d.body;
+      }
+      buildMerged();
+      renderFlow();
+    }
+    function buildMerged() {
+      const doc = flowState.doc || { steps: [] };
+      const runSteps = {};
+      ((flowState.detail && flowState.detail.steps) || []).forEach((s) => { runSteps[s.id] = s; });
+      const merged = doc.steps.map((s) => Object.assign({}, s, { run: runSteps[s.id] || null }));
+      // run 里有、当前流程里没有的步骤（流程改过 / 旧 run）也列出来，否则会「看不见失败过的那一步」
+      (flowState.detail && flowState.detail.steps ? flowState.detail.steps : []).forEach((s) => {
+        if (!doc.steps.some((x) => x.id === s.id)) {
+          merged.push({ index: merged.length + 1, id: s.id, command: s.command || "", label: s.command || s.id, args: {}, exprModes: {}, elementRefs: {}, run: s });
+        }
+      });
+      flowState.merged = merged;
+      if (!flowState.selected || !merged.some((x) => x.id === flowState.selected)) {
+        const failed = merged.find((x) => x.run && x.run.status === "failed");
+        flowState.selected = (failed || merged[0] || {}).id || null;
+      }
+    }
+    function renderFlow() {
+      const doc = flowState.doc;
+      if (!doc) return;
+      const d = flowState.detail;
+      $("#flow-sub").textContent = `（${doc.count} 步 · ${doc.id}）`;
+      const shot = d && d.artifacts && (d.artifacts.screenshots || []).length
+        ? `/api/runs/${encodeURIComponent(d.run_id)}/shot?v=${encodeURIComponent(d.run_id)}` : "";
+      const head = d
+        ? `<b>${esc(d.run_id)}</b> · 状态 ${runPill(d.status)} · 总耗时 ${d.duration_s == null ? "—" : d.duration_s + "s"} · 步骤 ${d.step_ok}/${d.step_total} 成功 · 采集 <b>${d.items}</b> 条`
+        : "还没有运行记录：去「采集控制」跑一次，这里会显示每一步的耗时、输出与现场截图。";
+      const errBox = d && d.error
+        ? `<div class="err" style="margin-top:6px">失败原因：${esc(typeof d.error === "string" ? d.error : fmtJson(d.error))}</div>` : "";
+      const shotBox = shot
+        ? `<div class="shot-bar"><a href="${shot}" target="_blank" rel="noopener"><img src="${shot}" alt="本次采集页面截图" /></a><div class="muted">采集当时的页面截图（点开看大图）</div></div>` : "";
+      $("#flow-summary").innerHTML = head + errBox + shotBox;
+
+      const rows = flowState.merged.map((s) => {
+        const st = s.run ? s.run.status : "";
+        const cls = st === "ok" ? "ok" : st === "failed" ? "failed" : "";
+        const dur = s.run && s.run.duration_s != null ? s.run.duration_s + "s" : (s.run ? "—" : "");
+        return `<div class="step-item ${cls} ${s.id === flowState.selected ? "active" : ""}" data-id="${esc(s.id)}">
+          <div class="idx">${s.index}</div>
+          <div class="fi-main"><b>${esc(s.label || s.command || s.id)}</b>
+            <div class="cmd">${esc(s.id)} · ${esc(s.command || "—")}</div></div>
+          <div class="dur">${esc(dur)}</div>
+        </div>`;
+      }).join("");
+      $("#flow-list").innerHTML = rows || `<div class="empty">流程里没有步骤。</div>`;
+      $("#flow-list").querySelectorAll(".step-item").forEach((el) => {
+        el.onclick = () => { flowState.selected = el.dataset.id; renderFlow(); };
+      });
+      renderStepDetail();
+    }
+    function renderStepDetail() {
+      const s = flowState.merged.find((x) => x.id === flowState.selected);
+      if (!s) { $("#flow-detail").innerHTML = `<div class="empty">选择左侧任意步骤查看参数与运行结果</div>`; return; }
+      const run = s.run;
+      const args = s.args || {};
+      const exprModes = s.exprModes || {};
+      const refs = s.elementRefs || {};
+      const keys = Object.keys(args);
+      const argRows = keys.length ? keys.map((k) => {
+        const badges = (exprModes[k] === "fx" ? `<span class="badge">fx 表达式</span>` : "")
+          + (refs[k] ? `<span class="badge ref">元素引用：${esc(refs[k])}</span>` : "");
+        const val = typeof args[k] === "string" ? args[k] : fmtJson(args[k]);
+        return `<tr><td class="k">${esc(k)}${badges}</td><td class="v">${esc(val)}</td></tr>`;
+      }).join("") : `<tr><td class="k">（无参数）</td><td class="v muted">该步骤没有参数</td></tr>`;
+      const outs = run && Object.keys(run.outputs || {}).length
+        ? `<pre class="json">${esc(fmtJson(run.outputs))}</pre>`
+        : `<div class="muted">${run ? "该步骤没有输出。" : "这一步在本次 run 中没有执行。"}</div>`;
+      const err = run && run.error ? `<h3 class="sec">错误</h3><pre class="json err">${esc(fmtJson(run.error))}</pre>` : "";
+      // 错误码是能力层术语，这里给一句能直接照做的中文解释（判据：用户看到就知道下一步干什么）
+      const HINTS = {
+        TIMEOUT: "页面上没等到这个条件：常见原因是未登录、被风控、或页面改版。先看上面的截图确认当时页面长什么样。",
+        ELEMENT_NOT_FOUND: "找不到元素：可能选择器变了，或页面还没加载完。",
+        ELEMENT_REF_MISSING: "元素引用解析不到：elements/ 里的元素被删或改名了。",
+      };
+      const code = run && run.error && run.error.code;
+      const hint = code && HINTS[code] ? `<div class="muted" style="margin-top:6px">${esc(HINTS[code])}</div>` : "";
+      const meta = [
+        `命令 ${esc(s.command || "—")}`,
+        `节点 ${esc(s.id)}`,
+        run ? `状态 ${run.status === "ok" ? "成功" : run.status}` : "未执行",
+        run && run.duration_s != null ? `耗时 ${run.duration_s}s` : "",
+        run && run.attempts ? `尝试 ${run.attempts} 次` : "",
+      ].filter(Boolean).join(" · ");
+      $("#flow-detail").innerHTML = `
+        <h2 style="margin:0 0 4px">${s.index}. ${esc(s.label || s.command || s.id)}</h2>
+        <div class="muted" style="font-size:12px">${meta}</div>
+        <h3 class="sec">参数</h3>
+        <table class="kv">${argRows}</table>
+        <h3 class="sec">本次输出</h3>${outs}${err}${hint}`;
+    }
+    $("#run-select").onchange = () => loadFlow($("#run-select").value);
+    $("#flow-refresh").onclick = () => loadFlow($("#run-select").value);
+
     // nav
     document.querySelectorAll("#nav button").forEach((b) => {
       b.onclick = () => {
@@ -274,12 +474,14 @@
         document.querySelectorAll(".tab").forEach((x) => x.classList.remove("active"));
         b.classList.add("active");
         $("#tab-" + b.dataset.tab).classList.add("active");
+        if (b.dataset.tab === "flow") loadFlow($("#run-select").value);
       };
     });
     $("#collect-btn").onclick = collect;
     // clock
     setInterval(() => { $("#clock").textContent = new Date().toLocaleString("zh-CN"); }, 1000);
     refreshAll();
+    loadFlow();
     setInterval(refreshAll, 15000);
   </script>
 </body>

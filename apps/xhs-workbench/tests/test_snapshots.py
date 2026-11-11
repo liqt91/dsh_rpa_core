@@ -120,3 +120,34 @@ def test_snapshot_from_outcome_rejects_non_json(tmp_path: Path) -> None:
         pass
     else:
         raise AssertionError("非 JSON 的 grabItems 结果应当被拒")
+
+
+def test_snapshot_from_outcome_skips_items_without_href_and_reports_count(tmp_path: Path) -> None:
+    """真机踩到：`section.note-item` 会命中不含链接的容器节点，缺 href 的记录让整轮采集报错。
+
+    现在改为丢弃 + 计数上报（Snapshot.skipped），既不静默吞掉，也不升级成整轮失败。
+    """
+    store = _store(tmp_path)
+    raw = _items(3) + [{"title": "没有链接的容器", "text": "x"}]
+    outcome = RunOutcome(
+        run_id="run-y",
+        status="succeeded",
+        group="ok",
+        outputs={"grabItems": {"outputs": {"result": json.dumps(raw, ensure_ascii=False)}}},
+        error=None,
+    )
+    snap = snapshots.snapshot_from_outcome(store, "kw", outcome)
+    assert snap.count == 3
+    assert snap.skipped == 1
+    # 落盘往返后 skipped 仍在，UI 才能把「丢了 1 条」说明白
+    assert store.latest("kw").skipped == 1
+
+
+def test_record_keeps_strict_identity_for_direct_callers(tmp_path: Path) -> None:
+    """宽松只发生在 outcome → store 这一层；底层 record 仍拒绝无身份记录。"""
+    store = _store(tmp_path)
+    try:
+        store.record("kw", "r", [{"title": "无链接"}])
+    except ValueError:
+        return
+    raise AssertionError("record 应当拒绝缺 href 的记录")

@@ -314,13 +314,86 @@ def test_real_runner_locates_result_json_by_filesystem_not_stdout_run_id(
     assert outcome.status == "succeeded"
 
 
-def test_make_context_resolves_root_to_absolute() -> None:
+def test_make_context_resolves_root_to_absolute(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """--data-root 传相对路径时必须转成绝对路径。
 
     否则 _real_runner 的 artifact 目录会同时被「服务进程 rglob」和「rpa-core 子进程
     (cwd=REPO_ROOT)」两套不同 cwd 解析，刚写出的 result.json 会被 rglob 找错地方，
     导致每次采集都误报「未写出 result.json」（真实踩过）。
+
+    注意：``SnapshotStore`` 会 mkdir，所以这里必须 chdir 到 tmp_path，
+    否则会在仓库根建出 ``some_relative_dir/`` 垃圾目录（已踩过）。
     """
+    monkeypatch.chdir(tmp_path)
     ctx = make_context(root="some_relative_dir")
     assert ctx.root.is_absolute()
-    assert str(ctx.root).endswith("some_relative_dir")
+    assert ctx.root == (tmp_path / "some_relative_dir").resolve()
+
+
+def _seed_run(root: Path, run_id: str = "run-seed") -> Path:
+    """造一次完整的 run 目录（result.json + events.jsonl + 截图），供流程接口断言。"""
+    run_dir = root / "run_artifacts" / run_id
+    run_dir.mkdir(parents=True)
+    (run_dir / "result.json").write_text(
+        json.dumps(
+            {
+                "run_id": run_id,
+                "status": "succeeded",
+                "error": None,
+                "outputs": {"grabItems": {"outputs": {"result": json.dumps(_items(["a", "b"]))}}},
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    events = [
+        {"type": "stepStarted", "node_id": "grabItems", "timestamp": "2026-11-11T07:00:00Z",
+         "payload": {"command": "browser.executeScript"}},
+        {"type": "stepCompleted", "node_id": "grabItems", "timestamp": "2026-11-11T07:00:01Z",
+         "payload": {"attempt": 1, "outputs": {"result": "[]"}}},
+    ]
+    (run_dir / "events.jsonl").write_text(
+        "\n".join(json.dumps(e, ensure_ascii=False) for e in events) + "\n", encoding="utf-8"
+    )
+    (run_dir / "results.png").write_bytes(b"\x89PNG\r\n\x1a\n")
+    return run_dir
+
+
+def test_http_workflow_exposes_steps_and_wait_before_grab(tmp_path: Path) -> None:
+    ctx = make_context(root=tmp_path)
+    with _live_server(ctx) as base:
+        doc = _get(base, "/api/workflow")
+    ids = [s["id"] for s in doc["steps"]]
+    assert ids[0] == "openHome"
+    assert ids.index("waitItems") < ids.index("grabItems")
+    assert doc["count"] == len(ids)
+
+
+def test_http_runs_lists_and_detail_with_shot(tmp_path: Path) -> None:
+    _seed_run(tmp_path)
+    ctx = make_context(root=tmp_path)
+    with _live_server(ctx) as base:
+        listing = _get(base, "/api/runs")
+        assert [r["run_id"] for r in listing["runs"]] == ["run-seed"]
+        assert listing["runs"][0]["items"] == 2
+        detail = _get(base, "/api/runs/run-seed")
+        assert detail["run_id"] == "run-seed"
+        assert [s["id"] for s in detail["steps"]] == ["grabItems"]
+        assert detail["artifacts"]["screenshots"] == ["results.png"]
+        with urllib.request.urlopen(base + "/api/runs/run-seed/shot", timeout=5) as resp:  # noqa: S310
+            assert resp.status == 200
+            assert resp.read().startswith(b"\x89PNG")
+
+
+def test_http_unknown_run_and_bad_run_id(tmp_path: Path) -> None:
+    _seed_run(tmp_path)
+    ctx = make_context(root=tmp_path)
+    with _live_server(ctx) as base:
+        with pytest.raises(urllib.error.HTTPError) as missing:
+            urllib.request.urlopen(base + "/api/runs/nope", timeout=5)  # noqa: S310
+        assert missing.value.code == 404
+        with pytest.raises(urllib.error.HTTPError) as escape:
+            urllib.request.urlopen(base + "/api/runs/..%2Fetc", timeout=5)  # noqa: S310
+        assert escape.value.code == 400

@@ -293,7 +293,11 @@ def run_live(args: argparse.Namespace) -> int:
         args.keyword,
         artifacts,
         binary=str(CLI),
-        extra_inputs={"browserType": args.browser, "workspace": str(artifacts)},
+        extra_inputs={
+            "browserType": args.browser,
+            "workspace": str(artifacts),
+            "shotPath": str(Path(artifacts).resolve() / "results.png"),
+        },
     )
     base["command"] = cmd
     try:
