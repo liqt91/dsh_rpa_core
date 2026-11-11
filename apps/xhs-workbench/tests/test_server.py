@@ -397,3 +397,45 @@ def test_http_unknown_run_and_bad_run_id(tmp_path: Path) -> None:
         with pytest.raises(urllib.error.HTTPError) as escape:
             urllib.request.urlopen(base + "/api/runs/..%2Fetc", timeout=5)  # noqa: S310
         assert escape.value.code == 400
+
+
+def test_monitor_is_running_while_runner_executes(tmp_path: Path) -> None:
+    """监控池必须在 runner 执行期间就是 running。
+
+    之前是「跑完才置 running」，整段采集期间监控池仍挂着上一次的 ok——
+    前端轮询 1 秒就读到「完成」，表现为「点了采集立刻跳出完成、没有任何数据」（真实踩到）。
+    """
+    ctx = make_context(root=tmp_path)
+    seen: list[str] = []
+
+    def runner(keyword: str, browser: str) -> RunOutcome:
+        entry = ctx.monitor.get(keyword)
+        seen.append(entry.state if entry else "(none)")
+        return _ok_outcome(_items(["a"]))
+
+    ctx.runner = runner
+    res = run_collection(ctx, KW, "chrome")
+    assert seen == ["running"], f"runner 执行时监控池状态应为 running，实际 {seen}"
+    assert res["ok"] is True
+    assert ctx.monitor.get(KW).state == "ok"
+    assert ctx.monitor.get(KW).last_run_id == "run-fake"
+
+
+def test_paused_keyword_is_refused_before_running(tmp_path: Path) -> None:
+    ctx = make_context(root=tmp_path, runner=lambda k, b: _ok_outcome(_items(["a"])))
+    ctx.monitor.register(KW)
+    ctx.monitor.pause(KW)
+    res = run_collection(ctx, KW, "chrome")
+    assert res["ok"] is False
+    assert "paused" in res["error"]
+    assert ctx.monitor.get(KW).state == "paused"
+
+
+def test_http_collect_rejects_paused_keyword(tmp_path: Path) -> None:
+    ctx = make_context(root=tmp_path, runner=lambda k, b: _ok_outcome(_items(["a"])))
+    ctx.monitor.register(KW)
+    ctx.monitor.pause(KW)
+    with _live_server(ctx) as base:
+        status, body = _post(base, "/api/collect", {"keyword": KW})
+    assert status == 409
+    assert "暂停" in body["error"]

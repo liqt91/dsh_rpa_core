@@ -183,19 +183,27 @@ def run_collection(
         "ok": False,
     }
 
+    # ★ 必须在**调用 runner 之前**进 running，不能等它跑完再置状态。
+    # 否则整段采集（十几秒）期间监控池仍挂着上一次的 ok/failed，前端轮询第一秒就读到
+    # 「完成」——这正是「点了采集，直接跳出采集完成、没有任何数据」这个症状的来源。
+    # 进度条可信的前提是「running 覆盖整个执行窗口」。
+    provisional = "run-" + uuid.uuid4().hex[:12]
+    try:
+        ctx.monitor.set_running(keyword, provisional)
+    except ValueError as exc:  # 已暂停的 keyword 不允许开跑
+        result["error"] = str(exc)
+        return result
+
     try:
         outcome = ctx.runner(keyword, browser_type)
     except Exception as exc:  # 子进程崩 / result.json 缺失 / 解析失败
-        rid = "run-" + uuid.uuid4().hex[:12]
-        ctx.monitor.set_running(keyword, rid)
         ctx.monitor.set_failed(keyword, f"{type(exc).__name__}: {exc}")
-        result["run_id"] = rid
+        entry = ctx.monitor.get(keyword)
+        result["run_id"] = (entry.last_run_id if entry else None) or provisional
         result["error"] = str(exc)
         return result
 
     run_id = outcome.run_id or "(unknown)"
-    # 先进入 running（从 pending/ok/failed 合法），再转 ok/failed。
-    ctx.monitor.set_running(keyword, run_id)
     if outcome.group == "ok":
         snap = snapshot_from_outcome(ctx.store, keyword, outcome)
         alerts = detect_for_keyword(ctx.store, keyword)
@@ -413,6 +421,11 @@ class _Handler(BaseHTTPRequestHandler):
             self._send(400, {"error": "keyword required"})
             return
         browser = str(data.get("browserType") or ctx.default_browser)
+        entry = ctx.monitor.get(keyword)
+        if entry is not None and entry.state == "paused":
+            # 暂停是用户显式意图：直接拒，不要先收下再在后台报错（前端会一直等 running）
+            self._send(409, {"error": f"{keyword} 已暂停，先在监控池恢复再采集"})
+            return
         if ctx.lock.locked():
             self._send(409, {"error": "another collection already in flight"})
             return

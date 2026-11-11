@@ -305,6 +305,11 @@
       const browser = $("#browser").value;
       $("#collect-btn").disabled = true;
       $("#collect-status").textContent = "已提交，等待执行…";
+      // 记下提交前那次 run 的 id：否则「上一次的 ok」会被当成本次结果（真实踩到过：
+      // 点了采集 1 秒后直接显示「采集完成」，其实一次都没跑）
+      const m0 = await api("/api/monitor");
+      const prev = ((m0.body && m0.body.entries) || []).find((x) => x.keyword === kw);
+      const prevId = prev ? prev.last_run_id : null;
       const res = await api("/api/collect", { method: "POST", body: JSON.stringify({ keyword: kw, browserType: browser }) });
       if (!res.ok) {
         $("#collect-status").textContent = "";
@@ -312,14 +317,17 @@
         $("#collect-btn").disabled = false;
         return;
       }
-      // 轮询该关键词状态直到不再是 running
+      // 轮询该关键词状态，直到「本次 run」结束（run_id 变了 或 中间见过 running）
       let waited = 0;
+      let sawRunning = false;
       while (waited < 180) {
         await new Promise((r) => setTimeout(r, 1000)); waited++;
         const m = await api("/api/monitor");
         const e = (m.body && m.body.entries || []).find((x) => x.keyword === kw);
         if (!e) { $("#collect-status").textContent = "状态未知"; break; }
-        if (e.state !== "running") {
+        if (e.state === "running") sawRunning = true;
+        const finished = e.state !== "running" && (sawRunning || e.last_run_id !== prevId || e.state === "paused");
+        if (finished) {
           if (e.state === "ok") {
             const s = await api("/api/snapshots");
             const hit = ((s.body && s.body.keywords) || []).find((x) => x.keyword === kw);
@@ -329,6 +337,8 @@
             $("#collect-status").textContent = n > 0
               ? `采集完成 ✓ 取到 ${n} 条${skipped ? `（跳过 ${skipped} 条无链接）` : ""}`
               : "结束但没取到数据 → 切到「流程」页看每步耗时与现场截图";
+          } else if (e.state === "paused") {
+            $("#collect-status").textContent = "该关键词已暂停：先在监控池恢复再采集";
           } else {
             $("#collect-status").textContent = `失败：${e.last_error || ""}`;
           }
