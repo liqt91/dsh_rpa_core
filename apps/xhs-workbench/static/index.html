@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>小红书工作台</title>
+  <style>
+    :root {
+      --bg: #f5f6f8; --card: #ffffff; --ink: #1f2329; --muted: #8a9099;
+      --line: #e6e8eb; --brand: #ff2e4d; --accent: #2b6cff;
+      --ok: #1f9d55; --fail: #d93636; --run: #2b6cff; --pause: #8a9099;
+      --warn: #d98300;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; font-family: -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      background: var(--bg); color: var(--ink); font-size: 14px;
+    }
+    header {
+      background: var(--card); border-bottom: 1px solid var(--line);
+      padding: 14px 20px; display: flex; align-items: center; gap: 12px;
+    }
+    header h1 { font-size: 17px; margin: 0; }
+    header .sub { color: var(--muted); font-size: 12px; }
+    .wrap { display: flex; min-height: calc(100vh - 53px); }
+    nav {
+      width: 168px; background: var(--card); border-right: 1px solid var(--line);
+      padding: 12px 0; flex: none;
+    }
+    nav button {
+      display: block; width: 100%; text-align: left; border: 0; background: none;
+      padding: 11px 20px; font-size: 14px; color: var(--ink); cursor: pointer;
+    }
+    nav button.active { background: #fff0f2; color: var(--brand); font-weight: 600; border-right: 3px solid var(--brand); }
+    main { flex: 1; padding: 20px; overflow: auto; }
+    .tab { display: none; }
+    .tab.active { display: block; }
+    .card {
+      background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+      padding: 16px; margin-bottom: 16px;
+    }
+    .card h2 { font-size: 15px; margin: 0 0 12px; }
+    .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th, td { text-align: left; padding: 9px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+    th { color: var(--muted); font-weight: 600; }
+    .pill { display: inline-block; padding: 2px 9px; border-radius: 999px; font-size: 12px; color: #fff; }
+    .s-ok { background: var(--ok); } .s-failed { background: var(--fail); }
+    .s-running { background: var(--run); } .s-paused { background: var(--pause); }
+    .s-pending, .s-scheduled { background: var(--warn); }
+    .btn {
+      border: 1px solid var(--line); background: #fff; color: var(--ink);
+      padding: 6px 13px; border-radius: 7px; cursor: pointer; font-size: 13px;
+    }
+    .btn:hover { border-color: var(--accent); }
+    .btn.primary { background: var(--brand); border-color: var(--brand); color: #fff; }
+    .btn.sm { padding: 3px 9px; font-size: 12px; }
+    input, select {
+      border: 1px solid var(--line); border-radius: 7px; padding: 7px 10px;
+      font-size: 13px; font-family: inherit;
+    }
+    input[type=text] { width: 240px; }
+    .muted { color: var(--muted); }
+    .empty { color: var(--muted); padding: 24px; text-align: center; }
+    .err { color: var(--fail); }
+    .toast {
+      position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
+      background: #1f2329; color: #fff; padding: 9px 16px; border-radius: 8px; font-size: 13px;
+      opacity: 0; transition: opacity .2s; pointer-events: none;
+    }
+    .toast.show { opacity: 1; }
+    .progress { color: var(--accent); }
+    a { color: var(--accent); }
+    .count { color: var(--muted); font-weight: 400; font-size: 13px; margin-left: 6px; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>小红书工作台</h1>
+    <span class="sub" id="health">连接中…</span>
+    <span class="sub" style="margin-left:auto" id="clock"></span>
+  </header>
+  <div class="wrap">
+    <nav id="nav">
+      <button data-tab="overview" class="active">概览</button>
+      <button data-tab="monitor">监控池</button>
+      <button data-tab="products">商品库</button>
+      <button data-tab="alerts">告警</button>
+      <button data-tab="snapshots">快照</button>
+      <button data-tab="collect">采集控制</button>
+    </nav>
+    <main>
+      <section class="tab active" id="tab-overview"><div class="card"><h2>概览</h2><div id="overview-body">加载中…</div></div></section>
+      <section class="tab" id="tab-monitor"><div class="card"><h2>监控池<span class="count" id="monitor-count"></span></h2><div id="monitor-body"></div></div></section>
+      <section class="tab" id="tab-products"><div class="card"><h2>商品库<span class="count" id="products-count"></span></h2><div id="products-body"></div></div></section>
+      <section class="tab" id="tab-alerts"><div class="card"><h2>告警<span class="count" id="alerts-count"></span></h2><div id="alerts-body"></div></div></section>
+      <section class="tab" id="tab-snapshots"><div class="card"><h2>快照<span class="count" id="snapshots-count"></span></h2><div id="snapshots-body"></div></div></section>
+      <section class="tab" id="tab-collect">
+        <div class="card">
+          <h2>触发一次采集</h2>
+          <div class="row">
+            <input type="text" id="kw" placeholder="关键词，例如 AI效率工具" />
+            <select id="browser">
+              <option value="chrome">Chrome</option>
+              <option value="msedge">Edge</option>
+            </select>
+            <button class="btn primary" id="collect-btn">开始采集</button>
+            <span id="collect-status" class="progress"></span>
+          </div>
+          <p class="muted" style="margin:10px 0 0">采集走后台线程，触发后下方状态实时刷新；同一时刻只允许一个采集在飞（其余返回 409）。</p>
+        </div>
+      </section>
+    </main>
+  </div>
+  <div class="toast" id="toast"></div>
+
+  <script>
+    const $ = (s) => document.querySelector(s);
+    const stateClass = (s) => ({
+      ok: "s-ok", failed: "s-failed", running: "s-running",
+      paused: "s-paused", pending: "s-pending", scheduled: "s-scheduled",
+    }[s] || "s-pending");
+    const stateText = (s) => ({ ok: "成功", failed: "失败", running: "采集中", paused: "已暂停", pending: "待排程", scheduled: "已排程" }[s] || s);
+    const esc = (x) => String(x ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+    let toastTimer;
+    function toast(msg, isErr) {
+      const t = $("#toast");
+      t.textContent = msg; t.classList.add("show");
+      if (isErr) t.style.background = "var(--fail)"; else t.style.background = "#1f2329";
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => t.classList.remove("show"), 2600);
+    }
+    async function api(path, opts) {
+      const res = await fetch(path, Object.assign({ headers: { "Content-Type": "application/json" } }, opts));
+      let body = null;
+      try { body = await res.json(); } catch (_) {}
+      return { ok: res.ok, status: res.status, body };
+    }
+    async function refreshAll() {
+      const [h, m, p, a, s] = await Promise.all([
+        api("/api/health"), api("/api/monitor"), api("/api/products"),
+        api("/api/alerts"), api("/api/snapshots"),
+      ]);
+      $("#health").textContent = h.ok ? "● 在线" : "○ 离线";
+      $("#health").style.color = h.ok ? "var(--ok)" : "var(--fail)";
+      renderMonitor(m.body); renderProducts(p.body); renderAlerts(a.body); renderSnapshots(s.body);
+      renderOverview(m.body, p.body, a.body, s.body);
+    }
+    function renderOverview(m, p, a, s) {
+      const counts = (m && m.counts) || {};
+      const html = `
+        <div class="row">
+          <div class="card" style="flex:1"><b>${((s && s.keywords) || []).length}</b><div class="muted">跟踪关键词</div></div>
+          <div class="card" style="flex:1"><b>${(p && p.count) || 0}</b><div class="muted">商品库条目</div></div>
+          <div class="card" style="flex:1"><b>${(a && a.count) || 0}</b><div class="muted">告警条数</div></div>
+          <div class="card" style="flex:1"><b>${counts.running || 0}</b><div class="muted">采集中</div></div>
+        </div>
+        <p class="muted">状态分布：成功 ${counts.ok || 0} · 失败 ${counts.failed || 0} · 已暂停 ${counts.paused || 0} · 待排程 ${counts.pending || 0} · 已排程 ${counts.scheduled || 0}</p>`;
+      $("#overview-body").innerHTML = html;
+    }
+    function renderMonitor(m) {
+      if (!m || !m.entries) { $("#monitor-body").innerHTML = `<div class="empty">加载失败</div>`; return; }
+      $("#monitor-count").textContent = m.entries.length ? `（${m.entries.length}）` : "";
+      if (!m.entries.length) { $("#monitor-body").innerHTML = `<div class="empty">还没有跟踪的关键词。去「采集控制」触发一次。</div>`; return; }
+      const rows = m.entries.map((e) => `
+        <tr>
+          <td>${esc(e.keyword)}</td>
+          <td><span class="pill ${stateClass(e.state)}">${stateText(e.state)}</span></td>
+          <td class="muted">${esc(e.last_run_id || "—")}</td>
+          <td class="muted">${esc(e.last_error || "—")}</td>
+          <td>
+            ${e.state === "paused"
+              ? `<button class="btn sm" data-act="resume" data-kw="${esc(e.keyword)}">恢复</button>`
+              : `<button class="btn sm" data-act="pause" data-kw="${esc(e.keyword)}">暂停</button>`}
+          </td>
+        </tr>`).join("");
+      $("#monitor-body").innerHTML = `
+        <div class="row" style="margin-bottom:10px">
+          <button class="btn" id="pause-all">全部暂停</button>
+          <button class="btn" id="resume-all">全部恢复</button>
+        </div>
+        <table><thead><tr><th>关键词</th><th>状态</th><th>最近 run</th><th>错误</th><th>操作</th></tr></thead><tbody>${rows}</tbody></table>`;
+      $("#monitor-body").querySelectorAll("button[data-act]").forEach((b) => {
+        b.onclick = () => stateChange(b.dataset.act, b.dataset.kw);
+      });
+      $("#pause-all").onclick = () => bulk("pause-all");
+      $("#resume-all").onclick = () => bulk("resume-all");
+    }
+    function renderProducts(p) {
+      const items = (p && p.items) || [];
+      $("#products-count").textContent = items.length ? `（${items.length}）` : "";
+      if (!items.length) { $("#products-body").innerHTML = `<div class="empty">商品库为空，先采集。</div>`; return; }
+      const rows = items.map((it) => `
+        <tr><td><a href="${esc(it.href)}" target="_blank" rel="noopener">${esc(it.title || it.href)}</a></td>
+        <td class="muted">${esc(it.text)}</td></tr>`).join("");
+      $("#products-body").innerHTML = `<table><thead><tr><th>标题 / 链接</th><th>正文摘要</th></tr></thead><tbody>${rows}</tbody></table>`;
+    }
+    function renderAlerts(a) {
+      const items = (a && a.alerts) || [];
+      $("#alerts-count").textContent = items.length ? `（${items.length}）` : "";
+      if (!items.length) { $("#alerts-body").innerHTML = `<div class="empty">暂无告警。</div>`; return; }
+      const kindText = { new: "新上架", removed: "下架", changed: "变动" };
+      const rows = items.slice().reverse().map((al) => `
+        <tr>
+          <td><span class="pill ${al.kind === "removed" ? "s-failed" : al.kind === "new" ? "s-ok" : "s-running"}">${kindText[al.kind] || al.kind}</span></td>
+          <td>${esc(al.keyword)}</td>
+          <td><a href="${esc(al.href)}" target="_blank" rel="noopener">${esc(al.title || al.href)}</a></td>
+          <td class="muted">${esc(al.detail)}</td>
+          <td class="muted">${esc(al.detected_at)}</td>
+        </tr>`).join("");
+      $("#alerts-body").innerHTML = `<table><thead><tr><th>类型</th><th>关键词</th><th>商品</th><th>说明</th><th>发现时间</th></tr></thead><tbody>${rows}</tbody></table>`;
+    }
+    function renderSnapshots(s) {
+      const kws = (s && s.keywords) || [];
+      $("#snapshots-count").textContent = kws.length ? `（${kws.length}）` : "";
+      if (!kws.length) { $("#snapshots-body").innerHTML = `<div class="empty">暂无快照。</div>`; return; }
+      const cards = kws.map((k) => {
+        const latest = k.latest;
+        const items = latest ? latest.items : [];
+        const list = items.slice(0, 8).map((it) => `<li><a href="${esc(it.href)}" target="_blank" rel="noopener">${esc(it.title || it.href)}</a></li>`).join("");
+        const more = items.length > 8 ? `<li class="muted">…还有 ${items.length - 8} 条</li>` : "";
+        return `<div class="card" style="margin-bottom:12px">
+          <h2 style="margin:0 0 6px">${esc(k.keyword)} <span class="count">${k.runs} 次 · 最新 ${esc(latest ? latest.collected_at : "—")}</span></h2>
+          <ul style="margin:0;padding-left:18px">${list || '<li class="muted">无条目</li>'}${more}</ul>
+        </div>`;
+      }).join("");
+      $("#snapshots-body").innerHTML = cards;
+    }
+    async function stateChange(act, kw) {
+      const res = await api("/api/" + act, { method: "POST", body: JSON.stringify({ keyword: kw }) });
+      if (res.ok) { toast(act === "pause" ? `已暂停：${kw}` : `已恢复：${kw}`); refreshAll(); }
+      else toast(res.body && res.body.error ? res.body.error : `操作失败(${res.status})`, true);
+    }
+    async function bulk(act) {
+      const res = await api("/api/" + act, { method: "POST", body: "{}" });
+      if (res.ok) { toast(act === "pause-all" ? "已暂停全部" : "已恢复全部"); refreshAll(); }
+      else toast(`操作失败(${res.status})`, true);
+    }
+    async function collect() {
+      const kw = $("#kw").value.trim();
+      if (!kw) { toast("请先填关键词", true); return; }
+      const browser = $("#browser").value;
+      $("#collect-btn").disabled = true;
+      $("#collect-status").textContent = "已提交，等待执行…";
+      const res = await api("/api/collect", { method: "POST", body: JSON.stringify({ keyword: kw, browserType: browser }) });
+      if (!res.ok) {
+        $("#collect-status").textContent = "";
+        toast(res.body && res.body.error ? res.body.error : `提交失败(${res.status})`, true);
+        $("#collect-btn").disabled = false;
+        return;
+      }
+      // 轮询该关键词状态直到不再是 running
+      let waited = 0;
+      while (waited < 180) {
+        await new Promise((r) => setTimeout(r, 1000)); waited++;
+        const m = await api("/api/monitor");
+        const e = (m.body && m.body.entries || []).find((x) => x.keyword === kw);
+        if (!e) { $("#collect-status").textContent = "状态未知"; break; }
+        if (e.state !== "running") {
+          $("#collect-status").textContent = e.state === "ok" ? "采集完成 ✓" : `结束（${e.state}）`;
+          if (e.state === "failed") $("#collect-status").textContent = `失败：${e.last_error || ""}`;
+          break;
+        }
+        $("#collect-status").textContent = `采集中…（已 ${waited}s）`;
+      }
+      if (waited >= 180) $("#collect-status").textContent = "超时未结束，请稍后刷新查看";
+      $("#collect-btn").disabled = false;
+      refreshAll();
+    }
+    // nav
+    document.querySelectorAll("#nav button").forEach((b) => {
+      b.onclick = () => {
+        document.querySelectorAll("#nav button").forEach((x) => x.classList.remove("active"));
+        document.querySelectorAll(".tab").forEach((x) => x.classList.remove("active"));
+        b.classList.add("active");
+        $("#tab-" + b.dataset.tab).classList.add("active");
+      };
+    });
+    $("#collect-btn").onclick = collect;
+    // clock
+    setInterval(() => { $("#clock").textContent = new Date().toLocaleString("zh-CN"); }, 1000);
+    refreshAll();
+    setInterval(refreshAll, 15000);
+  </script>
+</body>
+</html>
