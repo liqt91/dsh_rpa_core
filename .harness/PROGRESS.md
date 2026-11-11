@@ -424,3 +424,4 @@ un-control-advanced 翻 true——M21 于 2026-09-19 完成后已连续多轮 FU
 2026-11-11 | branch-scope-split | done | 以 ff36ed2 为拆分点建 plugin-only，两分支树一致；落 branch-scope.json 契约 + check_branch_scope.py 闸门（接线哨兵/跨分支比对/越界）；7 注负向全红且 md5 还原、1 对照绿；两分支共享治理文件逐字节相同。
 2026-11-11 | branch-scope-xhs | done | 从 cd74295 新建 xhs-workbench（独占 apps/xhs-workbench/），契约/闸门泛化为三分支；负向 10 红 + 2 绿 + md5 还原；P0 落配置化调度、collector、小红书采集 workflow。
 2026-11-11 | branch-artifacts-inbox | done | 收口拆分遗留的 4 笔在制品：两笔 workbuddy-suite 改动只提交到 plugin-only，workflows/test 草稿三分支同步删除；小红书流程只在 xhs-workbench 入库，ai-baidu-news 与其余未跟踪文件原样保留。闸门四层全绿，治理文件三分支同 blob。
+2026-11-11 | xhs-e2e-live | done | 真机 E2E 跑通（手动开 Chrome 后 --run --browser chrome 连续两次 PASSED，可重复）；跳 search_result?keyword=AI效率工具、抓 22 条、落盘 xhs-products.json 5293 字节逐字一致；五判据全绿；修了 host 白名单缺 ID / executeScript 表达式无 return / 合成 pressEnter 不跳页 三坑，加第5判据 search_effective；证据 run_artifacts/xhs-e2e/e2e-verdict-*.json，应用层 51 测试 + ruff + validate 全绿（仍欠：接 check_all.py）。

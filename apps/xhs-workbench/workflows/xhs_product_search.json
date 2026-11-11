@@ -4,7 +4,8 @@
   "name": "小红书商品搜索采集（P0）",
   "inputs": {
     "keyword": "AI效率工具",
-    "workspace": "run_artifacts/xhs"
+    "workspace": "run_artifacts/xhs",
+    "browserType": "chrome"
   },
   "root": {
     "type": "sequence",
@@ -15,7 +16,7 @@
         "id": "openHome",
         "command": "browser.navigate",
         "with": {
-          "browserType": "chrome",
+          "browserType": "${inputs.browserType}",
           "action": "goto",
           "url": "https://www.xiaohongshu.com/explore",
           "timeoutMs": 20000
@@ -38,7 +39,7 @@
           "sessionId": "${steps.openHome.outputs.sessionId}",
           "text": "${inputs.keyword}",
           "mode": "clipboard",
-          "pressEnter": true,
+          "pressEnter": false,
           "clickBeforeInput": true
         },
         "elementRefs": {
@@ -47,10 +48,32 @@
       },
       {
         "type": "action",
+        "id": "gotoResults",
+        "command": "browser.navigate",
+        "with": {
+          "browserType": "${inputs.browserType}",
+          "action": "goto",
+          "url": "https://www.xiaohongshu.com/search_result?keyword=[inputs.keyword]",
+          "timeoutMs": 20000
+        },
+        "_exprModes": {
+          "url": "fx"
+        }
+      },
+      {
+        "type": "action",
+        "id": "closeExplore",
+        "command": "browser.close",
+        "with": {
+          "sessionId": "${steps.openHome.outputs.sessionId}"
+        }
+      },
+      {
+        "type": "action",
         "id": "waitResults",
         "command": "browser.waitLoad",
         "with": {
-          "sessionId": "${steps.openHome.outputs.sessionId}",
+          "sessionId": "${steps.gotoResults.outputs.sessionId}",
           "timeoutMs": 20000
         }
       },
@@ -59,9 +82,9 @@
         "id": "grabItems",
         "command": "browser.executeScript",
         "with": {
-          "sessionId": "${steps.openHome.outputs.sessionId}",
+          "sessionId": "${steps.gotoResults.outputs.sessionId}",
           "timeoutMs": 15000,
-          "script": "(() => { const nodes = Array.from(document.querySelectorAll('a[href*=\"/goods/\"], section.note-item')); return JSON.stringify(nodes.slice(0, 50).map((n) => ({ title: (n.innerText || '').trim().slice(0, 200), href: n.href || (n.querySelector('a') || {}).href || '', text: (n.innerText || '').trim().slice(0, 500) }))); })()"
+          "script": "const nodes = Array.from(document.querySelectorAll('a[href*=\"/goods/\"], section.note-item')); return JSON.stringify(nodes.slice(0, 50).map((n) => ({ title: (n.innerText || '').trim().slice(0, 200), href: n.href || (n.querySelector('a') || {}).href || '', text: (n.innerText || '').trim().slice(0, 500) })));"
         }
       },
       {
@@ -79,7 +102,7 @@
         "id": "close",
         "command": "browser.close",
         "with": {
-          "sessionId": "${steps.openHome.outputs.sessionId}"
+          "sessionId": "${steps.gotoResults.outputs.sessionId}"
         }
       }
     ]

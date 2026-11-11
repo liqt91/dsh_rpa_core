@@ -39,7 +39,7 @@ def test_inputs_referenced_are_exactly_the_declared_ones() -> None:
         for value in (node.get("with") or {}).values():
             if isinstance(value, str):
                 used.update(INPUT_RE.findall(value))
-    assert used == {"keyword", "workspace"}
+    assert used == {"keyword", "workspace", "browserType"}
     assert used == set(doc["inputs"])
 
 
@@ -55,6 +55,8 @@ def test_step_refs_only_point_to_earlier_actions() -> None:
         "openHome",
         "waitHome",
         "typeKeyword",
+        "gotoResults",
+        "closeExplore",
         "waitResults",
         "grabItems",
         "saveRaw",
@@ -77,18 +79,62 @@ def test_element_ref_resolves_to_a_usable_css_selector() -> None:
         assert element_value_for_key(reader(name), "selector") == "#search-input-in-feeds"
 
 
+def _script_is_function_body(script: str) -> bool:
+    """扩展侧 pageEval 把 script 塞进 `new Function` 的函数体，必须自带 return。
+
+    写成 `(() => {...})()` 这种表达式语句时，函数体没有 return，注入结果恒为
+    undefined → `outputs.result` 为 null → 下一步 data.writeText 报 INVALID_INPUT。
+    真机 E2E 实跑踩到过，这里把形状钉死。
+    """
+    return "return " in script and not script.lstrip().startswith("(() =>")
+
+
 def test_extracted_result_is_actually_persisted() -> None:
     by_id = {node["id"]: node for node in actions()}
     assert by_id["grabItems"]["command"] == "browser.executeScript"
-    assert "JSON.stringify" in by_id["grabItems"]["with"]["script"]
+    script = by_id["grabItems"]["with"]["script"]
+    assert "JSON.stringify" in script
+    assert _script_is_function_body(script)
     assert by_id["saveRaw"]["command"] == "data.writeText"
     assert by_id["saveRaw"]["with"]["text"] == "${steps.grabItems.outputs.result}"
 
 
-def test_workflow_uses_a_single_browser_session() -> None:
+def test_search_navigation_uses_the_input_keyword() -> None:
+    """真机踩到：合成 Enter 不触发小红书搜索，URL 一直停在 /explore。
+
+    流程改为显式导航搜索结果页；这里钉死「关键词来自输入」和「pressEnter 不装样子」，
+    避免以后有人把 URL 写死或把假开关打开。
+    """
+    node = {n["id"]: n for n in actions()}["gotoResults"]
+    assert node["command"] == "browser.navigate"
+    assert "[inputs.keyword]" in node["with"]["url"]
+    assert node["_exprModes"]["url"] == "fx"
+    assert "sessionId" not in node["with"]  # navigate 的顶层 schema 不收 sessionId
+    assert {n["id"]: n for n in actions()}["typeKeyword"]["with"]["pressEnter"] is False
+
+
+def test_iife_script_shape_is_rejected() -> None:
+    """负向对照：旧写法必须被判据挡下，不是恒绿的形状检查。"""
+    legacy = (
+        "(() => { const nodes = []; return JSON.stringify(nodes); })()"
+    )
+    assert not _script_is_function_body(legacy)
+
+
+def test_sessions_follow_the_two_tabs_we_actually_open() -> None:
+    """首页标签只用来验元素引用输入，采集跟搜索结果页那个新标签。
+
+    两个 session 都必须指向真实更早步骤，且旧标签要有显式 close，不能残留。
+    """
+    by_id = {node["id"]: node for node in actions()}
     sessions = {
         node["with"]["sessionId"]
         for node in actions()
         if "sessionId" in (node.get("with") or {})
     }
-    assert sessions == {"${steps.openHome.outputs.sessionId}"}
+    assert sessions == {
+        "${steps.openHome.outputs.sessionId}",
+        "${steps.gotoResults.outputs.sessionId}",
+    }
+    assert by_id["closeExplore"]["with"]["sessionId"] == "${steps.openHome.outputs.sessionId}"
+    assert by_id["close"]["with"]["sessionId"] == "${steps.gotoResults.outputs.sessionId}"
