@@ -2,11 +2,12 @@
 
 隔离做法：在 tempfile.mkdtemp() 里造一个最小 git repo，复制主仓的契约 /
 闸门 / check_all.py / 治理文档，把契约的 split_point 改写成临时 repo 的 C0，
-再造出 ppx-only / plugin-only 两条分支。所有注入只发生在临时 repo 的副本里，
-**主仓工作区与 index 一律不动**，也从不删文件（删除守卫会拦）。
+再造出 ppx-only / plugin-only / xhs-workbench 三条分支。所有注入只发生在临时
+repo 的副本里，**主仓工作区与 index 一律不动**，也从不删文件（删除守卫会拦）。
 
 注入集按推理写期望片段，不照抄实际输出；每条跑完必须还原、还原后必须回绿，
-并核治理文件 md5。最后一个 case 是正向对照：共享运行时文件改动应当放行。
+并核治理文件 md5。末尾两条是正向对照：共享运行时改动放行、缺一条 ref 时
+明确 skipped 且仍放行。
 
 运行：./.venv/Scripts/python.exe .harness/spike/probe_branch_scope_negative.py
 """
@@ -94,7 +95,7 @@ def make_tmp_root() -> Path:
 def preflight() -> None:
     """防呆：别在别人的暂存改动上跑，也别在错误的分支上跑。"""
     branch = git(ROOT, "symbolic-ref", "--quiet", "--short", "HEAD").stdout.strip()
-    if branch not in ("ppx-only", "plugin-only"):
+    if branch not in ("ppx-only", "plugin-only", "xhs-workbench"):
         raise SystemExit(f"主仓当前分支 {branch} 不是拆分目标分支，先切过去")
     staged = git(ROOT, "diff", "--cached", "--name-only").stdout.strip()
     if staged:
@@ -130,6 +131,7 @@ def build_template(tmp: Path, sources: dict[str, bytes]) -> tuple[Path, str]:
     git(repo, "commit", "-q", "-m", "template C1")
     c1 = git(repo, "rev-parse", "HEAD").stdout.strip()
     git(repo, "branch", "plugin-only", c1)
+    git(repo, "branch", "xhs-workbench", c1)
     return repo, c1
 
 
@@ -153,7 +155,7 @@ def write_and_commit(repo: Path, rel: str, content: str) -> None:
 
 
 def cases(c1: str, split_sha: str) -> list[dict]:
-    """每个 case: name / expect(红时的期望片段或 None=期望绿) / inject(repo) -> restore()。"""
+    """case: name / expect(红时片段或 None=绿) / 可选 green_contains / inject->restore。"""
 
     def committed_plugin(repo: Path) -> object:
         write_and_commit(repo, "workbuddy-suite/release.json", "{}\n")
@@ -166,10 +168,29 @@ def cases(c1: str, split_sha: str) -> list[dict]:
         git(repo, "add", "workbuddy-suite/release.json")
         return lambda: git(repo, "restore", "--staged", "workbuddy-suite/release.json")
 
-    def committed_ppx(repo: Path) -> object:
+    def committed_ppx_on_plugin(repo: Path) -> object:
         git(repo, "checkout", "-q", "plugin-only")
         write_and_commit(repo, ".harness/demo/ppx_probe/app/gui/src/main.js", "// injected\n")
+
+        def restore() -> None:
+            git(repo, "reset", "--hard", "HEAD~1")
+            git(repo, "checkout", "-q", "ppx-only")
+
+        return restore
+
+    def committed_xhs_on_ppx(repo: Path) -> object:
+        write_and_commit(repo, "apps/xhs-workbench/README.md", "# injected\n")
         return lambda: git(repo, "reset", "--hard", "HEAD~1")
+
+    def committed_ppx_on_xhs(repo: Path) -> object:
+        git(repo, "checkout", "-q", "xhs-workbench")
+        write_and_commit(repo, ".harness/demo/ppx_probe/app/gui/src/main.js", "// injected\n")
+
+        def restore() -> None:
+            git(repo, "reset", "--hard", "HEAD~1")
+            git(repo, "checkout", "-q", "ppx-only")
+
+        return restore
 
     def unwired(repo: Path) -> object:
         original = replace_once(repo, CHECK_ALL_REL, WIRING_ANCHOR, "# unwired")
@@ -196,6 +217,27 @@ def cases(c1: str, split_sha: str) -> list[dict]:
 
         return restore
 
+    def diverged_contract_third(repo: Path) -> object:
+        scope_path = repo / SCOPE_REL
+        original = scope_path.read_bytes()
+        git(repo, "checkout", "-q", "xhs-workbench")
+        scope_path.write_bytes(
+            original.replace("PPX 桌面客户端专用分支".encode(), "分叉的 role".encode())
+        )
+        git(repo, "add", SCOPE_REL)
+        git(repo, "commit", "-q", "-m", "third branch diverge contract")
+        git(repo, "checkout", "-q", "ppx-only")
+
+        def restore() -> None:
+            git(repo, "update-ref", "refs/heads/xhs-workbench", c1)
+            scope_path.write_bytes(original)
+
+        return restore
+
+    def missing_ref_skipped(repo: Path) -> object:
+        git(repo, "update-ref", "-d", "refs/heads/xhs-workbench")
+        return lambda: git(repo, "update-ref", "refs/heads/xhs-workbench", c1)
+
     def overlapping_prefixes(repo: Path) -> object:
         original = replace_once(
             repo,
@@ -219,7 +261,17 @@ def cases(c1: str, split_sha: str) -> list[dict]:
         {
             "name": "plugin-only 提交客户端域文件",
             "expect": "归 ppx-only",
-            "inject": committed_ppx,
+            "inject": committed_ppx_on_plugin,
+        },
+        {
+            "name": "ppx-only 提交工作台域文件",
+            "expect": "归 xhs-workbench",
+            "inject": committed_xhs_on_ppx,
+        },
+        {
+            "name": "xhs-workbench 提交客户端域文件",
+            "expect": "归 ppx-only",
+            "inject": committed_ppx_on_xhs,
         },
         {"name": "摘掉 check_all.py 接线", "expect": "接线命中 0 次", "inject": unwired},
         {
@@ -227,7 +279,16 @@ def cases(c1: str, split_sha: str) -> list[dict]:
             "expect": "不是本仓的 commit",
             "inject": broken_split,
         },
-        {"name": "两分支契约分叉", "expect": "两分支内容分叉", "inject": diverged_contract},
+        {
+            "name": "plugin-only 契约分叉",
+            "expect": "与 plugin-only 内容分叉",
+            "inject": diverged_contract,
+        },
+        {
+            "name": "xhs-workbench 契约分叉",
+            "expect": "与 xhs-workbench 内容分叉",
+            "inject": diverged_contract_third,
+        },
         {
             "name": "exclusive 前缀互相覆盖",
             "expect": "exclusive 前缀互相覆盖",
@@ -237,6 +298,12 @@ def cases(c1: str, split_sha: str) -> list[dict]:
             "name": "对照：shared_runtime 改动应放行",
             "expect": None,
             "inject": shared_runtime_control,
+        },
+        {
+            "name": "对照：缺一条 ref 应打印 skipped 且放行",
+            "expect": None,
+            "green_contains": "本地没有 xhs-workbench ref",
+            "inject": missing_ref_skipped,
         },
     ]
 
@@ -273,6 +340,9 @@ def main() -> int:
                 if want is None:
                     if injected.returncode != 0:
                         raise RuntimeError(f"对照本该绿却红了：{injected.stdout}")
+                    hint = case.get("green_contains")
+                    if hint and hint not in injected.stdout:
+                        raise RuntimeError(f"期望绿但缺 {hint!r}：\n{injected.stdout}")
                     verdict = "GREEN(对照)"
                 else:
                     if injected.returncode == 0:
@@ -293,11 +363,13 @@ def main() -> int:
             except Exception as exc:  # noqa: BLE001 - 探针要报出每一条，不能半途静默
                 print(f"CASE {index:02d} {case['name']}: FAILED\n{exc}")
         expected = len(all_cases)
+        reds = sum(1 for case in all_cases if case["expect"] is not None)
+        greens = expected - reds
         print(f"\n临时 repo 留在：{tmp}（探针不删文件，避免触发删除守卫）")
         if passed != expected:
             print(f"NEGATIVE VERIFICATION FAILED ({passed}/{expected})")
             return 1
-        print(f"NEGATIVE VERIFICATION PASSED ({expected - 1} 注全红 + 1 对照绿 + 基线绿)")
+        print(f"NEGATIVE VERIFICATION PASSED ({reds} 注全红 + {greens} 对照绿 + 基线绿)")
         return 0
     finally:
         if md5_map(ROOT, governed) != main_before:
