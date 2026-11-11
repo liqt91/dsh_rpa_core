@@ -14,6 +14,12 @@
         "workbuddy-suite/",
         "tests/contract/test_workbuddy_connector.py"
       ]
+    },
+    "xhs-workbench": {
+      "role": "小红书专用工作台（调度 / 快照 / 告警 / 本地 Web 台；采集执行复用 rpa-core run）",
+      "exclusive": [
+        "apps/xhs-workbench/"
+      ]
     }
   },
   "shared_runtime": [

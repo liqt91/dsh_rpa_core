@@ -1,17 +1,21 @@
-"""门禁：两条分支的职责边界（2026-11-11 拆分）。
+"""门禁：多条分支的职责边界（2026-11-11 拆分，同日泛化为三分支）。
 
-`ppx-only`（PPX 桌面客户端）与 `plugin-only`（WorkBuddy 插件套件）从同一个
-拆分点出发，内容相同、职责不同。事实源是 `.harness/branch-scope.json`。
+`ppx-only`（PPX 桌面客户端）、`plugin-only`（WorkBuddy 插件套件）与
+`xhs-workbench`（小红书专用工作台）从同一个拆分点出发，基线相同、职责不同。
+事实源是 `.harness/branch-scope.json`，分支集合只在这一处声明，闸门不写死条数。
 
 只管「拆分之后的改动」：相对 split_point 的已提交改动 + 已暂存改动。
 拆分点之前的历史（含插件套件合进来的那几笔）是共同基线，一律不追溯。
 不检查未暂存的工作区脏文件 —— 那是维护者的在制品，不是提交意图。
 
 判据分四层，缺一层就会出现「看起来绿、其实没看住」：
-1. 契约自洽：字段形状、治理文件真存在、两条独占域不互相覆盖；
+1. 契约自洽：字段形状、治理文件真存在、各条独占域不互相覆盖；
 2. 接线哨兵：check_all.py 里摘掉本闸门，闸门自己就不会再跑；
-3. 共同基线：split_point 存在且是 HEAD 的祖先，两分支契约 blob 相同；
-4. 越界：当前分支上出现对方独占域的路径即红。
+3. 共同基线：split_point 存在且是 HEAD 的祖先，所有分支契约/闸门 blob 相同；
+4. 越界：当前分支上出现其他分支独占域的路径即红。
+
+单分支 clone 里缺对方 ref 时，第 3 条对该 ref 明确打印 skipped 并放行，
+其余判据照常生效——不让 CI 因为只 fetch 一条分支而假红。
 
 运行：uv run python .harness/scripts/check_branch_scope.py
 """
@@ -28,7 +32,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 SCOPE_REL = ".harness/branch-scope.json"
 CHECK_ALL_REL = ".harness/scripts/check_all.py"
-EXPECTED_BRANCHES = {"ppx-only", "plugin-only"}
+EXPECTED_BRANCHES = {"ppx-only", "plugin-only", "xhs-workbench"}
 WIRING_RE = re.compile(r'str\(ROOT / "\.harness" / "scripts" / "check_branch_scope\.py"\)')
 _GIT_BIN: str | None = None
 
@@ -172,22 +176,26 @@ def check_split_point(scope: dict, errors: list[str]) -> None:
 
 
 def check_matching(scope: dict, branch: str, errors: list[str]) -> int:
-    """两边的事实源必须逐字节相同；对方 ref 不存在时明确报 skipped。"""
-    other = "plugin-only" if branch == "ppx-only" else "ppx-only"
-    if not git_ok("show-ref", "--verify", "--quiet", f"refs/heads/{other}"):
-        print(f"[branch-scope] 跨分支一致性: skipped（本地没有 {other} ref）")
-        return 0
+    """所有分支的事实源必须逐字节相同；单个 ref 缺失时只跳过那一条。"""
     checked = 0
-    for rel in scope["must_match_across_branches"]:
-        try:
-            mine = git("rev-parse", f"HEAD:{rel}")
-            theirs = git("rev-parse", f"{other}:{rel}")
-        except RuntimeError as exc:
-            errors.append(f"{rel}: 取不到两分支 blob —— {exc}")
+    for other in scope["branches"]:
+        if other == branch:
             continue
-        if mine != theirs:
-            errors.append(f"{rel}: 两分支内容分叉（{mine[:8]} vs {theirs[:8]}）")
-        checked += 1
+        if not git_ok("show-ref", "--verify", "--quiet", f"refs/heads/{other}"):
+            print(f"[branch-scope] 跨分支一致性: skipped（本地没有 {other} ref）")
+            continue
+        for rel in scope["must_match_across_branches"]:
+            try:
+                mine = git("rev-parse", f"HEAD:{rel}")
+                theirs = git("rev-parse", f"{other}:{rel}")
+            except RuntimeError as exc:
+                errors.append(f"{rel}: 取不到 {branch}/{other} 的 blob —— {exc}")
+                continue
+            if mine != theirs:
+                errors.append(
+                    f"{rel}: {branch} 与 {other} 内容分叉（{mine[:8]} vs {theirs[:8]}）"
+                )
+            checked += 1
     return checked
 
 
