@@ -38,6 +38,9 @@ commands = [
     # 分支职责边界（2026-11-11 拆分）：两条分支共享同一份契约，越界改动直接红。
     # 事实源 .harness/branch-scope.json；闸门自带接线哨兵，摘掉下面这行它自己会红。
     [sys.executable, str(ROOT / ".harness" / "scripts" / "check_branch_scope.py")],
+    # 小红书工作台应用层单测（xhs-workbench 独占域）：默认 pytest 只收 testpaths=["tests"]，
+    # 扫不到 apps/ 下，故独立跑 + 哨兵证明测试真被收集/跑过（含 run_live→evaluate_run 接线）。
+    [sys.executable, str(ROOT / ".harness" / "scripts" / "check_xhs_workbench_tests.py")],
 ]
 
 # 真实桌面 E2E（记事本/WinForms 演示程序/捕获悬浮框，会弹窗抢前台）**默认不进
