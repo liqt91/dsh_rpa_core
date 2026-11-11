@@ -22,7 +22,7 @@
       },
       {
         "kind": "attribute",
-        "matchedCount": 2,
+        "matchedCount": 3,
         "penalty": 5,
         "selector": "textarea[placeholder=\"我在小红书搞装修\"]"
       }
@@ -41,7 +41,7 @@
     "placeholder": "我在小红书搞装修",
     "rect": {
       "height": 24,
-      "left": 639,
+      "left": 449,
       "top": 79,
       "width": 752
     },
@@ -49,7 +49,7 @@
     "tag": "textarea",
     "text": "",
     "title": "小红书 - 你的生活兴趣社区",
-    "url": "https://www.xiaohongshu.com/explore"
+    "url": "https://www.xiaohongshu.com/explore?channel_id=homefeed_recommend"
   },
-  "capturedAt": "2026-10-10T09:16:12.761721Z"
+  "capturedAt": "2026-10-12T04:21:03.776113Z"
 }

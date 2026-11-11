@@ -1,7 +1,7 @@
 {
   "schema_version": "1.0",
-  "id": "draft",
-  "name": "未命名工作流",
+  "id": "xiaohongshu",
+  "name": "xiaohongshu",
   "inputs": {},
   "root": {
     "type": "sequence",
@@ -9,23 +9,24 @@
     "children": [
       {
         "type": "action",
-        "id": "setVar",
+        "id": "n1",
         "command": "data.setVar",
         "with": {
           "varName": "url",
-          "varType": "string",
-          "value": "xiaohongshu.com"
+          "value": "\"www.xiaohongshu.com\""
+        },
+        "_exprModes": {
+          "value": "python"
         }
       },
       {
         "type": "action",
-        "id": "navigate",
+        "id": "n2",
         "command": "browser.navigate",
         "with": {
           "browserType": "chrome",
-          "action": "goto",
-          "url": "${url}",
-          "onTimeout": "error"
+          "url": "[url]",
+          "action": "goto"
         },
         "_exprModes": {
           "url": "fx"
@@ -33,18 +34,16 @@
       },
       {
         "type": "action",
-        "id": "n1",
+        "id": "n3",
         "command": "browser.input",
         "with": {
-          "selector": "#search-input-in-feeds",
           "text": "摄影",
-          "mode": "type",
-          "append": false,
+          "mode": "clipboard",
           "pressEnter": true,
           "clickBeforeInput": true
         },
         "elementRefs": {
-          "selector": "el_textarea"
+          "selector": "input_el_textarea"
         }
       }
     ]
