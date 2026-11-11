@@ -456,6 +456,11 @@
       "id": "ppx-canvas-layout",
       "title": "PPX canvas reads nesting: depth indent + rails, rows don't collapse, cards focusable · 23 invariants",
       "passes": true
+    },
+    {
+      "id": "branch-scope-xhs",
+      "title": "Three-branch scope contract: ppx-only / plugin-only / xhs-workbench with shared gate + negative probes",
+      "passes": true
     }
   ]
 }
