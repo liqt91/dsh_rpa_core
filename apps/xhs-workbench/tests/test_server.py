@@ -183,11 +183,12 @@ def test_http_collect_accepts_then_updates_monitor(tmp_path: Path) -> None:
         status, body = _post(base, "/api/collect", {"keyword": KW})
         assert status == 202
         assert body["accepted"] is True
-        # 轮询监控直到不再是 running（假 runner 瞬时完成）
+        # 轮询监控直到收尾：pending（线程还没起）和 running 都算「还在跑」，只有
+        # ok/failed 才是终态——不能拿「非 running」当完成（那条竞态真实踩到过）。
         for _ in range(50):
             mon = _get(base, "/api/monitor")
             entry = next((e for e in mon["entries"] if e["keyword"] == KW), None)
-            if entry and entry["state"] != "running":
+            if entry and entry["state"] in ("ok", "failed"):
                 break
             time.sleep(0.05)
         assert entry["state"] == "ok"

@@ -35,8 +35,11 @@ def command_label(command: str) -> str:
     return COMMAND_LABELS.get(command or "", command or "")
 
 
-def flatten_steps(document: dict[str, Any]) -> list[dict[str, Any]]:
+def flatten_steps(
+    document: dict[str, Any], labels: dict[str, str] | None = None
+) -> list[dict[str, Any]]:
     """深度优先摊平 root，只输出可执行的 action 节点。"""
+    label_map = labels or COMMAND_LABELS
     steps: list[dict[str, Any]] = []
 
     def walk(node: Any, depth: int) -> None:
@@ -51,7 +54,7 @@ def flatten_steps(document: dict[str, Any]) -> list[dict[str, Any]]:
                     "id": str(node.get("id") or ""),
                     "type": node_type or "action",
                     "command": command,
-                    "label": command_label(command),
+                    "label": label_map.get(command, command),
                     "depth": depth,
                     "args": node.get("with") or {},
                     "exprModes": node.get("_exprModes") or {},
@@ -73,14 +76,14 @@ def flatten_steps(document: dict[str, Any]) -> list[dict[str, Any]]:
     return steps
 
 
-def describe(path: str | Path) -> dict[str, Any]:
+def describe(path: str | Path, labels: dict[str, str] | None = None) -> dict[str, Any]:
     """读流程文件并给出面板需要的全部字段（含原始文本，供「看源码」用）。"""
     fp = Path(path)
     text = fp.read_text(encoding="utf-8")
     document = json.loads(text)
     if not isinstance(document, dict):
         raise ValueError(f"流程文件顶层必须是对象：{fp}")
-    steps = flatten_steps(document)
+    steps = flatten_steps(document, labels)
     return {
         "path": fp.name,
         "id": str(document.get("id") or ""),

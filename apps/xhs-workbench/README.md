@@ -86,14 +86,23 @@ cd apps/xhs-workbench
 | GET | `/api/snapshots`、`/api/snapshots/<关键词>` | 快照列表 / 单关键词历史 |
 | GET | `/api/products`、`/api/alerts`、`/api/monitor` | 商品库、告警、监控池 |
 | GET | `/api/workflow` | 流程文档摊平：节点 id / 命令 / 参数 / 表达式标记 |
+| GET | `/api/commands` | 指令目录（manifest 摊平 + 中文标签），编辑器指令栏/属性表单的事实源 |
 | GET | `/api/runs`、`/api/runs/<run_id>` | 运行记录列表 / 单次步骤时间线（耗时、输出、错误） |
 | GET | `/api/runs/<run_id>/shot` | 该次采集的页面截图（PNG） |
+| GET | `/api/editor/status`、`/api/editor/log?since=N` | 编辑器运行状态 / 增量执行日志 |
 | POST | `/api/collect` | 触发采集（后台线程 + 单 run 锁，并发返回 409） |
 | POST | `/api/pause`、`/api/resume`、`/api/pause-all`、`/api/resume-all` | 监控池暂停/恢复 |
+| POST | `/api/validate` | 跑 `rpa-core validate` 校验当前流程 |
+| POST | `/api/workflow/update`、`/insert`、`/delete`、`/move` | 编辑流程（改参数 / 插节点 / 删节点 / 上下移），原子写 + 引用护栏 |
+| POST | `/api/editor/run`、`/pause`、`/resume`、`/stop` | 编辑器执行控制（暂停=节点边界收口成 paused；继续=resume 从检查点续跑；停止=杀进程树） |
 
-界面「流程」页是 PPX 编辑器三栏视图的移植，但**只读 + 叠加运行态**：左侧步骤列表
-带每步耗时，右侧是选中步骤的参数（含 `fx` 表达式 / 元素引用标记）、本次输出与错误；
-顶部可按 run 切换，并显示采集当时的页面截图。它回答的是「这次采集卡在哪、为什么」。
+界面「编辑器」页是完整的可视化编辑器：左侧指令栏（89 条指令按分组列出、可搜索、点击
+插入到当前步骤之后）、中间画布（节点卡片，支持选中 / 上移 / 下移 / 删除，运行中当前
+步骤高亮）、右侧属性表单（按 manifest 的 schema 生成：必填标记、枚举下拉、多行文本、
+fx 表达式标记；类型收拢在服务端做，非法值 400 不落盘）、下方执行日志（执行 / 暂停 /
+继续 / 停止按钮 + 实时日志滚动）。每次编辑后自动跑 `rpa-core validate` 并亮校验结果。
+
+「流程」页保留为只读诊断视图（看历史 run 的步骤耗时、输出与现场截图）。
 
 ## 真机 E2E 判据
 
@@ -155,7 +164,6 @@ cd apps/xhs-workbench
 - **跨 run 会话复用**：workflow 末尾仍 `browser.close`。`browser.attach` 的
   `sessionId` 是 run 内逻辑 id，能否跨 run 复用没实测；一天跑几十次时应当改成
   常驻标签页 + attach，否则又慢又像机器人。
-- **流程面板只读**：PPX 编辑器那份是可编辑的（改参数、插/删节点、编译校验），
-  这里只搬了查看与定位。要编辑得先定「应用层怎么消费 catalog/compiler」——
-  当前边界是不 import `src/rpa_core`，直接搬会破例。
+- **编辑器尚无容器节点**：「编辑器」页只编辑 action 步骤，if/loop/try 这类容器
+  节点暂不支持（仓库里的命令清单有，画布还没做结构编辑）。
 - **真机采集仍要手动开浏览器**：Agent 会话内起 Chrome 会被 Crashpad 拒访。
