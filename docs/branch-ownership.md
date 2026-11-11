@@ -40,6 +40,11 @@ PPX 客户端并不是完全不碰 `workbuddy-suite/`：会话服务
 但改动要意识到它会影响其他分支；需要同步时用 `git cherry-pick` 显式搬，
 别整分支合并（那会把另一条分支的职责一起带过来）。
 
+`workflows/` 在这里有一条更宽的口径：流程文件**允许各分支各自跟踪**，既不设
+独占域，也不要求三分支同步。业务侧流程跟着用它的分支走（小红书采集流程只在
+`xhs-workbench` 入库），通用示例流程留在共享层按需取用。要跨分支复用仍用
+`cherry-pick`，别整分支合并；契约的 `must_match_across_branches` 也不含此目录。
+
 ## 闸门怎么拦
 
 `check_all.py` 里接了 `check_branch_scope.py`，四层判据：
@@ -69,10 +74,11 @@ git switch ppx-only         # PPX 客户端改动
 git switch xhs-workbench    # 小红书工作台改动
 ```
 
-拆分时工作区里已有的 `workbuddy-suite/skills/workflow-studio/SKILL.md`、
-`workbuddy-suite/verify/verify_suite.py` 两笔未提交修改是维护者的在制品，
-**没有**被并进任何一条分支的提交；按新职责它们应落到 `plugin-only`，
-处理前先确认，别在 `ppx-only` 上直接提交。
+拆分时留下的 4 笔在制品已按职责收口：`workbuddy-suite/skills/workflow-studio/SKILL.md`
+与 `workbuddy-suite/verify/verify_suite.py` 两笔修改**只提交到 `plugin-only`**；
+`workflows/test/` 两笔草稿删除在三分支同步落地；`workflows/xiaohongshu/` 只在
+`xhs-workbench` 入库。`ppx-only` 工作区里那两笔插件侧差异随后还原成 HEAD 版本 ——
+内容已安全落在 `plugin-only`，不要在 `ppx-only` 上重复提交（会触发越界闸门）。
 
 ## 负向验证
 
