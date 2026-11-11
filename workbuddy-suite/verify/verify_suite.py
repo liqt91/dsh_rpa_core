@@ -159,12 +159,16 @@ def check_skill() -> None:
         "缺 " + ", ".join(missing_refs) if missing_refs else f"{len(refs)} 个引用",
     )
 
-    examples = meta.get("examples_zh")
-    check(
-        "examples_zh 至少 3 条",
-        isinstance(examples, list) and len(examples) >= 3,
-        str(len(examples or [])),
-    )
+    # 平台实测（open.workbuddy.cn 技能解析）：examples_zh / examples_en 各最多 3 条，
+    # 5 条会直接「解析失败」。原先写 >= 3 容得下 4/5 条，是典型恒绿判据；
+    # 只查 zh 也会漏掉 en 超限。这里改成两键成对、等值断言。
+    for key in ("examples_zh", "examples_en"):
+        examples = meta.get(key)
+        check(
+            f"{key} 恰好 3 条",
+            isinstance(examples, list) and len(examples) == 3,
+            str(len(examples or [])),
+        )
     check(
         "正文不硬编码 token/key",
         not re.search(r"(sk-[A-Za-z0-9]{8,}|token\s*=\s*['\"][^'\"]{8,})", text),

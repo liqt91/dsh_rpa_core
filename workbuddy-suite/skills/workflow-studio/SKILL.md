@@ -7,16 +7,12 @@ description_zh: 从 89 条现成原子能力编排成 workflow.json，校验后�
 description_en: Orchestrate 89 typed atomic actions into a validated, deterministic workflow, wire in human judgment through a visual editor window and browser element picker, then run it and report the result.
 examples_zh:
   - "把这个 workflow.json 打开，让我自己改一下参数"
-  - "我改完了，你看下保存后的内容对不对"
   - "帮我在登录页上拾取用户名输入框，要能定位到的那种"
   - "打开必应搜 RPA，把前 10 条标题存成 JSON"
-  - "这个流程昨天还能跑，今天报 ELEMENT_NOT_FOUND，帮我修好"
 examples_en:
   - "Open workflow.json in the editor so I can tweak the parameters myself"
-  - "I'm done editing — check what I saved"
   - "Pick the username field on the login page and give me a reliable selector"
   - "Search Bing for RPA and save the top 10 titles as JSON"
-  - "This flow worked yesterday but now fails with ELEMENT_NOT_FOUND — fix it"
 version: 1.1.0
 author: w
 agent_created: true
