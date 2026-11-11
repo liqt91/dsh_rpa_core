@@ -98,14 +98,23 @@ def _real_runner(ctx: AppContext, keyword: str, browser_type: str) -> Any:
         )
     except subprocess.TimeoutExpired as exc:
         raise RuntimeError(f"run 超过 {ctx.timeout}s 未结束") from exc
+    out_tail = proc.stdout[-1200:] if proc.stdout else "(无 stdout)"
+    err_tail = proc.stderr[-2000:] if proc.stderr else "(无 stderr)"
     run_id = _find_run_id(proc.stdout)
     if not run_id:
         raise RuntimeError(
-            f"run 未产出 run_id；rc={proc.returncode}, stderr={proc.stderr[-500:]}"
+            f"run 未产出 run_id（rc={proc.returncode}）。\n"
+            f"--- rpa-core stderr ---\n{err_tail}\n--- stdout ---\n{out_tail}"
         )
     result_path = artifacts / run_id / "result.json"
     if not result_path.is_file():
-        raise RuntimeError(f"result.json 不存在：{result_path}")
+        # rpa-core 只在成功时落 result.json；此处缺文件 = workflow 中途失败。
+        # 真实失败原因在子进程 stderr 里，必须带出来，否则 UI 只看到「没产出结果」。
+        raise RuntimeError(
+            f"run（run_id={run_id}）未写出 result.json（rc={proc.returncode}）。"
+            f" 多半是 workflow 中途失败。\n"
+            f"--- rpa-core stderr ---\n{err_tail}\n--- stdout ---\n{out_tail}"
+        )
     return parse_result(result_path)
 
 

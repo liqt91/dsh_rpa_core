@@ -17,8 +17,9 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
+import pytest
 from src.collector import RunOutcome
-from src.server import make_context, make_server, run_collection
+from src.server import _real_runner, make_context, make_server, run_collection
 
 KW = "AI效率工具"
 
@@ -255,3 +256,27 @@ def test_http_serves_index_html(tmp_path: Path) -> None:
         assert resp.status == 200
         assert "小红书工作台" in body
         assert "/api/monitor" in body  # 前端确实消费真实 API，而非写死假数据
+
+
+def test_real_runner_surfaces_stderr_when_result_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """rpa-core 只在成功时落 result.json；中途失败会打印 run_id 但不写文件。
+
+    _real_runner 必须把子进程 stderr 带进异常，否则 UI 只看到「result.json 不存在」，
+    看不到真正的失败原因（这正是一次真实采集失败被误报为「原因不明」的根因）。
+    """
+
+    class _FakeProc:
+        returncode = 0
+        stdout = '{"run_id": "deadbeef-0000-0000-0000-000000000000"}'
+        stderr = "BOOM: browser session detached before grabItems"
+
+    monkeypatch.setattr("src.server.subprocess.run", lambda *a, **k: _FakeProc())
+
+    ctx = make_context(root=tmp_path)
+    with pytest.raises(RuntimeError) as exc:
+        _real_runner(ctx, KW, "chrome")
+    msg = str(exc.value)
+    assert "deadbeef" in msg
+    assert "BOOM: browser session detached before grabItems" in msg
