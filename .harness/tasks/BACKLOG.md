@@ -974,7 +974,7 @@
 - [ ] UI、DSH、MCP、调度器和安装器集成（`planned`）
   - 逐项放行与否以 ADR 0006 结论为准；操控型 HTTP 推迟不变。
 
-- [ ] **PPX 原型编辑器（含工作台复用版）缺「控制流」插入入口**（`wip`，2026-11-12 已实现并本机验证；**入库方式待拍板**）
+- [x] **PPX 原型编辑器（含工作台复用版）缺「控制流」插入入口**（`done`，2026-11-12）
   - 引擎不缺：`IfNode(then/else)`、`ForEachNode`、`TryNode(children/catch)`、`ReturnNode` 都是一等工作流
     AST 节点，compiler 与 orchestrator 都执行；`AGENTS.md` 规则 1 与 `compiler.py:353` 明令控制流
     **不得**做成 manifest 命令。所以指令栏按设计只有 `browser/data/desktop/ocr/workflow` 五组 89 条。
@@ -990,10 +990,12 @@
     且带 `parentId`/`branch`；`main.js` 加「流程控制 · 4」分组 + 组行可点选。dist 已重建。
     10 条负向验证全红且逐字节还原（`.harness/spike/negative_control_flow.py`），全门禁
     `FULL GATE PASSED`，HTTP 冒烟（`.harness/spike/probe_editor_http.py`）三项全通。
-  - **卡点**：见下面「分支治理」条——原型路径归 `ppx-only` 独占，在 `xhs-workbench` 分支
-    暂存即触发 `BRANCH SCOPE CHECK FAILED`（实测 staged 两条）。改动目前只在工作区，未提交。
+  - **入库已解决**：原型路径原本归 `ppx-only` 独占，暂存实测 `BRANCH SCOPE CHECK FAILED`；
+    按下面「分支治理」条改契约后已本地提交 `216950d`（ADR 0022-R2）。
+  - **仍欠**：浏览器里真机点一遍「流程控制 → 插入 if → 选中否则组行 → 插指令 → 运行」
+    全链路未做（需 Chrome 常开），后端 RPC / HTTP / 负向验证都已覆盖。
 
-- [ ] **`workflow_doc.flatten_steps` 会把真实控制流的分支体丢掉**（`wip`，2026-11-12 已修；随上条一起待入库）
+- [x] **`workflow_doc.flatten_steps` 会把真实控制流的分支体丢掉**（`done`，2026-11-12）
   - `apps/xhs-workbench/src/workflow_doc.py:97` 只递归 `children`，但真实 AST 里 `if` 的分支体在
     `then`/`else`、`try` 的捕获体在 `catch` ⇒ 控制台「流程」只读面板会**整段漏显示**；`forEach`
     又不在 `CONTAINER_TYPES` 里，会被拍平而不缩进。不影响运行（面板只读）。
@@ -1006,7 +1008,7 @@
     openFlow/保存/编译一律 ValidationError；id 改 ASCII slug（全中文名用 uuid5 前 8 位）。
     负向验证 G 打中它。
 
-- [ ] **分支治理与「工作台复用原型」结构矛盾**（`planned`，2026-11-12 取证，待维护者拍板）
+- [x] **分支治理与「工作台复用原型」结构矛盾**（`done`，2026-11-12）
   - `.harness/branch-scope.json` 把 `.harness/demo/ppx_probe/` 整目录划给 `ppx-only` 独占，
     而 ADR 0022-R1 让 `xhs-workbench` 在运行时直接装载原型的 `api.py` + `gui/dist`。
     拆分点的原型够用时没矛盾；一旦工作台要**增强**原型，就会撞墙：在 xhs-workbench 分支
@@ -1015,7 +1017,11 @@
     所以「改原型 + 修工作台」这两件事按现行契约无法落在同一次提交里。
   - 两条路：① 把「被工作台复用的编辑面」从独占域移到 `shared_runtime`（治理文件三分支
     同步提交，一次性解掉结构矛盾）；② 原型改动只入 ppx-only，本机工作区保留未提交副本，
-    换机器/换分支后工作台会退回旧编辑器。**推荐 ①，未拍板前不动治理文件。**
+    换机器/换分支后工作台会退回旧编辑器。
+  - **维护者选 ①，已落地**：`shared_runtime` 精确放行 `app/api/api.py` + `app/gui/src/main.js`
+    （整目录仍归 ppx-only），契约三分支同步提交 `ecc720e` / `f48b5d0` / `216950d`，
+    blob 一致；决策记录 ADR 0022-R2，说明见 `docs/branch-ownership.md`。
+    `check_branch_scope.py` 提交后复跑 PASSED（committed=50 / matched=4）。
 
 > 已删除条目：原「桌面客户端编辑器薄壳（ADR 0010 重估条件）」——ADR 0016 已定 GUI 为唯一
 > 主力形态，该条目（「确认非开发者用户为主力后再立项薄壳」）不再适用。
