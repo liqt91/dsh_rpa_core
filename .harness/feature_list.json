@@ -481,6 +481,11 @@
       "id": "xhs-capture-kit",
       "title": "Shared capture kit for ppx; float builds children without WM_CREATE; native-host whitelist self-heal",
       "passes": true
+    },
+    {
+      "id": "xhs-element-capture-single-button",
+      "title": "Editor capture as one button; notices in float only; capture held until confirm; Chinese names; rename rewrites refs",
+      "passes": true
     }
   ]
 }

@@ -1,0 +1,106 @@
+# M68：元素捕获收成「一个按钮 + 确认弹窗」
+
+Status: `done`
+
+> **2026-11-12 立项并当日完成**。起因是维护者一段完整的产品判断：
+>
+> 「元素捕获界面简化为单个按钮：点击按钮即开始捕获，无需预先填写资产名称，无需选择桌面或
+> Web 元素类型，也不提供直接写选择器名称入库的方式。环境准备等提示信息统一显示在弹出式
+> 桌面框中，元素资产区域不展示任何提示。捕获完成后弹出一个 GUI 用于编辑元素属性而非直接
+> 入库，可编辑内容包括资产名称，且资产名称支持中文输入，用户确认后才保存。另提供元素详情
+> 按钮，点击后显示同一 GUI，供对已保存元素重新编辑。」
+>
+> 拆成五条硬要求：①面板只剩一个按钮 ②提示全部走桌面浮窗、面板零提示 ③捕获完不直接入库、
+> 先弹框改属性 ④名称支持中文 ⑤详情按钮打开**同一个** GUI。
+> 前置：M66（拾取交互重设计）、M67（编辑器工作区路径）、M52 S6（ADR-002 ref-only）。
+> 不占 active 位（`M52-selector-advisor` 仍是主线）。
+
+## 一、改前 / 改后
+
+M66 的六态状态条把**技术分叉和过程状态全摊在面板上**：预填名输入框、网页/桌面下拉、
+手写选择器 + 「写入库」按钮、四行进度文案。维护者的判断是这些本该由程序推断或在别处播报。
+
+| 维度 | 改前（M66） | 改后（M68） |
+| --- | --- | --- |
+| 入口 | 每个待补元素两个按钮 + 工具条三个控件 | 面板只有一个「捕获元素」 |
+| 资产名称 | 开抓前手填（重名要自己避） | 抓完自动起名 `元素1/2/3`，在弹窗里改 |
+| 元素类型 | 用户选「网页 / 桌面」 | `m.command` 推出（`resolve_target` 三分支） |
+| 手写选择器 | 输入框 + 「写入库」 | **通道删除**（`rpa.writeElement` / `rpa.pickPlan` 一并删） |
+| 过程提示 | 面板状态条四行文案 | 桌面浮窗 `show_notice`，面板零提示 |
+| 入库时机 | 捕获成功当场落盘 | 先进 `_CAPTURES` 暂存，用户确认才 `commitElement` |
+| 详情 / 改名 | 行内展开只读信息 | 同一个弹窗，可改名，改名联动引用 |
+
+## 二、前端（`.harness/demo/ppx_probe/app/gui/`）
+
+- `index.html`：工具区只剩 `<button id="elemCapture">捕获元素</button>`；`</main>` 后新增
+  `#elemDialog`（标题 / 名称输入 / meta / note / 取消 / 保存），`hidden` 起始。
+- `main.js`：`ELEM_TEXT` 文案表集中，`renderElementsPanel` 只渲染「待补元素」与「资产」两段，
+  不再有状态条节点；`openCaptureDialog` 与 `openAssetDetail` 共用 `showElemDialog`，
+  用 `dialogMode`（`capture` / `detail`）决定确认时走 `commitElement` 还是 `saveElement`。
+- 名称输入框 `type=text` + Enter 提交，但 `event.isComposing` 时**不抢键**（中文输入法上屏
+  的那一下回车不是提交）。
+- 轮询：首轮 800ms、其后 1000ms；ready → 弹框；`offline` / `failed` 静默收尾并 `restoreApp()`
+  ——**失败的话由后端浮窗说**，前端不再自己写一遍。
+
+## 三、后端协议（`app/api/api.py`）
+
+新增：`rpa.commitElement(path, captureId, name)`、`rpa.discardCapture(path, captureId)`、
+`rpa.saveElement(path, name, newName)`。删除：`rpa.pickPlan`、`rpa.writeElement`。
+
+- **捕获与落盘解耦**：`_hold_captured(entry, descriptor)` 只写 `entry["captured"]` +
+  `entry["preview"]`（名称/类型/选择器/匹配数/节点/是否覆盖），`commit_element` 才写
+  `elements/<name>.json`。会话键从「元素名」改成 `(path, captureId)`，`captureId` 由
+  `_next_capture_id()` 递增生成——两条捕获并行也不会互相踩。
+- **中文名全链路**：`_valid_element_name` 只挡 `/ \ : * ? " < > | .`、控制字符、首尾空白、
+  >48 字、Windows 设备名（CON/PRN/AUX/NUL/COM1-9/LPT1-9），CJK 放行；写盘用
+  `json.dumps(ensure_ascii=False, indent=2)` + **LF**。
+- **改名联动引用**：`_rewrite_refs(path, old, new)` 遍历全 AST（`children` / `then` / `else` /
+  `catch`）把 `elementRefs` 的值一起改；`saveElement` 改名失败要**回滚文件名与引用**，
+  同名则返回 `unchanged: True` 空操作。`commitElement` 只在「按同名重抓」时允许 `overwrite`。
+- `delete_element` 被引用时先 `_notify("删不掉", ...)` 再返 `ELEMENT_IN_USE`——拒绝的理由
+  由浮窗说，不用前端横幅。
+
+## 四、浮窗（`src/rpa_core/capture_kit/float_window.py`）
+
+`CaptureFloat` 加第二种形态 `show_notice(title, detail, on_close=None, auto_hide_ms=0)`；
+`show()` 可以把同一个实例**原地升级**成捕获形态（环境检查完接着抓，不闪两个窗）。提示形态
+`on_close is None` 时按钮 `SW_HIDE`（纯告知）。
+
+三个坑全在真机上撞出来的，代码里都留了注释：
+
+1. **★ 窗口类只注册一次 ⇒ WNDPROC 绑死第一个实例**。`RegisterClass` 按类名在进程内只生效
+   一次，`wc.lpfnWndProc = self._wnd_proc` 于是永远指向第一个 `CaptureFloat`。第二个窗开着、
+   内容不动、日志一行异常都没有。改成模块级 `_dispatch` + `_INSTANCES[hwnd]` 查表分派。
+2. **★ `DT_WORDBREAK` 断不开中文**。中文没有空格，长说明被右边按钮一刀切掉，用户看到半截话。
+   自写 `_wrap_px`（CJK≈15px、ASCII≈8px，最多 3 行）。
+3. **★ `DrawText` 的 rect 是 `(left, top, right, bottom)`，不是 `(left, top, width, height)`**。
+   按后者传，第二行起 `bottom` 落在 `top` 上面（`top=36, bottom=18`），GDI 拿负高度做垂直居中
+   ⇒ 标题和说明**叠在同一片区域**。修正后把换算收进 `_text(hdc, text, box=(x,y,w,h), ...)`，
+   调用方只谈 `(x, y, w, h)`，语义错位不可能再发生。
+
+## 五、判据
+
+| 判据 | 位置 | 结果 |
+| --- | --- | --- |
+| 单按钮 / 弹窗控件 / 真点（DOM shim 跑 main.js） | `scripts/check_element_pick_ui.mjs` | 17/17 |
+| 工具区唯一按钮、资产行 2 动作、删除失败保留行 | `scripts/check_element_library.mjs` | 8/8 |
+| 捕获暂存 + 中文名 + 改名联动 + 轮询四态 | `.harness/scripts/check_element_pick_contract.py` | 15/15 |
+| 桥层注册 / 详情 / 中文名 / 删除护栏 / dist 同步 | `apps/xhs-workbench/tests/test_editor_element_library.py` | 25/25 |
+| 注入破坏 7 条 + 1 条元验证 | `.harness/spike/negative_element_library.py` | 8/8 |
+| 资产全链路进程内探针 | `.harness/spike/probe_element_library.py` | 10 项 |
+| 浮窗：3 行不叠字 / 不越界 / 提示形态 / 同类复用 | `.harness/demo/ppx_probe/_float_probe.py` | PASS |
+
+**★ 判据教训（第四坑）**：浮窗早先只判「暗像素计数 > 200」。三行字叠成一坨时暗像素照样有
+2000+，于是**叠字状态一直是绿的**。现在改成三件套：`_ink_bands` 把文字区切成墨迹带，
+断言「行数 == 期望行数」（多条挤成一条即叠字）；`_ink_right` 断言右边界没顶到按钮；`_wrap_checks`
+在纯函数层断言「真折了、每行不超宽（按最小字宽 8px 算上限，不误报）、不超 3 行」。
+负向验证用的是**修复前那三张真实截图**：三张全部判出「1 条带」，判据从绿变红，方向对得上。
+
+`ruff` 全绿（顺带清掉 `_INSTANCES` 上多余的引号，那是 WNDPROC 那次改动留下的，在上一次全量
+门禁之后才写进去）。
+
+## 六、欠账
+
+- 真机点一遍「点按钮 → 桌面抓 → 弹框改名 → 确认入库」全链路（当前靠 DOM shim + 进程内探针）。
+- 浮窗判据目前是手动跑的脚本（`.harness/demo/` 不进默认门禁：要真开窗，不能进 CI）。
+- 捕获期「用户手抖点到别的元素」只能重抓，没有「换个候选」的入口。

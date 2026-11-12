@@ -1,12 +1,15 @@
-"""门禁：元素拾取编排层的**动态**契约（M66）。
+"""门禁：元素编排层的**动态**契约（M68，替换 M66 的六态拾取）。
 
 `scripts/check_element_pick_ui.mjs` 管静态与渲染层；本文件真跑后端的
-`resolve_target` / `_pick_plan` / `start_capture` / `capture_poll` / `write_element`。
-为什么必须跑：只扫源码能证明「写了 `resolve_target`」，证明不了「忽略命令类型时
-它会不会照样返回 browser」——这正是假绿灯最容易藏的地方。
+`resolve_target` / `_pick_plan` / `start_capture` / `capture_poll` / `commit_element`
+/ `save_element` / `delete_element`。
+
+为什么必须跑：只扫源码能证明「写了 commit_element」，证明不了「捕获时真的没落盘」
+或「中文名真能写成文件」——这两条正是本轮交互改版的落点，也最容易写成恒绿判据。
 
 加载 `api.py` 时给 `ppx_py` 打桩（门禁环境没有 ppx 运行时）；所有 monkeypatch
-都在 try/finally 里还原，不污染同进程后续的判据。
+都在 try/finally 里还原，不污染同进程后续的判据。桌面浮窗一律打桩成 None：
+门禁跑起来不该弹窗抢前台。
 """
 
 from __future__ import annotations
@@ -15,7 +18,6 @@ import importlib.util
 import json
 import subprocess
 import sys
-import threading
 import types
 from pathlib import Path
 
@@ -50,7 +52,7 @@ def load_api():
     stub.api_method = lambda _name: (lambda fn: fn)
     stub.BridgeError = BridgeError
     sys.modules["ppx_py"] = stub
-    spec = importlib.util.spec_from_file_location("ppx_probe_api_m66", API)
+    spec = importlib.util.spec_from_file_location("ppx_probe_api_m68", API)
     assert_true(spec is not None and spec.loader is not None, f"加载不了 {API}")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -61,13 +63,55 @@ api = load_api()
 ONLINE = {"runtime": True, "extensionOnline": True, "browsers": {}, "fix": None}
 OFFLINE = {"runtime": True, "extensionOnline": False, "browsers": {}, "fix": "浏览器还没连上"}
 
+FLOW = {
+    "schema_version": "1.0",
+    "id": "m68-fixture",
+    "name": "元素编排夹具",
+    "inputs": {},
+    "root": {
+        "type": "sequence",
+        "id": "root",
+        "children": [
+            {
+                "type": "action",
+                "id": "openHome",
+                "command": "browser.click",
+                "with": {},
+                "elementRefs": {"selector": "userField"},
+            },
+            {
+                "type": "if",
+                "id": "ifNode",
+                "condition": "true",
+                "then": [
+                    {
+                        "type": "action",
+                        "id": "inThen",
+                        "command": "browser.click",
+                        "with": {},
+                        "elementRefs": {"selector": "userField"},
+                    }
+                ],
+                "else": [],
+            },
+        ],
+    },
+}
+
 
 def case_resolve_command() -> None:
     browser = api.resolve_target("browser.input", ONLINE)
     desktop = api.resolve_target("desktop.click", ONLINE)
-    assert_true(browser == {
-        "target": "browser", "hover": False, "reason": "这一步作用在网页上", "decidedBy": "command",
-    }, f"browser 命令被判成 {browser}")
+    assert_true(
+        browser
+        == {
+            "target": "browser",
+            "hover": False,
+            "reason": "这一步作用在网页上",
+            "decidedBy": "command",
+        },
+        f"browser 命令被判成 {browser}",
+    )
     assert_true(desktop["target"] == "desktop" and desktop["hover"] is True, f"desktop={desktop}")
     assert_true(desktop["decidedBy"] == "command", "桌面腿的决策依据丢了")
 
@@ -82,8 +126,10 @@ def case_resolve_capability() -> None:
 def case_resolve_override() -> None:
     forced = api.resolve_target("browser.input", ONLINE, "desktop")
     assert_true(forced["target"] == "desktop" and forced["decidedBy"] == "override", f"{forced}")
-    assert_true(api.resolve_target("browser.input", ONLINE, "auto")["decidedBy"] == "command",
-                "'自动判断'不该变成 override")
+    assert_true(
+        api.resolve_target("browser.input", ONLINE, "auto")["decidedBy"] == "command",
+        "'自动判断'不该变成 override",
+    )
 
 
 def case_capability_snapshot() -> None:
@@ -100,11 +146,43 @@ def case_capability_snapshot() -> None:
         payload = {"browsers": {"chrome": {"installed": True, "online": False}}}
         snap = api.capability_snapshot()
         assert_true(snap["extensionOnline"] is False and snap["fix"], f"离线没给修法：{snap}")
+        # 提示里不许再出现「手动填写选择器」：那条入口本轮已经删掉，说了也点不到。
+        assert_true("手动填写" not in snap["fix"], f"修法还在指一条不存在的入口：{snap['fix']}")
     finally:
         api.subprocess.run, api._rpa_argv = real_run, real_argv
 
 
-def _patch_offline():
+class _Silence:
+    """把桌面浮窗全部打成静默，并记录「浮窗里说过什么」。
+
+    门禁不该弹窗抢前台；但「提示进浮窗」是本轮的产品要求，所以必须记下来断言。
+    """
+
+    def __init__(self) -> None:
+        self.notices: list[tuple[str, str]] = []
+        self.saved: tuple | None = None
+
+    def __enter__(self):
+        self.saved = (api._new_float, api._notify)
+        notices = self.notices
+
+        class _Win:
+            def show_notice(self, title, detail="", on_close=None, auto_hide_ms=0):
+                notices.append((title, detail))
+
+            def hide(self):
+                pass
+
+        api._new_float = lambda: _Win()
+        api._notify = lambda title, detail="", **kw: notices.append((title, detail))
+        return self
+
+    def __exit__(self, *exc):
+        api._new_float, api._notify = self.saved
+        return False
+
+
+def _patch_offline() -> tuple[tuple, list]:
     """把能力真值换成离线，并记下 spawn 是否发生。"""
     real = (api.capability_snapshot, api._scan_missing, api._flow_path, api.subprocess.Popen)
     calls: list[list[str]] = []
@@ -117,7 +195,7 @@ def _patch_offline():
     api._scan_missing = lambda path: [
         {"name": "userField", "command": "browser.input", "nodeId": "n1"}
     ]
-    api._flow_path = lambda path: Path("C:/rpa-m66-fixture/flow.json")
+    api._flow_path = lambda path: Path("C:/rpa-m68-fixture/flow.json")
     api.subprocess.Popen = fake_popen
     return real, calls
 
@@ -125,85 +203,305 @@ def _patch_offline():
 def case_offline_never_spawns() -> None:
     saved, calls = _patch_offline()
     try:
-        plan = api._pick_plan("demo.json", "userField")
-        assert_true(plan["blocked"] is True and plan["fix"], f"离线没被拦：{plan}")
-        res = api.start_capture("demo.json", "userField")
-        assert_true(res["ok"] is False and res["state"] == "blocked", f"{res}")
-        assert_true(res["code"] == "CAPABILITY_OFFLINE", f"错误码={res['code']}")
-        assert_true(calls == [], "离线时起了子进程，用户又要空等一分钟")
+        with _Silence() as quiet:
+            plan = api._pick_plan("demo.json", "userField")
+            assert_true(plan["blocked"] is True and plan["fix"], f"离线没被拦：{plan}")
+            res = api.start_capture("demo.json", "userField")
+            assert_true(res["ok"] is False and res["state"] == "blocked", f"{res}")
+            assert_true(res["code"] == "CAPABILITY_OFFLINE", f"错误码={res['code']}")
+            assert_true(calls == [], "离线时起了子进程，用户又要空等一分钟")
+            assert_true(quiet.notices, "被挡住却没在浮窗里说（面板里不该有提示）")
     finally:
         (api.capability_snapshot, api._scan_missing, api._flow_path, api.subprocess.Popen) = saved
 
 
-def case_offline_with_override_still_blocked() -> None:
-    saved, calls = _patch_offline()
+def case_capture_needs_no_name() -> None:
+    """点按钮就抓：不传 name 也能起，默认名由后端给（元素1 / 元素2…）。"""
+    import tempfile
+
+    real = (
+        api.capability_snapshot,
+        api._scan_missing,
+        api._flow_path,
+        api._elements_dir,
+        api.CaptureController,
+    )
+    base = Path(tempfile.mkdtemp(prefix="rpa-m68-"))
+    seen: dict[str, object] = {}
+
+    class _Ctl:
+        def __init__(self, **kwargs):
+            seen["kwargs"] = kwargs
+
+        def start(self):
+            return {"ok": True, "offline": False}
+
+        def poll(self):
+            return {"state": "pending"}
+
+        def cancel(self):
+            seen["cancelled"] = True
+
+    key = ("probe.json", "?")
     try:
-        res = api.start_capture("demo.json", "userField", "browser")
-        assert_true(res["ok"] is False and not calls, f"强制网页腿绕过了能力闸：{res}")
+        api.capability_snapshot = lambda: dict(ONLINE)
+        api._scan_missing = lambda path: []
+        api._flow_path = lambda path: base / "workflows" / "probe.json"
+        api._elements_dir = lambda path: base / "workflows" / "elements"
+        api.CaptureController = _Ctl
+        with _Silence():
+            res = api.start_capture("probe.json")
+        assert_true(res["ok"] is True, f"不传名字就起不来：{res}")
+        assert_true(res["name"] is None, f"不该有名字：{res}")
+        assert_true(res["suggestedName"] == "元素1", f"默认名不对：{res}")
+        assert_true("on_captured" in seen["kwargs"], "没接捕获回调")
+        entry = api._CAPTURES.get(("probe.json", res["captureId"]))
+        assert_true(entry is not None, "开始后没有会话记录")
+        assert_true(entry["name"] is None and entry["overwrite"] is False, f"{entry}")
+        assert_true(entry["captured"] is None, "还没抓到就写进 captured 了")
+        api.cancel_capture("probe.json", res["captureId"])
+        assert_true(seen.get("cancelled") is True, "取消没传到控制器")
     finally:
-        (api.capability_snapshot, api._scan_missing, api._flow_path, api.subprocess.Popen) = saved
+        (
+            api.capability_snapshot,
+            api._scan_missing,
+            api._flow_path,
+            api._elements_dir,
+            api.CaptureController,
+        ) = real
+        api._CAPTURES.pop(key, None)
 
 
-def case_capture_poll_states() -> None:
-    """新模型：轮询只看后台产出，没有 deadline / timeout。
+class _FakeController:
+    def __init__(self, state: str, result: dict | None = None, reason: str = "") -> None:
+        self._state = state
+        self._result = result
+        self._reason = reason
 
-    后端 capture_poll 的状态只有 pending / ready / cancelled / offline / failed，
-    由 entry["result"]（或取消事件）派生——不再有「waiting」「timeout」这类
-    前端态，也不再壳 CLI（没有 proc / deadlineAt）。
-    """
-    real_captures, real_dir = api._CAPTURES, api._elements_dir
-    tmp = Path(sys.executable).parent  # 不写盘：用不存在的目录保证 captured=False
-    api._elements_dir = lambda path: tmp / "__m66_no_such_dir__"
-    key = ("demo.json", "userField")
-    try:
-        for state, result, cancelled, event_set in (
-            ("pending", None, False, False),
-            ("ready", {"kind": "browser", "selector": {"css": "#x"}}, False, False),
-            ("cancelled", None, False, True),
-            ("offline", {"offline": True, "error": "扩展离线：请先打开装好插件的浏览器"}, False, False),
-            ("failed", {"error": "捕获线程异常：boom"}, False, False),
-        ):
-            cancel_event = threading.Event()
-            if event_set:
-                cancel_event.set()
-            api._CAPTURES[key] = {
-                "name": "userField", "path": "demo.json",
-                "cancel_event": cancel_event, "cancelled": cancelled,
-                "result": result, "offline": False, "session": None, "nodeId": "n1",
-                "decision": {"target": "browser"},
-            }
-            res = api.capture_poll("demo.json", "userField")
-            assert_true(res["state"] == state, f"期望 {state}，得到 {res['state']}")
-            assert_true("state" in res and "ok" in res, f"状态契约缺字段：{res}")
-            if state in ("offline", "failed"):
-                assert_true("reason" in res, f"{state} 缺 reason：{res}")
-            if state == "ready":
-                assert_true("result" in res, f"ready 缺 result：{res}")
-    finally:
-        api._CAPTURES, api._elements_dir = real_captures, real_dir
+    def poll(self) -> dict:
+        if self._state == "ready":
+            return {"state": "ready", "result": self._result}
+        if self._state in ("offline", "failed"):
+            return {"state": self._state, "reason": self._reason}
+        return {"state": self._state, "offline": False, "armed": True}
+
+    def cancel(self) -> None:
+        self._state = "cancelled"
 
 
-def case_write_element() -> None:
+def case_capture_holds_descriptor_without_writing() -> None:
+    """捕获只暂存：poll=ready 时盘上什么都没有，preview 里带默认名。"""
     import tempfile
 
     real_dir, real_scan = api._elements_dir, api._scan_missing
-    with tempfile.TemporaryDirectory(prefix="rpa-m66-") as raw:
-        folder = Path(raw)
+    with tempfile.TemporaryDirectory(prefix="rpa-m68-") as raw:
+        folder = Path(raw) / "elements"
         api._elements_dir = lambda path: folder
-        api._scan_missing = lambda path: [{"name": "userField", "nodeId": "n1"}]
+        api._scan_missing = lambda path: []
+        key = ("demo.json", "c1")
         try:
-            bad = api.write_element("demo.json", "../evil", "#x")
-            assert_true(bad["ok"] is False, "路径穿越没拦住")
-            ok = api.write_element("demo.json", "userField", "#username")
-            assert_true(ok["ok"] is True and ok["boundNodeId"] == "n1", f"{ok}")
-            doc = json.loads((folder / "userField.json").read_text(encoding="utf-8"))
-            assert_true(
-                doc["selector"] == {"css": "#username"} and doc["kind"] == "browser",
-                f"{doc}",
+            entry = {"name": None, "suggestName": "元素1", "nodeId": None, "overwrite": False}
+            doc = api._hold_captured(
+                entry,
+                {
+                    "kind": "browser",
+                    "selector": {"css": "#q"},
+                    "verifyCount": 2,
+                    "metadata": {"title": "示例页"},
+                },
             )
-            assert_true((folder / "userField.json").read_bytes().count(b"\r\n") == 0, "写成了 CRLF")
+            assert_true(doc["kind"] == "browser" and doc["selector"] == {"css": "#q"}, f"{doc}")
+            assert_true(entry["preview"]["name"] == "元素1", f"{entry['preview']}")
+            assert_true(
+                entry["preview"]["selector"] == "#q" and entry["preview"]["matches"] == 2,
+                f"preview 缺定位/命中数：{entry['preview']}",
+            )
+            api._CAPTURES[key] = {**entry, "controller": _FakeController("ready", doc)}
+            polled = api.capture_poll("demo.json", "c1")
+            assert_true(polled["state"] == "ready", f"{polled}")
+            assert_true(polled["preview"]["name"] == "元素1", f"{polled}")
+            assert_true(not folder.exists() or not list(folder.glob("*.json")), "捕获就落盘了")
         finally:
             api._elements_dir, api._scan_missing = real_dir, real_scan
+            api._CAPTURES.pop(key, None)
+
+
+def case_commit_writes_chinese_name() -> None:
+    """用户确认才入库；中文名真能写成 UTF-8 / LF 的文件。"""
+    import tempfile
+
+    real_dir = api._elements_dir
+    with tempfile.TemporaryDirectory(prefix="rpa-m68-") as raw:
+        folder = Path(raw) / "elements"
+        api._elements_dir = lambda path: folder
+        key = ("demo.json", "c2")
+        try:
+            entry = {"name": None, "suggestName": "元素1", "nodeId": "openHome", "overwrite": False}
+            doc = api._hold_captured(
+                entry, {"kind": "browser", "selector": {"css": "#q"}, "verifyCount": 1}
+            )
+            api._CAPTURES[key] = {**entry, "captured": doc, "controller": _FakeController("ready")}
+            res = api.commit_element("demo.json", "c2", "  搜索框  ")
+            assert_true(res["ok"] is True and res["name"] == "搜索框", f"{res}")
+            written = folder / "搜索框.json"
+            assert_true(written.is_file(), f"没写成中文名文件：{list(folder.iterdir())}")
+            body = written.read_bytes()
+            assert_true(body.count(b"\r\n") == 0, "写成了 CRLF")
+            parsed = json.loads(body.decode("utf-8"))
+            assert_true(parsed["name"] == "搜索框", f"名字没写进文档：{parsed}")
+            assert_true(parsed["selector"]["css"] == "#q", f"选择器丢了：{parsed}")
+            assert_true(api._CAPTURES.get(key) is None, "入库后没释放这次捕获")
+        finally:
+            api._elements_dir = real_dir
+            api._CAPTURES.pop(key, None)
+
+
+def case_commit_rejects_bad_and_duplicate_names() -> None:
+    import tempfile
+
+    real_dir = api._elements_dir
+    with tempfile.TemporaryDirectory(prefix="rpa-m68-") as raw:
+        folder = Path(raw) / "elements"
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / "占用.json").write_text("{}", encoding="utf-8")
+        api._elements_dir = lambda path: folder
+        key = ("demo.json", "c3")
+        try:
+            entry = {"name": None, "suggestName": "元素1", "nodeId": None, "overwrite": False}
+            doc = api._hold_captured(entry, {"kind": "browser", "selector": {"css": "#q"}})
+            api._CAPTURES[key] = {**entry, "captured": doc, "controller": _FakeController("ready")}
+            for bad in ("../evil", "a/b", "a.b", "", "  "):
+                res = api.commit_element("demo.json", "c3", bad)
+                assert_true(res["ok"] is False and res["code"] == "BAD_NAME", (bad, res))
+            taken = api.commit_element("demo.json", "c3", "占用")
+            assert_true(taken["ok"] is False and taken["code"] == "NAME_TAKEN", f"{taken}")
+            assert_true(api._CAPTURES.get(key) is not None, "名字不合法却把捕获丢了")
+        finally:
+            api._elements_dir = real_dir
+            api._CAPTURES.pop(key, None)
+
+
+def case_commit_needs_a_live_capture() -> None:
+    res = api.commit_element("demo.json", "nope", "anything")
+    assert_true(res["ok"] is False and res["code"] == "NO_CAPTURE", f"{res}")
+
+
+def _fixture_flow(raw: str) -> tuple[Path, Path]:
+    base = Path(raw) / "workflows"
+    base.mkdir(parents=True, exist_ok=True)
+    flow = base / "probe.json"
+    flow.write_bytes((json.dumps(FLOW, ensure_ascii=False, indent=2) + "\n").encode("utf-8"))
+    return base, flow
+
+
+def case_rename_rewrites_refs() -> None:
+    """改名不动引用 = 资产与流程脱钩：盘上有文件、流程还指着旧名。"""
+    import tempfile
+
+    real_dir, real_flow = api._elements_dir, api._flow_path
+    with tempfile.TemporaryDirectory(prefix="rpa-m68-") as raw:
+        base, flow = _fixture_flow(raw)
+        api._flow_path = lambda path: flow
+        api._elements_dir = lambda path: base / "elements"
+        try:
+            elem = base / "elements"
+            elem.mkdir(parents=True, exist_ok=True)
+            (elem / "userField.json").write_text(
+                json.dumps({"kind": "browser", "selector": {"css": "#q"}}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            res = api.save_element("probe.json", "userField", "登录框")
+            assert_true(res["ok"] is True and res["name"] == "登录框", f"{res}")
+            assert_true((elem / "登录框.json").is_file(), "文件没改名")
+            assert_true(not (elem / "userField.json").exists(), "旧文件还在")
+            doc = json.loads(flow.read_text(encoding="utf-8"))
+            refs = [doc["root"]["children"][0]["elementRefs"]["selector"]]
+            refs.append(doc["root"]["children"][1]["then"][0]["elementRefs"]["selector"])
+            assert_true(refs == ["登录框", "登录框"], f"引用没跟着改：{refs}")
+            assert_true(res["renamedRefs"] == ["inThen", "openHome"], f"{res['renamedRefs']}")
+            assert_true(flow.read_bytes().count(b"\r\n") == 0, "流程文件被写成 CRLF")
+        finally:
+            api._elements_dir, api._flow_path = real_dir, real_flow
+
+
+def case_rename_rejects_duplicate_and_missing() -> None:
+    import tempfile
+
+    real_dir, real_flow = api._elements_dir, api._flow_path
+    with tempfile.TemporaryDirectory(prefix="rpa-m68-") as raw:
+        base, flow = _fixture_flow(raw)
+        api._flow_path = lambda path: flow
+        api._elements_dir = lambda path: base / "elements"
+        try:
+            elem = base / "elements"
+            elem.mkdir(parents=True, exist_ok=True)
+            for name in ("a", "b"):
+                (elem / f"{name}.json").write_text("{}", encoding="utf-8")
+            dup = api.save_element("probe.json", "a", "b")
+            assert_true(dup["ok"] is False and dup["code"] == "NAME_TAKEN", f"{dup}")
+            missing = api.save_element("probe.json", "nope", "c")
+            assert_true(missing["ok"] is False and missing["code"] == "NOT_FOUND", f"{missing}")
+            same = api.save_element("probe.json", "a", "a")
+            assert_true(same["ok"] is True and same["unchanged"] is True, f"{same}")
+        finally:
+            api._elements_dir, api._flow_path = real_dir, real_flow
+
+
+def case_delete_guard_speaks_in_float() -> None:
+    """删除被引用时拒绝，并且原因必须进浮窗（面板里不显示任何提示）。"""
+    import tempfile
+
+    real_dir, real_flow = api._elements_dir, api._flow_path
+    with tempfile.TemporaryDirectory(prefix="rpa-m68-") as raw:
+        base, flow = _fixture_flow(raw)
+        api._flow_path = lambda path: flow
+        api._elements_dir = lambda path: base / "elements"
+        try:
+            elem = base / "elements"
+            elem.mkdir(parents=True, exist_ok=True)
+            (elem / "userField.json").write_text("{}", encoding="utf-8")
+            with _Silence() as quiet:
+                res = api.delete_element("probe.json", "userField")
+            assert_true(res["ok"] is False and res["code"] == "ELEMENT_IN_USE", f"{res}")
+            assert_true(quiet.notices, "删不掉却没在浮窗里说")
+            assert_true((elem / "userField.json").is_file(), "被引用还删了文件")
+        finally:
+            api._elements_dir, api._flow_path = real_dir, real_flow
+
+
+def case_poll_states() -> None:
+    """轮询只看后台产出，没有 deadline；离线/失败要把原因送进浮窗（只送一次）。"""
+    key = ("demo.json", "c9")
+    try:
+        for state, expected in (("pending", "pending"), ("ready", "ready"),
+                                ("offline", "offline"), ("failed", "failed")):
+            with _Silence() as quiet:
+                api._CAPTURES[key] = {
+                    "controller": _FakeController(state, {"kind": "browser"}, "没收到点选"),
+                    "preview": {"name": "元素1"},
+                    "notified": False,
+                    "nodeId": None,
+                }
+                res = api.capture_poll("demo.json", "c9")
+                assert_true(res["state"] == expected, f"期望 {expected}，得到 {res}")
+                if expected in ("offline", "failed"):
+                    assert_true(
+                        len(quiet.notices) == 1, f"{expected} 没在浮窗里说：{quiet.notices}"
+                    )
+                    again = api.capture_poll("demo.json", "c9")
+                    assert_true(again["state"] == expected, "重复轮询改了状态")
+                    assert_true(len(quiet.notices) == 1, "同一次失败在浮窗里说了两遍")
+                if expected == "ready":
+                    assert_true(res["preview"]["name"] == "元素1", f"{res}")
+    finally:
+        api._CAPTURES.pop(key, None)
+
+
+def case_unknown_capture() -> None:
+    res = api.capture_poll("demo.json", "ghost")
+    assert_true(res["ok"] is False and res["code"] == "UNKNOWN_CAPTURE", f"{res}")
+    cancel = api.cancel_capture("demo.json", "ghost")
+    assert_true(cancel["ok"] is False and cancel["code"] == "UNKNOWN_CAPTURE", f"{cancel}")
 
 
 for name, fn in (
@@ -212,15 +510,24 @@ for name, fn in (
     ("覆盖只本次生效、auto 不越权", case_resolve_override),
     ("能力快照解析在线/离线与修法", case_capability_snapshot),
     ("能力离线：不 spawn、返回 blocked", case_offline_never_spawns),
-    ("覆盖为网页腿也不能绕过能力闸", case_offline_with_override_still_blocked),
-    ("轮询状态机：pending/ready/cancelled/offline/failed", case_capture_poll_states),
-    ("手填元素：拒绝路径穿越、schema 与 LF", case_write_element),
+    ("点击即抓：不需要预填名字", case_capture_needs_no_name),
+    ("捕获只暂存：ready 时盘上为空", case_capture_holds_descriptor_without_writing),
+    ("确认入库：中文名写成 UTF-8/LF", case_commit_writes_chinese_name),
+    ("入库拒绝非法名与重名", case_commit_rejects_bad_and_duplicate_names),
+    ("没有捕获就不能入库", case_commit_needs_a_live_capture),
+    ("改名联动流程引用", case_rename_rewrites_refs),
+    ("改名拒绝重名/不存在/同名为空操作", case_rename_rejects_duplicate_and_missing),
+    ("删除被引用：拒绝并进浮窗", case_delete_guard_speaks_in_float),
+    ("轮询状态机：pending/ready/offline/failed", case_poll_states),
+    ("未知捕获会话有明确错误码", case_unknown_capture),
 ):
     check(name, fn)
 
 failed = [r for r in results if not r[1]]
 for name, ok, detail in results:
     print(f"{'PASS' if ok else 'FAIL'} {name}{'' if ok else f' — {detail}'}")
-print(f"ELEMENT PICK CONTRACT CHECK {'FAILED' if failed else 'PASSED'} "
-      f"({len(results) - len(failed)}/{len(results)})")
+print(
+    f"ELEMENT PICK CONTRACT CHECK {'FAILED' if failed else 'PASSED'} "
+    f"({len(results) - len(failed)}/{len(results)})"
+)
 sys.exit(1 if failed else 0)

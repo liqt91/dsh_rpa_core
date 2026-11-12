@@ -29,8 +29,8 @@ commands = [
     # 「Qt 代码留着不动、也不改」——冻结必须能被机械证明，否则只是一句会过期的话；
     # 原型则不许偷偷 import Qt/gui UI 模块，否则「WebView 壳不靠 Qt」的结论作废。
     [sys.executable, str(ROOT / ".harness" / "scripts" / "check_host_boundary.py")],
-    # 元素拾取编排层的**动态**契约（M66）：真跑 resolve_target / 能力闸 / 状态机，
-    # 只扫源码证明不了「忽略命令类型时也照样返回 browser」这类假绿灯。
+    # 元素编排层的**动态**契约（M68）：真跑 resolve_target / 能力闸 / 暂存不落盘 /
+    # 中文名入库 / 改名联动引用。只扫源码证明不了「捕获时真的没写文件」这类假绿灯。
     [sys.executable, str(ROOT / ".harness" / "scripts" / "check_element_pick_contract.py")],
     # 编辑窗口 ↔ 会话的路径口径（M67）：真跑三种路径形态、桥等价包装、cmd_gui 的 env
     # 注入与 --wait 的失败回传。只扫源码证明不了「中文会话根真能打开」。
@@ -59,14 +59,15 @@ PURE_FUNCTION_SCRIPTS = (
     "check_param_groups.mjs",
     "check_retry_policy.mjs",
     "check_capture_helpers.mjs",
-    # 元素拾取 UI 三层判据（M66）：文案禁词 / 样式命中区 / 最小 DOM shim 真跑渲染函数。
+    # 元素捕获 UI 判据（M68）：文案禁词 / 样式命中区 / 结构单按钮 /
+    # 最小 DOM shim 真跑「点一下→弹编辑框→确认才入库→取消就丢弃→详情改名」。
     "check_element_pick_ui.mjs",
     # 编辑器底栏（元素资产 / 全局参数 / 运行日志）：ADR 0022-R3 后 DOM 在 index.html、
     # 版式在 style.css、行为在 main.js；只读源码证明不了三个 tab 真挂上去、
     # 原 details 真搬过去、全局参数真能保存 ⇒ 用最小 DOM shim 真跑一遍绑定与保存。
     "check_editor_bottom_dock.mjs",
-    # 元素资产库（常驻入库工具条 + 已就绪行的详情/重捕/删除）：与底栏判据分开，
-    # 只读源码证明不了「有按钮却点不着」「删了还显示在列表里」。
+    # 元素资产清单（单按钮工具区 + 行内详情/删除）：与捕获链判据分开，
+    # 只读源码证明不了「有按钮却点不着」「删除失败却把行抹了」。
     "check_element_library.mjs",
     # 捕获高亮框几何（content.js）：框线带必须整条落在元素**之外**、且碰不到指针
     # ±2px 热区（M41「框要躲着鼠标」）。同样是「只在浏览器里跑」的几何——Python

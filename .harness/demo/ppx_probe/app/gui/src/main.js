@@ -49,12 +49,15 @@ const el = {
   unset: document.querySelector('#unset'),
   elemBody: document.querySelector('#elemBody'),
   elemCount: document.querySelector('#elemCount'),
-  elemNewName: document.querySelector('#elemNewName'),
-  elemNewWhere: document.querySelector('#elemNewWhere'),
-  elemNewCapture: document.querySelector('#elemNewCapture'),
-  elemNewSelector: document.querySelector('#elemNewSelector'),
-  elemNewWrite: document.querySelector('#elemNewWrite'),
-  elemNewNote: document.querySelector('#elemNewNote'),
+  elemCapture: document.querySelector('#elemCapture'),
+  dialog: document.querySelector('#elemDialog'),
+  dialogTitle: document.querySelector('#elemDialogTitle'),
+  dialogName: document.querySelector('#elemDialogName'),
+  dialogMeta: document.querySelector('#elemDialogMeta'),
+  dialogNote: document.querySelector('#elemDialogNote'),
+  dialogSave: document.querySelector('#elemDialogSave'),
+  dialogCancel: document.querySelector('#elemDialogCancel'),
+  dialogClose: document.querySelector('#elemDialogClose'),
   dock: document.querySelector('#bottomDock'),
   dockFold: document.querySelector('.dockFold'),
   globalsRows: document.querySelector('#globalsRows'),
@@ -985,95 +988,82 @@ function renderCompile(result) {
   }
 }
 
-/* ---- 元素资产（AI 生成工作流的待补元素 + 捕获入口） -----------------------
- * AI 生成的工作流把交互元素写成 elementRefs 占位（模型不知道真实选择器），运行期解析不到
- * 即 ELEMENT_REF_MISSING。这里把「缺哪个元素、在第几步」摊开，并复用主分支进程内捕获会话
- * （ExtensionCaptureSession / DesktopCaptureSession）—— 不再壳 CLI、不手搓子进程。
- * 捕获没有超时概念：窗口一直开着，直到用户点选（ready）或按 Esc（cancel）。落盘即用同名 =
- * 自动绑定（引用模型无需单独绑定步骤）。 */
+/* ---- 元素资产（捕获入库 + 待补元素） --------------------------------------
+ * 交互口径（2026-11-12 改版，替换 M66 的六态状态条）：
+ * 1. 面板里只有**一个按钮**「捕获元素」：点一下就抓，不预填名字、不选网页/桌面，
+ *    也不提供手写选择器入库——那三件事要么系统能推断，要么本来就该抓。
+ * 2. 面板里**不显示任何提示**：检环境 / 没连上 / 这次没成 / 删不掉，全部落在桌面
+ *    浮窗里（后端 startCapture 先亮浮窗再查环境，见 api.py 的 _show_blocked / _notify）。
+ * 3. 抓完**不直接入库**：弹编辑框确认名字（允许中文），点保存才写 elements/<name>.json。
+ * 4. 资产行的「详情」打开**同一个**编辑框，对已保存元素改名。
+ */
 
-// 用户可见文案的唯一来源（M66）。静态判据扫这张表的值：出现实现名词即判红。
-// 动态内容一律用 {name} / {seconds} 占位，避免把拼接藏进源码里绕过判据。
-const PICK_TEXT = {
-  main: '补一下',
-  mainHint: '补这个元素，系统自己判断怎么抓',
-  alternate: '换个方式',
-  alternateHint: '通常不用改；这次选的只对这一个元素生效',
-  auto: '自动判断',
-  page: '在网页上',
-  app: '在桌面软件里',
+// 用户可见文案的唯一来源。静态判据扫这张表的值：出现实现名词即判红。
+// 动态内容一律用 {name} / {step} / {reason} 占位，避免把拼接藏进源码绕过判据。
+const ELEM_TEXT = {
+  capture: '捕获元素',
+  missingHead: '待补元素',
+  doneHead: '已有资产',
+  fill: '补一下',
+  none: '这个流程还没有元素',
+  detail: '详情',
+  remove: '删除',
+  confirmTitle: '确认这个元素',
+  detailTitle: '元素属性',
+  nameLabel: '资产名称',
+  namePlaceholder: '起个名字，可以用中文',
+  save: '保存',
+  cancel: '取消',
+  close: '关闭',
+  nameEmpty: '名字不能为空',
+  saveFailed: '没保存上：{reason}',
+  detailFailed: '打不开这个元素：{reason}',
+  missingMeta: '第 {step} 步 · {where}',
+  kindBrowser: '网页',
+  kindDesktop: '桌面',
   wherePage: '网页',
   whereApp: '桌面软件',
-  checking: '检查环境…',
-  ready: '准备好了，马上去点一下要用的元素',
-  startNow: '现在开始',
-  blocked: '现在还不能开始：{fix}',
-  offlineHint: '浏览器还没连上，可以先手动填写',
-  waiting: '等你点一下要用的元素',
-  waitingDefault: '去点一下要用的元素',
-  cancelled: '已取消，随时可以重来',
-  failed: '这次没成：{reason}',
-  bound: '第 {step} 步已就绪 · {name}',
-  manual: '手动填写',
-  manualHint: '不用点元素，直接写一个选择器（键盘也能用）',
-  manualPlaceholder: '例如 #username',
-  manualSubmit: '写好并绑定',
-  manualDone: '已写好并绑定 · {name}',
-  manualBad: '没写上：{reason}',
-  cancel: '取消',
-  retry: '再试一次',
-  view: '查看这一步',
-  none: '本流程没有元素，不用补',
-  loadFail: '元素没加载出来：{reason}',
-  headMissing: '待补元素',
-  headDone: '已就绪',
-  countDone: '{count} 已就绪',
-  countMissing: '{count} 待补',
+  matches: '捕获时命中 {count} 个',
+  refStep: '第 {step} 步正在用它',
+  refNone: '还没有流程引用它，保存后只是一条库存',
+  capturedAt: '捕获时间 {time}',
   stepFallback: '这一步',
-  boundNew: '已入库 · {name}',
-  assetNewBad: '名字只能用字母、数字、下划线和短横线',
-  assetManualBad: '还要写一个选择器',
-  assetWritten: '已入库 · {name}',
-  assetDeleted: '已删除 · {name}',
-  assetInUse: '还被第 {step} 步引用着，先改引用再删',
-  assetDetail: '详情',
-  assetRecapture: '重新捕获',
-  assetDelete: '删除',
-  assetDetailHead: '资产详情 · {name}',
-  assetRefNone: '无（预置资产）',
+  loadFailed: '元素没加载出来：{reason}',
 }
 
-// 状态符号：与文字、颜色三者并列，任何一条通道失效都还能读出状态。
-const PICK_ICON = {
-  checking: '◌', ready: '◉', waiting: '◌', bound: '✓',
-  blocked: '!', cancelled: '–', failed: '!', offline: '!',
-}
-
-function pickText(key, vars = {}) {
-  return (PICK_TEXT[key] || key).replace(/\{(\w+)\}/g, (_, k) => String(vars[k] ?? ''))
+function elemText(key, vars = {}) {
+  return (ELEM_TEXT[key] || key).replace(/\{(\w+)\}/g, (_, k) => String(vars[k] ?? ''))
 }
 
 let pickMissing = []
 let pickElements = []
-let pickCapabilities = null
-let pickState = null // { name, path, override, state, step, nodeId, hint, reason }
-let pickPollTimer = null
+let captureSession = null // { id, name, nodeId } —— 捕获期唯一的状态
+let captureTimer = null
+let dialogMode = null // 'capture' | 'detail'
+let dialogSave = null
+let dialogDiscard = null
 
 function stepOf(nodeId) {
   const card = cards.find((c) => c.id === nodeId)
-  return card && card.no != null ? String(card.no) : PICK_TEXT.stepFallback
+  return card && card.no != null ? String(card.no) : ELEM_TEXT.stepFallback
 }
 
 function whereOf(m) {
   const cmd = String(m.command || '')
-  if (cmd.startsWith('browser.')) return PICK_TEXT.wherePage
-  if (cmd.startsWith('desktop.')) return PICK_TEXT.whereApp
-  return m.decision && m.decision.target === 'browser' ? PICK_TEXT.wherePage : PICK_TEXT.whereApp
+  if (cmd.startsWith('browser.')) return elemText('wherePage')
+  if (cmd.startsWith('desktop.')) return elemText('whereApp')
+  return m.decision && m.decision.target === 'browser' ? elemText('wherePage') : elemText('whereApp')
+}
+
+function kindLabel(kind) {
+  if (kind === 'browser') return elemText('kindBrowser')
+  if (kind === 'desktop') return elemText('kindDesktop')
+  return ''
 }
 
 async function refreshElements() {
   if (!currentPath) {
-    el.elemBody.replaceChildren(mk('div', 'hint', pickText('none')))
+    el.elemBody.replaceChildren(mk('div', 'hint', elemText('none')))
     el.elemCount.textContent = ''
     return
   }
@@ -1084,476 +1074,283 @@ async function refreshElements() {
     ])
     pickMissing = miss.missing || []
     pickElements = list.elements || []
-    pickCapabilities = miss.capabilities || null
-    assetDetailOpen = new Set()
-    assetDetailCache = {}
     missingNodeIds = new Set(pickMissing.map((m) => m.nodeId).filter(Boolean))
     renderCards()
     renderElementsPanel()
   } catch (error) {
     el.elemBody.replaceChildren(
-      mk('div', 'hint', pickText('loadFail', { reason: `${error.code}: ${error.message}` })),
+      mk('div', 'hint', elemText('loadFailed', { reason: `${error.code}: ${error.message}` })),
     )
   }
 }
 
-/* 详情展开态放模块级、由 renderElementsPanel 重绘消费：最小 DOM shim 没有
-   remove()/querySelector，靠状态重绘才能让「点详情」这条路径真被判据跑到。 */
-let assetDetailOpen = new Set()
-let assetDetailCache = {}
-
-function showElemNote(text, isError = false) {
-  if (!el.elemNewNote) return
-  el.elemNewNote.textContent = text || ''
-  el.elemNewNote.classList[isError && text ? 'add' : 'remove']('error')
-}
-
 function bindElementTools() {
-  el.elemNewCapture?.addEventListener('click', createAssetByCapture)
-  el.elemNewWrite?.addEventListener('click', createAssetByManual)
-  el.elemNewName?.addEventListener('keydown', (event) => {
-    if (event.key === 'Enter') createAssetByCapture()
+  el.elemCapture?.addEventListener('click', () => startCapture(null))
+  el.dialogSave?.addEventListener('click', () => confirmElemDialog())
+  el.dialogCancel?.addEventListener('click', () => cancelElemDialog())
+  el.dialogClose?.addEventListener('click', () => cancelElemDialog())
+  el.dialogName?.addEventListener('keydown', (event) => {
+    // 中文输入法里回车是「上屏」，不是「保存」：isComposing 为真时绝不抢。
+    if (event.key === 'Enter' && !event.isComposing) {
+      event.preventDefault()
+      confirmElemDialog()
+    }
   })
-  el.elemNewSelector?.addEventListener('keydown', (event) => {
-    if (event.key === 'Enter') createAssetByManual()
-  })
 }
 
-function newAssetName() {
-  return String(el.elemNewName?.value || '').trim()
-}
+/* ---- 捕获：一个按钮 → 浮窗负责全部提示 → 抓完弹编辑框 -------------------- */
 
-function newAssetTarget() {
-  const value = String(el.elemNewWhere?.value || 'auto')
-  return value === 'auto' ? null : value
-}
-
-function validAssetName(name) {
-  return /^[A-Za-z0-9_-]+$/.test(name)
-}
-
-async function createAssetByCapture() {
+async function startCapture(name) {
   if (!currentPath) return
-  const name = newAssetName()
-  if (!validAssetName(name)) {
-    showElemNote(pickText('assetNewBad'), true)
+  let res
+  try {
+    res = await ppx.call('rpa.startCapture', { path: currentPath, name: name || null })
+  } catch (error) {
+    // 起捕获失败的原因已经写在桌面浮窗里（后端 _show_blocked），这里不再显示提示。
     return
   }
-  showElemNote('')
-  await startPickFlow({ name, nodeId: null, isNew: true }, newAssetTarget())
+  if (!res.ok) return // 被挡住 / 起不来：同样只在浮窗里说
+  captureSession = { id: res.captureId, name: res.name || null, nodeId: res.nodeId || null }
+  pollCapture()
 }
 
-async function createAssetByManual() {
-  if (!currentPath) return
-  const name = newAssetName()
-  const selector = String(el.elemNewSelector?.value || '').trim()
-  if (!validAssetName(name)) {
-    showElemNote(pickText('assetNewBad'), true)
-    return
+// 主窗的最小化 / 还原由后端同进程的 pywebview 窗口做（最小化后 JS 定时器可能被节流，
+// 不能把「还原」押在前端）。这里的 restore 只是兜底：后端异常没还原时也能拉回来。
+async function restoreApp() {
+  try { await ppx.call('window.restore') } catch { /* 环境不支持就保持原样 */ }
+}
+
+async function pollCapture() {
+  if (captureTimer) clearTimeout(captureTimer)
+  const tick = async () => {
+    const session = captureSession
+    if (!session) return
+    let res
+    try {
+      res = await ppx.call('rpa.capturePoll', { path: currentPath, captureId: session.id })
+    } catch (error) {
+      await restoreApp()
+      captureSession = null
+      return
+    }
+    if (!res.ok) {
+      await restoreApp()
+      captureSession = null
+      return
+    }
+    if (res.state === 'ready') {
+      await restoreApp()
+      captureSession = null
+      openCaptureDialog(session.id, res.preview || {})
+      return
+    }
+    // 终态：取消 / 离线 / 失败 / 被挡下。原因都不在面板里说，浮窗已经说过。
+    if (['cancelled', 'offline', 'failed', 'blocked'].includes(res.state)) {
+      await restoreApp()
+      captureSession = null
+      return
+    }
+    captureTimer = setTimeout(tick, 1000)
   }
-  if (!selector) {
-    showElemNote(pickText('assetManualBad'), true)
+  captureTimer = setTimeout(tick, 800)
+}
+
+/* ---- 编辑框（抓完确认 + 详情改名共用同一个） ------------------------------ */
+
+function setDialogNote(text, isError = false) {
+  if (!el.dialogNote) return
+  el.dialogNote.textContent = text || ''
+  el.dialogNote.classList[isError && text ? 'add' : 'remove']('error')
+}
+
+function showElemDialog(options) {
+  dialogMode = options.mode
+  dialogSave = options.save || null
+  dialogDiscard = options.discard || null
+  if (!el.dialog) return
+  el.dialog.hidden = false
+  el.dialog.classList.add('open')
+  if (el.dialogTitle) el.dialogTitle.textContent = options.title || ''
+  if (el.dialogName) {
+    el.dialogName.value = options.name || ''
+    el.dialogName.placeholder = elemText('namePlaceholder')
+    el.dialogName.readOnly = Boolean(options.readOnly)
+    el.dialogName.focus?.()
+    el.dialogName.select?.()
+  }
+  if (el.dialogMeta) {
+    el.dialogMeta.replaceChildren(...(options.meta || []).map((line) => mk('div', 'modalLine', line)))
+  }
+  if (el.dialogSave) el.dialogSave.disabled = !dialogSave
+  setDialogNote(options.note || '', Boolean(options.error))
+}
+
+function closeElemDialog() {
+  dialogMode = null
+  dialogSave = null
+  dialogDiscard = null
+  if (!el.dialog) return
+  el.dialog.hidden = true
+  el.dialog.classList.remove('open')
+  setDialogNote('')
+}
+
+async function confirmElemDialog() {
+  if (!dialogSave) return
+  const name = String(el.dialogName?.value || '').trim()
+  if (!name) {
+    setDialogNote(elemText('nameEmpty'), true)
     return
   }
   let res
   try {
-    res = await ppx.call('rpa.writeElement', { path: currentPath, name, selector })
+    res = await dialogSave(name)
   } catch (error) {
-    showElemNote(error.message, true)
+    setDialogNote(elemText('saveFailed', { reason: error?.message || error }), true)
     return
   }
-  if (!res.ok) {
-    showElemNote(res.error || pickText('manualBad', { reason: res.code || 'unknown' }), true)
+  if (!res || !res.ok) {
+    setDialogNote(elemText('saveFailed', { reason: (res && res.error) || '' }), true)
     return
   }
-  showElemNote(pickText('assetWritten', { name }))
-  if (el.elemNewName) el.elemNewName.value = ''
-  if (el.elemNewSelector) el.elemNewSelector.value = ''
+  closeElemDialog()
   await refreshElements()
 }
 
-async function toggleAssetDetail(name) {
-  if (assetDetailOpen.has(name)) {
-    assetDetailOpen.delete(name)
-    renderElementsPanel()
-    return
+async function cancelElemDialog() {
+  const discard = dialogDiscard
+  closeElemDialog()
+  if (!discard) return
+  try {
+    await discard()
+  } catch {
+    // 丢掉暂存失败也不该再弹一句：用户已经按了取消。
   }
+}
+
+function openCaptureDialog(captureId, preview) {
+  const meta = []
+  meta.push(`${kindLabel(preview.kind)} · ${preview.selector || ''}`.trim())
+  if (preview.matches) meta.push(elemText('matches', { count: preview.matches }))
+  meta.push(
+    preview.nodeId
+      ? elemText('refStep', { step: stepOf(preview.nodeId) })
+      : elemText('refNone'),
+  )
+  showElemDialog({
+    mode: 'capture',
+    title: elemText('confirmTitle'),
+    name: preview.name || '',
+    meta,
+    save: (name) => ppx.call('rpa.commitElement', { path: currentPath, captureId, name }),
+    discard: () => ppx.call('rpa.discardCapture', { path: currentPath, captureId }),
+  })
+}
+
+async function openAssetDetail(name) {
   let res
   try {
     res = await ppx.call('rpa.elementDetail', { path: currentPath, name })
   } catch (error) {
-    showElemNote(error.message, true)
+    showBrokenDetail(name, error?.message || error)
     return
   }
   if (!res.ok) {
-    showElemNote(res.error, true)
+    showBrokenDetail(name, res.error || res.code || '')
     return
   }
-  const d = res.document || {}
-  const sel = d.selector || {}
-  const refs = (res.referencedBy || []).join('、') || pickText('assetRefNone')
-  assetDetailCache[name] = [
-    pickText('assetDetailHead', { name }),
-    `类型 ${d.kind || '?'}`,
-    `选择器 ${sel.css || sel.locator || '?'}`,
-    `备选 ${Array.isArray(sel.candidates) ? sel.candidates.length : 0} 条`,
-    `引用 ${refs}`,
-    `捕获时间 ${d.capturedAt || '未知'}`,
-  ].join('\n')
-  assetDetailOpen.add(name)
-  renderElementsPanel()
+  const doc = res.document || {}
+  const meta = []
+  meta.push(`${kindLabel(doc.kind)} · ${res.selectorText || ''}`.trim())
+  if (doc.verifyCount) meta.push(elemText('matches', { count: doc.verifyCount }))
+  if (doc.capturedAt) meta.push(elemText('capturedAt', { time: doc.capturedAt }))
+  const refs = res.referencedBy || []
+  meta.push(
+    refs.length
+      ? elemText('refStep', { step: refs.map((id) => stepOf(id)).join('、') })
+      : elemText('refNone'),
+  )
+  showElemDialog({
+    mode: 'detail',
+    title: elemText('detailTitle'),
+    name,
+    meta,
+    save: (newName) => ppx.call('rpa.saveElement', { path: currentPath, name, newName }),
+  })
 }
+
+function showBrokenDetail(name, reason) {
+  showElemDialog({
+    mode: 'detail',
+    title: elemText('detailTitle'),
+    name,
+    meta: [],
+    readOnly: true,
+    error: true,
+    note: elemText('detailFailed', { reason }),
+  })
+}
+
+/* ---- 列表 ---------------------------------------------------------------- */
 
 async function deleteAsset(name) {
   let res
   try {
     res = await ppx.call('rpa.deleteElement', { path: currentPath, name })
   } catch (error) {
-    showElemNote(error.message, true)
+    // 失败原因在桌面浮窗里（后端把「还被引用着」也说清了），面板不显示任何提示。
     return
   }
-  if (!res.ok) {
-    const steps = (res.referencedBy || []).map((id) => stepOf(id)).join('、')
-    showElemNote(steps ? pickText('assetInUse', { step: steps }) : res.error, true)
-    return
-  }
-  assetDetailOpen.delete(name)
-  delete assetDetailCache[name]
-  showElemNote(pickText('assetDeleted', { name }))
+  if (!res || !res.ok) return
   await refreshElements()
+}
+
+function missingRow(m) {
+  const row = mk('div', 'elemRow missing')
+  row.dataset.pickName = m.name
+  row.append(mk('span', 'elemName', m.name))
+  row.append(
+    mk('span', 'elemMeta', elemText('missingMeta', { step: stepOf(m.nodeId), where: whereOf(m) })),
+  )
+  // 唯一主操作：怎么抓由后端决定，界面不提供技术选择题。
+  const fill = mk('button', 'elemFill', elemText('fill'))
+  fill.addEventListener('click', () => startCapture(m.name))
+  row.append(fill)
+  return row
 }
 
 function assetRow(e) {
   const row = mk('div', 'elemRow asset')
   row.append(mk('span', 'elemName', e.name))
-  row.append(mk('span', 'elemMeta', `${e.kind || '?'} · ${e.selector || ''}`))
-  const detail = mk('button', 'elemAct', pickText('assetDetail'))
-  detail.addEventListener('click', () => toggleAssetDetail(e.name))
-  const again = mk('button', 'elemAct', pickText('assetRecapture'))
-  again.addEventListener('click', () => {
-    const override = e.kind === 'desktop' || e.kind === 'browser' ? e.kind : null
-    startPickFlow({ name: e.name, nodeId: null, isNew: false }, override)
-  })
-  const remove = mk('button', 'elemAct danger', pickText('assetDelete'))
+  row.append(mk('span', 'elemMeta', `${kindLabel(e.kind)} · ${e.selector || ''}`.trim()))
+  const detail = mk('button', 'elemAct', elemText('detail'))
+  detail.addEventListener('click', () => openAssetDetail(e.name))
+  const remove = mk('button', 'elemAct danger', elemText('remove'))
   remove.addEventListener('click', () => deleteAsset(e.name))
-  row.append(detail, again, remove)
-  if (assetDetailOpen.has(e.name)) {
-    row.append(mk('div', 'elemDetail', assetDetailCache[e.name] || ''))
-  }
+  row.append(detail, remove)
   return row
 }
 
 function renderElementsPanel() {
   el.elemBody.replaceChildren()
-  el.elemCount.textContent =
-    `${pickText('countDone', { count: pickElements.length })} · ` +
-    pickText('countMissing', { count: pickMissing.length })
-  paintPickBar()
+  el.elemCount.textContent = pickMissing.length ? String(pickMissing.length) : ''
   if (!pickMissing.length && !pickElements.length) {
-    el.elemBody.append(mk('div', 'hint', pickText('none')))
+    el.elemBody.append(mk('div', 'hint', elemText('none')))
     return
   }
   if (pickMissing.length) {
-    el.elemBody.append(mk('div', 'elemHead', pickText('headMissing')))
-    for (const m of pickMissing) el.elemBody.append(pickRow(m))
+    el.elemBody.append(mk('div', 'elemHead', elemText('missingHead')))
+    for (const m of pickMissing) el.elemBody.append(missingRow(m))
   }
   if (pickElements.length) {
-    el.elemBody.append(mk('div', 'elemHead', pickText('headDone')))
+    el.elemBody.append(mk('div', 'elemHead', elemText('doneHead')))
     for (const e of pickElements) el.elemBody.append(assetRow(e))
   }
 }
 
-function pickRow(m) {
-  const row = mk('div', 'elemRow missing')
-  row.dataset.pickName = m.name
-  row.append(mk('span', 'elemName', m.name))
-  row.append(mk('span', 'elemMeta', `第 ${stepOf(m.nodeId)} 步 · ${whereOf(m)}`))
-
-  // 唯一主操作：怎么抓由后端 resolve_target 决定，界面不提供技术选择题。
-  const main = mk('button', 'pickMain', pickText('main'))
-  main.title = pickText('mainHint')
-  main.addEventListener('click', () => startPickFlow(m, null))
-  row.append(main)
-
-  const alt = mk('details', 'pickAlt')
-  alt.append(mk('summary', null, pickText('alternate')))
-  const box = mk('div', 'pickAltBox')
-  for (const [label, value] of [
-    [pickText('auto'), 'auto'],
-    [pickText('page'), 'browser'],
-    [pickText('app'), 'desktop'],
-  ]) {
-    const btn = mk('button', 'pickAltBtn', label)
-    btn.dataset.override = value
-    btn.addEventListener('click', () => startPickFlow(m, value === 'auto' ? null : value))
-    box.append(btn)
-  }
-  box.append(mk('div', 'pickHint', pickText('alternateHint')))
-  box.append(manualForm(m.name))
-  alt.append(box)
-  row.append(alt)
-  return row
-}
-
-function manualForm(name) {
-  const wrap = mk('div', 'pickManualRow')
-  wrap.append(mk('span', 'pickManualLabel', pickText('manual')))
-  const input = mk('input', 'pickManualInput')
-  input.placeholder = pickText('manualPlaceholder')
-  input.setAttribute('aria-label', pickText('manualHint'))
-  const submit = mk('button', 'pickManualSubmit', pickText('manualSubmit'))
-  submit.addEventListener('click', () => submitManual(name, input.value))
-  input.addEventListener('keydown', (event) => {
-    if (event.key === 'Enter') submitManual(name, input.value)
-  })
-  wrap.append(input, submit)
-  wrap.append(mk('span', 'pickManualHint', pickText('manualHint')))
-  return wrap
-}
-
-function paintPickBar() {
-  const bar = mk('div', 'pickBar')
-  bar.setAttribute('role', 'status')
-  const live = mk('div', 'pickLive')
-  live.setAttribute('aria-live', 'polite')
-  const detail = mk('div', 'pickDetail')
-  const actions = mk('div', 'pickActions')
-
-  if (!pickState) {
-    // 没有待补元素时不播离线：这个流程的资产已齐，报「浏览器没连上」是假警报。
-    // 点「＋ 捕获元素」时 pickPlan 仍会把真实能力结果报进状态条，不会隐瞒。
-    if (!pickMissing.length || !pickCapabilities || !pickCapabilities.fix) return
-    bar.dataset.state = 'offline'
-    live.append(mk('span', 'pickDot', '!'), mk('span', 'pickLiveText', pickText('offlineHint')))
-    detail.textContent = pickCapabilities.fix
-    el.elemBody.append(bar)
-    bar.append(live, detail)
-    return
-  }
-
-  const s = pickState
-  const textKey = s.state === 'bound' && s.isNew ? 'boundNew' : s.state
-  bar.dataset.state = s.state
-  live.append(
-    mk('span', 'pickDot', PICK_ICON[s.state] || '·'),
-    mk('span', 'pickLiveText', pickText(textKey, {
-      name: s.name,
-      step: s.step,
-      fix: s.reason,
-      reason: s.reason,
-    })),
-  )
-  if (s.state === 'waiting' || s.state === 'ready') {
-    detail.append(mk('span', 'pickHintText', s.hint || pickText('waitingDefault')))
-  } else {
-    detail.textContent = s.hint || ''
-  }
-
-  if (s.state === 'ready') {
-    const go = mk('button', 'pickAction', pickText('startNow'))
-    go.addEventListener('click', () => beginCapture())
-    actions.append(go)
-  }
-  if (s.state === 'checking' || s.state === 'ready' || s.state === 'waiting') {
-    const cancel = mk('button', 'pickAction', pickText('cancel'))
-    cancel.addEventListener('click', () => cancelPick())
-    actions.append(cancel)
-  }
-  if (s.state !== 'checking' && s.state !== 'bound') {
-    const retry = mk('button', 'pickAction', pickText('retry'))
-    retry.addEventListener('click', () => {
-      const m = pickMissing.find((x) => x.name === s.name)
-      // 新建 / 重新捕获的资产不在缺口里，重试仍要能回到同一条拾取流程。
-      startPickFlow(m || { name: s.name, nodeId: s.nodeId, isNew: s.isNew }, s.override)
-    })
-    actions.append(retry)
-  }
-  if (s.state === 'bound' && s.nodeId) {
-    const view = mk('button', 'pickAction', pickText('view'))
-    view.addEventListener('click', () => focusNode(s.nodeId))
-    actions.append(view)
-  }
-  if (s.state !== 'bound') {
-    const manual = mk('details', 'pickBarManual')
-    manual.append(mk('summary', null, pickText('manual')))
-    manual.append(manualForm(s.name))
-    actions.append(manual)
-  }
-  bar.append(live, detail, actions)
-  el.elemBody.append(bar)
-}
-
-function setPickState(next) {
-  pickState = next
-  renderElementsPanel()
-}
-
-async function startPickFlow(m, override) {
-  if (!currentPath) return
-  if (pickState && ['checking', 'ready', 'waiting'].includes(pickState.state)) await cancelPick()
-  const base = {
-    name: m.name,
-    path: currentPath,
-    override,
-    step: stepOf(m.nodeId),
-    nodeId: m.nodeId,
-    isNew: Boolean(m.isNew),
-    reason: null,
-    hint: null,
-  }
-  setPickState({ ...base, state: 'checking' })
-  let plan
-  try {
-    plan = await ppx.call('rpa.pickPlan', {
-      path: currentPath,
-      name: m.name,
-      override,
-    })
-  } catch (error) {
-    setPickState({ ...base, state: 'blocked', reason: error.message })
-    return
-  }
-  pickCapabilities = plan.capabilities
-  // ★ 能力闸在后端 pickPlan 算（与 startCapture 同一个函数），前端不重复判断，
-  //   也不在能力不在线时进等待态让用户空等一分钟。
-  if (plan.blocked) {
-    setPickState({ ...base, state: 'blocked', reason: plan.fix || '' })
-    return
-  }
-  setPickState({
-    ...base,
-    state: 'ready',
-    hint: '',
-  })
-}
-
-// 主窗收起/还原由后端同进程的 pywebview 窗口做（最小化后 JS 定时器可能被节流，
-// 不能把「还原」押在前端）。这里的 restore 只是兜底：后端异常没还原时，
-// 轮询到终态也能把窗口拉回来；非 ppx 环境（纯浏览器）忽略失败即可。
-async function restoreApp() {
-  try { await ppx.call('window.restore') } catch { /* 环境不支持就保持原样 */ }
-}
-
-async function beginCapture() {
-  const s = pickState
-  if (!s || s.state !== 'ready') return
-  let res
-  try {
-    res = await ppx.call('rpa.startCapture', {
-      path: s.path,
-      name: s.name,
-      override: s.override,
-    })
-  } catch (error) {
-    setPickState({ ...s, state: 'failed', reason: error.message })
-    return
-  }
-  if (!res.ok) {
-    setPickState({ ...s, state: 'blocked', reason: res.fix || res.error || '' })
-    return
-  }
-  setPickState({
-    ...s,
-    state: 'waiting',
-    hint: res.instructions,
-    nodeId: res.nodeId || s.nodeId,
-  })
-  pollCapture()
-}
-
-async function pollCapture() {
-  if (pickPollTimer) clearTimeout(pickPollTimer)
-  const tick = async () => {
-    const s = pickState
-    if (!s || s.state !== 'waiting') return
-    let res
-    try {
-      res = await ppx.call('rpa.capturePoll', { path: s.path, name: s.name })
-    } catch (error) {
-      await restoreApp()
-      setPickState({ ...s, state: 'failed', reason: error.message })
-      return
-    }
-    if (!res.ok) {
-      await restoreApp()
-      setPickState({ ...s, state: 'failed', reason: res.error })
-      return
-    }
-    // 没有「超时」状态：捕获窗口一直开着，直到 ready / cancelled / offline / failed。
-    if (res.state === 'ready') {
-      await restoreApp()
-      setPickState({ ...s, state: 'bound', result: res.result })
-      if (s.nodeId) focusNode(s.nodeId)
-      await refreshElements()
-      return
-    }
-    if (res.state === 'cancelled') {
-      await restoreApp()
-      setPickState({ ...s, state: 'cancelled' })
-      return
-    }
-    if (res.state === 'offline') {
-      await restoreApp()
-      setPickState({ ...s, state: 'blocked', reason: res.reason || pickText('offlineHint') })
-      return
-    }
-    if (res.state === 'failed') {
-      await restoreApp()
-      setPickState({ ...s, state: 'failed', reason: res.reason })
-      return
-    }
-    // pending：继续轮询，永不因时间放弃。
-    pickPollTimer = setTimeout(tick, 1000)
-  }
-  pickPollTimer = setTimeout(tick, 800)
-}
-
-async function cancelPick() {
-  const s = pickState
-  if (!s) return
-  if (pickPollTimer) clearTimeout(pickPollTimer)
-  pickPollTimer = null
-  if (s.state === 'waiting') {
-    try {
-      await ppx.call('rpa.cancelCapture', { path: s.path, name: s.name })
-    } catch {
-      // 取消失败也要退出等待态，否则界面会一直假装在等。
-    }
-    await restoreApp()
-  }
-  setPickState({ ...s, state: 'cancelled' })
-}
-
-async function submitManual(name, selector) {
-  let res
-  try {
-    res = await ppx.call('rpa.writeElement', { path: currentPath, name, selector })
-  } catch (error) {
-    setPickState({ ...(pickState || {}), state: 'failed', name, reason: error.message })
-    return
-  }
-  if (!res.ok) {
-    setPickState({ ...(pickState || {}), state: 'failed', name, reason: res.error })
-    return
-  }
-  if (pickState) setPickState({ ...pickState, state: 'bound', name, nodeId: res.boundNodeId })
-  await refreshElements()
-}
-
-function focusNode(nodeId) {
-  if (!nodeId) return
-  const card = Array.from(document.querySelectorAll('.card')).find(
-    (n) => n.dataset.nodeId === nodeId,
-  )
-  if (!card) return
-  card.scrollIntoView({ block: 'nearest' })
-  card.classList.add('pickFlash')
-  setTimeout(() => card.classList.remove('pickFlash'), 1200)
-}
-
 document.addEventListener('keydown', (event) => {
-  if (event.key !== 'Escape' || !pickState) return
-  if (['checking', 'ready', 'waiting'].includes(pickState.state)) cancelPick()
+  if (event.key !== 'Escape' || !dialogMode) return
+  cancelElemDialog()
 })
 
 el.compile.addEventListener('click', async () => {

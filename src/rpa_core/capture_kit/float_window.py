@@ -14,6 +14,11 @@ ppx 用 `window.minimize`），此时宿主的状态栏/面板看不见——浮
 - **躲鼠标**：25Hz（40ms）翻边，避免挡住要点的元素；
 - 不显示倒计时（没有「限时任务」这回事，超时无惩罚）。
 
+同一个窗还有第二种形态 ``show_notice(title, detail)``：**宿主界面不展示任何提示**，
+环境没就绪、这次没成、资产删不掉这类消息全部落到这里（标题 + 折行说明 + 关闭按钮）。
+``show()`` 可以把这个窗从提示形态**原地升级**成捕获形态（换按钮文案、换三行状态），
+所以「检查环境 → 就绪」不会闪两个窗口。
+
 非 Windows 直接 no-op（引擎层仍可用，只是没有浮窗）。
 """
 
@@ -26,6 +31,10 @@ import threading
 _WM_APP_STATUS = 0x8000 + 1
 _BTN_CANCEL = 1001
 _TIMER_AVOID = 1
+_TIMER_NOTICE = 2
+
+_MODE_CAPTURE = "capture"
+_MODE_NOTICE = "notice"
 
 _WIDTH = 560
 _HEIGHT = 104
@@ -64,10 +73,29 @@ def _kill_timer(hwnd: int, timer_id: int) -> None:
     user32.KillTimer(ctypes.c_void_p(int(hwnd)), timer_id)
 
 
+_CLASS = "RpaCaptureFloat"
+
+# 窗口类按类名在**进程内**只注册一次，WNDPROC 也就是第一个实例的方法。若直接把
+# ``self._wnd_proc`` 交给 RegisterClass，第二次开浮窗（同一个进程里再抓一次）时
+# 消息仍会落到**第一个**实例上——它的 ``_hwnd`` 早已销毁，表现是「窗开着但不刷新、
+# 或者干脆空白」，而日志里一行异常都没有。所以 WNDPROC 固定成模块级函数，按 hwnd
+# 查表分派给当前实例。
+_INSTANCES: dict[int, CaptureFloat] = {}
+
+
+def _dispatch(hwnd, msg, wparam, lparam):
+    import win32gui
+
+    instance = _INSTANCES.get(int(hwnd))
+    if instance is None:
+        return win32gui.DefWindowProc(hwnd, msg, wparam, lparam)
+    return instance._wnd_proc(hwnd, msg, wparam, lparam)
+
+
 class CaptureFloat:
     """一个始终置顶、无焦点、半透明的提示窗。show() 起线程画窗，hide() 关窗。"""
 
-    _CLASS = "RpaCaptureFloat"
+    _CLASS = _CLASS
 
     def __init__(self) -> None:
         self._hwnd = None
@@ -80,6 +108,12 @@ class CaptureFloat:
         self._children_ready = False
         # (gesture, web, desktop, web_ok, desktop_ok)：整体替换，跨线程读安全
         self._lines: tuple[str, str, str, bool, bool] = ("", "", "", False, False)
+        # 提示形态：标题 + 折行说明；与捕获形态共用同一个窗口
+        self._mode = _MODE_CAPTURE
+        self._notice: tuple[str, str] = ("", "")
+        self._auto_hide_ms = 0
+        self._button = None
+        self._button_visible = True
 
     # -- 对外 ----------------------------------------------------------------
     def show(
@@ -91,14 +125,72 @@ class CaptureFloat:
         desktop_ok: bool,
         on_cancel=None,
     ) -> None:
+        """捕获形态。**同一个实例若已在显示提示，就地升级**成捕获窗（不闪窗）。"""
+        self._mode = _MODE_CAPTURE
         self._lines = (gesture, web, desktop, bool(web_ok), bool(desktop_ok))
         self._on_cancel = on_cancel
+        self._auto_hide_ms = 0
+        self._spawn()
+
+    def show_notice(
+        self,
+        title: str,
+        detail: str = "",
+        on_close=None,
+        auto_hide_ms: int = 0,
+    ) -> None:
+        """提示形态：宿主界面里不出现任何提示，全部落到这个桌面框。
+
+        ``on_close`` 为 None 时不显示按钮（纯告知，配合 ``auto_hide_ms`` 自动收起）。
+        """
+        self._mode = _MODE_NOTICE
+        self._notice = (title, detail)
+        self._on_cancel = on_close
+        self._auto_hide_ms = int(auto_hide_ms or 0)
+        self._spawn()
+
+    def _spawn(self) -> None:
         if sys.platform != "win32":
             return
-        if self._thread is not None and self._thread.is_alive():
+        thread = self._thread
+        if thread is not None and thread.is_alive():
+            # 窗已开着：只换形态（按钮文案 / 自动收起 / 重绘），不重建窗口。
+            self._apply_mode()
             return
         self._thread = threading.Thread(target=self._run, name="capture-float", daemon=True)
         self._thread.start()
+
+    def _apply_mode(self) -> None:
+        """跨线程换形态：具体动作在窗口线程的 ``_WM_APP_STATUS`` 里做。"""
+        hwnd = self._hwnd
+        if hwnd is None:
+            return
+        try:
+            import win32gui
+
+            win32gui.PostMessage(hwnd, _WM_APP_STATUS, 0, 0)
+        except Exception:  # noqa: BLE001 - 窗已销毁也无妨
+            pass
+
+    def _sync_button(self) -> None:
+        button = self._button
+        if button is None:
+            return
+        import win32con
+        import win32gui
+
+        try:
+            if self._mode == _MODE_NOTICE and self._on_cancel is None:
+                win32gui.ShowWindow(button, win32con.SW_HIDE)
+                self._button_visible = False
+                return
+            win32gui.ShowWindow(button, win32con.SW_SHOW)
+            self._button_visible = True
+            win32gui.SetWindowText(
+                button, "关闭" if self._mode == _MODE_NOTICE else "取消捕获"
+            )
+        except Exception:  # noqa: BLE001 - 换文案失败不该影响捕获
+            pass
 
     def set_status(
         self, web: str, desktop: str, web_ok: bool, desktop_ok: bool
@@ -137,7 +229,7 @@ class CaptureFloat:
         self._children_ready = False
         hinst = win32gui.GetModuleHandle(None)
         wc = win32gui.WNDCLASS()
-        wc.lpfnWndProc = self._wnd_proc
+        wc.lpfnWndProc = _dispatch
         wc.lpszClassName = self._CLASS
         wc.hInstance = hinst
         wc.hbrBackground = win32gui.GetStockObject(win32con.WHITE_BRUSH)
@@ -168,6 +260,8 @@ class CaptureFloat:
             None,
         )
         self._hwnd = hwnd
+        # 先登记再建子控件：窗口一显示就会来 WM_PAINT，查不到表就是一笔不画。
+        _INSTANCES[int(hwnd)] = self
         # ★ 不依赖 WM_CREATE：实测这个 pywin32 版本下 CreateWindowEx 建窗时
         # `WM_CREATE` 根本没派发到 Python 的 WNDPROC（只收到 WM_PAINT/WM_CLOSE/
         # WM_DESTROY），于是 WM_CREATE 里的字体/按钮/定时器全部没建起来 ——
@@ -210,14 +304,24 @@ class CaptureFloat:
             hinst,
             None,
         )
+        self._button = button
         if button and self._hfont:
             win32gui.SendMessage(button, win32con.WM_SETFONT, self._hfont, True)
+        # 建窗时可能已经是提示形态（「检查环境…」先亮出来）：按当前形态定按钮可见性。
+        self._sync_button()
         if not _set_timer(hwnd, _TIMER_AVOID, 40):
             # 定时器起不来：浮窗会钉死在一角（可能挡住要点的元素）——留痕别静默
             from rpa_core.capture._trace import trace as _trace
 
             _trace("float", "set_timer_failed")
+        self._arm_notice_timer(hwnd)
         win32gui.InvalidateRect(hwnd, None, True)
+
+    def _arm_notice_timer(self, hwnd) -> None:
+        """提示形态的自动收起；切回捕获形态时要把它撤掉，别把捕获窗关了。"""
+        _kill_timer(hwnd, _TIMER_NOTICE)
+        if self._mode == _MODE_NOTICE and self._auto_hide_ms > 0:
+            _set_timer(hwnd, _TIMER_NOTICE, self._auto_hide_ms)
 
     def _place(self, hwnd, *, bottom_right: bool) -> None:
         import win32api
@@ -315,7 +419,13 @@ class CaptureFloat:
         if msg == win32con.WM_TIMER and wparam == _TIMER_AVOID:
             self._avoid_cursor(hwnd)
             return 0
+        if msg == win32con.WM_TIMER and wparam == _TIMER_NOTICE:
+            # 纯告知型提示自动收起（捕获形态永远不自动关：没有「限时任务」这回事）。
+            self.hide()
+            return 0
         if msg == _WM_APP_STATUS:
+            self._sync_button()
+            self._arm_notice_timer(hwnd)
             win32gui.InvalidateRect(hwnd, None, True)
             return 0
         if msg == win32con.WM_COMMAND:
@@ -334,12 +444,23 @@ class CaptureFloat:
                 old = win32gui.SelectObject(hdc, hfont) if hfont else None
                 try:
                     win32gui.SetBkMode(hdc, win32con.TRANSPARENT)
-                    gesture, web, desktop, web_ok, desktop_ok = self._lines
-                    self._text(hdc, gesture, (14, 10, _TEXT_W, 26), (30, 30, 30))
-                    self._text(hdc, "● " + web, (14, 40, _TEXT_W, 20),
-                               (0, 128, 0) if web_ok else (192, 0, 0))
-                    self._text(hdc, "● " + desktop, (14, 64, _TEXT_W, 20),
-                               (0, 128, 0) if desktop_ok else (192, 0, 0))
+                    if self._mode == _MODE_NOTICE:
+                        title, detail = self._notice
+                        width = _TEXT_W if self._button_visible else _WIDTH - 28
+                        self._text(hdc, title, (14, 10, width, 22), (30, 30, 30))
+                        # 中文没有空格，DrawText 的 DT_WORDBREAK 断不开 ⇒ 自己按字宽折行
+                        # （实测：不折行时说明会被右边按钮一刀切掉）。
+                        for index, line in enumerate(self._wrap_px(detail, width - 6)[:3]):
+                            self._text(
+                                hdc, line, (14, 34 + index * 20, width, 18), (90, 90, 90)
+                            )
+                    else:
+                        gesture, web, desktop, web_ok, desktop_ok = self._lines
+                        self._text(hdc, gesture, (14, 10, _TEXT_W, 26), (30, 30, 30))
+                        self._text(hdc, "● " + web, (14, 40, _TEXT_W, 20),
+                                   (0, 128, 0) if web_ok else (192, 0, 0))
+                        self._text(hdc, "● " + desktop, (14, 64, _TEXT_W, 20),
+                                   (0, 128, 0) if desktop_ok else (192, 0, 0))
                 finally:
                     if old:
                         win32gui.SelectObject(hdc, old)
@@ -353,6 +474,9 @@ class CaptureFloat:
             return 0
         if msg == win32con.WM_DESTROY:
             _kill_timer(hwnd, _TIMER_AVOID)
+            _kill_timer(hwnd, _TIMER_NOTICE)
+            _INSTANCES.pop(int(hwnd), None)
+            self._button = None
             if self._font_owned and self._hfont is not None:
                 try:
                     win32gui.DeleteObject(self._hfont)
@@ -365,19 +489,57 @@ class CaptureFloat:
         return win32gui.DefWindowProc(hwnd, msg, wparam, lparam)
 
     @staticmethod
-    def _text(hdc, text: str, rect, rgb: tuple[int, int, int]) -> None:
+    def _wrap_px(text: str, avail: int) -> list[str]:
+        """按**像素宽**折行（CJK 约 15px、ASCII 约 8px，对应 15px 的雅黑）。
+
+        不能交给 DrawText：中文没有空格，``DT_WORDBREAK`` 找不到断点，长说明会被
+        右边按钮一刀切掉——用户看到的是半截话。
+        """
+        if not text:
+            return []
+        lines: list[str] = []
+        current = ""
+        width = 0
+        for char in text:
+            if char == "\n":
+                lines.append(current)
+                current, width = "", 0
+                continue
+            char_width = 15 if ord(char) > 0x2E80 else 8
+            if current and width + char_width > avail:
+                lines.append(current)
+                current, width = "", 0
+            current += char
+            width += char_width
+        if current:
+            lines.append(current)
+        return lines
+
+    @staticmethod
+    def _text(hdc, text: str, box, rgb: tuple[int, int, int], wrap: bool = False) -> None:
+        """在 ``box=(x, y, w, h)`` 里画一行字。
+
+        ★ ``DrawText`` 要的是 ``RECT = (left, top, right, bottom)``，**不是**
+        ``(left, top, width, height)``。早先按后者的口径传，第二行起 ``bottom`` 就
+        落在 ``top`` 上面（``top=36, bottom=18``），GDI 拿负高度做垂直居中，把几行
+        字全挤到同一片区域——截图上看是「标题和说明叠在一起」。这里把换算收进
+        这一个函数，调用方只谈 ``(x, y, w, h)``，语义错位不可能再发生。
+        """
         import win32api
         import win32con
         import win32gui
 
         if not text:
             return
+        left, top, width, height = box
+        rect = (int(left), int(top), int(left + width), int(top + height))
         win32gui.SetTextColor(hdc, win32api.RGB(*rgb))
-        win32gui.DrawText(
-            hdc,
-            text,
-            -1,
-            rect,
-            win32con.DT_LEFT | win32con.DT_VCENTER | win32con.DT_SINGLELINE
-            | win32con.DT_END_ELLIPSIS,
+        flags = (
+            (win32con.DT_LEFT | win32con.DT_TOP | win32con.DT_WORDBREAK)
+            if wrap
+            else (
+                win32con.DT_LEFT | win32con.DT_VCENTER | win32con.DT_SINGLELINE
+                | win32con.DT_END_ELLIPSIS
+            )
         )
+        win32gui.DrawText(hdc, text, -1, rect, flags)

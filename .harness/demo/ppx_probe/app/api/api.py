@@ -65,7 +65,7 @@ if FROZEN_RES is not None:
     os.environ.setdefault("RPA_I18N_JS", str(FROZEN_RES / "i18n.js"))
 
 import rpa_core  # noqa: E402
-from rpa_core.capture_kit import CaptureController  # noqa: E402
+from rpa_core.capture_kit import CaptureController, CaptureFloat  # noqa: E402
 from rpa_core.catalog import load_catalog  # noqa: E402
 from rpa_core.compiler.compiler import WorkflowCompileError, WorkflowCompiler  # noqa: E402
 from rpa_core.gui.i18n import load_command_display_names, load_op_labels  # noqa: E402
@@ -2117,18 +2117,21 @@ def cancel_run(run_id: str) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# 元素：缺失检测 / 资产列表 / 触发捕获（复用 main 的 `rpa-core capture` 命令）
+# 元素：缺失检测 / 资产列表 / 捕获 → 确认入库 / 详情改名删除
 # 「AI 生成的工作流」只把交互元素写成 elementRefs 占位（模型不知道真实选择器），
 # 运行期解析不到即 ELEMENT_REF_MISSING；这组 RPC 把缺口摊开并接上 main 的捕获器。
+# 捕获（startCapture/capturePoll）只**暂存**描述符，落盘由用户在编辑框里确认
+# （commitElement）——名字允许中文，改名时流程里的同名引用一起改。
 # ---------------------------------------------------------------------------
 
-# M66：key 必须是 (path, name) 复合键。同名元素在两个流程里各缺一次时，
-# 单键会让后一次静默盖掉前一次的进程句柄 —— 用户看到的是「等了半天没反应」。
+# key 必须是 (path, captureId) 复合键：同一流程可能先后起两次捕获，
+# 单键会让后一次静默盖掉前一次的状态 —— 用户看到的是「等了半天没反应」。
+# ★ captureId 而不是元素名：名字要等抓完、用户在编辑框里确认，捕获期还没有名字。
 _CAPTURES: dict[tuple[str, str], dict[str, Any]] = {}
 
 
-def _capture_key(path: str, name: str) -> tuple[str, str]:
-    return (path, name)
+def _capture_key(path: str, capture_id: str) -> tuple[str, str]:
+    return (path, capture_id)
 
 
 def _elements_dir(path: str) -> Path:
@@ -2206,7 +2209,7 @@ def capability_snapshot() -> dict[str, Any]:
         installed = [n for n, i in browsers.items() if isinstance(i, dict) and i.get("installed")]
         snap["fix"] = (
             f"浏览器还没连上（已装插件：{', '.join(sorted(installed)) or '无'}）；"
-            "先打开装好插件的浏览器，或手动填写选择器"
+            "先打开装好插件的浏览器再试"
         )
     snap["ms"] = round((time.perf_counter() - started) * 1000, 1)
     return snap
@@ -2336,34 +2339,95 @@ def list_elements(path: str) -> dict[str, Any]:
     }
 
 
-_PICK_INSTRUCTIONS = {
-    "browser": "在页面上 Ctrl+Click（Mac 用 ⌘+Click）或右键目标元素；抓到后自动写好，不用再点保存",
-    "desktop": "把鼠标移到控件上按 F9，或 Ctrl+Click / 右键；抓到后自动写好",
-}
+# ---- 提示面：宿主界面里不出现提示（2026-11-12 交互改版） --------------------
+# 元素面板只留「一个捕获按钮 + 资产清单」。检环境、没连上、这次没成、删不掉这些消息
+# 全部走桌面浮窗——捕获期主窗要让开目标，浮窗是唯一能被看见的那块界面。
 
 
-def _capture_result(entry: dict[str, Any], elem: Path) -> dict[str, Any]:
-    """两条腿统一成一份结果形状，前端不再按 target 分叉解析。"""
+def _new_float() -> Any:
+    """一个新的桌面浮窗；非 Windows 或建不起来时返回 None（引擎层仍可用）。"""
+    if sys.platform != "win32":
+        return None
     try:
-        doc = json.loads(elem.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        doc = {}
-    sel = doc.get("selector") or {}
-    return {
-        "name": entry["name"],
-        "selector": sel.get("css") or sel.get("locator"),
-        "strategy": doc.get("strategy"),
+        return CaptureFloat()
+    except Exception:  # noqa: BLE001 - 没有浮窗不该把 RPC 拖死
+        return None
+
+
+def _notify(title: str, detail: str = "", *, auto_hide_ms: int = 12000) -> None:
+    """把一条提示显示在桌面浮窗；点「关闭」或到点自动收起。"""
+    window = _new_float()
+    if window is None:
+        return
+    try:
+        window.show_notice(title, detail, on_close=window.hide, auto_hide_ms=auto_hide_ms)
+    except Exception:  # noqa: BLE001 - 提示失败不影响主流程
+        pass
+
+
+def _selector_text(doc: dict[str, Any]) -> str:
+    """描述符 → 一行给人看的定位（网页给 CSS，桌面给控件名）。"""
+    selector = doc.get("selector") or {}
+    if doc.get("kind") == "desktop":
+        steps = (selector.get("locator") or {}).get("path") or []
+        last = steps[-1] if steps else {}
+        label = last.get("name") or last.get("automationId") or last.get("controlType")
+        return str(label or "桌面控件")
+    return str(selector.get("css") or "")
+
+
+def _suggest_name(path: str) -> str:
+    """新资产的默认名：元素1、元素2…（撞名就换下一个）。名字允许中文。"""
+    present = _present_elements(path)
+    for index in range(1, 1000):
+        candidate = f"元素{index}"
+        if candidate not in present:
+            return candidate
+    return "元素"
+
+
+_capture_seq = 0
+_capture_seq_lock = threading.Lock()
+
+
+def _next_capture_id() -> str:
+    """捕获会话 id。**不再拿元素名当键**：名字要等抓完、用户在编辑框里确认。"""
+    global _capture_seq
+    with _capture_seq_lock:
+        _capture_seq += 1
+        return f"c{_capture_seq}"
+
+
+def _hold_captured(entry: dict[str, Any], descriptor: dict[str, Any]) -> dict[str, Any]:
+    """捕获成功**只暂存不落盘**：写哪个名字、要不要留，等用户在编辑框里确认。
+
+    ``on_captured`` 的返回值会被 ``CaptureController`` 当作结果（带 ``kind`` 才算 ready），
+    所以这里把归一化后的描述符原样返回。
+    """
+    doc = ElementDescriptor(
+        kind=descriptor["kind"],
+        selector=descriptor["selector"],
+        verify_count=descriptor.get("verifyCount", 0),
+        metadata=descriptor.get("metadata", {}),
+    ).document()
+    entry["captured"] = doc
+    entry["preview"] = {
+        "name": entry.get("name") or entry.get("suggestName"),
+        "kind": doc["kind"],
+        "selector": _selector_text(doc),
         "matches": doc.get("verifyCount"),
-        "kind": doc.get("kind") or entry["decision"]["target"],
-        "boundNodeId": entry.get("nodeId"),
+        "nodeId": entry.get("nodeId"),
+        "ref": entry.get("name"),
+        "overwrite": bool(entry.get("overwrite")),
     }
+    return doc
 
 
-def _pick_plan(path: str, name: str, override: str | None = None) -> dict[str, Any]:
+def _pick_plan(path: str, name: str | None, override: str | None = None) -> dict[str, Any]:
     """探测 + 决策的**唯一权威**：spawn 之前把「能不能开始、用哪条腿」一次算清。
 
-    `rpa.pickPlan`（点按钮时探测）与 `rpa.startCapture`（真正起子进程）都走这里，
-    两处各自判断就会出现「界面说就绪、后端说离线」的假绿灯。
+    只有 ``rpa.startCapture`` 走这里。探测与 spawn 分两处判断就会出现
+    「界面说就绪、后端说离线」的假绿灯。
     """
     item = next((m for m in _scan_missing(path) if m.get("name") == name), None)
     capabilities = capability_snapshot()
@@ -2377,21 +2441,6 @@ def _pick_plan(path: str, name: str, override: str | None = None) -> dict[str, A
         "decision": decision,
         "blocked": blocked,
         "fix": capabilities["fix"],
-    }
-
-
-@api_method("rpa.pickPlan")
-def pick_plan(path: str, name: str, override: str | None = None) -> dict[str, Any]:
-    """点「补一下」后先问一次：能力在不在、准备怎么抓、被挡住时该做什么。"""
-    plan = _pick_plan(path, name, override)
-    return {
-        "ok": True,
-        "name": name,
-        "path": path,
-        "blocked": plan["blocked"],
-        "fix": plan["fix"],
-        "decision": plan["decision"],
-        "capabilities": plan["capabilities"],
     }
 
 
@@ -2423,280 +2472,339 @@ class _WebviewHost:
 
 
 @api_method("rpa.startCapture")
-def start_capture(path: str, name: str, override: str | None = None) -> dict[str, Any]:
-    """起一次捕获。**target 由后端算**：前端只说「补哪个元素」，不说用哪条线。
+def start_capture(
+    path: str, name: str | None = None, override: str | None = None
+) -> dict[str, Any]:
+    """点一下就抓：**不预填名字、不选网页/桌面、不写选择器**。
 
-    始终走主分支的 **HybridCaptureSession**（桌面 hover + 浏览器扩展双通道，先回传者胜），
-    不再把两条腿拆开各起一个会话 —— 那是上一轮自造的偏差，正是「只标红外侧窗口、
-    浏览器插件联动不上」两个根因：
+    界面只负责说「抓一个元素」，怎么抓由后端 ``_pick_plan`` 决定，抓到什么由
+    ``CaptureController``（桌面 hover + 浏览器扩展双通道，先回传者胜）产出：
 
-    - 桌面腿 ``hybrid=True``：鼠标移到浏览器内容区时**让位给扩展页内捕获**，不再
-      把整个浏览器窗口框成「外侧窗口」；
-    - 扩展腿**永远 arm**：只要浏览器插件已连接，网页内 Ctrl+Click 即捕获页面元素
-      （修复「无法与浏览器插件联动」）；
+    - 桌面腿 ``hybrid=True``：鼠标移到浏览器内容区时**让位给扩展页内捕获**；
+    - 扩展腿**永远 arm**：只要插件已连接，网页内 Ctrl+Click 即捕获页面元素；
     - 没装扩展时自动退化为纯桌面 hover（扩展腿 start 即离线，永不触发）。
 
-    整条链路**没有「超时」概念**：捕获窗口一直开着，直到用户点选（→ ready）或 Esc
-    （→ cancel）。元素以 ``name`` 落盘即与节点的 elementRefs 同名绑定（ref-only）。
+    **整条链路没有「超时」概念**：捕获窗一直开着，直到用户点选（→ ready）或取消。
+    抓到之后**不落盘**：名字与是否入库要等用户在编辑框里确认（``rpa.commitElement``）。
+    环境检查要一次子进程往返，所以提示浮窗在检查**之前**就亮出来——界面里不显示任何提示。
 
-    真正的拾取交给 ``rpa_core.capture_kit.CaptureController``（内部后台线程 pick +
-    win32 置顶浮窗 + 双腿状态 + 取消按钮），前端用 ``rpa.capturePoll`` 轮询结果。
-    浮窗是捕获期唯一的反馈面：宿主主窗此时要让开目标（ppx 前端负责 minimize/restore）。
+    返回 ``captureId``；前端用 ``rpa.capturePoll`` 轮询。被挡住时不 spawn，浮窗里给修法。
     """
     started = time.perf_counter()
+    capture_id = _next_capture_id()
+    window = _new_float()
+    if window is not None:
+        window.show_notice("正在准备…", "检查运行环境和浏览器")
     plan = _pick_plan(path, name, override)
-    item = plan["item"]
     decision = plan["decision"]
     if plan["blocked"]:
+        fix = plan["fix"] or "现在还不能开始"
+        _show_blocked(window, "还不能开始", fix)
         return {
             "ok": False,
             "state": "blocked",
+            "captureId": capture_id,
             "code": "CAPABILITY_OFFLINE",
             "capabilities": plan["capabilities"],
-            "fix": plan["fix"],
-            "ms": round((time.perf_counter() - started) * 1000, 1),
-        }
-    try:
-        controller = CaptureController(
-            on_captured=lambda captured: _persist_captured(path, name, captured),
-            host=_WebviewHost(),
-        )
-        launched = controller.start()
-    except Exception as exc:  # noqa: BLE001 - 起捕获失败必须如实回前端，别闷成等待态
-        return {"ok": False, "code": "CAPTURE_START_FAILED", "error": f"起不了捕获：{exc}"}
-    if not launched.get("ok"):
-        # 双通道都没了（非 Windows + 插件离线）：明确挡下，别让用户空等。
-        return {
-            "ok": False,
-            "state": "blocked",
-            "code": launched.get("code") or "NO_CAPTURE_CHANNEL",
-            "capabilities": plan["capabilities"],
-            "fix": plan["fix"] or "桌面捕获仅支持 Windows，且浏览器插件离线",
+            "fix": fix,
             "ms": round((time.perf_counter() - started) * 1000, 1),
         }
     entry: dict[str, Any] = {
-        "name": name,
+        "id": capture_id,
         "path": path,
+        "name": (name or "").strip() or None,
+        # 只有「按已有名字重抓」才允许覆盖同名资产；新抓的撞名一律要求改名。
+        "overwrite": bool((name or "").strip()),
+        "nodeId": (plan["item"] or {}).get("nodeId"),
         "decision": decision,
-        "nodeId": (item or {}).get("nodeId"),
-        "controller": controller,
-        # 兼容字段：契约门禁与旧轮询路径按 entry["result"]/cancel_event 派生状态。
-        "cancel_event": threading.Event(),
-        "result": None,
-        "cancelled": False,
-        "offline": bool(launched.get("offline", False)),
-        "armed": False,
-        "instructions": _capture_instructions(launched, decision["target"]),
+        "controller": None,
+        "captured": None,
+        "preview": None,
+        "notified": False,
         "startedAt": time.time(),
     }
-    _CAPTURES[_capture_key(path, name)] = entry
+    entry["suggestName"] = entry["name"] or _suggest_name(path)
+    key = _capture_key(path, capture_id)
+    _CAPTURES[key] = entry
+    try:
+        controller = CaptureController(
+            on_captured=lambda captured: _hold_captured(entry, captured),
+            host=_WebviewHost(),
+            # 与「正在准备…」共用同一个浮窗：就绪时**原地**变成捕获窗，不闪窗。
+            float_factory=lambda: window if window is not None else CaptureFloat(),
+        )
+        launched = controller.start()
+    except Exception as exc:  # noqa: BLE001 - 起捕获失败必须如实回前端，别闷成等待态
+        _CAPTURES.pop(key, None)
+        _show_blocked(window, "起不了捕获", f"这次没开始：{exc}")
+        return {
+            "ok": False,
+            "code": "CAPTURE_START_FAILED",
+            "captureId": capture_id,
+            "error": f"起不了捕获：{exc}",
+        }
+    if not launched.get("ok"):
+        # 双通道都没了（非 Windows + 插件离线）：明确挡下，别让用户空等。
+        _CAPTURES.pop(key, None)
+        reason = plan["fix"] or "桌面捕获只在 Windows 上可用，浏览器插件也没连上"
+        _show_blocked(window, "起不了捕获", reason)
+        return {
+            "ok": False,
+            "state": "blocked",
+            "captureId": capture_id,
+            "code": launched.get("code") or "NO_CAPTURE_CHANNEL",
+            "capabilities": plan["capabilities"],
+            "fix": reason,
+            "ms": round((time.perf_counter() - started) * 1000, 1),
+        }
+    entry["controller"] = controller
     return {
         "ok": True,
         "state": "waiting",
-        "name": name,
-        "path": path,
+        "captureId": capture_id,
+        "name": entry["name"],
+        "suggestedName": entry["suggestName"],
         "nodeId": entry["nodeId"],
-        "decision": decision,
-        "instructions": entry["instructions"],
-        "offline": entry["offline"],
-        "armed": False,
-        "extensionOffline": bool(launched.get("extensionOffline", False)),
-        # 插件「装了但没连通」与「压根没装」的处置完全不同，前端据此给准确指引。
-        "extensionInstalled": bool(launched.get("extensionInstalled", False)),
-        "extensionHostRefreshed": bool(launched.get("extensionHostRefreshed", False)),
+        "offline": bool(launched.get("offline", False)),
         "ms": round((time.perf_counter() - started) * 1000, 1),
     }
 
 
-def _capture_instructions(launched: dict[str, Any], target: str) -> str:
-    """本次捕获的手势提示；扩展刚被自愈修复时补一句「怎么让它生效」。
-
-    2026-11-12 现场：插件在 Edge 里启用着，但 host 白名单是旧路径派生的 ID，
-    浏览器拒绝拉起 host。自愈补上白名单后，扩展要等 service worker 重启才重连
-    —— 不告诉用户这一句，他只会觉得「还是不行」。
-    """
-    base = _PICK_INSTRUCTIONS[target]
-    if launched.get("extensionHostRefreshed"):
-        return base + "（已修复插件注册：到扩展页点『重新加载』或重开浏览器后，网页可捕获）"
-    if launched.get("extensionOffline") and launched.get("extensionInstalled"):
-        return base + "（网页不可用：插件已装但没连上，重载插件或重开浏览器）"
-    return base
-
-
-def _persist_captured(path: str, name: str, descriptor: dict[str, Any]) -> dict[str, Any]:
-    """把捕获描述符按主分支 ElementDescriptor 契约落盘到 elements/<name>.json。
-
-    直接复用主分支的 schema 校验（kind + selector 必填、verifyCount/metadata 可选），
-    不自己拼文档 —— 这是「复用主分支、别自己造」的关键落点。
-    """
-    element = ElementDescriptor(
-        kind=descriptor["kind"],
-        selector=descriptor["selector"],
-        verify_count=descriptor.get("verifyCount", 0),
-        metadata=descriptor.get("metadata", {}),
-    )
-    ed = _elements_dir(path)
-    ed.mkdir(parents=True, exist_ok=True)
-    doc = element.document()
-    target = ed / f"{name}.json"
-    target.write_bytes((json.dumps(doc, ensure_ascii=False, indent=2) + "\n").encode("utf-8"))
-    doc["savedAs"] = name
-    return doc
+def _show_blocked(window: Any, title: str, detail: str) -> None:
+    """被挡住时把原因写在浮窗里（界面里不显示任何提示）。"""
+    if window is not None:
+        try:
+            window.show_notice(title, detail, on_close=window.hide)
+            return
+        except Exception:  # noqa: BLE001 - 浮窗失败就退回新开一个
+            pass
+    _notify(title, detail, auto_hide_ms=0)
 
 
 @api_method("rpa.capturePoll")
-def capture_poll(path: str, name: str) -> dict[str, Any]:
+def capture_poll(path: str, capture_id: str) -> dict[str, Any]:
     """轮询状态机：pending / ready / cancelled / offline / failed。
 
     **没有 deadline、没有 timeout**：状态只看后台 pick 线程产出，不靠时间判断。
-    前端据此渲染，不要自己猜进程。
+    ``ready`` 只回一个 ``preview``（名字待确认），**盘上还没有文件**——入库是
+    ``rpa.commitElement`` 的事。失败/离线时顺手把原因写到桌面浮窗（界面里不显示）。
     """
-    entry = _CAPTURES.get(_capture_key(path, name))
+    entry = _CAPTURES.get(_capture_key(path, capture_id))
     if entry is None:
-        return {"ok": False, "code": "UNKNOWN_CAPTURE", "error": f"没有这个捕获会话：{name}"}
-    # 新路径：会话 / 浮窗 / 状态机由 capture_kit 持有；entry["controller"] 存在时交给它。
-    controller = entry.get("controller")
-    if controller is not None:
-        state = controller.poll()
-        payload: dict[str, Any] = {
-            "ok": True,
-            "name": name,
-            "path": path,
-            "state": state["state"],
-        }
-        if state["state"] == "ready":
-            payload["result"] = state.get("result")
-        elif state["state"] in ("offline", "failed"):
-            payload["reason"] = state.get("reason")
-        else:
-            payload["offline"] = bool(state.get("offline", False))
-            payload["armed"] = bool(state.get("armed", False))
-        return payload
-    # 旧形状（契约门禁按 entry["result"] 直接构造）：保留。
-    # 取消优先于一切。
-    if entry.get("cancelled") or entry["cancel_event"].is_set():
-        return {"ok": True, "state": "cancelled", "name": name, "path": path}
-    result = entry.get("result")
-    if result is not None:
-        if isinstance(result, dict) and result.get("kind") in ("desktop", "browser"):
-            # 已落盘的有效描述符：回显给前端绑定。
-            return {"ok": True, "state": "ready", "name": name, "path": path, "result": result}
-        if result.get("unavailable"):
-            # 双通道都出局（如「插件已连接但没确认 arm」）：当作离线，给可执行提示。
-            return {
-                "ok": True,
-                "state": "offline",
-                "name": name,
-                "path": path,
-                "reason": result.get("error") or "没有可用的捕获通道",
-            }
-        if result.get("offline"):
-            return {
-                "ok": True,
-                "state": "offline",
-                "name": name,
-                "path": path,
-                "reason": result.get("error") or "扩展离线：请先打开装好插件的浏览器",
-            }
-        if result.get("error"):
-            return {
-                "ok": True,
-                "state": "failed",
-                "name": name,
-                "path": path,
-                "reason": result.get("error")
-                or result.get("stderrTail")
-                or "捕获失败",
-            }
         return {
-            "ok": True,
-            "state": "failed",
-            "name": name,
-            "path": path,
-            "reason": str(result),
+            "ok": False,
+            "code": "UNKNOWN_CAPTURE",
+            "error": f"没有这次捕获：{capture_id}",
         }
-    # 进行中：实时回传扩展 armed（异步 ack，可能在 start 之后才到）。
-    session = entry.get("session")
-    armed = bool(getattr(session, "armed", False)) if session is not None else False
-    return {
+    controller = entry.get("controller")
+    if controller is None:
+        return {"ok": False, "code": "CAPTURE_NOT_ARMED", "error": "这次捕获没有起来"}
+    state = controller.poll()
+    payload: dict[str, Any] = {
         "ok": True,
-        "state": "pending",
-        "name": name,
+        "captureId": capture_id,
         "path": path,
-        "offline": entry.get("offline", False),
-        "armed": armed,
+        "state": state["state"],
     }
+    if state["state"] == "ready":
+        payload["preview"] = entry.get("preview")
+    elif state["state"] in ("offline", "failed"):
+        payload["reason"] = state.get("reason")
+        if not entry.get("notified"):
+            entry["notified"] = True
+            _notify(
+                "这次没成",
+                state.get("reason") or "没收到点选，点一下按钮再试一次",
+            )
+    else:
+        payload["offline"] = bool(state.get("offline", False))
+        payload["armed"] = bool(state.get("armed", False))
+    return payload
 
 
 @api_method("rpa.cancelCapture")
-def cancel_capture(path: str, name: str) -> dict[str, Any]:
-    """取消一次拾取：把等待态关掉，名字与步骤都留在界面上。"""
-    entry = _CAPTURES.get(_capture_key(path, name))
+def cancel_capture(path: str, capture_id: str) -> dict[str, Any]:
+    """取消一次捕获：浮窗与等待态一起收掉（编辑框取消也走这里）。"""
+    key = _capture_key(path, capture_id)
+    entry = _CAPTURES.get(key)
     if entry is None:
-        return {"ok": False, "code": "UNKNOWN_CAPTURE", "error": f"没有这个捕获会话：{name}"}
-    entry["cancel_event"].set()
+        return {"ok": False, "code": "UNKNOWN_CAPTURE", "error": f"没有这次捕获：{capture_id}"}
     controller = entry.get("controller")
     if controller is not None:
         try:
             controller.cancel()
         except Exception:  # noqa: BLE001 - 取消失败也要退出等待态
             pass
-    else:
-        session = entry.get("session")
-        try:
-            if session is not None:
-                session.cancel()
-                session.close()
-        except Exception:  # noqa: BLE001 - 取消失败也要退出等待态
-            pass
-        hud = entry.get("hud")
-        if hud is not None:
-            hud.hide()
-    entry["cancelled"] = True
-    return {"ok": True, "state": "cancelled", "name": name, "path": path}
-
-
-_ELEMENT_NAME_RE = re.compile(r"[A-Za-z0-9_-]+")
+    _CAPTURES.pop(key, None)
+    return {"ok": True, "state": "cancelled", "captureId": capture_id, "path": path}
 
 
 def _valid_element_name(name: str | None) -> bool:
-    """资产名唯一口径：新建、手填、详情、删除共用，同时挡掉路径穿越。"""
-    return bool(name and _ELEMENT_NAME_RE.fullmatch(name))
+    """资产名唯一口径：入库、改名、详情、删除共用，同时挡掉路径穿越。
 
-
-@api_method("rpa.writeElement")
-def write_element(path: str, name: str, selector: str) -> dict[str, Any]:
-    """能力不在线时的键盘可达出口：手填一个 CSS 选择器，按同一份 ref-only 契约落盘。
-
-    只收 CSS（桌面 locator 是结构化对象，手填容易写出运行期才炸的假资产）。
-    name 不要求在 elementRefs 缺口里：界面上的「＋ 捕获元素」正是用这条道入预置资产。
+    ★ **允许中文**（用户侧要求「资产名称支持中文输入」）。只挡真正会弄坏磁盘名的字符：
+    路径分隔符、Windows 保留字符、控制字符、点（避免与 ``.json`` 后缀混淆）、
+    首尾空白、以及 ``CON``/``NUL`` 这类设备名。
     """
-    selector = (selector or "").strip()
+    if not isinstance(name, str):
+        return False
+    if not name or len(name) > 48 or name != name.strip():
+        return False
+    if any(ch in _NAME_BAD_CHARS or ord(ch) < 32 for ch in name):
+        return False
+    return name.split(".")[0].lower() not in _RESERVED_NAMES
+
+
+_NAME_BAD_CHARS = frozenset('/\\:*?"<>|.')
+_RESERVED_NAMES = frozenset(
+    ["con", "prn", "aux", "nul"]
+    + [f"com{index}" for index in range(1, 10)]
+    + [f"lpt{index}" for index in range(1, 10)]
+)
+
+
+def _element_error(code: str, message: str) -> dict[str, Any]:
+    return {"ok": False, "code": code, "error": message}
+
+
+def _write_element_doc(path: Path, doc: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes((json.dumps(doc, ensure_ascii=False, indent=2) + "\n").encode("utf-8"))
+
+
+def _rewrite_refs(path: str, old: str, new: str) -> list[str]:
+    """把流程里引用 ``old`` 的 elementRefs 一起改成 ``new``（改名/入库即绑定）。
+
+    名字是元素与节点之间**唯一**的接线（ref-only，ADR-002）。只在文件侧改名会留下
+    「元素在盘上、流程还指着旧名」的悬空引用，用户看到的就是「明明抓过了还说没抓」。
+    """
+    target = _flow_path(path)
+    if not target.is_file():
+        return []
+    document, _ = _read_document(target)
+    hits: list[str] = []
+
+    def walk(node: Any) -> None:
+        if not isinstance(node, dict):
+            return
+        refs = node.get("elementRefs")
+        if isinstance(refs, dict):
+            for param, value in list(refs.items()):
+                if value == old:
+                    refs[param] = new
+                    if node.get("id"):
+                        hits.append(str(node["id"]))
+        for key in _NESTED:
+            for child in node.get(key) or []:
+                walk(child)
+
+    walk(document.get("root"))
+    if not hits:
+        return []
+    target.write_bytes(_encode_document(document))
+    return sorted(set(hits))
+
+
+@api_method("rpa.commitElement")
+def commit_element(path: str, capture_id: str, name: str) -> dict[str, Any]:
+    """用户确认后入库：捕获描述符 + 用户改好的名字 → ``elements/<name>.json``。
+
+    这是捕获链路上**唯一**写元素文件的地方（捕获本身只暂存）。名字被改过时，
+    流程里同名的 elementRefs 一起改名——否则资产与引用就对不上，等于白抓。
+    """
+    started = time.perf_counter()
+    key = _capture_key(path, capture_id)
+    entry = _CAPTURES.get(key)
+    if entry is None or not entry.get("captured"):
+        return _element_error("NO_CAPTURE", "这次捕获已经结束了，重新抓一次")
+    name = (name or "").strip()
     if not _valid_element_name(name):
-        return {"ok": False, "code": "BAD_NAME", "error": "元素名只能含字母、数字、下划线和短横线"}
-    if not selector or len(selector) > 500:
-        return {"ok": False, "code": "BAD_SELECTOR", "error": "选择器不能为空、也不能超过 500 字"}
-    # 落盘前取：写完之后这个缺口就消失了，再扫会拿不到 nodeId。
-    item = next((m for m in _scan_missing(path) if m.get("name") == name), None)
-    ed = _elements_dir(path)
-    ed.mkdir(parents=True, exist_ok=True)
-    doc = {
-        "kind": "browser",
-        "selector": {"css": selector},
-        "verifyCount": 0,
-        "name": None,
-        "metadata": {"source": "manual"},
-        "capturedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-    }
-    target = ed / f"{name}.json"
-    target.write_bytes((json.dumps(doc, ensure_ascii=False, indent=2) + "\n").encode("utf-8"))
+        return _element_error("BAD_NAME", "名字不能为空，也不能含 / \\ : * ? \" < > | . 这些字符")
+    target = _elements_dir(path) / f"{name}.json"
+    overwrite = bool(entry.get("overwrite")) and name == (entry.get("name") or "")
+    if target.exists() and not overwrite:
+        return _element_error("NAME_TAKEN", f"已经有一个叫「{name}」的元素了，换个名字")
+    doc = dict(entry["captured"] or {})
+    doc["name"] = name
+    _write_element_doc(target, doc)
+    renamed: list[str] = []
+    ref = entry.get("name") or ""
+    if ref and ref != name:
+        try:
+            renamed = _rewrite_refs(path, ref, name)
+        except OSError:
+            renamed = []
+    _CAPTURES.pop(key, None)
     return {
         "ok": True,
-        "state": "bound",
         "name": name,
-        "path": path,
         "file": str(target),
-        "boundNodeId": (item or {}).get("nodeId"),
+        "boundNodeId": entry.get("nodeId"),
+        "renamedRefs": renamed,
+        "ms": round((time.perf_counter() - started) * 1000, 1),
+    }
+
+
+@api_method("rpa.discardCapture")
+def discard_capture(path: str, capture_id: str) -> dict[str, Any]:
+    """用户在编辑框里点了取消：把暂存的描述符丢掉，盘上什么都不留。"""
+    key = _capture_key(path, capture_id)
+    entry = _CAPTURES.pop(key, None)
+    if entry is None:
+        return {"ok": True, "discarded": False, "captureId": capture_id}
+    return {"ok": True, "discarded": True, "captureId": capture_id}
+
+
+@api_method("rpa.saveElement")
+def save_element(path: str, name: str, new_name: str | None = None) -> dict[str, Any]:
+    """详情框的保存：改的只有资产名称（重名/改名后引用一起更新）。"""
+    started = time.perf_counter()
+    old = (name or "").strip()
+    if not _valid_element_name(old):
+        return _element_error("BAD_NAME", "这个名字用不了")
+    ed = _elements_dir(path)
+    source = ed / f"{old}.json"
+    if not source.is_file():
+        return _element_error("NOT_FOUND", f"没有这个资产：{old}")
+    new = (new_name or "").strip() or old
+    if not _valid_element_name(new):
+        return _element_error("BAD_NAME", "名字不能为空，也不能含 / \\ : * ? \" < > | . 这些字符")
+    if new == old:
+        return {
+            "ok": True,
+            "name": old,
+            "renamedRefs": [],
+            "unchanged": True,
+            "ms": round((time.perf_counter() - started) * 1000, 1),
+        }
+    target = ed / f"{new}.json"
+    if target.exists():
+        return _element_error("NAME_TAKEN", f"已经有一个叫「{new}」的元素了，换个名字")
+    try:
+        source.replace(target)
+    except OSError as exc:
+        return _element_error("RENAME_FAILED", f"改名没成：{exc}")
+    renamed: list[str] = []
+    try:
+        renamed = _rewrite_refs(path, old, new)
+        doc = json.loads(target.read_text(encoding="utf-8"))
+        doc["name"] = new
+        _write_element_doc(target, doc)
+    except (OSError, ValueError) as exc:
+        # 引用没改成，名字也退回去：宁可这次白改，也不能留下悬空引用。
+        try:
+            target.replace(source)
+            if renamed:
+                _rewrite_refs(path, new, old)
+        except OSError:
+            pass
+        return _element_error("RENAME_FAILED", f"改名没成：{exc}")
+    return {
+        "ok": True,
+        "name": new,
+        "file": str(target),
+        "renamedRefs": renamed,
+        "ms": round((time.perf_counter() - started) * 1000, 1),
     }
 
 
@@ -2730,23 +2838,24 @@ def _element_references(path: str, name: str) -> list[str]:
 
 @api_method("rpa.elementDetail")
 def element_detail(path: str, name: str) -> dict[str, Any]:
-    """资产详情：完整描述符 + 被哪些节点引用（界面展开「详情」用）。"""
+    """资产详情：完整描述符 + 被哪些节点引用（编辑框的数据来源）。"""
     started = time.perf_counter()
     if not _valid_element_name(name):
-        return {"ok": False, "code": "BAD_NAME", "error": "元素名只能含字母、数字、下划线和短横线"}
+        return _element_error("BAD_NAME", "这个名字用不了")
     target = _elements_dir(path) / f"{name}.json"
     if not target.is_file():
-        return {"ok": False, "code": "NOT_FOUND", "error": f"没有这个资产：{name}"}
+        return _element_error("NOT_FOUND", f"没有这个资产：{name}")
     try:
         doc = json.loads(target.read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
-        return {"ok": False, "code": "BAD_JSON", "error": f"资产文件读不了：{exc}"}
+        return _element_error("BAD_JSON", f"资产文件读不了：{exc}")
     return {
         "ok": True,
         "name": name,
         "file": str(target),
         "size": target.stat().st_size,
         "document": doc,
+        "selectorText": _selector_text(doc),
         "referencedBy": _element_references(path, name),
         "ms": round((time.perf_counter() - started) * 1000, 1),
     }
@@ -2754,15 +2863,16 @@ def element_detail(path: str, name: str) -> dict[str, Any]:
 
 @api_method("rpa.deleteElement")
 def delete_element(path: str, name: str) -> dict[str, Any]:
-    """删一条预置资产；仍被 elementRefs 引用时拒绝，避免静默把流程弄坏。"""
+    """删一条资产；仍被 elementRefs 引用时拒绝，并把原因写到桌面浮窗。"""
     started = time.perf_counter()
     if not _valid_element_name(name):
-        return {"ok": False, "code": "BAD_NAME", "error": "元素名只能含字母、数字、下划线和短横线"}
+        return _element_error("BAD_NAME", "这个名字用不了")
     target = _elements_dir(path) / f"{name}.json"
     if not target.is_file():
-        return {"ok": False, "code": "NOT_FOUND", "error": f"没有这个资产：{name}"}
+        return _element_error("NOT_FOUND", f"没有这个资产：{name}")
     referenced = _element_references(path, name)
     if referenced:
+        _notify("删不掉", f"「{name}」还被流程里 {len(referenced)} 处引用着，先改掉引用再删")
         return {
             "ok": False,
             "code": "ELEMENT_IN_USE",

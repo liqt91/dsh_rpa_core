@@ -63,22 +63,11 @@
         </div>
         <div class="dockPanels">
           <div class="dockPanel" data-panel="elements">
-            <!-- 常驻入库工具条：在 elemBody 之外，刷新资产列表时不会被 replaceChildren 清掉。
-                 新建的是预置资产，不改写流程、不自动绑节点。 -->
+            <!-- 只有一个按钮：点一下就抓。名字等抓完在弹窗里填，网页/桌面由后端判断，
+                 也不再提供手写选择器入库。环境与失败提示一律走桌面浮窗，这块区域
+                 不显示任何提示（2026-11-12 交互改版）。 -->
             <div class="elemTools">
-              <div class="elemToolsRow">
-                <span class="elemToolsLabel">新资产</span>
-                <input id="elemNewName" class="elemNewName" placeholder="名称，如 searchBox" aria-label="新资产名称">
-                <select id="elemNewWhere" class="elemNewWhere" aria-label="捕获位置">
-                  <option value="auto">自动判断</option>
-                  <option value="browser">在网页上</option>
-                  <option value="desktop">在桌面软件里</option>
-                </select>
-                <button type="button" id="elemNewCapture" class="elemNewCapture">＋ 捕获元素</button>
-                <input id="elemNewSelector" class="elemNewSelector" placeholder="或直接写选择器，如 #username" aria-label="手填选择器">
-                <button type="button" id="elemNewWrite" class="elemNewWrite">写入库</button>
-              </div>
-              <div id="elemNewNote" class="elemNewNote" role="status" aria-live="polite"></div>
+              <button type="button" id="elemCapture" class="elemCapture">捕获元素</button>
             </div>
             <details class="elemBox" id="elemBox" open>
               <summary></summary>
@@ -109,6 +98,28 @@
         </div>
       </section>
     </main>
+    <!-- 元素编辑框：抓完确认（名字可改、可中文）与资产详情改名共用这一个框。
+         只在用户点保存时才入库；点取消就把这次捕获的暂存描述符丢掉。 -->
+    <div id="elemDialog" class="modal" hidden>
+      <div class="modalBox" role="dialog" aria-modal="true" aria-labelledby="elemDialogTitle">
+        <div class="modalHead">
+          <span id="elemDialogTitle" class="modalTitle">确认这个元素</span>
+          <button type="button" id="elemDialogClose" class="modalClose" aria-label="关闭">×</button>
+        </div>
+        <div class="modalBody">
+          <label class="modalField">
+            <span class="modalLabel">资产名称</span>
+            <input id="elemDialogName" class="modalInput" type="text" autocomplete="off" spellcheck="false" />
+          </label>
+          <div id="elemDialogMeta" class="modalMeta"></div>
+          <div id="elemDialogNote" class="modalNote" role="status" aria-live="polite"></div>
+        </div>
+        <div class="modalBar">
+          <button type="button" id="elemDialogCancel">取消</button>
+          <button type="button" id="elemDialogSave" class="primary">保存</button>
+        </div>
+      </div>
+    </div>
   </div>
   <script type="module" src="/src/main.js"></script>
 </body>
