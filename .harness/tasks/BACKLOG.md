@@ -974,6 +974,33 @@
 - [ ] UI、DSH、MCP、调度器和安装器集成（`planned`）
   - 逐项放行与否以 ADR 0006 结论为准；操控型 HTTP 推迟不变。
 
+- [x] **PPX 原型 / 工作台编辑器缺全局参数界面，底栏三模块散落**（`done`，2026-11-12）
+  - 取证：`workflow.inputs` 是全局参数唯一真值源（`${inputs.<name>}` 引用、编译期校验在
+    `src/rpa_core/model/inputs.py`）；原型 `api.py` 只有节点类写入口，**没有写 inputs 的 RPC**；
+    `index.html` 里元素资产 `<details>` 在右栏、运行日志 `<details>` 在中栏，全局参数没有界面。
+    用户要求「三个模块放在下方区域」。
+  - **治理前置（维护者拍板，ADR 0022-R3）**：R2 只放行 `api.py` / `main.js`，底栏 DOM 与
+    拖拽样式只能从 `main.js` 运行时注入 ⇒ 维护者要求放宽：`.harness/demo/ppx_probe/` 整棵改
+    `shared_runtime` 目录前缀，`ppx-only` 只留客户端打包配置独占；`owner_of()` 必须改成
+    「精确声明 > 目录前缀」，否则 `app/ppx.toml` 会被目录前缀误判成共享。三分支同步提交
+    `8183a01` / `a046fc3` / `d4c5100`，契约 blob 一致。DOM 回 `index.html`、版式回
+    `style.css`，`main.js` 里 `DND_CSS` / `DOCK_CSS` / `injectXxx` / `mountBottomDock` 全删。
+  - **已落地**：`api.py` 加 `rpa.saveFlowInputs(path, values)`——全量替换声明、复用
+    `declaration_from_entries` 的权威校验（非法名 / 保留名 / 坏 JSON 一律拒绝）、sha 乐观锁、
+    `Workflow.model_validate` + 编译回显、编码比对后才写盘；`main.js` 加三 tab / 折叠 /
+    参数行（文本·数字·布尔·JSON）/ 保存·撤销 / 脏标记，运行自动切日志 tab，openFlow 刷新基线。
+    dist 已重建。
+  - 判据：`scripts/check_editor_bottom_dock.mjs` 11/11（结构层 + 最小 DOM shim 真跑绑定与保存，
+    tab/panel key 从 HTML 现解析，防替代结构恒绿）、`tests/test_editor_globals.py` 14 条、
+    `.harness/spike/negative_globals_dock.py` 11/11（9 红 + 2 元验证绿）逐字节还原、
+    `negative_drag_drop.py` 15/15 复跑、HTTP 冒烟 5 项全通、collected=160、
+    全门禁 rc=0 / 765 passed / `FULL GATE PASSED`。
+  - **仍欠**：浏览器里真机点一遍「全局参数改值 → 保存 → 重开流程 → 编译通过」，以及下面
+    控制流 / 拖拽两条的真机链路与「编辑器点运行 → 采集 → 落库」E2E（需 Chrome 常开）。
+  - **判据教训**：给 DOM shim 手写 tab key = 恒绿（HTML 改了 key，行为层还跑旧替代结构），
+    必须从被测 HTML 现解析；静态接线判据会被注释里的 RPC 名骗过，要断言真实调用串
+    `ppx.call('rpa.saveFlowInputs'`；pyproject 已有 `-q`，脚本别再传一次 `-q`（`-qq` 会吞汇总行）。
+
 - [x] **PPX 原型编辑器（含工作台复用版）缺「控制流」插入入口**（`done`，2026-11-12）
   - 引擎不缺：`IfNode(then/else)`、`ForEachNode`、`TryNode(children/catch)`、`ReturnNode` 都是一等工作流
     AST 节点，compiler 与 orchestrator 都执行；`AGENTS.md` 规则 1 与 `compiler.py:353` 明令控制流
@@ -1007,7 +1034,9 @@
     `insertNode` 与 `insertControlNode` 加 `explicit + parent_id + index` 精确落点（点击通道
     保持原语义）；`_Flattener` 每张卡片下发 `parentId/branch/index`，虚拟组行也是分支落点。
     `main.js` 加左栏 draggable、卡片 grip、dragover 落点三态、drop 双通道；样式从 main.js
-    运行时注入（style.css 仍归 ppx-only 独占，不为 14 行样式再松绑治理）。dist 已重建。
+    运行时注入（当时 style.css 仍归 ppx-only 独占）。**ADR 0022-R3 已撤回**：原型目录整棵
+    共享后，版式回 style.css、DOM 回 index.html，main.js 的运行时注入全删（见上面底栏条）。
+    dist 已重建。
   - 判据：`tests/test_editor_drag_drop.py` 7 条（语义 + 源码接线 + dist 产物同步）；
     `.harness/spike/negative_drag_drop.py` 15 条（13 注入全红且期望集精确、2 条元验证：
     把判据放宽后同一注入必须变绿），逐字节还原核 md5。collected=146、`FULL GATE PASSED`
@@ -1041,6 +1070,13 @@
     （整目录仍归 ppx-only），契约三分支同步提交 `ecc720e` / `f48b5d0` / `216950d`，
     blob 一致；决策记录 ADR 0022-R2，说明见 `docs/branch-ownership.md`。
     `check_branch_scope.py` 提交后复跑 PASSED（committed=50 / matched=4）。
+  - **2026-11-12 R3 更正（本条结论以此为准）**：逐文件放行被证明是纯噪声——底栏 DOM 与
+    拖拽样式马上又撞独占墙，被迫塞进 `main.js` 运行时注入。维护者拍板「当前分支也能编辑
+    ppx 分支文件」⇒ 整个 `.harness/demo/ppx_probe/` 移出 `ppx-only.exclusive`，改列
+    `shared_runtime` 目录前缀；`ppx-only` 只留 `ppx.toml` / `package.json` / lock 等打包配置。
+    `check_scope_sanity()` 补目录前缀存在性，`owner_of()` 改为「精确声明 > 目录前缀」
+    （否则 `app/ppx.toml` 会被误判成共享）。契约三分支同步提交 `8183a01` / `a046fc3` /
+    `d4c5100`；提交后 `BRANCH SCOPE CHECK PASSED (committed=53 / matched=4)`。见 ADR 0022-R3。
 
 > 已删除条目：原「桌面客户端编辑器薄壳（ADR 0010 重估条件）」——ADR 0016 已定 GUI 为唯一
 > 主力形态，该条目（「确认非开发者用户为主力后再立项薄壳」）不再适用。

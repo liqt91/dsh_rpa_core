@@ -68,6 +68,11 @@ import rpa_core  # noqa: E402
 from rpa_core.catalog import load_catalog  # noqa: E402
 from rpa_core.compiler.compiler import WorkflowCompileError, WorkflowCompiler  # noqa: E402
 from rpa_core.gui.i18n import load_command_display_names, load_op_labels  # noqa: E402
+from rpa_core.model.inputs import (  # noqa: E402
+    InputDeclarationError,
+    InputEntry,
+    declaration_from_entries,
+)
 from rpa_core.model.workflow import Condition, Workflow  # noqa: E402
 
 def _caps_dir() -> Path:
@@ -932,6 +937,80 @@ def save_node_params(path: str, node_id: str, params: dict[str, str]) -> dict[st
         "ms": round((time.perf_counter() - started) * 1000, 1),
         "added": added,
         "removed": removed,
+        "compile": compile_result,
+        "flow": flow,
+    }
+
+
+@api_method("rpa.saveFlowInputs")
+def save_flow_inputs(path: str, values: dict[str, str]) -> dict[str, Any]:
+    """全量替换 ``workflow.inputs``（流程级全局参数声明 / 运行参数默认值）。
+
+    前端每行给「名称 → 默认值的 JSON 文本」，与 Qt ``RunParamsDialog`` 和
+    ``rpa_core.model.inputs.InputEntry`` 同口径：``"abc"`` 得字符串、``3`` 得数字、
+    ``[1,2]`` 得数组。名称格式、保留名、重复、默认值可解析**一律交给权威校验器**，
+    这里不另写一套规则——否则编辑面与 compiler 的 ``validate_declaration`` 会分叉。
+
+    顺序：SHA 闸门 → 权威声明校验 → 全量模型复校 → 编码比对 → 落盘 →
+    编译（``${inputs.x}`` 是否还在声明里由 compiler 查）→ 重开流程刷新 ``_flows``。
+    任一步不过就**不写盘**；提交的是**整份声明**，不是补丁（漏传 = 删除该参数）。
+    """
+    started = time.perf_counter()
+    target = _flow_path(path)
+    document, raw = _read_document(target)
+
+    def reject(code: str, error: str) -> dict[str, Any]:
+        return {
+            "ok": False,
+            "code": code,
+            "error": error,
+            "saved": False,
+            "ms": round((time.perf_counter() - started) * 1000, 1),
+        }
+
+    entry = _flows.get(path)
+    if entry is not None and entry["sha"] != _sha256(raw):
+        return reject("FLOW_CHANGED", "文件在打开后被其他程序改过，已拒绝覆盖（重新打开流程再改）")
+    if not isinstance(values, dict):
+        return reject("INVALID_SUBMIT", "values 必须是「名称 → JSON 文本」的对象")
+
+    try:
+        entries = [
+            InputEntry(name=str(name), json_text="" if text is None else str(text))
+            for name, text in values.items()
+        ]
+        declaration = declaration_from_entries(entries)
+    except InputDeclarationError as exc:
+        return reject("INVALID_DECLARATION", f"全局参数不合法，未写盘：{exc}")
+    except Exception as exc:  # noqa: BLE001 - 前端传来的形状不可信，结论要带回去
+        return reject(
+            "INVALID_DECLARATION", f"全局参数不合法，未写盘：{type(exc).__name__}: {exc}"
+        )
+
+    previous = document.get("inputs") if isinstance(document.get("inputs"), dict) else {}
+    document["inputs"] = declaration
+    try:
+        Workflow.model_validate(document)
+    except Exception as exc:  # noqa: BLE001 - 校验失败按「不写盘」处理
+        return reject("INVALID_WORKFLOW", f"改完结构不合法，未写盘：{type(exc).__name__}: {exc}")
+
+    encoded = _encode_document(document)
+    changed = encoded != raw
+    if changed:
+        target.write_bytes(encoded)
+    compile_result = _compile(document)
+    flow = open_flow(path)
+    return {
+        "ok": True,
+        "saved": changed,
+        "changed": changed,
+        "bytes": [len(raw), len(encoded)],
+        "sha": _sha256(encoded)[:12],
+        "ms": round((time.perf_counter() - started) * 1000, 1),
+        "inputs": declaration,
+        "previous": previous,
+        "added": sorted(set(declaration) - set(previous)),
+        "removed": sorted(set(previous) - set(declaration)),
         "compile": compile_result,
         "flow": flow,
     }

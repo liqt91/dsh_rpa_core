@@ -19,6 +19,7 @@ from src import ppx_bridge as pb
 APP = Path(__file__).resolve().parents[1]
 ROOT = APP.parents[1]
 MAIN_JS = ROOT / ".harness" / "demo" / "ppx_probe" / "app" / "gui" / "src" / "main.js"
+STYLE_CSS = ROOT / ".harness" / "demo" / "ppx_probe" / "app" / "gui" / "src" / "style.css"
 DIST_DIR = ROOT / ".harness" / "demo" / "ppx_probe" / "app" / "gui" / "dist" / "assets"
 
 
@@ -262,12 +263,18 @@ def test_editor_wires_html5_drag_and_drop() -> None:
     assert "'rpa.moveNode'" in src
     assert "args.explicit = true" in src
     assert "await moveCard(payload.nodeId, target)" in src
-    # 样式不能写进 ppx-only 独占的 style.css，只能随共享编辑面注入
-    assert "const DND_CSS = `" in src and "card.drop-before" in src
+    # ADR 0022-R3：原型目录已共享，版式回到 style.css，不再从 main.js 运行时注入。
+    css = STYLE_CSS.read_text(encoding="utf-8")
+    assert ".card.drop-before" in css and ".card.drop-into" in css
+    assert ".card .grip" in css
+    assert "const DND_CSS" not in src and "injectDndStyles" not in src
 
     bundles = sorted(DIST_DIR.glob("*.js")) if DIST_DIR.is_dir() else []
     if bundles:
         built = "\n".join(p.read_text(encoding="utf-8") for p in bundles)
         assert "application/x-ppx-node" in built
         assert "rpa.moveNode" in built
-        assert "dnd-styles" in built
+    styles = sorted(DIST_DIR.glob("*.css")) if DIST_DIR.is_dir() else []
+    if styles:
+        built_css = "\n".join(p.read_text(encoding="utf-8") for p in styles)
+        assert ".card.drop-before" in built_css, "改了 style.css 忘了 npm run build"

@@ -27,10 +27,6 @@
       <section id="mid">
         <div id="flowTitle" class="flowTitle">未打开流程</div>
         <div id="cards" class="cardList"></div>
-        <details id="runBox" class="runBox" hidden>
-          <summary><span id="runTitle">运行</span></summary>
-          <div id="runLog" class="runLog"></div>
-        </details>
       </section>
       <aside id="right">
         <div class="paneHead">
@@ -51,11 +47,50 @@
           <pre id="detail" class="detail"></pre>
         </details>
         <div id="compileOut" class="compileOut"></div>
-        <details class="elemBox" id="elemBox">
-          <summary>元素资产 <span id="elemCount" class="count"></span></summary>
-          <div id="elemBody" class="elemBody"></div>
-        </details>
       </aside>
+
+      <!-- 底部三模块：元素资产 / 全局参数 / 运行日志。原本两个折叠 details 缩在
+           右栏与中栏，全局参数压根没有界面；现在整块收进横跨三列的底栏。
+           id 一个不改，main.js 里 renderElementsPanel / setRunTitle / runLog
+           的既有写入路径原样有效，只是父节点换了。 -->
+      <section id="bottomDock">
+        <div class="dockTabs">
+          <button type="button" class="dockTab" data-tab="elements">元素资产 <span id="elemCount" class="count"></span></button>
+          <button type="button" class="dockTab active" data-tab="globals">全局参数 <span id="globalsCount" class="count"></span></button>
+          <button type="button" class="dockTab" data-tab="log">运行日志 <span id="runTitle"></span></button>
+          <span class="dockSpacer"></span>
+          <button type="button" class="dockFold">收起</button>
+        </div>
+        <div class="dockPanels">
+          <div class="dockPanel" data-panel="elements">
+            <details class="elemBox" id="elemBox" open>
+              <summary></summary>
+              <div id="elemBody" class="elemBody"></div>
+            </details>
+          </div>
+          <div class="dockPanel active" data-panel="globals">
+            <div class="globalsPanel">
+              <div class="globalsHint">全局参数 = 流程的 inputs 声明；在节点参数里用 ${inputs.名称} 引用。默认值按 JSON 保存，「文本」类型会自动加引号。</div>
+              <div class="globalsScroll">
+                <div class="globalsHead"><span>参数名</span><span>类型</span><span>默认值</span><span></span></div>
+                <div id="globalsRows" class="globalsRows"></div>
+              </div>
+              <div class="globalsBar">
+                <button type="button" id="globalsAdd">+ 添加参数</button>
+                <button type="button" class="primary" id="globalsSave">保存</button>
+                <button type="button" id="globalsRevert">撤销</button>
+                <span class="globalsNote" id="globalsNote"></span>
+              </div>
+            </div>
+          </div>
+          <div class="dockPanel" data-panel="log">
+            <details id="runBox" class="runBox" open>
+              <summary></summary>
+              <div id="runLog" class="runLog"></div>
+            </details>
+          </div>
+        </div>
+      </section>
     </main>
   </div>
   <script type="module" src="/src/main.js"></script>

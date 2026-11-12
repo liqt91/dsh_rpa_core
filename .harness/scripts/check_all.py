@@ -61,6 +61,10 @@ PURE_FUNCTION_SCRIPTS = (
     "check_capture_helpers.mjs",
     # 元素拾取 UI 三层判据（M66）：文案禁词 / 样式命中区 / 最小 DOM shim 真跑渲染函数。
     "check_element_pick_ui.mjs",
+    # 编辑器底栏（元素资产 / 全局参数 / 运行日志）：ADR 0022-R3 后 DOM 在 index.html、
+    # 版式在 style.css、行为在 main.js；只读源码证明不了三个 tab 真挂上去、
+    # 原 details 真搬过去、全局参数真能保存 ⇒ 用最小 DOM shim 真跑一遍绑定与保存。
+    "check_editor_bottom_dock.mjs",
     # 捕获高亮框几何（content.js）：框线带必须整条落在元素**之外**、且碰不到指针
     # ±2px 热区（M41「框要躲着鼠标」）。同样是「只在浏览器里跑」的几何——Python
     # 侧读源码只能证明写了 `left - OVERLAY_OUTSET`，证明不了算出来的带落在哪。

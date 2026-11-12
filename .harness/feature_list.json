@@ -466,6 +466,11 @@
       "id": "branch-artifacts-inbox",
       "title": "Workflow assets split by branch: drafts dropped on all three, xhs flows tracked only on xhs-workbench",
       "passes": true
+    },
+    {
+      "id": "xhs-globals-dock",
+      "title": "Editor bottom dock: elements / global inputs / run log; rpa.saveFlowInputs with authoritative validation",
+      "passes": true
     }
   ]
 }

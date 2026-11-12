@@ -9,16 +9,16 @@
 拆分分的是**后续改动的车道**，不是把文件搬走。
 
 本文件是给人看的说明书；契约把它列在 `branch_local`，允许各分支各写各的
-（2026-11-12 起 `xhs-workbench` 分支多了一节「共享编辑面」，其余两分支暂未同步这节）。
+（2026-11-12 起 `xhs-workbench` 分支多记了 R2/R3 的共享编辑面来龙去脉）。
 机器事实源是 `.harness/branch-scope.json`，执行者是 `.harness/scripts/check_branch_scope.py`。
 
 ## 三条分支各自干什么
 
 | 分支 | 职责 | 独占域（只有它能改） | 不许碰 |
 |---|---|---|---|
-| `ppx-only` | PPX 桌面客户端：窗口、画布、会话、构建分发 | `.harness/demo/ppx_probe/` | `workbuddy-suite/`、`apps/xhs-workbench/` 等 |
-| `plugin-only` | WorkBuddy 插件套件：connector / skill / extension / 上架资产 | `workbuddy-suite/`、`tests/contract/test_workbuddy_connector.py` | `.harness/demo/ppx_probe/`、`apps/xhs-workbench/` |
-| `xhs-workbench` | 小红书专用工作台：调度 / 快照 / 告警 / 本地 Web 台 | `apps/xhs-workbench/` | 除共享编辑面外的 `.harness/demo/ppx_probe/`、`workbuddy-suite/` |
+| `ppx-only` | PPX 桌面客户端：窗口、画布、会话、构建分发 | `app/ppx.toml` 与 `app/package.json` / `pnpm-*` / `ppx.lock` 等客户端打包配置 | `workbuddy-suite/`、`apps/xhs-workbench/` 等 |
+| `plugin-only` | WorkBuddy 插件套件：connector / skill / extension / 上架资产 | `workbuddy-suite/`、`tests/contract/test_workbuddy_connector.py` | `apps/xhs-workbench/`、PPX 客户端打包配置 |
+| `xhs-workbench` | 小红书专用工作台：调度 / 快照 / 告警 / 本地 Web 台 | `apps/xhs-workbench/` | `workbuddy-suite/`、PPX 客户端打包配置 |
 
 工作台的**采集执行不自己写**：只经 `rpa-core run <workflow.json>` 调用能力层，
 不 import `src/rpa_core` 内部模块。因此 README 的 `scope.out`（排除调度器 / 数据库 /
@@ -32,17 +32,28 @@ PPX 客户端并不是完全不碰 `workbuddy-suite/`：会话服务
 `references/protocol.md`、npm 入口 `bin/rpa-skill.mjs` 是客户端跑起来的依赖。
 这三个文件列在契约的 `shared_runtime`，三条分支都可改 —— 用目录一刀切会切断运行时。
 
-### 共享编辑面（2026-11-12，三分支契约同步）
+### 原型编辑面整体共享（2026-11-12，R2 → R3，三分支契约同步）
 
 ADR 0022-R1 让工作台在运行时直接装载原型的 `app/api/api.py` 与 `app/gui/src/main.js`
 （后者经 `vite build` 产出工作台托管的 `gui/dist`）。拆分点的原型够用时没有矛盾；
-一旦工作台要**增强编辑能力**（这次是补「流程控制」插入分组），整目录独占就会把
-合法改动判成越界，而原型改动只入 `ppx-only` 又会让工作台分支 checkout 后读不到。
+一旦工作台要**增强编辑能力**，整目录独占就会把合法改动判成越界，而原型改动只入
+`ppx-only` 又会让工作台分支 checkout 后读不到。
 
-所以契约的 `shared_runtime` 精确放行这两个文件（不是整个原型目录）：
-`owner_of()` 先查 `shared_runtime` 再查 `exclusive`，其余原型文件仍只归 `ppx-only`。
-`branch-scope.json` 在 `must_match_across_branches` 里，这条改动在三条分支各提交一次、
-内容逐字节相同；`check_branch_scope.py` 本身没改。
+R2 的做法是精确放行 `api.py` / `main.js` 两个文件。补拖拽时立刻撞上第二堵墙：
+样式只能写进 `style.css`，而它仍归 `ppx-only`，于是被迫把 14 行 CSS 塞进
+`main.js` 运行时注入。**逐文件放行是纯噪声**——编辑面本来就是一整棵树。
+
+R3（维护者 2026-11-12 拍板）改为：契约的 `shared_runtime` 收一条目录前缀
+`.harness/demo/ppx_probe/`，整棵原型目录不再归任何分支独占；`owner_of()` 扩展为
+支持「以 `/` 结尾的条目按前缀共享」，优先级是**精确声明 > 目录前缀**，
+所以 `ppx.toml` 等客户端打包配置仍能用精确的 `exclusive` 条目留在 `ppx-only`。
+`check_scope_sanity()` 会检查目录前缀真实存在——路径写错不会报错，只会让本该独占的
+路径悄悄变成无人认领。
+
+两个文件都在 `must_match_across_branches` 里，`branch-scope.json` 与
+`check_branch_scope.py` 在三条分支各提交一次、blob 逐字节相同。
+ADR 0022-R3 记录了范围变化；本轮的编辑器改动因此回到 `index.html` / `style.css`
+的正规写法，不再从 `main.js` 注入 DOM 与样式。
 
 ### 共享支撑层
 
@@ -61,7 +72,8 @@ ADR 0022-R1 让工作台在运行时直接装载原型的 `app/api/api.py` 与 `
 
 `check_all.py` 里接了 `check_branch_scope.py`，四层判据：
 
-1. **契约自洽**：字段形状、治理文件真存在、各条独占域不互相覆盖；
+1. **契约自洽**：字段形状、治理文件真存在、`shared_runtime` 的目录前缀真存在、
+   各条独占域不互相覆盖；
 2. **接线哨兵**：把闸门从 `check_all.py` 摘掉，闸门自己会红；
 3. **共同基线**：`split_point` 存在且是 HEAD 祖先，契约与闸门在**所有**分支上
    blob 相同（逐对比对，缺哪条 ref 就只对那条打印 `skipped`）；

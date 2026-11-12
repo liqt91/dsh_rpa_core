@@ -49,7 +49,14 @@ body {
 #bar > button, #bar > select { flex: 0 0 auto; }
 .spacer { flex: 1; }
 
-main { flex: 1; display: grid; grid-template-columns: 216px minmax(0, 1fr) 340px; min-height: 0; }
+/* 第二行给横跨三列的底部 dock；第一行吃余高，三栏不许被 auto 行挤走。 */
+main {
+  flex: 1; display: grid;
+  grid-template-columns: 216px minmax(0, 1fr) 340px;
+  grid-template-rows: minmax(0, 1fr) auto;
+  min-height: 0;
+}
+#left, #mid, #right { grid-row: 1; }
 /* 窗口能被拖到 960 宽（minWidthRatio .5）。三栏都是定宽时中栏会被压到 400 出头，
    摘要全变省略号。窄窗口收左右栏，把宽度让给画布。 */
 @media (max-width: 1180px) {
@@ -117,7 +124,7 @@ aside, section { min-height: 0; overflow: auto; background: var(--surface); }
 
 .cardList { padding: 10px 12px 40px; }
 #cards:empty::after {
-  content: "这个流程还没有节点。从左边的指令列表点一条加进来。";
+  content: "这个流程还没有节点。从左边点一条或拖进来。";
   display: block; padding: 18px 4px;
   color: var(--faint); font-size: 12px;
 }
@@ -444,3 +451,97 @@ select {
   border: 1px solid var(--border); border-radius: 6px;
   background: var(--surface); color: var(--text); font: inherit;
 }
+
+/* ---- 拖拽落点 ------------------------------------------------------------
+ * 这些版式原先因为 style.css 归 ppx-only 独占，被塞进 main.js 运行时注入。
+ * ADR 0022-R3 把原型目录改成三分支共享后，版式回到它该在的地方。 */
+.cmd[draggable="true"] { cursor: grab; }
+.cmd[draggable="true"]:active { cursor: grabbing; }
+.card .grip {
+  flex: 0 0 auto; width: 12px; text-align: center;
+  color: var(--faint); font-size: 13px; line-height: 1;
+  cursor: grab; opacity: .35; user-select: none;
+}
+.card .grip:active { cursor: grabbing; }
+.card:hover .grip, .card:focus-within .grip { opacity: 1; }
+.card.drop-before { box-shadow: inset 0 2px 0 0 var(--info) !important; }
+.card.drop-after { box-shadow: inset 0 -2px 0 0 var(--info) !important; }
+.card.drop-into { outline: 1px dashed var(--info); background: var(--selected); }
+
+/* ---- 底部 dock：元素资产 / 全局参数 / 运行日志 ----------------------------
+ * 三个模块原本分散且都是折叠的（元素资产缩在右栏、运行日志缩在中栏、全局参数
+ * 没有界面）。底栏横跨三列，可整块收起；默认展示全局参数，运行时由 main.js
+ * 自动切到日志。两个 details 强制常开、藏掉 summary、吃掉 panel 余高。 */
+#bottomDock {
+  grid-column: 1 / -1; grid-row: 2;
+  display: flex; flex-direction: column;
+  height: 228px; min-height: 0;
+  border-top: 1px solid var(--border-strong);
+  background: var(--surface);
+}
+#bottomDock.collapsed { height: 34px; }
+#bottomDock.collapsed .dockPanels { display: none; }
+.dockTabs {
+  flex: 0 0 34px; display: flex; align-items: stretch;
+  background: var(--sunken); border-bottom: 1px solid var(--border);
+}
+.dockTab {
+  display: flex; align-items: center; gap: 6px; padding: 0 14px; height: auto;
+  border: 0; border-right: 1px solid var(--border); border-radius: 0;
+  background: transparent; color: var(--muted); font: inherit; cursor: pointer;
+}
+.dockTab:hover { background: var(--hover); }
+.dockTab.active { background: var(--surface); color: var(--info); box-shadow: inset 0 2px 0 0 var(--info); }
+.dockTab:focus-visible { outline: 2px solid var(--info); outline-offset: -2px; }
+.dockTab .count { margin-left: 2px; }
+.dockSpacer { flex: 1; }
+.dockFold {
+  flex: 0 0 auto; height: auto; padding: 0 14px;
+  border: 0; border-radius: 0; background: transparent;
+  color: var(--muted); font: inherit; cursor: pointer;
+}
+.dockFold:hover { background: var(--hover); }
+.dockPanels { flex: 1 1 auto; min-height: 0; position: relative; }
+.dockPanel { position: absolute; inset: 0; display: none; flex-direction: column; min-height: 0; }
+.dockPanel.active { display: flex; }
+#bottomDock .elemBox, #bottomDock .runBox {
+  flex: 1 1 auto; height: 100%; max-height: none; min-height: 0;
+  border: 0; display: flex; flex-direction: column; overflow: hidden;
+}
+#bottomDock .elemBox > summary, #bottomDock .runBox > summary { display: none; }
+#bottomDock .elemBody, #bottomDock .runLog { flex: 1 1 auto; height: 100%; max-height: none; }
+
+/* ---- 全局参数：名称 / 类型 / 默认值 三列，末列是删除 ---- */
+.globalsPanel { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+.globalsHint { padding: 7px 12px; color: var(--muted); font-size: 12px; border-bottom: 1px dashed var(--border); }
+.globalsScroll { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 6px 12px 10px; }
+.globalsHead, .globalRow {
+  display: grid; grid-template-columns: minmax(110px, 1fr) 96px minmax(150px, 2fr) 28px;
+  gap: 8px; align-items: center; margin-bottom: 5px;
+}
+.globalsHead { color: var(--faint); font-size: 11.5px; padding: 2px 0; }
+.globalRow input, .globalRow select {
+  width: 100%; box-sizing: border-box; height: 27px; padding: 0 7px;
+  border: 1px solid var(--border); border-radius: 6px;
+  background: var(--surface); color: var(--text); font: inherit;
+}
+.globalRow input:focus, .globalRow select:focus { outline: none; border-color: var(--info); }
+.globalRow input.bad { border-color: var(--danger); background: #fff8f8; }
+.globalDel {
+  width: 26px; height: 26px; border: 0; border-radius: 4px;
+  background: transparent; color: var(--faint); font-size: 15px; cursor: pointer;
+}
+.globalDel:hover { background: #ffebe9; color: var(--danger); }
+.globalsEmpty { padding: 14px 2px; color: var(--faint); font-size: 12px; }
+.globalsBar {
+  flex: 0 0 auto; display: flex; align-items: center; gap: 8px;
+  padding: 7px 12px; border-top: 1px solid var(--border); background: var(--sunken);
+}
+.globalsBar button {
+  height: 27px; padding: 0 10px; border: 1px solid var(--border); border-radius: 6px;
+  background: var(--surface); color: var(--text); font: inherit; cursor: pointer;
+}
+.globalsBar button:disabled { opacity: .45; cursor: default; }
+.globalsBar .primary { border-color: var(--info); background: var(--info); color: #fff; }
+.globalsNote { margin-left: auto; color: var(--muted); font-size: 11.5px; }
+.globalsNote.error { color: var(--danger); }

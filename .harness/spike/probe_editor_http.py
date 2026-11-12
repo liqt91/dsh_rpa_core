@@ -1,7 +1,7 @@
 """HTTP 冒烟：工作台托管的编辑器确实是刚重建的那份，且新 RPC 经 /editor-ppx-rpc 可达。
 
-不写任何流程文件：控制流 RPC 故意传一个未知 kind、移动 RPC 故意传不存在的节点，
-只验证链路，不验证落盘。
+不写任何流程文件：控制流 RPC 故意传未知 kind、移动 RPC 传不存在的节点、
+全局参数 RPC 传非法参数名，全部只验证链路与明确拒绝，不验证落盘。
 跑法：./.venv/Scripts/python.exe .harness/spike/probe_editor_http.py
 """
 
@@ -41,9 +41,17 @@ def main() -> None:
                 bundle = resp.read().decode("utf-8")
             assert "流程控制" in bundle, "托管的 JS 不是含新分组的那份"
             assert "insertControlNode" in bundle, "托管的 JS 里没有新 RPC"
-            for token in ("application/x-ppx-node", "rpa.moveNode", "dnd-styles"):
+            for token in ("application/x-ppx-node", "rpa.moveNode"):
                 assert token in bundle, f"托管的 JS 里没有拖拽实现：{token}"
-            print("PASS | /editor-ppx/ 托管的是重建产物（流程控制 + 拖拽实现）")
+            for token in ("rpa.saveFlowInputs", "bottomDock", "globalsCount"):
+                assert token in bundle, f"托管的 JS 里没有底栏/全局参数：{token}"
+            css_hit = re.search(r'/editor-ppx/(assets/[^"]+\.css)', html)
+            assert css_hit, "index.html 没引用 CSS 产物"
+            with urllib.request.urlopen(base + "/editor-ppx/" + css_hit.group(1), timeout=10) as resp:
+                built_css = resp.read().decode("utf-8")
+            for token in ("#bottomDock", ".dockTab.active", ".globalRow", ".card.drop-before"):
+                assert token in built_css, f"托管的 CSS 缺 {token}"
+            print("PASS | /editor-ppx/ 托管的是重建产物（流程控制 + 拖拽 + 底栏三模块 + 版式）")
 
             def rpc(payload: dict) -> dict:
                 req = urllib.request.Request(
@@ -80,6 +88,19 @@ def main() -> None:
             assert moved["ok"] is True
             assert moved["data"]["code"] == "NODE_NOT_FOUND", moved
             print("PASS | /editor-ppx-rpc → rpa.moveNode 可达（不存在的节点被明确拒绝）")
+            globals_denied = rpc(
+                {
+                    "method": "rpa.saveFlowInputs",
+                    "params": {
+                        "path": "workflows/xhs_product_search.json",
+                        "values": {"a.b": "1"},
+                    },
+                    "requestId": "probe-4",
+                }
+            )
+            assert globals_denied["ok"] is True
+            assert globals_denied["data"]["code"] == "INVALID_DECLARATION", globals_denied
+            print("PASS | /editor-ppx-rpc → rpa.saveFlowInputs 可达（非法名被明确拒绝、未写盘）")
         finally:
             httpd.shutdown()
             thread.join(timeout=5)

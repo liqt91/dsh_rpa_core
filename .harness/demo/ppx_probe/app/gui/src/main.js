@@ -20,34 +20,10 @@ const CONTROL_NODES = [
 // 同源 iframe 里 HTML5 DnD 可用；自定义 MIME 避免把 JSON 当普通文本拖进输入框。
 const DND_MIME = 'application/x-ppx-node'
 
-/* 拖拽样式随 main.js 走，不写进 style.css：分支契约（ADR 0022-R2 的 shared_runtime）
-   只放行 api.py / main.js 两个编辑面文件，style.css 仍归 ppx-only 独占，
-   工作台分支不能提交它。运行时注入这段 style，两端看到的落点指示一致。 */
-const DND_CSS = `
-.cmd[draggable="true"] { cursor: grab; }
-.cmd[draggable="true"]:active { cursor: grabbing; }
-#cards:empty::after { content: "这个流程还没有节点。从左边点一条或拖进来。"; }
-.card .grip {
-  flex: 0 0 auto; width: 12px; text-align: center;
-  color: var(--faint); font-size: 13px; line-height: 1;
-  cursor: grab; opacity: .35; user-select: none;
-}
-.card .grip:active { cursor: grabbing; }
-.card:hover .grip, .card:focus-within .grip { opacity: 1; }
-.card.drop-before { box-shadow: inset 0 2px 0 0 var(--info) !important; }
-.card.drop-after { box-shadow: inset 0 -2px 0 0 var(--info) !important; }
-.card.drop-into { outline: 1px dashed var(--info); background: var(--selected); }
-`
-function injectDndStyles() {
-  // 渲染层判据用最小 DOM shim 跑这份源码，那里没有 head；真实浏览器一定有。
-  const head = document.head || document.querySelector?.('head')
-  if (!head) return
-  const tag = document.createElement('style')
-  tag.id = 'dnd-styles'
-  tag.textContent = DND_CSS
-  head.append(tag)
-}
-injectDndStyles()
+/* 版式（拖拽落点、底部 dock）都在 style.css 里，DOM 骨架在 index.html 里。
+   ADR 0022-R3 把原型目录改为三分支共享后，不再需要往 main.js 里塞运行时样式。 */
+
+/* 底部 dock：元素资产 / 全局参数 / 运行日志，结构见 index.html。 */
 
 const el = {
   status: document.querySelector('#status'),
@@ -73,7 +49,260 @@ const el = {
   unset: document.querySelector('#unset'),
   elemBody: document.querySelector('#elemBody'),
   elemCount: document.querySelector('#elemCount'),
+  dock: document.querySelector('#bottomDock'),
+  dockFold: document.querySelector('.dockFold'),
+  globalsRows: document.querySelector('#globalsRows'),
+  globalsCount: document.querySelector('#globalsCount'),
+  globalsAdd: document.querySelector('#globalsAdd'),
+  globalsSave: document.querySelector('#globalsSave'),
+  globalsRevert: document.querySelector('#globalsRevert'),
+  globalsNote: document.querySelector('#globalsNote'),
 }
+
+/* ---- 底部 dock：元素资产 / 全局参数 / 运行日志 ----------------------------
+ * 三块原本分散且都是折叠的：元素资产缩在右栏、运行日志缩在中栏、全局参数没有界面。
+ * 现在整块搬进横跨三列的底栏，节点 id 一个不改，所以 renderElementsPanel /
+ * setRunTitle / runLog 的既有写入路径原样有效（只是父节点换了）。
+ */
+const DOCK_TABS = [
+  { key: 'elements', label: '元素资产' },
+  { key: 'globals', label: '全局参数' },
+  { key: 'log', label: '运行日志' },
+]
+const GLOBAL_KINDS = [
+  { id: 'string', label: '文本' },
+  { id: 'number', label: '数字' },
+  { id: 'boolean', label: '布尔' },
+  { id: 'json', label: 'JSON' },
+]
+
+const dockTabs = {}
+const dockPanels = {}
+let dockActive = 'globals'
+let globalsSaved = {}
+let globalsRows = []
+let globalsDirty = false
+let globalsError = ''
+let globalsBusy = false
+
+function activateDockTab(key) {
+  if (!DOCK_TABS.some((tab) => tab.key === key)) return
+  dockActive = key
+  for (const tab of DOCK_TABS) {
+    const action = tab.key === key ? 'add' : 'remove'
+    dockTabs[tab.key]?.classList[action]('active')
+    dockPanels[tab.key]?.classList[action]('active')
+  }
+}
+
+function bindBottomDock() {
+  const tabNodes = Array.from(document.querySelectorAll('.dockTab') || [])
+  const panelNodes = Array.from(document.querySelectorAll('.dockPanel') || [])
+  // 渲染层判据的最小 DOM shim 没有完整选择器；真实页面里两列各 3 个。
+  if (tabNodes.length !== DOCK_TABS.length || panelNodes.length !== DOCK_TABS.length) return
+  for (const tab of DOCK_TABS) {
+    const button = tabNodes.find((n) => n.dataset.tab === tab.key)
+    const panel = panelNodes.find((n) => n.dataset.panel === tab.key)
+    if (!button || !panel) return
+    dockTabs[tab.key] = button
+    dockPanels[tab.key] = panel
+    button.addEventListener('click', () => activateDockTab(tab.key))
+  }
+  if (el.dockFold) {
+    let folded = false
+    el.dockFold.addEventListener('click', () => {
+      folded = !folded
+      el.dock.classList[folded ? 'add' : 'remove']('collapsed')
+      el.dockFold.textContent = folded ? '展开' : '收起'
+    })
+  }
+  // 两个 details 在 HTML 里已 open，这里再钉一次：runFlow 也会重设，别让旧态复活。
+  if (el.runBox) {
+    el.runBox.hidden = false
+    el.runBox.open = true
+  }
+  const elemBox = document.querySelector('#elemBox')
+  if (elemBox) elemBox.open = true
+  bindGlobalsPanel()
+  activateDockTab(dockActive)
+  renderGlobals()
+}
+
+/* ---- 全局参数：编辑的是 workflow.inputs 声明 ------------------------------
+ * 权威规则在 rpa_core.model.inputs（名称格式 / 保留名 / 默认值 JSON），前端只做
+ * 「非空、不重名、JSON 能解析、类型对得上」这层语法预检，不复制一套标识符规则。
+ * 行内文本按类型编码成 JSON 文本再交给 rpa.saveFlowInputs，与 Qt RunParamsDialog 同口径。
+ */
+function globalsFromInputs(inputs) {
+  return Object.entries(inputs || {}).map(([name, value]) => {
+    const kind =
+      typeof value === 'string'
+        ? 'string'
+        : typeof value === 'number'
+          ? 'number'
+          : typeof value === 'boolean'
+            ? 'boolean'
+            : 'json'
+    return { name, kind, text: kind === 'string' ? value : JSON.stringify(value) }
+  })
+}
+
+function encodeGlobalRow(row) {
+  if (row.kind === 'string') return JSON.stringify(row.text)
+  const text = String(row.text).trim()
+  return text === '' ? 'null' : text
+}
+
+function globalsProblems() {
+  const seen = new Set()
+  const problems = []
+  for (const row of globalsRows) {
+    const name = String(row.name).trim()
+    if (!name) {
+      problems.push('参数名不能为空')
+      continue
+    }
+    if (seen.has(name)) {
+      problems.push(`参数名重复：${name}`)
+      continue
+    }
+    seen.add(name)
+    if (row.kind === 'string') continue
+    let parsed
+    try {
+      parsed = JSON.parse(encodeGlobalRow(row))
+    } catch {
+      problems.push(`${name} 的默认值不是合法 JSON`)
+      continue
+    }
+    if (row.kind === 'number' && typeof parsed !== 'number') problems.push(`${name} 应为数字`)
+    if (row.kind === 'boolean' && typeof parsed !== 'boolean') problems.push(`${name} 应为 true / false`)
+  }
+  return problems
+}
+
+function bindGlobalsPanel() {
+  if (el.globalsAdd) {
+    el.globalsAdd.addEventListener('click', () => {
+      globalsRows.push({ name: '', kind: 'string', text: '' })
+      markGlobalsDirty()
+      renderGlobals()
+    })
+  }
+  if (el.globalsSave) el.globalsSave.addEventListener('click', () => saveGlobals())
+  if (el.globalsRevert) {
+    el.globalsRevert.addEventListener('click', () => {
+      globalsRows = globalsFromInputs(globalsSaved)
+      globalsDirty = false
+      globalsError = ''
+      renderGlobals()
+    })
+  }
+}
+
+function renderGlobalsNote() {
+  if (!el.globalsNote) return
+  el.globalsNote.className = globalsError ? 'globalsNote error' : 'globalsNote'
+  el.globalsNote.textContent = globalsError || (globalsDirty ? '未保存' : `${globalsRows.length} 项`)
+  if (el.globalsSave) el.globalsSave.disabled = globalsBusy || (!globalsDirty && !globalsError)
+  if (el.globalsRevert) el.globalsRevert.disabled = globalsBusy || !globalsDirty
+  if (el.globalsAdd) el.globalsAdd.disabled = globalsBusy
+  if (el.globalsCount) el.globalsCount.textContent = `${globalsRows.length} 项`
+}
+
+function markGlobalsDirty() {
+  globalsDirty = true
+  globalsError = ''
+  renderGlobalsNote()
+}
+
+function renderGlobals() {
+  if (!el.globalsRows) return
+  el.globalsRows.replaceChildren()
+  if (!globalsRows.length) {
+    el.globalsRows.append(
+      mk('div', 'globalsEmpty', '还没有全局参数。点「+ 添加参数」，之后在节点参数里用 ${inputs.名称} 引用。'),
+    )
+  }
+  for (const [index, row] of globalsRows.entries()) {
+    const line = mk('div', 'globalRow')
+    const name = document.createElement('input')
+    name.value = row.name
+    name.placeholder = '如 keyword'
+    name.setAttribute('aria-label', '参数名')
+    name.addEventListener('input', () => {
+      row.name = name.value
+      markGlobalsDirty()
+    })
+    const kind = document.createElement('select')
+    kind.setAttribute('aria-label', '类型')
+    for (const option of GLOBAL_KINDS) {
+      const item = document.createElement('option')
+      item.value = option.id
+      item.textContent = option.label
+      kind.append(item)
+    }
+    kind.value = row.kind
+    kind.addEventListener('change', () => {
+      row.kind = kind.value
+      markGlobalsDirty()
+      renderGlobals()
+    })
+    const value = document.createElement('input')
+    value.value = row.text
+    value.placeholder = row.kind === 'string' ? '文本' : 'JSON'
+    value.setAttribute('aria-label', '默认值')
+    value.addEventListener('input', () => {
+      row.text = value.value
+      markGlobalsDirty()
+    })
+    const del = mk('button', 'globalDel', '×')
+    del.type = 'button'
+    del.title = '删除该参数'
+    del.addEventListener('click', () => {
+      globalsRows.splice(index, 1)
+      markGlobalsDirty()
+      renderGlobals()
+    })
+    line.append(name, kind, value, del)
+    el.globalsRows.append(line)
+  }
+  renderGlobalsNote()
+}
+
+async function saveGlobals() {
+  if (!currentPath || globalsBusy) return
+  const problems = globalsProblems()
+  if (problems.length) {
+    globalsError = problems[0]
+    renderGlobalsNote()
+    return
+  }
+  const values = {}
+  for (const row of globalsRows) values[String(row.name).trim()] = encodeGlobalRow(row)
+  globalsBusy = true
+  renderGlobalsNote()
+  try {
+    const res = await ppx.call('rpa.saveFlowInputs', { path: currentPath, values })
+    globalsSaved = res.inputs || {}
+    globalsRows = globalsFromInputs(globalsSaved)
+    globalsDirty = false
+    const compile = res.compile
+    globalsError = compile && compile.ok === false ? `已保存，但编译不通过：${compile.error}` : ''
+    setStatus(
+      `全局参数已保存 · ${globalsRows.length} 项`,
+      compile && compile.ok === false ? compile.error : '',
+    )
+    renderGlobals()
+  } catch (error) {
+    globalsError = `${error?.code || '保存失败'}：${String(error?.message || error)}`
+  } finally {
+    globalsBusy = false
+    renderGlobalsNote()
+  }
+}
+
+bindBottomDock()
 
 let commands = []
 let flows = []
@@ -691,6 +920,11 @@ async function openFlow(path) {
   try {
     const flow = await ppx.call('rpa.openFlow', { path })
     currentPath = path
+    globalsSaved = flow.inputs || {}
+    globalsRows = globalsFromInputs(globalsSaved)
+    globalsDirty = false
+    globalsError = ''
+    renderGlobals()
     cards = flow.cards
     selected = null
     fields = []
@@ -1403,6 +1637,7 @@ async function runFlow() {
   el.runLog.replaceChildren()
   el.runBox.hidden = false
   el.runBox.open = true
+  activateDockTab('log') // 一跑就把底栏切到日志，省得用户手动找
   const t0 = performance.now()
   try {
     const res = await ppx.call('rpa.startRun', { path: currentPath })

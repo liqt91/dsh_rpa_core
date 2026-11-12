@@ -142,3 +142,33 @@ P1 里工作台先自研了一份四区流程编辑器（指令栏/画布/属性
 `ppx-only` 独占，跨分支改动要靠 `cherry-pick` 显式同步（契约只保证 `branch-scope.json`
 与闸门三分支一致，不保证这两个文件本身同步）。`gui/dist` 仍按 `.gitignore` 不入库，
 换机器后需 `npm run build` 重建。
+
+## 修订 0022-R3（2026-11-12）：原型目录整体共享，撤回「逐文件放行」
+
+### 触发
+
+R2 之后紧接着补拖拽与底栏：拖拽样式要落 `style.css`、底栏结构要落 `index.html`，
+两个文件都仍归 `ppx-only`。为了不越界，实现被迫把 CSS 与整块 DOM 搬进 `main.js`
+运行时注入——**为了避免改一个独占文件，把版式藏进逻辑文件**，这是治理约束制造出来的
+坏味道，不是技术取舍。维护者拍板放宽：当前分支也能编辑 PPX 分支文件。
+
+### 决策
+
+- `.harness/demo/ppx_probe/` **整棵目录从 `ppx-only.exclusive` 移出**，改列进
+  `shared_runtime` 的目录前缀（以 `/` 结尾）。`owner_of()` 支持目录前缀，
+  优先级为 **精确声明 > 目录前缀**：精确 `shared_runtime` 文件与各分支 `exclusive`
+  先判，剩下才落到共享目录兜底。
+- `ppx-only` 保留一条窄的独占域：`app/ppx.toml`、`app/package.json`、
+  `app/pnpm-lock.yaml`、`app/pnpm-workspace.yaml`、`app/ppx.lock` —— 客户端打包配置，
+  工作台没有理由改。ADR 0019 的「原型不 import Qt/gui UI 模块」隔离判据不变。
+- `check_scope_sanity()` 新增目录前缀存在性检查；`branch-scope.json` 与
+  `check_branch_scope.py` 都在 `must_match_across_branches` 里，三分支各提交一次、
+  blob 逐字节相同。
+- **R2 的「精确放行两个文件」作废**，R1 的「不改原型本体」仍只在编辑面范围内作废。
+
+### 后果
+
+编辑器的 DOM 回 `index.html`、版式回 `style.css`、逻辑留 `main.js`，三处各归其位；
+工作台分支以后改原型任意文件都不必再动治理契约。代价是 `ppx-only` 不再拥有原型独占权，
+原型编辑面事实上成为三分支共享资产，跨分支同步仍靠显式 `cherry-pick`。
+`gui/dist` 依旧不入库，换机器要 `npm run build`。
