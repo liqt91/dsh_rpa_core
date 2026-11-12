@@ -1127,7 +1127,7 @@ async function pollCapture() {
     if (!session) return
     let res
     try {
-      res = await ppx.call('rpa.capturePoll', { path: currentPath, captureId: session.id })
+      res = await ppx.call('rpa.capturePoll', { path: currentPath, capture_id: session.id })
     } catch (error) {
       await restoreApp()
       captureSession = null
@@ -1242,8 +1242,8 @@ function openCaptureDialog(captureId, preview) {
     title: elemText('confirmTitle'),
     name: preview.name || '',
     meta,
-    save: (name) => ppx.call('rpa.commitElement', { path: currentPath, captureId, name }),
-    discard: () => ppx.call('rpa.discardCapture', { path: currentPath, captureId }),
+    save: (name) => ppx.call('rpa.commitElement', { path: currentPath, capture_id: captureId, name }),
+    discard: () => ppx.call('rpa.discardCapture', { path: currentPath, capture_id: captureId }),
   })
 }
 
@@ -1275,7 +1275,7 @@ async function openAssetDetail(name) {
     title: elemText('detailTitle'),
     name,
     meta,
-    save: (newName) => ppx.call('rpa.saveElement', { path: currentPath, name, newName }),
+    save: (newName) => ppx.call('rpa.saveElement', { path: currentPath, name, new_name: newName }),
   })
 }
 

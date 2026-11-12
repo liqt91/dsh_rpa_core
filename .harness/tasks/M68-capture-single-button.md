@@ -44,12 +44,12 @@ M66 的六态状态条把**技术分叉和过程状态全摊在面板上**：预
 
 ## 三、后端协议（`app/api/api.py`）
 
-新增：`rpa.commitElement(path, captureId, name)`、`rpa.discardCapture(path, captureId)`、
-`rpa.saveElement(path, name, newName)`。删除：`rpa.pickPlan`、`rpa.writeElement`。
+新增：`rpa.commitElement(path, capture_id, name)`、`rpa.discardCapture(path, capture_id)`、
+`rpa.saveElement(path, name, new_name)`。删除：`rpa.pickPlan`、`rpa.writeElement`。
 
 - **捕获与落盘解耦**：`_hold_captured(entry, descriptor)` 只写 `entry["captured"]` +
   `entry["preview"]`（名称/类型/选择器/匹配数/节点/是否覆盖），`commit_element` 才写
-  `elements/<name>.json`。会话键从「元素名」改成 `(path, captureId)`，`captureId` 由
+  `elements/<name>.json`。会话键从「元素名」改成 `(path, capture_id)`，`capture_id` 由
   `_next_capture_id()` 递增生成——两条捕获并行也不会互相踩。
 - **中文名全链路**：`_valid_element_name` 只挡 `/ \ : * ? " < > | .`、控制字符、首尾空白、
   >48 字、Windows 设备名（CON/PRN/AUX/NUL/COM1-9/LPT1-9），CJK 放行；写盘用
@@ -98,6 +98,27 @@ M66 的六态状态条把**技术分叉和过程状态全摊在面板上**：预
 
 `ruff` 全绿（顺带清掉 `_INSTANCES` 上多余的引号，那是 WNDPROC 那次改动留下的，在上一次全量
 门禁之后才写进去）。
+
+## 五点五、当晚真机事故：参数键 camelCase 配 snake_case（18:05 现场）
+
+交付后第一次真机捕获：**网页元素抓到了（trace 里 `result_received` 时间戳完整），编辑框
+没弹、资产没新增**。逐层排查后根因在前端发出的参数键名：
+
+- 桥层 `ppx_bridge.dispatch` 用 `inspect.signature(handler).bind(**params)` **严格绑定**，
+  没有任何 camelCase → snake_case 换算；
+- main.js 给 `capturePoll/commitElement/discardCapture/saveElement` 发的是 JS 惯例的
+  `captureId` / `newName`，后端参数叫 `capture_id` / `new_name` ⇒ 桥层回
+  `INVALID_PARAMS` ⇒ `ppx.call` 抛异常 ⇒ 前端轮询的 `catch` 静默收尾、会话丢弃——
+  捕获已暂存但永远等不来 ready，用户看到「抓完什么都没发生」。
+- **为什么判据全绿却拦不住**：Python 侧测试用 snake_case 直连 handler、DOM shim 用的是
+  假 `ppx`——没有一条判据走「真实参数名」这条路（正是「判据要覆盖用户实际走的路」）。
+
+修复：main.js 四处参数键统一回仓内约定 snake_case（`capture_id` / `new_name`，与既有
+`node_id` / `run_id` 一致）；新增固定门禁
+`.harness/scripts/check_rpc_wire_contract.py`——静态抽取 main.js 每处
+`ppx.call('字面量方法', {字面量对象})` 的顶层键，与 AST 解析出的 api.py 签名做
+「键 ⊆ 参数 且 必填参数 ⊆ 键」双向校验（动态方法/参数单列计数不强判）。负向验证：
+把 `capture_id` 改回 `captureId` 注入一次，门禁按行号精准报红，md5 逐字节还原。
 
 ## 六、欠账
 

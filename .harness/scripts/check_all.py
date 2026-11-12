@@ -32,6 +32,10 @@ commands = [
     # 元素编排层的**动态**契约（M68）：真跑 resolve_target / 能力闸 / 暂存不落盘 /
     # 中文名入库 / 改名联动引用。只扫源码证明不了「捕获时真的没写文件」这类假绿灯。
     [sys.executable, str(ROOT / ".harness" / "scripts" / "check_element_pick_contract.py")],
+    # RPC 线上参数契约（M68 真机事故补闸）：main.js 每处 ppx.call 字面量的参数键必须
+    # 与 api.py 签名**逐字绑定**（桥层是 inspect.signature.bind 严格匹配，camelCase 键
+    # 配 snake_case 参数会让前端轮询在桥层静默死掉——「捕获完了什么都没发生」）。
+    [sys.executable, str(ROOT / ".harness" / "scripts" / "check_rpc_wire_contract.py")],
     # 编辑窗口 ↔ 会话的路径口径（M67）：真跑三种路径形态、桥等价包装、cmd_gui 的 env
     # 注入与 --wait 的失败回传。只扫源码证明不了「中文会话根真能打开」。
     [sys.executable, str(ROOT / ".harness" / "scripts" / "check_editor_workspace_contract.py")],

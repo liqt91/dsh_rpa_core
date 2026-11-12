@@ -109,7 +109,7 @@ CASES: list[dict[str, Any]] = [
     ),
     case(
         "N3", "取消编辑框不再丢弃这次捕获（暂存泄漏）", JS,
-        "    discard: () => ppx.call('rpa.discardCapture', { path: currentPath, captureId }),\n",
+        "    discard: () => ppx.call('rpa.discardCapture', { path: currentPath, capture_id: captureId }),\n",
         "",
         # 删掉这行等于 main.js 里不再出现 discardCapture：行为判据与契约判据都会红。
         {"pick_ui": {UI_DISCARD, UI_CONTRACT}, "library": set(), "contract": set()},

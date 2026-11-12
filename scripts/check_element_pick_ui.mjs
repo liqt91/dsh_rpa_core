@@ -341,7 +341,7 @@ await checkAsync('渲染层：确认才入库，中文名照发', async () => {
   const commit = calls.find((c) => c.name === 'rpa.commitElement')
   assert(commit, '没走确认入库')
   assert(commit.args.name === '搜索框', `名字被改过：${commit.args.name}`)
-  assert(commit.args.captureId === 'c1', `captureId 没带上：${commit.args}`)
+  assert(commit.args.capture_id === 'c1', `capture_id 没带上：${commit.args}`)
   assert(dialogNode().hidden === true, '入库后编辑框没关')
   assert(calls.some((c) => c.name === 'rpa.listElements'), '入库后没刷新资产列表')
 })
@@ -396,7 +396,7 @@ await checkAsync('渲染层：详情打开同一个编辑框，改名走 saveEle
   await saveNode().click()
   await flush()
   const saved = run.calls.find((c) => c.name === 'rpa.saveElement')
-  assert(saved && saved.args.name === 'searchBox' && saved.args.newName === '登录框', `${saved?.args}`)
+  assert(saved && saved.args.name === 'searchBox' && saved.args.new_name === '登录框', `${saved?.args}`)
 })
 
 check('渲染层：待补行只有一个「补一下」，没有类型选择与手写入口', () => {
