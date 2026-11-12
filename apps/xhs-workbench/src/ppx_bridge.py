@@ -4,7 +4,7 @@
 - 注入与 ``ppx_py/bridge.py`` 语义一致的替身（`api_method` 打标 + `BridgeError`
   + 参数绑定 + ``{ok,data,error,requestId}`` 信封），然后按路径 import 原型的
   ``app/api/api.py``，把打了标记的函数收进 registry。
-- 工作台适配（**不改原型本体**，全在这层）：
+- 工作台适配（除「流程控制插入」这一项在原型侧补齐外，其余全在这层）：
   * ``RPA_WORKSPACE`` 指到 ``apps/xhs-workbench``：bootstrap 扫到的就是本目录的
     ``workflows/``，元素资产目录（``<flowDir>/elements``）也随之对齐；
   * ``rpa.bootstrap`` 的 flows 追加扁平布局的 ``workflows/*.json``（原型只扫
@@ -15,7 +15,8 @@
     ``rpa-core resume`` 并把新进程塞回原 entry——runPoll 是文件驱动的
     （events.jsonl/result.json 在同一 run 目录续写），界面无感知。
 
-不做：不改原型任何文件；不装 ppx_py；不碰 ``_flows`` 的 sha 乐观锁语义。
+不做：不装 ppx_py；不碰 ``_flows`` 的 sha 乐观锁语义；不在桥层复制编辑器的渲染逻辑。
+原型侧的「流程控制」插入分组是本工作台与 PPX 原型共用的能力，故落在原型本体（见 api.py）。
 """
 
 from __future__ import annotations
@@ -291,9 +292,14 @@ def _create_flow(name: str) -> dict[str, Any]:
     path = XHS_WORKFLOWS / f"{slug}.json"
     if path.exists():
         raise BridgeError("ALREADY_EXISTS", f"已存在：workflows/{slug}.json")
+    # 文件名可以保留中文，但 Workflow.id 的正则只认 ASCII。全中文名曾写出
+    # `xhs-控制流探针` 这种 id，导致 openFlow / 保存 / 编译一律 ValidationError。
+    ascii_slug = re.sub(r"[^A-Za-z0-9_.-]+", "-", slug).strip("-").lower()
+    if not ascii_slug:
+        ascii_slug = uuid.uuid5(uuid.NAMESPACE_URL, name).hex[:8]
     document = {
         "schema_version": "1.0",
-        "id": f"xhs-{slug}",
+        "id": f"xhs-{ascii_slug}",
         "name": name,
         "inputs": {
             "keyword": "AI效率工具",

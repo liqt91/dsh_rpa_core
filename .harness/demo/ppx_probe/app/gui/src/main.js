@@ -7,6 +7,16 @@ const DEPTH = ['#0969da', '#1a7f37', '#9a6700', '#8250df', '#bc4c00', '#0598bc']
 // 四种节点形态都能在界面上点到（`struct_probe.py` 每次运行都会重建这份夹具）。
 const DEMO_FLOW = '.harness/demo/ppx_probe/_sandbox/struct.json'
 
+/* 控制流是 workflow AST 节点，不是 catalog 里的 manifest 命令（AGENTS.md 规则 1）。
+   所以它们不进 89 条指令的分组，单独一组，点击走 rpa.insertControlNode。
+   id 必须与后端 _CONTROL_TEMPLATES 的键一致。 */
+const CONTROL_NODES = [
+  { id: 'if', label: '如果 / 否则', control: true },
+  { id: 'forEach', label: '循环每一项', control: true },
+  { id: 'try', label: '尝试 / 捕获', control: true },
+  { id: 'return', label: '返回', control: true },
+]
+
 const el = {
   status: document.querySelector('#status'),
   picker: document.querySelector('#flowPicker'),
@@ -80,20 +90,39 @@ function renderCommands(list) {
       el.cmds.append(row)
     }
   }
+  // 控制流与搜索框共用一份过滤：搜「如果」也要能找到它。cmdCount 仍只数 catalog 指令。
+  const q = el.search.value.trim().toLowerCase()
+  const controls = q
+    ? CONTROL_NODES.filter((c) => c.id.toLowerCase().includes(q) || c.label.includes(q))
+    : CONTROL_NODES
+  if (controls.length) {
+    el.cmds.append(mk('div', 'nsGroup', `流程控制 · ${controls.length}`))
+    for (const c of controls) {
+      const row = mk('div', 'cmd')
+      row.append(mk('span', null, c.label))
+      row.title = `插入结构节点：${c.id}`
+      row.addEventListener('click', () => insertCommand(c))
+      el.cmds.append(row)
+    }
+  }
   el.cmdCount.textContent = `${list.length} 条`
 }
 
 /** 插入一个真节点。落点由服务端按「anchor 所属分支末尾」决定，前端只出 anchor。 */
 async function insertCommand(command) {
   if (!currentPath) return
-  const anchor = selected?.id || ''
+  // 选中「否则 / 异常」这类虚拟组行时，锚点是它的父容器 + 分支键；
+  // 选中普通卡片时沿用原语义（容器进默认分支、叶子进父容器的当前分支）。
+  const isGroup = selected?.kind === 'group'
+  const anchor = isGroup ? selected.parentId : (selected?.id || '')
+  const branch = isGroup ? selected.branch : ''
   const t0 = performance.now()
   try {
-    const res = await ppx.call('rpa.insertNode', {
-      path: currentPath,
-      command: command.id,
-      anchor_id: anchor,
-    })
+    const rpc = command.control ? 'rpa.insertControlNode' : 'rpa.insertNode'
+    const args = { path: currentPath, anchor_id: anchor, branch }
+    if (command.control) args.kind = command.id
+    else args.command = command.id
+    const res = await ppx.call(rpc, args)
     if (!res.ok) {
       setStatus(`插入失败 ${res.code}：${res.error}`)
       return
@@ -158,11 +187,26 @@ function renderCards() {
   for (const card of cards) {
     const depth = card.depth || 0
     if (card.kind === 'group') {
-      const group = mk('div', 'card group')
+      const group = mk(
+        'div',
+        'card group' + (selected && card.id && card.id === selected.id ? ' selected' : ''),
+      )
       // 组行也要参与缩进与竖线，否则「则执行 / 否则 / 异常」会漂在父节点左边的同一列
       group.dataset.depth = String(depth)
       group.style.setProperty('--depth-n', String(depth))
       group.append(mk('span', 'gtag', '↳'), mk('span', 'gname', card.label))
+      // 组行不是 AST 节点，但它是「往这条分支插节点」的唯一可见落点：可点、可键盘选中。
+      if (card.branch) {
+        group.title = `选中后点左侧指令，新节点会插进「${card.label}」分支`
+        group.tabIndex = 0
+        group.setAttribute('role', 'button')
+        group.addEventListener('click', () => selectCard(card))
+        group.addEventListener('keydown', (event) => {
+          if (event.key !== 'Enter' && event.key !== ' ') return
+          event.preventDefault()
+          selectCard(card)
+        })
+      }
       el.cards.append(group)
       continue
     }
@@ -392,6 +436,20 @@ function renderForm() {
 
 async function selectCard(card) {
   if (isDirty() && !window.confirm('当前改动还没保存，切换会丢弃。继续？')) return
+  if (card.kind === 'group') {
+    // 虚拟组行没有节点详情可查，它的作用只是给下一次插入指定 branch。
+    selected = card
+    fields = []
+    groups = []
+    baseline = {} // 不清会留下上次节点的脏标记，下一次选择弹「改动还没保存」
+    renderCards()
+    renderForm()
+    el.detail.textContent =
+      `分支锚点：${card.label}（${card.branch}）\n父节点：${card.parentId}\n\n` +
+      '点左侧任意指令或控制流节点，会插进这条分支。'
+    setStatus(`已选中「${card.label}」分支 · 点左侧指令插入`)
+    return
+  }
   selected = card
   formError = null
   const hadFocus = el.cards.contains(document.activeElement)

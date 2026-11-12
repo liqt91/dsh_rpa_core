@@ -25,7 +25,9 @@
   "shared_runtime": [
     "workbuddy-suite/skills/workflow-studio/scripts/studio.py",
     "workbuddy-suite/skills/workflow-studio/references/protocol.md",
-    "bin/rpa-skill.mjs"
+    "bin/rpa-skill.mjs",
+    ".harness/demo/ppx_probe/app/api/api.py",
+    ".harness/demo/ppx_probe/app/gui/src/main.js"
   ],
   "governance": [
     ".harness/branch-scope.json",

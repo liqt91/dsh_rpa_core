@@ -974,6 +974,49 @@
 - [ ] UI、DSH、MCP、调度器和安装器集成（`planned`）
   - 逐项放行与否以 ADR 0006 结论为准；操控型 HTTP 推迟不变。
 
+- [ ] **PPX 原型编辑器（含工作台复用版）缺「控制流」插入入口**（`wip`，2026-11-12 已实现并本机验证；**入库方式待拍板**）
+  - 引擎不缺：`IfNode(then/else)`、`ForEachNode`、`TryNode(children/catch)`、`ReturnNode` 都是一等工作流
+    AST 节点，compiler 与 orchestrator 都执行；`AGENTS.md` 规则 1 与 `compiler.py:353` 明令控制流
+    **不得**做成 manifest 命令。所以指令栏按设计只有 `browser/data/desktop/ocr/workflow` 五组 89 条。
+  - 回归点：旧 Web 编辑器 M11 曾有「控制流」分组，可拖入 `sequence/if/forEach/try/return` 并自动带
+    标准子结构（`M11-editor-tree.md:19,25-26,32,41`）；换到 PPX 原型后只迁了「显示 + 编辑已有节点」
+    （`api.py:541-628` 摊平画布、`_structural_fields` 属性表单），**新建节点的唯一 RPC
+    `rpa.insertNode` 硬编码 `type:"action"` 且校验 `command in catalog`（`api.py:993-1029`）**，
+    物理上产不出控制流节点。ADR 0022-R1 的「含 if/forEach/try 结构编辑」措辞未登记这个回归。
+  - 工作台默认主流程 `workflows/xhs_product_search.json` 是 11 action + 1 sequence，一个控制流节点都没有
+    ⇒ 用户打开编辑器看不到「如果/尝试」，观感上像「少了指令」。
+  - **2026-11-12 已落地（维护者拍板「改原型」）**：`api.py` 加 `rpa.insertControlNode`
+    （if/forEach/try/return 带标准空分支）、`_insert_plan` 支持 branch、虚拟组行空分支也出
+    且带 `parentId`/`branch`；`main.js` 加「流程控制 · 4」分组 + 组行可点选。dist 已重建。
+    10 条负向验证全红且逐字节还原（`.harness/spike/negative_control_flow.py`），全门禁
+    `FULL GATE PASSED`，HTTP 冒烟（`.harness/spike/probe_editor_http.py`）三项全通。
+  - **卡点**：见下面「分支治理」条——原型路径归 `ppx-only` 独占，在 `xhs-workbench` 分支
+    暂存即触发 `BRANCH SCOPE CHECK FAILED`（实测 staged 两条）。改动目前只在工作区，未提交。
+
+- [ ] **`workflow_doc.flatten_steps` 会把真实控制流的分支体丢掉**（`wip`，2026-11-12 已修；随上条一起待入库）
+  - `apps/xhs-workbench/src/workflow_doc.py:97` 只递归 `children`，但真实 AST 里 `if` 的分支体在
+    `then`/`else`、`try` 的捕获体在 `catch` ⇒ 控制台「流程」只读面板会**整段漏显示**；`forEach`
+    又不在 `CONTAINER_TYPES` 里，会被拍平而不缩进。不影响运行（面板只读）。
+  - `tests/test_workflow_doc.py:39-58` 的 fixture 把 `if` 写成带 `children` 的假节点，与真实 AST 不符，
+    恰好把这条行为盖住了 ⇒ 修的时候先按 `model/workflow.py` 的真实形状重写 fixture 并做负向验证。
+  - **2026-11-12 已修**：`CONTAINER_BRANCHES` 按真实 AST 列各容器的子列表键（if→then/else、
+    try→children/catch、forEach→children），步骤新增 `branch` 字段；fixture 改真实形状并加
+    `Workflow.model_validate` 判据钉住真实性，另补四种控制流全覆盖用例。负向验证 A/B/C 三条均红。
+  - **顺手修**：`xhs.createFlow` 全中文名会写出 `xhs-控制流探针` 这种非 ASCII id，导致
+    openFlow/保存/编译一律 ValidationError；id 改 ASCII slug（全中文名用 uuid5 前 8 位）。
+    负向验证 G 打中它。
+
+- [ ] **分支治理与「工作台复用原型」结构矛盾**（`planned`，2026-11-12 取证，待维护者拍板）
+  - `.harness/branch-scope.json` 把 `.harness/demo/ppx_probe/` 整目录划给 `ppx-only` 独占，
+    而 ADR 0022-R1 让 `xhs-workbench` 在运行时直接装载原型的 `api.py` + `gui/dist`。
+    拆分点的原型够用时没矛盾；一旦工作台要**增强**原型，就会撞墙：在 xhs-workbench 分支
+    提交原型路径 ⇒ `check_branch_scope.py` 红（实测 staged 两条越界）。
+  - 另外 `xhs-workbench` 分支上根本没有 `apps/xhs-workbench/`（在 ppx-only 分支上没有），
+    所以「改原型 + 修工作台」这两件事按现行契约无法落在同一次提交里。
+  - 两条路：① 把「被工作台复用的编辑面」从独占域移到 `shared_runtime`（治理文件三分支
+    同步提交，一次性解掉结构矛盾）；② 原型改动只入 ppx-only，本机工作区保留未提交副本，
+    换机器/换分支后工作台会退回旧编辑器。**推荐 ①，未拍板前不动治理文件。**
+
 > 已删除条目：原「桌面客户端编辑器薄壳（ADR 0010 重估条件）」——ADR 0016 已定 GUI 为唯一
 > 主力形态，该条目（「确认非开发者用户为主力后再立项薄壳」）不再适用。
 

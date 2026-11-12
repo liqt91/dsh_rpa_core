@@ -6,6 +6,8 @@
 from __future__ import annotations
 
 import json
+import re
+import sys
 from pathlib import Path
 
 import pytest
@@ -194,3 +196,105 @@ def test_dispatched_run_poll_writes_snapshot_end_to_end(tmp_path: Path) -> None:
     latest = ctx.store.latest("端到端关键词")
     assert latest is not None and latest.count == 2
     assert ctx.monitor.get("端到端关键词").state == "ok"
+
+
+def _flow_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[str, Path]:
+    """把新建流程落到临时工作区：_flow_path 认 api.WORKSPACE，_create_flow 认 XHS_WORKFLOWS。"""
+    (tmp_path / "workflows").mkdir()
+    monkeypatch.setattr(pb, "XHS_WORKFLOWS", tmp_path / "workflows")
+    api = pb._load_api()
+    monkeypatch.setattr(api, "WORKSPACE", tmp_path)
+    created = pb._create_flow("控制流探针")
+    # 桥层是单例：上一条用例可能在 _flows 里留下同名 path 的 sha，乐观锁会误判 FLOW_CHANGED
+    api._flows.pop(created["path"], None)
+    return created["path"], tmp_path / "workflows" / "控制流探针.json"
+
+
+def test_insert_control_node_writes_real_ast_and_exposes_branch_anchors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """用户走的那条路：工作台 RPC → 原型 api → 磁盘 workflow → 画布组行 → 往分支再插。"""
+    path, fp = _flow_fixture(tmp_path, monkeypatch)
+    for kind in ("if", "forEach", "try", "return"):
+        env = pb.dispatch("rpa.insertControlNode", {"path": path, "kind": kind})
+        assert env["ok"] is True, env
+        assert env["data"]["ok"] is True, env["data"]
+        assert env["data"]["kind"] == kind
+        assert env["data"]["compile"]["ok"] is True
+        last = env["data"]
+
+    doc = json.loads(fp.read_text(encoding="utf-8"))
+    nodes = doc["root"]["children"]
+    assert [n["type"] for n in nodes] == ["if", "forEach", "try", "return"]
+    assert nodes[0]["then"] == [] and nodes[0]["else"] == []
+    assert nodes[0]["condition"]["op"] == "truthy"
+    assert nodes[1]["children"] == [] and nodes[1]["item_var"] == "item"
+    assert nodes[2]["children"] == [] and nodes[2]["catch"] == []
+
+    # 空分支也必须出虚拟组行，否则前端找不到「否则 / 异常」的落点
+    cards = last["flow"]["cards"]
+    anchors = {(c.get("parentId"), c.get("branch")) for c in cards if c["kind"] == "group"}
+    assert (nodes[0]["id"], "then") in anchors
+    assert (nodes[0]["id"], "else") in anchors
+    assert (nodes[2]["id"], "catch") in anchors
+
+    # 前端选中「否则」组行时发的参数：anchor_id=父容器 id + branch
+    env = pb.dispatch(
+        "rpa.insertNode",
+        {"path": path, "command": "data.log", "anchor_id": nodes[0]["id"], "branch": "else"},
+    )
+    assert env["ok"] is True and env["data"]["ok"] is True
+    assert env["data"]["placed"]["branch"] == "else"
+    doc2 = json.loads(fp.read_text(encoding="utf-8"))
+    assert doc2["root"]["children"][0]["else"][0]["command"] == "data.log"
+
+
+def test_insert_control_node_rejects_unknown_kind_without_writing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path, fp = _flow_fixture(tmp_path, monkeypatch)
+    before = fp.read_bytes()
+    env = pb.dispatch("rpa.insertControlNode", {"path": path, "kind": "while"})
+    assert env["ok"] is True  # 信封成功，业务失败在 data.code
+    assert env["data"]["code"] == "UNKNOWN_CONTROL_KIND"
+    assert fp.read_bytes() == before
+
+
+def test_editor_palette_wires_control_flow_group_to_new_rpc() -> None:
+    """编辑面接线：左栏分组、四种节点、点击走新 RPC、虚拟组行的 branch 回传。
+
+    这是静态判据（前端没有 headless 测试宿主），所以负向验证必须证明每条都能红：
+    `.harness/spike/negative_control_flow.py` 的 I / J 两例分别打掉这两处。
+    """
+    main_js = (
+        APP.parents[1]
+        / ".harness"
+        / "demo"
+        / "ppx_probe"
+        / "app"
+        / "gui"
+        / "src"
+        / "main.js"
+    ).read_text(encoding="utf-8")
+    assert "流程控制 · ${controls.length}" in main_js
+    assert "'rpa.insertControlNode'" in main_js
+    for kind in ("if", "forEach", "try", "return"):
+        assert f"{{ id: '{kind}'" in main_js
+    assert "const branch = isGroup ? selected.branch : ''" in main_js
+    assert "if (card.branch)" in main_js
+
+
+def test_create_flow_id_is_valid_for_chinese_name(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """全中文名曾写出 `xhs-控制流探针` 这种 id，openFlow/保存/编译一律 ValidationError。"""
+    monkeypatch.setattr(pb, "XHS_WORKFLOWS", tmp_path)
+    pb._create_flow("控制流探针")
+    doc = json.loads((tmp_path / "控制流探针.json").read_text(encoding="utf-8"))
+    assert re.fullmatch(r"[A-Za-z][A-Za-z0-9_.-]*", doc["id"])
+    repo_src = APP.parents[1] / "src"
+    if str(repo_src) not in sys.path:
+        sys.path.insert(0, str(repo_src))
+    from rpa_core.model.workflow import Workflow
+
+    assert Workflow.model_validate(doc).id == doc["id"]

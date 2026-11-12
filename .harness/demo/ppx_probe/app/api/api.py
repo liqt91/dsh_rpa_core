@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import atexit
+import copy
 import hashlib
 import json
 import logging
@@ -530,6 +531,10 @@ def _compact(value: Any, limit: int = 18) -> str:
 
 
 def _condition_summary(condition: dict[str, Any]) -> str:
+    # 新插入的 if 条件左值留空（不能编造 ${inputs.xxx}，编译期会查引用是否存在），
+    # 卡片上要直说「待设置」，别显示成 " truthy" 这种像坏了的样子。
+    if condition.get("left") in (None, ""):
+        return "待设置条件"
     left = _compact(condition.get("left"))
     op = condition.get("op", "")
     right = condition.get("right")
@@ -552,8 +557,21 @@ class _Flattener:
             card.setdefault("no", self._seq)
         self.cards.append(card)
 
-    def group(self, label: str, depth: int) -> None:
-        self.add(kind="group", label=label, depth=depth, command="", summary="")
+    def group(self, label: str, depth: int, parent_id: str = "", branch: str = "") -> None:
+        """虚拟组行同时是「往这条分支插节点」的锚点：前端选中它后把 parentId+branch 传回来。
+
+        空分支也要出组行，否则用户插入一个 if/try 之后根本找不到「否则 / 异常」的落点。
+        """
+        self.add(
+            kind="group",
+            label=label,
+            depth=depth,
+            command="",
+            summary="",
+            id=f"{parent_id}::{branch}" if parent_id and branch else "",
+            parentId=parent_id,
+            branch=branch,
+        )
 
     def walk(self, node: dict[str, Any], depth: int) -> None:
         kind = node.get("type")
@@ -585,14 +603,12 @@ class _Flattener:
                 label="如果",
                 summary=_condition_summary(cond),
             )
-            self.group("则执行", depth + 1)
+            self.group("则执行", depth + 1, node_id, "then")
             for child in node.get("then") or []:
                 self.walk(child, depth + 1)
-            alt = node.get("else") or []
-            if alt:
-                self.group("否则", depth + 1)
-                for child in alt:
-                    self.walk(child, depth + 1)
+            self.group("否则", depth + 1, node_id, "else")
+            for child in node.get("else") or []:
+                self.walk(child, depth + 1)
         elif kind == "forEach":
             self.add(
                 kind="forEach",
@@ -612,11 +628,9 @@ class _Flattener:
             )
             for child in node.get("children") or []:
                 self.walk(child, depth + 1)
-            caught = node.get("catch") or []
-            if caught:
-                self.group("异常", depth + 1)
-                for child in caught:
-                    self.walk(child, depth + 1)
+            self.group("异常", depth + 1, node_id, "catch")
+            for child in node.get("catch") or []:
+                self.walk(child, depth + 1)
         else:
             self.add(
                 kind="unknown",
@@ -965,14 +979,27 @@ def _allocate_id(document: dict[str, Any]) -> str:
 
 
 def _insert_plan(
-    document: dict[str, Any], anchor_id: str
+    document: dict[str, Any], anchor_id: str, branch: str = ""
 ) -> tuple[dict[str, Any], str, dict[str, Any] | None]:
     """算出「插到哪个 dict 的哪个列表里」。
 
     返回 (目标容器, 分支键, 锚点节点)。第三个值只用于回报位置：真正的落点由
     「分支末尾」决定，锚点本身不参与定位（这正是与「紧跟锚点之后」的区别）。
+
+    branch 非空时来自画布上选中的虚拟组行（如「否则」「异常」）：anchor_id 是
+    该组行的父容器节点 id，落点直接取它的这条分支。
     """
     root = document.get("root") or {}
+    if branch:
+        if branch not in _NESTED:
+            raise ValueError(f"未知分支：{branch}")
+        located = _locate(root, anchor_id) if anchor_id else None
+        if located is None:
+            raise ValueError(f"分支所属节点不存在：{anchor_id}")
+        container = located[3]
+        if container.get("type") not in _CONTAINERS:
+            raise ValueError(f"{anchor_id} 不是容器，没有 {branch} 分支")
+        return container, branch, container
     if not anchor_id:
         if root.get("type") not in _CONTAINERS:
             raise ValueError(f"根节点是 {root.get('type')}，不是一个可以追加子节点的容器")
@@ -991,8 +1018,13 @@ def _insert_plan(
 
 
 @api_method("rpa.insertNode")
-def insert_node(path: str, command: str, anchor_id: str = "") -> dict[str, Any]:
-    """按命令插一个新 action 节点（`with` 为空，与 Qt `create_action_item` 一致）。"""
+def insert_node(
+    path: str, command: str, anchor_id: str = "", branch: str = ""
+) -> dict[str, Any]:
+    """按命令插一个新 action 节点（`with` 为空，与 Qt `create_action_item` 一致）。
+
+    branch 由前端选中「否则 / 异常」这类虚拟组行时给出，指定落到容器的哪条分支。
+    """
     started = time.perf_counter()
     target = _flow_path(path)
     document, raw = _read_document(target)
@@ -1014,7 +1046,7 @@ def insert_node(path: str, command: str, anchor_id: str = "") -> dict[str, Any]:
         }
 
     try:
-        container, branch, anchor = _insert_plan(document, anchor_id)
+        container, target_branch, anchor = _insert_plan(document, anchor_id, branch)
     except ValueError as exc:
         return {
             "ok": False,
@@ -1025,7 +1057,7 @@ def insert_node(path: str, command: str, anchor_id: str = "") -> dict[str, Any]:
 
     node_id = _allocate_id(document)
     new_node = {"type": "action", "id": node_id, "command": command, "with": {}}
-    bucket = container.setdefault(branch, [])
+    bucket = container.setdefault(target_branch, [])
     bucket.append(new_node)
 
     try:
@@ -1047,7 +1079,79 @@ def insert_node(path: str, command: str, anchor_id: str = "") -> dict[str, Any]:
         "newNodeId": node_id,
         "placed": {
             "parent": container.get("id") or "root",
-            "branch": branch,
+            "branch": target_branch,
+            "index": len(bucket) - 1,
+            "anchor": anchor.get("id") if anchor else None,
+        },
+        "bytes": [len(raw), len(encoded)],
+        "sha": _sha256(encoded)[:12],
+        "ms": round((time.perf_counter() - started) * 1000, 1),
+        "compile": compile_result,
+        "flow": flow,
+    }
+
+
+# 控制流节点的标准初始形状，对齐 src/rpa_core/model/workflow.py 的判别联合。
+# ★ 控制流是 AST 节点，不是 manifest 命令（AGENTS.md 规则 1；compiler.py 会主动拒绝
+#   `command="if"` 这类写法）。所以另开一条插入通道，不往 catalog 里塞任何东西。
+_CONTROL_TEMPLATES: dict[str, dict[str, Any]] = {
+    "if": {"type": "if", "condition": {"op": "truthy", "left": ""}, "then": [], "else": []},
+    "forEach": {"type": "forEach", "items": [], "item_var": "item", "children": []},
+    "try": {"type": "try", "children": [], "catch": [], "error_var": "error"},
+    "return": {"type": "return", "value": None},
+}
+
+
+@api_method("rpa.insertControlNode")
+def insert_control_node(
+    path: str, kind: str, anchor_id: str = "", branch: str = ""
+) -> dict[str, Any]:
+    """插入控制流结构节点，带齐标准空分支；落点语义与 insert_node 完全一致。"""
+    started = time.perf_counter()
+    target = _flow_path(path)
+    document, raw = _read_document(target)
+
+    def failed(code: str, message: str) -> dict[str, Any]:
+        return {
+            "ok": False,
+            "code": code,
+            "error": message,
+            "ms": round((time.perf_counter() - started) * 1000, 1),
+        }
+
+    entry = _flows.get(path)
+    if entry is not None and entry["sha"] != _sha256(raw):
+        return failed("FLOW_CHANGED", "文件在打开后被其他程序改过，已拒绝覆盖（重新打开流程再改）")
+    template = _CONTROL_TEMPLATES.get(kind)
+    if template is None:
+        return failed("UNKNOWN_CONTROL_KIND", f"不支持的控制流节点：{kind}")
+
+    try:
+        container, target_branch, anchor = _insert_plan(document, anchor_id, branch)
+    except ValueError as exc:
+        return failed("INVALID_ANCHOR", str(exc))
+
+    node_id = _allocate_id(document)
+    new_node = {"id": node_id, **copy.deepcopy(template)}
+    bucket = container.setdefault(target_branch, [])
+    bucket.append(new_node)
+
+    try:
+        Workflow.model_validate(document)
+    except Exception as exc:  # noqa: BLE001 - 校验失败按「不写盘」处理
+        return failed("INVALID_WORKFLOW", f"插入后结构不合法，未写盘：{type(exc).__name__}: {exc}")
+
+    encoded = _encode_document(document)
+    target.write_bytes(encoded)
+    compile_result = _compile(document)
+    flow = open_flow(path)
+    return {
+        "ok": True,
+        "newNodeId": node_id,
+        "kind": kind,
+        "placed": {
+            "parent": container.get("id") or "root",
+            "branch": target_branch,
             "index": len(bucket) - 1,
             "anchor": anchor.get("id") if anchor else None,
         },

@@ -112,3 +112,33 @@ P1 里工作台先自研了一份四区流程编辑器（指令栏/画布/属性
 运行/停止），能力层升级自动对齐；自研四区编辑器退役（其「暂停/继续」由桥层对
 `control.json` 的原子写补足——那是文件契约，不是 import）。风险：原型未转正
 （ADR 0019 退出条件未全过），若原型大改，桥层要跟着修——这是本次松绑明确接受的代价。
+
+## 修订 0022-R2（2026-11-12）：允许改原型的「共享编辑面」
+
+### 触发
+
+维护者指出编辑器里没有「如果 / 则」「尝试 / 捕获」。取证结论：能力层一直有
+`IfNode` / `ForEachNode` / `TryNode` / `ReturnNode`，旧 Web 编辑器 M11 也有可拖入的
+「控制流」分组；**迁移到 PPX 原型时只迁了「显示 + 编辑已存在节点」，没迁「新建入口」**
+（唯一的 `rpa.insertNode` 硬编码 `type:"action"` 且只收 catalog 命令）。R1 后果段
+「含 if/forEach/try 结构编辑」按当时实测应理解为**只含编辑已有节点**，不含新建。
+
+### 决策
+
+- **R1 的「不改 PPX 原型本体」作废，但只作废编辑面这一条**：原型
+  `app/api/api.py` 与 `app/gui/src/main.js` 允许被工作台分支修改，用于补
+  `rpa.insertControlNode`、虚拟组行的 `branch` 锚点与左栏「流程控制」分组。
+  其余原型文件（窗口 / 启动器 / 打包 / 探针）仍归 `ppx-only`，ADR 0019 的隔离判据不变。
+- **控制流仍是 AST 节点，不是 manifest 命令**：AGENTS.md 规则 1 与 `compiler.py` 的
+  `Control flow cannot be a command` 不动，catalog 仍是 89 条，不新增任何命令。
+- 治理配套：`.harness/branch-scope.json` 的 `shared_runtime` **精确列出这两个文件**
+  （不是整个原型目录），`owner_of()` 先查 shared_runtime 再查 exclusive；
+  该文件在 `must_match_across_branches` 里，故三分支各提交一次、blob 逐字节相同。
+  理由与口径见 `docs/branch-ownership.md` 的「共享编辑面」一节。
+
+### 后果
+
+工作台与 PPX 原型共用一套编辑能力，一处改两端受益；代价是原型编辑面不再是
+`ppx-only` 独占，跨分支改动要靠 `cherry-pick` 显式同步（契约只保证 `branch-scope.json`
+与闸门三分支一致，不保证这两个文件本身同步）。`gui/dist` 仍按 `.gitignore` 不入库，
+换机器后需 `npm run build` 重建。

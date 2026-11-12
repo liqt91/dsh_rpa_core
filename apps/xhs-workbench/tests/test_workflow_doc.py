@@ -2,12 +2,54 @@
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
+from typing import Any
 
 from src.workflow_doc import command_label, describe, flatten_steps
 
 APP = Path(__file__).resolve().parents[1]
 WF = APP / "workflows" / "xhs_product_search.json"
+
+
+def _action(node_id: str) -> dict[str, Any]:
+    return {"type": "action", "id": node_id, "command": "data.log", "with": {}}
+
+
+def _control_flow_doc() -> dict[str, Any]:
+    """真实 AST 形状：if 用 then/else，try 用 children/catch，forEach 用 children。"""
+    return {
+        "id": "probe",
+        "name": "控制流探针",
+        "root": {
+            "type": "sequence",
+            "id": "root",
+            "children": [
+                {
+                    "type": "if",
+                    "id": "if1",
+                    "condition": {"op": "eq", "left": 1, "right": 1},
+                    "then": [_action("then_step")],
+                    "else": [_action("else_step")],
+                },
+                {
+                    "type": "try",
+                    "id": "try1",
+                    "error_var": "err",
+                    "children": [_action("try_step")],
+                    "catch": [_action("catch_step")],
+                },
+                {
+                    "type": "forEach",
+                    "id": "loop1",
+                    "items": [1, 2],
+                    "item_var": "row",
+                    "children": [_action("loop_step")],
+                },
+                _action("tail"),
+            ],
+        },
+    }
 
 
 def test_flatten_keeps_source_order_and_indexes() -> None:
@@ -37,6 +79,7 @@ def test_flatten_keeps_source_order_and_indexes() -> None:
 
 
 def test_container_nodes_are_descended_into_not_listed() -> None:
+    """if 的分支体在 then/else，不在 children——旧 fixture 写成 children 正好盖住了漏显示。"""
     doc = {
         "root": {
             "type": "sequence",
@@ -45,9 +88,11 @@ def test_container_nodes_are_descended_into_not_listed() -> None:
                 {
                     "type": "if",
                     "id": "branch",
-                    "children": [
+                    "condition": {"op": "truthy", "left": "${inputs.flag}"},
+                    "then": [
                         {"type": "action", "id": "inner", "command": "browser.click", "with": {}},
                     ],
+                    "else": [],
                 },
                 {"type": "action", "id": "after", "command": "browser.close", "with": {}},
             ],
@@ -56,6 +101,45 @@ def test_container_nodes_are_descended_into_not_listed() -> None:
     steps = flatten_steps(doc)
     assert [s["id"] for s in steps] == ["inner", "after"]
     assert steps[0]["depth"] == 1  # 进入一层容器后深度 +1，前端可据此缩进
+    assert steps[0]["branch"] == "then"
+    assert steps[1]["depth"] == 0
+
+
+def test_control_flow_branches_are_all_visited() -> None:
+    """if 的 then/else、try 的 children/catch、forEach 的 children 一个都不能丢。"""
+    steps = flatten_steps(_control_flow_doc())
+    assert [s["id"] for s in steps] == [
+        "then_step",
+        "else_step",
+        "try_step",
+        "catch_step",
+        "loop_step",
+        "tail",
+    ]
+    assert [s["branch"] for s in steps] == [
+        "then",
+        "else",
+        "children",
+        "catch",
+        "children",
+        "children",
+    ]
+    assert [s["depth"] for s in steps] == [1, 1, 1, 1, 1, 0]
+    # 控制流节点自身不是可执行指令，不该占一个步骤
+    assert all(s["command"] == "data.log" for s in steps)
+
+
+def test_control_flow_fixture_is_a_real_workflow_ast() -> None:
+    """钉住 fixture 的真实性：谁把它改回 `if.children`，模型先红。"""
+    repo_src = APP.parents[1] / "src"
+    if str(repo_src) not in sys.path:
+        sys.path.insert(0, str(repo_src))
+    from rpa_core.model.workflow import Workflow
+
+    model = Workflow.model_validate(_control_flow_doc())
+    root = model.root
+    assert root.type == "sequence"
+    assert [child.type for child in root.children] == ["if", "try", "forEach", "action"]
 
 
 def test_unknown_command_falls_back_to_command_id() -> None:

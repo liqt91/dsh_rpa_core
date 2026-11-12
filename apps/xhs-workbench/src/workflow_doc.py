@@ -28,8 +28,17 @@ COMMAND_LABELS = {
     "data.writeText": "写入文本文件",
 }
 
-# 容器节点：自身没有 command，只有 children。摊平时下钻，不单独成一个步骤。
-CONTAINER_TYPES = {"sequence", "if", "loop", "parallel", "try", "branch"}
+# 各容器节点的子列表键，按 src/rpa_core/model/workflow.py 的真实形状写。
+# ★ 不是所有容器都叫 children：if 的分支体在 then / else，try 的捕获体在 catch。
+# 键的顺序就是摊平顺序（先「则」后「否则」、先「尝试」后「异常」）。
+CONTAINER_BRANCHES: dict[str, tuple[str, ...]] = {
+    "sequence": ("children",),
+    "forEach": ("children",),
+    "if": ("then", "else"),
+    "try": ("children", "catch"),
+}
+# 旧流程里出现过的容器别名仍按 children 下钻，避免在只读面板里整段消失。
+CONTAINER_TYPES = frozenset(CONTAINER_BRANCHES) | {"loop", "parallel", "branch"}
 
 
 def command_label(command: str) -> str:
@@ -69,11 +78,18 @@ def load_command_labels(i18n_js: str | Path) -> dict[str, str]:
 def flatten_steps(
     document: dict[str, Any], labels: dict[str, str] | None = None
 ) -> list[dict[str, Any]]:
-    """深度优先摊平 root，只输出可执行的 action 节点。"""
+    """深度优先摊平 root，只输出可执行的 action 节点。
+
+    控制流节点本身不进列表，但它们的**每条分支体**都要下钻；`branch` 记下这条
+    action 落在父容器的哪个分支（then / else / catch / children），供面板分组用。
+    """
     label_map = labels or COMMAND_LABELS
     steps: list[dict[str, Any]] = []
 
-    def walk(node: Any, depth: int) -> None:
+    def branches_of(node_type: str) -> tuple[str, ...]:
+        return CONTAINER_BRANCHES.get(node_type, ("children",))
+
+    def walk(node: Any, depth: int, branch: str = "") -> None:
         if not isinstance(node, dict):
             return
         command = str(node.get("command") or "")
@@ -87,6 +103,7 @@ def flatten_steps(
                     "command": command,
                     "label": label_map.get(command, command),
                     "depth": depth,
+                    "branch": branch,
                     "args": node.get("with") or {},
                     "exprModes": node.get("_exprModes") or {},
                     "elementRefs": node.get("elementRefs") or {},
@@ -94,16 +111,20 @@ def flatten_steps(
                 }
             )
             return
-        for child in node.get("children") or []:
-            walk(child, depth + (1 if node_type in CONTAINER_TYPES else 0))
+        for key in branches_of(node_type):
+            for child in node.get(key) or []:
+                walk(child, depth + (1 if node_type in CONTAINER_TYPES else 0), key)
 
-    walk_root = document.get("root") or {}
-    if isinstance(walk_root, dict) and walk_root.get("command"):
-        walk(walk_root, 0)
-    else:
-        # root 一般是 sequence 容器，它本身不算一层缩进
-        for child in (walk_root.get("children") or []) if isinstance(walk_root, dict) else []:
-            walk(child, 0)
+    root = document.get("root") or {}
+    if not isinstance(root, dict):
+        return steps
+    if root.get("command"):
+        walk(root, 0)
+        return steps
+    # root 一般是 sequence 容器，它本身不算一层缩进
+    for key in branches_of(str(root.get("type") or "")):
+        for child in root.get(key) or []:
+            walk(child, 0, key)
     return steps
 
 
