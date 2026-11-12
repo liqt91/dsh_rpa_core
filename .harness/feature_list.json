@@ -471,6 +471,11 @@
       "id": "xhs-globals-dock",
       "title": "Editor bottom dock: elements / global inputs / run log; rpa.saveFlowInputs with authoritative validation",
       "passes": true
+    },
+    {
+      "id": "xhs-element-library",
+      "title": "Editor element library: constant capture/manual entry, detail, recapture, delete guard (preset assets)",
+      "passes": true
     }
   ]
 }

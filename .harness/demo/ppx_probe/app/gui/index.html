@@ -63,6 +63,23 @@
         </div>
         <div class="dockPanels">
           <div class="dockPanel" data-panel="elements">
+            <!-- 常驻入库工具条：在 elemBody 之外，刷新资产列表时不会被 replaceChildren 清掉。
+                 新建的是预置资产，不改写流程、不自动绑节点。 -->
+            <div class="elemTools">
+              <div class="elemToolsRow">
+                <span class="elemToolsLabel">新资产</span>
+                <input id="elemNewName" class="elemNewName" placeholder="名称，如 searchBox" aria-label="新资产名称">
+                <select id="elemNewWhere" class="elemNewWhere" aria-label="捕获位置">
+                  <option value="auto">自动判断</option>
+                  <option value="browser">在网页上</option>
+                  <option value="desktop">在桌面软件里</option>
+                </select>
+                <button type="button" id="elemNewCapture" class="elemNewCapture">＋ 捕获元素</button>
+                <input id="elemNewSelector" class="elemNewSelector" placeholder="或直接写选择器，如 #username" aria-label="手填选择器">
+                <button type="button" id="elemNewWrite" class="elemNewWrite">写入库</button>
+              </div>
+              <div id="elemNewNote" class="elemNewNote" role="status" aria-live="polite"></div>
+            </div>
             <details class="elemBox" id="elemBox" open>
               <summary></summary>
               <div id="elemBody" class="elemBody"></div>

@@ -974,6 +974,35 @@
 - [ ] UI、DSH、MCP、调度器和安装器集成（`planned`）
   - 逐项放行与否以 ADR 0006 结论为准；操控型 HTTP 推迟不变。
 
+- [x] **元素资产面板没有「捕获资产入库」的入口**（`done`，2026-11-12）
+  - 取证：`renderElementsPanel()` 的 `pickRow()`（含「补一下」「手动填写」）**只为 `pickMissing` 生成**；
+    工作台默认流程只有 1 个 `elementRefs`（`xhs_search_box`），`elements/xhs_search_box.json` 已在盘上
+    ⇒ 缺口为空，界面只剩离线横幅 + 一行只读资产，一个捕获按钮都没有。后端 8 个 RPC 里也没有
+    任何资产管理的写接口（详情 / 删除 / 重捕入口都缺）。上一轮解释给的「待补元素行 → 补一下」
+    路径在这个流程上根本不存在。
+  - **维护者拍板**：做「新建入口 + 资产管理」；新资产为**预置资产**（ref-only 契约下不改写工作流、
+    不自动绑节点，要用时在节点参数里写 `elementRefs`）。
+  - **已落地**：`api.py` 加 `rpa.elementDetail`（完整描述符 + 引用节点清单）、`rpa.deleteElement`
+    （仍被引用时 `ELEMENT_IN_USE` 拒绝且不删；引用扫描按 `_NESTED` 递归 then/else/catch/children）；
+    `startCapture` 记起跑前 mtime、`capturePoll` 改判「这一轮真重写过盘」——修掉重捕一个已存在
+    资产时 `elem.is_file()` 恒真造成的假成功。`index.html` 加常驻 `.elemTools`（在 `elemBody` 之外，
+    刷新不会被清）、`style.css` 加版式、`main.js` 加新建捕获 / 手填写入库 / 详情 / 重捕 / 删除，
+    离线横幅改为只在真有缺口时播；`retry` / `view` 补上「新建或重捕的资产不在缺口里」的路径。
+  - 判据：`scripts/check_element_library.mjs` 12/12（结构层 + 最小 DOM shim 真跑按钮）、
+    `tests/test_editor_element_library.py` 20 条、`probe_element_library.py` 8 项、
+    `.harness/spike/negative_element_library.py` 14/14（11 红 + 3 元验证绿）逐字节还原、
+    HTTP 冒烟 6 项、应用层 collected=180、全门禁 rc=0 / 765 passed / `FULL GATE PASSED`。
+  - **判据教训**：① DOM shim 没设 `currentPath`、没触发首次 `refreshElements()`，工具条 handler
+    第一行 `if (!currentPath) return` 静默退出 ⇒ 5 条行为判据「假红」其实是夹具没造对；
+    ② `css.includes('.elemTools')` 会被 `.elemToolsRow` 子串糊弄成恒绿 ⇒ 收紧成 `.elemTools {`；
+    ③ 哨兵按「new 是否已存在」查残留，`return True` / `captured = elem.is_file()` 这类自然代码会
+    误报，注入值要带不自然的注释尾巴；④ 注入锚点缩进必须照抄原文（写成 4 空格会 old=0）。
+  - **构建环境**：本机 pnpm 12 与 `package.json` 的 `packageManager: pnpm@11.25.0` 冲突，
+    用 `COREPACK_ENABLE_STRICT=0 pnpm --pm-on-fail=ignore --dir .harness/demo/ppx_probe/app run build`；
+    `ppx build` 末尾会因缺 Inno Setup 6 报 rc=1，但前端 `gui/dist` 在此之前已生成（判据按产物核）。
+  - **仍欠**：浏览器真机点一遍「新建 → 捕获/手填 → 详情 → 重捕 → 删除」，以及下面控制流 / 拖拽 /
+    全局参数真机链路与「编辑器点运行 → 采集 → 落库」E2E（需 Chrome 常开）。
+
 - [x] **PPX 原型 / 工作台编辑器缺全局参数界面，底栏三模块散落**（`done`，2026-11-12）
   - 取证：`workflow.inputs` 是全局参数唯一真值源（`${inputs.<name>}` 引用、编译期校验在
     `src/rpa_core/model/inputs.py`）；原型 `api.py` 只有节点类写入口，**没有写 inputs 的 RPC**；

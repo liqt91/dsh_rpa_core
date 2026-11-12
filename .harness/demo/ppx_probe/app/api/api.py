@@ -2433,6 +2433,11 @@ def start_capture(path: str, name: str, override: str | None = None) -> dict[str
         "--timeout",
         str(timeout),
     ]
+    # 重新捕获一个已存在的资产时，文件本来就在盘上：capturePoll 若只看 is_file()
+    # 会立刻报「已抓到」，用户还没碰鼠标就假成功。记下起跑前的 mtime，只有这轮
+    # 真的重写过盘才算抓到（新建资产 baseline=0，落盘后必然更大）。
+    elem_target = _elements_dir(path) / f"{name}.json"
+    baseline_mtime = elem_target.stat().st_mtime_ns if elem_target.is_file() else 0
     if decision["hover"]:
         argv.append("--hover")
     try:
@@ -2456,6 +2461,7 @@ def start_capture(path: str, name: str, override: str | None = None) -> dict[str
         "nodeId": (item or {}).get("nodeId"),
         "deadlineAt": time.time() + timeout + 3.0,
         "cancelled": False,
+        "baselineMtimeNs": baseline_mtime,
         "proc": proc,
         "stdout": [],
         "stderr": [],
@@ -2492,7 +2498,11 @@ def capture_poll(path: str, name: str) -> dict[str, Any]:
         return {"ok": False, "code": "UNKNOWN_CAPTURE", "error": f"没有这个捕获会话：{name}"}
     proc = entry["proc"]
     elem = _elements_dir(entry["path"]) / f"{name}.json"
-    captured = elem.is_file()
+    try:
+        # 只比「这一轮有没有重写过盘」，不比文件在不在：重捕时旧资产一直都在。
+        captured = elem.is_file() and elem.stat().st_mtime_ns > entry.get("baselineMtimeNs", 0)
+    except OSError:
+        captured = False
     alive = proc.poll() is None
     if captured:
         state, reason = "bound", "已抓到，写好并绑定"
@@ -2536,14 +2546,23 @@ def cancel_capture(path: str, name: str) -> dict[str, Any]:
     return {"ok": True, "state": "cancelled", "name": name, "path": path}
 
 
+_ELEMENT_NAME_RE = re.compile(r"[A-Za-z0-9_-]+")
+
+
+def _valid_element_name(name: str | None) -> bool:
+    """资产名唯一口径：新建、手填、详情、删除共用，同时挡掉路径穿越。"""
+    return bool(name and _ELEMENT_NAME_RE.fullmatch(name))
+
+
 @api_method("rpa.writeElement")
 def write_element(path: str, name: str, selector: str) -> dict[str, Any]:
     """能力不在线时的键盘可达出口：手填一个 CSS 选择器，按同一份 ref-only 契约落盘。
 
     只收 CSS（桌面 locator 是结构化对象，手填容易写出运行期才炸的假资产）。
+    name 不要求在 elementRefs 缺口里：界面上的「＋ 捕获元素」正是用这条道入预置资产。
     """
     selector = (selector or "").strip()
-    if not re.fullmatch(r"[A-Za-z0-9_-]+", name or ""):
+    if not _valid_element_name(name):
         return {"ok": False, "code": "BAD_NAME", "error": "元素名只能含字母、数字、下划线和短横线"}
     if not selector or len(selector) > 500:
         return {"ok": False, "code": "BAD_SELECTOR", "error": "选择器不能为空、也不能超过 500 字"}
@@ -2568,6 +2587,85 @@ def write_element(path: str, name: str, selector: str) -> dict[str, Any]:
         "path": path,
         "file": str(target),
         "boundNodeId": (item or {}).get("nodeId"),
+    }
+
+
+# ---- 元素资产库：详情 / 删除（ADR 0022-R3 后原型目录共享） -------------------
+# 与「补一下」的区别：界面新建的是**预置资产**，不改写工作流、不自动绑到任何节点
+# （ref-only 契约：运行期只认 elementRefs，没被引用就是一条库存，不会生效）。
+# 删除反过来必须挡住仍被引用的资产，否则流程会在运行期硬失败 ELEMENT_REF_MISSING。
+
+
+def _element_references(path: str, name: str) -> list[str]:
+    """扫工作流全部 elementRefs，返回引用了 name 的节点 id（删除护栏用）。
+
+    按 _NESTED 递归真实 AST 分支（then/else/catch/children），不能只扫 children——
+    那会漏掉控制流里的引用，删完等运行才炸。
+    """
+    data, _ = _read_document(_flow_path(path))
+    hits: set[str] = set()
+
+    def walk(node: Any) -> None:
+        if not isinstance(node, dict):
+            return
+        if any(ref == name for ref in (node.get("elementRefs") or {}).values()) and node.get("id"):
+            hits.add(str(node["id"]))
+        for key in _NESTED:
+            for child in node.get(key) or []:
+                walk(child)
+
+    walk(data.get("root"))
+    return sorted(hits)
+
+
+@api_method("rpa.elementDetail")
+def element_detail(path: str, name: str) -> dict[str, Any]:
+    """资产详情：完整描述符 + 被哪些节点引用（界面展开「详情」用）。"""
+    started = time.perf_counter()
+    if not _valid_element_name(name):
+        return {"ok": False, "code": "BAD_NAME", "error": "元素名只能含字母、数字、下划线和短横线"}
+    target = _elements_dir(path) / f"{name}.json"
+    if not target.is_file():
+        return {"ok": False, "code": "NOT_FOUND", "error": f"没有这个资产：{name}"}
+    try:
+        doc = json.loads(target.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        return {"ok": False, "code": "BAD_JSON", "error": f"资产文件读不了：{exc}"}
+    return {
+        "ok": True,
+        "name": name,
+        "file": str(target),
+        "size": target.stat().st_size,
+        "document": doc,
+        "referencedBy": _element_references(path, name),
+        "ms": round((time.perf_counter() - started) * 1000, 1),
+    }
+
+
+@api_method("rpa.deleteElement")
+def delete_element(path: str, name: str) -> dict[str, Any]:
+    """删一条预置资产；仍被 elementRefs 引用时拒绝，避免静默把流程弄坏。"""
+    started = time.perf_counter()
+    if not _valid_element_name(name):
+        return {"ok": False, "code": "BAD_NAME", "error": "元素名只能含字母、数字、下划线和短横线"}
+    target = _elements_dir(path) / f"{name}.json"
+    if not target.is_file():
+        return {"ok": False, "code": "NOT_FOUND", "error": f"没有这个资产：{name}"}
+    referenced = _element_references(path, name)
+    if referenced:
+        return {
+            "ok": False,
+            "code": "ELEMENT_IN_USE",
+            "error": "这个资产还被流程引用着，先改掉引用再删",
+            "referencedBy": referenced,
+        }
+    target.unlink()
+    return {
+        "ok": True,
+        "name": name,
+        "deleted": True,
+        "remaining": sorted(f.stem for f in _elements_dir(path).glob("*.json")),
+        "ms": round((time.perf_counter() - started) * 1000, 1),
     }
 
 

@@ -65,6 +65,9 @@ PURE_FUNCTION_SCRIPTS = (
     # 版式在 style.css、行为在 main.js；只读源码证明不了三个 tab 真挂上去、
     # 原 details 真搬过去、全局参数真能保存 ⇒ 用最小 DOM shim 真跑一遍绑定与保存。
     "check_editor_bottom_dock.mjs",
+    # 元素资产库（常驻入库工具条 + 已就绪行的详情/重捕/删除）：与底栏判据分开，
+    # 只读源码证明不了「有按钮却点不着」「删了还显示在列表里」。
+    "check_element_library.mjs",
     # 捕获高亮框几何（content.js）：框线带必须整条落在元素**之外**、且碰不到指针
     # ±2px 热区（M41「框要躲着鼠标」）。同样是「只在浏览器里跑」的几何——Python
     # 侧读源码只能证明写了 `left - OVERLAY_OUTSET`，证明不了算出来的带落在哪。

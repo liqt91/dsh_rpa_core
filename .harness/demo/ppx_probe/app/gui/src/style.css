@@ -511,6 +511,35 @@ select {
 #bottomDock .elemBox > summary, #bottomDock .runBox > summary { display: none; }
 #bottomDock .elemBody, #bottomDock .runLog { flex: 1 1 auto; height: 100%; max-height: none; }
 
+/* ---- 元素资产：常驻入库工具条 + 已就绪行的管理动作 ---- */
+.elemTools {
+  flex: 0 0 auto; padding: 7px 12px;
+  border-bottom: 1px dashed var(--border);
+}
+.elemToolsRow { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.elemToolsLabel { color: var(--muted); font-size: 12px; }
+.elemNewName, .elemNewSelector, .elemNewWhere {
+  min-height: 26px; padding: 2px 7px; font: inherit; font-size: 12px;
+  border: 1px solid var(--border); border-radius: 6px;
+  background: var(--surface); color: var(--text);
+}
+.elemNewName { width: 132px; }
+.elemNewSelector { width: 176px; }
+.elemNewWhere { width: 104px; }
+.elemNewCapture, .elemNewWrite, .elemAct {
+  min-height: 26px; padding: 2px 9px; font: inherit; font-size: 12px; cursor: pointer;
+}
+.elemNewCapture { border-color: var(--info); color: var(--info); }
+.elemNewNote { min-height: 16px; padding-top: 4px; color: var(--muted); font-size: 12px; }
+.elemNewNote.error { color: var(--danger); }
+.elemRow.asset { border-bottom: 1px dashed var(--border); }
+.elemAct.danger { color: var(--danger); }
+.elemDetail {
+  flex: 1 1 100%; padding: 6px 10px; border-radius: 6px;
+  background: var(--sunken); font-size: 12px;
+  white-space: pre-wrap; word-break: break-all; max-height: 132px; overflow: auto;
+}
+
 /* ---- 全局参数：名称 / 类型 / 默认值 三列，末列是删除 ---- */
 .globalsPanel { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
 .globalsHint { padding: 7px 12px; color: var(--muted); font-size: 12px; border-bottom: 1px dashed var(--border); }

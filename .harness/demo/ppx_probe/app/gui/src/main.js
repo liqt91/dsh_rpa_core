@@ -49,6 +49,12 @@ const el = {
   unset: document.querySelector('#unset'),
   elemBody: document.querySelector('#elemBody'),
   elemCount: document.querySelector('#elemCount'),
+  elemNewName: document.querySelector('#elemNewName'),
+  elemNewWhere: document.querySelector('#elemNewWhere'),
+  elemNewCapture: document.querySelector('#elemNewCapture'),
+  elemNewSelector: document.querySelector('#elemNewSelector'),
+  elemNewWrite: document.querySelector('#elemNewWrite'),
+  elemNewNote: document.querySelector('#elemNewNote'),
   dock: document.querySelector('#bottomDock'),
   dockFold: document.querySelector('.dockFold'),
   globalsRows: document.querySelector('#globalsRows'),
@@ -124,6 +130,7 @@ function bindBottomDock() {
   const elemBox = document.querySelector('#elemBox')
   if (elemBox) elemBox.open = true
   bindGlobalsPanel()
+  bindElementTools()
   activateDockTab(dockActive)
   renderGlobals()
 }
@@ -1024,6 +1031,17 @@ const PICK_TEXT = {
   countDone: '{count} 已就绪',
   countMissing: '{count} 待补',
   stepFallback: '这一步',
+  boundNew: '已入库 · {name}',
+  assetNewBad: '名字只能用字母、数字、下划线和短横线',
+  assetManualBad: '还要写一个选择器',
+  assetWritten: '已入库 · {name}',
+  assetDeleted: '已删除 · {name}',
+  assetInUse: '还被第 {step} 步引用着，先改引用再删',
+  assetDetail: '详情',
+  assetRecapture: '重新捕获',
+  assetDelete: '删除',
+  assetDetailHead: '资产详情 · {name}',
+  assetRefNone: '无（预置资产）',
 }
 
 // 状态符号：与文字、颜色三者并列，任何一条通道失效都还能读出状态。
@@ -1069,6 +1087,8 @@ async function refreshElements() {
     pickMissing = miss.missing || []
     pickElements = list.elements || []
     pickCapabilities = miss.capabilities || null
+    assetDetailOpen = new Set()
+    assetDetailCache = {}
     missingNodeIds = new Set(pickMissing.map((m) => m.nodeId).filter(Boolean))
     renderCards()
     renderElementsPanel()
@@ -1077,6 +1097,152 @@ async function refreshElements() {
       mk('div', 'hint', pickText('loadFail', { reason: `${error.code}: ${error.message}` })),
     )
   }
+}
+
+/* 详情展开态放模块级、由 renderElementsPanel 重绘消费：最小 DOM shim 没有
+   remove()/querySelector，靠状态重绘才能让「点详情」这条路径真被判据跑到。 */
+let assetDetailOpen = new Set()
+let assetDetailCache = {}
+
+function showElemNote(text, isError = false) {
+  if (!el.elemNewNote) return
+  el.elemNewNote.textContent = text || ''
+  el.elemNewNote.classList[isError && text ? 'add' : 'remove']('error')
+}
+
+function bindElementTools() {
+  el.elemNewCapture?.addEventListener('click', createAssetByCapture)
+  el.elemNewWrite?.addEventListener('click', createAssetByManual)
+  el.elemNewName?.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') createAssetByCapture()
+  })
+  el.elemNewSelector?.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') createAssetByManual()
+  })
+}
+
+function newAssetName() {
+  return String(el.elemNewName?.value || '').trim()
+}
+
+function newAssetTarget() {
+  const value = String(el.elemNewWhere?.value || 'auto')
+  return value === 'auto' ? null : value
+}
+
+function validAssetName(name) {
+  return /^[A-Za-z0-9_-]+$/.test(name)
+}
+
+async function createAssetByCapture() {
+  if (!currentPath) return
+  const name = newAssetName()
+  if (!validAssetName(name)) {
+    showElemNote(pickText('assetNewBad'), true)
+    return
+  }
+  showElemNote('')
+  await startPickFlow({ name, nodeId: null, isNew: true }, newAssetTarget())
+}
+
+async function createAssetByManual() {
+  if (!currentPath) return
+  const name = newAssetName()
+  const selector = String(el.elemNewSelector?.value || '').trim()
+  if (!validAssetName(name)) {
+    showElemNote(pickText('assetNewBad'), true)
+    return
+  }
+  if (!selector) {
+    showElemNote(pickText('assetManualBad'), true)
+    return
+  }
+  let res
+  try {
+    res = await ppx.call('rpa.writeElement', { path: currentPath, name, selector })
+  } catch (error) {
+    showElemNote(error.message, true)
+    return
+  }
+  if (!res.ok) {
+    showElemNote(res.error || pickText('manualBad', { reason: res.code || 'unknown' }), true)
+    return
+  }
+  showElemNote(pickText('assetWritten', { name }))
+  if (el.elemNewName) el.elemNewName.value = ''
+  if (el.elemNewSelector) el.elemNewSelector.value = ''
+  await refreshElements()
+}
+
+async function toggleAssetDetail(name) {
+  if (assetDetailOpen.has(name)) {
+    assetDetailOpen.delete(name)
+    renderElementsPanel()
+    return
+  }
+  let res
+  try {
+    res = await ppx.call('rpa.elementDetail', { path: currentPath, name })
+  } catch (error) {
+    showElemNote(error.message, true)
+    return
+  }
+  if (!res.ok) {
+    showElemNote(res.error, true)
+    return
+  }
+  const d = res.document || {}
+  const sel = d.selector || {}
+  const refs = (res.referencedBy || []).join('、') || pickText('assetRefNone')
+  assetDetailCache[name] = [
+    pickText('assetDetailHead', { name }),
+    `类型 ${d.kind || '?'}`,
+    `选择器 ${sel.css || sel.locator || '?'}`,
+    `备选 ${Array.isArray(sel.candidates) ? sel.candidates.length : 0} 条`,
+    `引用 ${refs}`,
+    `捕获时间 ${d.capturedAt || '未知'}`,
+  ].join('\n')
+  assetDetailOpen.add(name)
+  renderElementsPanel()
+}
+
+async function deleteAsset(name) {
+  let res
+  try {
+    res = await ppx.call('rpa.deleteElement', { path: currentPath, name })
+  } catch (error) {
+    showElemNote(error.message, true)
+    return
+  }
+  if (!res.ok) {
+    const steps = (res.referencedBy || []).map((id) => stepOf(id)).join('、')
+    showElemNote(steps ? pickText('assetInUse', { step: steps }) : res.error, true)
+    return
+  }
+  assetDetailOpen.delete(name)
+  delete assetDetailCache[name]
+  showElemNote(pickText('assetDeleted', { name }))
+  await refreshElements()
+}
+
+function assetRow(e) {
+  const row = mk('div', 'elemRow asset')
+  row.append(mk('span', 'elemName', e.name))
+  row.append(mk('span', 'elemMeta', `${e.kind || '?'} · ${e.selector || ''}`))
+  const detail = mk('button', 'elemAct', pickText('assetDetail'))
+  detail.addEventListener('click', () => toggleAssetDetail(e.name))
+  const again = mk('button', 'elemAct', pickText('assetRecapture'))
+  again.addEventListener('click', () => {
+    const override = e.kind === 'desktop' || e.kind === 'browser' ? e.kind : null
+    startPickFlow({ name: e.name, nodeId: null, isNew: false }, override)
+  })
+  const remove = mk('button', 'elemAct danger', pickText('assetDelete'))
+  remove.addEventListener('click', () => deleteAsset(e.name))
+  row.append(detail, again, remove)
+  if (assetDetailOpen.has(e.name)) {
+    row.append(mk('div', 'elemDetail', assetDetailCache[e.name] || ''))
+  }
+  return row
 }
 
 function renderElementsPanel() {
@@ -1095,12 +1261,7 @@ function renderElementsPanel() {
   }
   if (pickElements.length) {
     el.elemBody.append(mk('div', 'elemHead', pickText('headDone')))
-    for (const e of pickElements) {
-      const row = mk('div', 'elemRow')
-      row.append(mk('span', 'elemName', e.name))
-      row.append(mk('span', 'elemMeta', `${e.kind || '?'} · ${e.selector || ''}`))
-      el.elemBody.append(row)
-    }
+    for (const e of pickElements) el.elemBody.append(assetRow(e))
   }
 }
 
@@ -1161,7 +1322,9 @@ function paintPickBar() {
   const actions = mk('div', 'pickActions')
 
   if (!pickState) {
-    if (!pickCapabilities || !pickCapabilities.fix) return
+    // 没有待补元素时不播离线：这个流程的资产已齐，报「浏览器没连上」是假警报。
+    // 点「＋ 捕获元素」时 pickPlan 仍会把真实能力结果报进状态条，不会隐瞒。
+    if (!pickMissing.length || !pickCapabilities || !pickCapabilities.fix) return
     bar.dataset.state = 'offline'
     live.append(mk('span', 'pickDot', '!'), mk('span', 'pickLiveText', pickText('offlineHint')))
     detail.textContent = pickCapabilities.fix
@@ -1171,10 +1334,11 @@ function paintPickBar() {
   }
 
   const s = pickState
+  const textKey = s.state === 'bound' && s.isNew ? 'boundNew' : s.state
   bar.dataset.state = s.state
   live.append(
     mk('span', 'pickDot', PICK_ICON[s.state] || '·'),
-    mk('span', 'pickLiveText', pickText(s.state, {
+    mk('span', 'pickLiveText', pickText(textKey, {
       name: s.name,
       step: s.step,
       fix: s.reason,
@@ -1203,11 +1367,12 @@ function paintPickBar() {
     const retry = mk('button', 'pickAction', pickText('retry'))
     retry.addEventListener('click', () => {
       const m = pickMissing.find((x) => x.name === s.name)
-      if (m) startPickFlow(m, s.override)
+      // 新建 / 重新捕获的资产不在缺口里，重试仍要能回到同一条拾取流程。
+      startPickFlow(m || { name: s.name, nodeId: s.nodeId, isNew: s.isNew }, s.override)
     })
     actions.append(retry)
   }
-  if (s.state === 'bound') {
+  if (s.state === 'bound' && s.nodeId) {
     const view = mk('button', 'pickAction', pickText('view'))
     view.addEventListener('click', () => focusNode(s.nodeId))
     actions.append(view)
@@ -1258,6 +1423,7 @@ async function startPickFlow(m, override) {
     override,
     step: stepOf(m.nodeId),
     nodeId: m.nodeId,
+    isNew: Boolean(m.isNew),
     reason: null,
     hint: null,
   }

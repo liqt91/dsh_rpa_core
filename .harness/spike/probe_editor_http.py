@@ -45,13 +45,15 @@ def main() -> None:
                 assert token in bundle, f"托管的 JS 里没有拖拽实现：{token}"
             for token in ("rpa.saveFlowInputs", "bottomDock", "globalsCount"):
                 assert token in bundle, f"托管的 JS 里没有底栏/全局参数：{token}"
+            for token in ("rpa.elementDetail", "rpa.deleteElement", "elemNewCapture"):
+                assert token in bundle, f"托管的 JS 里没有元素资产库：{token}"
             css_hit = re.search(r'/editor-ppx/(assets/[^"]+\.css)', html)
             assert css_hit, "index.html 没引用 CSS 产物"
             with urllib.request.urlopen(base + "/editor-ppx/" + css_hit.group(1), timeout=10) as resp:
                 built_css = resp.read().decode("utf-8")
-            for token in ("#bottomDock", ".dockTab.active", ".globalRow", ".card.drop-before"):
+            for token in ("#bottomDock", ".dockTab.active", ".globalRow", ".card.drop-before", ".elemTools"):
                 assert token in built_css, f"托管的 CSS 缺 {token}"
-            print("PASS | /editor-ppx/ 托管的是重建产物（流程控制 + 拖拽 + 底栏三模块 + 版式）")
+            print("PASS | /editor-ppx/ 托管的是重建产物（流程控制 + 拖拽 + 底栏三模块 + 资产库 + 版式）")
 
             def rpc(payload: dict) -> dict:
                 req = urllib.request.Request(
@@ -101,6 +103,20 @@ def main() -> None:
             assert globals_denied["ok"] is True
             assert globals_denied["data"]["code"] == "INVALID_DECLARATION", globals_denied
             print("PASS | /editor-ppx-rpc → rpa.saveFlowInputs 可达（非法名被明确拒绝、未写盘）")
+            for method in ("rpa.elementDetail", "rpa.deleteElement"):
+                lib = rpc(
+                    {
+                        "method": method,
+                        "params": {
+                            "path": "workflows/xhs_product_search.json",
+                            "name": "__probe_missing__",
+                        },
+                        "requestId": f"probe-lib-{method}",
+                    }
+                )
+                assert lib["ok"] is True, lib
+                assert lib["data"]["code"] == "NOT_FOUND", lib
+            print("PASS | /editor-ppx-rpc → 资产库详情/删除可达（不存在的资产被明确拒绝、未写盘）")
         finally:
             httpd.shutdown()
             thread.join(timeout=5)
