@@ -476,6 +476,11 @@
       "id": "xhs-element-library",
       "title": "Editor element library: constant capture/manual entry, detail, recapture, delete guard (preset assets)",
       "passes": true
+    },
+    {
+      "id": "xhs-capture-kit",
+      "title": "Shared capture kit (engine + win32 float + controller) reused by ppx; backend pywebview minimize/restore",
+      "passes": true
     }
   ]
 }
