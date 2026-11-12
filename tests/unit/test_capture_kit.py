@@ -94,6 +94,23 @@ class FakeHost:
         self.restored += 1
 
 
+class FakeHeal:
+    """替身自愈：绝不碰注册表/浏览器档案。"""
+
+    def __init__(self, changed: bool = False, installed: dict[str, str] | None = None) -> None:
+        self.calls = 0
+        self._changed = changed
+        self._installed = installed or {}
+
+    def __call__(self) -> dict:
+        self.calls += 1
+        return {
+            "changed": self._changed,
+            "installed": self._installed,
+            "refreshed": ["edge"] if self._changed else [],
+        }
+
+
 def _wait(controller: CaptureController, states: set[str], timeout: float = 2.0) -> dict:
     deadline = time.monotonic() + timeout
     state = controller.poll()
@@ -105,12 +122,13 @@ def _wait(controller: CaptureController, states: set[str], timeout: float = 2.0)
     return state
 
 
-def _make(session, *, host=None, float_=None, on_captured=None) -> CaptureController:
+def _make(session, *, host=None, float_=None, on_captured=None, heal=None) -> CaptureController:
     return CaptureController(
         session_factory=lambda: session,
         on_captured=on_captured,
         host=host,
         float_factory=lambda: float_ if float_ is not None else FakeFloat(),
+        heal_host=heal or FakeHeal(),
     )
 
 
@@ -211,3 +229,99 @@ def test_both_channels_offline_blocks_without_minimize_or_float() -> None:
     assert launched["code"] == "NO_CAPTURE_CHANNEL"
     assert host.minimized == 0
     assert window.shown is False
+
+
+def test_extension_offline_triggers_host_heal_and_reports_it() -> None:
+    """扩展离线 → 幂等重注册 host 白名单，并把结果回给宿主做提示文案。
+
+    背景（2026-11-12 维护者报障）：插件在 Edge 里明明启用，但 host 的
+    ``allowed_origins`` 是旧路径派生的 ID ⇒ 浏览器拒绝拉起 host ⇒ 端点 0 个，
+    用户侧看起来像「插件没装」。自愈必须真的被调用，且结果要能传到前端。
+    """
+    heal = FakeHeal(changed=True, installed={"edge": "edkl"})
+    controller = _make(FakeSession(None, extension_offline=True), heal=heal)
+    launched = controller.start()
+    assert launched["ok"] is True
+    assert heal.calls == 1
+    assert launched["extensionHostRefreshed"] is True
+    assert launched["extensionInstalled"] is True
+    controller.cancel()
+
+
+def test_extension_online_does_not_touch_host_registration() -> None:
+    heal = FakeHeal()
+    controller = _make(FakeSession(None, extension_offline=False), heal=heal)
+    launched = controller.start()
+    assert heal.calls == 0
+    assert launched["extensionInstalled"] is True
+    assert launched["extensionHostRefreshed"] is False
+    controller.cancel()
+
+
+def test_heal_failure_never_blocks_capture() -> None:
+    def explode() -> dict:
+        raise RuntimeError("注册表读写被拒")
+
+    controller = _make(FakeSession(None, extension_offline=True), heal=explode)
+    launched = controller.start()
+    assert launched["ok"] is True
+    assert launched["extensionHostRefreshed"] is False
+    controller.cancel()
+
+
+class _OfflineSession:
+    extension_offline = True
+    extension_unresponsive = False
+
+
+def test_web_status_distinguishes_installed_but_disconnected(monkeypatch) -> None:
+    """「装了没连通」与「没装」必须给不同文案（这正是本次报障的误导点）。"""
+    from rpa_core.capture_kit import engine
+
+    monkeypatch.setattr(engine, "extension_installed", lambda: {"edge": "abc"})
+    text, ok = engine.web_status(_OfflineSession())
+    assert ok is False
+    assert "已装但未连通" in text
+
+    monkeypatch.setattr(engine, "extension_installed", lambda: {})
+    text, ok = engine.web_status(_OfflineSession())
+    assert ok is False
+    assert "先装插件" in text
+
+
+def test_ensure_extension_host_only_reports_newly_added_ids(monkeypatch, tmp_path) -> None:
+    """白名单里已有该 ID ⇒ 不该报「修复了」（否则每次捕获都提示用户重载插件）。"""
+    import rpa_core.extension_installer as installer
+    from rpa_core.capture_kit import engine
+
+    ext = tmp_path / "extension"
+    ext.mkdir()
+    (ext / "manifest.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(engine, "extension_dir", lambda: ext)
+    monkeypatch.setattr(engine, "extension_installed", lambda: {"edge": "abc"})
+    calls: list[str] = []
+    monkeypatch.setattr(
+        installer,
+        "ensure_native_host",
+        lambda browser, path: calls.append(browser) or {},
+    )
+
+    monkeypatch.setattr(
+        installer,
+        "native_host_status",
+        lambda browser: {"allowedOrigins": ["chrome-extension://old/"]},
+    )
+    stale = engine.ensure_extension_host()
+    assert stale["changed"] is True
+    assert calls == ["edge"]
+
+    calls.clear()
+    monkeypatch.setattr(
+        installer,
+        "native_host_status",
+        lambda browser: {"allowedOrigins": ["chrome-extension://abc/"]},
+    )
+    fresh = engine.ensure_extension_host()
+    assert fresh["changed"] is False
+    # 幂等调用仍然会「重写一次」（修 host 路径），但不当成「修复了白名单」
+    assert calls == ["edge"]

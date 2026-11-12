@@ -2486,7 +2486,7 @@ def start_capture(path: str, name: str, override: str | None = None) -> dict[str
         "cancelled": False,
         "offline": bool(launched.get("offline", False)),
         "armed": False,
-        "instructions": _PICK_INSTRUCTIONS[decision["target"]],
+        "instructions": _capture_instructions(launched, decision["target"]),
         "startedAt": time.time(),
     }
     _CAPTURES[_capture_key(path, name)] = entry
@@ -2501,8 +2501,26 @@ def start_capture(path: str, name: str, override: str | None = None) -> dict[str
         "offline": entry["offline"],
         "armed": False,
         "extensionOffline": bool(launched.get("extensionOffline", False)),
+        # 插件「装了但没连通」与「压根没装」的处置完全不同，前端据此给准确指引。
+        "extensionInstalled": bool(launched.get("extensionInstalled", False)),
+        "extensionHostRefreshed": bool(launched.get("extensionHostRefreshed", False)),
         "ms": round((time.perf_counter() - started) * 1000, 1),
     }
+
+
+def _capture_instructions(launched: dict[str, Any], target: str) -> str:
+    """本次捕获的手势提示；扩展刚被自愈修复时补一句「怎么让它生效」。
+
+    2026-11-12 现场：插件在 Edge 里启用着，但 host 白名单是旧路径派生的 ID，
+    浏览器拒绝拉起 host。自愈补上白名单后，扩展要等 service worker 重启才重连
+    —— 不告诉用户这一句，他只会觉得「还是不行」。
+    """
+    base = _PICK_INSTRUCTIONS[target]
+    if launched.get("extensionHostRefreshed"):
+        return base + "（已修复插件注册：到扩展页点『重新加载』或重开浏览器后，网页可捕获）"
+    if launched.get("extensionOffline") and launched.get("extensionInstalled"):
+        return base + "（网页不可用：插件已装但没连上，重载插件或重开浏览器）"
+    return base
 
 
 def _persist_captured(path: str, name: str, descriptor: dict[str, Any]) -> dict[str, Any]:

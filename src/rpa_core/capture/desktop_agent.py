@@ -859,6 +859,9 @@ def _hover_hit(x: int, y: int, exclude_hwnd: int, allow_scoped: bool = True):
             win_rect = wintypes.RECT()
             ctypes.windll.user32.GetWindowRect(root, ctypes.byref(win_rect))
             rect = win_rect
+            # 退化取证：用户侧看到的是「只框到外框」，但没有任何原因线索。
+            # 这条日志把「快路径与 DFS 都没命中」这件事留痕（权限被拒是最常见原因）。
+            _trace("agent", "hover_degraded_to_window", hwnd=root)
     return rect, root, leaf, scoped_ran, path_infos, hit_info
 
 
@@ -984,9 +987,17 @@ def _hover_capture(hotkey_vk: int, timeout: float, hybrid: bool = False) -> dict
                 last_pos = (x, y)
                 # 粗命中（大 rect）时才允许 DFS，且节流 150ms（DFS ~50ms 不能每帧跑）
                 allow_scoped = time.monotonic() - last_scoped > 0.15
-                rect, root, leaf, scoped_ran, path_infos, hit_info = _hover_hit(
-                    x, y, overlay.hwnd, allow_scoped=allow_scoped
-                )
+                try:
+                    rect, root, leaf, scoped_ran, path_infos, hit_info = _hover_hit(
+                        x, y, overlay.hwnd, allow_scoped=allow_scoped
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    # UIA 被系统拒绝（E_ACCESSDENIED，常见于受限令牌/沙箱）时，
+                    # `_window_scope_hit` 会抛出来。这里是 hover 主循环：一帧命中失败
+                    # 不该把整个 agent 打死（否则用户只看到红框消失、面板报崩溃）。
+                    _trace("agent", "hover_hit_error", error=str(exc)[:200])
+                    time.sleep(0.05)
+                    continue
                 hit_ms = (time.perf_counter() - t_hit) * 1000
                 if hit_ms > 100:
                     # 慢命中取证：真机若仍卡，日志直接给出每次命中耗时
@@ -1025,23 +1036,31 @@ def _hover_capture(hotkey_vk: int, timeout: float, hybrid: bool = False) -> dict
                 if in_browser_content:
                     # 浏览器内容区：让位给扩展的页内捕获（它有 Ctrl+Click 手势）
                     continue
-                # 捕获瞬间：鼠标仍在 hover 最后命中的 rect 内 → 直接复用该元素
-                # （省一次 hit-test + DFS，捕获延迟从数百 ms 降到 describe 一次）
-                if last_leaf is not None and last_rect is not None and _rect_contains(
-                    last_rect, x, y
-                ):
-                    # D1：path 与 last_leaf 同源（两者都在 DFS 那轮一起缓存），
-                    # 故只在 last_leaf 可复用时带 path——不会挂到别的元素上。
-                    return _describe_info(
-                        last_leaf, last_root or 0,
-                        last_path if last_hit_info is last_leaf else None,
+                try:
+                    # 捕获瞬间：鼠标仍在 hover 最后命中的 rect 内 → 直接复用该元素
+                    # （省一次 hit-test + DFS，捕获延迟从数百 ms 降到 describe 一次）
+                    if last_leaf is not None and last_rect is not None and _rect_contains(
+                        last_rect, x, y
+                    ):
+                        # D1：path 与 last_leaf 同源（两者都在 DFS 那轮一起缓存），
+                        # 故只在 last_leaf 可复用时带 path——不会挂到别的元素上。
+                        return _describe_info(
+                            last_leaf, last_root or 0,
+                            last_path if last_hit_info is last_leaf else None,
+                        )
+                    # 否则（hover 没跟上/鼠标刚快速移入）走全量 DFS 保证精度
+                    _rect, root, _leaf, _, _path, _hit = _hover_hit(
+                        x, y, overlay.hwnd, allow_scoped=True
                     )
-                # 否则（hover 没跟上/鼠标刚快速移入）走全量 DFS 保证精度
-                _rect, root, _leaf, _, _path, _hit = _hover_hit(
-                    x, y, overlay.hwnd, allow_scoped=True
-                )
-                scope = root or last_root or None
-                return capture_with_retry(x, y, scope)
+                    scope = root or last_root or None
+                    return capture_with_retry(x, y, scope)
+                except Exception as exc:  # noqa: BLE001
+                    # ★ 不能静默：UIA 被拒（E_ACCESSDENIED）/元素在按下瞬间消失时，
+                    # 老实现要么让异常打死进程（面板只看到 stderr 尾巴），要么返回
+                    # `timeout` 让会话继续干等 —— 用户侧就是「按 F9 毫无反应」。
+                    # 这里把确切原因回传，宿主能直接显示「读不到这个位置的元素」。
+                    _trace("agent", "capture_error", error=str(exc)[:300])
+                    return {"error": f"读不到该位置的元素：{exc}"}
             time.sleep(0.015)
         return {"timeout": True}
     finally:

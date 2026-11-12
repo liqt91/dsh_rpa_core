@@ -479,7 +479,7 @@
     },
     {
       "id": "xhs-capture-kit",
-      "title": "Shared capture kit (engine + win32 float + controller) reused by ppx; backend pywebview minimize/restore",
+      "title": "Shared capture kit for ppx; float builds children without WM_CREATE; native-host whitelist self-heal",
       "passes": true
     }
   ]

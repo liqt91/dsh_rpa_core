@@ -24,6 +24,7 @@ from .engine import (
     NEVER_TIMEOUT,
     build_hybrid_session,
     desktop_status,
+    ensure_extension_host,
     gesture_hint,
     status_snapshot,
     web_status,
@@ -43,11 +44,14 @@ class CaptureController:
         on_captured: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
         host: Any = None,
         float_factory: Callable[[], Any] | None = None,
+        heal_host: Callable[[], dict[str, Any]] | None = None,
     ) -> None:
         self._factory = session_factory or build_hybrid_session
         self._on_captured = on_captured
         self._host = host  # 需提供 minimize() / restore()；None 则不收主窗
         self._float_factory = float_factory or CaptureFloat
+        # 扩展离线时重注册 Native Messaging 白名单（路径漂移会让扩展 ID 变）
+        self._heal_host = heal_host or ensure_extension_host
         self._session: Any = None
         self._float: CaptureFloat | None = None
         self._thread: threading.Thread | None = None
@@ -55,6 +59,7 @@ class CaptureController:
         self._result: dict[str, Any] | None = None
         self._cancelled = False
         self._desktop_offline = False
+        self._extension_note: dict[str, Any] = {}
 
     # -- 生命周期 ------------------------------------------------------------
     def start(self) -> dict[str, Any]:
@@ -64,6 +69,23 @@ class CaptureController:
         self._session = session
         self._desktop_offline = bool(getattr(session, "desktop_offline", False))
         ext_offline = bool(getattr(session, "extension_offline", False))
+        if ext_offline:
+            # 扩展离线最常见的原因不是「没装」，而是 host 白名单里是旧路径派生的 ID
+            # （unpacked 扩展 ID 随目录变）——浏览器因此拒绝拉起 host。这里幂等重注册：
+            # 补上后扩展会在 service worker 重启时自动重连，本会话的「离线复活」守望
+            # 会把它收编回竞速。
+            healed = self._run_heal()
+            self._extension_note = {
+                "extensionInstalled": bool(healed.get("installed")),
+                "extensionHostRefreshed": bool(healed.get("changed")),
+                "extensionHostBrowsers": list(healed.get("refreshed") or []),
+            }
+        else:
+            self._extension_note = {
+                "extensionInstalled": True,
+                "extensionHostRefreshed": False,
+                "extensionHostBrowsers": [],
+            }
         snapshot = status_snapshot(session)
         if self._desktop_offline and ext_offline:
             try:
@@ -75,6 +97,7 @@ class CaptureController:
                 "code": "NO_CAPTURE_CHANNEL",
                 "extensionOffline": True,
                 "desktopOffline": True,
+                **self._extension_note,
                 **snapshot,
             }
         window = self._float_factory()
@@ -100,6 +123,7 @@ class CaptureController:
             "ok": True,
             "offline": self._desktop_offline,
             "extensionOffline": ext_offline,
+            **self._extension_note,
             **snapshot,
         }
 
@@ -148,6 +172,14 @@ class CaptureController:
         self._restore()
 
     # -- 内部 ----------------------------------------------------------------
+    def _run_heal(self) -> dict[str, Any]:
+        """跑一次 host 白名单自愈；失败只影响提示文案，绝不能挡住捕获本身。"""
+        try:
+            healed = self._heal_host()
+        except Exception:  # noqa: BLE001
+            return {}
+        return healed if isinstance(healed, dict) else {}
+
     def _work(self) -> None:
         session = self._session
         try:
