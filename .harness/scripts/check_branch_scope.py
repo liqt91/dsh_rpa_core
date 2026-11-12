@@ -136,6 +136,11 @@ def check_scope_sanity(scope: dict, errors: list[str]) -> int:
     for rel in governance:
         if not (ROOT / rel).is_file():
             errors.append(f"governance 列了不存在的文件：{rel}")
+    # shared_runtime 里以 / 结尾的条目是**目录前缀**（整棵子树共享，ADR 0022-R3）。
+    # 目录写错不会让越界检查报错，只会让本该独占的路径悄悄变成无人认领，故先查存在性。
+    for rel in scope["shared_runtime"]:
+        if rel.endswith("/") and not (ROOT / rel).is_dir():
+            errors.append(f"shared_runtime 的目录前缀不存在：{rel}")
     if not set(scope["must_match_across_branches"]) <= set(governance):
         errors.append("must_match_across_branches 必须是 governance 的子集")
     if not set(scope["branch_local"]) <= set(governance):
@@ -200,12 +205,27 @@ def check_matching(scope: dict, branch: str, errors: list[str]) -> int:
 
 
 def owner_of(path: str, scope: dict) -> str | None:
+    """查路径归属：治理 / 共享层 → 无人独占；否则按各分支 exclusive 前缀认领。
+
+    ``shared_runtime`` 的条目有两种形状：精确文件路径，或以 ``/`` 结尾的目录前缀。
+    后者整棵子树都算共享支撑层（ADR 0022-R3：PPX 原型编辑面被工作台运行时复用，
+    为它每加一个文件就改一次治理是纯噪声）。
+
+    优先级是**精确声明 > 目录前缀**：精确共享文件、各分支独占域先判，
+    剩下的才落到共享目录兜底。这样原型目录整体共享，但客户端打包配置
+    （``ppx.toml`` 等）仍能用一条精确的 exclusive 条目留在 ppx-only。
+    """
     if path in scope["governance"] or path in scope["shared_runtime"]:
         return None
     for name, cfg in scope["branches"].items():
         for prefix in cfg["exclusive"]:
             if path == prefix or path.startswith(prefix):
                 return name
+    if any(
+        prefix.endswith("/") and path.startswith(prefix)
+        for prefix in scope["shared_runtime"]
+    ):
+        return None
     return None
 
 
