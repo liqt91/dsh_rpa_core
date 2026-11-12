@@ -41,6 +41,7 @@ class CaptureFloat:
         self._hwnd = None
         self._thread = None
         self._on_cancel = None
+        self._hfont = None
         # (gesture, web, desktop, web_ok, desktop_ok)：整体替换，跨线程读安全
         self._lines: tuple[str, str, str, bool, bool] = ("", "", "", False, False)
 
@@ -198,9 +199,9 @@ class CaptureFloat:
 
         if msg == win32con.WM_CREATE:
             hinst = win32gui.GetModuleHandle(None)
-            hfont = self._font()
-            win32gui.SendMessage(hwnd, win32con.WM_SETFONT, hfont, True)
-            win32gui.CreateWindowEx(
+            # 字体只建一次（早年在 WM_PAINT 里每次 CreateFont 会持续泄漏 GDI 句柄）
+            self._hfont = self._font()
+            button = win32gui.CreateWindowEx(
                 0,
                 "BUTTON",
                 "取消捕获",
@@ -211,6 +212,7 @@ class CaptureFloat:
                 hinst,
                 None,
             )
+            win32gui.SendMessage(button, win32con.WM_SETFONT, self._hfont, True)
             win32gui.SetTimer(hwnd, _TIMER_AVOID, 40, None)
             return 0
         if msg == win32con.WM_TIMER and wparam == _TIMER_AVOID:
@@ -229,7 +231,7 @@ class CaptureFloat:
         if msg == win32con.WM_PAINT:
             hdc, ps = win32gui.BeginPaint(hwnd)
             try:
-                hfont = self._font()
+                hfont = self._hfont or self._font()
                 old = win32gui.SelectObject(hdc, hfont)
                 win32gui.SetBkMode(hdc, win32con.TRANSPARENT)
                 gesture, web, desktop, web_ok, desktop_ok = self._lines
@@ -247,6 +249,12 @@ class CaptureFloat:
             return 0
         if msg == win32con.WM_DESTROY:
             win32gui.KillTimer(hwnd, _TIMER_AVOID)
+            if self._hfont is not None:
+                try:
+                    win32gui.DeleteObject(self._hfont)
+                except Exception:  # noqa: BLE001 - 句柄已释放也无妨
+                    pass
+                self._hfont = None
             win32gui.PostQuitMessage(0)
             return 0
         return win32gui.DefWindowProc(hwnd, msg, wparam, lparam)
