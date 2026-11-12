@@ -992,8 +992,27 @@
     `FULL GATE PASSED`，HTTP 冒烟（`.harness/spike/probe_editor_http.py`）三项全通。
   - **入库已解决**：原型路径原本归 `ppx-only` 独占，暂存实测 `BRANCH SCOPE CHECK FAILED`；
     按下面「分支治理」条改契约后已本地提交 `216950d`（ADR 0022-R2）。
-  - **仍欠**：浏览器里真机点一遍「流程控制 → 插入 if → 选中否则组行 → 插指令 → 运行」
-    全链路未做（需 Chrome 常开），后端 RPC / HTTP / 负向验证都已覆盖。
+  - **仍欠**：浏览器里真机点一遍「流程控制 → 插入 if → 选中否则组行 → 插指令 → 运行」，
+    以及下面拖拽条的「左栏拖入 → grip 排序 → 运行」全链路未做（需 Chrome 常开）；
+    后端 RPC / HTTP / 负向验证都已覆盖。
+
+- [x] **PPX 原型 / 工作台编辑器缺拖拽（拖入 + 排序）**（`done`，2026-11-12）
+  - 取证：`main.js` 零 `dragstart/dragover/drop`，dist 产物搜不到 `dataTransfer`；后端只有
+    `insertNode/insertControlNode/deleteNode`，`_insert_plan` 明写「落点由分支末尾决定」，
+    **没有移动 / 排序 RPC** ⇒ 插进来的节点永远追加到分支末尾。旧 Web 编辑器 M9.1 有 HTML5 DnD
+    （拖入上/下半区落点 + 画布拖拽排序）、M11 有 grip 拖子树；ADR 0016 冻结、ADR 0020 移走
+    devserver 后没迁到原型。`M65-host-boundary-freeze.md:439` 的「未决」也挂着「拖拽重排」。
+  - **2026-11-12 已落地（维护者选「拖入 + 排序」）**：`api.py` 加 `rpa.moveNode`（防环、目标
+    容器/分支合法性、同分支 pop 后下标修正、写回前 `Workflow.model_validate`、sha 乐观锁），
+    `insertNode` 与 `insertControlNode` 加 `explicit + parent_id + index` 精确落点（点击通道
+    保持原语义）；`_Flattener` 每张卡片下发 `parentId/branch/index`，虚拟组行也是分支落点。
+    `main.js` 加左栏 draggable、卡片 grip、dragover 落点三态、drop 双通道；样式从 main.js
+    运行时注入（style.css 仍归 ppx-only 独占，不为 14 行样式再松绑治理）。dist 已重建。
+  - 判据：`tests/test_editor_drag_drop.py` 7 条（语义 + 源码接线 + dist 产物同步）；
+    `.harness/spike/negative_drag_drop.py` 15 条（13 注入全红且期望集精确、2 条元验证：
+    把判据放宽后同一注入必须变绿），逐字节还原核 md5。collected=146、`FULL GATE PASSED`
+    （rc=0，basetemp 用系统 temp 避开 50ms 计时用例假红）、HTTP 冒烟四项全通。
+  - **仍欠**：浏览器里真机拖一遍（见上条，需 Chrome 常开）。
 
 - [x] **`workflow_doc.flatten_steps` 会把真实控制流的分支体丢掉**（`done`，2026-11-12）
   - `apps/xhs-workbench/src/workflow_doc.py:97` 只递归 `children`，但真实 AST 里 `if` 的分支体在

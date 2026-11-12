@@ -454,7 +454,7 @@
     },
     {
       "id": "ppx-canvas-layout",
-      "title": "PPX canvas reads nesting: depth indent + rails, rows don't collapse, cards focusable · 23 invariants",
+      "title": "PPX canvas reads nesting: depth indent + rails, rows don't collapse, cards focusable · 23 invariants · DnD",
       "passes": true
     },
     {

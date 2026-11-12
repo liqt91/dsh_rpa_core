@@ -551,18 +551,35 @@ class _Flattener:
         self.cards: list[dict[str, Any]] = []
         self._seq = 0
 
-    def add(self, **card: Any) -> None:
+    def add(
+        self, parent_id: str = "", branch: str = "", index: int = 0, **card: Any
+    ) -> None:
+        """每张卡片都带上自己在 AST 里的位置，拖拽落点才不用前端去猜树形。"""
         if card.get("kind") != "group":
             self._seq += 1
             card.setdefault("no", self._seq)
+        card.setdefault("parentId", parent_id)
+        card.setdefault("branch", branch)
+        card.setdefault("index", index)
         self.cards.append(card)
 
-    def group(self, label: str, depth: int, parent_id: str = "", branch: str = "") -> None:
+    def group(
+        self,
+        label: str,
+        depth: int,
+        parent_id: str = "",
+        branch: str = "",
+        index: int = 0,
+    ) -> None:
         """虚拟组行同时是「往这条分支插节点」的锚点：前端选中它后把 parentId+branch 传回来。
 
         空分支也要出组行，否则用户插入一个 if/try 之后根本找不到「否则 / 异常」的落点。
+        index 取该分支当前长度：拖到组行上一律插在这条分支的末尾。
         """
         self.add(
+            parent_id,
+            branch,
+            index,
             kind="group",
             label=label,
             depth=depth,
@@ -570,15 +587,31 @@ class _Flattener:
             summary="",
             id=f"{parent_id}::{branch}" if parent_id and branch else "",
             parentId=parent_id,
-            branch=branch,
+            # branch 已由 add 的位置参数 setdefault，这里不能再传同名关键字
         )
 
-    def walk(self, node: dict[str, Any], depth: int) -> None:
+    def walk(
+        self,
+        node: dict[str, Any],
+        depth: int,
+        parent_id: str = "",
+        branch: str = "",
+        index: int = 0,
+    ) -> None:
+        """parent_id / branch / index 是这张卡片在 AST 中的落点，递归时逐层往下带。"""
         kind = node.get("type")
         node_id = node.get("id", "")
+
+        def emit(**card: Any) -> None:
+            self.add(parent_id, branch, index, **card)
+
+        def children(key: str, child_depth: int) -> None:
+            for i, child in enumerate(node.get(key) or []):
+                self.walk(child, child_depth, node_id, key, i)
+
         if kind == "action":
             command = node.get("command", "")
-            self.add(
+            emit(
                 kind="action",
                 id=node_id,
                 depth=depth,
@@ -587,15 +620,12 @@ class _Flattener:
                 summary=_summarize(node.get("with") or {}),
             )
         elif kind == "return":
-            self.add(
-                kind="return", id=node_id, depth=depth, command="return", label="返回", summary=""
-            )
+            emit(kind="return", id=node_id, depth=depth, command="return", label="返回", summary="")
         elif kind == "sequence":
-            for child in node.get("children") or []:
-                self.walk(child, depth)
+            children("children", depth)
         elif kind == "if":
             cond = node.get("condition") or {}
-            self.add(
+            emit(
                 kind="if",
                 id=node_id,
                 depth=depth,
@@ -603,14 +633,12 @@ class _Flattener:
                 label="如果",
                 summary=_condition_summary(cond),
             )
-            self.group("则执行", depth + 1, node_id, "then")
-            for child in node.get("then") or []:
-                self.walk(child, depth + 1)
-            self.group("否则", depth + 1, node_id, "else")
-            for child in node.get("else") or []:
-                self.walk(child, depth + 1)
+            self.group("则执行", depth + 1, node_id, "then", len(node.get("then") or []))
+            children("then", depth + 1)
+            self.group("否则", depth + 1, node_id, "else", len(node.get("else") or []))
+            children("else", depth + 1)
         elif kind == "forEach":
-            self.add(
+            emit(
                 kind="forEach",
                 id=node_id,
                 depth=depth,
@@ -620,19 +648,14 @@ class _Flattener:
                 # 和旁边参数摘要的 JSON 风格不一致
                 summary=f"{_compact(node.get('items'), 24)} as {node.get('item_var')}",
             )
-            for child in node.get("children") or []:
-                self.walk(child, depth + 1)
+            children("children", depth + 1)
         elif kind == "try":
-            self.add(
-                kind="try", id=node_id, depth=depth, command="try", label="尝试", summary=""
-            )
-            for child in node.get("children") or []:
-                self.walk(child, depth + 1)
-            self.group("异常", depth + 1, node_id, "catch")
-            for child in node.get("catch") or []:
-                self.walk(child, depth + 1)
+            emit(kind="try", id=node_id, depth=depth, command="try", label="尝试", summary="")
+            children("children", depth + 1)
+            self.group("异常", depth + 1, node_id, "catch", len(node.get("catch") or []))
+            children("catch", depth + 1)
         else:
-            self.add(
+            emit(
                 kind="unknown",
                 id=node_id,
                 depth=depth,
@@ -935,6 +958,14 @@ def compile_check(path: str) -> dict[str, Any]:
 _CONTAINERS = ("sequence", "forEach", "try", "if")
 # 容器里"新节点默认进哪条分支"
 _DEFAULT_BRANCH = {"sequence": "children", "forEach": "children", "try": "children", "if": "then"}
+# 容器「允许哪些分支」：比 _NESTED 更严，拖拽落点先挡掉 if.children 这类非法形状，
+# 比等到 Workflow.model_validate 才报错更能说清「哪儿放错了」。
+_BRANCHES_BY_TYPE = {
+    "sequence": ("children",),
+    "forEach": ("children",),
+    "try": ("children", "catch"),
+    "if": ("then", "else"),
+}
 
 
 def _locate(
@@ -1017,13 +1048,68 @@ def _insert_plan(
     return parent, key or "children", anchor
 
 
+def _explicit_container(
+    document: dict[str, Any], parent_id: str, branch: str
+) -> tuple[dict[str, Any], str]:
+    """拖拽落点：按「父容器 id + 分支键」定位，不走 anchor 的分支末尾语义。
+
+    parent_id 为空 = 落到 document.root（画布空白处）；分支留空取该容器默认分支。
+    """
+    root = document.get("root") or {}
+    if parent_id:
+        located = _locate(root, parent_id)
+        if located is None:
+            raise ValueError(f"目标容器不存在：{parent_id}")
+        container = located[3]
+    else:
+        container = root
+    kind = container.get("type")
+    if kind not in _BRANCHES_BY_TYPE:
+        raise ValueError(f"{parent_id or 'root'} 不是可以挂子节点的容器（{kind}）")
+    key = branch or _DEFAULT_BRANCH[kind]
+    if key not in _BRANCHES_BY_TYPE[kind]:
+        raise ValueError(f"{kind} 没有 {key} 分支")
+    return container, key
+
+
+def _insert_at(bucket: list[Any], node: dict[str, Any], index: int) -> int:
+    """按前端给的落点下标插入；-1 / 越界一律当「末尾」，与点击通道一致。"""
+    if 0 <= index <= len(bucket):
+        bucket.insert(index, node)
+        return index
+    bucket.append(node)
+    return len(bucket) - 1
+
+
+def _resolve_target(
+    document: dict[str, Any],
+    anchor_id: str,
+    branch: str,
+    parent_id: str,
+    explicit: bool,
+) -> tuple[dict[str, Any], str, dict[str, Any] | None]:
+    """点击 = anchor 所属分支末尾；拖拽 = 显式 (parent_id, branch) 落点。"""
+    if explicit:
+        container, key = _explicit_container(document, parent_id, branch)
+        return container, key, None
+    return _insert_plan(document, anchor_id, branch)
+
+
 @api_method("rpa.insertNode")
 def insert_node(
-    path: str, command: str, anchor_id: str = "", branch: str = ""
+    path: str,
+    command: str,
+    anchor_id: str = "",
+    branch: str = "",
+    parent_id: str = "",
+    index: int = -1,
+    explicit: bool = False,
 ) -> dict[str, Any]:
     """按命令插一个新 action 节点（`with` 为空，与 Qt `create_action_item` 一致）。
 
     branch 由前端选中「否则 / 异常」这类虚拟组行时给出，指定落到容器的哪条分支。
+    explicit=True 是拖拽通道：落点由 (parent_id, branch, index) 决定，index 为
+    「目标行的上半区 = 它的下标，下半区 = 下标 + 1」；点击通道保持旧语义不变。
     """
     started = time.perf_counter()
     target = _flow_path(path)
@@ -1046,11 +1132,13 @@ def insert_node(
         }
 
     try:
-        container, target_branch, anchor = _insert_plan(document, anchor_id, branch)
+        container, target_branch, anchor = _resolve_target(
+            document, anchor_id, branch, parent_id, explicit
+        )
     except ValueError as exc:
         return {
             "ok": False,
-            "code": "INVALID_ANCHOR",
+            "code": "INVALID_TARGET" if explicit else "INVALID_ANCHOR",
             "error": str(exc),
             "ms": round((time.perf_counter() - started) * 1000, 1),
         }
@@ -1058,7 +1146,7 @@ def insert_node(
     node_id = _allocate_id(document)
     new_node = {"type": "action", "id": node_id, "command": command, "with": {}}
     bucket = container.setdefault(target_branch, [])
-    bucket.append(new_node)
+    placed_index = _insert_at(bucket, new_node, index if explicit else -1)
 
     try:
         Workflow.model_validate(document)
@@ -1080,7 +1168,7 @@ def insert_node(
         "placed": {
             "parent": container.get("id") or "root",
             "branch": target_branch,
-            "index": len(bucket) - 1,
+            "index": placed_index,
             "anchor": anchor.get("id") if anchor else None,
         },
         "bytes": [len(raw), len(encoded)],
@@ -1104,7 +1192,13 @@ _CONTROL_TEMPLATES: dict[str, dict[str, Any]] = {
 
 @api_method("rpa.insertControlNode")
 def insert_control_node(
-    path: str, kind: str, anchor_id: str = "", branch: str = ""
+    path: str,
+    kind: str,
+    anchor_id: str = "",
+    branch: str = "",
+    parent_id: str = "",
+    index: int = -1,
+    explicit: bool = False,
 ) -> dict[str, Any]:
     """插入控制流结构节点，带齐标准空分支；落点语义与 insert_node 完全一致。"""
     started = time.perf_counter()
@@ -1127,14 +1221,16 @@ def insert_control_node(
         return failed("UNKNOWN_CONTROL_KIND", f"不支持的控制流节点：{kind}")
 
     try:
-        container, target_branch, anchor = _insert_plan(document, anchor_id, branch)
+        container, target_branch, anchor = _resolve_target(
+            document, anchor_id, branch, parent_id, explicit
+        )
     except ValueError as exc:
-        return failed("INVALID_ANCHOR", str(exc))
+        return failed("INVALID_TARGET" if explicit else "INVALID_ANCHOR", str(exc))
 
     node_id = _allocate_id(document)
     new_node = {"id": node_id, **copy.deepcopy(template)}
     bucket = container.setdefault(target_branch, [])
-    bucket.append(new_node)
+    placed_index = _insert_at(bucket, new_node, index if explicit else -1)
 
     try:
         Workflow.model_validate(document)
@@ -1152,8 +1248,97 @@ def insert_control_node(
         "placed": {
             "parent": container.get("id") or "root",
             "branch": target_branch,
-            "index": len(bucket) - 1,
+            "index": placed_index,
             "anchor": anchor.get("id") if anchor else None,
+        },
+        "bytes": [len(raw), len(encoded)],
+        "sha": _sha256(encoded)[:12],
+        "ms": round((time.perf_counter() - started) * 1000, 1),
+        "compile": compile_result,
+        "flow": flow,
+    }
+
+
+@api_method("rpa.moveNode")
+def move_node(
+    path: str,
+    node_id: str,
+    parent_id: str = "",
+    branch: str = "",
+    index: int = -1,
+) -> dict[str, Any]:
+    """拖拽排序 / 跨分支移动：源按 id 定位，目标按 (parent_id, branch, index)。
+
+    前端只报「鼠标落在哪一行的上半区还是下半区」，AST 怎么改全由后端把关：
+    防环（容器不能进自己的后代）、目标必须是容器且分支合法、同分支移动要修正
+    pop 后左移的下标、写回前 Workflow.model_validate，任何一步失败都不落盘。
+    """
+    started = time.perf_counter()
+    target = _flow_path(path)
+    document, raw = _read_document(target)
+
+    def failed(code: str, message: str) -> dict[str, Any]:
+        return {
+            "ok": False,
+            "code": code,
+            "error": message,
+            "ms": round((time.perf_counter() - started) * 1000, 1),
+        }
+
+    # move 的乐观锁：与参数保存共用 _flows 里的 sha，挡住「别处改过盘还继续写」。
+    entry = _flows.get(path)
+    if entry is not None and entry["sha"] != _sha256(raw):
+        return failed("FLOW_CHANGED", "文件在打开后被其他程序改过，已拒绝覆盖（重新打开流程再改）")
+
+    root = document.get("root") or {}
+    located = _locate(root, node_id)
+    if located is None:
+        return failed("NODE_NOT_FOUND", f"节点不存在：{node_id}")
+    src_parent, src_branch, src_index, node = located
+    if src_parent is None or src_branch is None or src_index is None:
+        return failed("ROOT_NOT_MOVABLE", "根节点不能移动（流程至少要有一个 root）")
+
+    try:
+        container, target_branch = _explicit_container(document, parent_id, branch)
+    except ValueError as exc:
+        return failed("INVALID_TARGET", str(exc))
+
+    # _collect_ids 含源节点自身，一并挡住「拖进自己」与「拖进自己的子分支」。
+    subtree: list[str] = []
+    _collect_ids(node, subtree)
+    if (container.get("id") or "root") in subtree:
+        return failed("CYCLE", "不能把节点拖进它自己或它的子分支里")
+
+    bucket = container.setdefault(target_branch, [])
+    # 同一条分支里，前端给的下标是 pop 之前的；源在目标之前时目标会左移一格。
+    if container is src_parent and target_branch == src_branch and index > src_index:
+        index -= 1
+    src_parent[src_branch].pop(src_index)
+    actual = _insert_at(bucket, node, index)
+
+    try:
+        Workflow.model_validate(document)
+    except Exception as exc:  # noqa: BLE001 - 校验失败按「不写盘」处理
+        return failed(
+            "INVALID_WORKFLOW", f"移动后结构不合法，未写盘：{type(exc).__name__}: {exc}"
+        )
+
+    encoded = _encode_document(document)
+    target.write_bytes(encoded)
+    compile_result = _compile(document)
+    flow = open_flow(path)
+    return {
+        "ok": True,
+        "moved": {
+            "nodeId": node_id,
+            "parent": container.get("id") or "root",
+            "branch": target_branch,
+            "index": actual,
+            "from": {
+                "parent": src_parent.get("id") or "root",
+                "branch": src_branch,
+                "index": src_index,
+            },
         },
         "bytes": [len(raw), len(encoded)],
         "sha": _sha256(encoded)[:12],

@@ -17,6 +17,38 @@ const CONTROL_NODES = [
   { id: 'return', label: '返回', control: true },
 ]
 
+// 同源 iframe 里 HTML5 DnD 可用；自定义 MIME 避免把 JSON 当普通文本拖进输入框。
+const DND_MIME = 'application/x-ppx-node'
+
+/* 拖拽样式随 main.js 走，不写进 style.css：分支契约（ADR 0022-R2 的 shared_runtime）
+   只放行 api.py / main.js 两个编辑面文件，style.css 仍归 ppx-only 独占，
+   工作台分支不能提交它。运行时注入这段 style，两端看到的落点指示一致。 */
+const DND_CSS = `
+.cmd[draggable="true"] { cursor: grab; }
+.cmd[draggable="true"]:active { cursor: grabbing; }
+#cards:empty::after { content: "这个流程还没有节点。从左边点一条或拖进来。"; }
+.card .grip {
+  flex: 0 0 auto; width: 12px; text-align: center;
+  color: var(--faint); font-size: 13px; line-height: 1;
+  cursor: grab; opacity: .35; user-select: none;
+}
+.card .grip:active { cursor: grabbing; }
+.card:hover .grip, .card:focus-within .grip { opacity: 1; }
+.card.drop-before { box-shadow: inset 0 2px 0 0 var(--info) !important; }
+.card.drop-after { box-shadow: inset 0 -2px 0 0 var(--info) !important; }
+.card.drop-into { outline: 1px dashed var(--info); background: var(--selected); }
+`
+function injectDndStyles() {
+  // 渲染层判据用最小 DOM shim 跑这份源码，那里没有 head；真实浏览器一定有。
+  const head = document.head || document.querySelector?.('head')
+  if (!head) return
+  const tag = document.createElement('style')
+  tag.id = 'dnd-styles'
+  tag.textContent = DND_CSS
+  head.append(tag)
+}
+injectDndStyles()
+
 const el = {
   status: document.querySelector('#status'),
   picker: document.querySelector('#flowPicker'),
@@ -86,6 +118,10 @@ function renderCommands(list) {
       const row = mk('div', 'cmd')
       row.append(mk('span', null, c.label))
       row.title = c.id
+      row.draggable = true
+      row.addEventListener('dragstart', (event) =>
+        setDragPayload(event, { mode: 'insert', command: c }, 'copy'),
+      )
       row.addEventListener('click', () => insertCommand(c))
       el.cmds.append(row)
     }
@@ -101,6 +137,10 @@ function renderCommands(list) {
       const row = mk('div', 'cmd')
       row.append(mk('span', null, c.label))
       row.title = `插入结构节点：${c.id}`
+      row.draggable = true
+      row.addEventListener('dragstart', (event) =>
+        setDragPayload(event, { mode: 'insert', command: c }, 'copy'),
+      )
       row.addEventListener('click', () => insertCommand(c))
       el.cmds.append(row)
     }
@@ -108,8 +148,8 @@ function renderCommands(list) {
   el.cmdCount.textContent = `${list.length} 条`
 }
 
-/** 插入一个真节点。落点由服务端按「anchor 所属分支末尾」决定，前端只出 anchor。 */
-async function insertCommand(command) {
+/** 插入一个真节点。点击走 anchor 末尾语义；拖入传 dropTarget 走显式落点。 */
+async function insertCommand(command, dropTarget = null) {
   if (!currentPath) return
   // 选中「否则 / 异常」这类虚拟组行时，锚点是它的父容器 + 分支键；
   // 选中普通卡片时沿用原语义（容器进默认分支、叶子进父容器的当前分支）。
@@ -122,6 +162,14 @@ async function insertCommand(command) {
     const args = { path: currentPath, anchor_id: anchor, branch }
     if (command.control) args.kind = command.id
     else args.command = command.id
+    // 拖拽落点：服务端按 (parent_id, branch, index) 精确插入，不再追加到分支末尾。
+    if (dropTarget) {
+      args.anchor_id = ''
+      args.branch = dropTarget.branch
+      args.explicit = true
+      args.parent_id = dropTarget.parentId
+      args.index = dropTarget.index
+    }
     const res = await ppx.call(rpc, args)
     if (!res.ok) {
       setStatus(`插入失败 ${res.code}：${res.error}`)
@@ -131,7 +179,8 @@ async function insertCommand(command) {
     const placed = res.placed
     renderCards()
     renderCompile(res.compile)
-    setStatus(`插入 ${command.label} → ${placed.parent}/${placed.branch}[${placed.index}] · ${res.bytes[0]}→${res.bytes[1]} B · ${res.ms} ms（anchor ${placed.anchor || 'root'}）`)
+    const from = dropTarget ? '拖放落点' : `anchor ${placed.anchor || 'root'}`
+    setStatus(`插入 ${command.label} → ${placed.parent}/${placed.branch}[${placed.index}] · ${res.bytes[0]}→${res.bytes[1]} B · ${res.ms} ms（${from}）`)
     // 新节点 with 是空的（与 Qt 一致），参数全未设置 ⇒ 直接跳到它，省一次点击
     const fresh = cards.find((c) => c.id === res.newNodeId)
     if (fresh) {
@@ -145,6 +194,95 @@ async function insertCommand(command) {
         row.addEventListener('animationend', () => row.classList.remove('flash'), { once: true })
       }
     }
+  } catch (error) {
+    setStatus(`${error.code}: ${error.message}`)
+  } finally {
+    el.rpcMs.textContent = `${(performance.now() - t0).toFixed(0)} ms`
+  }
+}
+
+/* ---- 拖拽：左栏拖入 + 画布 grip 排序 -------------------------------------
+ * 两条通道共用一套落点。卡片的 parentId / branch / index 由 openFlow 下发，
+ * 前端只算「落在哪一行的上半区还是下半区」，AST 怎么改全部交给后端。
+ */
+function setDragPayload(event, payload, effect) {
+  event.dataTransfer.setData(DND_MIME, JSON.stringify(payload))
+  event.dataTransfer.effectAllowed = effect
+}
+
+function readDragPayload(event) {
+  const raw = event.dataTransfer.getData(DND_MIME)
+  if (!raw) return null
+  try {
+    return JSON.parse(raw)
+  } catch {
+    return null
+  }
+}
+
+// dragover 阶段读不到 data（浏览器只在 drop 时放开），但 types 一直可读。
+function hasDragPayload(event) {
+  return Array.from(event.dataTransfer.types || []).includes(DND_MIME)
+}
+
+function clearDropHint() {
+  for (const row of el.cards.querySelectorAll('.drop-before, .drop-after, .drop-into')) {
+    row.classList.remove('drop-before', 'drop-after', 'drop-into')
+  }
+}
+
+function dragTarget(event) {
+  const row = event.target instanceof Element ? event.target.closest('.card') : null
+  const empty = { parentId: '', branch: '', index: -1, row: null, mode: '' }
+  if (!row) return empty // 画布空白处 = root 末尾
+  const card = cards.find((c) => (c.id || '') === row.dataset.cardId)
+  if (!card) return empty
+  if (card.kind === 'group') {
+    // 虚拟组行代表整条分支，拖到它上面一律插这条分支的末尾
+    return {
+      parentId: card.parentId || '',
+      branch: card.branch || '',
+      index: card.index ?? 0,
+      row,
+      mode: 'into',
+    }
+  }
+  const box = row.getBoundingClientRect()
+  const before = event.clientY < box.top + box.height / 2
+  return {
+    parentId: card.parentId || '',
+    branch: card.branch || '',
+    index: (card.index ?? 0) + (before ? 0 : 1),
+    row,
+    mode: before ? 'before' : 'after',
+  }
+}
+
+function showDropHint(target) {
+  clearDropHint()
+  if (target.row) target.row.classList.add(`drop-${target.mode}`)
+}
+
+async function moveCard(nodeId, target) {
+  if (!currentPath) return
+  const t0 = performance.now()
+  try {
+    const res = await ppx.call('rpa.moveNode', {
+      path: currentPath,
+      node_id: nodeId,
+      parent_id: target.parentId,
+      branch: target.branch,
+      index: target.index,
+    })
+    if (!res.ok) {
+      setStatus(`移动失败 ${res.code}：${res.error}`)
+      return
+    }
+    cards = res.flow.cards
+    renderCards()
+    renderCompile(res.compile)
+    const moved = res.moved
+    setStatus(`移动 ${moved.nodeId} → ${moved.parent}/${moved.branch}[${moved.index}] · ${res.ms} ms`)
   } catch (error) {
     setStatus(`${error.code}: ${error.message}`)
   } finally {
@@ -193,6 +331,7 @@ function renderCards() {
       )
       // 组行也要参与缩进与竖线，否则「则执行 / 否则 / 异常」会漂在父节点左边的同一列
       group.dataset.depth = String(depth)
+      group.dataset.cardId = card.id || ''
       group.style.setProperty('--depth-n', String(depth))
       group.append(mk('span', 'gtag', '↳'), mk('span', 'gname', card.label))
       // 组行不是 AST 节点，但它是「往这条分支插节点」的唯一可见落点：可点、可键盘选中。
@@ -219,6 +358,7 @@ function renderCards() {
         (missingNodeIds.has(card.id) ? ' missing' : ''),
     )
     row.dataset.nodeId = card.id || ''
+    row.dataset.cardId = card.id || ''
     row.dataset.depth = String(depth)
     row.style.setProperty('--depth-n', String(depth))
     row.style.setProperty('--accent', DEPTH[depth % DEPTH.length])
@@ -227,6 +367,15 @@ function renderCards() {
     if (card.command) row.append(mk('span', 'badge', card.command.split('.')[0]))
     if (missingNodeIds.has(card.id)) row.append(mk('span', 'cap', '⚠ 待补'))
     if (!card.draft) {
+      // 只有 grip 可拖：整行 draggable 会跟「点选 / 删除 / 键盘空格」抢事件。
+      const grip = mk('span', 'grip', '⠿')
+      grip.title = '拖动排序：拖到目标行的上半区插在前面，下半区插在后面'
+      grip.draggable = true
+      grip.addEventListener('dragstart', (event) => {
+        event.stopPropagation()
+        setDragPayload(event, { mode: 'move', nodeId: card.id }, 'move')
+      })
+      row.append(grip)
       const del = mk('button', 'del', '×')
       del.title = '删除这个节点（容器会连同里面的一起删）'
       del.addEventListener('click', (event) => {
@@ -1305,6 +1454,28 @@ el.stop.addEventListener('click', stopRun)
 el.status.addEventListener('mouseenter', () => {
   el.status.title = el.status.textContent
 })
+
+/* 画布是同源 iframe 里的容器：dragover 不 preventDefault 就不会有 drop。 */
+el.cards.addEventListener('dragover', (event) => {
+  if (!hasDragPayload(event)) return
+  event.preventDefault()
+  event.dataTransfer.dropEffect = event.dataTransfer.effectAllowed === 'move' ? 'move' : 'copy'
+  showDropHint(dragTarget(event))
+})
+el.cards.addEventListener('drop', async (event) => {
+  if (!hasDragPayload(event)) return
+  event.preventDefault()
+  const payload = readDragPayload(event)
+  const target = dragTarget(event)
+  clearDropHint()
+  if (!payload || !currentPath) return
+  if (payload.mode === 'insert') await insertCommand(payload.command, target)
+  else if (payload.mode === 'move') await moveCard(payload.nodeId, target)
+})
+el.cards.addEventListener('dragleave', (event) => {
+  if (!el.cards.contains(event.relatedTarget)) clearDropHint()
+})
+document.addEventListener('dragend', clearDropHint)
 
 el.save.addEventListener('click', saveParams)
 el.revert.addEventListener('click', revertParams)

@@ -1,6 +1,7 @@
 """HTTP 冒烟：工作台托管的编辑器确实是刚重建的那份，且新 RPC 经 /editor-ppx-rpc 可达。
 
-不写任何流程文件：控制流 RPC 故意传一个未知 kind，只验证链路，不验证落盘。
+不写任何流程文件：控制流 RPC 故意传一个未知 kind、移动 RPC 故意传不存在的节点，
+只验证链路，不验证落盘。
 跑法：./.venv/Scripts/python.exe .harness/spike/probe_editor_http.py
 """
 
@@ -40,7 +41,9 @@ def main() -> None:
                 bundle = resp.read().decode("utf-8")
             assert "流程控制" in bundle, "托管的 JS 不是含新分组的那份"
             assert "insertControlNode" in bundle, "托管的 JS 里没有新 RPC"
-            print("PASS | /editor-ppx/ 托管的是重建产物（含流程控制分组 + 新 RPC）")
+            for token in ("application/x-ppx-node", "rpa.moveNode", "dnd-styles"):
+                assert token in bundle, f"托管的 JS 里没有拖拽实现：{token}"
+            print("PASS | /editor-ppx/ 托管的是重建产物（流程控制 + 拖拽实现）")
 
             def rpc(payload: dict) -> dict:
                 req = urllib.request.Request(
@@ -64,6 +67,19 @@ def main() -> None:
             assert denied["ok"] is True
             assert denied["data"]["code"] == "UNKNOWN_CONTROL_KIND", denied
             print("PASS | /editor-ppx-rpc → rpa.insertControlNode 可达（未知 kind 被明确拒绝）")
+            moved = rpc(
+                {
+                    "method": "rpa.moveNode",
+                    "params": {
+                        "path": "workflows/xhs_product_search.json",
+                        "node_id": "__probe_missing__",
+                    },
+                    "requestId": "probe-3",
+                }
+            )
+            assert moved["ok"] is True
+            assert moved["data"]["code"] == "NODE_NOT_FOUND", moved
+            print("PASS | /editor-ppx-rpc → rpa.moveNode 可达（不存在的节点被明确拒绝）")
         finally:
             httpd.shutdown()
             thread.join(timeout=5)
