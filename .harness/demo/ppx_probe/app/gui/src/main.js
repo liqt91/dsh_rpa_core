@@ -1427,6 +1427,13 @@ async function startPickFlow(m, override) {
   })
 }
 
+// 主窗收起/还原由后端同进程的 pywebview 窗口做（最小化后 JS 定时器可能被节流，
+// 不能把「还原」押在前端）。这里的 restore 只是兜底：后端异常没还原时，
+// 轮询到终态也能把窗口拉回来；非 ppx 环境（纯浏览器）忽略失败即可。
+async function restoreApp() {
+  try { await ppx.call('window.restore') } catch { /* 环境不支持就保持原样 */ }
+}
+
 async function beginCapture() {
   const s = pickState
   if (!s || s.state !== 'ready') return
@@ -1463,29 +1470,35 @@ async function pollCapture() {
     try {
       res = await ppx.call('rpa.capturePoll', { path: s.path, name: s.name })
     } catch (error) {
+      await restoreApp()
       setPickState({ ...s, state: 'failed', reason: error.message })
       return
     }
     if (!res.ok) {
+      await restoreApp()
       setPickState({ ...s, state: 'failed', reason: res.error })
       return
     }
     // 没有「超时」状态：捕获窗口一直开着，直到 ready / cancelled / offline / failed。
     if (res.state === 'ready') {
+      await restoreApp()
       setPickState({ ...s, state: 'bound', result: res.result })
       if (s.nodeId) focusNode(s.nodeId)
       await refreshElements()
       return
     }
     if (res.state === 'cancelled') {
+      await restoreApp()
       setPickState({ ...s, state: 'cancelled' })
       return
     }
     if (res.state === 'offline') {
+      await restoreApp()
       setPickState({ ...s, state: 'blocked', reason: res.reason || pickText('offlineHint') })
       return
     }
     if (res.state === 'failed') {
+      await restoreApp()
       setPickState({ ...s, state: 'failed', reason: res.reason })
       return
     }
@@ -1506,6 +1519,7 @@ async function cancelPick() {
     } catch {
       // 取消失败也要退出等待态，否则界面会一直假装在等。
     }
+    await restoreApp()
   }
   setPickState({ ...s, state: 'cancelled' })
 }

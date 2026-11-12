@@ -65,23 +65,19 @@ if FROZEN_RES is not None:
     os.environ.setdefault("RPA_I18N_JS", str(FROZEN_RES / "i18n.js"))
 
 import rpa_core  # noqa: E402
+from rpa_core.capture_kit import CaptureController  # noqa: E402
 from rpa_core.catalog import load_catalog  # noqa: E402
 from rpa_core.compiler.compiler import WorkflowCompileError, WorkflowCompiler  # noqa: E402
 from rpa_core.gui.i18n import load_command_display_names, load_op_labels  # noqa: E402
+from rpa_core.model.capture import ElementDescriptor  # noqa: E402
 from rpa_core.model.inputs import (  # noqa: E402
     InputDeclarationError,
     InputEntry,
     declaration_from_entries,
 )
-from rpa_core.capture.desktop import DesktopCaptureSession  # noqa: E402
-from rpa_core.capture.extension import ExtensionCaptureSession  # noqa: E402
-from rpa_core.model.capture import ElementDescriptor  # noqa: E402
 from rpa_core.model.workflow import Condition, Workflow  # noqa: E402
 
-# 桌面捕获没有「无限」语义的参数，传一个极大的秒数（≈ 100 年）等同永不超时。
-# 浏览器捕获走 ExtensionCaptureSession.pick(timeout_seconds=None) —— 永久阻塞，
-# 直到用户点选或 Esc 取消。两者都不存在「时间到了」这个概念。
-_CAPTURE_NEVER_TIMEOUT = 86400 * 365 * 10
+# 捕获的会话 / 浮窗 / 「无超时」全在 rpa_core.capture_kit 里，ppx 只负责 RPC 与落盘。
 
 
 def _caps_dir() -> Path:
@@ -2341,8 +2337,8 @@ def list_elements(path: str) -> dict[str, Any]:
 
 
 _PICK_INSTRUCTIONS = {
-    "browser": "在页面上点一下这个元素；抓到后自动写好，不用再点保存",
-    "desktop": "把鼠标移到那个控件上，点一下或按 F9；抓到后自动写好",
+    "browser": "在页面上 Ctrl+Click（Mac 用 ⌘+Click）或右键目标元素；抓到后自动写好，不用再点保存",
+    "desktop": "把鼠标移到控件上按 F9，或 Ctrl+Click / 右键；抓到后自动写好",
 }
 
 
@@ -2399,17 +2395,53 @@ def pick_plan(path: str, name: str, override: str | None = None) -> dict[str, An
     }
 
 
+class _WebviewHost:
+    """PPX 宿主适配：同进程的 pywebview 主窗（与 ppx 内置 ``window.minimize`` 同一对象）。
+
+    后端直接调 ``window.minimize()/restore()``，不依赖前端 JS 定时器——窗口最小化后
+    脚本可能被节流，「还原」不能押在它身上。非 pywebview 环境（门禁/纯浏览器）静默跳过。
+    """
+
+    @staticmethod
+    def _window():
+        try:
+            import webview  # ppx 运行时已加载；门禁环境没有就跳过
+        except Exception:  # noqa: BLE001
+            return None
+        windows = getattr(webview, "windows", None) or []
+        return windows[0] if windows else None
+
+    def minimize(self) -> None:
+        window = self._window()
+        if window is not None:
+            window.minimize()
+
+    def restore(self) -> None:
+        window = self._window()
+        if window is not None:
+            window.restore()
+
+
 @api_method("rpa.startCapture")
 def start_capture(path: str, name: str, override: str | None = None) -> dict[str, Any]:
     """起一次捕获。**target 由后端算**：前端只说「补哪个元素」，不说用哪条线。
 
-    复用主分支进程内捕获会话（ExtensionCaptureSession / DesktopCaptureSession），
-    **不壳 CLI、不手搓子进程**。浏览器捕获 ``pick(timeout_seconds=None)`` 永久阻塞，
-    桌面捕获传极大值 —— 整条链路**没有「超时」概念**：捕获窗口一直开着，直到用户
-    点选元素（→ ready）或按 Esc（→ cancel）。元素以 ``name`` 落盘即与节点的
-    elementRefs 同名绑定（ref-only，无需第二次「应用」）。
+    始终走主分支的 **HybridCaptureSession**（桌面 hover + 浏览器扩展双通道，先回传者胜），
+    不再把两条腿拆开各起一个会话 —— 那是上一轮自造的偏差，正是「只标红外侧窗口、
+    浏览器插件联动不上」两个根因：
 
-    真正的拾取在后台线程跑（否则会阻塞 RPC），前端用 ``rpa.capturePoll`` 轮询结果。
+    - 桌面腿 ``hybrid=True``：鼠标移到浏览器内容区时**让位给扩展页内捕获**，不再
+      把整个浏览器窗口框成「外侧窗口」；
+    - 扩展腿**永远 arm**：只要浏览器插件已连接，网页内 Ctrl+Click 即捕获页面元素
+      （修复「无法与浏览器插件联动」）；
+    - 没装扩展时自动退化为纯桌面 hover（扩展腿 start 即离线，永不触发）。
+
+    整条链路**没有「超时」概念**：捕获窗口一直开着，直到用户点选（→ ready）或 Esc
+    （→ cancel）。元素以 ``name`` 落盘即与节点的 elementRefs 同名绑定（ref-only）。
+
+    真正的拾取交给 ``rpa_core.capture_kit.CaptureController``（内部后台线程 pick +
+    win32 置顶浮窗 + 双腿状态 + 取消按钮），前端用 ``rpa.capturePoll`` 轮询结果。
+    浮窗是捕获期唯一的反馈面：宿主主窗此时要让开目标（ppx 前端负责 minimize/restore）。
     """
     started = time.perf_counter()
     plan = _pick_plan(path, name, override)
@@ -2424,40 +2456,40 @@ def start_capture(path: str, name: str, override: str | None = None) -> dict[str
             "fix": plan["fix"],
             "ms": round((time.perf_counter() - started) * 1000, 1),
         }
-    target = decision["target"]
     try:
-        if target == "browser":
-            session = ExtensionCaptureSession()
-            session.start()  # 连接全部在线 bridge 端点并 arm；无端点则置 offline
-            offline = session.offline
-            armed = session.armed  # ack 异步到达，此刻可能还是 False
-        else:
-            # 桌面捕获：agent 在 __init__ 里已 spawn；hybrid=False 走纯桌面 hover。
-            session = DesktopCaptureSession(hover=decision["hover"], hybrid=False)
-            offline = False
-            armed = True
+        controller = CaptureController(
+            on_captured=lambda captured: _persist_captured(path, name, captured),
+            host=_WebviewHost(),
+        )
+        launched = controller.start()
     except Exception as exc:  # noqa: BLE001 - 起捕获失败必须如实回前端，别闷成等待态
         return {"ok": False, "code": "CAPTURE_START_FAILED", "error": f"起不了捕获：{exc}"}
+    if not launched.get("ok"):
+        # 双通道都没了（非 Windows + 插件离线）：明确挡下，别让用户空等。
+        return {
+            "ok": False,
+            "state": "blocked",
+            "code": launched.get("code") or "NO_CAPTURE_CHANNEL",
+            "capabilities": plan["capabilities"],
+            "fix": plan["fix"] or "桌面捕获仅支持 Windows，且浏览器插件离线",
+            "ms": round((time.perf_counter() - started) * 1000, 1),
+        }
     entry: dict[str, Any] = {
         "name": name,
         "path": path,
         "decision": decision,
         "nodeId": (item or {}).get("nodeId"),
-        "session": session,
+        "controller": controller,
+        # 兼容字段：契约门禁与旧轮询路径按 entry["result"]/cancel_event 派生状态。
         "cancel_event": threading.Event(),
         "result": None,
         "cancelled": False,
-        "offline": offline,
-        "armed": armed,
-        "instructions": _PICK_INSTRUCTIONS[target],
+        "offline": bool(launched.get("offline", False)),
+        "armed": False,
+        "instructions": _PICK_INSTRUCTIONS[decision["target"]],
         "startedAt": time.time(),
     }
     _CAPTURES[_capture_key(path, name)] = entry
-    threading.Thread(
-        target=_capture_worker,
-        args=(path, name, session, target, decision),
-        daemon=True,
-    ).start()
     return {
         "ok": True,
         "state": "waiting",
@@ -2466,8 +2498,9 @@ def start_capture(path: str, name: str, override: str | None = None) -> dict[str
         "nodeId": entry["nodeId"],
         "decision": decision,
         "instructions": entry["instructions"],
-        "offline": offline,
-        "armed": armed,
+        "offline": entry["offline"],
+        "armed": False,
+        "extensionOffline": bool(launched.get("extensionOffline", False)),
         "ms": round((time.perf_counter() - started) * 1000, 1),
     }
 
@@ -2493,38 +2526,6 @@ def _persist_captured(path: str, name: str, descriptor: dict[str, Any]) -> dict[
     return doc
 
 
-def _capture_worker(
-    path: str, name: str, session: Any, target: str, decision: dict[str, Any]
-) -> None:
-    """后台线程：真正阻塞在 ``session.pick`` 上，产出后落盘，前端轮询取结果。
-
-    取消由 ``cancel_capture`` 置 ``cancel_event`` 并 terminate agent；这里**优先判取消**，
-    避免把「取消导致的 agent 退出」误报成超时/失败。浏览器 ``pick(None)`` 永久阻塞，
-    桌面 ``pick(极大值)`` 也不会自己超时 —— 链路里没有「时间到了」这个概念。
-    """
-    entry = _CAPTURES.get(_capture_key(path, name))
-    if entry is None:
-        return
-    try:
-        if target == "browser":
-            result = session.pick(timeout_seconds=None)
-        else:
-            result = session.pick(timeout_seconds=_CAPTURE_NEVER_TIMEOUT)
-    except Exception as exc:  # noqa: BLE001 - 任何异常都落进 result，让前端显式判失败
-        result = {"error": f"捕获线程异常：{exc}"}
-    if entry["cancel_event"].is_set():
-        entry["cancelled"] = True
-        return
-    if isinstance(result, dict) and result.get("kind") and result.get("selector"):
-        entry["result"] = _persist_captured(path, name, result)
-    elif isinstance(result, dict) and result.get("cancelled"):
-        entry["cancelled"] = True
-    else:
-        # offline / error（桌面 agent 被取消时已在上一个分支拦截，
-        # 所以到这里的都是真实失败或离线）。
-        entry["result"] = result if isinstance(result, dict) else {"error": str(result)}
-
-
 @api_method("rpa.capturePoll")
 def capture_poll(path: str, name: str) -> dict[str, Any]:
     """轮询状态机：pending / ready / cancelled / offline / failed。
@@ -2535,11 +2536,42 @@ def capture_poll(path: str, name: str) -> dict[str, Any]:
     entry = _CAPTURES.get(_capture_key(path, name))
     if entry is None:
         return {"ok": False, "code": "UNKNOWN_CAPTURE", "error": f"没有这个捕获会话：{name}"}
+    # 新路径：会话 / 浮窗 / 状态机由 capture_kit 持有；entry["controller"] 存在时交给它。
+    controller = entry.get("controller")
+    if controller is not None:
+        state = controller.poll()
+        payload: dict[str, Any] = {
+            "ok": True,
+            "name": name,
+            "path": path,
+            "state": state["state"],
+        }
+        if state["state"] == "ready":
+            payload["result"] = state.get("result")
+        elif state["state"] in ("offline", "failed"):
+            payload["reason"] = state.get("reason")
+        else:
+            payload["offline"] = bool(state.get("offline", False))
+            payload["armed"] = bool(state.get("armed", False))
+        return payload
+    # 旧形状（契约门禁按 entry["result"] 直接构造）：保留。
     # 取消优先于一切。
     if entry.get("cancelled") or entry["cancel_event"].is_set():
         return {"ok": True, "state": "cancelled", "name": name, "path": path}
     result = entry.get("result")
     if result is not None:
+        if isinstance(result, dict) and result.get("kind") in ("desktop", "browser"):
+            # 已落盘的有效描述符：回显给前端绑定。
+            return {"ok": True, "state": "ready", "name": name, "path": path, "result": result}
+        if result.get("unavailable"):
+            # 双通道都出局（如「插件已连接但没确认 arm」）：当作离线，给可执行提示。
+            return {
+                "ok": True,
+                "state": "offline",
+                "name": name,
+                "path": path,
+                "reason": result.get("error") or "没有可用的捕获通道",
+            }
         if result.get("offline"):
             return {
                 "ok": True,
@@ -2558,7 +2590,13 @@ def capture_poll(path: str, name: str) -> dict[str, Any]:
                 or result.get("stderrTail")
                 or "捕获失败",
             }
-        return {"ok": True, "state": "ready", "name": name, "path": path, "result": result}
+        return {
+            "ok": True,
+            "state": "failed",
+            "name": name,
+            "path": path,
+            "reason": str(result),
+        }
     # 进行中：实时回传扩展 armed（异步 ack，可能在 start 之后才到）。
     session = entry.get("session")
     armed = bool(getattr(session, "armed", False)) if session is not None else False
@@ -2579,13 +2617,23 @@ def cancel_capture(path: str, name: str) -> dict[str, Any]:
     if entry is None:
         return {"ok": False, "code": "UNKNOWN_CAPTURE", "error": f"没有这个捕获会话：{name}"}
     entry["cancel_event"].set()
-    session = entry.get("session")
-    try:
-        if session is not None:
-            session.cancel()
-            session.close()
-    except Exception:  # noqa: BLE001 - 取消失败也要退出等待态，否则界面会一直假装在等
-        pass
+    controller = entry.get("controller")
+    if controller is not None:
+        try:
+            controller.cancel()
+        except Exception:  # noqa: BLE001 - 取消失败也要退出等待态
+            pass
+    else:
+        session = entry.get("session")
+        try:
+            if session is not None:
+                session.cancel()
+                session.close()
+        except Exception:  # noqa: BLE001 - 取消失败也要退出等待态
+            pass
+        hud = entry.get("hud")
+        if hud is not None:
+            hud.hide()
     entry["cancelled"] = True
     return {"ok": True, "state": "cancelled", "name": name, "path": path}
 
