@@ -3,9 +3,13 @@
   "split_point": "ff36ed21e39249375619788a6ccf6531d0167f0f",
   "branches": {
     "ppx-only": {
-      "role": "PPX 桌面客户端专用分支",
+      "role": "PPX 桌面客户端专用分支（客户端打包配置独占；原型编辑面已共享）",
       "exclusive": [
-        ".harness/demo/ppx_probe/"
+        ".harness/demo/ppx_probe/app/ppx.toml",
+        ".harness/demo/ppx_probe/app/package.json",
+        ".harness/demo/ppx_probe/app/pnpm-lock.yaml",
+        ".harness/demo/ppx_probe/app/pnpm-workspace.yaml",
+        ".harness/demo/ppx_probe/app/ppx.lock"
       ]
     },
     "plugin-only": {
@@ -26,8 +30,7 @@
     "workbuddy-suite/skills/workflow-studio/scripts/studio.py",
     "workbuddy-suite/skills/workflow-studio/references/protocol.md",
     "bin/rpa-skill.mjs",
-    ".harness/demo/ppx_probe/app/api/api.py",
-    ".harness/demo/ppx_probe/app/gui/src/main.js"
+    ".harness/demo/ppx_probe/"
   ],
   "governance": [
     ".harness/branch-scope.json",
