@@ -15,6 +15,7 @@ import importlib.util
 import json
 import subprocess
 import sys
+import threading
 import types
 from pathlib import Path
 
@@ -143,36 +144,41 @@ def case_offline_with_override_still_blocked() -> None:
         (api.capability_snapshot, api._scan_missing, api._flow_path, api.subprocess.Popen) = saved
 
 
-class FakeProc:
-    def __init__(self, alive: bool = True, code: int | None = None):
-        self.alive = alive
-        self.code = code
-        self.returncode = code
-
-    def poll(self):
-        return None if self.alive else self.code
-
-
 def case_capture_poll_states() -> None:
+    """新模型：轮询只看后台产出，没有 deadline / timeout。
+
+    后端 capture_poll 的状态只有 pending / ready / cancelled / offline / failed，
+    由 entry["result"]（或取消事件）派生——不再有「waiting」「timeout」这类
+    前端态，也不再壳 CLI（没有 proc / deadlineAt）。
+    """
     real_captures, real_dir = api._CAPTURES, api._elements_dir
     tmp = Path(sys.executable).parent  # 不写盘：用不存在的目录保证 captured=False
     api._elements_dir = lambda path: tmp / "__m66_no_such_dir__"
     key = ("demo.json", "userField")
     try:
-        for state, alive, code, deadline, cancelled in (
-            ("waiting", True, None, api.time.time() + 60, False),
-            ("timeout", False, 3, api.time.time() - 1, False),
-            ("failed", False, 1, api.time.time() + 60, False),
-            ("cancelled", False, -9, api.time.time() + 60, True),
+        for state, result, cancelled, event_set in (
+            ("pending", None, False, False),
+            ("ready", {"kind": "browser", "selector": {"css": "#x"}}, False, False),
+            ("cancelled", None, False, True),
+            ("offline", {"offline": True, "error": "扩展离线：请先打开装好插件的浏览器"}, False, False),
+            ("failed", {"error": "捕获线程异常：boom"}, False, False),
         ):
+            cancel_event = threading.Event()
+            if event_set:
+                cancel_event.set()
             api._CAPTURES[key] = {
-                "name": "userField", "path": "demo.json", "proc": FakeProc(alive, code),
-                "deadlineAt": deadline, "cancelled": cancelled, "nodeId": "n1",
-                "decision": {"target": "browser"}, "stdout": [], "stderr": [],
+                "name": "userField", "path": "demo.json",
+                "cancel_event": cancel_event, "cancelled": cancelled,
+                "result": result, "offline": False, "session": None, "nodeId": "n1",
+                "decision": {"target": "browser"},
             }
             res = api.capture_poll("demo.json", "userField")
             assert_true(res["state"] == state, f"期望 {state}，得到 {res['state']}")
-            assert_true("reason" in res and "deadlineAt" in res, f"状态契约缺字段：{res}")
+            assert_true("state" in res and "ok" in res, f"状态契约缺字段：{res}")
+            if state in ("offline", "failed"):
+                assert_true("reason" in res, f"{state} 缺 reason：{res}")
+            if state == "ready":
+                assert_true("result" in res, f"ready 缺 result：{res}")
     finally:
         api._CAPTURES, api._elements_dir = real_captures, real_dir
 
@@ -207,7 +213,7 @@ for name, fn in (
     ("能力快照解析在线/离线与修法", case_capability_snapshot),
     ("能力离线：不 spawn、返回 blocked", case_offline_never_spawns),
     ("覆盖为网页腿也不能绕过能力闸", case_offline_with_override_still_blocked),
-    ("轮询状态机：waiting/timeout/failed/cancelled", case_capture_poll_states),
+    ("轮询状态机：pending/ready/cancelled/offline/failed", case_capture_poll_states),
     ("手填元素：拒绝路径穿越、schema 与 LF", case_write_element),
 ):
     check(name, fn)

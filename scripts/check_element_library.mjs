@@ -184,8 +184,8 @@ const sandbox = {
       if (name === 'rpa.deleteElement') return state.deleteResponse
       if (name === 'rpa.writeElement') return state.writeResponse
       if (name === 'rpa.pickPlan') return state.planResponse
-      if (name === 'rpa.startCapture') return { ok: true, state: 'waiting', deadlineAt: 9999999999, instructions: '点一下' }
-      if (name === 'rpa.capturePoll') return { ok: true, state: 'waiting' }
+      if (name === 'rpa.startCapture') return { ok: true, state: 'waiting', offline: false, armed: true, instructions: '点一下' }
+      if (name === 'rpa.capturePoll') return { ok: true, state: 'pending' }
       return { ok: true }
     },
   },

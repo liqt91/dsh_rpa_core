@@ -334,15 +334,13 @@ aside, section { min-height: 0; overflow: auto; background: var(--surface); }
   border-radius: 6px; background: var(--surface);
 }
 .pickBar[data-state="bound"] { border-left-color: var(--success); }
-.pickBar[data-state="blocked"], .pickBar[data-state="failed"], .pickBar[data-state="timeout"] { border-left-color: var(--danger); }
+.pickBar[data-state="blocked"], .pickBar[data-state="failed"] { border-left-color: var(--danger); }
 .pickLive { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 500; color: var(--text); }
 .pickDot { flex: 0 0 auto; font-size: 16px; line-height: 1; color: var(--info); }
 .pickBar[data-state="bound"] .pickDot { color: var(--success); }
-.pickBar[data-state="blocked"] .pickDot, .pickBar[data-state="failed"] .pickDot,
-.pickBar[data-state="timeout"] .pickDot { color: var(--danger); }
+.pickBar[data-state="blocked"] .pickDot, .pickBar[data-state="failed"] .pickDot { color: var(--danger); }
 .pickDetail { display: flex; gap: 8px; flex-wrap: wrap; min-height: 20px; color: var(--muted); font-size: 14px; }
 .pickHintText { color: var(--text); }
-.pickSeconds { color: var(--muted); font-variant-numeric: tabular-nums; }
 .pickActions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 
 /* 唯一主操作；其余都是次级/折叠，不与技术选择并列。 */

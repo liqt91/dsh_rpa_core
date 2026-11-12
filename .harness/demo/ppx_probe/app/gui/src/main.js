@@ -987,8 +987,10 @@ function renderCompile(result) {
 
 /* ---- 元素资产（AI 生成工作流的待补元素 + 捕获入口） -----------------------
  * AI 生成的工作流把交互元素写成 elementRefs 占位（模型不知道真实选择器），运行期解析不到
- * 即 ELEMENT_REF_MISSING。这里把「缺哪个元素、在第几步」摊开，并接上 main 的
- * `rpa-core capture` 复用捕获器。捕获落盘即用同名 = 自动绑定（引用模型无需单独绑定步骤）。 */
+ * 即 ELEMENT_REF_MISSING。这里把「缺哪个元素、在第几步」摊开，并复用主分支进程内捕获会话
+ * （ExtensionCaptureSession / DesktopCaptureSession）—— 不再壳 CLI、不手搓子进程。
+ * 捕获没有超时概念：窗口一直开着，直到用户点选（ready）或按 Esc（cancel）。落盘即用同名 =
+ * 自动绑定（引用模型无需单独绑定步骤）。 */
 
 // 用户可见文案的唯一来源（M66）。静态判据扫这张表的值：出现实现名词即判红。
 // 动态内容一律用 {name} / {seconds} 占位，避免把拼接藏进源码里绕过判据。
@@ -1004,15 +1006,12 @@ const PICK_TEXT = {
   whereApp: '桌面软件',
   checking: '检查环境…',
   ready: '准备好了，马上去点一下要用的元素',
-  readyCount: '{seconds} 秒后自动开始',
   startNow: '现在开始',
   blocked: '现在还不能开始：{fix}',
   offlineHint: '浏览器还没连上，可以先手动填写',
   waiting: '等你点一下要用的元素',
   waitingDefault: '去点一下要用的元素',
-  left: '还剩 {seconds} 秒',
   cancelled: '已取消，随时可以重来',
-  timeout: '时间到了，没收到这次点选',
   failed: '这次没成：{reason}',
   bound: '第 {step} 步已就绪 · {name}',
   manual: '手动填写',
@@ -1047,7 +1046,7 @@ const PICK_TEXT = {
 // 状态符号：与文字、颜色三者并列，任何一条通道失效都还能读出状态。
 const PICK_ICON = {
   checking: '◌', ready: '◉', waiting: '◌', bound: '✓',
-  blocked: '!', cancelled: '–', timeout: '!', failed: '!',
+  blocked: '!', cancelled: '–', failed: '!', offline: '!',
 }
 
 function pickText(key, vars = {}) {
@@ -1057,8 +1056,7 @@ function pickText(key, vars = {}) {
 let pickMissing = []
 let pickElements = []
 let pickCapabilities = null
-let pickState = null // { name, path, override, state, step, nodeId, deadlineAt, hint, reason }
-let pickTimer = null
+let pickState = null // { name, path, override, state, step, nodeId, hint, reason }
 let pickPollTimer = null
 
 function stepOf(nodeId) {
@@ -1347,8 +1345,6 @@ function paintPickBar() {
   )
   if (s.state === 'waiting' || s.state === 'ready') {
     detail.append(mk('span', 'pickHintText', s.hint || pickText('waitingDefault')))
-    const seconds = mk('span', 'pickSeconds')
-    detail.append(seconds)
   } else {
     detail.textContent = s.hint || ''
   }
@@ -1385,33 +1381,11 @@ function paintPickBar() {
   }
   bar.append(live, detail, actions)
   el.elemBody.append(bar)
-  updateSeconds()
-}
-
-function updateSeconds() {
-  const node = document.querySelector('.pickSeconds')
-  if (!node || !pickState) return
-  const end = pickState.state === 'ready' ? pickState.readyAt : pickState.deadlineAt
-  if (!end) return
-  const left = Math.max(0, Math.ceil(end - Date.now() / 1000))
-  node.textContent = pickState.state === 'ready'
-    ? pickText('readyCount', { seconds: left })
-    : pickText('left', { seconds: left })
 }
 
 function setPickState(next) {
   pickState = next
   renderElementsPanel()
-  if (pickTimer) clearInterval(pickTimer)
-  pickTimer = null
-  if (next && (next.state === 'ready' || next.state === 'waiting')) {
-    pickTimer = setInterval(updateSeconds, 1000)
-    if (next.state === 'ready') {
-      setTimeout(() => {
-        if (pickState && pickState.state === 'ready') beginCapture()
-      }, 10000)
-    }
-  }
 }
 
 async function startPickFlow(m, override) {
@@ -1450,7 +1424,6 @@ async function startPickFlow(m, override) {
     ...base,
     state: 'ready',
     hint: '',
-    readyAt: Date.now() / 1000 + 10,
   })
 }
 
@@ -1477,7 +1450,6 @@ async function beginCapture() {
     state: 'waiting',
     hint: res.instructions,
     nodeId: res.nodeId || s.nodeId,
-    deadlineAt: res.deadlineAt,
   })
   pollCapture()
 }
@@ -1498,17 +1470,27 @@ async function pollCapture() {
       setPickState({ ...s, state: 'failed', reason: res.error })
       return
     }
-    if (res.state === 'bound') {
-      setPickState({ ...s, state: 'bound', nodeId: res.boundNodeId || s.nodeId })
-      focusNode(res.boundNodeId || s.nodeId)
+    // 没有「超时」状态：捕获窗口一直开着，直到 ready / cancelled / offline / failed。
+    if (res.state === 'ready') {
+      setPickState({ ...s, state: 'bound', result: res.result })
+      if (s.nodeId) focusNode(s.nodeId)
       await refreshElements()
       return
     }
-    if (res.state === 'waiting') {
-      pickPollTimer = setTimeout(tick, 1000)
+    if (res.state === 'cancelled') {
+      setPickState({ ...s, state: 'cancelled' })
       return
     }
-    setPickState({ ...s, state: res.state, reason: res.reason })
+    if (res.state === 'offline') {
+      setPickState({ ...s, state: 'blocked', reason: res.reason || pickText('offlineHint') })
+      return
+    }
+    if (res.state === 'failed') {
+      setPickState({ ...s, state: 'failed', reason: res.reason })
+      return
+    }
+    // pending：继续轮询，永不因时间放弃。
+    pickPollTimer = setTimeout(tick, 1000)
   }
   pickPollTimer = setTimeout(tick, 800)
 }

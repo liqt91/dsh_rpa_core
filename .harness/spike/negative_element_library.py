@@ -100,9 +100,10 @@ CASES = [
         {P_BRANCH, P_DELETE_GUARD}, set(),
     ),
     case(
-        "P5", "重捕判据退回只看文件在不在（旧资产立刻假成功）", API,
-        "        captured = elem.is_file() and elem.stat().st_mtime_ns > entry.get(\"baselineMtimeNs\", 0)",
-        "        captured = elem.is_file()  # 退回只看文件在不在",
+        "P5", "重捕判据退回「永不 pending」（旧资产/无结果也立刻假报 ready）", API,
+        "    if result is not None:",
+        "    if result is not None or True:  # 退回「永不 pending」\n"
+        "        result = result or {\"kind\": \"browser\", \"selector\": {\"css\": \"#x\"}, \"verifyCount\": 0, \"metadata\": {}}",
         {P_MTIME}, set(),
     ),
     case(

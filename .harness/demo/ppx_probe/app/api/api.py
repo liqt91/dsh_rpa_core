@@ -73,7 +73,16 @@ from rpa_core.model.inputs import (  # noqa: E402
     InputEntry,
     declaration_from_entries,
 )
+from rpa_core.capture.desktop import DesktopCaptureSession  # noqa: E402
+from rpa_core.capture.extension import ExtensionCaptureSession  # noqa: E402
+from rpa_core.model.capture import ElementDescriptor  # noqa: E402
 from rpa_core.model.workflow import Condition, Workflow  # noqa: E402
+
+# 桌面捕获没有「无限」语义的参数，传一个极大的秒数（≈ 100 年）等同永不超时。
+# 浏览器捕获走 ExtensionCaptureSession.pick(timeout_seconds=None) —— 永久阻塞，
+# 直到用户点选或 Esc 取消。两者都不存在「时间到了」这个概念。
+_CAPTURE_NEVER_TIMEOUT = 86400 * 365 * 10
+
 
 def _caps_dir() -> Path:
     """能力目录（每个命令一个 json）的三条来路，按形态选：
@@ -2120,7 +2129,6 @@ def cancel_run(run_id: str) -> dict[str, Any]:
 # M66：key 必须是 (path, name) 复合键。同名元素在两个流程里各缺一次时，
 # 单键会让后一次静默盖掉前一次的进程句柄 —— 用户看到的是「等了半天没反应」。
 _CAPTURES: dict[tuple[str, str], dict[str, Any]] = {}
-_CAPTURE_TIMEOUT = {"browser": 60.0, "desktop": 90.0}
 
 
 def _capture_key(path: str, name: str) -> tuple[str, str]:
@@ -2393,19 +2401,17 @@ def pick_plan(path: str, name: str, override: str | None = None) -> dict[str, An
 
 @api_method("rpa.startCapture")
 def start_capture(path: str, name: str, override: str | None = None) -> dict[str, Any]:
-    """起一次性捕获。**target 由后端算**：前端只说「补哪个元素」，不说用哪条线。
+    """起一次捕获。**target 由后端算**：前端只说「补哪个元素」，不说用哪条线。
 
-    捕获阻塞到用户手势，所以 spawn 后立即返回，前端用 `rpa.capturePoll` 轮询落盘。
-    元素以 `name` 落盘即与节点的 elementRefs 同名绑定（ref-only，无需第二次「应用」）。
+    复用主分支进程内捕获会话（ExtensionCaptureSession / DesktopCaptureSession），
+    **不壳 CLI、不手搓子进程**。浏览器捕获 ``pick(timeout_seconds=None)`` 永久阻塞，
+    桌面捕获传极大值 —— 整条链路**没有「超时」概念**：捕获窗口一直开着，直到用户
+    点选元素（→ ready）或按 Esc（→ cancel）。元素以 ``name`` 落盘即与节点的
+    elementRefs 同名绑定（ref-only，无需第二次「应用」）。
+
+    真正的拾取在后台线程跑（否则会阻塞 RPC），前端用 ``rpa.capturePoll`` 轮询结果。
     """
     started = time.perf_counter()
-    flow_file = _flow_path(path)
-    flow_dir = flow_file.parent.name
-    # --workflows 取**流程目录的父目录**：流程可能在 examples/ 或 workflows/ 或沙箱里，
-    # 写死 WORKSPACE/workflows 会让其它来源的流程捕获时找不到自己的目录。
-    flows_root = flow_file.parent.parent
-
-    # 探测在 spawn **之前**：能力不在线就别让用户进等待态空等一分钟。
     plan = _pick_plan(path, name, override)
     item = plan["item"]
     decision = plan["decision"]
@@ -2418,63 +2424,39 @@ def start_capture(path: str, name: str, override: str | None = None) -> dict[str
             "fix": plan["fix"],
             "ms": round((time.perf_counter() - started) * 1000, 1),
         }
-
-    timeout = _CAPTURE_TIMEOUT[decision["target"]]
-    argv = [
-        *_rpa_argv(),
-        "capture",
-        decision["target"],
-        "--save-as",
-        name,
-        "--flow",
-        flow_dir,
-        "--workflows",
-        str(flows_root),
-        "--timeout",
-        str(timeout),
-    ]
-    # 重新捕获一个已存在的资产时，文件本来就在盘上：capturePoll 若只看 is_file()
-    # 会立刻报「已抓到」，用户还没碰鼠标就假成功。记下起跑前的 mtime，只有这轮
-    # 真的重写过盘才算抓到（新建资产 baseline=0，落盘后必然更大）。
-    elem_target = _elements_dir(path) / f"{name}.json"
-    baseline_mtime = elem_target.stat().st_mtime_ns if elem_target.is_file() else 0
-    if decision["hover"]:
-        argv.append("--hover")
+    target = decision["target"]
     try:
-        proc = subprocess.Popen(
-            argv,
-            cwd=str(WORKSPACE),
-            env=_run_env(),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-        )
-    except OSError as exc:
-        return {"ok": False, "code": "SPAWN_FAILED", "error": f"起不了捕获子进程：{exc}"}
+        if target == "browser":
+            session = ExtensionCaptureSession()
+            session.start()  # 连接全部在线 bridge 端点并 arm；无端点则置 offline
+            offline = session.offline
+            armed = session.armed  # ack 异步到达，此刻可能还是 False
+        else:
+            # 桌面捕获：agent 在 __init__ 里已 spawn；hybrid=False 走纯桌面 hover。
+            session = DesktopCaptureSession(hover=decision["hover"], hybrid=False)
+            offline = False
+            armed = True
+    except Exception as exc:  # noqa: BLE001 - 起捕获失败必须如实回前端，别闷成等待态
+        return {"ok": False, "code": "CAPTURE_START_FAILED", "error": f"起不了捕获：{exc}"}
     entry: dict[str, Any] = {
         "name": name,
-        "flow": flow_dir,
         "path": path,
         "decision": decision,
         "nodeId": (item or {}).get("nodeId"),
-        "deadlineAt": time.time() + timeout + 3.0,
+        "session": session,
+        "cancel_event": threading.Event(),
+        "result": None,
         "cancelled": False,
-        "baselineMtimeNs": baseline_mtime,
-        "proc": proc,
-        "stdout": [],
-        "stderr": [],
-        "t0": time.perf_counter(),
+        "offline": offline,
+        "armed": armed,
+        "instructions": _PICK_INSTRUCTIONS[target],
         "startedAt": time.time(),
-        "argv": argv,
     }
     _CAPTURES[_capture_key(path, name)] = entry
     threading.Thread(
-        target=_pump, args=(proc.stdout, entry["stdout"], entry), daemon=True
-    ).start()
-    threading.Thread(
-        target=_pump, args=(proc.stderr, entry["stderr"], entry), daemon=True
+        target=_capture_worker,
+        args=(path, name, session, target, decision),
+        daemon=True,
     ).start()
     return {
         "ok": True,
@@ -2483,49 +2465,110 @@ def start_capture(path: str, name: str, override: str | None = None) -> dict[str
         "path": path,
         "nodeId": entry["nodeId"],
         "decision": decision,
-        "deadlineAt": entry["deadlineAt"],
-        "instructions": _PICK_INSTRUCTIONS[decision["target"]],
-        "argv": argv[1:],
+        "instructions": entry["instructions"],
+        "offline": offline,
+        "armed": armed,
         "ms": round((time.perf_counter() - started) * 1000, 1),
     }
 
 
+def _persist_captured(path: str, name: str, descriptor: dict[str, Any]) -> dict[str, Any]:
+    """把捕获描述符按主分支 ElementDescriptor 契约落盘到 elements/<name>.json。
+
+    直接复用主分支的 schema 校验（kind + selector 必填、verifyCount/metadata 可选），
+    不自己拼文档 —— 这是「复用主分支、别自己造」的关键落点。
+    """
+    element = ElementDescriptor(
+        kind=descriptor["kind"],
+        selector=descriptor["selector"],
+        verify_count=descriptor.get("verifyCount", 0),
+        metadata=descriptor.get("metadata", {}),
+    )
+    ed = _elements_dir(path)
+    ed.mkdir(parents=True, exist_ok=True)
+    doc = element.document()
+    target = ed / f"{name}.json"
+    target.write_bytes((json.dumps(doc, ensure_ascii=False, indent=2) + "\n").encode("utf-8"))
+    doc["savedAs"] = name
+    return doc
+
+
+def _capture_worker(
+    path: str, name: str, session: Any, target: str, decision: dict[str, Any]
+) -> None:
+    """后台线程：真正阻塞在 ``session.pick`` 上，产出后落盘，前端轮询取结果。
+
+    取消由 ``cancel_capture`` 置 ``cancel_event`` 并 terminate agent；这里**优先判取消**，
+    避免把「取消导致的 agent 退出」误报成超时/失败。浏览器 ``pick(None)`` 永久阻塞，
+    桌面 ``pick(极大值)`` 也不会自己超时 —— 链路里没有「时间到了」这个概念。
+    """
+    entry = _CAPTURES.get(_capture_key(path, name))
+    if entry is None:
+        return
+    try:
+        if target == "browser":
+            result = session.pick(timeout_seconds=None)
+        else:
+            result = session.pick(timeout_seconds=_CAPTURE_NEVER_TIMEOUT)
+    except Exception as exc:  # noqa: BLE001 - 任何异常都落进 result，让前端显式判失败
+        result = {"error": f"捕获线程异常：{exc}"}
+    if entry["cancel_event"].is_set():
+        entry["cancelled"] = True
+        return
+    if isinstance(result, dict) and result.get("kind") and result.get("selector"):
+        entry["result"] = _persist_captured(path, name, result)
+    elif isinstance(result, dict) and result.get("cancelled"):
+        entry["cancelled"] = True
+    else:
+        # offline / error（桌面 agent 被取消时已在上一个分支拦截，
+        # 所以到这里的都是真实失败或离线）。
+        entry["result"] = result if isinstance(result, dict) else {"error": str(result)}
+
+
 @api_method("rpa.capturePoll")
 def capture_poll(path: str, name: str) -> dict[str, Any]:
-    """轮询状态机：state / deadlineAt / reason / boundNodeId，前端不猜进程。"""
+    """轮询状态机：pending / ready / cancelled / offline / failed。
+
+    **没有 deadline、没有 timeout**：状态只看后台 pick 线程产出，不靠时间判断。
+    前端据此渲染，不要自己猜进程。
+    """
     entry = _CAPTURES.get(_capture_key(path, name))
     if entry is None:
         return {"ok": False, "code": "UNKNOWN_CAPTURE", "error": f"没有这个捕获会话：{name}"}
-    proc = entry["proc"]
-    elem = _elements_dir(entry["path"]) / f"{name}.json"
-    try:
-        # 只比「这一轮有没有重写过盘」，不比文件在不在：重捕时旧资产一直都在。
-        captured = elem.is_file() and elem.stat().st_mtime_ns > entry.get("baselineMtimeNs", 0)
-    except OSError:
-        captured = False
-    alive = proc.poll() is None
-    if captured:
-        state, reason = "bound", "已抓到，写好并绑定"
-    elif entry["cancelled"]:
-        state, reason = "cancelled", "你取消了这次拾取"
-    elif alive and time.time() < entry["deadlineAt"]:
-        state, reason = "waiting", "等你点一下"
-    elif not alive and (proc.returncode == 3 or time.time() >= entry["deadlineAt"]):
-        state, reason = "timeout", "时间到了，没收到点选"
-    elif alive:
-        state, reason = "timeout", "时间到了，没收到点选"
-    else:
-        state, reason = "failed", f"这次没成（退出码 {proc.returncode}）"
+    # 取消优先于一切。
+    if entry.get("cancelled") or entry["cancel_event"].is_set():
+        return {"ok": True, "state": "cancelled", "name": name, "path": path}
+    result = entry.get("result")
+    if result is not None:
+        if result.get("offline"):
+            return {
+                "ok": True,
+                "state": "offline",
+                "name": name,
+                "path": path,
+                "reason": result.get("error") or "扩展离线：请先打开装好插件的浏览器",
+            }
+        if result.get("error"):
+            return {
+                "ok": True,
+                "state": "failed",
+                "name": name,
+                "path": path,
+                "reason": result.get("error")
+                or result.get("stderrTail")
+                or "捕获失败",
+            }
+        return {"ok": True, "state": "ready", "name": name, "path": path, "result": result}
+    # 进行中：实时回传扩展 armed（异步 ack，可能在 start 之后才到）。
+    session = entry.get("session")
+    armed = bool(getattr(session, "armed", False)) if session is not None else False
     return {
         "ok": True,
-        "state": state,
+        "state": "pending",
         "name": name,
         "path": path,
-        "deadlineAt": entry["deadlineAt"],
-        "reason": reason,
-        "boundNodeId": entry.get("nodeId") if state == "bound" else None,
-        "result": _capture_result(entry, elem) if captured else None,
-        "exitCode": None if alive else proc.returncode,
+        "offline": entry.get("offline", False),
+        "armed": armed,
     }
 
 
@@ -2535,13 +2578,14 @@ def cancel_capture(path: str, name: str) -> dict[str, Any]:
     entry = _CAPTURES.get(_capture_key(path, name))
     if entry is None:
         return {"ok": False, "code": "UNKNOWN_CAPTURE", "error": f"没有这个捕获会话：{name}"}
-    proc = entry["proc"]
-    if proc.poll() is None:
-        proc.terminate()
-        try:
-            proc.wait(timeout=2.0)
-        except subprocess.TimeoutExpired:
-            proc.kill()
+    entry["cancel_event"].set()
+    session = entry.get("session")
+    try:
+        if session is not None:
+            session.cancel()
+            session.close()
+    except Exception:  # noqa: BLE001 - 取消失败也要退出等待态，否则界面会一直假装在等
+        pass
     entry["cancelled"] = True
     return {"ok": True, "state": "cancelled", "name": name, "path": path}
 

@@ -7,9 +7,9 @@ headless 直调 ppx_bridge，不碰仓库里的真实流程与资产。
 from __future__ import annotations
 
 import json
-import os
 import sys
 import tempfile
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -20,19 +20,10 @@ sys.path.insert(0, str(APP))
 
 from src import ppx_bridge as pb  # noqa: E402
 
-
-class _FakeProc:
-    returncode = None
-
-    def poll(self) -> None:
-        return None
-
-
 def call(method: str, **params: Any) -> dict[str, Any]:
     env = pb.dispatch(method, params)
     assert env["ok"] is True, (method, env)
     return env["data"]
-
 
 def main() -> None:
     api = pb._load_api()
@@ -90,40 +81,32 @@ def main() -> None:
             assert r["ok"] is False and r["code"] == "BAD_NAME", (bad, r)
         ok.append("非法资产名（含路径穿越）一律 BAD_NAME")
 
-        elem = ed / "in_use.json"
-        baseline = elem.stat().st_mtime_ns
-        entry = {
-            "path": path,
-            "name": "in_use",
-            "proc": _FakeProc(),
-            "baselineMtimeNs": baseline,
-            "deadlineAt": time.time() + 60,
-            "cancelled": False,
-            "nodeId": None,
-            "stdout": [],
-            "stderr": [],
-            "decision": {"target": "browser"},
+        # 重捕判据：新模型只看后台 pick 线程是否真正产出结果，
+        # 旧文件在盘上不会假报 ready —— 链路里没有「文件在不在」这种超时补丁。
+        key = api._capture_key(path, "in_use")
+        api._CAPTURES[key] = {
+            "name": "in_use", "path": path, "decision": {"target": "browser"},
+            "nodeId": None, "session": None, "cancel_event": threading.Event(),
+            "result": None, "cancelled": False, "offline": False, "armed": False,
+            "instructions": "", "startedAt": time.time(),
         }
-        api._CAPTURES[api._capture_key(path, "in_use")] = entry
         polled = call("rpa.capturePoll", path=path, name="in_use")
-        assert polled["state"] == "waiting", polled
-        ok.append("重捕时旧文件还在也不假报 bound（等这一轮真重写）")
+        assert polled["state"] == "pending", polled
+        ok.append("重捕进行中（pending）不假报 ready，即便旧文件还在盘上")
 
-        elem.write_text(
-            json.dumps({"kind": "browser", "selector": {"css": "#new"}}) + "\n",
-            encoding="utf-8",
-        )
-        future = baseline + 2_000_000_000
-        os.utime(elem, ns=(future, future))
+        # 只有后台 pick 真正落地的结果才让 poll 报 ready，且回显新选择器。
+        api._CAPTURES[key]["result"] = {
+            "kind": "browser", "selector": {"css": "#new"}, "verifyCount": 2,
+            "metadata": {}, "savedAs": "in_use",
+        }
         polled2 = call("rpa.capturePoll", path=path, name="in_use")
-        assert polled2["state"] == "bound", polled2
-        assert polled2["result"]["selector"] == "#new", polled2
-        ok.append("这轮真重写过盘才报 bound，且回显新选择器")
+        assert polled2["state"] == "ready", polled2
+        assert polled2["result"]["selector"]["css"] == "#new", polled2
+        ok.append("只有 pick 真正产出才报 ready，且回显新选择器")
 
         for line in ok:
             print("PASS |", line)
         print(f"全部通过：元素资产库 {len(ok)} 项")
-
 
 if __name__ == "__main__":
     main()

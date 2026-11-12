@@ -70,7 +70,7 @@ check('文案表：所有用户可见值都不含实现名词', () => {
 })
 
 check('文案表：状态键齐全（漏一个就会把 state 原名显示给用户）', () => {
-  for (const key of ['checking', 'ready', 'waiting', 'bound', 'blocked', 'cancelled', 'timeout', 'failed']) {
+  for (const key of ['checking', 'ready', 'waiting', 'bound', 'blocked', 'cancelled', 'failed']) {
     assert(typeof pickText[key] === 'string' && pickText[key], `缺 ${key}`)
   }
 })
@@ -161,9 +161,9 @@ function makeContext({ missing, capabilities, responses = {} } = {}) {
     'rpa.pickPlan': { ok: true, blocked: false, fix: null, decision: { target: 'browser' }, capabilities },
     'rpa.startCapture': {
       ok: true, state: 'waiting', name: 'userField', nodeId: 'n1',
-      instructions: '在页面上点一下这个元素', deadlineAt: Date.now() / 1000 + 60,
+      instructions: '在页面上点一下这个元素', offline: false, armed: true,
     },
-    'rpa.capturePoll': { ok: true, state: 'bound', reason: '已抓到', boundNodeId: 'n1' },
+    'rpa.capturePoll': { ok: true, state: 'ready', name: 'userField', nodeId: 'n1', result: { kind: 'css', selector: '#q' } },
     'rpa.cancelCapture': { ok: true, state: 'cancelled' },
     'rpa.writeElement': { ok: true, state: 'bound', boundNodeId: 'n1' },
   }
@@ -239,16 +239,16 @@ async function runFlow(responses) {
   })
   const seen = []
   await api.startPickFlow(TWO_MISSING[0], null)
-  seen.push(api.state().state)
-  const auto = timers.find((t) => t.ms === 10000)
-  assert(auto, '已就绪后没有自动开始的定时器')
-  auto.fn() // 不是用户再点一次：10 秒到点自动开始
+  seen.push(api.state().state) // 'ready'：探测完即就绪，不再有「检查中」常驻
+  // 新模型不再有「10 秒到点自动开始」：用户点「现在开始」才进等待态。
+  await api.beginCapture()
   await flush()
-  seen.push(api.state().state)
+  seen.push(api.state().state) // 'waiting'
   const tick = timers.find((t) => t.ms === 800)
   assert(tick, '没排轮询')
   await tick.fn()
-  seen.push(api.state().state)
+  await flush()
+  seen.push(api.state().state) // 'bound'（后端 ready → 前端 bound）或 'waiting'（pending 持续）
   return { seen, calls, state: api.state(), api }
 }
 
@@ -307,11 +307,11 @@ check('契约层：前端不传 target/browserType，轮询带 path，可取消'
   assert(/rpa\.pickPlan/.test(mainSrc), '探测没有前置到点按钮时')
 })
 
-check('契约层：后端决策唯一、探测在 spawn 之前、复合键', () => {
+check('契约层：后端决策唯一、不再手搓超时子进程、复合键', () => {
   assert(/def _pick_plan\(/.test(apiSrc), '没有唯一的探测+决策函数')
   assert(/plan = _pick_plan\(path, name, override\)/.test(apiSrc), 'startCapture 没复用 _pick_plan')
-  assert(apiSrc.indexOf('plan = _pick_plan') < apiSrc.indexOf('proc = subprocess.Popen(', apiSrc.indexOf('def start_capture')),
-    '能力探测跑到 spawn 后面去了')
+  const startRegion = apiSrc.slice(apiSrc.indexOf('def start_capture'))
+  assert(!/subprocess\.Popen/.test(startRegion), 'startCapture 还在手搓带超时的子进程')
   assert(/_CAPTURES: dict\[tuple\[str, str\]/.test(apiSrc), '_CAPTURES 不是复合键')
   assert(/resolve_target\(\(item or \{\}\)\.get\("command"\), capabilities, override\)/.test(apiSrc),
     'resolve_target 没吃到命令类型')
@@ -342,7 +342,7 @@ await checkAsync('端到端：一次「补一下」走到已就绪，零技术�
 
 await checkAsync('端到端：取消后名字与步骤不丢', async () => {
   const { calls, api } = await runFlow({
-    'rpa.capturePoll': { ok: true, state: 'waiting', reason: '等你点一下' },
+    'rpa.capturePoll': { ok: true, state: 'pending' },
   })
   await api.cancelPick()
   const state = api.state()
@@ -351,11 +351,12 @@ await checkAsync('端到端：取消后名字与步骤不丢', async () => {
   assert(calls.some((c) => c.name === 'rpa.cancelCapture'), '取消没走到后端')
 })
 
-await checkAsync('端到端：超时后可重来，名字与步骤不丢', async () => {
+await checkAsync('端到端：没有超时概念，pending 持续时窗口一直开着、可随时取消重来', async () => {
   const { seen, state } = await runFlow({
-    'rpa.capturePoll': { ok: true, state: 'timeout', reason: '时间到了，没收到这次点选' },
+    'rpa.capturePoll': { ok: true, state: 'pending' },
   })
-  assert(seen.join('>') === 'ready>waiting>timeout', `状态流=${seen.join('>')}`)
+  // 没有「时间到了」这种终态：轮询不停，末态仍是 waiting（用户在等，不是被踢出）。
+  assert(seen[seen.length - 1] === 'waiting', `末态不该是超时/失败：${seen.join('>')}`)
   assert(state.name === 'userField' && state.step === '3', `上下文丢了：${JSON.stringify(state)}`)
 })
 

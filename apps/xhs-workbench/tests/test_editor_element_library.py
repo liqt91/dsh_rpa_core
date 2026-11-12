@@ -12,9 +12,9 @@ UI 动态判据 ``scripts/check_element_library.mjs``；
 from __future__ import annotations
 
 import json
-import os
 import shutil
 import subprocess
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -33,19 +33,10 @@ DIST_DIR = ROOT / ".harness" / "demo" / "ppx_probe" / "app" / "gui" / "dist" / "
 CHECK_ALL = ROOT / ".harness" / "scripts" / "check_all.py"
 UI_SCRIPT = ROOT / "scripts" / "check_element_library.mjs"
 
-
-class _FakeProc:
-    returncode = None
-
-    def poll(self) -> None:
-        return None
-
-
 def _call(method: str, **params: Any) -> dict[str, Any]:
     env = pb.dispatch(method, params)
     assert env["ok"] is True, env
     return env["data"]
-
 
 @pytest.fixture
 def flow(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[str, Path, Any]:
@@ -86,13 +77,11 @@ def flow(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[str, Path, An
     target.write_text(json.dumps(doc, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     return created["path"], target, api
 
-
 def test_bridge_registers_asset_library_rpcs() -> None:
     registry = pb._registry()
     for name in ("rpa.elementDetail", "rpa.deleteElement"):
         assert name in registry, f"{name} 没注册进桥层"
         assert callable(registry[name]), f"{name} 不是可调用的处理函数"
-
 
 def test_write_element_creates_unbound_preset_asset(flow: tuple[str, Path, Any]) -> None:
     path, target, _ = flow
@@ -104,7 +93,6 @@ def test_write_element_creates_unbound_preset_asset(flow: tuple[str, Path, Any])
     doc = json.loads(target.read_text(encoding="utf-8"))
     assert "preset_one" not in json.dumps(doc), "新建资产不该改写工作流"
 
-
 def test_element_detail_returns_full_descriptor(flow: tuple[str, Path, Any]) -> None:
     path, _, _ = flow
     elem = _call("rpa.writeElement", path=path, name="in_use", selector="#used")
@@ -115,20 +103,17 @@ def test_element_detail_returns_full_descriptor(flow: tuple[str, Path, Any]) -> 
     assert detail["document"]["metadata"]["source"] == "manual"
     assert detail["size"] > 0 and detail["file"].endswith("in_use.json")
 
-
 def test_element_detail_walks_all_real_ast_branches(flow: tuple[str, Path, Any]) -> None:
     path, _, _ = flow
     _call("rpa.writeElement", path=path, name="branch_ref", selector="#branch")
     detail = _call("rpa.elementDetail", path=path, name="branch_ref")
     assert detail["referencedBy"] == ["inCatch", "inElse", "inThen"], detail["referencedBy"]
 
-
 @pytest.mark.parametrize("name", ["../evil", "a.b", "", "空格"])
 def test_detail_rejects_bad_names(flow: tuple[str, Path, Any], name: str) -> None:
     path, _, _ = flow
     res = _call("rpa.elementDetail", path=path, name=name)
     assert res["ok"] is False and res["code"] == "BAD_NAME", (name, res)
-
 
 def test_detail_reports_missing_and_broken_json(flow: tuple[str, Path, Any]) -> None:
     path, target, _ = flow
@@ -138,7 +123,6 @@ def test_detail_reports_missing_and_broken_json(flow: tuple[str, Path, Any]) -> 
     (ed / "broken.json").write_text("{bad json", encoding="utf-8")
     assert _call("rpa.elementDetail", path=path, name="broken")["code"] == "BAD_JSON"
 
-
 def test_delete_refuses_referenced_asset_without_unlink(flow: tuple[str, Path, Any]) -> None:
     path, target, _ = flow
     _call("rpa.writeElement", path=path, name="branch_ref", selector="#branch")
@@ -146,7 +130,6 @@ def test_delete_refuses_referenced_asset_without_unlink(flow: tuple[str, Path, A
     assert denied["ok"] is False and denied["code"] == "ELEMENT_IN_USE"
     assert denied["referencedBy"] == ["inCatch", "inElse", "inThen"]
     assert (target.parent / "elements" / "branch_ref.json").is_file()
-
 
 def test_delete_removes_unreferenced_asset(flow: tuple[str, Path, Any]) -> None:
     path, target, _ = flow
@@ -158,35 +141,42 @@ def test_delete_removes_unreferenced_asset(flow: tuple[str, Path, Any]) -> None:
         e["name"] for e in _call("rpa.listElements", path=path)["elements"]
     ]
 
-
 @pytest.mark.parametrize("name", ["../evil", "a.b", "", "空格"])
 def test_delete_rejects_bad_names(flow: tuple[str, Path, Any], name: str) -> None:
     path, _, _ = flow
     res = _call("rpa.deleteElement", path=path, name=name)
     assert res["ok"] is False and res["code"] == "BAD_NAME", (name, res)
 
-
 def test_recapture_needs_a_fresh_write_not_just_a_file(flow: tuple[str, Path, Any]) -> None:
-    """重捕一个已存在的资产：capturePoll 只看 is_file() 会立刻假报 bound。"""
-    path, target, api = flow
+    """重捕一个已存在的资产：新模型只看后台 pick 线程是否真正产出结果，
+    旧文件在盘上不会假报 ready —— 链路里没有「文件在不在」这种超时补丁。"""
+    path, _, api = flow
     _call("rpa.writeElement", path=path, name="in_use", selector="#used")
-    elem = target.parent / "elements" / "in_use.json"
-    baseline = elem.stat().st_mtime_ns
-    api._CAPTURES[api._capture_key(path, "in_use")] = {
-        "path": path, "name": "in_use", "proc": _FakeProc(),
-        "baselineMtimeNs": baseline, "deadlineAt": time.time() + 60,
-        "cancelled": False, "nodeId": None, "stdout": [], "stderr": [],
-        "decision": {"target": "browser"},
-    }
-    assert _call("rpa.capturePoll", path=path, name="in_use")["state"] == "waiting"
-    elem.write_text(
-        json.dumps({"kind": "browser", "selector": {"css": "#new"}}) + "\n", encoding="utf-8"
-    )
-    future = baseline + 2_000_000_000
-    os.utime(elem, ns=(future, future))
-    bound = _call("rpa.capturePoll", path=path, name="in_use")
-    assert bound["state"] == "bound" and bound["result"]["selector"] == "#new"
+    key = api._capture_key(path, "in_use")
 
+    # 进行中（pending）：还没真正点选，即便文件已存在也绝不能报 ready。
+    api._CAPTURES[key] = {
+        "name": "in_use", "path": path, "decision": {"target": "browser"},
+        "nodeId": None, "session": None, "cancel_event": threading.Event(),
+        "result": None, "cancelled": False, "offline": False, "armed": False,
+        "instructions": "", "startedAt": time.time(),
+    }
+    assert _call("rpa.capturePoll", path=path, name="in_use")["state"] == "pending"
+
+    # 取消优先：cancel_event 置位后，即便后面真有结果也只报 cancelled。
+    api._CAPTURES[key]["cancel_event"].set()
+    assert _call("rpa.capturePoll", path=path, name="in_use")["state"] == "cancelled"
+
+    # 真正产出（ready）：只有后台 pick 落盘的结果才让 poll 报 ready，且回显选择器。
+    ev = api._CAPTURES[key]
+    ev["cancel_event"] = threading.Event()
+    ev["cancelled"] = False
+    ev["result"] = {
+        "kind": "browser", "selector": {"css": "#new"}, "verifyCount": 2,
+        "metadata": {}, "savedAs": "in_use",
+    }
+    ready = _call("rpa.capturePoll", path=path, name="in_use")
+    assert ready["state"] == "ready" and ready["result"]["selector"]["css"] == "#new"
 
 def test_frontend_wires_constant_entry_and_asset_actions() -> None:
     main = MAIN_JS.read_text(encoding="utf-8")
@@ -209,11 +199,9 @@ def test_frontend_wires_constant_entry_and_asset_actions() -> None:
     for selector in (".elemTools {", ".elemDetail {", ".elemAct.danger", ".elemNewNote.error"):
         assert selector in css, f"style.css 缺 {selector}"
 
-
 def test_ui_check_is_wired_into_full_gate() -> None:
     hits = CHECK_ALL.read_text(encoding="utf-8").count('"check_element_library.mjs"')
     assert hits == 1, f"check_all.py 里接线命中 {hits} 次（须恰好 1）"
-
 
 def test_ui_check_really_runs() -> None:
     node = shutil.which("node")
@@ -224,7 +212,6 @@ def test_ui_check_really_runs() -> None:
     )
     assert result.returncode == 0, result.stdout + result.stderr
     assert "ELEMENT LIBRARY CHECK PASSED" in result.stdout
-
 
 def test_dist_bundle_is_rebuilt_from_source() -> None:
     if not DIST_DIR.is_dir():
