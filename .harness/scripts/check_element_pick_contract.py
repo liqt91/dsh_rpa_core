@@ -176,7 +176,8 @@ def case_capability_snapshot() -> None:
 class _Silence:
     """把桌面浮窗全部打成静默，并记录「浮窗里说过什么」。
 
-    门禁不该弹窗抢前台；但「提示进浮窗」是本轮的产品要求，所以必须记下来断言。
+    门禁不该弹窗抢前台；记录本轮用来断言「删除等业务逻辑**没有**再借浮窗说话」
+    （kit 只管捕获/编辑，业务提示归网页端）。
     """
 
     def __init__(self) -> None:
@@ -485,8 +486,8 @@ def case_rename_rejects_duplicate_and_missing() -> None:
             api._elements_dir, api._flow_path = real_dir, real_flow
 
 
-def case_delete_guard_speaks_in_float() -> None:
-    """删除被引用时拒绝，并且原因必须进浮窗（面板里不显示任何提示）。"""
+def case_delete_guard_returns_refs_without_float() -> None:
+    """删除被引用时拒绝，引用节点结构化回给网页端；桌面浮窗不掺和业务提示。"""
     import tempfile
 
     real_dir, real_flow = api._elements_dir, api._flow_path
@@ -501,7 +502,10 @@ def case_delete_guard_speaks_in_float() -> None:
             with _Silence() as quiet:
                 res = api.delete_element("probe.json", "userField")
             assert_true(res["ok"] is False and res["code"] == "ELEMENT_IN_USE", f"{res}")
-            assert_true(quiet.notices, "删不掉却没在浮窗里说")
+            assert_true(bool(res.get("referencedBy")), "没把引用节点回给网页端")
+            assert_true(
+                not quiet.notices, f"kit 越界：删除失败还弹了桌面浮窗 {quiet.notices}"
+            )
             assert_true((elem / "userField.json").is_file(), "被引用还删了文件")
         finally:
             api._elements_dir, api._flow_path = real_dir, real_flow
@@ -760,7 +764,7 @@ for name, fn in (
     ("没有捕获就不能入库", case_commit_needs_a_live_capture),
     ("改名联动流程引用", case_rename_rewrites_refs),
     ("改名拒绝重名/不存在/同名为空操作", case_rename_rejects_duplicate_and_missing),
-    ("删除被引用：拒绝并进浮窗", case_delete_guard_speaks_in_float),
+    ("删除被引用：回引用节点、不弹桌面浮窗", case_delete_guard_returns_refs_without_float),
     ("轮询状态机：pending/ready/offline/failed", case_poll_states),
     ("未知捕获会话有明确错误码", case_unknown_capture),
     ("轮询新三态：editing/committed/discarded", case_poll_edit_states),

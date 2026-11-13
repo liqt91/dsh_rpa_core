@@ -76,6 +76,7 @@ check('文案表：必备键齐全（漏一个就会把 key 原名显示给用�
   for (const key of [
     'capture', 'fill', 'detail', 'remove', 'save', 'cancel',
     'confirmTitle', 'detailTitle', 'nameEmpty', 'saveFailed', 'none',
+    'deleteBlockedTitle', 'deleteBlockedHint', 'deleteBlockedRef', 'deleteBlockedNote',
   ]) {
     assert(typeof elemText[key] === 'string' && elemText[key], `缺 ${key}`)
   }
@@ -464,7 +465,7 @@ check('渲染层：待补行只有一个「补一下」，没有类型选择与�
   assert(!walk(row).some((n) => hasClass(n, 'pickManualInput')), '手写选择器入口又回来了')
 })
 
-check('渲染层：面板里没有状态条/提示节点（提示全在桌面浮窗）', () => {
+check('渲染层：面板里没有状态条/提示节点（说明走可关闭的网页弹框）', () => {
   const run = makeContext()
   run.api.setState(ONE_MISSING, [{ name: 'searchBox', kind: 'browser', selector: '#q' }])
   const nodes = walk(nodeById('elemBody'))
@@ -491,6 +492,34 @@ check('契约层：后端没有手填写入口、捕获不落盘、名字允许�
   assert(/def commit_element\(/.test(apiSrc), '没有确认入库的 RPC')
   assert(!/A-Za-z0-9_-/.test(apiSrc), '名称规则还是纯 ASCII（中文会被挡）')
   assert(/def _rewrite_refs\(/.test(apiSrc), '改名没联动流程引用')
+})
+
+// ---------- 6. kit 边界：只管捕获/编辑，删除与引用检查归网页端 ----------
+check('契约层：删前引用检查在网页端，删除不借桌面浮窗', () => {
+  const head = apiSrc.indexOf('def delete_element(')
+  assert(head > 0, '找不到 delete_element')
+  const region = apiSrc.slice(head, head + 1100)
+  assert(!/_notify\(/.test(region), '删除失败还在弹桌面浮窗（关不掉的那个框）')
+  assert(/referencedBy/.test(region), '没把引用节点回给网页端')
+
+  const web = mainSrc.slice(
+    mainSrc.indexOf('async function deleteAsset'),
+    mainSrc.indexOf('function missingRow'),
+  )
+  assert(web.includes('rpa.elementDetail'), '网页端删前没查引用')
+  assert(
+    web.indexOf('rpa.elementDetail') < web.indexOf('rpa.deleteElement'),
+    '删前检查没排在删除 RPC 之前',
+  )
+  assert(/refs\.length/.test(web), '查到引用没有拦下删除')
+  assert(/showDeleteProblem/.test(web), '删不掉时网页端没给可关闭的说明')
+})
+
+check('契约层：捕获期 Esc 接取消，编辑态不抢桌面编辑框', () => {
+  assert(/rpa\.cancelCapture/.test(mainSrc), '网页端 Esc 没接取消 RPC')
+  assert(/capturePhase\s*===\s*'pending'/.test(mainSrc), '没把 editing 态排除')
+  // 行级断言：光「源码里出现过这个函数名」会被函数定义自己糊弄成恒绿。
+  assert(/^\s*cancelCaptureByEsc\(\)\s*$/m.test(mainSrc), 'Esc 分支没调取消')
 })
 
 const failed = results.filter((r) => !r.ok)

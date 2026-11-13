@@ -59,6 +59,10 @@ M66 的六态状态条把**技术分叉和过程状态全摊在面板上**：预
   同名则返回 `unchanged: True` 空操作。`commitElement` 只在「按同名重抓」时允许 `overwrite`。
 - `delete_element` 被引用时先 `_notify("删不掉", ...)` 再返 `ELEMENT_IN_USE`——拒绝的理由
   由浮窗说，不用前端横幅。
+  > **M71 修订（2026-11-13）**：维护者反馈这个置顶浮窗「无法退出」，并给新口径
+  > 「kit 只管理捕获和编辑，其他逻辑放在网页端」。此条已作废：`delete_element`
+  > 不再弹浮窗，删前引用检查与说明改在网页端（`main.js::deleteAsset`），服务端
+  > 只保留结构化护栏返回 `referencedBy`。细则 `M71-kit-boundary-and-esc-cancel.md`。
 
 ## 四、浮窗（`src/rpa_core/capture_kit/float_window.py`）
 

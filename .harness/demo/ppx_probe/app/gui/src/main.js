@@ -1029,6 +1029,13 @@ const ELEM_TEXT = {
   capturedAt: '捕获时间 {time}',
   stepFallback: '这一步',
   loadFailed: '元素没加载出来：{reason}',
+  deleteBlockedTitle: '这个元素删不掉',
+  deleteBlockedHint: '流程里还有 {count} 个节点在用它：',
+  deleteBlockedRef: '第 {step} 步',
+  deleteBlockedNote: '先改掉这些引用，再来删',
+  deleteCheckFailed: '没查到引用情况：{reason}',
+  deleteFailed: '没删掉：{reason}',
+  deleteFailedHint: '删除没成功，元素还在清单里',
 }
 
 function elemText(key, vars = {}) {
@@ -1039,7 +1046,10 @@ let pickMissing = []
 let pickElements = []
 let captureSession = null // { id, name, nodeId } —— 捕获期唯一的状态
 let captureTimer = null
-let dialogMode = null // 'capture' | 'detail'
+// 'pending' | 'editing'：桌面编辑框开着时 Esc 归它自己（IDCANCEL → discarded），
+// 网页端不能顺手把整次会话取消掉。
+let capturePhase = null
+let dialogMode = null // 'capture' | 'detail' | 'blocked'
 let dialogSave = null
 let dialogDiscard = null
 
@@ -1111,6 +1121,7 @@ async function startCapture(name) {
   }
   if (!res.ok) return // 被挡住 / 起不来：同样只在浮窗里说
   captureSession = { id: res.captureId, name: res.name || null, nodeId: res.nodeId || null }
+  capturePhase = 'pending'
   pollCapture()
 }
 
@@ -1118,6 +1129,25 @@ async function startCapture(name) {
 // 不能把「还原」押在前端）。这里的 restore 只是兜底：后端异常没还原时也能拉回来。
 async function restoreApp() {
   try { await ppx.call('window.restore') } catch { /* 环境不支持就保持原样 */ }
+}
+
+function endCapture() {
+  captureSession = null
+  capturePhase = null
+  if (captureTimer) clearTimeout(captureTimer)
+  captureTimer = null
+}
+
+// 捕获期 Esc 的网页端一路（另一路是桌面浮窗的全局键状态轮询，两条都幂等）。
+// 只在 pending 发：editing 时桌面编辑框自己有 Esc（取消这次入库），别抢。
+async function cancelCaptureByEsc() {
+  const session = captureSession
+  if (!session) return
+  endCapture()
+  try {
+    await ppx.call('rpa.cancelCapture', { path: currentPath, capture_id: session.id })
+  } catch { /* 后端已经收场也一样 */ }
+  await restoreApp()
 }
 
 async function pollCapture() {
@@ -1130,33 +1160,34 @@ async function pollCapture() {
       res = await ppx.call('rpa.capturePoll', { path: currentPath, capture_id: session.id })
     } catch (error) {
       await restoreApp()
-      captureSession = null
+      endCapture()
       return
     }
     if (!res.ok) {
       await restoreApp()
-      captureSession = null
+      endCapture()
       return
     }
+    capturePhase = res.state === 'editing' ? 'editing' : 'pending'
     if (res.state === 'ready') {
       // 非 Windows 兜底：确认框开在页面里（win32 上确认框由 capture_kit 开在桌面，
       // 状态机会走 editing → committed/discarded，这条路不会到）。
       await restoreApp()
-      captureSession = null
+      endCapture()
       openCaptureDialog(session.id, res.preview || {})
       return
     }
     if (res.state === 'committed') {
       // 桌面的原生编辑框已完成入库（或详情改名）：刷新资产列表即可。
       await restoreApp()
-      captureSession = null
+      endCapture()
       await refreshElements()
       return
     }
     // 终态：取消 / 放弃 / 离线 / 失败 / 被挡下。原因都不在面板里说，浮窗已经说过。
     if (['cancelled', 'discarded', 'offline', 'failed', 'blocked'].includes(res.state)) {
       await restoreApp()
-      captureSession = null
+      endCapture()
       return
     }
     // 'pending' / 'editing'（桌面编辑框开着）都继续等。
@@ -1264,6 +1295,7 @@ async function openAssetDetail(name) {
     const edit = await ppx.call('rpa.editElement', { path: currentPath, name })
     if (edit && edit.ok && edit.state === 'editing') {
       captureSession = { id: edit.editId, name: null, nodeId: null }
+      capturePhase = 'editing' // 桌面详情框的 Esc 归它自己，别在这儿取消会话
       pollCapture()
       return
     }
@@ -1315,15 +1347,52 @@ function showBrokenDetail(name, reason) {
 
 /* ---- 列表 ---------------------------------------------------------------- */
 
+// 删不掉的说明框：复用页面编辑框的只读形态（有「取消」「关闭」，Esc 也能退）。
+// ★ kit 只管捕获和编辑，删除的业务判断与反馈全部留在网页端，不再弹桌面浮窗。
+function showDeleteProblem(name, refs, reason = '') {
+  const meta = refs.length
+    ? [
+      elemText('deleteBlockedHint', { count: refs.length }),
+      ...refs.map((id) => elemText('deleteBlockedRef', { step: stepOf(id) })),
+    ]
+    : [elemText('deleteFailedHint')]
+  showElemDialog({
+    mode: 'blocked',
+    title: elemText('deleteBlockedTitle'),
+    name,
+    readOnly: true,
+    meta,
+    error: true,
+    note: reason || (refs.length ? elemText('deleteBlockedNote') : ''),
+  })
+}
+
 async function deleteAsset(name) {
+  // 删之前先查「哪几个节点引用了它」。查到就不发删除，直接在网页端列出节点。
+  let detail
+  try {
+    detail = await ppx.call('rpa.elementDetail', { path: currentPath, name })
+  } catch (error) {
+    showDeleteProblem(name, [], elemText('deleteCheckFailed', { reason: error?.message || error }))
+    return
+  }
+  const refs = (detail && detail.referencedBy) || []
+  if (refs.length) {
+    showDeleteProblem(name, refs)
+    return
+  }
   let res
   try {
     res = await ppx.call('rpa.deleteElement', { path: currentPath, name })
   } catch (error) {
-    // 失败原因在桌面浮窗里（后端把「还被引用着」也说清了），面板不显示任何提示。
+    showDeleteProblem(name, [], elemText('deleteFailed', { reason: error?.message || error }))
     return
   }
-  if (!res || !res.ok) return
+  if (!res || !res.ok) {
+    // 服务端护栏还在（防绕过界面直调 RPC / 并发改动）：同样只在网页端说。
+    showDeleteProblem(name, (res && res.referencedBy) || [], (res && res.error) || '')
+    return
+  }
   await refreshElements()
 }
 
@@ -1371,7 +1440,15 @@ function renderElementsPanel() {
 }
 
 document.addEventListener('keydown', (event) => {
-  if (event.key !== 'Escape' || !dialogMode) return
+  if (event.key !== 'Escape') return
+  // 捕获等待期：Esc 取消整次捕获（桌面浮窗也在全局轮询，两条路都幂等）。
+  // editing 时桌面编辑框自己接 Esc，这里不能抢；页面弹框打开时 Esc 先关它。
+  if (captureSession && capturePhase === 'pending' && !dialogMode) {
+    event.preventDefault?.()
+    cancelCaptureByEsc()
+    return
+  }
+  if (!dialogMode) return
   cancelElemDialog()
 })
 

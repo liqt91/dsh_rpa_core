@@ -1,4 +1,4 @@
-"""浮窗冒烟：真开窗验四件事（前三件都对应用户报障，第四件是同类复用的回归）。
+"""浮窗冒烟：真开窗验六件事（前三件都对应用户报障，后面是同类回归）。
 
 1. **不是空白**：``win32gui.CreateFont`` 不存在 ⇒ WM_PAINT 抛异常 ⇒ 只剩白底。
    判据是**暗像素计数**（白底没有暗像素，画上三行字必然有）。
@@ -14,8 +14,11 @@
    第二行起 ``bottom < top``，GDI 把几行字做垂直居中叠进同一片区域。判据是
    **行带结构**（连续暗像素的 y 区间）而不是暗像素总数——叠在一起时总数照样很足，
    这正是上半年的判据漏掉的形态。同时查右边界是否被按钮切掉。
+6. **Esc 取消（M71）**：真窗口的 40ms 定时器要驱动全局键状态轮询并调 on_cancel。
+   只把按键物理状态换替身（不往系统注入按键），窗口/消息泵/定时器/回调线程全真跑，
+   同时验「按住不放只触发一次」的按下沿去重。
 
-跑法（会闪一下窗，约 3s）：
+跑法（会闪一下窗，约 4s）：
     .venv/Scripts/python.exe .harness/demo/ppx_probe/_float_probe.py
 """
 
@@ -178,6 +181,51 @@ def _probe_notice() -> list[str]:
     return failed
 
 
+def _probe_esc() -> list[str]:
+    """捕获形态的 40ms 定时器要真的轮询 Esc 并调 on_cancel（M71）。
+
+    只把「按键物理状态」换成替身——**不往系统注入按键**，免得 Esc 打到用户当前
+    的前台窗口。窗口、消息泵、定时器、回调线程全是真的，所以这段能抓住
+    「定时器没建起来 / 轮询没接线 / 回调被压在窗口线程里」这类单测抓不到的事故。
+    """
+    import threading
+
+    fired: list[int] = []
+    gate = threading.Event()
+
+    def on_cancel() -> None:
+        fired.append(1)
+        gate.set()
+
+    win = _fw.CaptureFloat()
+    real_probe = _fw._escape_down
+    # 模拟「按着 Esc 不放」：按下沿只该触发一次，不该起一串取消线程
+    _fw._escape_down = lambda: True
+    try:
+        win.show("Esc 探针", "网页：就绪", "桌面：就绪", True, True,
+                 on_cancel=on_cancel)
+        hit = gate.wait(3.0)
+        time.sleep(0.4)
+    finally:
+        _fw._escape_down = real_probe
+        win.hide()
+        time.sleep(0.3)
+
+    failed: list[str] = []
+    if not hit:
+        failed.append("真窗口下 Esc 轮询没触发取消（定时器/接线没跑通）")
+    if len(fired) != 1:
+        failed.append(f"按住 Esc 触发了 {len(fired)} 次（按下沿去重失效）")
+    # 真实 API 面在本机必须可读、不抛异常（win32 ctypes 能力探测）
+    try:
+        state = real_probe()
+        if not isinstance(state, bool):
+            failed.append(f"_escape_down 返回值不是 bool：{state!r}")
+    except Exception as exc:  # noqa: BLE001 - 探测失败要报出来，别静默
+        failed.append(f"本机 GetAsyncKeyState 不可用：{exc}")
+    return failed
+
+
 def main() -> int:
     float_win = _fw.CaptureFloat()
     gesture, web, desktop = _texts()
@@ -230,10 +278,11 @@ def main() -> int:
     failed.extend(_layout_checks(image, 3, "捕获形态（手势+网页+桌面）"))
     failed.extend(_wrap_checks())
     failed.extend(_probe_notice())
+    failed.extend(_probe_esc())
     if failed:
         print("FAIL", "；".join(failed))
         return 1
-    print("PASS 浮窗有文字、会躲鼠标、逐行不叠字、提示形态与同类复用都正常")
+    print("PASS 浮窗有文字、会躲鼠标、逐行不叠字、提示形态、同类复用与 Esc 取消都正常")
     return 0
 
 

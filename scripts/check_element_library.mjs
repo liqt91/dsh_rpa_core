@@ -118,6 +118,7 @@ const state = {
 
 function makeContext() {
   const calls = []
+  const docHandlers = {}
   const dockTabs = TAB_KEYS.map((key) => {
     const node = new El('button')
     node.dataset.tab = key
@@ -137,7 +138,7 @@ function makeContext() {
       if (sel === '.dockPanel') return dockPanels
       return []
     },
-    addEventListener() {},
+    addEventListener(type, fn) { (docHandlers[type] ||= []).push(fn) },
     activeElement: null,
   }
   const defaults = {
@@ -175,11 +176,16 @@ function makeContext() {
   vm.runInContext(mainSrc.replace(/^import .*$/gm, ''), ctx, { filename: 'main.js' })
   vm.runInContext(
     `globalThis.__api = { refreshElements, renderElementsPanel, openAssetDetail, deleteAsset,
-       setState: (missing, elements) => { pickMissing = missing; pickElements = elements; renderElementsPanel() } }
+       setState: (missing, elements) => { pickMissing = missing; pickElements = elements; renderElementsPanel() },
+       setCapture: (id, phase) => { captureSession = id ? { id } : null; capturePhase = phase },
+       getCapture: () => ({ session: captureSession, phase: capturePhase }) }
      currentPath = 'flows/probe.json'`,
     ctx,
   )
-  return { ctx, calls, api: vm.runInContext('globalThis.__api', ctx) }
+  return {
+    ctx, calls, api: vm.runInContext('globalThis.__api', ctx),
+    keydown: docHandlers.keydown || [],
+  }
 }
 
 const flush = () => new Promise((resolve) => setImmediate(resolve))
@@ -255,6 +261,8 @@ await checkAsync('点详情取完整描述符并弹编辑框（不是行内展�
 
 await checkAsync('删除成功才刷新，失败保留行', async () => {
   state.deleteResponse = { ok: false, code: 'ELEMENT_IN_USE', error: '还被引用着', referencedBy: ['openHome'] }
+  // 删前检查放行（无引用），这段测的是「RPC 也挡下时不能把行抹掉」的兜底。
+  state.detailResponse = { ok: true, referencedBy: [] }
   const run = makeContext()
   run.api.setState([], [{ name: 'searchBox', kind: 'browser', selector: '#q' }])
   const row = walk(nodeById('elemBody')).find((n) => hasClass(n, 'asset'))
@@ -274,7 +282,54 @@ await checkAsync('删除成功才刷新，失败保留行', async () => {
   assert(run.calls.filter((c) => c.name === 'rpa.listElements').length === 1, '删除成功没刷新列表')
 })
 
-check('清单里不出现提示节点（提示只在桌面浮窗）', () => {
+await checkAsync('删前检查引用：查出引用就不发删除，说明框能退出', async () => {
+  state.detailResponse = { ok: true, referencedBy: ['openHome', 'clickFilter'] }
+  const run = makeContext()
+  const dialog = nodeById('elemDialog')
+  dialog.hidden = true // registry 跨用例共享，先对齐真实 DOM 的初始态
+  run.api.setState([], [{ name: 'searchBox', kind: 'browser', selector: '#q' }])
+  const row = walk(nodeById('elemBody')).find((n) => hasClass(n, 'asset'))
+  const del = walk(row).find((n) => hasClass(n, 'elemAct') && n.textContent === '删除')
+  const before = run.calls.length
+  await del.click()
+  await flush()
+  const after = run.calls.slice(before).map((c) => c.name)
+  assert(after.includes('rpa.elementDetail'), '删前没查引用')
+  assert(!after.includes('rpa.deleteElement'), '查到引用还发了删除 RPC')
+  assert(dialog.hidden === false, '网页端没给说明')
+  const lines = walk(nodeById('elemDialogMeta')).map((n) => n.textContent).join('|')
+  assert(lines.includes('2 个节点'), `没写清几处引用：${lines}`)
+  // 用户抱怨的「提示框无法退出」：Esc 必须能收掉，且不误伤清单
+  for (const fn of run.keydown) fn({ key: 'Escape', preventDefault() {} })
+  await flush()
+  assert(dialog.hidden === true, '说明框按 Esc 关不掉')
+  assert(walk(nodeById('elemBody')).some((n) => hasClass(n, 'asset')), '失败却把行抹了')
+  state.detailResponse = { ok: true, referencedBy: [] }
+})
+
+await checkAsync('捕获中按 Esc 取消会话，桌面编辑态不抢', async () => {
+  const run = makeContext()
+  const before = run.calls.length
+  run.api.setCapture('c9', 'pending')
+  for (const fn of run.keydown) fn({ key: 'Escape', preventDefault() {} })
+  await flush()
+  assert(
+    run.calls.slice(before).some((c) => c.name === 'rpa.cancelCapture'),
+    '捕获等待期按 Esc 没取消',
+  )
+  assert(run.api.getCapture().session === null, 'Esc 之后会话还在')
+
+  const before2 = run.calls.length
+  run.api.setCapture('c9', 'editing')
+  for (const fn of run.keydown) fn({ key: 'Escape', preventDefault() {} })
+  await flush()
+  assert(
+    !run.calls.slice(before2).some((c) => c.name === 'rpa.cancelCapture'),
+    '桌面编辑框正在用时 Esc 抢了整次会话',
+  )
+})
+
+check('清单里不出现提示节点（说明走可关闭的网页弹框）', () => {
   const { api } = makeContext()
   api.setState([{ name: 'userField', nodeId: 'n1', command: 'browser.input' }], [])
   const nodes = walk(nodeById('elemBody'))

@@ -1,9 +1,10 @@
-"""负向验证：元素捕获改版（M68）的三条判据是否真会红。
+"""负向验证：元素捕获/编辑判据（M68 → M71）是否真会红。
 
-每条用例都是「合法语法的精准放宽」：改一处实现，同时跑三条判据——
+每条用例都是「合法语法的精准放宽」：改一处实现，同时跑四条判据——
   - ``scripts/check_element_pick_ui.mjs``（文案 / 样式 / 结构 / 渲染 / 契约）
-  - ``scripts/check_element_library.mjs``（清单结构与详情、删除行为）
+  - ``scripts/check_element_library.mjs``（清单结构与详情、删除行为、Esc 行为）
   - ``.harness/scripts/check_element_pick_contract.py``（后端动态契约）
+  - ``tests/unit/test_capture_kit.py``（kit 状态机与浮窗 Esc 定时器链路）
 断言 **实际失败集 == 按推理写下的期望失败集**（不是「有红就行」，也不是 `>=`）。
 末尾一条是元验证：把判据本身放宽后，同一处注入必须**变绿**——证明那条红真是它报的。
 
@@ -27,9 +28,11 @@ SENTINEL = "NV-M68-INJECTED"
 API = ".harness/demo/ppx_probe/app/api/api.py"
 JS = ".harness/demo/ppx_probe/app/gui/src/main.js"
 HTML = ".harness/demo/ppx_probe/app/gui/index.html"
+FLOAT = "src/rpa_core/capture_kit/float_window.py"
 PICK_UI = "scripts/check_element_pick_ui.mjs"
 LIBRARY = "scripts/check_element_library.mjs"
 CONTRACT = ".harness/scripts/check_element_pick_contract.py"
+KIT_TESTS = "tests/unit/test_capture_kit.py"
 
 # 判据里的用例名（原样抄自脚本输出，改了那边这里必须同步，否则期望集会永远对不上）
 UI_NO_NAME = "渲染层：点唯一的按钮就起捕获，不预填名字、不先探测"
@@ -46,6 +49,13 @@ PY_BADNAME = "入库拒绝非法名与重名"
 PY_EDIT_DIALOG = "详情走桌面编辑框：改名/重名/取消"
 UI_COMMITTED = "渲染层：桌面确认入库（committed）刷新资产并收尾"
 UI_DETAIL_DESKTOP = "渲染层：详情优先弹桌面编辑框，页面框只是兜底"
+# M71 新增
+LIB_REF_CHECK = "删前检查引用：查出引用就不发删除，说明框能退出"
+LIB_ESC = "捕获中按 Esc 取消会话，桌面编辑态不抢"
+UI_KIT_BOUNDARY = "契约层：删前引用检查在网页端，删除不借桌面浮窗"
+UI_ESC = "契约层：捕获期 Esc 接取消，编辑态不抢桌面编辑框"
+PY_DELETE_GUARD = "删除被引用：回引用节点、不弹桌面浮窗"
+KIT_ESC_TIMER = "test_float_timer_drives_escape_poll"
 
 
 def digest(path: Path) -> str:
@@ -57,6 +67,10 @@ def run_gate(name: str) -> set[str]:
         cmd = ["node", PICK_UI]
     elif name == "library":
         cmd = ["node", LIBRARY]
+    elif name == "unit":
+        # 不用 --basetemp：这个文件的用例不碰 tmp_path，固定 basetemp 反而让
+        # pytest 每次 rm_rf，容易撞上删除守卫。
+        cmd = [str(PY), "-m", "pytest", KIT_TESTS, "-q", "--tb=no", "-ra"]
     else:
         cmd = [str(PY), CONTRACT]
     done = subprocess.run(
@@ -65,7 +79,11 @@ def run_gate(name: str) -> set[str]:
     )
     failed = set()
     for line in done.stdout.splitlines():
-        hit = re.match(r"^FAIL (.+?)(?: — .*)?$", line.strip())
+        pattern = (
+            r"^FAILED \S+::(\w+)" if name == "unit"
+            else r"^FAIL (.+?)(?: — .*)?$"
+        )
+        hit = re.match(pattern, line.strip())
         if hit:
             failed.add(hit.group(1).strip())
     if done.returncode != 0 and not failed:
@@ -87,9 +105,13 @@ def apply(rel: str, old: str, new: str) -> tuple[Path, bytes]:
 
 
 def case(cid, desc, rel, old, new, expect, *, extra=(), green=None):
+    # 四条 gate 全跑、全等断言：没写进 expect 的判据也必须「不红」，
+    # 才能同时抓住「该红的没红」和「不该红的被误伤」。
+    gates = {"pick_ui": set(), "library": set(), "contract": set(), "unit": set()}
+    gates.update(expect)
     return {
         "id": cid, "desc": desc, "rel": rel, "old": old, "new": new,
-        "expect": expect, "extra": list(extra), "green": green,
+        "expect": gates, "extra": list(extra), "green": green,
     }
 
 
@@ -119,8 +141,8 @@ CASES: list[dict[str, Any]] = [
     ),
     case(
         "N4", "删除失败也刷新（行会被刷掉，用户以为删成了）", JS,
-        "  if (!res || !res.ok) return\n  await refreshElements()",
-        "  if (false) return\n  await refreshElements()",
+        "  if (!res || !res.ok) {\n    // 服务端护栏还在",
+        "  if (false) {  // " + SENTINEL + "\n    // 服务端护栏还在",
         {"pick_ui": set(), "library": {LIB_DELETE}, "contract": set()},
     ),
     case(
@@ -146,8 +168,8 @@ CASES: list[dict[str, Any]] = [
     ),
     case(
         "N8", "桌面确认入库后不再刷新资产（用户看不见新元素）", JS,
-        "      captureSession = null\n      await refreshElements()\n      return\n    }",
-        "      captureSession = null  // " + SENTINEL + "\n      return\n    }",
+        "      endCapture()\n      await refreshElements()\n      return\n    }",
+        "      endCapture()  // " + SENTINEL + "\n      return\n    }",
         # committed 分支同时服务捕获确认与详情改名：删掉刷新，两条用例都得红。
         {"pick_ui": {UI_COMMITTED, UI_DETAIL_DESKTOP}, "library": set(), "contract": set()},
     ),
@@ -156,6 +178,61 @@ CASES: list[dict[str, Any]] = [
         "    if (edit && edit.ok && edit.state === 'editing') {",
         "    if (false) {  // " + SENTINEL,
         {"pick_ui": {UI_DETAIL_DESKTOP}, "library": set(), "contract": set()},
+    ),
+    # ---- M71：kit 边界（只管捕获/编辑）+ 捕获期 Esc -------------------------
+    case(
+        "N10", "删前不查引用（直接发删除，被引用的资产会被抹掉）", JS,
+        "  const refs = (detail && detail.referencedBy) || []",
+        "  const refs = []  // " + SENTINEL,
+        {"library": {LIB_REF_CHECK}},
+    ),
+    case(
+        "N11", "查到引用仍发删除 RPC（网页端检查形同虚设）", JS,
+        "  if (refs.length) {\n    showDeleteProblem(name, refs)\n    return\n  }",
+        "  if (false) {  // " + SENTINEL
+        + "\n    showDeleteProblem(name, refs)\n    return\n  }",
+        # 静态判据钉了源码里的 refs.length 拦截；换成恒假后它也该红。
+        {"pick_ui": {UI_KIT_BOUNDARY}, "library": {LIB_REF_CHECK}},
+    ),
+    case(
+        "N12", "删除失败又弹桌面浮窗（那个关不掉的框回来了）", API,
+        "    referenced = _element_references(path, name)\n"
+        "    if referenced:\n        return {",
+        "    referenced = _element_references(path, name)\n"
+        "    if referenced:\n"
+        '        _notify("删不掉", "还被引用着")  # ' + SENTINEL + "\n"
+        "        return {",
+        {"pick_ui": {UI_KIT_BOUNDARY}, "contract": {PY_DELETE_GUARD}},
+    ),
+    case(
+        "N13", "捕获期 Esc 不再发取消（用户按 Esc 没反应）", JS,
+        "    cancelCaptureByEsc()\n    return",
+        "    // " + SENTINEL + "\n    return",
+        {"pick_ui": {UI_ESC}, "library": {LIB_ESC}},
+    ),
+    case(
+        "N14", "去掉 editing 守卫（桌面编辑框的 Esc 被网页端抢走）", JS,
+        "  if (captureSession && capturePhase === 'pending' && !dialogMode) {",
+        "  if (captureSession && !dialogMode) {  // " + SENTINEL,
+        {"pick_ui": {UI_ESC}, "library": {LIB_ESC}},
+    ),
+    case(
+        "N15", "说明框不设 dialogMode（Esc 关不掉，又是那个死框）", JS,
+        "    mode: 'blocked',",
+        "    mode: null,  // " + SENTINEL,
+        {"library": {LIB_REF_CHECK}},
+    ),
+    case(
+        "N16", "kit 定时器不再轮询 Esc（浮窗拿不到焦点，Esc 全链路失效）", FLOAT,
+        "        if msg == win32con.WM_TIMER and wparam == _TIMER_AVOID:\n"
+        "            self._avoid_cursor(hwnd)\n"
+        "            self._poll_escape()\n"
+        "            return 0\n",
+        "        if msg == win32con.WM_TIMER and wparam == _TIMER_AVOID:\n"
+        "            self._avoid_cursor(hwnd)\n"
+        "            # " + SENTINEL + " 不轮询 Esc\n"
+        "            return 0\n",
+        {"unit": {KIT_ESC_TIMER}},
     ),
 ]
 
@@ -182,7 +259,7 @@ def run_case(item: dict[str, Any]) -> list[str]:
         touched.append(apply(item["rel"], item["old"], item["new"]))
         for rel, old, new in item["extra"]:
             touched.append(apply(rel, old, new))
-        for gate in ("pick_ui", "library", "contract"):
+        for gate in ("pick_ui", "library", "contract", "unit"):
             actual = run_gate(gate)
             want = item["expect"][gate]
             if actual != want:
@@ -197,7 +274,7 @@ def run_case(item: dict[str, Any]) -> list[str]:
 
 def verify_clean() -> list[str]:
     bad = []
-    for rel in (API, JS):
+    for rel in (API, JS, FLOAT):
         if SENTINEL in (ROOT / rel).read_text(encoding="utf-8"):
             bad.append(f"哨兵残留：{rel}")
     if "startCapture('userField')" in (ROOT / JS).read_text(encoding="utf-8"):
@@ -206,10 +283,14 @@ def verify_clean() -> list[str]:
 
 
 def main() -> int:
-    if any(SENTINEL in (ROOT / rel).read_text(encoding="utf-8") for rel in (API, JS)):
+    targets = (API, JS, FLOAT)
+    if any(SENTINEL in (ROOT / rel).read_text(encoding="utf-8") for rel in targets):
         print("源码里已有哨兵，拒绝运行（上次注入没还原干净）")
         return 2
-    before = {rel: digest(ROOT / rel) for rel in (API, JS, HTML, PICK_UI, LIBRARY, CONTRACT)}
+    before = {
+        rel: digest(ROOT / rel)
+        for rel in (API, JS, HTML, FLOAT, KIT_TESTS, PICK_UI, LIBRARY, CONTRACT)
+    }
     print("基线:", {k: v[:8] for k, v in before.items()})
 
     failures = 0

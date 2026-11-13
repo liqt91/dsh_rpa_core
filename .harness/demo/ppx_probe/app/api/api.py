@@ -2475,7 +2475,11 @@ def _new_float() -> Any:
 
 
 def _notify(title: str, detail: str = "", *, auto_hide_ms: int = 12000) -> None:
-    """把一条提示显示在桌面浮窗；点「关闭」或到点自动收起。"""
+    """把**捕获过程自己**的提示显示在桌面浮窗；点「关闭」或到点自动收起。
+
+    只给捕获链路用（环境没就绪 / 离线 / 失败）。删除、引用检查这类业务提示归
+    网页端，别再从这里弹窗——置顶浮窗没有系统关闭按钮，留在错误路径上就下不来。
+    """
     window = _new_float()
     if window is None:
         return
@@ -3096,7 +3100,12 @@ def element_detail(path: str, name: str) -> dict[str, Any]:
 
 @api_method("rpa.deleteElement")
 def delete_element(path: str, name: str) -> dict[str, Any]:
-    """删一条资产；仍被 elementRefs 引用时拒绝，并把原因写到桌面浮窗。"""
+    """删一条资产；仍被 elementRefs 引用时拒绝，把引用节点结构化回给网页端。
+
+    ★ kit 的边界只到「捕获 + 编辑」：删除前查引用、以及「删不掉」的说明都在
+    网页端做（``main.js::deleteAsset``），这里**不弹桌面浮窗**。服务端的护栏仍保留，
+    防的是绕过界面直调 RPC 把被引用的资产删掉、运行期炸 ``ELEMENT_REF_MISSING``。
+    """
     started = time.perf_counter()
     if not _valid_element_name(name):
         return _element_error("BAD_NAME", "这个名字用不了")
@@ -3105,7 +3114,6 @@ def delete_element(path: str, name: str) -> dict[str, Any]:
         return _element_error("NOT_FOUND", f"没有这个资产：{name}")
     referenced = _element_references(path, name)
     if referenced:
-        _notify("删不掉", f"「{name}」还被流程里 {len(referenced)} 处引用着，先改掉引用再删")
         return {
             "ok": False,
             "code": "ELEMENT_IN_USE",

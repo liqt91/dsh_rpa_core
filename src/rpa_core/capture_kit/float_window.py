@@ -14,10 +14,17 @@ ppx 用 `window.minimize`），此时宿主的状态栏/面板看不见——浮
 - **躲鼠标**：25Hz（40ms）翻边，避免挡住要点的元素；
 - 不显示倒计时（没有「限时任务」这回事，超时无惩罚）。
 
-同一个窗还有第二种形态 ``show_notice(title, detail)``：**宿主界面不展示任何提示**，
-环境没就绪、这次没成、资产删不掉这类消息全部落到这里（标题 + 折行说明 + 关闭按钮）。
-``show()`` 可以把这个窗从提示形态**原地升级**成捕获形态（换按钮文案、换三行状态），
-所以「检查环境 → 就绪」不会闪两个窗口。
+同一个窗还有第二种形态 ``show_notice(title, detail)``：捕获过程自己的提示
+（环境没就绪、这次没成）落到这里（标题 + 折行说明 + 关闭按钮）。
+★ **kit 的边界只到「捕获 + 编辑」**：删除、引用检查这类业务提示不由这个窗说，
+宿主自己决定怎么告诉用户。``show()`` 可以把这个窗从提示形态**原地升级**成捕获形态
+（换按钮文案、换三行状态），所以「检查环境 → 就绪」不会闪两个窗口。
+
+**Esc 取消**：捕获形态下按 25Hz 轮询全局 ``GetAsyncKeyState(VK_ESCAPE)``。浮窗是
+``WS_EX_NOACTIVATE``，永远拿不到键盘焦点，所以不能等 ``WM_KEYDOWN``；而桌面腿的
+agent 只在 hover 时才 spawn、扩展腿只在页面有焦点时才听得到 —— 三条路都靠不住时
+「按 Esc 没反应」。全局异步键状态不挑焦点，正好补上这个洞。只在捕获形态生效：
+编辑态浮窗已经 hide，提示形态交给自己的关闭按钮/自动收起。
 
 非 Windows 直接 no-op（引擎层仍可用，只是没有浮窗）。
 """
@@ -37,6 +44,21 @@ _TIMER_NOTICE = 2
 
 _MODE_CAPTURE = "capture"
 _MODE_NOTICE = "notice"
+
+# 全局 Esc：VK_ESCAPE 的异步键状态位（当前是否按下）
+_VK_ESCAPE = 0x1B
+
+
+def _escape_down() -> bool:
+    """当前 Esc 是否按下。抽成模块级函数，单测可替换，不必真去敲键盘。"""
+    if sys.platform != "win32":
+        return False
+    try:
+        import ctypes
+
+        return bool(ctypes.windll.user32.GetAsyncKeyState(_VK_ESCAPE) & 0x8000)
+    except Exception:  # noqa: BLE001 - 取不到键状态就当没按，绝不能打断消息循环
+        return False
 
 _WIDTH = 560
 _HEIGHT = 104
@@ -72,6 +94,8 @@ class CaptureFloat:
         self._auto_hide_ms = 0
         self._button = None
         self._button_visible = True
+        # Esc 按下沿：按住不放只触发一次取消，别起一串线程
+        self._esc_held = False
 
     # -- 对外 ----------------------------------------------------------------
     def show(
@@ -88,6 +112,7 @@ class CaptureFloat:
         self._lines = (gesture, web, desktop, bool(web_ok), bool(desktop_ok))
         self._on_cancel = on_cancel
         self._auto_hide_ms = 0
+        self._esc_held = False
         self._spawn()
 
     def show_notice(
@@ -312,6 +337,24 @@ class CaptureFloat:
             at_bottom = top > screen_h // 2
             self._place(hwnd, bottom_right=not at_bottom)
 
+    def _poll_escape(self) -> None:
+        """捕获形态下 Esc = 取消整次捕获（由 25Hz 躲鼠标定时器驱动）。
+
+        按下沿触发一次；回调丢到独立线程，与「取消捕获」按钮同一待遇
+        （session.cancel / 杀子进程可能阻塞，不能压在窗口消息循环里）。
+        """
+        down = _escape_down()
+        held = self._esc_held
+        self._esc_held = down
+        if not (down and not held):
+            return
+        if self._mode != _MODE_CAPTURE:
+            return
+        callback = self._on_cancel
+        if callback is None:
+            return
+        threading.Thread(target=callback, daemon=True, name="capture-esc").start()
+
     def _wnd_proc(self, hwnd, msg, wparam, lparam):
         import win32con
         import win32gui
@@ -324,6 +367,7 @@ class CaptureFloat:
             return 0
         if msg == win32con.WM_TIMER and wparam == _TIMER_AVOID:
             self._avoid_cursor(hwnd)
+            self._poll_escape()
             return 0
         if msg == win32con.WM_TIMER and wparam == _TIMER_NOTICE:
             # 纯告知型提示自动收起（捕获形态永远不自动关：没有「限时任务」这回事）。

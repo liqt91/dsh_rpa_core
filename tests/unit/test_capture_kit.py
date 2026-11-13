@@ -12,6 +12,8 @@ from __future__ import annotations
 import threading
 import time
 
+import pytest
+
 from rpa_core.capture_kit import CaptureController
 
 
@@ -455,3 +457,84 @@ def test_ensure_extension_host_only_reports_newly_added_ids(monkeypatch, tmp_pat
     assert fresh["changed"] is False
     # 幂等调用仍然会「重写一次」（修 host 路径），但不当成「修复了白名单」
     assert calls == ["edge"]
+
+
+# -- 捕获期 Esc（M71）：全局键状态轮询，不依赖焦点 ---------------------------
+def _wait_calls(calls: list[str], expected: int, timeout: float = 0.5) -> None:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline and len(calls) < expected:
+        time.sleep(0.01)
+
+
+def test_float_esc_cancels_on_rising_edge_only(monkeypatch) -> None:
+    """按一下 Esc 触发一次取消；按住不放不重复起线程；松开再按能再触发。"""
+    from rpa_core.capture_kit import float_window as fw
+
+    calls: list[str] = []
+    win = fw.CaptureFloat()
+    win._mode = fw._MODE_CAPTURE
+    win._on_cancel = lambda: calls.append("cancel")
+    down = {"value": False}
+    monkeypatch.setattr(fw, "_escape_down", lambda: down["value"])
+
+    down["value"] = True
+    win._poll_escape()
+    _wait_calls(calls, 1)
+    assert calls == ["cancel"]
+
+    win._poll_escape()  # 仍按着：按下沿只算一次
+    assert calls == ["cancel"]
+
+    down["value"] = False
+    win._poll_escape()  # 松开
+    down["value"] = True
+    win._poll_escape()  # 再按
+    _wait_calls(calls, 2)
+    assert len(calls) == 2
+
+
+def test_float_esc_ignored_outside_capture(monkeypatch) -> None:
+    """提示形态 / 没接回调时 Esc 不该顺手取消（编辑态浮窗本来就已 hide）。"""
+    from rpa_core.capture_kit import float_window as fw
+
+    calls: list[str] = []
+    win = fw.CaptureFloat()
+    win._on_cancel = lambda: calls.append("cancel")
+    monkeypatch.setattr(fw, "_escape_down", lambda: True)
+
+    win._mode = fw._MODE_NOTICE
+    win._poll_escape()
+    assert calls == []
+
+    win._mode = fw._MODE_CAPTURE
+    win._on_cancel = None
+    win._poll_escape()
+    assert calls == []
+
+
+def test_float_timer_drives_escape_poll(monkeypatch) -> None:
+    """真实链路：40ms 定时器 → _wnd_proc → Esc 轮询 → on_cancel。"""
+    win32con = pytest.importorskip("win32con")
+    from rpa_core.capture_kit import float_window as fw
+
+    calls: list[str] = []
+    win = fw.CaptureFloat()
+    win._mode = fw._MODE_CAPTURE
+    win._on_cancel = lambda: calls.append("cancel")
+    monkeypatch.setattr(fw, "_escape_down", lambda: True)
+    monkeypatch.setattr(win, "_avoid_cursor", lambda hwnd: None)
+    win._wnd_proc(0, win32con.WM_TIMER, fw._TIMER_AVOID, 0)
+    _wait_calls(calls, 1)
+    assert calls == ["cancel"]
+
+
+def test_float_cancel_callback_ends_controller_session() -> None:
+    """浮窗按钮与 Esc 共用同一个 on_cancel：它必须真的把捕获会话收掉。"""
+    host = FakeHost()
+    window = FakeFloat()
+    controller = _make(BlockingSession(), host=host, float_=window)
+    controller.start()
+    assert window.on_cancel is not None
+    window.on_cancel()
+    assert _wait(controller, {"cancelled"}) == {"state": "cancelled"}
+    assert host.restored >= 1 and window.hidden is True
