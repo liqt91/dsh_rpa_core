@@ -48,6 +48,9 @@ _ID_INFO = 206
 # 动态控件 id 起点（层级勾选 / 属性行）
 _ID_LEVEL_BASE = 1000
 _ID_ATTR_BASE = 2000
+# 层级区一屏放得下的行数（y 70 起、行高 32、预览标签在 402）；全链层级超出时
+# 窗口右侧给 WS_VSCROLL 滚动条，checkbox 按偏移重排（M69：目标→根的完整链）。
+_LEVEL_ROWS = 10
 
 _MATCH_MODES = ("精确", "包含")
 
@@ -72,6 +75,8 @@ class ElementEditDialog:
         # 层级形态状态
         self._levels: list[dict[str, Any]] = []
         self._selected = 0
+        self._level_scroll = 0
+        self._level_boxes: list[int] = []
         self._attr_controls: list[int] = []
         self._control_map: dict[int, tuple] = {}
 
@@ -136,6 +141,9 @@ class ElementEditDialog:
         _win32.register_class(_CLASS)
         ex_style = win32con.WS_EX_TOPMOST | win32con.WS_EX_DLGMODALFRAME
         style = win32con.WS_POPUP | win32con.WS_CAPTION | win32con.WS_SYSMENU
+        if len(self._levels) > _LEVEL_ROWS:
+            # 全链层级超一屏：给窗口原生垂直滚动条（WM_VSCROLL 里重排 checkbox）
+            style |= win32con.WS_VSCROLL
         # ★ 外框尺寸从客户区反推：把客户区尺寸当外框传，标题栏和边框会吃掉
         # 底部控件（保存按钮被裁一半的真机事故）。
         outer_w, outer_h = _win32.adjust_window_size(client_w, client_h, style, ex_style)
@@ -249,10 +257,10 @@ class ElementEditDialog:
         control("STATIC", "层级（勾选参与定位）", 0, 16, 46, 240, 20, 207)
         control("STATIC", "属性（勾选参与本层定位）", 0, 312, 46, 280, 20, 208)
         # 层级勾选：点哪层，右栏就编辑哪层（勾选与选中同一击，与影刀的 tree 一致）
+        self._level_boxes = []
         for index, level in enumerate(self._levels):
-            style = win32con.BS_AUTOCHECKBOX
             box = control(
-                "BUTTON", selector_tree.summary(level), style,
+                "BUTTON", selector_tree.summary(level), win32con.BS_AUTOCHECKBOX,
                 16, 70 + index * 32, 280, 26, _ID_LEVEL_BASE + index,
             )
             win32gui.SendMessage(
@@ -262,6 +270,8 @@ class ElementEditDialog:
             # 目标级（链尾）不许勾掉：锁勾选
             if index == len(self._levels) - 1:
                 win32gui.EnableWindow(box, False)
+            self._level_boxes.append(box)
+        self._setup_level_scroll(hwnd)
         self._rebuild_attr_pane(hwnd)
         control("STATIC", "组合选择器", 0, 16, 402, 200, 20, 209)
         self._preview_edit = control(
@@ -278,6 +288,60 @@ class ElementEditDialog:
         control("BUTTON", "取消", 0, 676, 512, 88, 30, win32con.IDCANCEL)
         win32gui.SendMessage(self._name_edit, win32con.EM_SETSEL, 0, -1)
         self._refresh_preview()
+
+    def _setup_level_scroll(self, hwnd) -> None:
+        """层级超一屏时初始化滚动条并重排 checkbox（不超也要按 0 偏移排一次）。"""
+        import win32con
+        import win32gui
+
+        self._level_scroll = 0
+        if len(self._levels) > _LEVEL_ROWS:
+            # pywin32 的 SCROLLINFO 是 (mask, min, max, page, pos[, trackPos]) 元组
+            mask = win32con.SIF_RANGE | win32con.SIF_PAGE | win32con.SIF_POS
+            win32gui.SetScrollInfo(
+                hwnd, win32con.SB_VERT,
+                (mask, 0, len(self._levels) - 1, _LEVEL_ROWS, 0), True,
+            )
+        self._layout_levels(hwnd)
+
+    def _layout_levels(self, hwnd) -> None:
+        """按滚动偏移摆放层级 checkbox：屏内显示、屏外隐藏。"""
+        import win32con
+        import win32gui
+
+        for index, box in enumerate(self._level_boxes):
+            row = index - self._level_scroll
+            visible = 0 <= row < _LEVEL_ROWS
+            win32gui.SetWindowPos(
+                box, 0, 16, 70 + row * 32, 0, 0,
+                win32con.SWP_NOSIZE | win32con.SWP_NOZORDER,
+            )
+            win32gui.ShowWindow(box, win32con.SW_SHOW if visible else win32con.SW_HIDE)
+
+    def _on_vscroll(self, hwnd, wparam) -> None:
+        """滚动层级区：行/页/拖块三档都收。"""
+        import win32con
+        import win32gui
+
+        code = wparam & 0xFFFF
+        pos = (wparam >> 16) & 0xFFFF
+        limit = max(0, len(self._levels) - _LEVEL_ROWS)
+        if code == win32con.SB_LINEUP:
+            self._level_scroll = max(0, self._level_scroll - 1)
+        elif code == win32con.SB_LINEDOWN:
+            self._level_scroll = min(limit, self._level_scroll + 1)
+        elif code == win32con.SB_PAGEUP:
+            self._level_scroll = max(0, self._level_scroll - _LEVEL_ROWS)
+        elif code == win32con.SB_PAGEDOWN:
+            self._level_scroll = min(limit, self._level_scroll + _LEVEL_ROWS)
+        elif code in (win32con.SB_THUMBTRACK, win32con.SB_THUMBPOSITION):
+            self._level_scroll = min(limit, max(0, pos))
+        # SCROLLINFO 元组按位填充：min/max 必须成对给（给了 mask=SIF_POS 也得占位）。
+        win32gui.SetScrollInfo(
+            hwnd, win32con.SB_VERT,
+            (win32con.SIF_POS, 0, 0, 0, self._level_scroll), True,
+        )
+        self._layout_levels(hwnd)
 
     def _rebuild_attr_pane(self, hwnd) -> None:
         """右栏属性行随选中层重建（行数随层级属性变，池化比重排省事）。"""
@@ -352,6 +416,9 @@ class ElementEditDialog:
                 self._close(saved=False)
                 return 0
             self._on_control(hwnd, cid, notif)
+            return 0
+        if msg == win32con.WM_VSCROLL:
+            self._on_vscroll(hwnd, wparam)
             return 0
         if msg == _WM_APP_FOCUS:
             try:

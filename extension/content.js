@@ -23,7 +23,7 @@
   // 构建标识：与 background.js 的 EXT_BUILD、manifest.json 的 version 三方一致（契约测试钉住）。
   // 随捕获结果回传——诊断「页面里跑的脚本是哪个年代的」（Load unpacked 不自动重载，
   // 补注入前已开页面里的可能还是旧快照；见 background.js 顶部的完整说明）。
-  const EXT_BUILD = "0.9.2";
+  const EXT_BUILD = "0.9.3";
 
   // ---- 实例接管守卫（M42）----------------------------------------------------
   // 声明式 content_scripts **只在页面加载时**注入：扩展装载/重载后，已经打开的标签页
@@ -129,8 +129,11 @@
     return (el.getAttribute("title") || el.getAttribute("placeholder") || "").trim();
   };
 
-  // 祖先链深度上限：与升级前的 cssSelectorFor 一致（超过就不再上溯）。
+  // 主 css 的深度上限：与升级前的 cssSelectorFor 一致（超过就不再上溯）。
   const MAX_PATH_DEPTH = 6;
+  // 编辑器节点树的深度上限：维护者要「目标 → 页面根」的**完整**祖先链（M69），
+  // 40 级对真实页面足够；主 css 不受它影响（仍走短链）。
+  const MAX_TREE_DEPTH = 40;
 
   /** 单级定位片段：给一个节点，返回它在选择器里怎么写 + 供节点树展示的原始属性。
    *
@@ -174,21 +177,41 @@
     return { tag: node.tagName.toLowerCase(), id: id || null, classes, nthOfType, fragment };
   };
 
-  /** 根 → 目标的祖先链（每级一个 pathEntryFor 结果）。节点树用它，勾选后拼回主选择器。 */
+  /** 目标 → 页面根的**完整**祖先链（每级一个 pathEntryFor 结果）。
+   *
+   * 这是编辑器节点树的素材（M69：用户要看全部层级、决定哪些参与定位），
+   * **不再**到 id / 6 级就停——主 css 的短链由 cssChainFor 单独取，两者共享
+   * 同一条全链（见 buildDescriptor 的 inCss 标记），不会出现「树上路径与
+   * 真正下发的选择器对不上」。
+   */
   const pathFor = (el) => {
-    if (el.id) return [pathEntryFor(el)];
     const parts = [];
     let node = el;
-    while (node && node.nodeType === 1 && parts.length < MAX_PATH_DEPTH) {
-      const entry = pathEntryFor(node);
-      parts.unshift(entry);
-      if (entry.id) break;
+    while (node && node.nodeType === 1 && parts.length < MAX_TREE_DEPTH) {
+      parts.unshift(pathEntryFor(node));
       node = node.parentElement;
     }
     return parts;
   };
 
-  const cssSelectorFor = (el) => pathFor(el).map((entry) => entry.fragment).join(" > ");
+  /** 主 css 用链的起点：从链尾（目标）往根数，带 id 即停、最多 MAX_PATH_DEPTH 级。 */
+  const cssStartFor = (chain) => {
+    let count = 0;
+    for (let index = chain.length - 1; index >= 0; index--) {
+      count += 1;
+      if (chain[index].id || count >= MAX_PATH_DEPTH) return index;
+    }
+    return 0;
+  };
+
+  /** 主 css 用的短链（带 id 即停 / 最多 6 级），candidates 的「更短写法」也从它截。 */
+  const cssChainFor = (el) => {
+    if (el.id) return [pathEntryFor(el)];
+    const chain = pathFor(el);
+    return chain.slice(cssStartFor(chain));
+  };
+
+  const cssSelectorFor = (el) => cssChainFor(el).map((entry) => entry.fragment).join(" > ");
 
   // CSS 属性选择器的值需要转义 \ 与 "（否则含引号的 aria-label 会拼出非法选择器）。
   const attrValue = (value) => String(value).replace(/\\/g, "\\\\").replace(/"/g, '\\"');
@@ -219,7 +242,8 @@
   // ——候选越多，运行期自愈逐个 try 的开销越大。
   const MAX_PATH_SUFFIX = 3;
   const pathSuffixSelectorsFor = (el) => {
-    const fragments = pathFor(el).map((entry) => entry.fragment);
+    // 收缩候选从主 css 的短链截（与升级前逐字一致）；全链只服务编辑器节点树。
+    const fragments = cssChainFor(el).map((entry) => entry.fragment);
     if (fragments.length < 2) return [];  // 单级链（元素自带 id）没有「更短写法」可给
     const top = Math.min(fragments.length - 1, MAX_PATH_SUFFIX);
     const out = [];
@@ -508,13 +532,17 @@
   // [capture-descriptor-rect:end]
 
   const buildDescriptor = (el) => {
-    const css = cssSelectorFor(el);
+    // path = **完整**祖先链（M69：目标 → 页面根，每级 {tag, id, classes, nthOfType,
+    // fragment, inCss}）。inCss 标记哪些层组成了主 css——编辑器据它初始化勾选，
+    // 所以树上初始高亮的路径与真正下发执行的选择器必然是同一条。
+    const chain = pathFor(el);
+    const cssStart = el.id ? chain.length - 1 : cssStartFor(chain);
+    const marked = chain.map((entry, index) => ({ ...entry, inCss: index >= cssStart }));
+    const css = marked.filter((entry) => entry.inCss).map((entry) => entry.fragment)
+      .join(" > ");
     return {
       kind: "browser",
-      // path = 祖先链（每级 {tag, id, classes, nthOfType, fragment}）：元素编辑器据它画
-      // 节点树，用户勾选层级后按 fragment join(" > ") 拼回 css。与 css **同源**
-      // （都出自 pathFor），所以树上高亮的路径与真正下发执行的选择器必然是同一条。
-      selector: { css, path: pathFor(el), candidates: candidatesFor(el, css) },
+      selector: { css, path: marked, candidates: candidatesFor(el, css) },
       verifyCount: document.querySelectorAll(css).length,
       // M47.12 真机反馈（预览要的是「捕获时的截图」）：把视口几何一并回传，
       // host 拿它把 metadata.rect 换算成图内红框。**不依赖扩展给窗口句柄**

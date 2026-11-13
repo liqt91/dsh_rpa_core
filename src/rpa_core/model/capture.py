@@ -12,10 +12,11 @@ class ElementDescriptor(BaseModel):
       "path": [...] | 缺省}``
       ``css`` 必填且是第一顺位，语义与升级前**完全一致**；``candidates`` 可选，
       是捕获时额外收集的备选定位 ``[{"kind", "selector", "matchedCount"}]``；
-      ``path`` 可选，是从根到目标的**祖先链**
-      ``[{"tag", "id", "classes", "nthOfType", "fragment"}]``——元素编辑器据它画节点树，
-      用户勾选层级后按 ``fragment`` 重组主 css。它与 ``css`` 出自**同一个**片段生成处
-      （``content.js::pathFor``），所以树上的路径与真正下发执行的选择器必然是同一条。
+      ``path`` 可选，是**目标 → 页面根**的完整祖先链
+      ``[{"tag", "id", "classes", "nthOfType", "fragment", "inCss"}]``——元素编辑器据它
+      画层级树，``inCss`` 标记哪些层组成了主 css（编辑器初始勾选）；用户勾选层级后
+      按 ``fragment`` 重组主 css。它与 ``css`` 出自**同一个**片段生成处
+      （``content.js::pathEntryFor``），所以树上的路径与真正下发执行的选择器必然是同一条。
     - desktop: ``{"locator": <DesktopLocator 文档>}``
 
     browser 的 ``metadata`` 另可携带语义特征（``role`` / ``accessibleName`` /

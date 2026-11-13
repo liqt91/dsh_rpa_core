@@ -213,6 +213,40 @@ def _probe() -> list[str]:
             failed.append(f"层级形态保存结果不对：{saved_tree}")
         if closes != [True, False, True]:
             failed.append(f"层级形态保存后 on_close 不对：{closes}")
+
+    # 7. 全链层级（>一屏）：出滚动条、首屏之外的 checkbox 隐藏、滚到底目标级可见。
+    long_levels = selector_tree.levels_from_path([
+        {"tag": "div", "id": None, "classes": [f"c{i}"], "nthOfType": None,
+         "fragment": f"div.c{i}", "inCss": i >= 10}
+        for i in range(12)
+    ])
+    dialog4 = ElementEditDialog()
+    dialog4.show(title="t", name="n", levels=long_levels,
+                 on_save=lambda n, s: None, on_close=closes.append)
+    hwnd4 = _wait_hwnd(dialog4)
+    if not hwnd4:
+        failed.append("全链层级编辑框没建起来")
+    else:
+        style4 = win32gui.GetWindowLong(hwnd4, win32con.GWL_STYLE)
+        if not (style4 & win32con.WS_VSCROLL):
+            failed.append("12 层却没给滚动条")
+        box_last = win32gui.GetDlgItem(hwnd4, _ID_LEVEL_BASE + 11)
+        if win32gui.IsWindowVisible(box_last):
+            failed.append("目标级该在屏外却没隐藏")
+        # 滚到底：SB_PAGEDOWN 两次
+        for _ in range(2):
+            win32gui.SendMessage(hwnd4, win32con.WM_VSCROLL, win32con.SB_PAGEDOWN, 0)
+            time.sleep(0.15)
+        if not win32gui.IsWindowVisible(box_last):
+            failed.append("滚到底目标级还不可见")
+        box0_4 = win32gui.GetDlgItem(hwnd4, _ID_LEVEL_BASE)
+        if win32gui.IsWindowVisible(box0_4):
+            failed.append("滚到底第一层还显示着（没跟上偏移）")
+        # 首屏外只初始勾了 inCss 的层：预览必须只含 inCss 部分
+        if _control_text(hwnd4, _ID_PREVIEW) != "div.c10 > div.c11":
+            failed.append(f"全链初始预览不对：{_control_text(hwnd4, _ID_PREVIEW)!r}")
+        dialog4.close()
+        time.sleep(0.4)
     return failed
 
 

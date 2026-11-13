@@ -34,7 +34,12 @@ def attr_escape(value: str) -> str:
 
 
 def levels_from_path(path: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """捕获的 ``selector.path`` → 编辑器层级模型（初始勾选与主 css 一致）。"""
+    """捕获的 ``selector.path`` → 编辑器层级模型（初始勾选与主 css 一致）。
+
+    ``path`` 是**目标 → 页面根**的完整祖先链（M69 起），每层带 ``inCss`` 标记
+    它是否参与主 css——初始勾选只开 ``inCss`` 的层（id 祖先往下的短链），
+    上面的层展示但默认不参与。旧资产没有 ``inCss`` 时按「全参与」兼容。
+    """
     levels: list[dict[str, Any]] = []
     for entry in path:
         ident = entry.get("id")
@@ -43,7 +48,7 @@ def levels_from_path(path: list[dict[str, Any]]) -> list[dict[str, Any]]:
         levels.append(
             {
                 "tag": str(entry.get("tag") or "*"),
-                "included": True,
+                "included": bool(entry.get("inCss", True)),
                 "id": {"on": bool(ident), "value": str(ident or "")},
                 "classes": [
                     # 捕获侧片段只取首类：初始勾选与它一致，其余类默认不勾

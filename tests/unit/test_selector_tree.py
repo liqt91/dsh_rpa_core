@@ -36,6 +36,29 @@ def test_levels_from_path_mirrors_capture_fragments() -> None:
     assert levels[1]["id"]["on"] is False and levels[0]["id"]["on"] is True
 
 
+def test_incgs_marks_only_css_chain_included() -> None:
+    """全链 path（目标 → 根）：只有 inCss 的层初始参与重组，与主 css 逐字一致。"""
+    full = [
+        {"tag": "html", "id": None, "classes": [], "nthOfType": None,
+         "fragment": "html", "inCss": False},
+        {"tag": "body", "id": None, "classes": ["dark"], "nthOfType": None,
+         "fragment": "body.dark", "inCss": False},
+        {"tag": "div", "id": "app", "classes": ["page"], "nthOfType": None,
+         "fragment": "#app", "inCss": True},
+        {"tag": "span", "id": None, "classes": ["t"], "nthOfType": None,
+         "fragment": "span.t", "inCss": True},
+    ]
+    levels = levels_from_path(full)
+    assert [level["included"] for level in levels] == [False, False, True, True]
+    assert compose(levels) == "#app > span.t"
+    # 用户往上勾一层：相邻判定按全链下标，body 与 #app 相邻 ⇒ 仍是子代连接
+    levels[1]["included"] = True
+    assert compose(levels) == "body.dark > #app > span.t"
+    levels[0]["included"] = True
+    levels[1]["included"] = False
+    assert compose(levels) == "html #app > span.t"
+
+
 def test_uncheck_middle_level_uses_descendant_not_child() -> None:
     levels = levels_from_path(PATH)
     levels[1]["included"] = False  # 勾掉中间层
