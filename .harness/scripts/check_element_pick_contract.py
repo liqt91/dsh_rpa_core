@@ -297,6 +297,79 @@ def case_capture_needs_no_name() -> None:
         api._CAPTURES.pop(key, None)
 
 
+def case_capture_commit_wires_selector() -> None:
+    """捕获确认框保存：接线必须吃 ``(name, selector)`` 两参，且 selector 真落盘。
+
+    用户实际走的路：编辑框改完层级 → compose → 保存 → 控制器回调两参 →
+    宿主校验 / 写回 / 落盘。只断言「控制器接到了 on_commit 这个 key」是**恒绿判据**：
+    M73 实测 lambda 停在单参数，用户一点保存就 TypeError「入库失败」，
+    而门禁全绿。所以这里真调一次接线回调，并核对盘上的 css 是编辑后的值。
+    """
+    import tempfile
+
+    real = (
+        api.capability_snapshot,
+        api._scan_missing,
+        api._flow_path,
+        api._elements_dir,
+        api.CaptureController,
+    )
+    base = Path(tempfile.mkdtemp(prefix="rpa-m73-wire-"))
+    seen: dict[str, object] = {}
+
+    class _Ctl:
+        def __init__(self, **kwargs):
+            seen["kwargs"] = kwargs
+
+        def start(self):
+            return {"ok": True, "offline": False}
+
+        def poll(self):
+            return {"state": "pending"}
+
+        def cancel(self):
+            pass
+
+    key: tuple[str, str] | None = None
+    try:
+        api.capability_snapshot = lambda: dict(ONLINE)
+        api._scan_missing = lambda path: []
+        api._flow_path = lambda path: base / "workflows" / "probe.json"
+        api._elements_dir = lambda path: base / "workflows" / "elements"
+        api.CaptureController = _Ctl
+        with _Silence():
+            res = api.start_capture("probe.json")
+        assert_true(res["ok"] is True, f"起不来捕获：{res}")
+        key = ("probe.json", res["captureId"])
+        hook = seen["kwargs"].get("on_commit")
+        assert_true(callable(hook), "控制器没接到 on_commit")
+        entry = api._CAPTURES[key]
+        api._hold_captured(
+            entry,
+            {"kind": "browser", "selector": {"css": "#original"}, "verifyCount": 1},
+        )
+        # 编辑框点保存时控制器就传这两个参数；单参数 lambda 在这里直接 TypeError。
+        error = hook("搜索框", "#edited")
+        assert_true(error is None, f"保存被拦：{error}")
+        written = base / "workflows" / "elements" / "搜索框.json"
+        assert_true(written.is_file(), "接线没落盘")
+        saved = json.loads(written.read_text(encoding="utf-8"))
+        assert_true(
+            saved["selector"]["css"] == "#edited",
+            f"编辑后的 selector 没写回（丢了 selector 也算坏）：{saved['selector']}",
+        )
+    finally:
+        (
+            api.capability_snapshot,
+            api._scan_missing,
+            api._flow_path,
+            api._elements_dir,
+            api.CaptureController,
+        ) = real
+        if key is not None:
+            api._CAPTURES.pop(key, None)
+
+
 class _FakeController:
     def __init__(self, state: str, result: dict | None = None, reason: str = "") -> None:
         self._state = state
@@ -838,6 +911,7 @@ for name, fn in (
     ("能力快照解析在线/离线与修法", case_capability_snapshot),
     ("能力离线：不 spawn、返回 blocked", case_offline_never_spawns),
     ("点击即抓：不需要预填名字", case_capture_needs_no_name),
+    ("确认框保存接线：吃两参且 selector 落盘", case_capture_commit_wires_selector),
     ("捕获只暂存：ready 时盘上为空", case_capture_holds_descriptor_without_writing),
     ("确认入库：中文名写成 UTF-8/LF", case_commit_writes_chinese_name),
     ("入库拒绝非法名与重名", case_commit_rejects_bad_and_duplicate_names),

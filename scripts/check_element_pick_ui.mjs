@@ -495,6 +495,18 @@ check('契约层：后端没有手填写入口、捕获不落盘、名字允许�
   assert(/def _rewrite_refs\(/.test(apiSrc), '改名没联动流程引用')
 })
 
+// 行级等值断言：只搜「on_commit 出现过」会被 lambda 自身喂成恒绿。
+// 控制器从 M69 起传 (name, selector)，宿主 _commit_from_dialog 也是三参（含 entry）。
+// 接线停在单参数时用户点保存直接 TypeError「入库失败」，而旧的 key 存在性判据全绿。
+check('契约层：确认框保存接线收两参并透传 selector 给入库', () => {
+  const line = apiSrc.split('\n').find((l) => /^\s*on_commit=lambda /.test(l))
+  assert(line, 'start_capture 没接 on_commit')
+  assert(
+    /^\s*on_commit=lambda name, selector: _commit_from_dialog\(entry, name, selector\),\s*$/.test(line),
+    `保存接线没把编辑后的 selector 透传给入库：${line.trim()}`,
+  )
+})
+
 // ---------- 6. kit 边界：只管捕获/编辑，删除与引用检查归网页端 ----------
 check('契约层：删前引用检查在网页端，删除不借桌面浮窗', () => {
   const head = apiSrc.indexOf('def delete_element(')

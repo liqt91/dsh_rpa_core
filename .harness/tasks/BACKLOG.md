@@ -5,6 +5,20 @@
 
 ## 当前任务
 
+- [x] **M73 捕获确认框保存接线的双参数回归**（`done`，2026-11-13）——维护者实测
+  「入库失败：start capture.<locals>.<lambda>() takes 1 positional argument but 2 were given」。
+  根因：M69 把控制器回调升成 `(name, selector)`、宿主 `_commit_from_dialog` 也收 selector，
+  唯独 `start_capture` 的接线 lambda 还停在单参数；旧判据只验「on_commit 这个 key 存在」
+  是恒绿判据。落地见 `M73-save-hook-two-args.md`。
+  **欠**：真机保存链路（点保存 → 落盘 → 列表刷新）未占机复验，当前验到真调 hook + 真文件写回。
+
+- [ ] **M73 附带：层级编辑器的编辑态不复现**（`planned`，2026-11-13）——只读取证：
+  `edit_dialog._try_save` 用 `selector_tree.compose(levels)` 只写 `selector.css`，
+  不回写 `selector.path` 各层的 `inCss` / 属性值；下次打开详情框时
+  `levels_from_path(path)` 拿旧 path 重建层级，用户改过的勾选与属性看不见。
+  运行期定位读 css 所以**不影响执行**，只影响编辑态复现。要不要让编辑器成为
+  path 的写入侧、或另存一份编辑态模型，属于既有设计取向改动，先给取舍再动手。
+
 - [x] **M72 元素引用在网页端可见 / 可解除**（`done`，2026-11-13）——维护者实测
   「删除元素，提示第三步引用它，但第三步 selector 是空的」。取证：ref-only 下
   `elementRefs.selector` 是真值、`with.selector` 故意不存在，删除护栏没误报；

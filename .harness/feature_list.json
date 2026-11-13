@@ -484,7 +484,7 @@
     },
     {
       "id": "xhs-element-capture-single-button",
-      "title": "One-button capture; float for capture, web for delete; Chinese names; elementRefs visible/unbindable",
+      "title": "One-button capture; float for capture, web for delete; Chinese names; elementRefs visible/unbindable; save-hook 2 args",
       "passes": true
     }
   ]

@@ -63,6 +63,9 @@ UI_REF_STRUCT = "契约层：引用清单带 nodeId/param/name，删除提示逐
 UI_REF_UNBIND = "契约层：被引用参数不假报未设置，解除引用随保存全量写回"
 PY_REFS = "引用清单结构化：nodeId+param+name+递归分支"
 PY_UNBIND = "解除引用随保存写回，不传则不动引用"
+# M73：捕获确认框保存接线（用户实测「入库失败：<lambda>() takes 1 ... but 2 were given」）
+UI_COMMIT_WIRE = "契约层：确认框保存接线收两参并透传 selector 给入库"
+PY_COMMIT_WIRE = "确认框保存接线：吃两参且 selector 落盘"
 
 
 def digest(path: Path) -> str:
@@ -274,6 +277,26 @@ CASES: list[dict[str, Any]] = [
         "      param: '',  // " + SENTINEL + "\n",
         {"pick_ui": {UI_REF_STRUCT}, "library": {LIB_REF_CHECK}},
     ),
+    # ---- M73：确认框保存接线（用户实测 TypeError 的那一处） -----------------
+    case(
+        "N21", "保存接线退回单参数（点保存直接 TypeError「入库失败」）", API,
+        "            on_commit=lambda name, selector: "
+        "_commit_from_dialog(entry, name, selector),\n",
+        "            on_commit=lambda name: _commit_from_dialog(entry, name),  # " + SENTINEL + "\n",
+        # 静态行级断言 + 真调回调的动态用例：两层都该红；
+        # 只验「key 存在」的旧判据不该红（它本来就抓不到）。
+        {"pick_ui": {UI_COMMIT_WIRE}, "contract": {PY_COMMIT_WIRE}},
+    ),
+    case(
+        "N22", "接线收两参却丢掉 selector（层级编辑白改，落盘还是旧 css）", API,
+        "            on_commit=lambda name, selector: "
+        "_commit_from_dialog(entry, name, selector),\n",
+        "            on_commit=lambda name, selector: _commit_from_dialog(\n"
+        "                entry, name, _selector_edit_text(entry[\"captured\"])\n"
+        "            ),  # " + SENTINEL + "\n",
+        # 合法语法的精准放宽：不抛异常、照样能保存，只有「核对落盘 css」抓得住。
+        {"pick_ui": {UI_COMMIT_WIRE}, "contract": {PY_COMMIT_WIRE}},
+    ),
 ]
 
 # 元验证：同一处注入 + 把判据本身放宽 ⇒ 必须变绿（证明这条红是那条判据报的）
@@ -286,6 +309,29 @@ META2 = case(
         (
             CONTRACT,
             '    ("解除引用随保存写回，不传则不动引用", case_unbind_ref_writes_back),\n',
+            "    # 放宽：不再跑这条 case\n",
+        ),
+    ),
+)
+
+
+META3 = case(
+    "M3", "注入 N21 的同时放宽「接线形状 + 真调回调」两条新判据 ⇒ 应变绿", API,
+    "            on_commit=lambda name, selector: "
+    "_commit_from_dialog(entry, name, selector),\n",
+    "            on_commit=lambda name: _commit_from_dialog(entry, name),  # " + SENTINEL + "\n",
+    {"pick_ui": set(), "library": set(), "contract": set(), "unit": set()},
+    extra=(
+        (
+            PICK_UI,
+            "    /^\\s*on_commit=lambda name, selector: "
+            "_commit_from_dialog\\(entry, name, selector\\),\\s*$/.test(line),\n",
+            "    true,  // 放宽：不再断言接线形状\n",
+        ),
+        (
+            CONTRACT,
+            '    ("确认框保存接线：吃两参且 selector 落盘", '
+            "case_capture_commit_wires_selector),\n",
             "    # 放宽：不再跑这条 case\n",
         ),
     ),
@@ -349,7 +395,7 @@ def main() -> int:
     print("基线:", {k: v[:8] for k, v in before.items()})
 
     failures = 0
-    for item in [*CASES, META, META2]:
+    for item in [*CASES, META, META2, META3]:
         problems = run_case(item)
         if problems:
             failures += 1
@@ -369,8 +415,9 @@ def main() -> int:
     for note in verify_clean():
         failures += 1
         print(f"FAIL {note}")
+    total = len(CASES) + 3
     print(f"NEGATIVE VERIFICATION {'FAILED' if failures else 'PASSED'} "
-          f"({len(CASES) + 2 - failures}/{len(CASES) + 2})")
+          f"({total - failures}/{total})")
     return 1 if failures else 0
 
 

@@ -2687,7 +2687,7 @@ def start_capture(
             # ready 语义，前端弹自己的页面框兜底。
             edit_dialog_factory=_new_edit_dialog,
             edit_model=lambda doc: _capture_edit_model(entry),
-            on_commit=lambda name: _commit_from_dialog(entry, name),
+            on_commit=lambda name, selector: _commit_from_dialog(entry, name, selector),
         )
         launched = controller.start()
     except Exception as exc:  # noqa: BLE001 - 起捕获失败必须如实回前端，别闷成等待态
