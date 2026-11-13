@@ -261,6 +261,8 @@ class CaptureController:
             name=model.get("name") or "",
             selector=model.get("selector") or "",
             meta=model.get("meta") or "",
+            info=model.get("info") or "",
+            levels=model.get("levels"),
             on_save=self._commit_from_dialog,
             on_close=self._close_edit,
         )

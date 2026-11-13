@@ -717,6 +717,31 @@ def case_selector_edit_validation() -> None:
             assert_true(ok is None, f"合法定位被拦：{ok}")
             written = json.loads((folder / "搜索框.json").read_text(encoding="utf-8"))
             assert_true(written["selector"]["css"] == "#better", f"定位没入库：{written}")
+
+            # 影刀式层级接线：browser 且 selector.path 存在 ⇒ 编辑模型给层级；
+            # 没有 path ⇒ 退化为文本编辑（简式形态），不许给空树。
+            with_path = {
+                "kind": "browser",
+                "selector": {
+                    "css": "#q",
+                    "path": [
+                        {"tag": "span", "id": None, "classes": ["t"],
+                         "nthOfType": None, "fragment": "span.t"},
+                    ],
+                },
+            }
+            api._CAPTURES[key]["captured"] = with_path
+            model = api._capture_edit_model(api._CAPTURES[key])
+            assert_true("levels" in model, f"有 path 却没给层级模型：{model}")
+            assert_true(model["levels"][0]["classes"][0]["value"] == "t", f"{model['levels']}")
+            no_path = dict(with_path)
+            no_path["selector"] = {"css": "#q"}
+            api._CAPTURES[key]["captured"] = no_path
+            model2 = api._capture_edit_model(api._CAPTURES[key])
+            assert_true(
+                "levels" not in model2 and model2.get("selector"),
+                f"无 path 没退化：{model2}",
+            )
         finally:
             api._elements_dir = real_dir
             api._CAPTURES.pop(key, None)

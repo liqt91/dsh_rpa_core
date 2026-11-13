@@ -300,9 +300,12 @@ class FakeEditDialog:
         self._on_save = None
         self._on_close = None
 
-    def show(self, *, title, name, selector="", meta="", save_label="保存",
-             on_save=None, on_close=None):
-        self.shown = {"title": title, "name": name, "selector": selector, "meta": meta}
+    def show(self, *, title, name, selector="", meta="", info="", levels=None,
+             save_label="保存", on_save=None, on_close=None):
+        self.shown = {
+            "title": title, "name": name, "selector": selector,
+            "meta": meta, "info": info, "levels": levels,
+        }
         self._on_save = on_save
         self._on_close = on_close
 
@@ -342,7 +345,8 @@ def test_captured_opens_edit_dialog_instead_of_ready() -> None:
     state = _wait(controller, {"editing"})
     assert state["state"] == "editing"
     assert dialog.shown == {
-        "title": "捕获到元素", "name": "元素1", "selector": "", "meta": "m",
+        "title": "捕获到元素", "name": "元素1", "selector": "",
+        "meta": "m", "info": "", "levels": None,
     }
 
 

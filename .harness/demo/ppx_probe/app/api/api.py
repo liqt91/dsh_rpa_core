@@ -2184,21 +2184,34 @@ def _apply_selector_edit(doc: dict[str, Any], text: str) -> None:
         doc["selector"] = json.loads(text)
 
 
-def _capture_edit_model(entry: dict[str, Any]) -> dict[str, str]:
-    """捕获确认框的内容：建议名 + 可编辑定位 + 只读 meta（多行 EDIT 只吃 CRLF 折行）。"""
+def _capture_edit_model(entry: dict[str, Any]) -> dict[str, Any]:
+    """捕获确认框的内容：建议名 + 定位编辑素材 + 信息行。
+
+    browser 且有 ``selector.path`` 时给**层级模型**（影刀式树形编辑）；
+    desktop / 无 path 时退化为可编辑文本（简式形态）。
+    """
+    from rpa_core.capture_kit import selector_tree
+
     preview = entry.get("preview") or {}
+    captured = entry.get("captured") or {}
     kind = preview.get("kind")
-    lines = ["网页元素" if kind == "browser" else "桌面元素"]
+    parts = ["网页元素" if kind == "browser" else "桌面元素"]
     if preview.get("matches"):
-        lines.append(f"命中 {preview['matches']} 个")
+        parts.append(f"命中 {preview['matches']} 个")
     node = preview.get("nodeId")
-    lines.append(f"将绑定到 {node}" if node else "存为资产（不绑定节点）")
-    return {
+    parts.append(f"将绑定到 {node}" if node else "存为资产（不绑定节点）")
+    path = (captured.get("selector") or {}).get("path")
+    model: dict[str, Any] = {
         "title": "捕获到元素",
         "name": str(preview.get("name") or entry.get("suggestName") or ""),
-        "selector": _selector_edit_text(entry.get("captured") or {}),
-        "meta": "\r\n".join(lines),
+        "info": " · ".join(parts),
     }
+    if kind == "browser" and isinstance(path, list) and path:
+        model["levels"] = selector_tree.levels_from_path(path)
+    else:
+        model["selector"] = _selector_edit_text(captured)
+        model["meta"] = model["info"].replace(" · ", "\r\n")
+    return model
 
 
 def _commit_from_dialog(entry: dict[str, Any], name: str, selector: str) -> str | None:
@@ -3009,14 +3022,22 @@ def edit_element(path: str, name: str) -> dict[str, Any]:
         session.finish({"state": "committed", "name": res["name"]})
         return None
 
-    dialog.show(
-        title=f"元素详情 · {name}",
-        name=name,
-        selector=_selector_edit_text(doc),
-        meta=json.dumps(doc, ensure_ascii=False, indent=2),
-        on_save=_save,
-        on_close=lambda saved: saved or session.finish({"state": "discarded"}),
-    )
+    from rpa_core.capture_kit import selector_tree
+
+    path_chain = (doc.get("selector") or {}).get("path")
+    show_args: dict[str, Any] = {
+        "title": f"元素详情 · {name}",
+        "name": name,
+        "on_save": _save,
+        "on_close": lambda saved: saved or session.finish({"state": "discarded"}),
+    }
+    if doc.get("kind") == "browser" and isinstance(path_chain, list) and path_chain:
+        show_args["levels"] = selector_tree.levels_from_path(path_chain)
+        show_args["info"] = f"网页元素 · 命中 {doc.get('verifyCount', 0)} 个"
+    else:
+        show_args["selector"] = _selector_edit_text(doc)
+        show_args["meta"] = json.dumps(doc, ensure_ascii=False, indent=2)
+    dialog.show(**show_args)
     return {"ok": True, "editId": edit_id, "state": "editing"}
 
 

@@ -25,8 +25,15 @@ sys.path.insert(0, "src")
 import win32con
 import win32gui
 
-from rpa_core.capture_kit import CaptureFloat, ElementEditDialog
-from rpa_core.capture_kit.edit_dialog import _ID_ERROR, _ID_META, _ID_NAME, _ID_SELECTOR
+from rpa_core.capture_kit import CaptureFloat, ElementEditDialog, selector_tree
+from rpa_core.capture_kit.edit_dialog import (
+    _ID_ERROR,
+    _ID_LEVEL_BASE,
+    _ID_META,
+    _ID_NAME,
+    _ID_PREVIEW,
+    _ID_SELECTOR,
+)
 
 
 def _wait_hwnd(dialog: ElementEditDialog, timeout: float = 3.0) -> int | None:
@@ -163,6 +170,49 @@ def _probe() -> list[str]:
             failed.append("Esc 后编辑框还活着")
         float_win.hide()
         time.sleep(0.3)
+
+    # 6. 层级形态（影刀式）：初始预览=主 css；勾掉层级 ⇒ 预览重组；目标级锁勾选；
+    #    保存拿到的是重组结果而不是手写文本（M69 的核心链路）。
+    saved_tree: list[tuple[str, str]] = []
+    levels = selector_tree.levels_from_path([
+        {"tag": "div", "id": "app", "classes": ["page"], "nthOfType": None,
+         "fragment": "#app"},
+        {"tag": "li", "id": None, "classes": ["item"], "nthOfType": 2,
+         "fragment": "li.item:nth-of-type(2)"},
+    ])
+    dialog3 = ElementEditDialog()
+    dialog3.show(
+        title="捕获到元素", name="元素1", levels=levels, info="网页元素 · 命中 1 个",
+        on_save=lambda n, s: saved_tree.append((n, s)) or None,
+        on_close=closes.append,
+    )
+    hwnd3 = _wait_hwnd(dialog3)
+    if not hwnd3:
+        failed.append("层级形态编辑框没建起来")
+    else:
+        _client_checks(hwnd3, failed)
+        if _control_text(hwnd3, _ID_PREVIEW) != "#app > li.item:nth-of-type(2)":
+            failed.append(f"初始预览不对：{_control_text(hwnd3, _ID_PREVIEW)!r}")
+        if not win32gui.GetDlgItem(hwnd3, _ID_LEVEL_BASE):
+            failed.append("层级 checkbox 没建")
+        box1 = win32gui.GetDlgItem(hwnd3, _ID_LEVEL_BASE + 1)
+        if win32gui.IsWindowEnabled(box1):
+            failed.append("目标级 checkbox 没禁用（勾掉目标级就没有定位了）")
+        # 模拟用户勾掉第一层：控件先变状态，再通知父窗（与真实点击同路径）
+        box0 = win32gui.GetDlgItem(hwnd3, _ID_LEVEL_BASE)
+        win32gui.SendMessage(box0, win32con.BM_SETCHECK, 0, 0)
+        win32gui.SendMessage(hwnd3, win32con.WM_COMMAND, _ID_LEVEL_BASE, 0)
+        time.sleep(0.3)
+        if _control_text(hwnd3, _ID_PREVIEW) != "li.item:nth-of-type(2)":
+            failed.append(f"勾掉层级后预览没重组：{_control_text(hwnd3, _ID_PREVIEW)!r}")
+        win32gui.SendMessage(
+            win32gui.GetDlgItem(hwnd3, win32con.IDOK), win32con.BM_CLICK, 0, 0
+        )
+        time.sleep(0.3)
+        if saved_tree != [("元素1", "li.item:nth-of-type(2)")]:
+            failed.append(f"层级形态保存结果不对：{saved_tree}")
+        if closes != [True, False, True]:
+            failed.append(f"层级形态保存后 on_close 不对：{closes}")
     return failed
 
 
