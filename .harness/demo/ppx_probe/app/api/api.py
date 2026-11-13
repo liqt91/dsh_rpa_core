@@ -2157,6 +2157,42 @@ def _session_reachable() -> bool:
         return False
 
 
+# env-status 实测热机 ~3.6s（冷启动更久），3s 预算必然误杀——误杀不只是「报错离线」，
+# 还会把处理线程钉在管道收尾上（见 _env_status_json 的注释）。
+_ENV_STATUS_TIMEOUT = 10.0
+
+
+def _env_status_json(argv: list[str]) -> tuple[int, dict[str, Any]]:
+    """跑 ``rpa-core env-status``，返回 ``(rc, JSON)``；超时抛 ``TimeoutExpired``。
+
+    ★ 不能用 ``subprocess.run`` 的 ``capture_output`` + ``timeout``：``rpa-core.exe``
+    是 shim，会再 spawn python 孙进程；超时 kill 掉 shim 后孙进程仍持有 stdout 管道，
+    ``run`` 的收尾读**一直堵到孙进程自己退出**——HTTP 处理线程就这么被钉死，前端
+    30s 超时（2026-11-13 早真机：开机冷启动 env-status >3s 被 3s 预算误杀，
+    线程跟着挂死，用户看到「RPA Probe TIMEOUT: PPX API 调用超时（30000ms）」）。
+    改成落临时文件：kill 完 shim 立刻能走，孙进程接着写文件无害。
+    """
+    import tempfile
+
+    with tempfile.TemporaryFile(mode="w+b") as tmp:
+        proc = subprocess.Popen(
+            [*argv, "env-status"],
+            cwd=str(WORKSPACE),
+            env=_run_env(),
+            stdout=tmp,
+            stderr=subprocess.DEVNULL,
+        )
+        try:
+            rc = proc.wait(timeout=_ENV_STATUS_TIMEOUT)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait(timeout=5)
+            raise
+        tmp.seek(0)
+        raw = tmp.read()
+    return rc, json.loads(raw.decode("utf-8", errors="replace"))
+
+
 @api_method("rpa.capabilitySnapshot")
 def capability_snapshot() -> dict[str, Any]:
     """一次取回能力真值：运行时 / 扩展在线 / 各浏览器 / 会话端口。
@@ -2182,24 +2218,14 @@ def capability_snapshot() -> dict[str, Any]:
         snap["ms"] = round((time.perf_counter() - started) * 1000, 1)
         return snap
     try:
-        done = subprocess.run(
-            [*argv, "env-status"],
-            cwd=str(WORKSPACE),
-            env=_run_env(),
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=3.0,
-        )
-        doc = json.loads(done.stdout)
+        rc, doc = _env_status_json(argv)
     except (OSError, subprocess.SubprocessError, ValueError, TypeError) as exc:
         snap["fix"] = f"连不上运行时（{type(exc).__name__}）：重新打开窗口再试"
         snap["ms"] = round((time.perf_counter() - started) * 1000, 1)
         return snap
     browsers = doc.get("browsers") or {}
     snap["browsers"] = browsers
-    snap["runtime"] = done.returncode == 0
+    snap["runtime"] = rc == 0
     snap["extensionOnline"] = any(
         bool(info.get("online")) for info in browsers.values() if isinstance(info, dict)
     )

@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import importlib.util
 import json
-import subprocess
 import sys
 import types
 from pathlib import Path
@@ -133,13 +132,25 @@ def case_resolve_override() -> None:
 
 
 def case_capability_snapshot() -> None:
-    real_run, real_argv = api.subprocess.run, api._rpa_argv
+    real_popen, real_argv = api.subprocess.Popen, api._rpa_argv
     payload = {"browsers": {"chrome": {"installed": True, "online": True}}}
+
+    class _FakePopen:
+        """按 ``_env_status_json`` 的调用面伪造：stdout 是临时文件，wait 写入并返回 rc。"""
+
+        def __init__(self, args, **kwargs):
+            self._out = kwargs["stdout"]
+
+        def wait(self, timeout=None):
+            self._out.write(json.dumps(payload, ensure_ascii=False).encode("utf-8"))
+            return 0
+
+        def kill(self):
+            raise AssertionError("env-status 正常返回不该 kill")
+
     try:
         api._rpa_argv = lambda: ["fake-rpa-core"]
-        api.subprocess.run = lambda *a, **k: subprocess.CompletedProcess(
-            a[0], 0, json.dumps(payload, ensure_ascii=False), ""
-        )
+        api.subprocess.Popen = _FakePopen
         snap = api.capability_snapshot()
         assert_true(snap["runtime"] is True and snap["extensionOnline"] is True, f"{snap}")
         assert_true(snap["fix"] is None, "能力齐全却给了修法")
@@ -149,7 +160,17 @@ def case_capability_snapshot() -> None:
         # 提示里不许再出现「手动填写选择器」：那条入口本轮已经删掉，说了也点不到。
         assert_true("手动填写" not in snap["fix"], f"修法还在指一条不存在的入口：{snap['fix']}")
     finally:
-        api.subprocess.run, api._rpa_argv = real_run, real_argv
+        api.subprocess.Popen, api._rpa_argv = real_popen, real_argv
+    # 形态闸（2026-11-13 真机事故的回归判据）：env-status 必须走临时文件而不是
+    # 管道——shim 被杀后孙进程仍持有管道，收尾读会把处理线程钉死；超时预算必须
+    # 容得下热机实测 ~3.6s（3s 预算必然误杀，冷机更久）。
+    src = Path(api.__file__).read_text(encoding="utf-8")
+    assert_true("capture_output=True" not in src, "又回到管道读 stdout（kill 后会钉死线程）")
+    assert_true("TemporaryFile" in src, "env-status 没落临时文件")
+    assert_true(
+        api._ENV_STATUS_TIMEOUT >= 5.0,
+        f"env-status 超时预算 {api._ENV_STATUS_TIMEOUT}s 容不下热机 ~3.6s",
+    )
 
 
 class _Silence:

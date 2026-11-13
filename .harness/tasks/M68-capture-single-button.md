@@ -120,6 +120,28 @@ M66 的六态状态条把**技术分叉和过程状态全摊在面板上**：预
 「键 ⊆ 参数 且 必填参数 ⊆ 键」双向校验（动态方法/参数单列计数不强判）。负向验证：
 把 `capture_id` 改回 `captureId` 注入一次，门禁按行号精准报红，md5 逐字节还原。
 
+## 五点六、次日开机事故：env-status 超时预算误杀 + 管道收尾钉死线程（11-13 早现场）
+
+用户报「RPA Probe TIMEOUT: PPX API 调用超时（30000ms）」，捕获按钮没反应。证据链：
+
+1. 活服务器探测：`rpa.startCapture` 3.3s 返回 `blocked`，fix=「连不上运行时
+   （TimeoutExpired）」——`rpa-core env-status` **热机实测 ~3.6s**（开机冷启动更久），
+   `capability_snapshot` 的 `timeout=3.0` **必然误杀**，capability 永远
+   `runtime:false` ⇒ 捕获永远被挡。
+2. 更坏的一档：`subprocess.run(capture_output=True, timeout=...)` 超时后 kill 的是
+   shim（`rpa-core.exe`），**孙进程 python 仍持有 stdout 管道**，run 的收尾读堵到
+   孙进程自己退出——冷机上远超 30s ⇒ HTTP 处理线程被钉死 ⇒ 前端 30s 超时。
+3. 定位手法：健康服务器上逐 RPC 探测全部毫秒级 ⇒ 嫌疑收敛到 env-status；
+   直接 `rpa-core env-status` 计时 3.6s 实锤；输出里 `edge.online=true` 说明
+   环境本来一切正常，纯粹是预算不够 + 杀法不对。
+
+修复：`_env_status_json()` 改用「**临时文件 + Popen + wait(timeout)**」——kill 完 shim
+立刻返回，孙进程接着写文件无害，处理线程永不挂；超时预算 3s → **10s**
+（`_ENV_STATUS_TIMEOUT`）。契约判据补三条形态闸（源码无 `capture_output=True`、
+走 `TemporaryFile`、预算 ≥5s），双向注入负向验证均按名报红、md5 还原。活服务器
+端到端复验：capabilitySnapshot 1.8s 返回 `runtime:true / extensionOnline:true`，
+startCapture 2.6s `waiting` → poll `pending` → cancel `cancelled`，桌面 agent 无残留。
+
 ## 六、欠账
 
 - 真机点一遍「点按钮 → 桌面抓 → 弹框改名 → 确认入库」全链路（当前靠 DOM shim + 进程内探针）。
