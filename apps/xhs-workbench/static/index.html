@@ -269,10 +269,23 @@
       const items = (p && p.items) || [];
       $("#products-count").textContent = items.length ? `（${items.length}）` : "";
       if (!items.length) { $("#products-body").innerHTML = `<div class="empty">商品库为空，先采集。</div>`; return; }
-      const rows = items.map((it) => `
-        <tr><td><a href="${esc(it.href)}" target="_blank" rel="noopener">${esc(it.title || it.href)}</a></td>
-        <td class="muted">${esc(it.text)}</td></tr>`).join("");
-      $("#products-body").innerHTML = `<table><thead><tr><th>标题 / 链接</th><th>正文摘要</th></tr></thead><tbody>${rows}</tbody></table>`;
+      const rows = items.map((it) => {
+        const stats = [
+          it.likes && `赞 ${it.likes}`,
+          it.collects && `藏 ${it.collects}`,
+          it.comments && `评 ${it.comments}`,
+        ].filter(Boolean).join(" · ");
+        const comments = Array.isArray(it.commentList) ? it.commentList : [];
+        const detail = comments.length
+          ? `<details class="muted" style="margin-top:6px"><summary>评论 ${comments.length} 条</summary><ul>${
+              comments.map((c) => `<li>${esc(c.author ? c.author + "：" : "")}${esc(c.text)}</li>`).join("")
+            }</ul></details>`
+          : "";
+        return `
+        <tr><td><a href="${esc(it.href)}" target="_blank" rel="noopener">${esc(it.title || it.href)}</a>${detail}</td>
+        <td class="muted">${esc(it.text)}</td><td class="muted">${esc(stats)}</td></tr>`;
+      }).join("");
+      $("#products-body").innerHTML = `<table><thead><tr><th>标题 / 链接</th><th>正文摘要</th><th>互动数据</th></tr></thead><tbody>${rows}</tbody></table>`;
     }
     function renderAlerts(a) {
       const items = (a && a.alerts) || [];

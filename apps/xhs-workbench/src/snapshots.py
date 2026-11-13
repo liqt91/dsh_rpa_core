@@ -29,9 +29,19 @@ def _safe_name(keyword: str) -> str:
 
 @dataclass(frozen=True)
 class Product:
+    """一条帖子。``href`` 仍是唯一身份；其余字段来自帖子详情页，缺省即空。
+
+    老快照只有 href/title/text —— 新增字段全部给默认值，读旧文件不会炸。
+    ``comment_list`` 是逐条评论（``{"author","text"}``），由流程滚动评论区采集。
+    """
+
     href: str
     title: str
     text: str
+    likes: str = ""
+    collects: str = ""
+    comments: str = ""
+    comment_list: list[dict[str, str]] = field(default_factory=list)
 
     @classmethod
     def from_raw(cls, raw: Any) -> Product:
@@ -55,10 +65,41 @@ class Product:
             return None
         title = str(raw.get("title") or "").strip()
         text = str(raw.get("text") or "").strip()
-        return cls(href=href, title=title, text=text)
+        return cls(
+            href=href,
+            title=title,
+            text=text,
+            likes=str(raw.get("likes") or "").strip(),
+            collects=str(raw.get("collects") or "").strip(),
+            comments=str(raw.get("comments") or "").strip(),
+            comment_list=_comment_list(raw.get("commentList")),
+        )
 
-    def to_json(self) -> dict[str, str]:
-        return {"href": self.href, "title": self.title, "text": self.text}
+    def to_json(self) -> dict[str, Any]:
+        return {
+            "href": self.href,
+            "title": self.title,
+            "text": self.text,
+            "likes": self.likes,
+            "collects": self.collects,
+            "comments": self.comments,
+            "commentList": list(self.comment_list),
+        }
+
+
+def _comment_list(raw: Any) -> list[dict[str, str]]:
+    """评论形状归一化：只认 dict / 字符串，脏元素直接跳过而不是塞进库里。"""
+    if not isinstance(raw, list):
+        return []
+    rows: list[dict[str, str]] = []
+    for item in raw[:200]:
+        if isinstance(item, dict):
+            text = str(item.get("text") or "").strip()
+            if text:
+                rows.append({"author": str(item.get("author") or "").strip(), "text": text})
+        elif isinstance(item, str) and item.strip():
+            rows.append({"author": "", "text": item.strip()})
+    return rows
 
 
 @dataclass(frozen=True)

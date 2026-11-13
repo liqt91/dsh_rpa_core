@@ -118,6 +118,10 @@ PURE_FUNCTION_SCRIPTS = (
     # compiler.visible_scope，Web 属性面板是另一份 JS 实现——Python 侧读源码只能
     # 证明「写了 visibleScopeAt」，证明不了它对每个节点的判定与编译器一致。
     "check_scope_visibility.mjs",
+    # 工作台「商品库」渲染层（帖子详情采集）：流程逐帖抓 赞/藏/评 + 逐条评论，
+    # 数据层存得住不等于页面看得见。切出 renderProducts 真跑一遍，并把 Python
+    # Product.to_json 的键与前端 it.<key> 双向对账（任一侧漂移都红）。
+    "check_xhs_products_view.mjs",
 )
 node = shutil.which("node")
 if node:

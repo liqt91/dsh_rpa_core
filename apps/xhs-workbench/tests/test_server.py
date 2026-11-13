@@ -181,6 +181,31 @@ def test_http_get_endpoints_return_real_data(tmp_path: Path) -> None:
         assert len(detail["history"]) == 1
 
 
+def test_http_products_exposes_post_detail_fields(tmp_path: Path) -> None:
+    """前端要展示互动数据和评论，前提是 /api/products 真把它们带出来。
+
+    数据层单测只证明 store 存得住；这里证明 HTTP 出口没有把新字段裁掉。
+    """
+    post = {
+        **_items(["详情"])[0],
+        "likes": "1.2万",
+        "collects": "345",
+        "comments": "88",
+        "commentList": [{"author": "甲", "text": "第一条"}],
+    }
+    ctx = make_context(
+        root=tmp_path, runner=lambda kw, bt: _ok_outcome([post], run_id="r1")
+    )
+    run_collection(ctx, KW)
+    with _live_server(ctx) as base:
+        prods = _get(base, "/api/products")
+        assert prods["count"] == 1
+        item = prods["items"][0]
+        assert item["likes"] == "1.2万" and item["collects"] == "345"
+        assert item["comments"] == "88"
+        assert item["commentList"] == [{"author": "甲", "text": "第一条"}]
+
+
 def test_http_collect_accepts_then_updates_monitor(tmp_path: Path) -> None:
     ctx = make_context(
         root=tmp_path, runner=lambda kw, bt: _ok_outcome(_items(["a", "b"]), run_id="r1")

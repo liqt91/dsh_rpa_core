@@ -1,7 +1,7 @@
 {
   "schema_version": "1.0",
   "id": "xhs-product-search",
-  "name": "小红书商品搜索采集（P0）",
+  "name": "小红书搜索采集（筛选 + 帖子详情 + 评论）",
   "inputs": {
     "keyword": "AI效率工具",
     "workspace": "run_artifacts/xhs",
@@ -39,9 +39,11 @@
         "with": {
           "sessionId": "${steps.openHome.outputs.sessionId}",
           "text": "${inputs.keyword}",
-          "mode": "clipboard",
-          "pressEnter": false,
-          "clickBeforeInput": true
+          "mode": "type",
+          "pressEnter": true,
+          "keyIntervalMs": 120,
+          "clickBeforeInput": true,
+          "postDelayMs": 1500
         },
         "elementRefs": {
           "selector": "xhs_search_box"
@@ -49,32 +51,44 @@
       },
       {
         "type": "action",
-        "id": "gotoResults",
-        "command": "browser.navigate",
+        "id": "probeSearch",
+        "command": "browser.executeScript",
         "with": {
-          "browserType": "${inputs.browserType}",
-          "action": "goto",
-          "url": "https://www.xiaohongshu.com/search_result?keyword=[inputs.keyword]",
-          "timeoutMs": 20000
-        },
-        "_exprModes": {
-          "url": "fx"
+          "sessionId": "${steps.openHome.outputs.sessionId}",
+          "script": "const url = location.href; const cards = document.querySelectorAll('section.note-item, a[href*=\"/search_result/\"]').length; const ok = /search_result/.test(url) || (/keyword=/.test(url) && cards > 0); return ok ? '' : '1';",
+          "timeoutMs": 15000
         }
       },
       {
-        "type": "action",
-        "id": "closeExplore",
-        "command": "browser.close",
-        "with": {
-          "sessionId": "${steps.openHome.outputs.sessionId}"
-        }
+        "type": "if",
+        "id": "needFallback",
+        "condition": {
+          "op": "truthy",
+          "left": "${steps.probeSearch.outputs.result}"
+        },
+        "then": [
+          {
+            "type": "action",
+            "id": "fallbackNav",
+            "command": "browser.executeScript",
+            "with": {
+              "sessionId": "${steps.openHome.outputs.sessionId}",
+              "script": "const kw = __RPA_ARGS__[0] || ''; location.href = 'https://www.xiaohongshu.com/search_result?keyword=' + encodeURIComponent(kw); return 'navigating';",
+              "timeoutMs": 15000,
+              "args": [
+                "${inputs.keyword}"
+              ]
+            }
+          }
+        ],
+        "else": []
       },
       {
         "type": "action",
         "id": "waitResults",
         "command": "browser.waitLoad",
         "with": {
-          "sessionId": "${steps.gotoResults.outputs.sessionId}",
+          "sessionId": "${steps.openHome.outputs.sessionId}",
           "timeoutMs": 20000
         }
       },
@@ -83,8 +97,113 @@
         "id": "waitItems",
         "command": "browser.waitFor",
         "with": {
-          "sessionId": "${steps.gotoResults.outputs.sessionId}",
-          "selector": "section.note-item, a[href*=\"/goods/\"]",
+          "sessionId": "${steps.openHome.outputs.sessionId}",
+          "selector": "section.note-item, a[href*=\"/search_result/\"]",
+          "state": "attached",
+          "timeoutMs": 20000
+        }
+      },
+      {
+        "type": "action",
+        "id": "probeAiPanel",
+        "command": "browser.executeScript",
+        "with": {
+          "sessionId": "${steps.openHome.outputs.sessionId}",
+          "script": "const nodes = Array.from(document.querySelectorAll('div,section,aside')); const hit = nodes.filter(n => /点点|问问点点|AI搜索|AI 搜索/i.test((n.innerText || '').slice(0, 300))) .filter(n => n.querySelector('[class*=\"close\"], [aria-label*=\"关闭\"], [class*=\"Close\"]')).length; return hit ? '1' : '';",
+          "timeoutMs": 15000
+        }
+      },
+      {
+        "type": "if",
+        "id": "hasAiPanel",
+        "condition": {
+          "op": "truthy",
+          "left": "${steps.probeAiPanel.outputs.result}"
+        },
+        "then": [
+          {
+            "type": "action",
+            "id": "closeAiPanel",
+            "command": "browser.executeScript",
+            "with": {
+              "sessionId": "${steps.openHome.outputs.sessionId}",
+              "script": "const nodes = Array.from(document.querySelectorAll('div,section,aside')); const panels = nodes.filter(n => /点点|问问点点|AI搜索|AI 搜索/i.test((n.innerText || '').slice(0, 300))) .filter(n => n.querySelector('[class*=\"close\"], [aria-label*=\"关闭\"], [class*=\"Close\"]')); if (!panels.length) return ''; const panel = panels.sort((a, b) => a.innerText.length - b.innerText.length)[0]; const btn = panel.querySelector('[class*=\"close\"], [aria-label*=\"关闭\"], [class*=\"Close\"]'); (btn.closest('button') || btn).click(); return 'closed';",
+              "timeoutMs": 15000
+            }
+          }
+        ],
+        "else": []
+      },
+      {
+        "type": "action",
+        "id": "clickFilter",
+        "command": "browser.executeScript",
+        "with": {
+          "sessionId": "${steps.openHome.outputs.sessionId}",
+          "script": "const want = (__RPA_ARGS__[0] || '').trim(); const all = Array.from(document.querySelectorAll('button,[role=\"button\"],a,span,div,li')); const hits = all.filter(n => (n.innerText || '').trim() === want && n.getClientRects().length); if (!hits.length) return ''; const target = hits.sort((a, b) => (a.textContent || '').length - (b.textContent || '').length)[0]; target.click(); return 'clicked';",
+          "timeoutMs": 15000,
+          "args": [
+            "筛选"
+          ]
+        }
+      },
+      {
+        "type": "action",
+        "id": "sleepFilter",
+        "command": "workflow.sleep",
+        "with": {
+          "seconds": 1
+        }
+      },
+      {
+        "type": "action",
+        "id": "clickLatest",
+        "command": "browser.executeScript",
+        "with": {
+          "sessionId": "${steps.openHome.outputs.sessionId}",
+          "script": "const want = (__RPA_ARGS__[0] || '').trim(); const all = Array.from(document.querySelectorAll('button,[role=\"button\"],a,span,div,li')); const hits = all.filter(n => (n.innerText || '').trim() === want && n.getClientRects().length); if (!hits.length) return ''; const target = hits.sort((a, b) => (a.textContent || '').length - (b.textContent || '').length)[0]; target.click(); return 'clicked';",
+          "timeoutMs": 15000,
+          "args": [
+            "最新"
+          ]
+        }
+      },
+      {
+        "type": "action",
+        "id": "sleepLatest",
+        "command": "workflow.sleep",
+        "with": {
+          "seconds": 1
+        }
+      },
+      {
+        "type": "action",
+        "id": "clickOneDay",
+        "command": "browser.executeScript",
+        "with": {
+          "sessionId": "${steps.openHome.outputs.sessionId}",
+          "script": "const want = (__RPA_ARGS__[0] || '').trim(); const all = Array.from(document.querySelectorAll('button,[role=\"button\"],a,span,div,li')); const hits = all.filter(n => (n.innerText || '').trim() === want && n.getClientRects().length); if (!hits.length) return ''; const target = hits.sort((a, b) => (a.textContent || '').length - (b.textContent || '').length)[0]; target.click(); return 'clicked';",
+          "timeoutMs": 15000,
+          "args": [
+            "一天内"
+          ]
+        }
+      },
+      {
+        "type": "action",
+        "id": "sleepReload",
+        "command": "workflow.sleep",
+        "with": {
+          "seconds": 2
+        }
+      },
+      {
+        "type": "action",
+        "id": "waitReload",
+        "command": "browser.waitFor",
+        "with": {
+          "sessionId": "${steps.openHome.outputs.sessionId}",
+          "selector": "section.note-item",
           "state": "attached",
           "timeoutMs": 20000
         }
@@ -94,18 +213,161 @@
         "id": "shotResults",
         "command": "browser.screenshot",
         "with": {
-          "sessionId": "${steps.gotoResults.outputs.sessionId}",
+          "sessionId": "${steps.openHome.outputs.sessionId}",
           "savePath": "${inputs.shotPath}"
         }
+      },
+      {
+        "type": "action",
+        "id": "listPosts",
+        "command": "browser.executeScript",
+        "with": {
+          "sessionId": "${steps.openHome.outputs.sessionId}",
+          "script": "const seen = new Set(); const rows = []; document.querySelectorAll('section.note-item a[href], a[href*=\"/search_result/\"], a[href*=\"/explore/\"]').forEach(a => { let href = ''; try { href = new URL(a.getAttribute('href'), location.href).href; } catch (e) { return; } if (!href || seen.has(href) || !/xiaohongshu\\.com/.test(href)) return; seen.add(href); const card = a.closest('section.note-item') || a; const label = card.querySelector('.title, [class*=\"title\"], span'); const title = ((label && label.innerText) || a.innerText || '').trim().slice(0, 200); rows.push({ href: href, title: title }); }); return rows.slice(0, 20);",
+          "timeoutMs": 15000
+        }
+      },
+      {
+        "type": "action",
+        "id": "initCollect",
+        "command": "browser.executeScript",
+        "with": {
+          "sessionId": "${steps.openHome.outputs.sessionId}",
+          "script": "sessionStorage.setItem('__rpa_xhs_rows__', '[]'); return 'ready';",
+          "timeoutMs": 15000
+        }
+      },
+      {
+        "type": "forEach",
+        "id": "eachPost",
+        "items": "${steps.listPosts.outputs.result}",
+        "item_var": "post",
+        "children": [
+          {
+            "type": "action",
+            "id": "openPost",
+            "command": "browser.executeScript",
+            "with": {
+              "sessionId": "${steps.openHome.outputs.sessionId}",
+              "script": "const href = __RPA_ARGS__[0] || ''; const a = Array.from(document.querySelectorAll('a[href]')).find(x => { try { return new URL(x.getAttribute('href'), location.href).href === href; } catch (e) { return false; } }); if (a) { a.setAttribute('target', '_self'); a.click(); return 'clicked'; } if (href) location.href = href; return 'navigated';",
+              "timeoutMs": 15000,
+              "args": [
+                "${loop.post.href}"
+              ]
+            }
+          },
+          {
+            "type": "action",
+            "id": "waitPost",
+            "command": "browser.waitLoad",
+            "with": {
+              "sessionId": "${steps.openHome.outputs.sessionId}",
+              "timeoutMs": 20000
+            }
+          },
+          {
+            "type": "action",
+            "id": "grabPost",
+            "command": "browser.executeScript",
+            "with": {
+              "sessionId": "${steps.openHome.outputs.sessionId}",
+              "script": "const href = __RPA_ARGS__[0] || ''; const fallbackTitle = __RPA_ARGS__[1] || ''; const pick = (list) => { for (const s of list) { const n = document.querySelector(s); if (n && (n.innerText || '').trim()) return (n.innerText || '').trim(); } return ''; }; const num = (list) => pick(list).replace(/[^\\d.万亿kKwW]/g, '').trim(); const title = pick(['#detail-title', '.note-content .title', '[class*=\"title\"]', 'h1']) || fallbackTitle || document.title; const text = pick(['#detail-desc', '.note-content .desc', '[class*=\"desc\"]', '.note-text']); const likes = num(['.like-wrapper .count', '[class*=\"like\"] .count', '[class*=\"like\"] span']); const collects = num(['.collect-wrapper .count', '[class*=\"collect\"] .count', '[class*=\"fav\"] .count']); const comments = num(['.chat-wrapper .count', '[class*=\"comment\"] .count', '[class*=\"chat\"] .count']); return JSON.stringify({ href: href, title: title, text: text, likes: likes, collects: collects, comments: comments, commentList: [] });",
+              "timeoutMs": 15000,
+              "args": [
+                "${loop.post.href}",
+                "${loop.post.title}"
+              ]
+            }
+          },
+          {
+            "type": "action",
+            "id": "scrollComments1",
+            "command": "browser.executeScript",
+            "with": {
+              "sessionId": "${steps.openHome.outputs.sessionId}",
+              "script": "const sels = ['[class*=\"comments-container\"]', '[class*=\"comment-list\"]', '.comments', '#comments', '[class*=\"comments\"]']; let box = null; for (const s of sels) { const n = document.querySelector(s); if (n && n.scrollHeight > n.clientHeight + 20) { box = n; break; } } if (!box) box = document.scrollingElement || document.documentElement; box.scrollTop = box.scrollHeight; window.scrollTo(0, document.body.scrollHeight); return String(Math.round(box.scrollTop));",
+              "timeoutMs": 15000
+            }
+          },
+          {
+            "type": "action",
+            "id": "sleepComments1",
+            "command": "workflow.sleep",
+            "with": {
+              "seconds": 1
+            }
+          },
+          {
+            "type": "action",
+            "id": "scrollComments2",
+            "command": "browser.executeScript",
+            "with": {
+              "sessionId": "${steps.openHome.outputs.sessionId}",
+              "script": "const sels = ['[class*=\"comments-container\"]', '[class*=\"comment-list\"]', '.comments', '#comments', '[class*=\"comments\"]']; let box = null; for (const s of sels) { const n = document.querySelector(s); if (n && n.scrollHeight > n.clientHeight + 20) { box = n; break; } } if (!box) box = document.scrollingElement || document.documentElement; box.scrollTop = box.scrollHeight; window.scrollTo(0, document.body.scrollHeight); return String(Math.round(box.scrollTop));",
+              "timeoutMs": 15000
+            }
+          },
+          {
+            "type": "action",
+            "id": "sleepComments2",
+            "command": "workflow.sleep",
+            "with": {
+              "seconds": 1
+            }
+          },
+          {
+            "type": "action",
+            "id": "scrollComments3",
+            "command": "browser.executeScript",
+            "with": {
+              "sessionId": "${steps.openHome.outputs.sessionId}",
+              "script": "const sels = ['[class*=\"comments-container\"]', '[class*=\"comment-list\"]', '.comments', '#comments', '[class*=\"comments\"]']; let box = null; for (const s of sels) { const n = document.querySelector(s); if (n && n.scrollHeight > n.clientHeight + 20) { box = n; break; } } if (!box) box = document.scrollingElement || document.documentElement; box.scrollTop = box.scrollHeight; window.scrollTo(0, document.body.scrollHeight); return String(Math.round(box.scrollTop));",
+              "timeoutMs": 15000
+            }
+          },
+          {
+            "type": "action",
+            "id": "sleepComments3",
+            "command": "workflow.sleep",
+            "with": {
+              "seconds": 1
+            }
+          },
+          {
+            "type": "action",
+            "id": "grabComments",
+            "command": "browser.executeScript",
+            "with": {
+              "sessionId": "${steps.openHome.outputs.sessionId}",
+              "script": "const sels = ['[class*=\"comment-item\"]', '.comment-item', 'li[class*=\"comment\"]', '[class*=\"comment\"] .content']; let nodes = []; for (const s of sels) { const found = Array.from(document.querySelectorAll(s)); if (found.length > nodes.length) nodes = found; } const seen = new Set(); const rows = []; nodes.forEach(n => { const label = n.querySelector('[class*=\"author\"], [class*=\"name\"], a'); const author = ((label && label.innerText) || '').trim(); const content = (n.innerText || '').trim().replace(/\\s+/g, ' ').slice(0, 500); if (!content || seen.has(content)) return; seen.add(content); rows.push({ author: author, text: content }); }); return JSON.stringify(rows.slice(0, 200));",
+              "timeoutMs": 15000
+            }
+          },
+          {
+            "type": "action",
+            "id": "appendPost",
+            "command": "browser.executeScript",
+            "with": {
+              "sessionId": "${steps.openHome.outputs.sessionId}",
+              "script": "const post = JSON.parse(__RPA_ARGS__[0] || '{}'); const comments = JSON.parse(__RPA_ARGS__[1] || '[]'); const href = __RPA_ARGS__[2] || post.href || ''; post.href = href; post.commentList = comments; const rows = JSON.parse(sessionStorage.getItem('__rpa_xhs_rows__') || '[]'); rows.push(post); sessionStorage.setItem('__rpa_xhs_rows__', JSON.stringify(rows)); return String(rows.length);",
+              "timeoutMs": 15000,
+              "args": [
+                "${steps.grabPost.outputs.result}",
+                "${steps.grabComments.outputs.result}",
+                "${loop.post.href}"
+              ]
+            }
+          }
+        ]
       },
       {
         "type": "action",
         "id": "grabItems",
         "command": "browser.executeScript",
         "with": {
-          "sessionId": "${steps.gotoResults.outputs.sessionId}",
-          "timeoutMs": 15000,
-          "script": "const nodes = Array.from(document.querySelectorAll('section.note-item, a[href*=\"/goods/\"]')); const items = nodes.map((n) => { const a = n.tagName === 'A' ? n : n.querySelector('a[href]'); const text = (n.innerText || '').trim(); return { title: text.slice(0, 200), href: (a && a.href) || n.href || '', text: text.slice(0, 500) }; }).filter((it) => it.href && it.text); return JSON.stringify(items.slice(0, 50));"
+          "sessionId": "${steps.openHome.outputs.sessionId}",
+          "script": "const rows = JSON.parse(sessionStorage.getItem('__rpa_xhs_rows__') || '[]'); return JSON.stringify(rows);",
+          "timeoutMs": 15000
         }
       },
       {
@@ -123,7 +385,7 @@
         "id": "close",
         "command": "browser.close",
         "with": {
-          "sessionId": "${steps.gotoResults.outputs.sessionId}"
+          "sessionId": "${steps.openHome.outputs.sessionId}"
         }
       }
     ]

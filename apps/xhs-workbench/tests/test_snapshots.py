@@ -151,3 +151,55 @@ def test_record_keeps_strict_identity_for_direct_callers(tmp_path: Path) -> None
     except ValueError:
         return
     raise AssertionError("record 应当拒绝缺 href 的记录")
+
+
+def test_post_detail_fields_survive_roundtrip(tmp_path: Path) -> None:
+    """帖子详情（赞/藏/评 + 逐条评论）必须能从 grabItems 结果一路带到商品库。
+
+    只断言「count 对」是假绿灯：字段在 Product 里被丢掉时条数照样是 1。
+    """
+    store = _store(tmp_path)
+    post = {
+        "href": "https://www.xiaohongshu.com/explore/abc",
+        "title": "一篇笔记",
+        "text": "正文内容",
+        "likes": "1.2万",
+        "collects": "345",
+        "comments": "88",
+        "commentList": [
+            {"author": "甲", "text": "第一条"},
+            {"author": "", "text": "第二条"},
+            "纯文本评论",
+            {"text": ""},  # 脏记录要被跳过，不能塞空行进库
+            42,
+        ],
+    }
+    outcome = RunOutcome(
+        run_id="run-detail",
+        status="succeeded",
+        group="ok",
+        outputs={"grabItems": {"outputs": {"result": json.dumps([post], ensure_ascii=False)}}},
+        error=None,
+    )
+    snap = snapshots.snapshot_from_outcome(store, "kw", outcome)
+    assert snap.count == 1
+    item = store.latest("kw").items[0]  # 落盘往返，不只是内存对象
+    assert item.likes == "1.2万" and item.collects == "345" and item.comments == "88"
+    assert item.comment_list == [
+        {"author": "甲", "text": "第一条"},
+        {"author": "", "text": "第二条"},
+        {"author": "", "text": "纯文本评论"},
+    ]
+    exported = store.product_index()[post["href"]].to_json()
+    assert set(exported) == {
+        "href", "title", "text", "likes", "collects", "comments", "commentList",
+    }
+    assert exported["commentList"] == item.comment_list
+
+
+def test_legacy_snapshot_without_detail_fields_still_loads(tmp_path: Path) -> None:
+    """老数据只有三个字段，读出来补空值而不是炸（开发期不做数据迁移）。"""
+    store = _store(tmp_path)
+    store.record("kw", "r1", [{"href": "https://xhs.com/old", "title": "旧", "text": "t"}])
+    item = store.latest("kw").items[0]
+    assert (item.likes, item.collects, item.comments, item.comment_list) == ("", "", "", [])
