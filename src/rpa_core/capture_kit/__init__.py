@@ -24,6 +24,7 @@
 """
 
 from .controller import CaptureController
+from .edit_dialog import ElementEditDialog
 from .engine import (
     NEVER_TIMEOUT,
     build_hybrid_session,
@@ -42,6 +43,7 @@ __all__ = [
     "NEVER_TIMEOUT",
     "CaptureController",
     "CaptureFloat",
+    "ElementEditDialog",
     "build_hybrid_session",
     "capture_click_label",
     "desktop_status",

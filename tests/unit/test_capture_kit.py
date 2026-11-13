@@ -289,6 +289,129 @@ def test_web_status_distinguishes_installed_but_disconnected(monkeypatch) -> Non
     assert "先装插件" in text
 
 
+class FakeEditDialog:
+    """win32 编辑框的替身：不开窗，show/click_save/click_cancel 模拟用户操作。"""
+
+    available = True
+
+    def __init__(self) -> None:
+        self.shown: dict | None = None
+        self.closed = False
+        self._on_save = None
+        self._on_close = None
+
+    def show(self, *, title, name, meta, save_label="保存", on_save=None, on_close=None):
+        self.shown = {"title": title, "name": name, "meta": meta}
+        self._on_save = on_save
+        self._on_close = on_close
+
+    def close(self) -> None:
+        self.closed = True
+
+    def click_save(self, name: str) -> str | None:
+        error = self._on_save(name)
+        if error:
+            return error  # 错误回显留框（真实对话框的 _try_save 同款分支）
+        self._on_close(True)
+        return None
+
+    def click_cancel(self) -> None:
+        self._on_close(False)
+
+
+def _make_editing(session, dialog, *, on_commit=None, on_discard=None) -> CaptureController:
+    return CaptureController(
+        session_factory=lambda: session,
+        on_captured=lambda doc: doc,
+        float_factory=FakeFloat,
+        heal_host=FakeHeal(),
+        edit_dialog_factory=lambda: dialog,
+        edit_model=lambda doc: {"title": "捕获到元素", "name": "元素1", "meta": "m"},
+        on_commit=on_commit,
+        on_discard=on_discard,
+    )
+
+
+def test_captured_opens_edit_dialog_instead_of_ready() -> None:
+    dialog = FakeEditDialog()
+    controller = _make_editing(
+        FakeSession({"kind": "browser", "selector": {"css": "#a"}}), dialog
+    )
+    controller.start()
+    state = _wait(controller, {"editing"})
+    assert state["state"] == "editing"
+    assert dialog.shown == {"title": "捕获到元素", "name": "元素1", "meta": "m"}
+
+
+def test_edit_dialog_commit_reports_committed_with_name() -> None:
+    dialog = FakeEditDialog()
+    committed: list[str] = []
+    controller = _make_editing(
+        FakeSession({"kind": "browser", "selector": {"css": "#a"}}),
+        dialog,
+        on_commit=lambda name: committed.append(name) or None,
+    )
+    controller.start()
+    _wait(controller, {"editing"})
+    assert dialog.click_save("搜索框") is None
+    state = controller.poll()
+    assert state == {"state": "committed", "name": "搜索框"}
+    assert committed == ["搜索框"]
+
+
+def test_edit_dialog_save_error_stays_editing() -> None:
+    dialog = FakeEditDialog()
+    controller = _make_editing(
+        FakeSession({"kind": "browser", "selector": {"css": "#a"}}),
+        dialog,
+        on_commit=lambda name: "这个名字被占了",
+    )
+    controller.start()
+    _wait(controller, {"editing"})
+    assert dialog.click_save("搜索框") == "这个名字被占了"
+    assert controller.poll()["state"] == "editing"
+
+
+def test_edit_dialog_cancel_reports_discarded() -> None:
+    dialog = FakeEditDialog()
+    discarded: list[bool] = []
+    controller = _make_editing(
+        FakeSession({"kind": "browser", "selector": {"css": "#a"}}),
+        dialog,
+        on_discard=lambda: discarded.append(True),
+    )
+    controller.start()
+    _wait(controller, {"editing"})
+    dialog.click_cancel()
+    assert controller.poll()["state"] == "discarded"
+    assert discarded == [True]
+
+
+def test_cancel_during_editing_closes_dialog() -> None:
+    dialog = FakeEditDialog()
+    controller = _make_editing(
+        FakeSession({"kind": "browser", "selector": {"css": "#a"}}), dialog
+    )
+    controller.start()
+    _wait(controller, {"editing"})
+    controller.cancel()
+    assert dialog.closed is True
+    assert controller.poll()["state"] == "cancelled"
+
+
+def test_unavailable_dialog_falls_back_to_ready() -> None:
+    """非 Windows（对话框 unavailable）：维持旧 ready 语义，宿主页面接管确认。"""
+    dialog = FakeEditDialog()
+    dialog.available = False
+    controller = _make_editing(
+        FakeSession({"kind": "browser", "selector": {"css": "#a"}}), dialog
+    )
+    controller.start()
+    state = _wait(controller, {"ready", "editing"})
+    assert state["state"] == "ready"
+    assert dialog.shown is None
+
+
 def test_ensure_extension_host_only_reports_newly_added_ids(monkeypatch, tmp_path) -> None:
     """白名单里已有该 ID ⇒ 不该报「修复了」（否则每次捕获都提示用户重载插件）。"""
     import rpa_core.extension_installer as installer

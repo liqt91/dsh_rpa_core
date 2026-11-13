@@ -27,6 +27,8 @@ from __future__ import annotations
 import sys
 import threading
 
+from . import _win32
+
 # win32con 里没有的私有消息号：跨线程刷新状态
 _WM_APP_STATUS = 0x8000 + 1
 _BTN_CANCEL = 1001
@@ -45,51 +47,7 @@ _BTN_W = 104
 _BTN_H = 32
 _TEXT_W = _WIDTH - _BTN_W - 44
 
-
-def _set_timer(hwnd: int, timer_id: int, elapse_ms: int) -> int:
-    """起一个 WM_TIMER，返回定时器 id（0 = 失败）。
-
-    ★ ``win32gui`` **没有** ``SetTimer`` / ``KillTimer``（实测 ``dir(win32gui)`` 里
-    一个 Timer 成员都没有）。早期写成 ``win32gui.SetTimer(...)`` 会在 ``WM_CREATE``
-    里抛 ``AttributeError`` ⇒ **躲鼠标的 40ms 定时器从未建立**（浮窗钉死在一角，
-    正好挡住要点的元素），销毁时再抛一次让消息循环退不干净。这里走 user32 原生调用。
-    """
-    import ctypes
-
-    user32 = ctypes.WinDLL("user32", use_last_error=True)
-    user32.SetTimer.argtypes = [
-        ctypes.c_void_p, ctypes.c_size_t, ctypes.c_uint, ctypes.c_void_p,
-    ]
-    user32.SetTimer.restype = ctypes.c_size_t
-    return int(user32.SetTimer(ctypes.c_void_p(int(hwnd)), timer_id, elapse_ms, None))
-
-
-def _kill_timer(hwnd: int, timer_id: int) -> None:
-    import ctypes
-
-    user32 = ctypes.WinDLL("user32", use_last_error=True)
-    user32.KillTimer.argtypes = [ctypes.c_void_p, ctypes.c_size_t]
-    user32.KillTimer.restype = ctypes.c_int
-    user32.KillTimer(ctypes.c_void_p(int(hwnd)), timer_id)
-
-
 _CLASS = "RpaCaptureFloat"
-
-# 窗口类按类名在**进程内**只注册一次，WNDPROC 也就是第一个实例的方法。若直接把
-# ``self._wnd_proc`` 交给 RegisterClass，第二次开浮窗（同一个进程里再抓一次）时
-# 消息仍会落到**第一个**实例上——它的 ``_hwnd`` 早已销毁，表现是「窗开着但不刷新、
-# 或者干脆空白」，而日志里一行异常都没有。所以 WNDPROC 固定成模块级函数，按 hwnd
-# 查表分派给当前实例。
-_INSTANCES: dict[int, CaptureFloat] = {}
-
-
-def _dispatch(hwnd, msg, wparam, lparam):
-    import win32gui
-
-    instance = _INSTANCES.get(int(hwnd))
-    if instance is None:
-        return win32gui.DefWindowProc(hwnd, msg, wparam, lparam)
-    return instance._wnd_proc(hwnd, msg, wparam, lparam)
 
 
 class CaptureFloat:
@@ -228,17 +186,8 @@ class CaptureFloat:
 
         self._children_ready = False
         hinst = win32gui.GetModuleHandle(None)
-        wc = win32gui.WNDCLASS()
-        wc.lpfnWndProc = _dispatch
-        wc.lpszClassName = self._CLASS
-        wc.hInstance = hinst
-        wc.hbrBackground = win32gui.GetStockObject(win32con.WHITE_BRUSH)
-        wc.style = win32con.CS_HREDRAW | win32con.CS_VREDRAW
-        try:
-            win32gui.RegisterClass(wc)
-        except win32gui.error:
-            # 同名类已存在（没有 UnregisterClass）：WNDPROC 一致，复用即可。
-            pass
+        # 窗口类注册/实例分派收在 capture_kit._win32（与编辑框共用同一套）。
+        _win32.register_class(self._CLASS)
         ex_style = (
             win32con.WS_EX_TOPMOST
             | win32con.WS_EX_TOOLWINDOW
@@ -261,7 +210,7 @@ class CaptureFloat:
         )
         self._hwnd = hwnd
         # 先登记再建子控件：窗口一显示就会来 WM_PAINT，查不到表就是一笔不画。
-        _INSTANCES[int(hwnd)] = self
+        _win32._INSTANCES[int(hwnd)] = self
         # ★ 不依赖 WM_CREATE：实测这个 pywin32 版本下 CreateWindowEx 建窗时
         # `WM_CREATE` 根本没派发到 Python 的 WNDPROC（只收到 WM_PAINT/WM_CLOSE/
         # WM_DESTROY），于是 WM_CREATE 里的字体/按钮/定时器全部没建起来 ——
@@ -285,7 +234,7 @@ class CaptureFloat:
         import win32gui
 
         hinst = win32gui.GetModuleHandle(None)
-        self._hfont = self._font()
+        self._hfont = _win32.make_font()
         self._font_owned = bool(self._hfont)
         if not self._hfont:
             # 自建失败退回系统 GUI 字体：文字照画，绝不会再出现空白窗
@@ -309,7 +258,7 @@ class CaptureFloat:
             win32gui.SendMessage(button, win32con.WM_SETFONT, self._hfont, True)
         # 建窗时可能已经是提示形态（「检查环境…」先亮出来）：按当前形态定按钮可见性。
         self._sync_button()
-        if not _set_timer(hwnd, _TIMER_AVOID, 40):
+        if not _win32.set_timer(hwnd, _TIMER_AVOID, 40):
             # 定时器起不来：浮窗会钉死在一角（可能挡住要点的元素）——留痕别静默
             from rpa_core.capture._trace import trace as _trace
 
@@ -319,9 +268,9 @@ class CaptureFloat:
 
     def _arm_notice_timer(self, hwnd) -> None:
         """提示形态的自动收起；切回捕获形态时要把它撤掉，别把捕获窗关了。"""
-        _kill_timer(hwnd, _TIMER_NOTICE)
+        _win32.kill_timer(hwnd, _TIMER_NOTICE)
         if self._mode == _MODE_NOTICE and self._auto_hide_ms > 0:
-            _set_timer(hwnd, _TIMER_NOTICE, self._auto_hide_ms)
+            _win32.set_timer(hwnd, _TIMER_NOTICE, self._auto_hide_ms)
 
     def _place(self, hwnd, *, bottom_right: bool) -> None:
         import win32api
@@ -362,49 +311,6 @@ class CaptureFloat:
             screen_h = win32api.GetSystemMetrics(win32con.SM_CYSCREEN)
             at_bottom = top > screen_h // 2
             self._place(hwnd, bottom_right=not at_bottom)
-
-    def _font(self) -> int:
-        """建 UI 字体（HFONT）。
-
-        ★ ``win32gui`` **没有** ``CreateFont``（那是 ``win32ui`` 的成员）。早期写成
-        ``win32gui.CreateFont(...)`` 时，``WM_CREATE`` 与每次 ``WM_PAINT`` 都会抛
-        ``AttributeError`` ⇒ 按钮与躲鼠标定时器压根没建起来、文字一笔不画，
-        用户侧看到的就是**一个空白浮窗**（WNDPROC 报 "Python WNDPROC handler failed"）。
-        这里直接调 gdi32，不引入 ``win32ui`` 的 MFC 依赖；失败也返回 0，由调用方退回
-        stock 字体，绝不因为字体把整个窗口废掉。
-        """
-        import ctypes
-
-        try:
-            gdi32 = ctypes.WinDLL("gdi32", use_last_error=True)
-            gdi32.CreateFontW.argtypes = [
-                ctypes.c_int,  # cHeight
-                ctypes.c_int,  # cWidth
-                ctypes.c_int,  # cEscapement
-                ctypes.c_int,  # cOrientation
-                ctypes.c_int,  # cWeight
-                ctypes.c_uint,  # bItalic
-                ctypes.c_uint,  # bUnderline
-                ctypes.c_uint,  # bStrikeOut
-                ctypes.c_uint,  # iCharSet
-                ctypes.c_uint,  # iOutPrecision
-                ctypes.c_uint,  # iClipPrecision
-                ctypes.c_uint,  # iQuality
-                ctypes.c_uint,  # iPitchAndFamily
-                ctypes.c_wchar_p,  # pszFaceName
-            ]
-            gdi32.CreateFontW.restype = ctypes.c_void_p
-            handle = gdi32.CreateFontW(
-                -15, 0, 0, 0, 400, 0, 0, 0,
-                1,  # DEFAULT_CHARSET
-                0, 0,
-                5,  # CLEARTYPE_QUALITY
-                0,  # DEFAULT_PITCH | FF_DONTCARE
-                "Microsoft YaHei UI",
-            )
-            return int(handle or 0)
-        except Exception:  # noqa: BLE001 - 字体失败不该拖死浮窗
-            return 0
 
     def _wnd_proc(self, hwnd, msg, wparam, lparam):
         import win32con
@@ -473,9 +379,9 @@ class CaptureFloat:
             win32gui.DestroyWindow(hwnd)
             return 0
         if msg == win32con.WM_DESTROY:
-            _kill_timer(hwnd, _TIMER_AVOID)
-            _kill_timer(hwnd, _TIMER_NOTICE)
-            _INSTANCES.pop(int(hwnd), None)
+            _win32.kill_timer(hwnd, _TIMER_AVOID)
+            _win32.kill_timer(hwnd, _TIMER_NOTICE)
+            _win32._INSTANCES.pop(int(hwnd), None)
             self._button = None
             if self._font_owned and self._hfont is not None:
                 try:
@@ -490,56 +396,10 @@ class CaptureFloat:
 
     @staticmethod
     def _wrap_px(text: str, avail: int) -> list[str]:
-        """按**像素宽**折行（CJK 约 15px、ASCII 约 8px，对应 15px 的雅黑）。
-
-        不能交给 DrawText：中文没有空格，``DT_WORDBREAK`` 找不到断点，长说明会被
-        右边按钮一刀切掉——用户看到的是半截话。
-        """
-        if not text:
-            return []
-        lines: list[str] = []
-        current = ""
-        width = 0
-        for char in text:
-            if char == "\n":
-                lines.append(current)
-                current, width = "", 0
-                continue
-            char_width = 15 if ord(char) > 0x2E80 else 8
-            if current and width + char_width > avail:
-                lines.append(current)
-                current, width = "", 0
-            current += char
-            width += char_width
-        if current:
-            lines.append(current)
-        return lines
+        """按像素宽折行（实现已下沉 ``capture_kit._win32``，此处保留调用面）。"""
+        return _win32.wrap_px(text, avail)
 
     @staticmethod
-    def _text(hdc, text: str, box, rgb: tuple[int, int, int], wrap: bool = False) -> None:
-        """在 ``box=(x, y, w, h)`` 里画一行字。
-
-        ★ ``DrawText`` 要的是 ``RECT = (left, top, right, bottom)``，**不是**
-        ``(left, top, width, height)``。早先按后者的口径传，第二行起 ``bottom`` 就
-        落在 ``top`` 上面（``top=36, bottom=18``），GDI 拿负高度做垂直居中，把几行
-        字全挤到同一片区域——截图上看是「标题和说明叠在一起」。这里把换算收进
-        这一个函数，调用方只谈 ``(x, y, w, h)``，语义错位不可能再发生。
-        """
-        import win32api
-        import win32con
-        import win32gui
-
-        if not text:
-            return
-        left, top, width, height = box
-        rect = (int(left), int(top), int(left + width), int(top + height))
-        win32gui.SetTextColor(hdc, win32api.RGB(*rgb))
-        flags = (
-            (win32con.DT_LEFT | win32con.DT_TOP | win32con.DT_WORDBREAK)
-            if wrap
-            else (
-                win32con.DT_LEFT | win32con.DT_VCENTER | win32con.DT_SINGLELINE
-                | win32con.DT_END_ELLIPSIS
-            )
-        )
-        win32gui.DrawText(hdc, text, -1, rect, flags)
+    def _text(hdc, text: str, box, rgb: tuple[int, int, int]) -> None:
+        """在 ``box=(x, y, w, h)`` 里画一行字（实现已下沉 ``capture_kit._win32``）。"""
+        _win32.draw_text(hdc, text, box, rgb)

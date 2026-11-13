@@ -276,6 +276,9 @@ def case_capture_needs_no_name() -> None:
         assert_true(res["name"] is None, f"不该有名字：{res}")
         assert_true(res["suggestedName"] == "元素1", f"默认名不对：{res}")
         assert_true("on_captured" in seen["kwargs"], "没接捕获回调")
+        # 编辑框收进 capture_kit：控制器必须接到编辑框三件套（win32 上抓完自己弹框）
+        for hook in ("edit_dialog_factory", "edit_model", "on_commit"):
+            assert_true(hook in seen["kwargs"], f"控制器没接编辑框注入口：{hook}")
         entry = api._CAPTURES.get(("probe.json", res["captureId"]))
         assert_true(entry is not None, "开始后没有会话记录")
         assert_true(entry["name"] is None and entry["overwrite"] is False, f"{entry}")
@@ -304,6 +307,8 @@ class _FakeController:
             return {"state": "ready", "result": self._result}
         if self._state in ("offline", "failed"):
             return {"state": self._state, "reason": self._reason}
+        if self._state == "committed":
+            return {"state": "committed", "name": self._reason or "元素1"}
         return {"state": self._state, "offline": False, "armed": True}
 
     def cancel(self) -> None:
@@ -357,7 +362,13 @@ def case_commit_writes_chinese_name() -> None:
         api._elements_dir = lambda path: folder
         key = ("demo.json", "c2")
         try:
-            entry = {"name": None, "suggestName": "元素1", "nodeId": "openHome", "overwrite": False}
+            entry = {
+                "path": "demo.json",
+                "name": None,
+                "suggestName": "元素1",
+                "nodeId": "openHome",
+                "overwrite": False,
+            }
             doc = api._hold_captured(
                 entry, {"kind": "browser", "selector": {"css": "#q"}, "verifyCount": 1}
             )
@@ -388,7 +399,13 @@ def case_commit_rejects_bad_and_duplicate_names() -> None:
         api._elements_dir = lambda path: folder
         key = ("demo.json", "c3")
         try:
-            entry = {"name": None, "suggestName": "元素1", "nodeId": None, "overwrite": False}
+            entry = {
+                "path": "demo.json",
+                "name": None,
+                "suggestName": "元素1",
+                "nodeId": None,
+                "overwrite": False,
+            }
             doc = api._hold_captured(entry, {"kind": "browser", "selector": {"css": "#q"}})
             api._CAPTURES[key] = {**entry, "captured": doc, "controller": _FakeController("ready")}
             for bad in ("../evil", "a/b", "a.b", "", "  "):
@@ -525,6 +542,133 @@ def case_unknown_capture() -> None:
     assert_true(cancel["ok"] is False and cancel["code"] == "UNKNOWN_CAPTURE", f"{cancel}")
 
 
+def case_poll_edit_states() -> None:
+    """轮询新三态：editing 透传继续等；committed 带名字、会话读后即焚；discarded 同。"""
+    key = ("demo.json", "c9")
+    try:
+        api._CAPTURES[key] = {"name": None, "controller": _FakeController("editing")}
+        res = api.capture_poll("demo.json", "c9")
+        assert_true(res["ok"] and res["state"] == "editing", f"editing 没透传：{res}")
+        assert_true(key in api._CAPTURES, "editing 就把会话烧了")
+
+        api._CAPTURES[key]["controller"] = _FakeController("committed", reason="搜索框")
+        res = api.capture_poll("demo.json", "c9")
+        assert_true(res["state"] == "committed" and res["name"] == "搜索框", f"{res}")
+        assert_true(key not in api._CAPTURES, "committed 后会话没焚")
+
+        api._CAPTURES[key] = {"name": None, "controller": _FakeController("discarded")}
+        res = api.capture_poll("demo.json", "c9")
+        assert_true(res["state"] == "discarded", f"{res}")
+        assert_true(key not in api._CAPTURES, "discarded 后会话没焚")
+    finally:
+        api._CAPTURES.pop(key, None)
+
+
+def case_edit_element_desktop_dialog() -> None:
+    """详情也走桌面编辑框：弹框带资产全文；改名联动 refs、重名回显、取消落 discarded。"""
+    import tempfile
+
+    real = (api._new_edit_dialog, api._elements_dir, api._flow_path)
+    with tempfile.TemporaryDirectory(prefix="rpa-m68-edit-") as raw:
+        base = Path(raw)
+        elements = base / "elements"
+        elements.mkdir()
+        flow = base / "flow.json"
+        (elements / "搜索框.json").write_text(
+            json.dumps(
+                {"kind": "browser", "selector": {"css": "#q"}, "name": "搜索框"},
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        flow.write_text(
+            json.dumps(
+                {"root": {"children": [{"id": "n1", "elementRefs": {"selector": "搜索框"}}]}},
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        api._elements_dir = lambda path: elements
+        api._flow_path = lambda path: flow
+        dialogs: list = []
+
+        class _Dlg:
+            def __init__(self):
+                self._on_save = None
+                self._on_close = None
+
+            def show(self, **kwargs):
+                self.kwargs = kwargs
+                self._on_save = kwargs.get("on_save")
+                self._on_close = kwargs.get("on_close")
+
+            def click_save(self, name):
+                error = self._on_save(name)
+                if error is None:
+                    self._on_close(True)
+                return error
+
+            def click_cancel(self):
+                self._on_close(False)
+
+        def _mk():
+            dialog = _Dlg()
+            dialogs.append(dialog)
+            return dialog
+
+        try:
+            api._new_edit_dialog = _mk
+            res = api.edit_element("flow.json", "搜索框")
+            assert_true(res["ok"] and res["state"] == "editing", f"{res}")
+            assert_true("元素详情" in dialogs[0].kwargs["title"], f"{dialogs[0].kwargs}")
+            assert_true(dialogs[0].kwargs["name"] == "搜索框", f"{dialogs[0].kwargs}")
+            assert_true('"css": "#q"' in dialogs[0].kwargs["meta"], "详情没带资产全文")
+            edit_id = res["editId"]
+
+            error = dialogs[0].click_save("登录框")
+            assert_true(error is None, f"改名被拦：{error}")
+            assert_true((elements / "登录框.json").is_file(), "没改名")
+            assert_true(not (elements / "搜索框.json").exists(), "旧名还在")
+            doc = json.loads(flow.read_text(encoding="utf-8"))
+            assert_true(
+                doc["root"]["children"][0]["elementRefs"]["selector"] == "登录框",
+                "详情框改名没联动 refs",
+            )
+            poll = api.capture_poll("flow.json", edit_id)
+            assert_true(poll["state"] == "committed" and poll["name"] == "登录框", f"{poll}")
+            assert_true(("flow.json", edit_id) not in api._CAPTURES, "committed 后会话没焚")
+
+            # 重名：错误回显、会话仍 editing；取消 → discarded
+            (elements / "占位.json").write_text("{}", encoding="utf-8")
+            res2 = api.edit_element("flow.json", "登录框")
+            error2 = dialogs[1].click_save("占位")
+            assert_true(error2 and "占位" in error2, f"重名没回显：{error2}")
+            poll2 = api.capture_poll("flow.json", res2["editId"])
+            assert_true(poll2["state"] == "editing", f"重名后不该变终态：{poll2}")
+            dialogs[1].click_cancel()
+            poll3 = api.capture_poll("flow.json", res2["editId"])
+            assert_true(poll3["state"] == "discarded", f"{poll3}")
+
+            missing = api.edit_element("flow.json", "幽灵")
+            assert_true(missing["ok"] is False and missing["code"] == "NOT_FOUND", f"{missing}")
+        finally:
+            api._new_edit_dialog, api._elements_dir, api._flow_path = real
+            for k in list(api._CAPTURES):
+                if k[0] == "flow.json":
+                    api._CAPTURES.pop(k, None)
+
+    # 非 Windows 兜底：框不可用要回明确的 fallback 码（前端据此弹页面框）
+    real_new = api._new_edit_dialog
+    try:
+        api._new_edit_dialog = lambda: None
+        res = api.edit_element("flow.json", "x")
+        assert_true(
+            res["ok"] is False and res["code"] == "EDIT_DIALOG_UNAVAILABLE", f"{res}"
+        )
+    finally:
+        api._new_edit_dialog = real_new
+
+
 for name, fn in (
     ("命令类型决定唯一 target", case_resolve_command),
     ("缺命令时按能力真值收敛", case_resolve_capability),
@@ -541,6 +685,8 @@ for name, fn in (
     ("删除被引用：拒绝并进浮窗", case_delete_guard_speaks_in_float),
     ("轮询状态机：pending/ready/offline/failed", case_poll_states),
     ("未知捕获会话有明确错误码", case_unknown_capture),
+    ("轮询新三态：editing/committed/discarded", case_poll_edit_states),
+    ("详情走桌面编辑框：改名/重名/取消", case_edit_element_desktop_dialog),
 ):
     check(name, fn)
 

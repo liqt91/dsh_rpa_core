@@ -103,6 +103,7 @@ def test_bridge_registers_asset_rpcs_and_drops_manual_entry() -> None:
         "rpa.commitElement",
         "rpa.saveElement",
         "rpa.discardCapture",
+        "rpa.editElement",
     ):
         assert name in registry, f"{name} 没注册进桥层"
         assert callable(registry[name]), f"{name} 不是可调用的处理函数"
@@ -209,7 +210,8 @@ def test_capture_is_held_until_the_user_confirms(flow: tuple[str, Path, Any]) ->
     path, target, api = flow
     key = (path, "c1")
     entry = {
-        "name": None, "suggestName": "元素1", "nodeId": "inRoot", "overwrite": False,
+        "path": path, "name": None, "suggestName": "元素1",
+        "nodeId": "inRoot", "overwrite": False,
     }
     api._CAPTURES[key] = entry
     try:
@@ -232,7 +234,7 @@ def test_commit_refuses_duplicate_name(flow: tuple[str, Path, Any]) -> None:
     path, target, api = flow
     _put_element(target, "占用", "#taken")
     key = (path, "c2")
-    entry = {"name": None, "suggestName": "元素1", "nodeId": None, "overwrite": False}
+    entry = {"path": path, "name": None, "suggestName": "元素1", "nodeId": None, "overwrite": False}
     api._CAPTURES[key] = entry
     try:
         api._hold_captured(entry, {"kind": "browser", "selector": {"css": "#x"}})
@@ -254,6 +256,7 @@ def test_frontend_wires_single_button_and_dialog() -> None:
         "ppx.call('rpa.elementDetail'",
         "ppx.call('rpa.saveElement'",
         "ppx.call('rpa.deleteElement'",
+        "ppx.call('rpa.editElement'",
     ):
         assert needle in main, f"main.js 缺 {needle}"
     for node_id in (
@@ -289,5 +292,7 @@ def test_dist_bundle_is_rebuilt_from_source() -> None:
         pytest.skip("dist 未构建（.gitignore 忽略产物）")
     bundles = list(DIST_DIR.glob("*.js")) + list(DIST_DIR.glob("*.css"))
     joined = "\n".join(p.read_text(encoding="utf-8") for p in bundles)
-    for token in ("rpa.commitElement", "rpa.saveElement", ".elemTools", "elemCapture"):
+    for token in (
+        "rpa.commitElement", "rpa.saveElement", "rpa.editElement", ".elemTools", "elemCapture"
+    ):
         assert token in joined, f"dist 产物里没有 {token}（改了源码忘了 npm run build）"

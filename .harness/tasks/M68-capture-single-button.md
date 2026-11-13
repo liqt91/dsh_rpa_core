@@ -142,6 +142,39 @@ M66 的六态状态条把**技术分叉和过程状态全摊在面板上**：预
 端到端复验：capabilitySnapshot 1.8s 返回 `runtime:true / extensionOnline:true`，
 startCapture 2.6s `waiting` → poll `pending` → cancel `cancelled`，桌面 agent 无残留。
 
+## 五点七、维护者拍板：编辑框收进 capture_kit（2026-11-13）
+
+维护者问「元素编辑框能否做成捕获 kit 的一部分，而不是在 web 页面中弹出来」，并在
+「极简确认框进 kit / **全量搬进 kit** / 维持 web」里拍了**全量**：确认与详情都改
+win32 原生，web 弹窗降为非 Windows 兜底。
+
+动机正是前两次事故的教训：web 弹窗让「捕获 → 确认入库」强依赖页面生命周期
+（主窗还原、iframe 活着、RPC 桥通畅），两个真机事故都死在「回页面的路上」。
+
+落地：
+
+- `capture_kit/_win32.py`（新）：窗口类注册 / `_INSTANCES` 分派 / 定时器 / 折行 /
+  画字 / 字体从 float_window 下沉，浮窗行为不变（`_float_probe` 复跑 PASS）。
+- `capture_kit/edit_dialog.py`（新）：`ElementEditDialog`——标题 + 名称 EDIT +
+  只读多行 meta（选择器全文可复制）+ 错误行 + 保存/取消。消息泵手写 ctypes 版
+  `IsDialogMessage` 循环（**`win32gui` 又没有这个成员**，同 CreateFont/SetTimer 坑），
+  Enter=保存 / Esc=取消 / Tab 轮换 / EDIT 原生 IME（免 web 端 isComposing 守卫）。
+  `SetForegroundWindow` 必须 try——环境性失败（句柄无效 6）会把窗口线程打死。
+- `controller.py`：新增 `edit_dialog_factory / edit_model / on_commit / on_discard`
+  注入口与 **editing / committed / discarded** 三态；`_result` 与 `_editing`
+  同一把锁落定（否则宿主轮询会插进 ready 缝隙同时弹两个框）；工厂给 None
+  （非 Windows）退回旧 ready 语义。
+- api.py：`_do_commit` / `_do_rename` 抽成唯一权威（RPC 与桌面框回调共用，
+  pop 归各自调用方）；`rpa.editElement` 详情弹同一个框（`_EditSession` 复用
+  capture_poll 状态机）；前端 editing 只轮询、committed 刷新、discarded 收尾，
+  详情先试 `editElement` 失败再回 `elementDetail` 页面框。
+
+判据：contract 17/17（+轮询新三态、+详情桌面框）、pick_ui 20/20（+editing/
+committed/详情优先桌面）、xhs 26 测（+editElement 注册）、负向 **10/10**
+（新增 N8 删 committed 刷新、N9 详情不走桌面框）。★ 判据夹具的坑：DOM shim 的
+`registry` 模块级共享 ⇒ 旧用例的处理器在新用例 click 上重放（N9 注入才暴露），
+改每用例一副新节点 + `#elemDialog` 起始 hidden 对齐真实 DOM。
+
 ## 六、欠账
 
 - 真机点一遍「点按钮 → 桌面抓 → 弹框改名 → 确认入库」全链路（当前靠 DOM shim + 进程内探针）。

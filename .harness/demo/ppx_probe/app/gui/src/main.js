@@ -1139,17 +1139,27 @@ async function pollCapture() {
       return
     }
     if (res.state === 'ready') {
+      // 非 Windows 兜底：确认框开在页面里（win32 上确认框由 capture_kit 开在桌面，
+      // 状态机会走 editing → committed/discarded，这条路不会到）。
       await restoreApp()
       captureSession = null
       openCaptureDialog(session.id, res.preview || {})
       return
     }
-    // 终态：取消 / 离线 / 失败 / 被挡下。原因都不在面板里说，浮窗已经说过。
-    if (['cancelled', 'offline', 'failed', 'blocked'].includes(res.state)) {
+    if (res.state === 'committed') {
+      // 桌面的原生编辑框已完成入库（或详情改名）：刷新资产列表即可。
+      await restoreApp()
+      captureSession = null
+      await refreshElements()
+      return
+    }
+    // 终态：取消 / 放弃 / 离线 / 失败 / 被挡下。原因都不在面板里说，浮窗已经说过。
+    if (['cancelled', 'discarded', 'offline', 'failed', 'blocked'].includes(res.state)) {
       await restoreApp()
       captureSession = null
       return
     }
+    // 'pending' / 'editing'（桌面编辑框开着）都继续等。
     captureTimer = setTimeout(tick, 1000)
   }
   captureTimer = setTimeout(tick, 800)
@@ -1248,6 +1258,18 @@ function openCaptureDialog(captureId, preview) {
 }
 
 async function openAssetDetail(name) {
+  // win32：详情编辑在桌面原生框里做（与捕获确认同一个 ElementEditDialog），
+  // 前端只轮询终态；非 Windows / 框不可用才回退下面的页面弹窗。
+  try {
+    const edit = await ppx.call('rpa.editElement', { path: currentPath, name })
+    if (edit && edit.ok && edit.state === 'editing') {
+      captureSession = { id: edit.editId, name: null, nodeId: null }
+      pollCapture()
+      return
+    }
+  } catch (error) {
+    // 桥/服务异常也回退页面形态：详情不能打不开
+  }
   let res
   try {
     res = await ppx.call('rpa.elementDetail', { path: currentPath, name })

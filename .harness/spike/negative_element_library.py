@@ -43,6 +43,9 @@ LIB_DELETE = "删除成功才刷新，失败保留行"
 LIB_STRUCT = "工具区在 elemBody 之外、只有一个按钮"
 PY_RENAME = "改名联动流程引用"
 PY_BADNAME = "入库拒绝非法名与重名"
+PY_EDIT_DIALOG = "详情走桌面编辑框：改名/重名/取消"
+UI_COMMITTED = "渲染层：桌面确认入库（committed）刷新资产并收尾"
+UI_DETAIL_DESKTOP = "渲染层：详情优先弹桌面编辑框，页面框只是兜底"
 
 
 def digest(path: Path) -> str:
@@ -132,13 +135,27 @@ CASES: list[dict[str, Any]] = [
         "    target = _flow_path(path)\n    if not target.is_file():\n        return []",
         "    return []  # " + SENTINEL + "\n    target = _flow_path(path)\n"
         "    if not target.is_file():\n        return []",
-        {"pick_ui": set(), "library": set(), "contract": {PY_RENAME}},
+        # _rewrite_refs 是 RPC 改名与桌面详情框改名的共用权威：注入后两条用例都得红。
+        {"pick_ui": set(), "library": set(), "contract": {PY_RENAME, PY_EDIT_DIALOG}},
     ),
     case(
         "N7", "名字规则退回「什么都放行」（路径穿越能写出去）", API,
         "    if any(ch in _NAME_BAD_CHARS or ord(ch) < 32 for ch in name):\n        return False",
         "    if False:  # " + SENTINEL + "\n        return False",
         {"pick_ui": set(), "library": set(), "contract": {PY_BADNAME}},
+    ),
+    case(
+        "N8", "桌面确认入库后不再刷新资产（用户看不见新元素）", JS,
+        "      captureSession = null\n      await refreshElements()\n      return\n    }",
+        "      captureSession = null  // " + SENTINEL + "\n      return\n    }",
+        # committed 分支同时服务捕获确认与详情改名：删掉刷新，两条用例都得红。
+        {"pick_ui": {UI_COMMITTED, UI_DETAIL_DESKTOP}, "library": set(), "contract": set()},
+    ),
+    case(
+        "N9", "详情不走桌面编辑框（退回纯页面弹窗）", JS,
+        "    if (edit && edit.ok && edit.state === 'editing') {",
+        "    if (false) {  // " + SENTINEL,
+        {"pick_ui": {UI_DETAIL_DESKTOP}, "library": set(), "contract": set()},
     ),
 ]
 

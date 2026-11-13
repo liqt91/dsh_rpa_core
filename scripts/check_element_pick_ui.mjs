@@ -207,7 +207,12 @@ const ONE_MISSING = [
   { name: 'userField', nodeId: 'n1', command: 'browser.input', decision: { target: 'browser' } },
 ]
 
-function makeContext({ responses = {} } = {}) {
+function makeContext({ responses = {}, sequences = {} } = {}) {
+  // ★ registry 是模块级的：节点跨用例共享会让旧用例的事件处理器在新用例的
+  // click 上全部重放（实测：某用例弹了 web 详情框没关，下一个用例点「保存」
+  // 时旧处理器替它 closeElemDialog，当前用例的断言凭空变红——N9 注入才暴露）。
+  // 每个用例一副新节点，旧处理器留在旧对象上，谁也点不到。
+  registry.clear()
   const timers = []
   const calls = []
   const dockTabs = ['elements', 'globals', 'log'].map((key) => {
@@ -255,6 +260,9 @@ function makeContext({ responses = {} } = {}) {
       document: { kind: 'browser', selector: { css: '#q' }, verifyCount: 2, capturedAt: '2026-11-12' },
     },
     'rpa.deleteElement': { ok: true, deleted: true, remaining: [] },
+    // 默认按「桌面编辑框不可用」处理：详情走页面兜底——这样既有详情用例覆盖的是
+    // 非 Windows 路径；win32 路径由 sequences 显式给 editing 响应的用例覆盖。
+    'rpa.editElement': { ok: false, code: 'EDIT_DIALOG_UNAVAILABLE' },
     'window.restore': { ok: true },
   }
   const sandbox = {
@@ -262,6 +270,8 @@ function makeContext({ responses = {} } = {}) {
     ppx: {
       call: async (name, args) => {
         calls.push({ name, args })
+        const seq = sequences[name]
+        if (seq && seq.length) return { ...(defaults[name] || { ok: true }), ...seq.shift() }
         return { ...(defaults[name] || { ok: true }), ...(responses[name] || {}) }
       },
     },
@@ -289,6 +299,9 @@ function makeContext({ responses = {} } = {}) {
      cards = [{ id: 'n1', no: 3 }, { id: 'n2', no: 5 }]`,
     ctx,
   )
+  // index.html 里 #elemDialog 起始就是 hidden（编辑框只在需要时才打开），
+  // shim 要如实反映，否则「没弹框」的断言会撞在 El 的默认 hidden=false 上。
+  nodeById('elemDialog').hidden = true
   return { ctx, timers, calls, api: vm.runInContext('globalThis.__api', ctx) }
 }
 
@@ -353,6 +366,46 @@ await checkAsync('渲染层：取消编辑框就丢弃这次捕获，不入库',
   assert(calls.some((c) => c.name === 'rpa.discardCapture'), '取消后没丢弃暂存')
   assert(!calls.some((c) => c.name === 'rpa.commitElement'), '取消了还入库')
   assert(dialogNode().hidden === true, '取消后编辑框没关')
+})
+
+await checkAsync('渲染层：桌面编辑框开着（editing）只轮询，不弹页面框', async () => {
+  const run = await startOnce({
+    sequences: { 'rpa.capturePoll': [{ ok: true, state: 'editing' }] },
+  })
+  assert(dialogNode().hidden !== false, 'editing 却弹了页面框')
+  assert(run.api.session(), 'editing 就把会话扔了')
+  assert(run.timers.some((t) => t.ms === 1000), 'editing 没排下一轮轮询')
+})
+
+await checkAsync('渲染层：桌面确认入库（committed）刷新资产并收尾', async () => {
+  const run = await startOnce({
+    sequences: { 'rpa.capturePoll': [{ ok: true, state: 'committed', name: '搜索框' }] },
+  })
+  await flush()
+  assert(dialogNode().hidden !== false, 'committed 还弹页面框')
+  assert(!run.api.session(), 'committed 后会话没清')
+  assert(run.calls.some((c) => c.name === 'rpa.listElements'), 'committed 没刷新资产列表')
+  assert(!run.calls.some((c) => c.name === 'rpa.commitElement'), 'win32 路径不该再调 commitElement')
+})
+
+await checkAsync('渲染层：详情优先弹桌面编辑框，页面框只是兜底', async () => {
+  const run = makeContext({
+    responses: { 'rpa.editElement': { ok: true, state: 'editing', editId: 'e9' } },
+    sequences: { 'rpa.capturePoll': [{ ok: true, state: 'committed', name: '登录框' }] },
+  })
+  run.api.setState(ONE_MISSING, [{ name: 'searchBox', kind: 'browser', selector: '#q' }])
+  await run.api.openAssetDetail('searchBox')
+  await flush()
+  const edits = run.calls.filter((c) => c.name === 'rpa.editElement')
+  assert(edits.length === 1 && edits[0].args.name === 'searchBox',
+    `没走桌面编辑框：${run.calls.map((c) => c.name)}`)
+  assert(!run.calls.some((c) => c.name === 'rpa.elementDetail'), '桌面框可用时却走了 elementDetail')
+  assert(dialogNode().hidden !== false, '桌面框可用时却弹了页面框')
+  const tick = run.timers.find((t) => t.ms === 800)
+  assert(tick, '详情编辑没排轮询')
+  await tick.fn()
+  await flush()
+  assert(run.calls.some((c) => c.name === 'rpa.listElements'), '改名完成后没刷新列表')
 })
 
 await checkAsync('渲染层：入库失败把原因写在框里，不关框也不刷新', async () => {

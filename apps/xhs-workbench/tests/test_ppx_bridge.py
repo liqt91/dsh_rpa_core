@@ -48,7 +48,29 @@ def test_bootstrap_adaptation_puts_xhs_flow_first() -> None:
 def test_open_flow_and_compile_check_on_main_flow() -> None:
     env = pb.dispatch("rpa.openFlow", {"path": "workflows/xhs_product_search.json"})
     assert env["ok"] is True
-    assert len(env["data"]["cards"]) == 11  # 与流程文件的 11 个 action 对齐
+    # ★ 不硬编码卡片数：流程是维护者会在编辑器里改的活文档，写死 11 会随每次
+    # 编辑腐烂（2026-11-13 流程加了步骤后这条凭空红）。对齐语义才是契约——
+    # 文件里每个节点都有卡，控制流的 ::then/::else 合成卡必须挂回真实节点。
+    flow = json.loads(
+        (pb.XHS_WORKFLOWS / "xhs_product_search.json").read_text(encoding="utf-8")
+    )
+    node_ids: list[str] = []
+
+    def walk(node: object) -> None:
+        if not isinstance(node, dict):
+            return
+        if node.get("id"):
+            node_ids.append(node["id"])
+        for key in ("children", "then", "else", "catch"):
+            for child in node.get(key) or []:
+                walk(child)
+
+    walk(flow["root"])
+    file_ids = set(node_ids) - {"root"}
+    card_ids = {card["id"] for card in env["data"]["cards"]}
+    assert file_ids <= card_ids, f"文件节点没出卡：{sorted(file_ids - card_ids)}"
+    dangling = {cid for cid in card_ids if cid.split("::")[0] not in file_ids}
+    assert not dangling, f"合成卡挂在不存在的节点上：{sorted(dangling)}"
     env2 = pb.dispatch("rpa.compileCheck", {"path": "workflows/xhs_product_search.json"})
     assert env2["ok"] is True
 

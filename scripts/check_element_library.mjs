@@ -151,6 +151,8 @@ function makeContext() {
     'rpa.commitElement': { ok: true, name: 'searchBox' },
     'rpa.discardCapture': { ok: true, discarded: true },
     'rpa.saveElement': { ok: true, name: 'searchBox' },
+    // 默认按「桌面编辑框不可用」处理：详情走页面兜底（非 Windows 路径）
+    'rpa.editElement': { ok: false, code: 'EDIT_DIALOG_UNAVAILABLE' },
   }
   const sandbox = {
     document: doc,

@@ -75,8 +75,9 @@ def main() -> None:
         ok: list[str] = []
 
         # 1) 捕获只暂存：ready 时盘上还没有文件，preview 里带默认名。
-        entry = {"name": "userField", "suggestName": "userField", "nodeId": "openHome",
-                 "overwrite": False, "captured": None, "preview": None, "notified": False}
+        entry = {"path": path, "name": "userField", "suggestName": "userField",
+                 "nodeId": "openHome", "overwrite": False, "captured": None,
+                 "preview": None, "notified": False}
         api._CAPTURES[api._capture_key(path, "c1")] = {
             **entry, "controller": _Ctl("pending"),
         }

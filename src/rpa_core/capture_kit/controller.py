@@ -45,6 +45,10 @@ class CaptureController:
         host: Any = None,
         float_factory: Callable[[], Any] | None = None,
         heal_host: Callable[[], dict[str, Any]] | None = None,
+        edit_dialog_factory: Callable[[], Any] | None = None,
+        edit_model: Callable[[dict[str, Any]], dict[str, str]] | None = None,
+        on_commit: Callable[[str], str | None] | None = None,
+        on_discard: Callable[[], None] | None = None,
     ) -> None:
         self._factory = session_factory or build_hybrid_session
         self._on_captured = on_captured
@@ -52,6 +56,15 @@ class CaptureController:
         self._float_factory = float_factory or CaptureFloat
         # 扩展离线时重注册 Native Messaging 白名单（路径漂移会让扩展 ID 变）
         self._heal_host = heal_host or ensure_extension_host
+        # 编辑框三件套（M68 后半场）：给了工厂，抓完由控制器**自己弹** win32 编辑框，
+        # 状态机多三个值：editing / committed / discarded；不给工厂（非 Windows 或
+        # 宿主想自己画）则维持旧的 ready 语义，由宿主页面接管确认。
+        self._edit_dialog_factory = edit_dialog_factory
+        self._edit_model = edit_model
+        self._on_commit = on_commit
+        self._on_discard = on_discard
+        self._edit_dialog: Any = None
+        self._editing = False
         self._session: Any = None
         self._float: CaptureFloat | None = None
         self._thread: threading.Thread | None = None
@@ -135,16 +148,26 @@ class CaptureController:
         return gesture_hint(self._session)
 
     def poll(self) -> dict[str, Any]:
-        """状态机：pending / ready / cancelled / offline / failed。"""
+        """状态机：pending / editing / ready / committed / discarded / cancelled /
+        offline / failed。"""
         with self._lock:
             if self._cancelled:
                 return {"state": "cancelled"}
             result = self._result
+            editing = self._editing
+        if editing:
+            # 编辑框正在桌面上：宿主页面继续轮询，别弹自己的确认框
+            return {"state": "editing"}
         if result is None:
             self._refresh_float()
             session = self._session
             armed = bool(getattr(session, "armed", False)) if session is not None else False
             return {"state": "pending", "offline": self._desktop_offline, "armed": armed}
+        state = result.get("state")
+        if state == "committed":
+            return {"state": "committed", "name": result.get("name")}
+        if state == "discarded":
+            return {"state": "discarded"}
         if result.get("kind") in _READY_KINDS:
             return {"state": "ready", "result": result}
         if result.get("unavailable") or result.get("offline"):
@@ -158,7 +181,7 @@ class CaptureController:
         }
 
     def cancel(self) -> None:
-        """取消本次捕获，并收掉浮窗（可重入）。"""
+        """取消本次捕获，并收掉浮窗与编辑框（可重入）。"""
         with self._lock:
             self._cancelled = True
         session = self._session
@@ -168,6 +191,12 @@ class CaptureController:
                 session.close()
         except Exception:  # noqa: BLE001 - 取消失败也要退出等待态
             pass
+        dialog = self._edit_dialog
+        if dialog is not None:
+            try:
+                dialog.close()
+            except Exception:  # noqa: BLE001 - 框已销毁也无妨
+                pass
         self._hide_float()
         self._restore()
 
@@ -196,11 +225,72 @@ class CaptureController:
         finally:
             self._hide_float()
             self._restore()
+        # ★ _result 与 _editing 必须在同一把锁里落定：分开赋值的话，宿主轮询可能
+        # 恰好插进「ready 已可见、editing 还没置位」的缝隙，web 弹窗与 win32 框一起弹。
+        open_edit = False
         with self._lock:
             if isinstance(result, dict) and result.get("cancelled"):
                 self._cancelled = True
             else:
                 self._result = result
+                open_edit = (
+                    isinstance(result, dict)
+                    and result.get("kind") in _READY_KINDS
+                    and self._edit_dialog_factory is not None
+                )
+                if open_edit:
+                    self._editing = True
+        # 编辑态：有对话框工厂时，抓完由控制器直接弹 win32 编辑框——
+        # 「捕获 → 确认入库」不再依赖宿主页面活着（M68 后半场）。
+        if open_edit:
+            self._open_edit_dialog(result)
+
+    # -- 编辑框（win32；工厂缺省时整条路径不触发） ------------------------------
+    def _open_edit_dialog(self, doc: dict[str, Any]) -> None:
+        dialog = self._edit_dialog_factory()
+        if dialog is None or not getattr(dialog, "available", True):
+            # 对话框不可用（非 Windows 工厂给 None）：退回旧的 ready 语义，
+            # 宿主页面接管确认。
+            with self._lock:
+                self._editing = False
+            return
+        model = self._edit_model(doc) if self._edit_model is not None else {}
+        self._edit_dialog = dialog
+        dialog.show(
+            title=model.get("title") or "捕获到元素",
+            name=model.get("name") or "",
+            meta=model.get("meta") or "",
+            on_save=self._commit_from_dialog,
+            on_close=self._close_edit,
+        )
+
+    def _commit_from_dialog(self, name: str) -> str | None:
+        """编辑框「保存」的回调：宿主落盘，返回 None=成功关框 / 文案=错误留框。"""
+        error: str | None = None
+        if self._on_commit is not None:
+            try:
+                error = self._on_commit(name)
+            except Exception as exc:  # noqa: BLE001 - 入库异常也要回显在框里
+                error = f"入库失败：{exc}"
+        if error:
+            return str(error)
+        with self._lock:
+            self._editing = False
+            self._result = {"state": "committed", "name": name}
+        return None
+
+    def _close_edit(self, saved: bool) -> None:
+        """编辑框关闭（取消路径）：丢掉暂存，状态机落 discarded。"""
+        if saved:
+            return  # committed 已在 _commit_from_dialog 落定
+        if self._on_discard is not None:
+            try:
+                self._on_discard()
+            except Exception:  # noqa: BLE001 - 丢弃失败不该卡住收场
+                pass
+        with self._lock:
+            self._editing = False
+            self._result = {"state": "discarded"}
 
     def _refresh_float(self) -> None:
         """等待期每进一次 poll 就刷新双腿状态（扩展 arm/判死是异步的）。"""

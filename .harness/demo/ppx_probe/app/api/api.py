@@ -65,7 +65,11 @@ if FROZEN_RES is not None:
     os.environ.setdefault("RPA_I18N_JS", str(FROZEN_RES / "i18n.js"))
 
 import rpa_core  # noqa: E402
-from rpa_core.capture_kit import CaptureController, CaptureFloat  # noqa: E402
+from rpa_core.capture_kit import (  # noqa: E402
+    CaptureController,
+    CaptureFloat,
+    ElementEditDialog,
+)
 from rpa_core.catalog import load_catalog  # noqa: E402
 from rpa_core.compiler.compiler import WorkflowCompileError, WorkflowCompiler  # noqa: E402
 from rpa_core.gui.i18n import load_command_display_names, load_op_labels  # noqa: E402
@@ -2134,6 +2138,42 @@ def _capture_key(path: str, capture_id: str) -> tuple[str, str]:
     return (path, capture_id)
 
 
+def _new_edit_dialog() -> ElementEditDialog | None:
+    """win32 原生元素编辑框；非 Windows 返回 None（宿主回退页面弹窗形态）。
+
+    与提示浮窗同一个理由：「捕获 → 确认入库」不该依赖宿主页面活着——
+    页面关了、桥断了，桌面框照样能改名入库。
+    """
+    if sys.platform != "win32":
+        return None
+    return ElementEditDialog()
+
+
+def _capture_edit_model(entry: dict[str, Any]) -> dict[str, str]:
+    """捕获确认框的内容：建议名 + 只读 meta（多行 EDIT 只吃 CRLF 折行）。"""
+    preview = entry.get("preview") or {}
+    kind = preview.get("kind")
+    lines = [
+        ("网页元素" if kind == "browser" else "桌面元素")
+        + f" · {preview.get('selector') or ''}"
+    ]
+    if preview.get("matches"):
+        lines.append(f"命中 {preview['matches']} 个")
+    node = preview.get("nodeId")
+    lines.append(f"将绑定到 {node}" if node else "存为资产（不绑定节点）")
+    return {
+        "title": "捕获到元素",
+        "name": str(preview.get("name") or entry.get("suggestName") or ""),
+        "meta": "\r\n".join(lines),
+    }
+
+
+def _commit_from_dialog(entry: dict[str, Any], name: str) -> str | None:
+    """win32 确认框的保存回调：返回 None=成功关框 / 文案=错误回显留框。"""
+    res = _do_commit(entry, name)
+    return None if res["ok"] else str(res["error"])
+
+
 def _elements_dir(path: str) -> Path:
     return _flow_path(path).parent / "elements"
 
@@ -2558,6 +2598,12 @@ def start_capture(
             host=_WebviewHost(),
             # 与「正在准备…」共用同一个浮窗：就绪时**原地**变成捕获窗，不闪窗。
             float_factory=lambda: window if window is not None else CaptureFloat(),
+            # 编辑框收进 capture_kit（win32）：抓完控制器直接弹桌面确认框，
+            # 「捕获 → 确认入库」不再依赖宿主页面活着；非 Windows 缺省走旧的
+            # ready 语义，前端弹自己的页面框兜底。
+            edit_dialog_factory=_new_edit_dialog,
+            edit_model=lambda doc: _capture_edit_model(entry),
+            on_commit=lambda name: _commit_from_dialog(entry, name),
         )
         launched = controller.start()
     except Exception as exc:  # noqa: BLE001 - 起捕获失败必须如实回前端，别闷成等待态
@@ -2615,7 +2661,8 @@ def capture_poll(path: str, capture_id: str) -> dict[str, Any]:
     ``ready`` 只回一个 ``preview``（名字待确认），**盘上还没有文件**——入库是
     ``rpa.commitElement`` 的事。失败/离线时顺手把原因写到桌面浮窗（界面里不显示）。
     """
-    entry = _CAPTURES.get(_capture_key(path, capture_id))
+    key = _capture_key(path, capture_id)
+    entry = _CAPTURES.get(key)
     if entry is None:
         return {
             "ok": False,
@@ -2634,6 +2681,12 @@ def capture_poll(path: str, capture_id: str) -> dict[str, Any]:
     }
     if state["state"] == "ready":
         payload["preview"] = entry.get("preview")
+    elif state["state"] == "committed":
+        # win32 确认框已完成入库：带上最终名字，会话读后即焚（同 cancel 语义）。
+        payload["name"] = state.get("name")
+        _CAPTURES.pop(key, None)
+    elif state["state"] == "discarded":
+        _CAPTURES.pop(key, None)
     elif state["state"] in ("offline", "failed"):
         payload["reason"] = state.get("reason")
         if not entry.get("notified"):
@@ -2731,21 +2784,15 @@ def _rewrite_refs(path: str, old: str, new: str) -> list[str]:
     return sorted(set(hits))
 
 
-@api_method("rpa.commitElement")
-def commit_element(path: str, capture_id: str, name: str) -> dict[str, Any]:
-    """用户确认后入库：捕获描述符 + 用户改好的名字 → ``elements/<name>.json``。
-
-    这是捕获链路上**唯一**写元素文件的地方（捕获本身只暂存）。名字被改过时，
-    流程里同名的 elementRefs 一起改名——否则资产与引用就对不上，等于白抓。
+def _do_commit(entry: dict[str, Any], name: str) -> dict[str, Any]:
+    """入库的**唯一权威**：web 弹窗（``rpa.commitElement``）与 win32 确认框
+    （``_commit_from_dialog``）共用。**不碰会话表**——pop 归各自的调用方：
+    RPC 路径提交即 pop；win32 路径由 ``capture_poll`` 读到 committed 才 pop。
     """
-    started = time.perf_counter()
-    key = _capture_key(path, capture_id)
-    entry = _CAPTURES.get(key)
-    if entry is None or not entry.get("captured"):
-        return _element_error("NO_CAPTURE", "这次捕获已经结束了，重新抓一次")
     name = (name or "").strip()
     if not _valid_element_name(name):
         return _element_error("BAD_NAME", "名字不能为空，也不能含 / \\ : * ? \" < > | . 这些字符")
+    path = entry["path"]
     target = _elements_dir(path) / f"{name}.json"
     overwrite = bool(entry.get("overwrite")) and name == (entry.get("name") or "")
     if target.exists() and not overwrite:
@@ -2760,15 +2807,33 @@ def commit_element(path: str, capture_id: str, name: str) -> dict[str, Any]:
             renamed = _rewrite_refs(path, ref, name)
         except OSError:
             renamed = []
-    _CAPTURES.pop(key, None)
     return {
         "ok": True,
         "name": name,
         "file": str(target),
         "boundNodeId": entry.get("nodeId"),
         "renamedRefs": renamed,
-        "ms": round((time.perf_counter() - started) * 1000, 1),
     }
+
+
+@api_method("rpa.commitElement")
+def commit_element(path: str, capture_id: str, name: str) -> dict[str, Any]:
+    """用户确认后入库：捕获描述符 + 用户改好的名字 → ``elements/<name>.json``。
+
+    这是捕获链路上**唯一**写元素文件的地方（捕获本身只暂存）。名字被改过时，
+    流程里同名的 elementRefs 一起改名——否则资产与引用就对不上，等于白抓。
+    """
+    started = time.perf_counter()
+    key = _capture_key(path, capture_id)
+    entry = _CAPTURES.get(key)
+    if entry is None or not entry.get("captured"):
+        return _element_error("NO_CAPTURE", "这次捕获已经结束了，重新抓一次")
+    res = _do_commit(entry, name)
+    if not res["ok"]:
+        return res
+    _CAPTURES.pop(key, None)
+    res["ms"] = round((time.perf_counter() - started) * 1000, 1)
+    return res
 
 
 @api_method("rpa.discardCapture")
@@ -2781,10 +2846,9 @@ def discard_capture(path: str, capture_id: str) -> dict[str, Any]:
     return {"ok": True, "discarded": True, "captureId": capture_id}
 
 
-@api_method("rpa.saveElement")
-def save_element(path: str, name: str, new_name: str | None = None) -> dict[str, Any]:
-    """详情框的保存：改的只有资产名称（重名/改名后引用一起更新）。"""
-    started = time.perf_counter()
+def _do_rename(path: str, name: str, new_name: str | None) -> dict[str, Any]:
+    """改名的**唯一权威**：web 详情弹窗（``rpa.saveElement``）与 win32 详情框
+    （``edit_element`` 的 on_save）共用。失败回滚文件名与引用，绝不留悬空引用。"""
     old = (name or "").strip()
     if not _valid_element_name(old):
         return _element_error("BAD_NAME", "这个名字用不了")
@@ -2796,13 +2860,7 @@ def save_element(path: str, name: str, new_name: str | None = None) -> dict[str,
     if not _valid_element_name(new):
         return _element_error("BAD_NAME", "名字不能为空，也不能含 / \\ : * ? \" < > | . 这些字符")
     if new == old:
-        return {
-            "ok": True,
-            "name": old,
-            "renamedRefs": [],
-            "unchanged": True,
-            "ms": round((time.perf_counter() - started) * 1000, 1),
-        }
+        return {"ok": True, "name": old, "renamedRefs": [], "unchanged": True}
     target = ed / f"{new}.json"
     if target.exists():
         return _element_error("NAME_TAKEN", f"已经有一个叫「{new}」的元素了，换个名字")
@@ -2825,13 +2883,91 @@ def save_element(path: str, name: str, new_name: str | None = None) -> dict[str,
         except OSError:
             pass
         return _element_error("RENAME_FAILED", f"改名没成：{exc}")
-    return {
-        "ok": True,
-        "name": new,
-        "file": str(target),
-        "renamedRefs": renamed,
-        "ms": round((time.perf_counter() - started) * 1000, 1),
+    return {"ok": True, "name": new, "file": str(target), "renamedRefs": renamed}
+
+
+@api_method("rpa.saveElement")
+def save_element(path: str, name: str, new_name: str | None = None) -> dict[str, Any]:
+    """详情框的保存：改的只有资产名称（重名/改名后引用一起更新）。"""
+    started = time.perf_counter()
+    res = _do_rename(path, name, new_name)
+    res["ms"] = round((time.perf_counter() - started) * 1000, 1)
+    return res
+
+
+class _EditSession:
+    """已入库资产的详情编辑会话：复用 ``capture_poll`` 的状态机（editing/committed/discarded）。
+
+    与捕获会话同一个轮询面，前端不用为「详情」学第二条通道。
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._state: dict[str, Any] = {"state": "editing"}
+
+    def poll(self) -> dict[str, Any]:
+        with self._lock:
+            return dict(self._state)
+
+    def finish(self, state: dict[str, Any]) -> None:
+        with self._lock:
+            self._state = state
+
+    def cancel(self) -> None:  # cancel_capture 的兼容面（详情会话没有腿可撤）
+        pass
+
+
+@api_method("rpa.editElement")
+def edit_element(path: str, name: str) -> dict[str, Any]:
+    """已入库资产的详情编辑：桌面原生框（win32），与捕获确认框同一个。
+
+    框里可改名字（改名联动 elementRefs），meta 是资产文档全文。非 Windows 返回
+    ``EDIT_DIALOG_UNAVAILABLE``，前端回退页面弹窗。
+    """
+    dialog = _new_edit_dialog()
+    if dialog is None:
+        return {
+            "ok": False,
+            "code": "EDIT_DIALOG_UNAVAILABLE",
+            "error": "桌面编辑框不可用（非 Windows）",
+        }
+    name = (name or "").strip()
+    doc_path = _elements_dir(path) / f"{name}.json"
+    if not doc_path.is_file():
+        return _element_error("NOT_FOUND", f"没有这个资产：{name}")
+    try:
+        doc = json.loads(doc_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        return _element_error("READ_FAILED", f"读资产失败：{exc}")
+    edit_id = _next_capture_id()
+    session = _EditSession()
+    entry = {
+        "id": edit_id,
+        "path": path,
+        "kind": "edit",
+        "name": name,
+        "controller": session,
+        "captured": None,
+        "preview": None,
+        "notified": True,
     }
+    _CAPTURES[_capture_key(path, edit_id)] = entry
+
+    def _save(new_name: str) -> str | None:
+        res = _do_rename(path, name, new_name)
+        if not res["ok"]:
+            return str(res["error"])
+        session.finish({"state": "committed", "name": res["name"]})
+        return None
+
+    dialog.show(
+        title=f"元素详情 · {name}",
+        name=name,
+        meta=json.dumps(doc, ensure_ascii=False, indent=2),
+        on_save=_save,
+        on_close=lambda saved: saved or session.finish({"state": "discarded"}),
+    )
+    return {"ok": True, "editId": edit_id, "state": "editing"}
 
 
 # ---- 元素资产库：详情 / 删除（ADR 0022-R3 后原型目录共享） -------------------
