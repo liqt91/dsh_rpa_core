@@ -300,16 +300,17 @@ class FakeEditDialog:
         self._on_save = None
         self._on_close = None
 
-    def show(self, *, title, name, meta, save_label="保存", on_save=None, on_close=None):
-        self.shown = {"title": title, "name": name, "meta": meta}
+    def show(self, *, title, name, selector="", meta="", save_label="保存",
+             on_save=None, on_close=None):
+        self.shown = {"title": title, "name": name, "selector": selector, "meta": meta}
         self._on_save = on_save
         self._on_close = on_close
 
     def close(self) -> None:
         self.closed = True
 
-    def click_save(self, name: str) -> str | None:
-        error = self._on_save(name)
+    def click_save(self, name: str, selector: str = "") -> str | None:
+        error = self._on_save(name, selector)
         if error:
             return error  # 错误回显留框（真实对话框的 _try_save 同款分支）
         self._on_close(True)
@@ -340,7 +341,9 @@ def test_captured_opens_edit_dialog_instead_of_ready() -> None:
     controller.start()
     state = _wait(controller, {"editing"})
     assert state["state"] == "editing"
-    assert dialog.shown == {"title": "捕获到元素", "name": "元素1", "meta": "m"}
+    assert dialog.shown == {
+        "title": "捕获到元素", "name": "元素1", "selector": "", "meta": "m",
+    }
 
 
 def test_edit_dialog_commit_reports_committed_with_name() -> None:
@@ -349,14 +352,14 @@ def test_edit_dialog_commit_reports_committed_with_name() -> None:
     controller = _make_editing(
         FakeSession({"kind": "browser", "selector": {"css": "#a"}}),
         dialog,
-        on_commit=lambda name: committed.append(name) or None,
+        on_commit=lambda name, selector: committed.append((name, selector)) or None,
     )
     controller.start()
     _wait(controller, {"editing"})
-    assert dialog.click_save("搜索框") is None
+    assert dialog.click_save("搜索框", "#q") is None
     state = controller.poll()
     assert state == {"state": "committed", "name": "搜索框"}
-    assert committed == ["搜索框"]
+    assert committed == [("搜索框", "#q")]
 
 
 def test_edit_dialog_save_error_stays_editing() -> None:
@@ -364,7 +367,7 @@ def test_edit_dialog_save_error_stays_editing() -> None:
     controller = _make_editing(
         FakeSession({"kind": "browser", "selector": {"css": "#a"}}),
         dialog,
-        on_commit=lambda name: "这个名字被占了",
+        on_commit=lambda name, selector: "这个名字被占了",
     )
     controller.start()
     _wait(controller, {"editing"})

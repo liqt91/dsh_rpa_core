@@ -602,8 +602,8 @@ def case_edit_element_desktop_dialog() -> None:
                 self._on_save = kwargs.get("on_save")
                 self._on_close = kwargs.get("on_close")
 
-            def click_save(self, name):
-                error = self._on_save(name)
+            def click_save(self, name, selector=""):
+                error = self._on_save(name, selector)
                 if error is None:
                     self._on_close(True)
                 return error
@@ -625,7 +625,7 @@ def case_edit_element_desktop_dialog() -> None:
             assert_true('"css": "#q"' in dialogs[0].kwargs["meta"], "详情没带资产全文")
             edit_id = res["editId"]
 
-            error = dialogs[0].click_save("登录框")
+            error = dialogs[0].click_save("登录框", "#new-css")
             assert_true(error is None, f"改名被拦：{error}")
             assert_true((elements / "登录框.json").is_file(), "没改名")
             assert_true(not (elements / "搜索框.json").exists(), "旧名还在")
@@ -634,6 +634,9 @@ def case_edit_element_desktop_dialog() -> None:
                 doc["root"]["children"][0]["elementRefs"]["selector"] == "登录框",
                 "详情框改名没联动 refs",
             )
+            # 影刀式：详情框里改的不只是名字，定位也要落盘
+            saved = json.loads((elements / "登录框.json").read_text(encoding="utf-8"))
+            assert_true(saved["selector"]["css"] == "#new-css", f"定位没改：{saved}")
             poll = api.capture_poll("flow.json", edit_id)
             assert_true(poll["state"] == "committed" and poll["name"] == "登录框", f"{poll}")
             assert_true(("flow.json", edit_id) not in api._CAPTURES, "committed 后会话没焚")
@@ -641,7 +644,7 @@ def case_edit_element_desktop_dialog() -> None:
             # 重名：错误回显、会话仍 editing；取消 → discarded
             (elements / "占位.json").write_text("{}", encoding="utf-8")
             res2 = api.edit_element("flow.json", "登录框")
-            error2 = dialogs[1].click_save("占位")
+            error2 = dialogs[1].click_save("占位", "#new-css")
             assert_true(error2 and "占位" in error2, f"重名没回显：{error2}")
             poll2 = api.capture_poll("flow.json", res2["editId"])
             assert_true(poll2["state"] == "editing", f"重名后不该变终态：{poll2}")
@@ -669,6 +672,56 @@ def case_edit_element_desktop_dialog() -> None:
         api._new_edit_dialog = real_new
 
 
+def case_selector_edit_validation() -> None:
+    """选择器编辑的校验与写回（影刀式：定位可改，但非法的不放行、不落半成品）。"""
+    browser_doc = {"kind": "browser", "selector": {"css": "#q"}}
+    empty = api._selector_edit_error(browser_doc, "")
+    assert_true(empty == "选择器不能为空", f"空选择器没拦：{empty}")
+    newline = api._selector_edit_error(browser_doc, "a\nb")
+    assert_true(newline is not None, "换行没拦")
+    fine = api._selector_edit_error(browser_doc, "#new")
+    assert_true(fine is None, f"合法选择器被拦：{fine}")
+    api._apply_selector_edit(browser_doc, "  #new  ")
+    assert_true(browser_doc["selector"]["css"] == "#new", f"{browser_doc}")
+
+    desktop_doc = {"kind": "desktop", "selector": {"locator": {"path": []}}}
+    assert_true(api._selector_edit_error(desktop_doc, "not json") is not None, "坏 JSON 没拦")
+    assert_true(api._selector_edit_error(desktop_doc, '{"x": 1}') is not None, "缺 locator 没拦")
+    good = '{"locator": {"path": [{"name": "确定"}]}}'
+    good_err = api._selector_edit_error(desktop_doc, good)
+    assert_true(good_err is None, f"合法桌面定位被拦：{good_err}")
+    api._apply_selector_edit(desktop_doc, good)
+    assert_true(desktop_doc["selector"]["locator"]["path"][0]["name"] == "确定", f"{desktop_doc}")
+
+    # 确认框的保存链：改过的定位必须写进入库文件
+    import tempfile
+
+    real_dir = api._elements_dir
+    with tempfile.TemporaryDirectory(prefix="rpa-m68-sel-") as raw:
+        folder = Path(raw) / "elements"
+        api._elements_dir = lambda path: folder
+        key = ("demo.json", "c7")
+        try:
+            entry = {
+                "path": "demo.json",
+                "name": None,
+                "suggestName": "元素1",
+                "nodeId": None,
+                "overwrite": False,
+            }
+            api._hold_captured(entry, {"kind": "browser", "selector": {"css": "#q"}})
+            api._CAPTURES[key] = {**entry, "controller": _FakeController("editing")}
+            bad = api._commit_from_dialog(api._CAPTURES[key], "搜索框", "  ")
+            assert_true(bad == "选择器不能为空", f"空定位没拦：{bad}")
+            ok = api._commit_from_dialog(api._CAPTURES[key], "搜索框", "  #better ")
+            assert_true(ok is None, f"合法定位被拦：{ok}")
+            written = json.loads((folder / "搜索框.json").read_text(encoding="utf-8"))
+            assert_true(written["selector"]["css"] == "#better", f"定位没入库：{written}")
+        finally:
+            api._elements_dir = real_dir
+            api._CAPTURES.pop(key, None)
+
+
 for name, fn in (
     ("命令类型决定唯一 target", case_resolve_command),
     ("缺命令时按能力真值收敛", case_resolve_capability),
@@ -687,6 +740,7 @@ for name, fn in (
     ("未知捕获会话有明确错误码", case_unknown_capture),
     ("轮询新三态：editing/committed/discarded", case_poll_edit_states),
     ("详情走桌面编辑框：改名/重名/取消", case_edit_element_desktop_dialog),
+    ("选择器编辑：校验、写回、入库", case_selector_edit_validation),
 ):
     check(name, fn)
 

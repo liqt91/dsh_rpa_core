@@ -47,7 +47,7 @@ class CaptureController:
         heal_host: Callable[[], dict[str, Any]] | None = None,
         edit_dialog_factory: Callable[[], Any] | None = None,
         edit_model: Callable[[dict[str, Any]], dict[str, str]] | None = None,
-        on_commit: Callable[[str], str | None] | None = None,
+        on_commit: Callable[[str, str], str | None] | None = None,
         on_discard: Callable[[], None] | None = None,
     ) -> None:
         self._factory = session_factory or build_hybrid_session
@@ -259,17 +259,18 @@ class CaptureController:
         dialog.show(
             title=model.get("title") or "捕获到元素",
             name=model.get("name") or "",
+            selector=model.get("selector") or "",
             meta=model.get("meta") or "",
             on_save=self._commit_from_dialog,
             on_close=self._close_edit,
         )
 
-    def _commit_from_dialog(self, name: str) -> str | None:
+    def _commit_from_dialog(self, name: str, selector: str) -> str | None:
         """编辑框「保存」的回调：宿主落盘，返回 None=成功关框 / 文案=错误留框。"""
         error: str | None = None
         if self._on_commit is not None:
             try:
-                error = self._on_commit(name)
+                error = self._on_commit(name, selector)
             except Exception as exc:  # noqa: BLE001 - 入库异常也要回显在框里
                 error = f"入库失败：{exc}"
         if error:

@@ -26,7 +26,7 @@ import win32con
 import win32gui
 
 from rpa_core.capture_kit import CaptureFloat, ElementEditDialog
-from rpa_core.capture_kit.edit_dialog import _ID_ERROR, _ID_META, _ID_NAME
+from rpa_core.capture_kit.edit_dialog import _ID_ERROR, _ID_META, _ID_NAME, _ID_SELECTOR
 
 
 def _wait_hwnd(dialog: ElementEditDialog, timeout: float = 3.0) -> int | None:
@@ -43,23 +43,45 @@ def _control_text(hwnd: int, cid: int) -> str:
     return win32gui.GetWindowText(control) if control else ""
 
 
+def _client_checks(hwnd: int, failed: list[str]) -> None:
+    """按钮必须**完整**落在客户区里（2026-11-13「保存按钮显示不全」的回归判据）。
+
+    早先把外框高当客户区高布局：WS_CAPTION 标题栏 + 边框吃掉 ~27px，
+    排在底部的按钮被裁掉一半——像素截图能看出来，但控件矩形断言更准、
+    还不依赖截图环境。
+    """
+    save_btn = win32gui.GetDlgItem(hwnd, win32con.IDOK)
+    cancel_btn = win32gui.GetDlgItem(hwnd, win32con.IDCANCEL)
+    _, _, client_w, client_h = win32gui.GetClientRect(hwnd)
+    for btn, label in ((save_btn, "保存"), (cancel_btn, "取消")):
+        left, top, right, bottom = win32gui.GetWindowRect(btn)
+        # 转成客户区坐标再比
+        cx1, cy1 = win32gui.ScreenToClient(hwnd, (left, top))
+        cx2, cy2 = win32gui.ScreenToClient(hwnd, (right, bottom))
+        if cx1 < 0 or cy1 < 0 or cx2 > client_w or cy2 > client_h:
+            failed.append(
+                f"{label}按钮越出客户区：({cx1},{cy1})-({cx2},{cy2}) vs 客户区 {client_w}x{client_h}"
+            )
+
+
 def _probe() -> list[str]:
     failed: list[str] = []
-    saved_names: list[str] = []
+    saved: list[tuple[str, str]] = []
     closes: list[bool] = []
 
     # 第一轮：错误回显留框 → 改正后保存成功
     attempts = iter(["这个名字被占了", None])  # 第一次保存报错，第二次放行
 
-    def on_save(name: str) -> str | None:
-        saved_names.append(name)
+    def on_save(name: str, selector: str) -> str | None:
+        saved.append((name, selector))
         return next(attempts)
 
     dialog = ElementEditDialog()
     dialog.show(
         title="捕获到元素",
         name="元素1",
-        meta="browser · #search-input\n命中 1 个 · 第 3 步",
+        selector="#search-input",
+        meta="browser\n命中 1 个 · 第 3 步",
         on_save=on_save,
         on_close=closes.append,
     )
@@ -67,8 +89,9 @@ def _probe() -> list[str]:
     if not hwnd:
         return ["编辑框没建起来"]
 
-    # 1. 控件齐 + 默认按钮
-    for cid, label in ((_ID_NAME, "名称 EDIT"), (_ID_META, "meta EDIT"), (_ID_ERROR, "错误行")):
+    # 1. 控件齐 + 默认按钮 + 按钮完整落在客户区（不裁）
+    for cid, label in ((_ID_NAME, "名称 EDIT"), (_ID_SELECTOR, "选择器 EDIT"),
+                       (_ID_META, "meta EDIT"), (_ID_ERROR, "错误行")):
         if not win32gui.GetDlgItem(hwnd, cid):
             failed.append(f"缺控件：{label}")
     save_btn = win32gui.GetDlgItem(hwnd, win32con.IDOK)
@@ -77,15 +100,19 @@ def _probe() -> list[str]:
     style = win32gui.GetWindowLong(save_btn, win32con.GWL_STYLE)
     if not (style & win32con.BS_DEFPUSHBUTTON):
         failed.append("保存不是默认按钮（Enter 会落空）")
+    _client_checks(hwnd, failed)
     if _control_text(hwnd, _ID_NAME) != "元素1":
         failed.append(f"建议名没预填：{_control_text(hwnd, _ID_NAME)!r}")
+    if _control_text(hwnd, _ID_SELECTOR) != "#search-input":
+        failed.append(f"选择器没预填：{_control_text(hwnd, _ID_SELECTOR)!r}")
 
-    # 2. 中文名保存 → 第一次返回错误 → 框留着、错误行红字、on_close 没动
+    # 2. 中文名 + 改过的选择器保存 → 第一次返回错误 → 框留着、错误行红字
     win32gui.SetWindowText(win32gui.GetDlgItem(hwnd, _ID_NAME), "搜索框")
+    win32gui.SetWindowText(win32gui.GetDlgItem(hwnd, _ID_SELECTOR), "#q")
     win32gui.SendMessage(save_btn, win32con.BM_CLICK, 0, 0)
     time.sleep(0.3)
-    if saved_names != ["搜索框"]:
-        failed.append(f"on_save 收到的名字不对：{saved_names}")
+    if saved != [("搜索框", "#q")]:
+        failed.append(f"on_save 收到的名字/选择器不对：{saved}")
     if not win32gui.IsWindow(hwnd):
         failed.append("保存报错后框被关了（错误被吞）")
     if _control_text(hwnd, _ID_ERROR) != "这个名字被占了":
@@ -100,15 +127,16 @@ def _probe() -> list[str]:
         time.sleep(0.05)
     if closes != [True]:
         failed.append(f"Enter 保存后 on_close 不对：{closes}")
-    if saved_names != ["搜索框", "搜索框"]:
-        failed.append(f"Enter 没触发第二次保存：{saved_names}")
+    if saved != [("搜索框", "#q"), ("搜索框", "#q")]:
+        failed.append(f"Enter 没触发第二次保存：{saved}")
     if dialog.last_error != "这个名字被占了":
         failed.append(f"last_error 没留痕：{dialog.last_error!r}")
 
     # 3. 空名不走 on_save，本地就拦下
     dialog2 = ElementEditDialog()
-    calls: list[str] = []
-    dialog2.show(title="t", name="", meta="", on_save=calls.append, on_close=closes.append)
+    calls: list[tuple[str, str]] = []
+    dialog2.show(title="t", name="", meta="", on_save=lambda n, s: calls.append((n, s)),
+                 on_close=closes.append)
     hwnd2 = _wait_hwnd(dialog2)
     if not hwnd2:
         failed.append("第二个编辑框没建起来")

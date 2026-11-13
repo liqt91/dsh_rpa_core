@@ -175,6 +175,28 @@ committed/详情优先桌面）、xhs 26 测（+editElement 注册）、负向 *
 `registry` 模块级共享 ⇒ 旧用例的处理器在新用例 click 上重放（N9 注入才暴露），
 改每用例一副新节点 + `#elemDialog` 起始 hidden 对齐真实 DOM。
 
+## 五点八、编辑框 v2：影刀式可选择器编辑 + 三处真机修补（2026-11-13 下午）
+
+维护者验收 v1 后三连反馈：①保存按钮显示不全 ②编辑框要有元素各信息的编辑功能
+（参考影刀）③资产/参数面板太挤。
+
+- **按钮被裁**：`_HEIGHT` 当外框高传给 CreateWindowEx，`WS_CAPTION` 标题栏 + 边框
+  吃掉 ~27px。修法：外框一律 `_win32.adjust_window_size`（ctypes 版
+  `AdjustWindowRectEx`——**`win32gui` 又没有这个成员**）从客户区反推；探针加
+  `_client_checks`（按钮矩形必须完整落在客户区内）作回归判据。
+- **影刀式编辑**：名称 + **定位选择器可编辑**（网页=css 一行、桌面=locator JSON
+  多行），只读区放元素信息。校验前置（`_selector_edit_error` 不改 doc，
+  非法不落半成品）；`_apply_selector_edit` 写回；确认链 `_commit_from_dialog`
+  与详情链 `_save` 都是「先校验定位 → 再动文件」。
+- **SetFocus 同步卡 1.5s**：本机前台序列化/辅助技术客户端让建窗期 `SetFocus`
+  阻塞 ⇒ 用户看到「窗半天不出来」。改成窗口可见后 `PostMessage` 给自己再设焦点
+  （`_WM_APP_FOCUS`），卡顿藏在可见之后。
+- 面板：资产行选择器独占一行允许折行（`word-break: break-all`，不再单行截断），
+  参数行类型列 96→108px、删除列留足。
+
+判据：contract 18/18（+选择器编辑校验/写回/入库）、_edit_probe 含客户区越界
+判据 PASS、pick_ui 20/20、负向 10/10、FULL GATE PASSED。
+
 ## 六、欠账
 
 - 真机点一遍「点按钮 → 桌面抓 → 弹框改名 → 确认入库」全链路（当前靠 DOM shim + 进程内探针）。

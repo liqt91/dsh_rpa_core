@@ -56,6 +56,34 @@ def pump_dialog(hwnd: int) -> None:
         user32.DispatchMessageW(ctypes.byref(msg))
 
 
+class _RECT(ctypes.Structure):
+    _fields_ = [
+        ("left", ctypes.c_long),
+        ("top", ctypes.c_long),
+        ("right", ctypes.c_long),
+        ("bottom", ctypes.c_long),
+    ]
+
+
+def adjust_window_size(
+    client_w: int, client_h: int, style: int, ex_style: int
+) -> tuple[int, int]:
+    """客户区尺寸 → 窗口外框尺寸（把标题栏/边框算回来）。
+
+    ★ ``win32gui`` **没有** ``AdjustWindowRectEx``（同 ``CreateFont``/``SetTimer``/
+    ``IsDialogMessage`` 的缺成员坑）。布局按客户区排布时，外框必须经它反推，
+    否则标题栏 + 边框会吃掉排在底部的控件（2026-11-13「保存按钮显示不全」）。
+    """
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
+    user32.AdjustWindowRectEx.argtypes = [
+        ctypes.c_void_p, ctypes.c_uint, ctypes.c_int, ctypes.c_uint,
+    ]
+    user32.AdjustWindowRectEx.restype = ctypes.c_int
+    rect = _RECT(0, 0, client_w, client_h)
+    user32.AdjustWindowRectEx(ctypes.byref(rect), style, False, ex_style)
+    return rect.right - rect.left, rect.bottom - rect.top
+
+
 # -- 实例分派 ------------------------------------------------------------------
 # 窗口类按类名在**进程内**只注册一次，WNDPROC 也就是第一个实例的方法。若直接把
 # ``self._wnd_proc`` 交给 RegisterClass，第二次开同类窗口时消息仍会落到**第一个**

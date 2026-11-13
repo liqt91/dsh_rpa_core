@@ -325,6 +325,15 @@ aside, section { min-height: 0; overflow: auto; background: var(--surface); }
 .elemRow.missing { background: var(--sunken); }
 .elemName { font: 14px/1.4 Consolas, "Microsoft YaHei", monospace; color: var(--text); font-weight: 500; }
 .elemMeta { flex: 1 1 120px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 14px; }
+/* 已有资产行：名字与按钮一行，选择器独占一行并允许折行——长 css 单行截断时
+   用户看不见后半截（2026-11-13 维护者反馈「元素资产显示太挤」） */
+.elemRow.asset .elemMeta {
+  flex: 1 1 100%; order: 5; white-space: normal; word-break: break-all;
+  font-size: 12.5px; line-height: 1.5; padding-left: 2px;
+}
+.elemRow.asset { align-items: flex-start; }
+.elemRow.asset .elemAct { flex: 0 0 auto; }
+.elemRow.asset .elemName { padding-top: 5px; }
 
 .elemCapture {
   min-height: 32px; min-width: 96px; padding: 0 14px; font-size: 14px;
@@ -554,7 +563,8 @@ select {
 .globalsHint { padding: 7px 12px; color: var(--muted); font-size: 12px; border-bottom: 1px dashed var(--border); }
 .globalsScroll { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 6px 12px 10px; }
 .globalsHead, .globalRow {
-  display: grid; grid-template-columns: minmax(110px, 1fr) 96px minmax(150px, 2fr) 28px;
+  /* 类型列要容得下「文本 + 下拉箭头」不挤字；删除列留足不贴边 */
+  display: grid; grid-template-columns: minmax(120px, 1.2fr) 108px minmax(140px, 2fr) 30px;
   gap: 8px; align-items: center; margin-bottom: 5px;
 }
 .globalsHead { color: var(--faint); font-size: 11.5px; padding: 2px 0; }

@@ -2149,14 +2149,46 @@ def _new_edit_dialog() -> ElementEditDialog | None:
     return ElementEditDialog()
 
 
+def _selector_edit_text(doc: dict[str, Any]) -> str:
+    """可编辑的定位文本：网页给 css，桌面给 locator JSON（供编辑框预填）。"""
+    selector = doc.get("selector") or {}
+    if doc.get("kind") == "desktop":
+        return json.dumps(selector, ensure_ascii=False, indent=2)
+    return str(selector.get("css") or "")
+
+
+def _selector_edit_error(doc: dict[str, Any], text: str) -> str | None:
+    """选择器编辑的校验（**不改 doc**）：返回错误文案或 None。"""
+    text = (text or "").strip()
+    if doc.get("kind") == "browser":
+        if not text:
+            return "选择器不能为空"
+        if "\n" in text or "\r" in text:
+            return "网页选择器只能是一行"
+        return None
+    try:
+        parsed = json.loads(text)
+    except ValueError as exc:
+        return f"定位不是合法 JSON：{exc}"
+    if not isinstance(parsed, dict) or not isinstance(parsed.get("locator"), dict):
+        return '桌面定位必须是含 "locator" 字段的 JSON'
+    return None
+
+
+def _apply_selector_edit(doc: dict[str, Any], text: str) -> None:
+    """把校验过的定位写回 doc（调用前必须先过 _selector_edit_error）。"""
+    text = (text or "").strip()
+    if doc.get("kind") == "browser":
+        doc.setdefault("selector", {})["css"] = text
+    else:
+        doc["selector"] = json.loads(text)
+
+
 def _capture_edit_model(entry: dict[str, Any]) -> dict[str, str]:
-    """捕获确认框的内容：建议名 + 只读 meta（多行 EDIT 只吃 CRLF 折行）。"""
+    """捕获确认框的内容：建议名 + 可编辑定位 + 只读 meta（多行 EDIT 只吃 CRLF 折行）。"""
     preview = entry.get("preview") or {}
     kind = preview.get("kind")
-    lines = [
-        ("网页元素" if kind == "browser" else "桌面元素")
-        + f" · {preview.get('selector') or ''}"
-    ]
+    lines = ["网页元素" if kind == "browser" else "桌面元素"]
     if preview.get("matches"):
         lines.append(f"命中 {preview['matches']} 个")
     node = preview.get("nodeId")
@@ -2164,12 +2196,21 @@ def _capture_edit_model(entry: dict[str, Any]) -> dict[str, str]:
     return {
         "title": "捕获到元素",
         "name": str(preview.get("name") or entry.get("suggestName") or ""),
+        "selector": _selector_edit_text(entry.get("captured") or {}),
         "meta": "\r\n".join(lines),
     }
 
 
-def _commit_from_dialog(entry: dict[str, Any], name: str) -> str | None:
-    """win32 确认框的保存回调：返回 None=成功关框 / 文案=错误回显留框。"""
+def _commit_from_dialog(entry: dict[str, Any], name: str, selector: str) -> str | None:
+    """win32 确认框的保存回调：返回 None=成功关框 / 文案=错误回显留框。
+
+    先校验定位再动盘：定位非法时用户留在框里改，盘上不落半成品。
+    """
+    captured = entry.get("captured") or {}
+    error = _selector_edit_error(captured, selector)
+    if error:
+        return error
+    _apply_selector_edit(captured, selector)
     res = _do_commit(entry, name)
     return None if res["ok"] else str(res["error"])
 
@@ -2953,16 +2994,25 @@ def edit_element(path: str, name: str) -> dict[str, Any]:
     }
     _CAPTURES[_capture_key(path, edit_id)] = entry
 
-    def _save(new_name: str) -> str | None:
+    def _save(new_name: str, new_selector: str) -> str | None:
+        # 先校验定位再动文件：名字改了、定位非法会留下半成品。
+        error = _selector_edit_error(doc, new_selector)
+        if error:
+            return error
         res = _do_rename(path, name, new_name)
         if not res["ok"]:
             return str(res["error"])
+        # 改名后回写的是打开时读出的那份 doc：名字与定位都要同步成最新
+        doc["name"] = res["name"]
+        _apply_selector_edit(doc, new_selector)
+        _write_element_doc(_elements_dir(path) / f"{res['name']}.json", doc)
         session.finish({"state": "committed", "name": res["name"]})
         return None
 
     dialog.show(
         title=f"元素详情 · {name}",
         name=name,
+        selector=_selector_edit_text(doc),
         meta=json.dumps(doc, ensure_ascii=False, indent=2),
         on_save=_save,
         on_close=lambda saved: saved or session.finish({"state": "discarded"}),
