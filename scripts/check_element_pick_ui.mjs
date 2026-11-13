@@ -77,6 +77,7 @@ check('文案表：必备键齐全（漏一个就会把 key 原名显示给用�
     'capture', 'fill', 'detail', 'remove', 'save', 'cancel',
     'confirmTitle', 'detailTitle', 'nameEmpty', 'saveFailed', 'none',
     'deleteBlockedTitle', 'deleteBlockedHint', 'deleteBlockedRef', 'deleteBlockedNote',
+    'refDetail', 'refNone',
   ]) {
     assert(typeof elemText[key] === 'string' && elemText[key], `缺 ${key}`)
   }
@@ -520,6 +521,65 @@ check('契约层：捕获期 Esc 接取消，编辑态不抢桌面编辑框', ()
   assert(/capturePhase\s*===\s*'pending'/.test(mainSrc), '没把 editing 态排除')
   // 行级断言：光「源码里出现过这个函数名」会被函数定义自己糊弄成恒绿。
   assert(/^\s*cancelCaptureByEsc\(\)\s*$/m.test(mainSrc), 'Esc 分支没调取消')
+})
+
+// ---------- 7. ref-only：引用得看得见、找得到、改得掉 ----------
+// 用户实测：删元素提示「第三步引用它」，可第三步 selector 显示「未设置」，
+// 面板里也没有任何一项指着这个资产 —— 引用在 elementRefs 里，界面却完全没渲染。
+check('契约层：引用清单带 nodeId/param/name，删除提示逐条摊开字段', () => {
+  const head = apiSrc.indexOf('def _all_element_refs(')
+  assert(head > 0, '找不到唯一权威的引用扫描器')
+  const region = apiSrc.slice(head, head + 1500)
+  // ★ 精确产出锚点：只判 region.includes('"param"') 会被下面的排序键
+  // `ref["param"]` 喂成恒绿——产出里删掉 param 字段它照样过。
+  for (const field of [
+    '"nodeId": str(node.get("id") or "")',
+    '"param": str(param)',
+    '"name": str(ref)',
+    '"command": str(node.get("command") or "")',
+  ]) {
+    assert(region.includes(field), `引用清单缺产出字段 ${field}，网页端说不清哪个参数`)
+  }
+  assert(/for key in _NESTED/.test(region), '引用扫描没递归真实 AST 分支')
+  assert(/def _element_references\(/.test(region), '删除护栏没复用同一个扫描器')
+
+  const detail = mainSrc.slice(
+    mainSrc.indexOf('async function openAssetDetail'),
+    mainSrc.indexOf('function showBrokenDetail'),
+  )
+  assert(/ref\.param/.test(detail) && /ref\.name/.test(detail), '详情没读结构化引用字段')
+  const link = mainSrc.slice(mainSrc.indexOf('function refLink'), mainSrc.indexOf('function showDeleteProblem'))
+  assert(/param: ref\.param/.test(link) && /name: ref\.name/.test(link), '删除提示没带字段/资产名')
+  assert(/cards\.find/.test(link) && /selectCard\(card\)/.test(link), '引用行没跳到对应节点')
+})
+
+check('契约层：被引用参数不假报未设置，解除引用随保存全量写回', () => {
+  const build = mainSrc.slice(
+    mainSrc.indexOf('function buildControl'),
+    mainSrc.indexOf('function groupFields'),
+  )
+  assert(/const refName = pendingUnbinds\.has\(field\.key\) \? null : nodeRefs\[field\.key\]/.test(build),
+    '参数表没读 elementRefs')
+  assert(/control\.type = 'hidden'/.test(build), '被引用字段没保留全量提交控件（会 INCOMPLETE_SUBMIT）')
+  assert(/已由元素引用/.test(build), '被引用字段没换成引用说明，还在假报「必填但当前未设置」')
+  const panel = mainSrc.slice(
+    mainSrc.indexOf('function buildRefPanel'),
+    mainSrc.indexOf('function renderForm'),
+  )
+  assert(/Object\.entries\(nodeRefs\)/.test(panel) && /pendingUnbinds\.add\(param\)/.test(panel),
+    '引用面板没给可撤销的解除入口')
+  const save = mainSrc.slice(
+    mainSrc.indexOf('async function saveParams'),
+    mainSrc.indexOf('function revertParams'),
+  )
+  assert(/element_refs:/.test(save), '保存没提交 element_refs')
+  assert(/!pendingUnbinds\.has\(key\)/.test(save), '解除项没从全量提交里去掉')
+  const apiSave = apiSrc.slice(
+    apiSrc.indexOf('def save_node_params'),
+    apiSrc.indexOf('@api_method("rpa.saveFlowInputs")'),
+  )
+  assert(/element_refs: dict\[str, str\] \| None = None/.test(apiSave), '服务端没接 element_refs')
+  assert(/node\.pop\("elementRefs", None\)/.test(apiSave), '清空引用没真的删掉键')
 })
 
 const failed = results.filter((r) => !r.ok)

@@ -56,6 +56,13 @@ UI_KIT_BOUNDARY = "契约层：删前引用检查在网页端，删除不借桌�
 UI_ESC = "契约层：捕获期 Esc 接取消，编辑态不抢桌面编辑框"
 PY_DELETE_GUARD = "删除被引用：回引用节点、不弹桌面浮窗"
 KIT_ESC_TIMER = "test_float_timer_drives_escape_poll"
+# M72：ref-only 引用可视化（用户报「删除提示第三步引用它，可 selector 是空的」）
+LIB_REF_LINK = "说明框里的引用能点：关框并跳到被引用节点"
+LIB_REF_PANEL = "参数表摊开 elementRefs：不假报未设置，解除随保存全量提交"
+UI_REF_STRUCT = "契约层：引用清单带 nodeId/param/name，删除提示逐条摊开字段"
+UI_REF_UNBIND = "契约层：被引用参数不假报未设置，解除引用随保存全量写回"
+PY_REFS = "引用清单结构化：nodeId+param+name+递归分支"
+PY_UNBIND = "解除引用随保存写回，不传则不动引用"
 
 
 def digest(path: Path) -> str:
@@ -184,7 +191,8 @@ CASES: list[dict[str, Any]] = [
         "N10", "删前不查引用（直接发删除，被引用的资产会被抹掉）", JS,
         "  const refs = (detail && detail.referencedBy) || []",
         "  const refs = []  // " + SENTINEL,
-        {"library": {LIB_REF_CHECK}},
+        # 两条独立用例都从「点删除 → 弹说明框」起步：refs 恒空时都红。
+        {"library": {LIB_REF_CHECK, LIB_REF_LINK}},
     ),
     case(
         "N11", "查到引用仍发删除 RPC（网页端检查形同虚设）", JS,
@@ -192,7 +200,7 @@ CASES: list[dict[str, Any]] = [
         "  if (false) {  // " + SENTINEL
         + "\n    showDeleteProblem(name, refs)\n    return\n  }",
         # 静态判据钉了源码里的 refs.length 拦截；换成恒假后它也该红。
-        {"pick_ui": {UI_KIT_BOUNDARY}, "library": {LIB_REF_CHECK}},
+        {"pick_ui": {UI_KIT_BOUNDARY}, "library": {LIB_REF_CHECK, LIB_REF_LINK}},
     ),
     case(
         "N12", "删除失败又弹桌面浮窗（那个关不掉的框回来了）", API,
@@ -234,9 +242,56 @@ CASES: list[dict[str, Any]] = [
         "            return 0\n",
         {"unit": {KIT_ESC_TIMER}},
     ),
+    # ---- M72：引用可视化——判据必须能抓住「又退回看不见的引用」 -------------
+    case(
+        "N17", "参数表不读 elementRefs（被引用字段又假报「必填但当前未设置」）", JS,
+        "  const refName = pendingUnbinds.has(field.key) ? null : nodeRefs[field.key]\n",
+        "  const refName = null  // " + SENTINEL + "\n",
+        {"pick_ui": {UI_REF_UNBIND}, "library": {LIB_REF_PANEL}},
+    ),
+    case(
+        "N18", "引用清单丢了 param（网页端又说不清是哪个参数引用）", API,
+        '                    "nodeId": str(node.get("id") or ""),\n'
+        '                    "param": str(param),\n',
+        '                    "nodeId": str(node.get("id") or ""),\n'
+        "                    # " + SENTINEL + " 丢了 param\n",
+        # 连带红有因果：_all_element_refs 的排序键 ref["param"] 会 KeyError，
+        # 所有调引用扫描的 case 都跟着红，不是判据误伤。
+        {
+            "pick_ui": {UI_REF_STRUCT},
+            "contract": {PY_REFS, PY_DELETE_GUARD, PY_UNBIND},
+        },
+    ),
+    case(
+        "N19", "保存参数不写回 element_refs（点解除后引用还在，永远删不掉）", API,
+        "    if element_refs is not None:\n",
+        "    if False:  # " + SENTINEL + "\n",
+        {"contract": {PY_UNBIND}},
+    ),
+    case(
+        "N20", "删除提示不显示字段名（又只剩「第 N 步」）", JS,
+        "      param: ref.param,\n",
+        "      param: '',  // " + SENTINEL + "\n",
+        {"pick_ui": {UI_REF_STRUCT}, "library": {LIB_REF_CHECK}},
+    ),
 ]
 
 # 元验证：同一处注入 + 把判据本身放宽 ⇒ 必须变绿（证明这条红是那条判据报的）
+META2 = case(
+    "M2", "注入 N19 的同时不再跑「解除引用写回」用例 ⇒ 应变绿", API,
+    "    if element_refs is not None:\n",
+    "    if False:  # " + SENTINEL + "\n",
+    {"pick_ui": set(), "library": set(), "contract": set(), "unit": set()},
+    extra=(
+        (
+            CONTRACT,
+            '    ("解除引用随保存写回，不传则不动引用", case_unbind_ref_writes_back),\n',
+            "    # 放宽：不再跑这条 case\n",
+        ),
+    ),
+)
+
+
 META = case(
     "M1", "注入 N1 的同时放宽「不预填名字」判据 ⇒ 应变绿", JS,
     "el.elemCapture?.addEventListener('click', () => startCapture(null))",
@@ -294,7 +349,7 @@ def main() -> int:
     print("基线:", {k: v[:8] for k, v in before.items()})
 
     failures = 0
-    for item in [*CASES, META]:
+    for item in [*CASES, META, META2]:
         problems = run_case(item)
         if problems:
             failures += 1
@@ -315,7 +370,7 @@ def main() -> int:
         failures += 1
         print(f"FAIL {note}")
     print(f"NEGATIVE VERIFICATION {'FAILED' if failures else 'PASSED'} "
-          f"({len(CASES) + 1 - failures}/{len(CASES) + 1})")
+          f"({len(CASES) + 2 - failures}/{len(CASES) + 2})")
     return 1 if failures else 0
 
 

@@ -81,7 +81,7 @@ FLOW = {
             {
                 "type": "if",
                 "id": "ifNode",
-                "condition": "true",
+                "condition": {"op": "truthy", "left": "${inputs.keyword}"},
                 "then": [
                     {
                         "type": "action",
@@ -751,6 +751,86 @@ def case_selector_edit_validation() -> None:
             api._CAPTURES.pop(key, None)
 
 
+def case_all_refs_are_structured() -> None:
+    """引用清单必须带 param/name：只有 nodeId 时网页端说不清引用在哪个参数上。
+
+    ref-only 下被引用参数不在 with 里，界面显示「未设置」是正常形态；删除提示
+    只给「第 N 步」会指到一条用户看不见的引用，正是本次报的问题。
+    """
+    import tempfile
+
+    real_flow = api._flow_path
+    with tempfile.TemporaryDirectory(prefix="rpa-m72-refs-") as raw:
+        _, flow = _fixture_flow(raw)
+        api._flow_path = lambda path: flow
+        try:
+            all_refs = api._all_element_refs("probe.json")
+            assert_true(len(all_refs) == 2, f"引用条数不对：{all_refs}")
+            assert_true(
+                {r["nodeId"] for r in all_refs} == {"openHome", "inThen"},
+                f"没递归到 if.then：{all_refs}",
+            )
+            for ref in all_refs:
+                assert_true(
+                    set(ref) == {"nodeId", "param", "name", "command"},
+                    f"引用字段不全：{ref}",
+                )
+                assert_true(ref["param"] == "selector" and ref["name"] == "userField", f"{ref}")
+            hits = api._element_references("probe.json", "userField")
+            assert_true(len(hits) == 2, f"删除护栏漏了引用：{hits}")
+            assert_true(
+                api._element_references("probe.json", "ghost") == [],
+                "幽灵资产被判成有引用",
+            )
+        finally:
+            api._flow_path = real_flow
+
+
+def case_unbind_ref_writes_back() -> None:
+    """网页端「解除引用 → 保存」真落盘；不传 element_refs 不许动引用。"""
+    import tempfile
+
+    class _Manifest:
+        input_schema = {
+            "properties": {"selector": {"type": "string"}, "sessionId": {"type": "string"}}
+        }
+
+    real = (api._flow_path, api._compile, api.open_flow, api._catalog_snapshot)
+    with tempfile.TemporaryDirectory(prefix="rpa-m72-unbind-") as raw:
+        _, flow = _fixture_flow(raw)
+        api._flow_path = lambda path: flow
+        api._compile = lambda doc: {
+            "ok": True, "digest": "x", "capabilities": [], "workflowId": "w",
+        }
+        api.open_flow = lambda path: {"cards": [], "sha": "x"}
+        api._catalog_snapshot = lambda: {"browser.click": _Manifest()}
+        params = {"selector": "", "sessionId": ""}
+        try:
+            kept = api.save_node_params("probe.json", "openHome", params)
+            assert_true(kept["ok"] is True, f"不传 element_refs 却保存失败：{kept}")
+            assert_true(
+                len(api._element_references("probe.json", "userField")) == 2,
+                "没传 element_refs 却把引用改了",
+            )
+            unbound = api.save_node_params("probe.json", "openHome", params, element_refs={})
+            assert_true(unbound["ok"] is True, f"解除引用写回失败：{unbound}")
+            doc = json.loads(flow.read_text(encoding="utf-8"))
+            assert_true(
+                "elementRefs" not in doc["root"]["children"][0],
+                f"element_refs={{}} 没把键删掉：{doc['root']['children'][0]}",
+            )
+            assert_true(
+                doc["root"]["children"][1]["then"][0]["elementRefs"]["selector"] == "userField",
+                "解除一个节点把别的节点引用也清了",
+            )
+            assert_true(
+                len(api._element_references("probe.json", "userField")) == 1,
+                "解除后删除护栏没跟着少一条",
+            )
+        finally:
+            (api._flow_path, api._compile, api.open_flow, api._catalog_snapshot) = real
+
+
 for name, fn in (
     ("命令类型决定唯一 target", case_resolve_command),
     ("缺命令时按能力真值收敛", case_resolve_capability),
@@ -770,6 +850,8 @@ for name, fn in (
     ("轮询新三态：editing/committed/discarded", case_poll_edit_states),
     ("详情走桌面编辑框：改名/重名/取消", case_edit_element_desktop_dialog),
     ("选择器编辑：校验、写回、入库", case_selector_edit_validation),
+    ("引用清单结构化：nodeId+param+name+递归分支", case_all_refs_are_structured),
+    ("解除引用随保存写回，不传则不动引用", case_unbind_ref_writes_back),
 ):
     check(name, fn)
 

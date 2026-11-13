@@ -81,6 +81,7 @@ class El {
   }
   querySelector() { return null }
   querySelectorAll() { return [] }
+  contains() { return false }
   focus() {}
   select() {}
   scrollIntoView() {}
@@ -106,11 +107,16 @@ function nodeById(id) {
 const TAB_KEYS = [...html.matchAll(/data-tab="([a-z]+)"/g)].map((m) => m[1])
 const PANEL_KEYS = [...html.matchAll(/data-panel="([a-z]+)"/g)].map((m) => m[1])
 
+// ★ 与服务端 _all_element_refs 同形状：nodeId 不够，param/name 才能让用户找到引用。
+const ref = (nodeId, param = 'selector', name = 'searchBox') => ({
+  nodeId, param, name, command: 'browser.click',
+})
+
 const state = {
   missing: [],
   elements: [{ name: 'searchBox', kind: 'browser', selector: '#q' }],
   detailResponse: {
-    ok: true, name: 'searchBox', selectorText: '#q', referencedBy: ['openHome'],
+    ok: true, name: 'searchBox', selectorText: '#q', referencedBy: [ref('openHome')],
     document: { kind: 'browser', selector: { css: '#q' }, verifyCount: 2, capturedAt: '2026-11-12' },
   },
   deleteResponse: { ok: true, deleted: true, remaining: [] },
@@ -154,9 +160,32 @@ function makeContext() {
     'rpa.saveElement': { ok: true, name: 'searchBox' },
     // 默认按「桌面编辑框不可用」处理：详情走页面兜底（非 Windows 路径）
     'rpa.editElement': { ok: false, code: 'EDIT_DIALOG_UNAVAILABLE' },
+    // 第三步节点：selector 只在 elementRefs 里，with 里没有 —— 用户报的正是这条形态
+    'rpa.nodeDetail': () => ({
+      ok: true,
+      node: {
+        id: 'openHome', type: 'action', command: 'browser.click', with: {},
+        elementRefs: { selector: 'searchBox' },
+      },
+      fields: [
+        { key: 'selector', label: 'selector', type: 'string', required: true,
+          set: false, valueText: '', enum: [], declared: true },
+        { key: 'text', label: 'text', type: 'string', required: false,
+          set: true, valueText: 'hi', enum: [], declared: true },
+      ],
+      groups: [],
+    }),
+    'rpa.saveNodeParams': () => ({
+      ok: true, saved: true, changed: true, bytes: [10, 8], sha: 'abc123',
+      added: [], removed: [], warnings: [],
+      compile: { ok: true, digest: 'abc', capabilities: [], workflowId: 'probe' },
+      flow: { cards: [] },
+    }),
   }
   const sandbox = {
     document: doc,
+    CSS: { escape: (s) => String(s) },
+    window: { confirm: () => true },
     ppx: {
       call: async (name, args) => {
         calls.push({ name, args })
@@ -176,9 +205,12 @@ function makeContext() {
   vm.runInContext(mainSrc.replace(/^import .*$/gm, ''), ctx, { filename: 'main.js' })
   vm.runInContext(
     `globalThis.__api = { refreshElements, renderElementsPanel, openAssetDetail, deleteAsset,
+       selectCard, saveParams, renderForm,
        setState: (missing, elements) => { pickMissing = missing; pickElements = elements; renderElementsPanel() },
+       setCards: (list) => { cards = list },
        setCapture: (id, phase) => { captureSession = id ? { id } : null; capturePhase = phase },
-       getCapture: () => ({ session: captureSession, phase: capturePhase }) }
+       getCapture: () => ({ session: captureSession, phase: capturePhase }),
+       getRefState: () => ({ refs: { ...nodeRefs }, pending: [...pendingUnbinds] }) }
      currentPath = 'flows/probe.json'`,
     ctx,
   )
@@ -260,7 +292,7 @@ await checkAsync('点详情取完整描述符并弹编辑框（不是行内展�
 })
 
 await checkAsync('删除成功才刷新，失败保留行', async () => {
-  state.deleteResponse = { ok: false, code: 'ELEMENT_IN_USE', error: '还被引用着', referencedBy: ['openHome'] }
+  state.deleteResponse = { ok: false, code: 'ELEMENT_IN_USE', error: '还被引用着', referencedBy: [ref('openHome')] }
   // 删前检查放行（无引用），这段测的是「RPC 也挡下时不能把行抹掉」的兜底。
   state.detailResponse = { ok: true, referencedBy: [] }
   const run = makeContext()
@@ -283,11 +315,15 @@ await checkAsync('删除成功才刷新，失败保留行', async () => {
 })
 
 await checkAsync('删前检查引用：查出引用就不发删除，说明框能退出', async () => {
-  state.detailResponse = { ok: true, referencedBy: ['openHome', 'clickFilter'] }
+  state.detailResponse = {
+    ok: true,
+    referencedBy: [ref('openHome', 'selector'), ref('clickFilter', 'target')],
+  }
   const run = makeContext()
   const dialog = nodeById('elemDialog')
   dialog.hidden = true // registry 跨用例共享，先对齐真实 DOM 的初始态
   run.api.setState([], [{ name: 'searchBox', kind: 'browser', selector: '#q' }])
+  run.api.setCards([{ id: 'openHome', kind: 'action', label: 'browser.click', no: 3 }])
   const row = walk(nodeById('elemBody')).find((n) => hasClass(n, 'asset'))
   const del = walk(row).find((n) => hasClass(n, 'elemAct') && n.textContent === '删除')
   const before = run.calls.length
@@ -297,14 +333,69 @@ await checkAsync('删前检查引用：查出引用就不发删除，说明框�
   assert(after.includes('rpa.elementDetail'), '删前没查引用')
   assert(!after.includes('rpa.deleteElement'), '查到引用还发了删除 RPC')
   assert(dialog.hidden === false, '网页端没给说明')
-  const lines = walk(nodeById('elemDialogMeta')).map((n) => n.textContent).join('|')
-  assert(lines.includes('2 个节点'), `没写清几处引用：${lines}`)
+  const meta = nodeById('elemDialogMeta')
+  const lines = walk(meta).map((n) => n.textContent).join('|')
+  assert(lines.includes('2 处引用'), `没写清几处引用：${lines}`)
+  // ★ 用户这次卡住的根因：只说「第 N 步」不说是哪个参数，参数表里 selector
+  // 又显示「未设置」，等于指向一个看不见的引用。字段名/资产名必须摊开。
+  assert(lines.includes('selector') && lines.includes('target'), `没写清引用字段：${lines}`)
+  assert(lines.includes('searchBox'), `没写清引用的资产：${lines}`)
+  const links = walk(meta).filter((n) => hasClass(n, 'refLink'))
+  assert(links.length === 2, `引用行不能点去处理：${links.length}`)
   // 用户抱怨的「提示框无法退出」：Esc 必须能收掉，且不误伤清单
   for (const fn of run.keydown) fn({ key: 'Escape', preventDefault() {} })
   await flush()
   assert(dialog.hidden === true, '说明框按 Esc 关不掉')
   assert(walk(nodeById('elemBody')).some((n) => hasClass(n, 'asset')), '失败却把行抹了')
   state.detailResponse = { ok: true, referencedBy: [] }
+})
+
+await checkAsync('说明框里的引用能点：关框并跳到被引用节点', async () => {
+  state.detailResponse = { ok: true, referencedBy: [ref('openHome', 'selector')] }
+  const run = makeContext()
+  const dialog = nodeById('elemDialog')
+  dialog.hidden = true
+  run.api.setState([], [{ name: 'searchBox', kind: 'browser', selector: '#q' }])
+  run.api.setCards([{ id: 'openHome', kind: 'action', label: 'browser.click', no: 3 }])
+  const row = walk(nodeById('elemBody')).find((n) => hasClass(n, 'asset'))
+  await walk(row).find((n) => hasClass(n, 'elemAct') && n.textContent === '删除').click()
+  await flush()
+  const link = walk(nodeById('elemDialogMeta')).find((n) => hasClass(n, 'refLink'))
+  assert(link, '没有可点的引用行')
+  await link.click()
+  await flush()
+  assert(dialog.hidden === true, '点引用没关掉说明框')
+  assert(
+    run.calls.some((c) => c.name === 'rpa.nodeDetail' && c.args.node_id === 'openHome'),
+    '点引用没跳到对应节点',
+  )
+  state.detailResponse = { ok: true, referencedBy: [] }
+})
+
+await checkAsync('参数表摊开 elementRefs：不假报未设置，解除随保存全量提交', async () => {
+  const run = makeContext()
+  const card = { id: 'openHome', kind: 'action', label: 'browser.click', no: 3 }
+  await run.api.selectCard(card)
+  const form = nodeById('paramForm')
+  const panel = walk(form).find((n) => hasClass(n, 'refPanel'))
+  assert(panel, '参数表没有元素引用面板')
+  const panelText = walk(panel).map((n) => n.textContent).join('|')
+  assert(panelText.includes('selector') && panelText.includes('searchBox'), `引用没摊开：${panelText}`)
+  const formText = walk(form).map((n) => n.textContent).join('|')
+  assert(formText.includes('已引用元素'), '被引用字段没显示引用值')
+  assert(!formText.includes('必填但当前未设置'), '被引用字段还在假报「必填但当前未设置」')
+  assert(walk(form).some((n) => hasClass(n, 'refBound')), '引用字段没换成只读形态')
+  const unbind = walk(panel).find((n) => hasClass(n, 'refUnbind'))
+  await unbind.click()
+  assert(run.api.getRefState().pending.includes('selector'), '点解除没进待提交集合')
+  assert(!run.calls.some((c) => c.name === 'rpa.saveNodeParams'), '点解除就直接写盘了')
+  await run.api.saveParams()
+  const saved = run.calls.filter((c) => c.name === 'rpa.saveNodeParams').pop()
+  assert(saved, '保存没发参数 RPC')
+  assert(
+    JSON.stringify(saved.args.element_refs) === '{}',
+    `解除没进全量提交：${JSON.stringify(saved.args)}`,
+  )
 })
 
 await checkAsync('捕获中按 Esc 取消会话，桌面编辑态不抢', async () => {

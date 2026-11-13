@@ -73,7 +73,8 @@ def flow(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[str, Path, An
             "with": {}, "elementRefs": {"selector": "in_use"},
         },
         {
-            "type": "if", "id": "ifNode", "condition": "true",
+            "type": "if", "id": "ifNode",
+            "condition": {"op": "truthy", "left": "${inputs.keyword}"},
             "then": [{
                 "type": "action", "id": "inThen", "command": "browser.click",
                 "with": {}, "elementRefs": {"selector": "branch_ref"},
@@ -84,7 +85,7 @@ def flow(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[str, Path, An
             }],
         },
         {
-            "type": "try", "id": "tryNode", "errorVar": "err", "children": [],
+            "type": "try", "id": "tryNode", "children": [],
             "catch": [{
                 "type": "action", "id": "inCatch", "command": "desktop.click",
                 "with": {}, "elementRefs": {"selector": "branch_ref"},
@@ -126,7 +127,22 @@ def test_element_detail_walks_all_real_ast_branches(flow: tuple[str, Path, Any])
     path, target, _ = flow
     _put_element(target, "branch_ref", "#branch")
     detail = _call("rpa.elementDetail", path=path, name="branch_ref")
-    assert detail["referencedBy"] == ["inCatch", "inElse", "inThen"], detail["referencedBy"]
+    # 结构化引用：只给节点 id 的话，网页端说不清「哪个参数」引用了它——
+    # 而 ref-only 下那个参数在 with 里根本不存在，用户会以为提示是假的。
+    assert detail["referencedBy"] == [
+        {
+            "nodeId": "inCatch", "param": "selector",
+            "name": "branch_ref", "command": "desktop.click",
+        },
+        {
+            "nodeId": "inElse", "param": "selector",
+            "name": "branch_ref", "command": "browser.click",
+        },
+        {
+            "nodeId": "inThen", "param": "selector",
+            "name": "branch_ref", "command": "browser.click",
+        },
+    ], detail["referencedBy"]
 
 
 @pytest.mark.parametrize("name", ["../evil", "a/b", "a.b", "", "  ", "con"])
@@ -183,8 +199,35 @@ def test_delete_refuses_referenced_asset_without_unlink(flow: tuple[str, Path, A
     _put_element(target, "branch_ref", "#branch")
     denied = _call("rpa.deleteElement", path=path, name="branch_ref")
     assert denied["ok"] is False and denied["code"] == "ELEMENT_IN_USE"
-    assert denied["referencedBy"] == ["inCatch", "inElse", "inThen"]
+    assert [(r["nodeId"], r["param"], r["name"]) for r in denied["referencedBy"]] == [
+        ("inCatch", "selector", "branch_ref"),
+        ("inElse", "selector", "branch_ref"),
+        ("inThen", "selector", "branch_ref"),
+    ], denied["referencedBy"]
     assert (target.parent / "elements" / "branch_ref.json").is_file()
+
+
+def test_unbind_ref_on_save_then_delete(flow: tuple[str, Path, Any]) -> None:
+    """网页端点「解除引用 → 保存」后，引用真落盘消失，元素才删得掉。"""
+    path, target, _ = flow
+    _put_element(target, "in_use", "#used")
+    detail = _call("rpa.nodeDetail", path=path, node_id="inRoot")
+    params = {f["key"]: f["valueText"] for f in detail["fields"]}
+    assert "selector" in params and params["selector"] == "", params
+
+    # 不传 element_refs：原有引用一个都不许被动到
+    kept = _call("rpa.saveNodeParams", path=path, node_id="inRoot", params=params)
+    assert kept["ok"] is True, kept
+    assert _call("rpa.elementDetail", path=path, name="in_use")["referencedBy"]
+
+    unbound = _call(
+        "rpa.saveNodeParams", path=path, node_id="inRoot", params=params, element_refs={},
+    )
+    assert unbound["ok"] is True, unbound
+    doc = json.loads(target.read_text(encoding="utf-8"))
+    assert "elementRefs" not in doc["root"]["children"][0], doc["root"]["children"][0]
+    assert _call("rpa.elementDetail", path=path, name="in_use")["referencedBy"] == []
+    assert _call("rpa.deleteElement", path=path, name="in_use")["deleted"] is True
 
 
 def test_delete_removes_unreferenced_asset(flow: tuple[str, Path, Any]) -> None:

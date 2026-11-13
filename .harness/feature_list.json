@@ -484,7 +484,7 @@
     },
     {
       "id": "xhs-element-capture-single-button",
-      "title": "Editor capture as one button; capture notices in float, delete checks in web; confirm-gated, Chinese names",
+      "title": "One-button capture; float for capture, web for delete; Chinese names; elementRefs visible/unbindable",
       "passes": true
     }
   ]

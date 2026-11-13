@@ -246,6 +246,33 @@ aside, section { min-height: 0; overflow: auto; background: var(--surface); }
 }
 .paramGroup[open] > summary { margin-bottom: 10px; }
 
+/* ref-only：引用面板是 elementRefs 的唯一可见入口，排在参数表之前 */
+.refPanel {
+  margin-bottom: 12px; padding: 8px;
+  border: 1px solid var(--border); border-radius: 6px; background: var(--sunken);
+}
+.refPanelTitle { margin-bottom: 6px; color: var(--muted); font-size: 11.5px; }
+.refRow { display: flex; align-items: center; gap: 5px; min-width: 0; margin-top: 4px; }
+.refParam, .refName {
+  font: 11.5px/1.4 Consolas, "Microsoft YaHei", monospace;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.refParam { color: var(--muted); }
+.refName { color: var(--info); }
+.refArrow { color: var(--faint); }
+.refUnbind {
+  flex: 0 0 auto; margin-left: auto; padding: 2px 7px;
+  border: 1px solid var(--border); border-radius: 5px;
+  background: var(--surface); color: var(--muted); font-size: 11px; cursor: pointer;
+}
+.refUnbind:hover { border-color: var(--info); color: var(--info); }
+.refPanelHint { margin-top: 7px; color: var(--faint); font-size: 11px; line-height: 1.45; }
+.refBoundValue {
+  padding: 4px 7px; border: 1px dashed var(--info); border-radius: 6px;
+  color: var(--info); font-size: 12px;
+}
+.field.refBound .key { color: var(--muted); }
+
 .field { margin-bottom: 10px; }
 .field.unset .key { color: var(--faint); }
 .field .labelRow {
@@ -383,6 +410,12 @@ button:focus-visible, summary:focus-visible, input:focus-visible {
 }
 .modalMeta { display: flex; flex-direction: column; gap: 4px; min-height: 20px; color: var(--muted); font-size: 14px; }
 .modalLine { min-width: 0; overflow-wrap: anywhere; }
+button.modalLine.refLink {
+  text-align: left; font: inherit; font-size: 13px; padding: 6px 8px;
+  border: 1px dashed var(--border-strong); border-radius: 6px;
+  background: var(--sunken); color: var(--info); cursor: pointer;
+}
+button.modalLine.refLink:hover { border-color: var(--info); }
 .modalNote { min-height: 20px; font-size: 14px; color: var(--muted); }
 .modalNote.error { color: var(--danger); }
 .modalBar { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 14px; border-top: 1px solid var(--border); }

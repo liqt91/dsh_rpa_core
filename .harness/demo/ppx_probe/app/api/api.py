@@ -798,7 +798,9 @@ def _compile(document: dict[str, Any]) -> dict[str, Any]:
 
 
 @api_method("rpa.saveNodeParams")
-def save_node_params(path: str, node_id: str, params: dict[str, str]) -> dict[str, Any]:
+def save_node_params(
+    path: str, node_id: str, params: dict[str, str], element_refs: dict[str, str] | None = None
+) -> dict[str, Any]:
     """把参数表单的**全量**内容写成节点的 `with`。
 
     语义与 Qt `app.py` 的「应用参数」一致：`holder.raw["with"] = dict(values)` ——
@@ -809,8 +811,13 @@ def save_node_params(path: str, node_id: str, params: dict[str, str]) -> dict[st
     提交键集合不覆盖「声明集合 ∪ 原有集合」时直接拒绝（`INCOMPLETE_SUBMIT`），
     宁可报错也不猜。
 
-    顺序：SHA 闸门 → 定位 → 完整性校验 → 逐键转换 → 全量模型复校 → 编码比对 →
-    落盘 → 编译。任一步不过就**不写盘**。
+    `element_refs` 同理是**全量**（网页端「解除引用」的落点）：传 None 表示不碰
+    `elementRefs`；传空 dict 表示清空该节点的全部引用。ref-only 契约下被引用字段
+    不在 `with` 里，解除后若没补上值，编译会如实报缺参数——这是该有的结果，不替
+    用户猜一个选择器。
+
+    顺序：SHA 闸门 → 定位 → 完整性校验 → 逐键转换 → 引用写回 → 全量模型复校 →
+    编码比对 → 落盘 → 编译。任一步不过就**不写盘**。
     """
     started = time.perf_counter()
     target = _flow_path(path)
@@ -917,6 +924,25 @@ def save_node_params(path: str, node_id: str, params: dict[str, str]) -> dict[st
         }
 
     node["with"] = {**reserved, **{k: with_map[k] for k in hidden_keys}, **next_with}
+    if element_refs is not None:
+        cleaned: dict[str, str] = {}
+        for key, ref in dict(element_refs).items():
+            key, ref = str(key), str(ref).strip()
+            if not ref:
+                continue
+            if not _valid_element_name(ref):
+                return {
+                    "ok": False,
+                    "code": "INVALID_VALUE",
+                    "error": f"元素引用名不合法，未写盘：{key} → {ref}",
+                    "saved": False,
+                    "ms": round((time.perf_counter() - started) * 1000, 1),
+                }
+            cleaned[key] = ref
+        if cleaned:
+            node["elementRefs"] = cleaned
+        else:
+            node.pop("elementRefs", None)
     added = sorted(set(next_with) - set(with_map))
     removed = sorted(set(with_map) - set(next_with))
     try:
@@ -3051,26 +3077,43 @@ def edit_element(path: str, name: str) -> dict[str, Any]:
 # 删除反过来必须挡住仍被引用的资产，否则流程会在运行期硬失败 ELEMENT_REF_MISSING。
 
 
-def _element_references(path: str, name: str) -> list[str]:
-    """扫工作流全部 elementRefs，返回引用了 name 的节点 id（删除护栏用）。
+def _all_element_refs(path: str) -> list[dict[str, Any]]:
+    """扫工作流全部 elementRefs —— 引用检查的**唯一权威**（护栏与网页端共用）。
 
-    按 _NESTED 递归真实 AST 分支（then/else/catch/children），不能只扫 children——
-    那会漏掉控制流里的引用，删完等运行才炸。
+    ref-only 契约下被引用参数**不进 with**：节点详情里 selector 显示「未设置」是
+    正常的，真值只在这里。所以删除提示必须把 nodeId + param + name 一起交出去，
+    只给「第 N 步」用户找不到引用在哪，也改不掉。
+
+    按 _NESTED 递归真实 AST 分支（then/else/catch/children），不能只扫 children。
+    逐条返回、不去重：同一节点两个字段引用同一资产就得让用户看到两处，否则
+    「改掉一处仍删不掉」又变成第二条看不见的引用。
     """
     data, _ = _read_document(_flow_path(path))
-    hits: set[str] = set()
+    hits: list[dict[str, Any]] = []
 
     def walk(node: Any) -> None:
         if not isinstance(node, dict):
             return
-        if any(ref == name for ref in (node.get("elementRefs") or {}).values()) and node.get("id"):
-            hits.add(str(node["id"]))
+        for param, ref in (node.get("elementRefs") or {}).items():
+            hits.append(
+                {
+                    "nodeId": str(node.get("id") or ""),
+                    "param": str(param),
+                    "name": str(ref),
+                    "command": str(node.get("command") or ""),
+                }
+            )
         for key in _NESTED:
             for child in node.get(key) or []:
                 walk(child)
 
     walk(data.get("root"))
-    return sorted(hits)
+    return sorted(hits, key=lambda ref: (ref["nodeId"], ref["param"]))
+
+
+def _element_references(path: str, name: str) -> list[dict[str, Any]]:
+    """删除护栏：某资产被哪些节点的哪些字段引用（结构化，网页端据此呈现）。"""
+    return [ref for ref in _all_element_refs(path) if ref["name"] == name]
 
 
 @api_method("rpa.elementDetail")

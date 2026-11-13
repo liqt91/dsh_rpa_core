@@ -322,8 +322,11 @@ let selected = null // 当前选中的卡片
 let fields = [] // 该节点的可编辑字段（服务端算的，含未设置的声明字段）
 let groups = [] // 分组定义（顺序 + 折叠），服务端给
 let panelMode = 'param' // param | struct —— 决定保存走哪个 RPC
-let baseline = {} // 首次渲染时的原文，用于判断是否改动 / 撤销
 let formError = null
+// ★ ref-only：被引用参数故意不进 with，参数表里就是「未设置」。真值只在
+// node.elementRefs 里，不渲染出来用户就会以为删除提示是假的、也找不到地方改。
+let nodeRefs = {} // 当前节点的 elementRefs 全量快照（param → 资产名）
+let pendingUnbinds = new Set() // 待随「保存参数」一起提交的解除项
 // 待补元素所在的节点 id 集合：AI 生成的工作流把交互元素写成 elementRefs 占位，
 // 这些节点在卡片上标「⚠ 待补」，并在元素面板里给出捕获入口。
 let missingNodeIds = new Set()
@@ -657,6 +660,8 @@ function currentValues() {
 }
 
 function isDirty() {
+  // 「解除引用」不落在任何控件里，得单独算脏，否则保存按钮是灰的、解除白点了。
+  if (pendingUnbinds.size) return true
   if (!fields.length) return false
   const values = currentValues()
   return fields.some((field) => (values[field.key] ?? '') !== field.valueText)
@@ -712,8 +717,18 @@ function buildControl(field) {
   if (field.required) row.append(mk('span', 'req', '必填'))
   wrap.append(row)
 
+  // ★ 被引用参数本来就不在 with 里：给一个空输入框 +「必填但当前未设置」是假报警。
+  // 换成只读的引用说明，保留隐藏 input 让 currentValues() 仍能全量提交（漏键会被
+  // 服务端判 INCOMPLETE_SUBMIT）。解除待生效时按普通字段渲染，用户好补值。
+  const refName = pendingUnbinds.has(field.key) ? null : nodeRefs[field.key]
   let control
-  if (field.enum.length) {
+  if (refName) {
+    control = document.createElement('input')
+    control.type = 'hidden'
+    control.value = field.valueText
+    wrap.classList.add('refBound')
+    wrap.append(mk('div', 'refBoundValue', `已引用元素「${refName}」`))
+  } else if (field.enum.length) {
     control = document.createElement('select')
     // 结构字段的 enum（条件操作符）必有值，不给「未设置」——空操作符没有语义
     if (field.semantic !== 'enum') {
@@ -756,7 +771,9 @@ function buildControl(field) {
   control.addEventListener('input', refreshDirty)
   control.addEventListener('change', refreshDirty)
   wrap.append(control)
-  const note = field.description || (!field.set && field.required ? '必填但当前未设置' : '')
+  const note = refName
+    ? `已由元素引用「${refName}」提供，运行期从资产库解析；这里不用填`
+    : field.description || (!field.set && field.required ? '必填但当前未设置' : '')
   if (note) {
     const desc = mk('div', 'desc', note)
     // manifest 的 description 动辄四五句（browserType 那段 90 字），全铺开会把 340px 的
@@ -787,9 +804,32 @@ function groupFields() {
   return ordered
 }
 
+/** 引用面板：ref-only 的真值入口。列出 param → 资产名，并给出可撤销的「解除引用」。 */
+function buildRefPanel() {
+  const box = mk('div', 'refPanel')
+  box.append(mk('div', 'refPanelTitle', '元素引用（运行期从资产库解析）'))
+  for (const [param, name] of Object.entries(nodeRefs)) {
+    const row = mk('div', 'refRow')
+    row.append(mk('span', 'refParam', param), mk('span', 'refArrow', '→'), mk('span', 'refName', name))
+    const btn = mk('button', 'refUnbind', pendingUnbinds.has(param) ? '撤销解除' : '解除引用')
+    btn.addEventListener('click', () => {
+      if (pendingUnbinds.has(param)) pendingUnbinds.delete(param)
+      else pendingUnbinds.add(param)
+      renderForm()
+    })
+    row.append(btn)
+    box.append(row)
+  }
+  if (pendingUnbinds.size) {
+    box.append(mk('div', 'refPanelHint', '点「保存参数」生效；解除后该参数要自己填值，否则流程缺定位。'))
+  }
+  return box
+}
+
 function renderForm() {
   el.form.replaceChildren()
   if (formError) el.form.append(mk('div', 'formError', formError))
+  if (Object.keys(nodeRefs).length) el.form.append(buildRefPanel())
   if (!selected) {
     el.form.append(mk('div', 'hint', '点击中间卡片查看参数'))
   } else if (!fields.length) {
@@ -829,7 +869,8 @@ async function selectCard(card) {
     selected = card
     fields = []
     groups = []
-    baseline = {} // 不清会留下上次节点的脏标记，下一次选择弹「改动还没保存」
+    nodeRefs = {}
+    pendingUnbinds.clear()
     renderCards()
     renderForm()
     el.detail.textContent =
@@ -854,12 +895,15 @@ async function selectCard(card) {
     el.rpcMs.textContent = `${(performance.now() - t0).toFixed(1)} ms`
     fields = res.fields || []
     groups = res.groups || []
-    baseline = Object.fromEntries(fields.map((f) => [f.key, f.valueText]))
+    nodeRefs = { ...((res.node && res.node.elementRefs) || {}) }
+    pendingUnbinds.clear()
     renderForm()
     el.detail.textContent = JSON.stringify(res.node ?? res, null, 2)
   } catch (error) {
     fields = []
     groups = []
+    nodeRefs = {}
+    pendingUnbinds.clear()
     renderForm()
     el.detail.textContent = `${error.code}: ${error.message}`
   }
@@ -873,10 +917,21 @@ async function saveParams() {
   const rpc = panelMode === 'struct' ? 'rpa.saveStructuredParams' : 'rpa.saveNodeParams'
   const t0 = performance.now()
   try {
+    // 引用也是全量提交：解除标记在这里落地，服务端按整份 elementRefs 覆盖。
+    // 结构表单没有 elementRefs 这条通道，别给它塞未知参数。
+    const refsPayload =
+      panelMode === 'struct'
+        ? {}
+        : {
+          element_refs: Object.fromEntries(
+            Object.entries(nodeRefs).filter(([key]) => !pendingUnbinds.has(key)),
+          ),
+        }
     const res = await ppx.call(rpc, {
       path: currentPath,
       node_id: selected.id,
       params,
+      ...refsPayload,
     })
     if (!res.ok) {
       formError = `${res.code}：${res.error}`
@@ -891,7 +946,8 @@ async function saveParams() {
     const detail = await ppx.call(detailRpc, { path: currentPath, node_id: keepId })
     fields = detail.fields || []
     groups = detail.groups || []
-    baseline = Object.fromEntries(fields.map((f) => [f.key, f.valueText]))
+    nodeRefs = { ...((detail.node && detail.node.elementRefs) || {}) }
+    pendingUnbinds.clear()
     renderCards()
     renderForm()
     renderCompile(res.compile)
@@ -915,12 +971,9 @@ async function saveParams() {
 }
 
 function revertParams() {
-  if (!fields.length) return
-  for (const field of fields) {
-    const node = el.form.querySelector(`[data-key="${CSS.escape(field.key)}"]`)
-    if (node) node.value = baseline[field.key]
-  }
-  refreshDirty()
+  // 解除标记也算一次编辑，撤销要把它一起撤掉——重建表单用 field.valueText 回填。
+  pendingUnbinds.clear()
+  renderForm()
 }
 
 /* ---- 流程与编译 -------------------------------------------------------- */
@@ -1025,14 +1078,15 @@ const ELEM_TEXT = {
   whereApp: '桌面软件',
   matches: '捕获时命中 {count} 个',
   refStep: '第 {step} 步正在用它',
+  refDetail: '第 {step} 步 · {param} → {name}',
   refNone: '还没有流程引用它，保存后只是一条库存',
   capturedAt: '捕获时间 {time}',
   stepFallback: '这一步',
   loadFailed: '元素没加载出来：{reason}',
   deleteBlockedTitle: '这个元素删不掉',
-  deleteBlockedHint: '流程里还有 {count} 个节点在用它：',
-  deleteBlockedRef: '第 {step} 步',
-  deleteBlockedNote: '先改掉这些引用，再来删',
+  deleteBlockedHint: '流程里还有 {count} 处引用：',
+  deleteBlockedRef: '第 {step} 步 · {param} → {name}（点这里去处理）',
+  deleteBlockedNote: '点引用跳到节点，解除引用并保存后再删',
   deleteCheckFailed: '没查到引用情况：{reason}',
   deleteFailed: '没删掉：{reason}',
   deleteFailedHint: '删除没成功，元素还在清单里',
@@ -1220,7 +1274,14 @@ function showElemDialog(options) {
     el.dialogName.select?.()
   }
   if (el.dialogMeta) {
-    el.dialogMeta.replaceChildren(...(options.meta || []).map((line) => mk('div', 'modalLine', line)))
+    // 引用行是可点的按钮（跳到节点去解除），其余仍是纯文本行。
+    el.dialogMeta.replaceChildren(
+      ...(options.meta || []).map((line) =>
+        typeof line === 'string' || typeof line === 'number'
+          ? mk('div', 'modalLine', String(line))
+          : line,
+      ),
+    )
   }
   if (el.dialogSave) el.dialogSave.disabled = !dialogSave
   setDialogNote(options.note || '', Boolean(options.error))
@@ -1319,11 +1380,16 @@ async function openAssetDetail(name) {
   if (doc.verifyCount) meta.push(elemText('matches', { count: doc.verifyCount }))
   if (doc.capturedAt) meta.push(elemText('capturedAt', { time: doc.capturedAt }))
   const refs = res.referencedBy || []
-  meta.push(
-    refs.length
-      ? elemText('refStep', { step: refs.map((id) => stepOf(id)).join('、') })
-      : elemText('refNone'),
-  )
+  if (!refs.length) meta.push(elemText('refNone'))
+  else {
+    // 只说「第 N 步」不够：被引用参数不在 with 里，用户翻参数表找不到。
+    // 把「哪一步的哪个字段指向哪个资产」逐条摊开。
+    for (const ref of refs) {
+      meta.push(
+        elemText('refDetail', { step: stepOf(ref.nodeId), param: ref.param, name: ref.name }),
+      )
+    }
+  }
   showElemDialog({
     mode: 'detail',
     title: elemText('detailTitle'),
@@ -1349,12 +1415,29 @@ function showBrokenDetail(name, reason) {
 
 // 删不掉的说明框：复用页面编辑框的只读形态（有「取消」「关闭」，Esc 也能退）。
 // ★ kit 只管捕获和编辑，删除的业务判断与反馈全部留在网页端，不再弹桌面浮窗。
+function refLink(ref) {
+  const line = mk(
+    'button',
+    'modalLine refLink',
+    elemText('deleteBlockedRef', {
+      step: stepOf(ref.nodeId),
+      param: ref.param,
+      name: ref.name,
+    }),
+  )
+  line.type = 'button'
+  line.title = `跳到节点 ${ref.nodeId}`
+  line.addEventListener('click', () => {
+    closeElemDialog()
+    const card = cards.find((c) => c.id === ref.nodeId)
+    if (card) selectCard(card)
+  })
+  return line
+}
+
 function showDeleteProblem(name, refs, reason = '') {
   const meta = refs.length
-    ? [
-      elemText('deleteBlockedHint', { count: refs.length }),
-      ...refs.map((id) => elemText('deleteBlockedRef', { step: stepOf(id) })),
-    ]
+    ? [elemText('deleteBlockedHint', { count: refs.length }), ...refs.map(refLink)]
     : [elemText('deleteFailedHint')]
   showElemDialog({
     mode: 'blocked',

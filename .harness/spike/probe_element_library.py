@@ -111,15 +111,20 @@ def main() -> None:
 
         detail = call("rpa.elementDetail", path=path, name="搜索框")
         assert detail["document"]["selector"]["css"] == "#q", detail
-        assert detail["referencedBy"] == ["inThen", "openHome"], detail
-        ok.append("elementDetail 回完整描述符 + 按真实 AST 分支找到引用")
+        # M72：引用清单结构化，网页端才说得出「哪一步的哪个参数」。
+        assert [(r["nodeId"], r["param"]) for r in detail["referencedBy"]] == [
+            ("inThen", "selector"), ("openHome", "selector"),
+        ], detail
+        ok.append("elementDetail 回完整描述符 + 结构化引用（真实 AST 分支）")
 
-        # 3) 仍被引用的资产不能删，且原因进桌面浮窗（面板里不显示提示）。
+        # 3) 仍被引用的资产不能删；M71 起说明只在网页端，不借桌面浮窗。
+        notices_before = len(notices)
         denied = call("rpa.deleteElement", path=path, name="搜索框")
         assert denied["ok"] is False and denied["code"] == "ELEMENT_IN_USE", denied
+        assert denied["referencedBy"], "没把引用节点结构回给网页端"
         assert target.is_file(), "被拒绝的删除却把文件删了"
-        assert notices, "删不掉却没在浮窗里说"
-        ok.append("仍被引用：拒绝删除 + 原因进浮窗")
+        assert len(notices) == notices_before, "删除失败又弹了桌面浮窗"
+        ok.append("仍被引用：拒绝删除 + 说明留在网页端")
 
         # 4) 改名联动引用；重名拒绝。
         renamed = call("rpa.saveElement", path=path, name="搜索框", new_name="搜索输入框")
