@@ -142,6 +142,14 @@ def test_cli_capture_desktop_hover_passthrough(monkeypatch, tmp_path, capsys):
     assert session.kwargs["hover"] is True
 
 
+def test_cli_capture_desktop_image_flag(monkeypatch, capsys):
+    monkeypatch.setattr("rpa_core.capture.DesktopCaptureSession", _FakeDesktopSession)
+    _FakeDesktopSession.instances = []
+    code, _ = _run(["capture", "desktop", "--point", "3,4", "--image"], capsys)
+    assert code == 0
+    assert _FakeDesktopSession.instances[0].kwargs["image"] is True
+
+
 def test_cli_capture_save_requires_flow(monkeypatch, tmp_path, capsys):
     monkeypatch.setattr("rpa_core.capture.ExtensionCaptureSession", _FakeBrowserSession)
     _FakeBrowserSession.instances = []
@@ -181,6 +189,119 @@ def test_cli_elements_list_show_verify(tmp_path, capsys):
     payload = json.loads(out)
     assert payload["valid"] is False
     assert any("css" in err["path"] for err in payload["errors"])
+
+
+def test_cli_elements_live_verify_uses_unified_facade(tmp_path, capsys, monkeypatch):
+    """--live 必须从 CLI 走到 M74 门面，且按 mode 调对 verifier 方法。"""
+    import rpa_core.capture.verification as verification
+
+    workflows = tmp_path / "workflows"
+    element_dir = workflows / "demo" / "elements"
+    element_dir.mkdir(parents=True)
+    (element_dir / "ok.json").write_text(json.dumps(_BROWSER_DESCRIPTOR), encoding="utf-8")
+
+    class _FakeBrowserVerifier:
+        def __init__(self):
+            self.calls = []
+
+        def verify(self, css, *, want_shot=False):
+            self.calls.append(("verify", css, want_shot))
+            return {"count": 2, "windowHandle": 123}
+
+        def preview(self, css):
+            self.calls.append(("preview", css))
+            return {"count": 2}
+
+        def clear_preview(self):
+            self.calls.append(("clear", ""))
+            return {"count": 0}
+
+    fake = _FakeBrowserVerifier()
+    monkeypatch.setattr(verification, "_default_browser_verifier", lambda: fake)
+
+    code, out = _run(
+        [
+            "elements", "verify", "--flow", "demo", "--workflows", str(workflows),
+            "--live", "--mode", "preview", "ok",
+        ],
+        capsys,
+    )
+    assert code == 0
+    assert json.loads(out) == {"count": 2}
+    assert fake.calls == [("preview", "#go")]
+
+
+def test_cli_elements_live_verify_explicit_image_dispatch(tmp_path, capsys, monkeypatch):
+    """显式 image locator 必须在 CLI 活体路径上二次分派到图像 verifier。"""
+    import rpa_core.capture.verification as verification
+
+    descriptor = {
+        "kind": "desktop",
+        "selector": {
+            "locator": {
+                "driver": "image",
+                "windowHandle": 9,
+                "imageKeyword": "保存",
+            }
+        },
+        "verifyCount": 1,
+        "metadata": {},
+    }
+    workflows = tmp_path / "workflows"
+    element_dir = workflows / "demo" / "elements"
+    element_dir.mkdir(parents=True)
+    (element_dir / "img.json").write_text(json.dumps(descriptor), encoding="utf-8")
+
+    class _FakeImageVerifier:
+        def __init__(self):
+            self.calls = []
+
+        def verify(self, locator, *, want_shot=False):
+            self.calls.append(locator)
+            return {"count": 1, "windowHandle": 9, "rect": {"left": 1, "top": 2,
+                                                             "width": 3, "height": 4}}
+
+        def preview(self, locator):
+            return self.verify(locator)
+
+        def clear_preview(self):
+            return {"count": 0}
+
+    fake = _FakeImageVerifier()
+    monkeypatch.setattr(verification, "_default_image_verifier", lambda: fake)
+
+    code, out = _run(
+        [
+            "elements", "verify", "--flow", "demo", "--workflows", str(workflows),
+            "--live", "img",
+        ],
+        capsys,
+    )
+    assert code == 0
+    assert json.loads(out) == {
+        "count": 1,
+        "windowHandle": 9,
+        "rect": {"left": 1, "top": 2, "width": 3, "height": 4},
+    }
+    assert fake.calls[0]["driver"] == "image"
+
+
+def test_cli_elements_live_verify_unknown_kind_is_structured(tmp_path, capsys):
+    workflows = tmp_path / "workflows"
+    element_dir = workflows / "demo" / "elements"
+    element_dir.mkdir(parents=True)
+    (element_dir / "odd.json").write_text(
+        json.dumps({"kind": "qt-hlay", "selector": {}, "metadata": {}}), encoding="utf-8"
+    )
+    code, out = _run(
+        [
+            "elements", "verify", "--flow", "demo", "--workflows", str(workflows),
+            "--live", "odd",
+        ],
+        capsys,
+    )
+    assert code == 0
+    assert json.loads(out) == {"count": 0, "error": "unsupported-kind"}
 
 
 def test_cli_elements_missing_and_forbidden(tmp_path, capsys):

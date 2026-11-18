@@ -1481,5 +1481,85 @@
         "notes": "空会话串的实测语义（2026-09-22 执行层首跑校正）：`resolve_session_id` 把空串当「未提供」（`str(requested or '').strip()` 为空即回退），于是命令落到**默认会话**上，并不存在「拿空串去匹配某个会话」这一步——这才是『空串不是通配符』的真实含义。 本命令只吃会话，所以回退之后就是一次正常执行；`missing-session-is-explicit` 那条才是真正的失败路径。"
       }
     ]
+  },
+  "desktop.imageLocate": {
+    "notes": "桌面图像定位（M75 S4）。本表只被 check_command_matrix.py 静态校验，从不执行——真机需要窗口截图+OCR，默认门禁不跑真桌面。变体钉参数覆盖：windowHandle 边界、imageTemplate/imageKeyword 互斥、templateSize/minConfidence 有界。usedLayer=image 是 ADR 0003 实际使用层证据，由执行器 diagnostics 落盘。",
+    "variants": [
+      {
+        "name": "template-with-confidence-and-size-resolves-rect",
+        "inputs": {
+          "windowHandle": 12345,
+          "imageTemplate": "aVRN",
+          "templateSize": [
+            20,
+            10
+          ],
+          "minConfidence": 0.8
+        },
+        "expect": {
+          "effect": "read",
+          "outputKeys": [
+            "left",
+            "top",
+            "width",
+            "height",
+            "count"
+          ]
+        }
+      },
+      {
+        "name": "keyword-locate-with-boundary-confidence-zero",
+        "inputs": {
+          "windowHandle": 1,
+          "imageKeyword": "登录",
+          "minConfidence": 0.0
+        },
+        "expect": {
+          "effect": "read",
+          "outputKeys": [
+            "left",
+            "top",
+            "width",
+            "height",
+            "count"
+          ]
+        }
+      },
+      {
+        "name": "confidence-upper-bound-accepted",
+        "inputs": {
+          "windowHandle": 999,
+          "imageKeyword": "OK",
+          "minConfidence": 1.0
+        },
+        "expect": {
+          "effect": "read",
+          "outputKeys": [
+            "left",
+            "top",
+            "width",
+            "height",
+            "count"
+          ]
+        }
+      },
+      {
+        "name": "negative-mutually-exclusive-targets-are-invalid",
+        "negative": true,
+        "inputs": {
+          "windowHandle": 12345,
+          "imageTemplate": "aVRN",
+          "imageKeyword": "登录",
+          "templateSize": [
+            20,
+            10
+          ],
+          "minConfidence": 0.5
+        },
+        "expect": {
+          "error": "INVALID_INPUT"
+        }
+      }
+    ]
   }
 }

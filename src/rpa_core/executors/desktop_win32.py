@@ -34,7 +34,8 @@ from .base import (
 
 # D3 的锚点异常与 uia 后端**共用同一个类**：两后端的「锚点没找到」是同一件事，
 # 各自定义一份会让上层按错误码分支时不得不区分后端（没有理由）。
-from .desktop import AnchorNotResolved
+from .desktop import AnchorNotResolved, _bring_window_to_front
+from .image_target import action_result, find_element_result, is_image_locator
 
 
 @dataclass
@@ -436,11 +437,44 @@ class Win32DesktopExecutor(CommandExecutor):
                 ]
             )
 
+        # M82：图像元素不需要 pywinauto 的窗口包装（图像定位吃的是截图），因此必须在
+        # 解析窗口**之前**分派——否则目标句柄已失效时，包装类构造会先抛
+        # InvalidWindowHandle，用户看到的是崩溃而不是「图像没找到」。
+        if is_image_locator(inputs.get("locator")):
+            return find_element_result(
+                invocation,
+                session,
+                session_id,
+                inputs["locator"],
+                inputs,
+                resource_prefix="desktop.win32.session",
+            )
+        element_id = str(inputs.get("elementId") or "")
+        stored_locator = session.elements.get(element_id)
+        if stored_locator is not None and is_image_locator(stored_locator):
+            return action_result(
+                invocation,
+                session,
+                session_id,
+                element_id,
+                command,
+                inputs,
+                stored_locator,
+                click_command="desktop.win32.click",
+                resource_prefix="desktop.win32.session",
+            )
+
         window = self._window_by_handle(session.window_handle)
         if window is None:
             return CommandResult.failure(
                 ErrorCode.SESSION_NOT_FOUND, "Desktop window not found"
             )
+        # M78：与 uia 侧同口径——元素动作前置顶层窗口，失败吞掉（前台锁定不是故障）。
+        if command in ("desktop.win32.click", "desktop.win32.input", "desktop.win32.getText"):
+            try:
+                _bring_window_to_front(session.window_handle)
+            except Exception:  # noqa: BLE001
+                pass
 
         if command == "desktop.win32.findElement":
             try:

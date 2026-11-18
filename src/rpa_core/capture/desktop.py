@@ -19,6 +19,7 @@ import time
 from typing import Any
 
 from rpa_core.capture._trace import trace as _trace
+from rpa_core.procenv import child_env
 
 # agent 的 UIA hit-test 依赖 pywinauto/win32gui，仅 Windows 可跑
 _PLATFORM_SUPPORTED = sys.platform == "win32"
@@ -47,6 +48,8 @@ class DesktopCaptureSession:
         window_handle: int | None = None,
         hover: bool = False,
         hybrid: bool = False,
+        image: bool = False,
+        wake_accessibility: bool = True,
     ):
         self._available = _PLATFORM_SUPPORTED
         self._queue: queue.Queue[str] = queue.Queue()
@@ -71,6 +74,14 @@ class DesktopCaptureSession:
             args += ["--hover"]
         if hybrid:
             args += ["--hybrid"]
+        if image:
+            args += ["--image"]
+        if wake_accessibility:
+            # 默认开：微信这类 Qt 应用的无障碍树是「按需暴露」的，冷启动只有
+            # Qt 外壳，不打开 gate 就永远捕获不到控件（见 capture/accessibility）。
+            # agent 侧只在「Qt 窗口壳 + 子节点≤1」时才动手，且只写一个字节、
+            # 幂等、可还原；失败会写 trace，不静默。
+            args += ["--wake-accessibility"]
         _trace("desktop", "agent_spawn_start")
         self._proc = subprocess.Popen(
             args,
@@ -79,6 +90,10 @@ class DesktopCaptureSession:
             text=True,
             encoding="utf-8",
             errors="replace",
+            # 宿主可能只改了 sys.path（PPX 就是这样）：不注入 PYTHONPATH 的话
+            # 子进程 `-m rpa_core.capture.desktop_agent` 直接 ModuleNotFoundError
+            # 秒退，而这在父进程里毫无征兆（见 rpa_core.procenv）。
+            env=child_env(),
         )
         _trace("desktop", "agent_spawn_returned")
         self._reader = threading.Thread(target=self._read_stdout, daemon=True)

@@ -196,6 +196,7 @@ def _cmd_capture(args) -> int:
             hover=args.hover,
             # hover 默认混合捕获（网页走扩展、桌面走 UIA），与 devserver 同口径
             hybrid=args.hover,
+            image=getattr(args, "image", False),
         )
         # 混合会话的扩展腿需显式 arm（与 devserver 同口径；纯桌面会话无 start）
         if getattr(session, "is_extension_capture", False):
@@ -562,7 +563,17 @@ def _cmd_elements(args) -> int:
         if args.elements_action == "show":
             print(json.dumps(document, ensure_ascii=False, indent=2))
             return 0
-        # verify
+        # verify：默认仍是静态文档校验（M10 口径不变）；--live 才走活体门面（M76）。
+        if getattr(args, "live", False):
+            from rpa_core.capture.verification import verify_element
+
+            result = verify_element(
+                document,
+                mode=args.mode,
+                want_shot=args.shot,
+            )
+            print(json.dumps(result.to_dict(), ensure_ascii=False, indent=2))
+            return 0
         try:
             element = validate_element_document(document)
             errors = selector_errors(element)
@@ -660,6 +671,8 @@ def main() -> int:
             desktop.add_argument("--window-handle", type=int)
             desktop.add_argument("--hover", action="store_true",
                                  help="hover 模式：鼠标移动实时高亮，热键或 Ctrl+Click 捕获")
+            desktop.add_argument("--image", action="store_true",
+                                 help="显式图像捕获：把光标附近截图作为 image locator 候选")
             desktop.add_argument("--save-as")
             desktop.add_argument("--flow")
             desktop.add_argument("--workflows", type=Path, default=Path("workflows"))
@@ -672,6 +685,23 @@ def main() -> int:
                 el.add_argument("--workflows", type=Path, default=Path("workflows"))
                 if elements_action != "list":
                     el.add_argument("name")
+                if elements_action == "verify":
+                    el.add_argument(
+                        "--live",
+                        action="store_true",
+                        help="活体校验：连接真实浏览器/桌面窗口（默认只做静态文档校验）",
+                    )
+                    el.add_argument(
+                        "--mode",
+                        choices=("flash", "preview", "clear"),
+                        default="flash",
+                        help="活体校验模式：flash 闪框 / preview 驻留高亮 / clear 清场",
+                    )
+                    el.add_argument(
+                        "--shot",
+                        action="store_true",
+                        help="活体校验时索取截图元数据（桌面/Web 都支持，拍不到不影响命中数）",
+                    )
             continue
         if action == "runs":
             # 运行历史（M25）：只读 run_artifacts
@@ -745,6 +775,7 @@ def main() -> int:
         # 等子命令的导入链不触碰 pywinauto → COM 初始化。
         from rpa_core.executors import (
             DesktopExecutor,
+            DesktopImageExecutor,
             ExecutorRegistry,
             OcrExecutor,
             PlaywrightExecutor,
@@ -755,6 +786,8 @@ def main() -> int:
         executors = {
             "browser.playwright": browser,
             "desktop.uia": DesktopExecutor(),
+            # 桌面图像定位（M75 S4）：显式 driver=image 的第 4 层定位，不静默降级
+            "desktop.image": DesktopImageExecutor(),
             "python.worker": PythonWorkerExecutor(),
             # OCR 指令族（M60）：常驻 worker 承载 ddddocr，首次调用才拉起子进程
             "ocr.ddddocr": OcrExecutor(),

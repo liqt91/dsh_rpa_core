@@ -145,7 +145,8 @@ tabBar.children[2].children.push(byId.get('runTitle'))
 const fold = make('button', '', 'dockFold')
 fold.textContent = '收起'
 tabBar.append(fold)
-dock.append(tabBar, panelsWrap)
+const dockResize = make('div', 'dockResize', 'dockResize')
+dock.append(dockResize, tabBar, panelsWrap)
 mainHost.append(dock)
 
 const panelByKey = (key) => walk(panelsWrap).find((n) => hasClass(n, 'dockPanel') && n.dataset.panel === key)
@@ -172,6 +173,7 @@ for (const id of ['globalsAdd', 'globalsSave', 'globalsRevert', 'globalsNote']) 
 // globalsRows 已注册成 div，renderGlobals 会往它里面写行
 
 const calls = []
+const docHandlers = {}
 let saveInputsResponse = null
 const doc = {
   head,
@@ -185,7 +187,10 @@ const doc = {
   },
   querySelectorAll: (sel) =>
     sel.startsWith('.') ? walk(mainHost).filter((n) => hasClass(n, sel.slice(1))) : [],
-  addEventListener() {},
+  addEventListener(type, fn) { (docHandlers[type] ||= []).push(fn) },
+  removeEventListener(type, fn) {
+    docHandlers[type] = (docHandlers[type] || []).filter((f) => f !== fn)
+  },
   activeElement: null,
 }
 const sandbox = {
@@ -368,6 +373,32 @@ await checkAsync('openFlow 真的把 inputs 刷进编辑行，runFlow 会切到�
   assert(run('globalsDirty') === false, 'openFlow 后不该是脏的')
   const flowSrc = mainSrc.slice(mainSrc.indexOf('async function runFlow()'), mainSrc.indexOf('async function runFlow()') + 900)
   assert(/^\s*activateDockTab\('log'\)/m.test(flowSrc), '运行时没自动切到日志 tab')
+})
+
+check('M94 底栏默认高随视口给足，顶边拖拽真改高度、折叠时不拖', () => {
+  assert(css.includes('height: clamp(300px, 34vh, 440px)'), '底栏默认高还是钉死的 228px')
+  assert(css.includes('.dockResize {'), 'style.css 没有拖拽条样式')
+  assert(html.includes('id="dockResize"'), 'index.html 缺 #dockResize')
+  assert(mainSrc.includes('\n  bindDockResize()\n'), 'main.js 没在 bindBottomDock 里接拖拽')
+  const grip = byId.get('dockResize')
+  assert(grip && grip.parent === dock, 'shim 里拖拽条没挂在底栏')
+  assert((grip.handlers.mousedown || []).length === 1, '拖拽条 mousedown 没绑正好一次')
+  dock.getBoundingClientRect = () => ({ height: 300 })
+  grip.handlers.mousedown[0]({ clientY: 200, preventDefault() {} })
+  assert(grip.classList.contains('dragging'), '按下没进拖拽态')
+  const move = (docHandlers.mousemove || [])[0]
+  assert(move, '没绑 document mousemove')
+  move({ clientY: 120 })
+  assert(parseFloat(dock.style.height) === 380, `上拖后高 ${dock.style.height} != 380px`)
+  move({ clientY: 220 })
+  assert(parseFloat(dock.style.height) === 280, `下拖后高 ${dock.style.height} != 280px`)
+  ;(docHandlers.mouseup || [])[0]?.()
+  assert(!grip.classList.contains('dragging'), '松开没退拖拽态')
+  assert((docHandlers.mousemove || []).length === 0, '松开没解绑 mousemove')
+  dock.classList.add('collapsed')
+  grip.handlers.mousedown[0]({ clientY: 200, preventDefault() {} })
+  assert(!grip.classList.contains('dragging'), '折叠态还在响应拖拽')
+  dock.classList.remove('collapsed')
 })
 
 for (const result of results) {

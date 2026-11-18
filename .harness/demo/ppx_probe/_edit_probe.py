@@ -17,6 +17,7 @@
 
 from __future__ import annotations
 
+import json
 import sys
 import time
 
@@ -25,22 +26,38 @@ sys.path.insert(0, "src")
 import win32con
 import win32gui
 
-from rpa_core.capture_kit import CaptureFloat, ElementEditDialog, selector_tree
+from rpa_core.capture_kit import (
+    CaptureFloat,
+    ElementEditDialog,
+    desktop_editing,
+    selector_tree,
+)
 from rpa_core.capture_kit.edit_dialog import (
+    _ID_DESKTOP_ATTR_BASE,
     _ID_ERROR,
     _ID_LEVEL_BASE,
     _ID_META,
     _ID_NAME,
+    _ID_NODE_BASE,
     _ID_PREVIEW,
     _ID_SELECTOR,
 )
 
 
 def _wait_hwnd(dialog: ElementEditDialog, timeout: float = 3.0) -> int | None:
+    """等窗口**连同子控件**建完：只看 _hwnd 会在控件建好前抢跑（GetDlgItem 1421）。"""
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        if dialog._hwnd:
-            return dialog._hwnd
+        hwnd = dialog._hwnd
+        if hwnd:
+            try:
+                if all(
+                    win32gui.GetDlgItem(hwnd, cid)
+                    for cid in (win32con.IDOK, win32con.IDCANCEL)
+                ):
+                    return hwnd
+            except Exception:  # noqa: BLE001 - 子控件还没建完，下一轮再看
+                pass
         time.sleep(0.05)
     return None
 
@@ -50,6 +67,14 @@ def _control_text(hwnd: int, cid: int) -> str:
     return win32gui.GetWindowText(control) if control else ""
 
 
+def _try_control(hwnd: int, cid: int):
+    """GetDlgItem 在控件不存在时抛 win32 error，这里收敛成 None。"""
+    try:
+        return win32gui.GetDlgItem(hwnd, cid)
+    except Exception:  # noqa: BLE001 - 探针里缺控件要记失败，不能让异常打断后续检查
+        return None
+
+
 def _client_checks(hwnd: int, failed: list[str]) -> None:
     """按钮必须**完整**落在客户区里（2026-11-13「保存按钮显示不全」的回归判据）。
 
@@ -57,10 +82,13 @@ def _client_checks(hwnd: int, failed: list[str]) -> None:
     排在底部的按钮被裁掉一半——像素截图能看出来，但控件矩形断言更准、
     还不依赖截图环境。
     """
-    save_btn = win32gui.GetDlgItem(hwnd, win32con.IDOK)
-    cancel_btn = win32gui.GetDlgItem(hwnd, win32con.IDCANCEL)
+    save_btn = _try_control(hwnd, win32con.IDOK)
+    cancel_btn = _try_control(hwnd, win32con.IDCANCEL)
     _, _, client_w, client_h = win32gui.GetClientRect(hwnd)
     for btn, label in ((save_btn, "保存"), (cancel_btn, "取消")):
+        if not btn:
+            failed.append(f"{label}按钮不存在")
+            continue
         left, top, right, bottom = win32gui.GetWindowRect(btn)
         # 转成客户区坐标再比
         cx1, cy1 = win32gui.ScreenToClient(hwnd, (left, top))
@@ -247,6 +275,86 @@ def _probe() -> list[str]:
             failed.append(f"全链初始预览不对：{_control_text(hwnd4, _ID_PREVIEW)!r}")
         dialog4.close()
         time.sleep(0.4)
+    # 8. 桌面详细形态（M91）：节点/属性树 + 完整 selector 预览 + 回写候选。
+    descriptor = {
+        "kind": "desktop",
+        "selector": {
+            "locator": {
+                "backend": "uia", "controlType": "Button", "name": "发送",
+                "path": [{"controlType": "Pane", "name": "聊天区"}],
+            },
+            "candidates": [{"kind": "uia", "matchedCount": 2}],
+        },
+        "metadata": {"windowTitle": "微信"},
+    }
+    nodes = desktop_editing.nodes_from_descriptor(descriptor)
+    saved_desktop: list[tuple[str, str]] = []
+    dialog5 = ElementEditDialog()
+    dialog5.show(
+        title="捕获到元素", name="微信按钮", nodes=nodes, descriptor=descriptor,
+        info="桌面元素 · 命中 1 个",
+        on_save=lambda n, s: saved_desktop.append((n, s)) or None,
+        on_close=closes.append,
+    )
+    hwnd5 = _wait_hwnd(dialog5)
+    if not hwnd5:
+        failed.append("桌面详细编辑框没建起来")
+    else:
+        _client_checks(hwnd5, failed)
+        if len(nodes) != 3 or nodes[0].get("readonly") is not True:
+            failed.append(f"桌面节点模型不是「窗口只读 + 容器 + 目标」：{nodes}")
+        for index in range(len(nodes)):
+            if not _try_control(hwnd5, _ID_NODE_BASE + index):
+                failed.append(f"桌面层级 checkbox {index} 没建")
+        # 窗口级只读：点击也不能勾上；目标级链尾：取消勾选会被弹回。
+        first = _try_control(hwnd5, _ID_NODE_BASE)
+        if first:
+            win32gui.SendMessage(first, win32con.BM_SETCHECK, 1, 0)
+            win32gui.SendMessage(hwnd5, win32con.WM_COMMAND, _ID_NODE_BASE, 0)
+            if win32gui.SendMessage(first, win32con.BM_GETCHECK, 0, 0):
+                failed.append("只读窗口级被勾上了")
+        target = _try_control(hwnd5, _ID_NODE_BASE + 2)
+        if target:
+            win32gui.SendMessage(target, win32con.BM_SETCHECK, 0, 0)
+            win32gui.SendMessage(hwnd5, win32con.WM_COMMAND, _ID_NODE_BASE + 2, 0)
+            if not win32gui.SendMessage(target, win32con.BM_GETCHECK, 0, 0):
+                failed.append("目标级被勾掉了（保存会得到空定位）")
+        # 选中目标级，改 name 值 ⇒ 预览与保存都必须是改后的完整 JSON。
+        name_row = next(
+            i for i, row in enumerate(nodes[-1]["attributes"]) if row["field"] == "name"
+        )
+        value_edit = _try_control(hwnd5, _ID_DESKTOP_ATTR_BASE + name_row * 4 + 3)
+        if not value_edit:
+            failed.append("目标级 name 属性输入框没建")
+        else:
+            win32gui.SetWindowText(value_edit, "发送2")
+            cid = _ID_DESKTOP_ATTR_BASE + name_row * 4 + 3
+            win32gui.SendMessage(
+                hwnd5, win32con.WM_COMMAND, (win32con.EN_CHANGE << 16) | cid, value_edit
+            )
+            time.sleep(0.2)
+        preview = _control_text(hwnd5, _ID_PREVIEW)
+        if '"name": "发送2"' not in preview:
+            failed.append(f"桌面组合预览没跟属性值变化：{preview[:120]!r}")
+        win32gui.SendMessage(
+            win32gui.GetDlgItem(hwnd5, win32con.IDOK), win32con.BM_CLICK, 0, 0
+        )
+        time.sleep(0.3)
+        if len(saved_desktop) != 1:
+            failed.append(f"桌面详细框没保存：{saved_desktop}")
+        else:
+            try:
+                written = json.loads(saved_desktop[0][1])
+            except ValueError as exc:
+                failed.append(f"保存的定位不是合法 JSON：{exc}")
+            else:
+                if written["locator"]["name"] != "发送2":
+                    failed.append(f"保存的定位没吃到编辑：{written['locator']}")
+                if written.get("candidates") != descriptor["selector"]["candidates"]:
+                    failed.append(f"保存把捕获候选抹掉了：{written}")
+        # dialog4 是外部强制收框，on_close(False) 异步到达；只钉住本次保存的手势。
+        if closes[-1] is not True or len([c for c in closes if c is True]) != 3:
+            failed.append(f"桌面详细框 on_close 不对：{closes}")
     return failed
 
 

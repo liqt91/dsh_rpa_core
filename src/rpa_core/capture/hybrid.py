@@ -101,6 +101,10 @@ class HybridCaptureSession:
         self._arm_deadline: float | None = None
         # 扩展腿是否因「未 ack」被判死（宿主据此在浮窗上显示真实通道状态）
         self._extension_unresponsive = False
+        # 桌面腿的失败原因（子进程秒退 / 读不到元素）。留给 desktop_status 用：
+        # 桌面腿出局时扩展腿还活着，``_exhausted`` 不会收场，浮窗会一直写「就绪」，
+        # 用户按 F9 毫无反应也看不到原因（2026-11-17 报障的可见性根因）。
+        self._desktop_failure: dict[str, Any] | None = None
 
     def start(self) -> list[str]:
         self._extension.start()
@@ -138,6 +142,11 @@ class HybridCaptureSession:
         扩展没在听」——两者的用户处置完全不同（前者去装插件，后者重开浏览器）。
         """
         return self._extension_unresponsive
+
+    @property
+    def desktop_failure(self) -> dict[str, Any] | None:
+        """桌面腿的失败原因（``pick`` 期间写入；没失败为 ``None``）。"""
+        return self._desktop_failure
 
     @property
     def pending(self) -> bool:
@@ -219,6 +228,10 @@ class HybridCaptureSession:
                     # agent 的 finally 已经 destroy 掉 overlay，此处必须收掉会话本身
                     return self._finish_cancelled(thread)
                 desktop_failure = result if isinstance(result, dict) else {}
+                if desktop_failure.get("error"):
+                    # 只记**真故障**（子进程秒退、读不到元素）；单纯 ``timeout`` 是
+                    # 「用户还没按热键」的正常等待，浮窗不能因此报红。
+                    self._desktop_failure = desktop_failure
 
             # ③ 两条腿都已出局 → 立即收场，不干等满超时
             if self._exhausted(extension_failure, desktop_failure):

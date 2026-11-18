@@ -3,6 +3,7 @@ import sys
 from .base import CommandExecutor
 from .browser import PlaywrightExecutor
 from .desktop import DesktopExecutor
+from .desktop_image import DesktopImageExecutor
 from .ocr import OcrExecutor
 from .python_worker import PythonWorkerExecutor
 from .registry import ExecutorRegistry
@@ -10,6 +11,7 @@ from .registry import ExecutorRegistry
 __all__ = [
     "CommandExecutor",
     "DesktopExecutor",
+    "DesktopImageExecutor",
     "ExecutorRegistry",
     "OcrExecutor",
     "PlaywrightExecutor",

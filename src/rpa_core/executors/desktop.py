@@ -29,6 +29,14 @@ from .base import (
     resolve_session_id,
     wait_for_element,
 )
+from .image_target import action_result, find_element_result, is_image_locator
+
+
+def _bring_window_to_front(hwnd: int) -> None:
+    """元素动作前把目标窗口置前（M78）；失败由调用方吞掉，绝不影响执行结果。"""
+    from rpa_core.capture.foreground_window import bring_to_foreground
+
+    bring_to_foreground(int(hwnd))
 
 
 @dataclass
@@ -415,6 +423,13 @@ class DesktopExecutor(CommandExecutor):
                     ],
                 )
             if command == "desktop.findElement":
+                # M82：图像元素（driver=image）走独立定位路径。判定只认显式声明
+                # （image_guard），语义定位器一个字段都没变——ADR 0003 的「禁静默降级」
+                # 在这里表现为「只有元素自己说是图像才走图像」。
+                if is_image_locator(inputs["locator"]):
+                    return find_element_result(
+                        invocation, session, session_id, inputs["locator"], inputs
+                    )
                 try:
                     locator = DesktopLocator.model_validate(inputs["locator"])
                 except ValidationError as exc:
@@ -492,12 +507,27 @@ class DesktopExecutor(CommandExecutor):
                 return CommandResult.failure(
                     ErrorCode.ELEMENT_NOT_FOUND, "Desktop element not found"
                 )
+            # M82：图像元素没有 UIA 控件可查/可 invoke，动作面单独一条（实现收在
+            # `image_target.action_result`，与 win32 后端共用）。必须放在
+            # `DesktopLocator.model_validate` 之前，否则图像 locator 会被
+            # `backend must be uia or win32` 直接判死。
+            if is_image_locator(locator_data):
+                return action_result(
+                    invocation, session, session_id, element_id, command, inputs, locator_data
+                )
             resource = f"desktop.session:{session_id}:element:{element_id}"
             window = self._window_by_handle(session.window_handle)
             if window is None:
                 return CommandResult.failure(
                     ErrorCode.SESSION_NOT_FOUND, "Desktop window not found"
                 )
+            # M78：元素级 set_focus 不等于顶层窗口前置；真实点击/输入前把目标窗口抬上来。
+            # 前台锁定导致失败时吞掉——动作照常执行，观感优化不能变成功能故障。
+            if command in ("desktop.click", "desktop.input", "desktop.getText"):
+                try:
+                    _bring_window_to_front(session.window_handle)
+                except Exception:  # noqa: BLE001
+                    pass
             element_locator = DesktopLocator.model_validate(locator_data)
             # 只有会等元素的命令才消费 timeoutMs（等待目标元素存在的最长时间）。
             # 字面量元组不只是风格：参数消费门禁按 `command in (...)` 的字面量切片做审计，

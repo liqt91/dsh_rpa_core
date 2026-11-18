@@ -81,6 +81,11 @@ EXECUTOR_FILES = {
     "browser.": ("src/rpa_core/executors/browser.py",),
     "desktop.uia": ("src/rpa_core/executors/desktop.py",),
     "desktop.win32": ("src/rpa_core/executors/desktop_win32.py",),
+    # M75 S4 桌面图像定位：命令分派在 executor，实际定位委托 capture（两处都登记）
+    "desktop.image": (
+        "src/rpa_core/executors/desktop_image.py",
+        "src/rpa_core/capture/image_verification.py",
+    ),
     "python.worker": ("src/rpa_core/workers/python_worker.py",),
     # M60 OCR：实现在 worker 子进程（`ocr_worker.handle` 里按 `command_id == "<id>"` 显式分派），
     # 执行器只负责子进程生命周期，故两处都登记。

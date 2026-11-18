@@ -16,9 +16,18 @@ import os
 import subprocess
 import sys
 import time
+import traceback
 from ctypes import wintypes
 
+from rpa_core.capture import accessibility
 from rpa_core.capture._trace import trace as _trace
+from rpa_core.capture.foreground_window import is_browser_content
+from rpa_core.capture.image_proposal import (
+    DEFAULT_RADIUS,
+    clip_template_rect,
+    make_image_proposal,
+)
+from rpa_core.procenv import child_env
 
 VK_F9 = 0x78
 VK_ESCAPE = 0x1B
@@ -40,6 +49,92 @@ VK_CONTROL = 0x11
 VK_LBUTTON = 0x01
 GA_ROOT = 2
 POLL_INTERVAL = 0.05
+
+# 无障碍唤醒：默认**关**。写第三方进程内存是显式选择，宿主必须传
+# --wake-accessibility 才会打开（微信这类 Qt 应用不写就永远只有外壳）。
+_WAKE_ACCESSIBILITY = False
+# ★ 唤醒不是「一次成功就永久有效」：微信这类应用会在若干秒后自己把 gate 关回去
+# （2026-11-17 真机：唤醒后能框到控件几秒，随后只剩外框，trace 里 before=0）。
+# 所以这里不能「每进程只试一次」，而是**节流重试**——只要还在悬停这个 Qt 窗口，
+# 就每秒兜一次；`activate` 本身幂等（gate 已是 1 就只补发 WM_GETOBJECT）。
+_WAKE_INTERVAL = 1.0
+_WAKE_LAST: dict[int, float] = {}
+# 不可恢复的失败：dll 里找不到 gate（版本不支持）。反复试只会刷日志。
+_WAKE_HOPELESS_REASONS = frozenset({"no_dll", "no_gate"})
+_WAKE_HOPELESS: set[int] = set()
+# pid -> 上一次是否「树活着」；只在状态翻转时写 trace，避免每秒刷屏。
+_WAKE_STATE: dict[int, bool] = {}
+
+
+def _maybe_wake_accessibility(hwnd: int, *, force: bool = False) -> bool:
+    """目标像是「无障碍树休眠」的 Qt 窗口时，把它的 QAccessible gate 打开。
+
+    只在 --wake-accessibility 下生效。判据见 ``accessibility.looks_dormant``：
+    类名是 Qt 窗口壳。真正要不要写由 ``activate`` 内部再看 gate 当前值——已经是 1
+    就只补发 WM_GETOBJECT。
+
+    ``force=True`` 用于「用户刚按下捕获键」这种必须确认真实的时刻，跳过节流；
+    悬停循环里用默认节流值，避免每帧都开进程句柄。
+
+    返回 **True 仅当 gate 是被这次调用从 0 写成 1**——也就是「树刚刚被救活」。
+    调用方据此立刻重做一次命中测试：否则用户鼠标停着不动时，红框会停在整窗外框上
+    （hover 只在 ``moved`` 时才 hit-test，见 ``_hover_capture``）。
+
+    ★ trace 里目标进程记作 ``target_pid``，**不能叫 ``pid``**：``_trace`` 自己会写
+    一条本进程 pid，同名 extra 会把它覆盖掉。2026-11-18 排查「谁在唤醒」时就因此
+    把微信的 pid 当成了 agent 的 pid，误判成「另一个进程唤醒的」。
+    """
+    if not _WAKE_ACCESSIBILITY or not hwnd:
+        return False
+    try:
+        class_name = _class_name_of(hwnd)
+    except Exception:  # noqa: BLE001 - 取类名失败不该影响捕获
+        return False
+    if not accessibility.looks_dormant(class_name, 1):
+        return False
+    pid = accessibility._pid_of_window(hwnd)
+    if not pid or pid in _WAKE_HOPELESS:
+        return False
+    now = time.monotonic()
+    if not force and now - _WAKE_LAST.get(pid, 0.0) < _WAKE_INTERVAL:
+        return False
+    _WAKE_LAST[pid] = now
+    try:
+        # 稳态（上次已知树是活的）只读字节确认，不再每秒让目标重建一次 provider 树；
+        # 只有 gate 真被写过才 poke（`activate` 内部保证）。
+        result = accessibility.activate(hwnd, poke=_WAKE_STATE.get(pid) is not True)
+    except Exception as exc:  # noqa: BLE001 - 唤醒是增强路径，绝不能打断捕获
+        _trace("agent", "accessibility_wake_error", error=type(exc).__name__,
+               detail=str(exc)[:200])
+        return False
+    if not result.ok:
+        if result.reason in _WAKE_HOPELESS_REASONS:
+            _WAKE_HOPELESS.add(pid)
+        # 失败要让用户看得见：否则「没有控件」会被误读成「这个应用没有控件」。
+        # 但只报一次——每秒一条会把日志埋掉。
+        if _WAKE_STATE.get(pid) is not False:
+            _WAKE_STATE[pid] = False
+            _trace(
+                "agent", "accessibility_wake",
+                ok=False, reason=result.reason, target_pid=result.pid,
+                rva=result.rva, before=result.before, after=result.after,
+                cls=class_name, poked=result.poked,
+            )
+            _trace("agent", "accessibility_wake_failed", reason=result.reason)
+        return False
+    # 成功：`activated` 说明 gate 是**从 0 被写回 1**——这就是「树曾经失效过」的
+    # 硬证据，必须每次都记（否则「能框几秒又只剩外框」在日志里查不到）。
+    # `already_active` 只在状态翻转（上次不是活的）时记一次。
+    state_changed = _WAKE_STATE.get(pid) is not True
+    _WAKE_STATE[pid] = True
+    if result.reason == "activated" or state_changed:
+        _trace(
+            "agent", "accessibility_wake",
+            ok=True, reason=result.reason, target_pid=result.pid,
+            rva=result.rva, before=result.before, after=result.after,
+            cls=class_name, poked=result.poked,
+        )
+    return result.reason == "activated"
 
 
 def _cursor_pos() -> tuple[int, int]:
@@ -478,7 +573,14 @@ def _ancestor_chain(info, root_hwnd: int, *, max_depth: int = 32) -> list:
     return chain
 
 
-def _describe_info(info, root_hwnd: int, path_infos: list | None = None) -> dict:
+def _describe_info(
+    info,
+    root_hwnd: int,
+    path_infos: list | None = None,
+    *,
+    image_point: tuple[int, int] | None = None,
+    prefer_image: bool = False,
+) -> dict:
     control_type = info.control_type
     automation_id = info.automation_id or None
     name = info.name or None
@@ -522,6 +624,14 @@ def _describe_info(info, root_hwnd: int, path_infos: list | None = None) -> dict
         _root_verify(root_hwnd),
         path_steps=steps,
     )
+    image_rect: dict | None = None
+    # M77：只有用户显式选了图像模式才产 proposal；不覆盖语义命中，也不冒充实测。
+    if prefer_image and image_point is not None:
+        image_record = _image_proposal_record(root_hwnd, image_point)
+        if image_record is not None:
+            scored.append(image_record)
+            locator = dict(image_record["locator"])
+            image_rect = _rect_from_source(image_record["locator"].get("sourceRect"))
 
     window_title = ""
     if root_hwnd:
@@ -533,18 +643,9 @@ def _describe_info(info, root_hwnd: int, path_infos: list | None = None) -> dict
     # （都是绝对屏幕像素）⇒ 图内框 = 矩形 − 窗口原点，1:1 无换算。
     # 此前**只读不产**：``gui/element_panel._metadata_text`` 一直读 ``meta["rect"]``，
     # 于是那一行永远空着——补上之后既修了那个既有显示缺口，也给预览供了数据。
-    rect_text: dict | None = None
-    try:
-        box = info.rectangle
-        if box is not None and (box.right > box.left) and (box.bottom > box.top):
-            rect_text = {
-                "left": int(box.left),
-                "top": int(box.top),
-                "width": int(box.right - box.left),
-                "height": int(box.bottom - box.top),
-            }
-    except Exception:  # noqa: BLE001 - 取不到矩形不该让整个捕获失败
-        rect_text = None
+    rect_text: dict | None = image_rect
+    if rect_text is None:
+        rect_text = _info_rect(info)
 
     metadata = {
         "windowHandle": root_hwnd,
@@ -579,6 +680,89 @@ def capture_in_window(root_hwnd: int, x: int, y: int) -> dict | None:
     if leaf is None:
         return None
     return _describe_info(leaf, root_hwnd, path_infos)
+
+
+def _window_rect(root_hwnd: int) -> tuple[int, int] | None:
+    """根窗口的 ``(宽, 高)``；句柄无效/调用失败回 None（判据据此不做整窗推断）。"""
+    box = wintypes.RECT()
+    try:
+        ok = ctypes.windll.user32.GetWindowRect(int(root_hwnd), ctypes.byref(box))
+    except Exception:  # noqa: BLE001
+        return None
+    if not ok:
+        return None
+    return (max(int(box.right - box.left), 1), max(int(box.bottom - box.top), 1))
+
+
+def _rect_fills_window(rect: dict | None, root_hwnd: int, *, threshold: float = 0.9) -> bool:
+    """元素矩形是否几乎铺满根窗口 ⇒ 这一枪只拿到「整窗容器」，没钻到具体控件。
+
+    取不到元素矩形时回 ``True``：宁可多跑一次屏幕级命中，也不要静默把整窗
+    当成用户想捕获的控件（M96 真机：悬停框住搜索框、保存下来是 1024x865 整窗）。
+    """
+    if not root_hwnd:
+        return False
+    if not isinstance(rect, dict):
+        return True
+    size = _window_rect(int(root_hwnd))
+    if size is None:
+        return False
+    win_w, win_h = size
+    elem_w = max(int(rect.get("width") or 0), 0)
+    elem_h = max(int(rect.get("height") or 0), 0)
+    return elem_w * elem_h >= win_w * win_h * threshold
+
+
+def _finer_element_in_same_window(x: int, y: int, root_hwnd: int) -> dict | None:
+    """屏幕级命中里取「同一根窗口内、比整窗更细」的元素；不满足就回 None。
+
+    为什么要这条兜底：窗口作用域 DFS 依赖 ``children()``（pywinauto 的 FindAll），
+    而微信 4.x 的 UIA provider 对它返回空、只支持 TreeWalker 导航 ⇒ DFS 从根窗口
+    一步都迈不出去。``ElementFromPoint`` 这类屏幕级命中却能给出更细的元素
+    （真机上悬停红框正是这条路画出来的）。两条路必须收敛到同一个粒度，
+    否则「框选看到搜索框、保存下来是整窗」。
+
+    **只接受同一根窗口内的元素**：别的窗口（浮层/覆盖层）面积再小也不能要，
+    那正是 DFS 优先设计要免疫的东西。★ 但「同一根窗口」的判法必须与 hover 快路径
+    同口径：Qt 自绘控件（微信搜索框）的 UIA 元素 ``handle`` 常为 0，此时按
+    ``_win32_root_at(x, y)`` 定位根窗口——直接拿 0 去比会**一票否决唯一可用的命中**
+    （M97 真机：hover 框到搜索框、按 F9 保存成整窗）。
+    """
+    try:
+        info = _element_from_point(x, y)
+    except Exception:  # noqa: BLE001 - 屏幕级被 provider 拒是常态，兜底而已
+        _trace("agent", "finer_unavailable", reason="element_from_point_raised")
+        return None
+    if info is None:
+        _trace("agent", "finer_unavailable", reason="no_element")
+        return None
+    try:
+        handle = int(info.handle or 0)
+    except Exception:  # noqa: BLE001
+        return None
+    root_of_element = _root_window_handle(handle) if handle else _win32_root_at(x, y)
+    if (root_of_element or 0) != int(root_hwnd):
+        _trace(
+            "agent", "finer_other_window",
+            element_root=int(root_of_element or 0), expected=int(root_hwnd),
+        )
+        return None
+    try:
+        fine = _drill_to_leaf(info, x, y)
+    except Exception:  # noqa: BLE001
+        fine = info
+    captured = _describe_info(fine, root_hwnd, _ancestor_chain(fine, root_hwnd))
+    rect = captured.get("metadata", {}).get("rect")
+    if _rect_fills_window(rect, int(root_hwnd)):
+        # 屏幕级也只给到整窗（例如误命中未下钻的渲染宿主）：留痕，否则用户侧
+        # 只有「保存下来还是整个窗口」这一条线索。
+        _trace(
+            "agent", "finer_still_fills_window",
+            control_type=captured.get("metadata", {}).get("controlType"),
+            rect=rect if isinstance(rect, dict) else None,
+        )
+        return None
+    return captured
 
 
 def _locator_candidates(
@@ -628,6 +812,73 @@ def _locator_candidates(
             )
         )
     return out
+
+
+def _image_proposal_record(hwnd: int, point: tuple[int, int]) -> dict | None:
+    """显式图像模式的 proposal 记录（不冒充实测命中）。
+
+    ``matchedCount=0`` 是刻意的：模板只是从光标附近裁出来的候选，还没有跑过匹配；
+    运行期/校验门面会真测。``kind="image"`` 让确认框能把它和 UIA 候选区分开。
+    """
+    locator = make_image_proposal(hwnd or 0, point)
+    if locator is None:
+        return None
+    from rpa_core.model.desktop import locator_penalty
+
+    return {
+        "kind": "image",
+        "locator": locator,
+        "matchedCount": 0,
+        "penalty": locator_penalty(locator),
+        "proposed": True,
+    }
+
+
+def _info_rect(info) -> dict | None:
+    """UIA 元素的屏幕矩形 → ``metadata["rect"]`` 的具名字段形状。
+
+    **两条捕获路径共用本函数**（hover/窗口作用域的 ``_describe_info`` 与屏幕级
+    ``capture_at``）：矩形形状一旦分叉，预览红框、整窗判定、元素面板显示就会
+    各说各话。取不到/空矩形回 None（调用方按「没有矩形」处理，绝不编造）。
+    """
+    if info is None:
+        return None
+    try:
+        box = info.rectangle
+    except Exception:  # noqa: BLE001 - 取不到矩形不该让整个捕获失败
+        return None
+    if box is None:
+        return None
+    try:
+        width = int(box.right - box.left)
+        height = int(box.bottom - box.top)
+        if width <= 0 or height <= 0:
+            return None
+        return {
+            "left": int(box.left),
+            "top": int(box.top),
+            "width": width,
+            "height": height,
+        }
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _rect_from_source(source) -> dict | None:
+    """``sourceRect``（``[x, y, w, h]``）→ 预览用的 ``rect``（同语义的具名字段）。
+
+    图像定位的主定位是那块模板，预览框就必须框这块——否则确认框/元素面板框住整个
+    窗口，用户看不出「到底截了多大一块」（M84 维护者：「没有更细的粒度」）。
+    """
+    if not isinstance(source, (list, tuple)) or len(source) != 4:
+        return None
+    try:
+        x, y, w, h = (int(v) for v in source)
+    except (TypeError, ValueError):
+        return None
+    if w <= 0 or h <= 0:
+        return None
+    return {"left": x, "top": y, "width": w, "height": h}
 
 
 def _window_verify(window):
@@ -732,35 +983,88 @@ def _pick_best_candidate(
     )
 
 
-def capture_at(x: int, y: int, scope_hwnd: int | None = None) -> dict:
-    if scope_hwnd:
+def capture_at(
+    x: int,
+    y: int,
+    scope_hwnd: int | None = None,
+    *,
+    image_point: tuple[int, int] | None = None,
+    prefer_image: bool = False,
+) -> dict:
+    # 显式图像模式不能在这里提前返回——否则窗口作用域捕获会绕过 image proposal。
+    if scope_hwnd and not prefer_image:
+        # 窗口作用域捕获最容易撞上「Qt 外壳」：先给休眠的无障碍树一次唤醒机会，
+        # 否则这道门里只能看到 MMUIRenderSubWindowHW 一个节点。
+        # force：用户已经按下捕获键，这一刻的树状态必须是真实的，不能因为悬停循环
+        # 一秒前刚试过就跳过（gate 可能正好在这 1 秒内被目标关回去）。
+        _maybe_wake_accessibility(int(scope_hwnd), force=True)
         scoped = capture_in_window(scope_hwnd, x, y)
+        if scoped is not None and not _rect_fills_window(
+            scoped.get("metadata", {}).get("rect"), int(scope_hwnd)
+        ):
+            return scoped
+        # ★ 只拿到整窗容器（微信这类 provider 的 DFS 迈不出第一步）：再问一次屏幕级，
+        #   同一窗口内更细的元素才采用。否则用户悬停看到搜索框、保存下来是整窗。
+        finer = _finer_element_in_same_window(x, y, int(scope_hwnd))
+        if finer is not None:
+            return finer
         if scoped is not None:
             return scoped
-    from pywinauto import Desktop
+    info = None
+    if prefer_image:
+        # ★ 自绘控件（微信等）上 UIA ElementFromPoint 可能直接 COM 拒绝访问。显式图像
+        # 模式本来就不依赖语义树：这里失败只记 trace，继续用 scope_hwnd 产出 proposal。
+        # 非图像模式保持原行为——该抛就抛，不静默降级。
+        try:
+            info = _element_from_point(x, y)
+        except Exception as exc:  # noqa: BLE001 - 仅显式图像模式吞，语义模式绝不吞
+            _trace("agent", "image_uia_unavailable", error=type(exc).__name__)
+    else:
+        info = _element_from_point(x, y)
 
-    info = _element_from_point(x, y)
-    hwnd = int(info.handle or 0)
-    root_hwnd = _root_window_handle(hwnd) or (scope_hwnd or 0)
-    window = Desktop(backend="uia").window(handle=root_hwnd) if root_hwnd else None
+    if info is None:
+        hwnd = int(scope_hwnd or 0)
+        root_hwnd = _root_window_handle(hwnd) or hwnd
+        control_type = automation_id = name = class_name = None
+        candidates = []
+        steps = []
+        scored = []
+    else:
+        hwnd = int(info.handle or 0)
+        root_hwnd = _root_window_handle(hwnd) or (scope_hwnd or 0)
+        control_type = info.control_type
+        automation_id = info.automation_id or None
+        name = info.name or None
+        class_name = info.class_name or None
 
-    control_type = info.control_type
-    automation_id = info.automation_id or None
-    name = info.name or None
-    class_name = info.class_name or None
+        # 候选形状的唯一权威在 `_locator_candidates`（与 hover / 窗口作用域路径共用）。
+        candidates = _locator_candidates(control_type, automation_id, name)
 
-    # 候选形状的唯一权威在 `_locator_candidates`（与 hover / 窗口作用域路径共用）。
-    candidates = _locator_candidates(control_type, automation_id, name)
+        # D1：屏幕级路径没有 DFS 下降过程，祖先链走父链上溯（不含目标本身、不含根窗口自身）。
+        # **先算 path 再评估候选**：path 是同一元素的收窄条件，对每条定位方案都适用，故一并
+        # 注入候选 locator 并计入分数——这样「候选之一」与最终主定位逐字节一致。
+        chain = _ancestor_chain(info, root_hwnd)
+        steps = _path_steps_from(chain, root_hwnd)
 
-    # D1：屏幕级路径没有 DFS 下降过程，祖先链走父链上溯（不含目标本身、不含根窗口自身）。
-    # **先算 path 再评估候选**：path 是同一元素的收窄条件，对每条定位方案都适用，故一并
-    # 注入候选 locator 并计入分数——这样「候选之一」与最终主定位逐字节一致。
-    chain = _ancestor_chain(info, root_hwnd)
-    steps = _path_steps_from(chain, root_hwnd)
+        from pywinauto import Desktop
 
-    # M52：候选先实测（命中数 + penalty），同一份测量既供择优、也随元素落盘。
-    scored = _evaluate_candidates(candidates, _window_verify(window), path_steps=steps)
+        window = Desktop(backend="uia").window(handle=root_hwnd) if root_hwnd else None
+        # M52：候选先实测（命中数 + penalty），同一份测量既供择优、也随元素落盘。
+        scored = _evaluate_candidates(candidates, _window_verify(window), path_steps=steps)
+
     best_locator, best_count = _choose_from_scored(scored)
+    image_rect: dict | None = None
+    # M77：显式图像模式把 proposal 设为主定位；语义候选仍留在 candidates 里供人核对。
+    # matchedCount 保持 0——proposal 没跑过图像匹配，不冒充「实测命中」。
+    if prefer_image:
+        image_record = _image_proposal_record(
+            root_hwnd or scope_hwnd or 0, image_point or (x, y)
+        )
+        if image_record is not None:
+            scored.append(image_record)
+            best_locator = dict(image_record["locator"])
+            best_count = 0
+            image_rect = _rect_from_source(image_record["locator"].get("sourceRect"))
     if not best_locator and control_type:
         best_locator = {"backend": "uia", "controlType": control_type}
         best_count = 0
@@ -780,31 +1084,73 @@ def capture_at(x: int, y: int, scope_hwnd: int | None = None) -> dict:
         ctypes.windll.user32.GetWindowTextW(root_hwnd, title_buffer, 256)
         window_title = title_buffer.value
 
+    metadata: dict = {
+        "point": [x, y],
+        "windowHandle": root_hwnd,
+        "windowTitle": window_title,
+        "controlType": control_type,
+        "automationId": automation_id,
+        "name": name,
+        "className": class_name,
+    }
+    # 图像主定位时 rect 必须是那块模板（而不是整窗）——预览/确认框据此画框。
+    if image_rect is not None:
+        metadata["rect"] = image_rect
+    else:
+        # 语义模式也要写 rect：预览红框读它，``capture_with_retry`` 判「这一枪是不是
+        # 只拿到整窗容器」也读它。此前只有图像模式写 ⇒ 语义捕获的 rect 恒缺，
+        # 下游只能按「拿不到矩形 = 容器」保守处理（M97）。
+        rect_text = _info_rect(info)
+        if rect_text is not None:
+            metadata["rect"] = rect_text
+
     return {
         "kind": "desktop",
         "selector": selector,
         "verifyCount": max(best_count, 0),
-        "metadata": {
-            "point": [x, y],
-            "windowHandle": root_hwnd,
-            "windowTitle": window_title,
-            "controlType": control_type,
-            "automationId": automation_id,
-            "name": name,
-            "className": class_name,
-        },
+        "metadata": metadata,
     }
 
 
-def capture_with_retry(x: int, y: int, scope_hwnd: int | None, attempts: int = 4) -> dict:
+def _capture_rank(result: dict, scope_hwnd: int | None) -> tuple[int, int]:
+    """重试择优的排序键：**先看粒度，再看命中数**。
+
+    为什么粒度必须压过命中数：微信 4.x 的 provider 不支持 ``FindAll``，屏幕级兜底
+    给出的搜索框 ``verifyCount`` 恒 0（实测不出），而整窗渲染宿主是 Pane 泛化、能
+    「命中」好几次。只按命中数择优，会把用户框住的搜索框换成整个微信窗口——这正是
+    M97 真机报障的第二形态。
+    """
+    rect = result.get("metadata", {}).get("rect")
+    container = _rect_fills_window(rect, int(scope_hwnd or 0))
+    return (0 if container else 1, int(result.get("verifyCount") or 0))
+
+
+def capture_with_retry(
+    x: int,
+    y: int,
+    scope_hwnd: int | None,
+    attempts: int = 4,
+    *,
+    prefer_image: bool = False,
+) -> dict:
     """整体重试（重新 hit-test）：负载下首次 UIA 树枚举偶发不完整或被覆盖层劫持。"""
+    if prefer_image:
+        # 图像模式的 ``verifyCount`` 恒 0（proposal 没跑过匹配，不冒充实测），
+        # 因而下面的「等到 1 就返回」永不成立——按原样会白跑 4 轮（每轮一次 UIA
+        # 命中 + 一张窗口截图，真机 200~900ms/轮）。一次就够。
+        return capture_at(x, y, scope_hwnd, prefer_image=True)
     best: dict | None = None
+    best_rank: tuple[int, int] = (0, 0)
     for index in range(attempts):
-        result = capture_at(x, y, scope_hwnd)
-        if result.get("verifyCount") == 1:
+        result = capture_at(x, y, scope_hwnd, prefer_image=prefer_image)
+        rank = _capture_rank(result, scope_hwnd)
+        # 「唯一命中且已经钻到具体控件」才算够好；整窗容器命中一次不算（否则
+        # 微信这类 provider 会让第一轮就带着整窗返回，兜底的细元素白算）。
+        if rank[1] == 1 and rank[0] == 1:
             return result
-        if best is None or result.get("verifyCount", 0) > best.get("verifyCount", 0):
+        if best is None or rank > best_rank:
             best = result
+            best_rank = rank
         if index < attempts - 1:
             time.sleep(0.4)
     return best if best is not None else {"timeout": True}
@@ -825,6 +1171,17 @@ def _hover_hit(x: int, y: int, exclude_hwnd: int, allow_scoped: bool = True):
     leaf = None
     path_infos: list = []
     hit_info = None
+    # ★ 唤醒必须在 hit-test **之前**：无障碍树休眠时（微信冷启动）`ElementFromPoint`
+    #   可能直接抛 E_ACCESSDENIED，异常会跳进下面的 except，唤醒就永远轮不到——
+    #   于是「树休眠 → 命中失败 → 不唤醒 → 一直休眠」形成死锁，用户只看到外框。
+    #   实测 2026-11-17：唤醒后能框到控件几秒，随后微信把 gate 关回去，正是这个形态。
+    probe_root = 0
+    try:
+        probe_root = _win32_root_at(x, y)
+        if probe_root:
+            _maybe_wake_accessibility(probe_root)
+    except Exception:  # noqa: BLE001 - 唤醒失败不影响后续命中
+        probe_root = 0
     try:
         info = _element_from_point(x, y)
         hwnd = int(info.handle or 0)
@@ -835,8 +1192,9 @@ def _hover_hit(x: int, y: int, exclude_hwnd: int, allow_scoped: bool = True):
             rect = fine.rectangle
             # root 定位：有 handle 用 UIA 祖先链；无 handle（虚拟元素）必须走
             # win32 窗口链，否则 hover 缓存的 last_root 会陈旧（指向别的窗口）
-            root = _root_window_handle(hwnd) if hwnd else _win32_root_at(x, y)
+            root = _root_window_handle(hwnd) if hwnd else (probe_root or _win32_root_at(x, y))
             if root:
+                _maybe_wake_accessibility(root)
                 path_infos = _ancestor_chain(fine, root)
             hit_info = fine
     except Exception:
@@ -845,7 +1203,7 @@ def _hover_hit(x: int, y: int, exclude_hwnd: int, allow_scoped: bool = True):
     if rect is None and allow_scoped:
         scoped_ran = True
         if not root:
-            root = _win32_root_at(x, y)
+            root = probe_root or _win32_root_at(x, y)
         if root:
             path_infos = []
             scoped_leaf, scoped_rect = _window_scope_hit(root, x, y, path_out=path_infos)
@@ -865,13 +1223,57 @@ def _hover_hit(x: int, y: int, exclude_hwnd: int, allow_scoped: bool = True):
     return rect, root, leaf, scoped_ran, path_infos, hit_info
 
 
-# hybrid 模式：这些窗口类是浏览器**网页内容区**（让位给 content-script 扩展的页内捕获）
-_BROWSER_CONTENT_CLASSES = {"Chrome_RenderWidgetHostHWND"}
+# hybrid 模式：浏览器的**网页内容区**让位给 content-script 扩展的页内捕获。
+# 「是不是真浏览器」的判据在 foreground_window.is_browser_content（类名 + 进程名）——
+# 只看类名会把 Electron 定制客户端一起判死（M84：WorkBuddy 悬停无反应）。
 
 
 def _window_class_at(x: int, y: int) -> str:
     hwnd = int(ctypes.windll.user32.WindowFromPoint(wintypes.POINT(x, y)) or 0)
     return _class_name_of(hwnd)
+
+
+def _in_browser_content(x: int, y: int) -> bool:
+    """点是否落在**真浏览器**的网页内容区（只有这类区域才让位给扩展）。
+
+    ★ 判据必须是「类名 + 进程名」两个条件（M84 真机）：
+    ``Chrome_RenderWidgetHostHWND`` 不只出现在浏览器里——Electron 定制客户端
+    （WorkBuddy / 咚咚 / VS Code）的渲染子窗同样是这个类。只按类名判，会让这类
+    应用整片被当成「网页内容区」：高亮被隐藏、捕获手势被忽略，用户侧就是
+    **悬停在窗口上毫无反应、连窗口都认不出来**。判定权威在
+    ``foreground_window.is_browser_content``，本函数只负责取句柄。
+    """
+    hwnd = int(ctypes.windll.user32.WindowFromPoint(wintypes.POINT(x, y)) or 0)
+    return _browser_content_at(_class_name_of(hwnd), hwnd)
+
+
+def _browser_content_at(class_name: str, hwnd: int) -> bool:
+    """命中窗口（任意层级）是否属于真浏览器的网页内容区。
+
+    进程名要按**顶层窗口**取：渲染子窗与顶层窗同进程，但顶层句柄在窗口重建时更稳。
+    """
+    if not hwnd:
+        return False
+    return is_browser_content(class_name, _root_window_handle(hwnd) or hwnd)
+
+
+def _image_box_at(
+    root_hwnd: int, x: int, y: int, *, radius: int = DEFAULT_RADIUS
+) -> tuple[int, int, int, int] | None:
+    """光标处那块模板的屏幕矩形（四边），与落盘模板**同一份几何**。
+
+    图像模式的悬浮红框必须画这块（而不是语义元素的矩形）：自绘控件（微信）没有
+    控件树，语义命中只能回到整窗——框住整个窗口的话，用户既看不到「到底截了多大
+    一块」，也没法把光标对准某个按钮（M84 维护者实测：「没有更细的粒度」）。
+    """
+    if not root_hwnd:
+        return None
+    rect = wintypes.RECT()
+    if not ctypes.windll.user32.GetWindowRect(root_hwnd, ctypes.byref(rect)):
+        return None
+    return clip_template_rect(
+        (rect.left, rect.top, rect.right, rect.bottom), (x, y), radius=radius
+    )
 
 
 # ---- Ctrl+Click 穿透拦截（专职钩子子进程）------------------------------------
@@ -904,7 +1306,10 @@ def _start_click_hook(respect_browser_content: bool) -> None:
         argv.append("--respect-browser-content")
     try:
         proc = subprocess.Popen(
-            argv, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+            argv,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            env=child_env(),
         )
     except OSError as exc:
         # 起不来不致命：捕获轮询仍在，只是 Ctrl+Click 会穿透（装钩子前的行为）
@@ -942,7 +1347,13 @@ def _stop_click_hook() -> None:
         _click_hook_state["event"] = None
 
 
-def _hover_capture(hotkey_vk: int, timeout: float, hybrid: bool = False) -> dict:
+def _hover_capture(
+    hotkey_vk: int,
+    timeout: float,
+    hybrid: bool = False,
+    *,
+    prefer_image: bool = False,
+) -> dict:
     """hover 模式：鼠标移动实时高亮命中元素；热键或 Ctrl+Click 捕获；Esc 取消。
 
     作用域取悬停点 win32 根窗口（免疫屏幕覆盖层劫持），而非前台窗口。
@@ -957,17 +1368,35 @@ def _hover_capture(hotkey_vk: int, timeout: float, hybrid: bool = False) -> dict
     last_hit = 0.0
     last_scoped = 0.0  # DFS 节流：粗命中区域 150ms 一次（浏览器 UI 骨架变化慢）
     last_root = 0
-    last_leaf = None  # hover 最后命中的元素（捕获瞬间复用，省一次 hit-test）
     last_rect = None
+    last_box = None  # 图像模式：上一次画出的模板框（相同则不重画，免闪烁）
+    last_image_trace = 0.0  # 图像模式诊断：每秒至多一条，见下面 image_box 埋点
     last_path: list = []  # D1：与 last_hit_info 同源的祖先链（必须一起更新）
     last_hit_info = None
+    last_wake_check = 0.0  # 无障碍保活：与鼠标是否移动无关的定时检查
+    force_hit = False  # 树刚被救活 → 立刻重做一次命中测试，不等用户再动鼠标
     hotkey_was = _hotkey_pressed(hotkey_vk)
     lbutton_was = _hotkey_pressed(VK_LBUTTON)
     try:
         while time.monotonic() < deadline:
             x, y = _cursor_pos()
-            in_browser_content = hybrid and _window_class_at(x, y) in _BROWSER_CONTENT_CLASSES
+            in_browser_content = (
+                hybrid and not prefer_image and _in_browser_content(x, y)
+            )
             moved = abs(x - last_pos[0]) > 3 or abs(y - last_pos[1]) > 3
+            # ★ 无障碍保活：**不依赖鼠标移动**。目标（微信 4.x）会在若干秒后自己把
+            #   QAccessible gate 关回去，而下面的命中测试只在 ``moved`` 时跑——鼠标一停，
+            #   红框就永远停在整窗外框上，用户只能再动一下才恢复。这里每 ``_WAKE_INTERVAL``
+            #   兜一次；若这次把 gate 从 0 写成 1（树刚被救活），立刻强制重做命中测试。
+            if (
+                not in_browser_content
+                and not prefer_image
+                and time.monotonic() - last_wake_check >= _WAKE_INTERVAL
+            ):
+                last_wake_check = time.monotonic()
+                wake_root = _win32_root_at(x, y)
+                if wake_root and _maybe_wake_accessibility(wake_root):
+                    force_hit = True
             # 命中测试是每移动最大的开销（ElementFromPoint+下钻，全是跨进程 COM；
             # 真机 comtypes 慢一个量级 ⇒ 30ms 连发即「红框追着爬 + CPU 打满」）：
             # 光标仍在当前 rect 内（本次移动大概率命中的还是它）降到 100ms 一测，
@@ -975,20 +1404,52 @@ def _hover_capture(hotkey_vk: int, timeout: float, hybrid: bool = False) -> dict
             inside_last = last_rect is not None and _rect_contains(last_rect, x, y)
             if in_browser_content:
                 overlay.hide()
-                last_leaf = None
                 last_rect = None
                 last_path = []
                 last_hit_info = None
-            elif moved and time.monotonic() - last_hit > (
-                0.10 if inside_last else 0.03
+            elif prefer_image:
+                # 图像模式不查控件树：只画「光标周围那块模板」。win32 取根窗口是微秒级，
+                # 红框能跟着光标走；UIA 单次命中真机 200~900ms，框都追不上光标，更别说
+                # 对准一个 32×32 的按钮（M84 维护者实测「没有更细的粒度」的根因）。
+                if moved:
+                    last_pos = (x, y)
+                    root = _win32_root_at(x, y)
+                    if root:
+                        last_root = root
+                    box = _image_box_at(last_root, x, y)
+                    # 图像模式此前完全没有埋点，报障只能靠猜（2026-11-18 维护者报
+                    # 「按图捕获框不住桌面/微信元素」）。每秒至多一条：窗口类名回答
+                    # 「框的是谁」，box=None 回答「为什么没画」——两种情况修法完全不同。
+                    if time.monotonic() - last_image_trace >= 1.0:
+                        last_image_trace = time.monotonic()
+                        try:
+                            root_cls = _class_name_of(last_root)[:48]
+                        except Exception:  # noqa: BLE001 - 诊断通道不得打断捕获
+                            root_cls = ""
+                        _trace(
+                            "agent", "image_box", root=int(last_root), cls=root_cls,
+                            box=list(box) if box is not None else None,
+                            cursor=[x, y],
+                        )
+                    if box is not None and box != last_box:
+                        overlay.show_rect(*box)
+                        last_box = box
+                        # ★ 不得写 ``last_rect``：那是**语义矩形**的槽（UIA 的 RECT
+                        # 对象，下面 ``_rect_contains`` 按 .left/.right 读）。图像模式的
+                        # box 是四元组，写进去下一帧就 AttributeError ——而这里是 hover
+                        # 主循环，异常会打死整个 agent，父进程只看到「exited with code 1」，
+                        # 用户侧就是「鼠标一动就报捕获进程起不来」（2026-11-17 报障）。
+            elif (moved or force_hit) and (
+                force_hit or time.monotonic() - last_hit > (0.10 if inside_last else 0.03)
             ):
                 t_hit = time.perf_counter()
                 last_hit = time.monotonic()
                 last_pos = (x, y)
+                force_hit = False
                 # 粗命中（大 rect）时才允许 DFS，且节流 150ms（DFS ~50ms 不能每帧跑）
                 allow_scoped = time.monotonic() - last_scoped > 0.15
                 try:
-                    rect, root, leaf, scoped_ran, path_infos, hit_info = _hover_hit(
+                    rect, root, _leaf, scoped_ran, path_infos, hit_info = _hover_hit(
                         x, y, overlay.hwnd, allow_scoped=allow_scoped
                     )
                 except Exception as exc:  # noqa: BLE001
@@ -1010,12 +1471,14 @@ def _hover_capture(hotkey_vk: int, timeout: float, hybrid: bool = False) -> dict
                     last_rect = rect
                 if root:
                     last_root = root
-                if leaf is not None:
-                    last_leaf = leaf
-                # D1：path 与描述它的元素必须同源同时更新——否则 path 会挂到别的元素上
-                if hit_info is not None:
-                    last_hit_info = hit_info
-                    last_path = list(path_infos)
+                # D1：path 与描述它的元素必须同源同时更新——否则 path 会挂到别的元素上。
+                # ★ 「画红框的那个元素」是 ``hit_info``，**不是** DFS 的 leaf：快路径
+                #   （ElementFromPoint 成功）压根不产 leaf。这里必须与 ``last_rect``
+                #   同进同退——一次命中没有元素就把旧的清掉，否则会出现「矩形是这一处、
+                #   元素还是上一次那一处」，捕获瞬间复用的正是元素（M97 真机：hover
+                #   框着搜索框、按 F9 保存成整窗）。
+                last_hit_info = hit_info
+                last_path = list(path_infos) if hit_info is not None else []
             overlay.pump()
 
             hotkey_now = _hotkey_pressed(hotkey_vk)
@@ -1036,24 +1499,55 @@ def _hover_capture(hotkey_vk: int, timeout: float, hybrid: bool = False) -> dict
                 if in_browser_content:
                     # 浏览器内容区：让位给扩展的页内捕获（它有 Ctrl+Click 手势）
                     continue
+                if prefer_image:
+                    # 图像模式不跑 hover 的 UIA 命中（那一步只为拿语义元素，本模式不用），
+                    # 直接按「光标位置 + win32 根窗口」出 descriptor：能取到语义元素就
+                    # 顺带带上做候选，取不到就纯像素——自绘控件（微信）属于后者。
+                    try:
+                        scope = last_root or _win32_root_at(x, y) or None
+                        return capture_with_retry(x, y, scope, prefer_image=True)
+                    except Exception as exc:  # noqa: BLE001
+                        _trace("agent", "capture_error", error=str(exc)[:300])
+                        return {"error": f"读不到该位置的元素：{exc}"}
+                # ★ 按下捕获键这一刻，树必须是真的活的：下面会**复用缓存的那个元素**，
+                #   而它依赖目标进程的 provider 还在。保活有 1 秒窗口，可能刚好被跳过，
+                #   此时读旧元素的属性会抛（用户看到「读不到该位置的元素」）。
+                revived = False
+                if not prefer_image:
+                    try:
+                        _root_now = int(last_root or _win32_root_at(x, y) or 0)
+                        if _root_now:
+                            revived = _maybe_wake_accessibility(_root_now, force=True)
+                    except Exception:  # noqa: BLE001 - 捕获流程不能因唤醒失败中断
+                        revived = False
                 try:
-                    # 捕获瞬间：鼠标仍在 hover 最后命中的 rect 内 → 直接复用该元素
-                    # （省一次 hit-test + DFS，捕获延迟从数百 ms 降到 describe 一次）
-                    if last_leaf is not None and last_rect is not None and _rect_contains(
-                        last_rect, x, y
+                    # 捕获瞬间：鼠标仍在 hover 最后命中的 rect 内 → **直接复用画红框
+                    # 的那个元素**（省一次 hit-test + DFS，捕获延迟从数百 ms 降到
+                    # describe 一次）。
+                    # ★ 复用对象必须是 ``last_hit_info``（快路径 = 下钻后的 fine，
+                    #   DFS 兜底 = leaf），而不是只认 DFS 的 leaf：微信这类 provider 的
+                    #   FindAll 返回空、DFS 一步都迈不出去，快路径**永远不产 leaf** ——
+                    #   只认 leaf 就等于「日常这条路径永远不复用」，一路退到
+                    #   capture_at 再走一遍 DFS，最后保存成整窗（M97 真机：框选明明
+                    #   停在搜索框）。以「画红框的元素」为准则不会出现这种分叉。
+                    if (
+                        not revived
+                        and last_hit_info is not None
+                        and last_rect is not None
+                        and _rect_contains(last_rect, x, y)
                     ):
-                        # D1：path 与 last_leaf 同源（两者都在 DFS 那轮一起缓存），
-                        # 故只在 last_leaf 可复用时带 path——不会挂到别的元素上。
+                        # path 与元素同源（两者在命中那一轮一起缓存）⇒ 可以一起带出。
                         return _describe_info(
-                            last_leaf, last_root or 0,
-                            last_path if last_hit_info is last_leaf else None,
+                            last_hit_info, last_root or 0, last_path or None,
+                            image_point=(x, y),
+                            prefer_image=prefer_image,
                         )
                     # 否则（hover 没跟上/鼠标刚快速移入）走全量 DFS 保证精度
                     _rect, root, _leaf, _, _path, _hit = _hover_hit(
                         x, y, overlay.hwnd, allow_scoped=True
                     )
                     scope = root or last_root or None
-                    return capture_with_retry(x, y, scope)
+                    return capture_with_retry(x, y, scope, prefer_image=prefer_image)
                 except Exception as exc:  # noqa: BLE001
                     # ★ 不能静默：UIA 被拒（E_ACCESSDENIED）/元素在按下瞬间消失时，
                     # 老实现要么让异常打死进程（面板只看到 stderr 尾巴），要么返回
@@ -1070,8 +1564,12 @@ def _hover_capture(hotkey_vk: int, timeout: float, hybrid: bool = False) -> dict
 
 def main() -> int:
     # 父进程按 UTF-8 读取 stdout：本地化编码（cp936）会让中文描述符破坏管道。
-    sys.stdout.reconfigure(encoding="utf-8")
-    sys.stderr.reconfigure(encoding="utf-8")
+    # 非标准流（测试替身、重定向到 StringIO）没有 reconfigure，不能让它致命。
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8")
+        except (AttributeError, ValueError, OSError):
+            pass
     parser = argparse.ArgumentParser(prog="desktop-capture-agent")
     parser.add_argument("--hotkey", default="F9")
     parser.add_argument("--timeout", type=float, default=60.0)
@@ -1081,9 +1579,20 @@ def main() -> int:
                         help="hover 模式：鼠标移动实时高亮，热键或 Ctrl+Click 捕获")
     parser.add_argument("--hybrid", action="store_true",
                         help="混合捕获：浏览器网页内容区让位给扩展页内捕获（仅配合 --hover）")
+    parser.add_argument("--image", action="store_true",
+                        help="显式图像捕获：裁光标周边模板作 image locator 候选")
+    parser.add_argument("--wake-accessibility", action="store_true",
+                        dest="wake_accessibility",
+                        help="目标是无障碍树休眠的 Qt 应用（微信 4.x）时，打开其 "
+                             "QAccessible gate（写目标进程一字节，可还原）")
     args = parser.parse_args()
+    global _WAKE_ACCESSIBILITY
+    _WAKE_ACCESSIBILITY = bool(args.wake_accessibility)
     mode = "hover" if args.hover else ("point" if args.point is not None else "hotkey")
-    _trace("agent", "main_enter", mode=mode)
+    # image 必须进 trace：取证时「按图捕获」与「捕获元素」的子进程长得一模一样，
+    # 只能靠「有没有 UIA 调用」反推（2026-11-17 排查 M85 时踩过）。
+    _trace("agent", "main_enter", mode=mode, image=bool(args.image),
+           wake_accessibility=_WAKE_ACCESSIBILITY)
 
     if sys.platform != "win32":
         print(json.dumps({"error": "desktop capture requires Windows"}))
@@ -1098,12 +1607,16 @@ def main() -> int:
         keys = {"F9": 0x78, "F8": 0x77, "F10": 0x79}
         hotkey = keys.get(args.hotkey.upper(), VK_F9)
         if args.hover:
-            result = _hover_capture(hotkey, args.timeout, hybrid=args.hybrid)
+            result = _hover_capture(
+                hotkey, args.timeout, hybrid=args.hybrid, prefer_image=args.image
+            )
         elif args.point is not None:
             scope = args.window_handle
             if not scope:
                 scope = int(ctypes.windll.user32.GetForegroundWindow()) or None
-            result = capture_with_retry(args.point[0], args.point[1], scope)
+            result = capture_with_retry(
+                args.point[0], args.point[1], scope, prefer_image=args.image
+            )
         else:
             deadline = time.monotonic() + args.timeout
             pressed_before = _hotkey_pressed(hotkey)
@@ -1113,7 +1626,7 @@ def main() -> int:
                 if pressed and not pressed_before:
                     x, y = _cursor_pos()
                     scope = int(ctypes.windll.user32.GetForegroundWindow()) or None
-                    result = capture_with_retry(x, y, scope)
+                    result = capture_with_retry(x, y, scope, prefer_image=args.image)
                     break
                 pressed_before = pressed
                 time.sleep(POLL_INTERVAL)
@@ -1126,6 +1639,16 @@ def main() -> int:
             ),
         )
         print(json.dumps(result, ensure_ascii=False))
+    except Exception as exc:  # noqa: BLE001
+        # 未处理异常 ⇒ 进程秒退，父进程只读得到「exited with code N」，浮窗上写着
+        # 「捕获进程起不来」；用户会去重装插件/查环境，而真凶是本进程里的一个 bug
+        # （2026-11-17：图像模式 hover 循环抛 AttributeError 就是这个形态）。
+        # 把确切原因当**结构化结果**回传，父进程/浮窗能直接显示；完整栈仍写 stderr。
+        traceback.print_exc()
+        _trace("agent", "crashed", kind=type(exc).__name__, error=str(exc)[:300])
+        _trace("agent", "result_emitted", outcome="error")
+        reason = f"{type(exc).__name__}: {exc}".replace("\n", " ")
+        print(json.dumps({"error": f"桌面捕获内部错误：{reason}"}, ensure_ascii=False))
     finally:
         pythoncom.CoUninitialize()
     return 0

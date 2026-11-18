@@ -90,6 +90,9 @@ class _ScreenAPI(Protocol):
     def window_exists(self, hwnd: int) -> bool:
         """窗口是否还在（截图前瞬时状态会变）。"""
 
+    def window_dpi(self, hwnd: int) -> dict[str, Any]:
+        """窗口当前 DPI / 缩放；替身可不实现，调用方用 ``getattr`` 兜底。"""
+
 
 class _WinScreen:
     """真实实现：pywinauto 取窗口矩形 + PIL 坐标截屏。
@@ -141,6 +144,11 @@ class _WinScreen:
             return bool(win32gui.IsWindow(int(hwnd)))
         except Exception:  # noqa: BLE001
             return False
+
+    def window_dpi(self, hwnd: int) -> dict[str, Any]:
+        from rpa_core.capture.dpi import probe_window_dpi
+
+        return probe_window_dpi(hwnd)
 
 
 def _default_api() -> _ScreenAPI | None:
@@ -379,7 +387,11 @@ def browser_box_in_window(
 # ---------------------------------------------------------------- 取图
 
 def grab_window(hwnd: int, api: _ScreenAPI | None = None) -> dict[str, Any] | None:
-    """截指定窗口那块屏幕，返回 ``{dataUrl, windowOrigin, imageSize}``。
+    """截指定窗口那块屏幕，返回 ``{dataUrl, windowOrigin, imageSize, dpi, scale}``。
+
+    ``dpi/scale`` 是这张图的 **provenance**，由 :mod:`rpa_core.capture.dpi` 单点取数；
+    M80 以后模板 V2 的跨缩放重采样必须拿它当「当前侧」基准，**不在这里换算坐标**。
+    取不到时回 ``None``，由消费方给结构化错误，不能静默按 96 猜。
 
     返回 ``None`` 的场景一律吞掉（窗口没了/ 平台不支持 / 缺PIL / 截到空图），
     调用方落一句文案即可——**截图失败绝不上级成校验失败**（同 ``captureVisible``）。
@@ -390,6 +402,15 @@ def grab_window(hwnd: int, api: _ScreenAPI | None = None) -> dict[str, Any] | No
     rect = api.window_rect(int(hwnd or 0))
     if rect is None:
         return None
+    probe_dpi = getattr(api, "window_dpi", None)
+    if probe_dpi is not None:
+        dpi_info = probe_dpi(int(hwnd))
+    else:
+        from rpa_core.capture.dpi import probe_window_dpi
+
+        dpi_info = probe_window_dpi(int(hwnd))
+    if not isinstance(dpi_info, dict):
+        dpi_info = {}
     data = api.grab(rect)
     if not data:
         return None
@@ -405,6 +426,8 @@ def grab_window(hwnd: int, api: _ScreenAPI | None = None) -> dict[str, Any] | No
         "windowOrigin": [rect[0], rect[1]],
         "imageSize": [int(size[0]), int(size[1])],
         "windowRect": [rect[0], rect[1], rect[2], rect[3]],
+        "dpi": dpi_info.get("dpi"),
+        "scale": dpi_info.get("scale"),
     }
 
 

@@ -36,6 +36,7 @@ Windows 的 **Z 序**就是系统维护的窗口激活栈：
 from __future__ import annotations
 
 import sys
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -61,6 +62,12 @@ _WS_EX_TOOLWINDOW = 0x00000080
 # 桌面壳窗口：可见且有标题，但不是任何校验目标。
 _SHELL_WINDOW_CLASSES = {"progman", "workerw", "shell_traywnd", "shell_secondarytraywnd"}
 
+# M95：桌面元素校验专用放行集。任务栏（含副屏任务栏）标题恒为空，会被
+# _is_user_window 的「无标题」规则滤掉，但它正是「开始图标右侧搜索按钮」这类
+# 元素的合法宿主。只有桌面 verifier 传 include_desktop_shell=True 才放行；
+# 浏览器目标选择仍走原过滤，一行不改。
+_DESKTOP_SHELL_CLASSES = frozenset({"shell_traywnd", "shell_secondarytraywnd"})
+
 
 @dataclass(frozen=True)
 class ForegroundBrowser:
@@ -70,6 +77,16 @@ class ForegroundBrowser:
     browser: str          # msedge / chrome / ...（与 endpoint <browser> 段同词表）
     process: str          # 进程可执行名，如 msedge.exe（诊断用）
     title: str            # 窗口标题（诊断用，不含页面内容以外的东西）
+
+
+@dataclass(frozen=True)
+class TopWindow:
+    """Z 序里的一个可见用户顶层窗口（M74 S2：跨窗口搜索的单元）。"""
+
+    hwnd: int
+    class_name: str
+    title: str
+    process: str
 
 
 class _WindowsAPI(Protocol):
@@ -85,6 +102,10 @@ class _WindowsAPI(Protocol):
 
     def foreground(self) -> int:
         """当前前台窗口句柄（取不到给 0）。"""
+        ...
+
+    def process_name(self, hwnd: int) -> str:
+        """``hwnd`` 所属进程的可执行名（如 ``chrome.exe``），取不到给空串。"""
         ...
 
     def set_foreground(self, hwnd: int) -> bool:
@@ -119,28 +140,149 @@ def _is_user_window(class_name: str, title: str, visible: bool) -> bool:
     return str(class_name or "").strip().lower() not in _SHELL_WINDOW_CLASSES
 
 
+def process_name_of(hwnd: int, api: _WindowsAPI | None = None) -> str:
+    """``hwnd`` 所属进程的可执行名（小写，如 ``workbuddy.exe``）；取不到给空串。"""
+    if not hwnd:
+        return ""
+    api = api or _default_api()
+    getter = getattr(api, "process_name", None) if api is not None else None
+    if getter is None:
+        return ""
+    try:
+        return str(getter(int(hwnd)) or "").strip().lower()
+    except Exception:  # noqa: BLE001 - 探测失败只意味着「认不出」，不该冒泡
+        return ""
+
+
+def browser_of_window(hwnd: int, api: _WindowsAPI | None = None) -> str | None:
+    """``hwnd`` 所属进程是否**已知浏览器**（msedge/chrome/...），是则返回标识。
+
+    判据只看进程名——理由与 :func:`_is_browser_window` 同一份：Electron 定制客户端
+    （咚咚 / WorkBuddy / VS Code）的类名也是 ``Chrome_WidgetWin_1``，但它们页面里
+    没有我们的扩展。「是不是浏览器」直接决定捕获要不要让位给扩展，用类名判会把
+    这些客户端整片判死（M84 真机：WorkBuddy 悬停无任何反应）。
+    """
+    name = process_name_of(hwnd, api=api)
+    if not name:
+        return None
+    return _PROCESS_BROWSERS.get(name)
+
+
+# 浏览器**网页内容区**的渲染子窗类名。只有这类窗口才可能属于「扩展能接管的页面」；
+# 但类名本身不足以判定——Electron 定制客户端（咚咚 / WorkBuddy / VS Code）同样用它。
+BROWSER_CONTENT_CLASSES = frozenset({"Chrome_RenderWidgetHostHWND"})
+
+
+def is_browser_content(
+    class_name: str, root_hwnd: int, api: _WindowsAPI | None = None
+) -> bool:
+    """该窗口是不是**真浏览器**的网页内容区（决定捕获要不要让位给扩展）。
+
+    两个条件缺一不可：类名是 Chromium 渲染子窗 **且** 所属进程是已知浏览器。
+    ``root_hwnd`` 传顶层窗口句柄。只按类名判会让 Electron 客户端整片被当成网页
+    内容区——高亮被隐藏、Ctrl+Click 被放行，用户侧是「悬停毫无反应」（M84 真机）。
+    """
+    if str(class_name or "").strip() not in BROWSER_CONTENT_CLASSES:
+        return False
+    return browser_of_window(root_hwnd, api=api) is not None
+
+
+def visible_top_windows(
+    api: _WindowsAPI | None = None,
+    *,
+    include_desktop_shell: bool = False,
+) -> list[TopWindow]:
+    """Z 序链里**所有可见用户顶层窗口**，由近到远（M74 S2 的单一权威原语）。
+
+    「最近激活的浏览器」（:func:`first_browser_window`）与「跨窗口找桌面元素」
+    （M74 S3）都从这一条链派生，**不许各自遍历**——否则过滤规则/顺序会漂移。
+    顺序由 ``GetTopWindow → GW_HWNDNEXT`` 链保证，调用方不得重排。
+
+    ``include_desktop_shell``（M95）只给桌面元素校验用：把可见的任务栏壳窗口
+    （``Shell_TrayWnd`` / ``Shell_SecondaryTrayWnd``）按原 Z 序位置放回链里，
+    它们没有标题，默认规则会把它们当系统窗滤掉。浏览器路径不传 ⇒ 行为不变。
+    """
+    api = api or _default_api()
+    if api is None:
+        return []
+    try:
+        rows = api.enumerate_top_windows()
+    except Exception:  # noqa: BLE001 - 探测失败绝不影响校验主流程
+        return []
+    out: list[TopWindow] = []
+    for hwnd, class_name, title, process, visible in rows:
+        is_tray = (
+            include_desktop_shell
+            and visible
+            and str(class_name or "").strip().lower() in _DESKTOP_SHELL_CLASSES
+        )
+        if not is_tray and not _is_user_window(class_name, title, visible):
+            continue
+        out.append(
+            TopWindow(hwnd=int(hwnd), class_name=class_name, title=title, process=process)
+        )
+    return out
+
+
 def first_browser_window(
     api: _WindowsAPI | None = None,
 ) -> ForegroundBrowser | None:
     """Z 序链里第一个**浏览器**窗口 = 「最近激活的浏览器」；没有则 None。
 
     非 Windows 或 API 不可用时返回 None（调用方退回旧的广播行为）。
+    现在是 :func:`visible_top_windows` 的派生——语义与抽出前逐字一致。
     """
     api = api or _default_api()
-    if api is None:
-        return None
-    try:
-        windows = api.enumerate_top_windows()
-    except Exception:  # noqa: BLE001 - 探测失败绝不影响校验主流程
-        return None
-    for hwnd, class_name, title, process, visible in windows:
-        if not _is_user_window(class_name, title, visible):
-            continue
-        browser = _is_browser_window(class_name, process)
+    for window in visible_top_windows(api):
+        browser = _is_browser_window(window.class_name, window.process)
         if browser:
             return ForegroundBrowser(
-                hwnd=int(hwnd), browser=browser, process=process, title=title,
+                hwnd=window.hwnd, browser=browser, process=window.process, title=window.title,
             )
+    return None
+
+
+def find_window_for_element(
+    probe: Callable[[TopWindow], bool],
+    api: _WindowsAPI | None = None,
+    *,
+    preferred_hwnd: int | None = None,
+    include_desktop_shell: bool = False,
+    before_probe: Callable[[TopWindow], None] | None = None,
+) -> TopWindow | None:
+    """按 Z 序逐窗 ``probe``，**第一个命中即停**（M74 S2 跨窗口搜索的顺序权威）。
+
+    ``probe(window)`` 返回 True 表示该窗口里找到了目标元素。返回命中的窗口；
+    全不命中返回 None（调用方据此报 count=0，不猜、不降级）。
+
+    ``preferred_hwnd``（元素捕获时记下的窗口句柄）若命中 Z 序里的某个窗口，
+    **插到链首优先查**——这是「先查目标窗口」的最快路径；它不存在时退回整条 Z 序。
+    ``include_desktop_shell`` 只由桌面元素校验打开，见 :func:`visible_top_windows`。
+    ★ 顺序是本函数的核心契约：判据必须断言「返回的是更靠前的那个」，而不是
+    「找到了某个」——把命中窗口挪到链尾、或去掉「即停」，都必须让判据变红。
+
+    ``before_probe(window)`` 在该窗口第一次 ``probe`` **之前**调用，每个窗口至多一次。
+    桌面校验用它做无障碍唤醒：微信这类 Qt 应用的树只在**进程首次被 UIA 查询之前**
+    建得起来，等 probe（= 第一次查询）跑完再唤醒就晚了（M98 实测全部无效）。
+    异常一律吞掉——唤醒是增强路径，不能因为它让整轮校验失败。
+    """
+    windows = visible_top_windows(api, include_desktop_shell=include_desktop_shell)
+    if preferred_hwnd is not None:
+        idx = next((i for i, w in enumerate(windows) if w.hwnd == preferred_hwnd), None)
+        if idx is not None and idx > 0:
+            hit = windows[idx]
+            windows = [hit, *windows[:idx], *windows[idx + 1:]]
+    for window in windows:
+        if before_probe is not None:
+            try:
+                before_probe(window)
+            except Exception as exc:  # noqa: BLE001 - 唤醒失败不该打断搜索
+                _trace(
+                    "verify", "before_probe_error",
+                    hwnd=window.hwnd, error=type(exc).__name__,
+                )
+        if probe(window):
+            return window
     return None
 
 
@@ -204,6 +346,10 @@ class _Win32Windows:
         self._u = u
         self._k = k
 
+    def process_name(self, hwnd: int) -> str:
+        """公开的进程名查询（:func:`browser_of_window` 与捕获腿共用）。"""
+        return self._process_name(int(hwnd))
+
     def _process_name(self, hwnd: int) -> str:
         pid = self._wintypes.DWORD(0)
         self._u.GetWindowThreadProcessId(hwnd, self._ctypes.byref(pid))
@@ -229,9 +375,13 @@ class _Win32Windows:
         # 系统窗密布），真正的用户窗口排在第 100~200 位——上限取 2048 留足余量。
         while hwnd and seen < 2048:
             seen += 1
-            if not self._u.GetWindowLongW(hwnd, self._GWL_EXSTYLE) & _WS_EX_TOOLWINDOW:
-                cls = self._ctypes.create_unicode_buffer(256)
-                self._u.GetClassNameW(hwnd, cls, 256)
+            cls = self._ctypes.create_unicode_buffer(256)
+            self._u.GetClassNameW(hwnd, cls, 256)
+            # M95：任务栏壳窗口可能带 WS_EX_TOOLWINDOW，若在枚举阶段就丢掉，
+            # 业务层的桌面放行开关也救不回来。这里只把托盘壳保留在行集里；
+            # 是否真用于校验仍由 _is_user_window / include_desktop_shell 决定。
+            is_shell = str(cls.value or "").strip().lower() in _DESKTOP_SHELL_CLASSES
+            if is_shell or not self._u.GetWindowLongW(hwnd, self._GWL_EXSTYLE) & _WS_EX_TOOLWINDOW:
                 text = self._ctypes.create_unicode_buffer(512)
                 self._u.GetWindowTextW(hwnd, text, 512)
                 out.append((

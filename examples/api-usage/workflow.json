@@ -28,6 +28,18 @@
           "path": "bye.txt",
           "text": "run finished"
         }
+      },
+      {
+        "type": "action",
+        "id": "n1",
+        "command": "browser.click",
+        "with": {}
+      },
+      {
+        "type": "action",
+        "id": "n2",
+        "command": "desktop.win32.click",
+        "with": {}
       }
     ]
   }

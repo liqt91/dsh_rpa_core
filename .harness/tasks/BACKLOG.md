@@ -5,6 +5,109 @@
 
 ## 当前任务
 
+- [x] **M87 无障碍唤醒要能反复唤醒**（`done`，2026-11-17）——用户报「有几秒钟可以捕获微信
+  控件，之后又失效，只能捕获外框」。trace 里 18:20 那次 `reason=activated before=0` 证明
+  **微信自己把 gate 关回去了**，而 M86 的 `_WAKE_ATTEMPTED` 是「每进程只写一次」⇒ 之后永久
+  不重试。另两处：唤醒写在 `_hover_hit` 的 `try` 里、`ElementFromPoint` 之后（休眠时它抛
+  `E_ACCESSDENIED` ⇒ 跳进 `except` ⇒ 唤醒永远轮不到，形成死锁）；hover 只在 `moved` 时
+  hit-test（鼠标一停，救活了也不重画）。改用节流重试（1s；按下捕获键 `force`）+ 唤醒前置
+  到 hit-test 之前 + 与移动无关的保活块，救活后 `force_hit` 立刻重画。详见
+  `.harness/tasks/M87-accessibility-keepalive.md`。
+
+- [x] **M86 无障碍树唤醒（微信 4.x 的 QAccessible gate）**（`done`，2026-11-17）——复刻影刀
+  捕获微信控件的通道。实测链路：微信 4.2.0.13（Qt 静态链接、无 `platforms` 目录）冷启动时
+  UIA 主窗只有 1 个 `MMUIRenderSubWindowHW`、MSAA `accChild` 全 `E_INVALIDARG`、
+  `QueryInterface(IAccessible2)` = `E_NOINTERFACE`；**树不是不存在，是 gate 关着**。
+  影刀官方微信活动源码（`xbot_extensions/activity_weixin_v4/wechat.py`，明文）给出真相：
+  真正的 UIA 类名是 `mmui::MainWindow`，热写 `Weixin.dll` 里 `QAccessible` 的 active byte
+  再发 `WM_GETOBJECT` 即可，**无需重启**。本机 gate = `0xB50ABC8`（磁盘 1 / 内存 0），
+  写 1 后主窗 `Descendants` **1 → 118**，出现 `mmui::MainTabBar`(aid=`MainView.main_tabbar`)
+  等节点。新增 `capture/accessibility.py`（PE 扫描 + 单字节读写 + 休眠判定 + 可还原）、
+  agent `--wake-accessibility` 两处接入、session 默认下发。20 判据绿 / 负向两注入失败集
+  精确相等 + md5 还原 / 真实 dll 回归 rva 不变 / 全量 992-0 / 门禁 PASS。见 `M86-accessibility-gate.md`。
+- [x] **M84 图像红框与模板同源 + 让位按进程名**（`done`，2026-11-17）——真机两问：
+  「微信没有更细的粒度」与「WorkBuddy 连窗口都认不出」。真因都不在捕获算法：图像模式真正截的
+  是光标周围 32×32，而红框画的是**语义元素矩形**（自绘控件没有控件树 ⇒ 退化到整窗）；
+  让位判据只看 `Chrome_RenderWidgetHostHWND` 类名，Electron 客户端的渲染子窗同名 ⇒
+  整片被当成网页内容区、高亮与手势被忽略。修法：`image_proposal.clip_template_rect()` 作唯一
+  几何权威（红框与 `sourceRect` 同源）、`foreground_window.is_browser_content()` 按类名+进程名
+  判定（agent 与 click hook 共用）、图像模式只画模板框且不查 UIA、图像主定位的 `metadata.rect`
+  改为模板框、PPX 文案显示「图像 32×32 @ (x,y)」。13 测绿 / 负向 5-5 / 全量 969-0 / 门禁 PASS。
+- [x] **M83 桌面捕获子进程起不来**（`done`，2026-11-17）——维护者报「捕获元素和按图捕获都只在
+  网页框选，微信、桌面都没有框选，也无法捕获」。真因：PPX 后端用 `sys.path.insert` 挂 `src/`，
+  而 `sys.path` 不出进程 ⇒ 桌面腿 `python -m rpa_core.capture.desktop_agent` 子进程
+  `ModuleNotFoundError` 秒退；扩展腿（浏览器插件）不经过 Python 子进程，所以只有网页能用。
+  次生问题：桌面腿出局而扩展腿还活着时 `_exhausted` 不成立，浮窗照样写「桌面：就绪」，
+  用户按 F9 干等到超时也看不到原因。新增 `rpa_core/procenv.py`（`child_env()` 唯一权威，
+  四处 `-m rpa_core.*` spawn 统一接线），`HybridCaptureSession.desktop_failure` +
+  `desktop_status()` 报真实原因。判据 8 测绿、负向 4/4 集合相等 + md5 还原、全量 962 / 0 failed。
+  见 `M83-child-env.md`。
+  **欠**：① 本机鼠标注入被拦（`SetCursorPos` 返回 0 不移动），「F9 真捕一次」只能人工验；
+  ② `_BROWSER_CONTENT_CLASSES` 只登记 `Chrome_RenderWidgetHostHWND`，新内核类名变化时
+  hybrid 让位会失效（网页区被桌面腿抢）；③ 桌面腿仍无启动期健康探针，只是不再静默。
+
+- [x] **M82 图像元素执行面**（`done`，2026-11-17）——维护者问「没集成到当前的捕获功能中吗」，
+  查接线后确认两个洞：① 捕获/落盘/校验都接了图像，但 `CaptureController` 没有 `image` 参数、
+  `build_hybrid_session(image=)` 全仓无一处传 `True`（死参数），宿主 UI 也没有开关；
+  ② 更硬的是执行侧——`desktop.findElement` 只走 `DesktopLocator.model_validate`（backend 限
+  uia/win32、`driver` 被 `extra=forbid` 判非法），图像元素「捕得到、存得下、校验得过却点不动」。
+  本轮补 ②：新增 `executors/image_target.py`（定位复用 `ImageElementVerifier`、落点复用
+  `random_point_in_rect`、辅助键复用 `modifier_key_sequences`，零匹配实现），uia/win32 两后端同一份
+  分派（win32 先于窗口解析，句柄失效不再先炸 `InvalidWindowHandle`）。判据 23 测绿、负向 5/5 集合相等
+  + md5 还原、全量 954 / 0 failed。见 `M82-image-element-execution.md`。
+  **欠**：① 的宿主侧未接（PPX 编辑窗口不在本仓，Qt 面板在 `main`）；`desktop.input` 对图像元素
+  （先点后打字）未做，当前给显式 `INVALID_INPUT`。
+- [x] **M81 微信自绘真机复验**（`done`，2026-11-17）——M79 的微信项原本是 SKIP，真因是探针只认
+  `WeChatMainWndForPC`/标题「微信」，而微信 4.x 是 Qt 窗口（`Qt51514QWindowIcon`）、可执行文件叫
+  `Weixin.exe`，于是开着的主窗口被判成「不存在」。改为按进程路径识别后真机全绿：**12 pass / 0 fail / 0 skip**。
+  关键证据是 Qt 窗口 UIA `descendants` 的 `controlType` 为空、无任何交互控件 ⇒ 语义定位在微信上不可能成立；
+  显式图像捕获 → V2 proposal → 命中 `(904,138,32,32)` → `usedScale=1.0`；1.25 倍模板重采样到 `usedScale=0.8`
+  矩形不变；对照组（不重采样）`count=0`。顺带修掉 M79 探针同一处识别 bug。见 `M81-wechat-real-verification.md`。
+  **欠**：本机系统 DPI 只有 96，跨 DPI 是「真机像素 + 模拟 captureScale」；真 125%/150% 环境未验；
+  聊天区内部控件（气泡/输入框）模板精度未覆盖。
+
+- [x] **M80 模板 V2 + DPI 自适应重采样**（`done`，2026-11-17）——图像模板此前只存 base64 与尺寸，
+  不知道在什么 DPI/缩放下截的，匹配也只按原尺寸跑一次 ⇒ 100% 缩放捕获的微信图标到 125% 上直接失配。
+  维护者拍板「DPI provenance + 多尺度」「旧模板不迁移、显式报错重捕获」。落地 `capture/dpi.py`（统一取数）、
+  `grab_window` 回 `dpi`/`scale`、`image_proposal` 写 `templateSchema=2`/`templateHash`/`captureDpi`/`captureScale`/`sourceRect`、
+  `image_locator` 单一重采样函数 + `usedScale`、V1 模板在静态与 `verify_element` 两条路径都显式拒绝。
+  判据全绿、负向 5/5 精确红、FULL GATE PASSED ×2（909 passed）。见 `M80-template-v2-dpi.md`。
+  **欠**：真机 125%/150% 缩放环境、多显示器 per-monitor 混合 DPI 未验。
+
+- [x] **M79 捕获/校验真机复验**（`done`，2026-11-17）——M74~M78 首次占机跑出 `3 pass / 5 fail`，暴露三处替身看不见的接线缺陷：locator dict 未归一化成 `DesktopLocator`（全窗口 `find-failed`）、`metadata.windowHandle` 没交给默认桌面 verifier（遮挡时命中盖子窗口）、微信自绘区 UIA 拒绝访问阻断显式图像 proposal。三处修复 + 真机复跑 `8 pass / 0 fail / 1 skip`，负向 3/3。S1~S4 见 `M79-real-machine-verification.md`。
+  **欠**：微信自绘区已由 M81 真机取证（12 pass / 0 skip：Qt 窗口空 UIA 树 + 图像命中 + 跨 DPI 重采样）；
+  真 125% 缩放环境与聊天区内部控件仍未覆盖。
+
+- [x] **M78 执行层前置 + 桌面校验可见反馈**（`done`，2026-11-17）——M74 只给了 hit 时置前、没有可见框；click/input 的元素 set_focus 不等于窗口前置。补 `capture/desktop_highlight.py`（瞬时置顶穿透红框，flash 才画）、`--shot` 桌面截图回执、uia/win32 两执行器 click/input/getText 动作前置。观感失败一律吞掉。判据 34 测绿、负向 6/6、FULL GATE PASSED。S1~S4 见 `M78-front-and-highlight.md`。
+  **欠**：preview 长驻高亮未做；视觉/DPI/多窗口遮挡已由 M79 占机复验（8 pass / 1 skip）。
+
+- [x] **M77 捕获期显式图像 proposal**（`done`，2026-11-17）——M75 只给运行期图像定位，捕获期仍只产 UIA 三属性候选，微信自绘控件进不了元素库。补 `capture/image_proposal.py` + CLI `--image` / PPX「按图捕获」按钮，显式开关端到端透传；proposal 标 `matchedCount=0/proposed=true`，不冒充实测、不静默降级（ADR 0003）。判据 17 测绿、UI 14/14、负向 8/8、FULL GATE PASSED。S1~S4 见 `M77-capture-time-image-proposal.md`。
+  **欠**：DPI/遮挡已由 M79 占机复验通过；微信自绘区本机离屏且禁移动，模板精度仍未取证；模板版本与自适应重采样未做。
+
+- [x] **M76 统一校验的用户入口**（`done`，2026-11-17）——M74 的 `verify_element` 此前只有测试调用，用户点不到。CLI `elements verify --live`（默认静态校验不变）+ PPX 原型 `rpa.verifyElement` 薄 RPC 与资产行「校验」按钮，两端都只调同一门面；Qt 源码冻结未动。判据 CLI 5 测绿、负向 7/7、UI 13/13、FULL GATE PASSED 两次。S1~S3 见 `M76-verification-user-entry.md`。
+  **欠**：桌面侧可见高亮/截图回执、执行层操作前置仍未做；PPX 原型需占机点一次按钮确认（当前只到 RPC/静态判据）。
+
+- [x] **M75 图像/OCR 定位后端**（`done`，2026-11-16）——承接 M74 欠账：自绘/微信控件
+  UIA 语义全空 ⇒ `_locator_candidates` 候选为空。维护者拍板**路线 A + GUI 走 ppx 分支**。
+  落地：`capture/image_locator.py`（复用 ocr_worker 模板匹配/检测，替身可测）、`image_guard.py`
+  （ADR 0003 禁静默降级，显式 driver=image + usedLayer 证据）、`image_verification.py`（接 M74
+  verify_element 门面）、`executors/desktop_image.py` + `commands/desktop_image/imageLocate.json`
+  （executor/manifest/cases/参数·错误门禁/i18n 标签全同步）、文档补第 4 层。判据 77 测绿、
+  负向 9 条精确红、FULL GATE PASSED。
+  **欠**：GUI 侧接线（命令卡片/属性面板字段 + i18n.js 同步）需在 `ppx-only` 分支 cherry-pick
+  并留证；真机图像定位精度（DPI/遮挡/微信自绘区）未占机复验，台账见正文第七节。
+  S0~S5 见 `M75-image-ocr-locator-backend.md`。
+
+- [x] **M74 统一元素校验编排**（`done`，2026-11-16）——看影刀逆向后定调：桌面/浏览器
+  捕获无缝衔接、校验能在桌面所有窗口找到元素并前置、粒度到微信控件是目标效果，
+  **不许拿「技术栈不同」当不做的理由**。本任务只做编排层：统一校验入口（按 kind 分派）+
+  Z 序跨窗口搜索 + 命中窗口置前 + 桌面侧活体校验（现在只有 Web 一条 `ElementVerifier`，
+  桌面无等价校验、执行 click/input 不自动前置）。S1~S5 见 `M74-unified-element-verification.md`。
+  **欠（能力层，另立里程碑）**：微信/自绘/Qt 控件细粒度定位——影刀靠 `HLayFrontend.dll`
+  （造 DOM 树）+ Java hook + CV/OCR；我们 `_locator_candidates` 只依赖
+  controlType/automationId/name，自绘控件为空⇒候选空。需 image/OCR 定位后端或注入式控件树。
+  另：操作前自动前置目标窗口（执行层，S4 后可单列）。
+
 - [x] **M73 捕获确认框保存接线的双参数回归**（`done`，2026-11-13）——维护者实测
   「入库失败：start capture.<locals>.<lambda>() takes 1 positional argument but 2 were given」。
   根因：M69 把控制器回调升成 `(name, selector)`、宿主 `_commit_from_dialog` 也收 selector，

@@ -6,7 +6,11 @@
   （勾掉 = 该层不参与定位）、右栏选中层的属性行（勾选 / 精确·包含 / 值可改），
   底部实时预览重组后的 css。重组规则的唯一权威是
   ``capture_kit.selector_tree.compose``——控件只改状态，不自己拼字符串。
-- **简式形态**（desktop 或旧资产无 path）：名称 + 可编辑定位 + 只读信息区。
+- **桌面层级形态**（desktop，M91）：左栏节点勾选（窗口只读、容器可勾掉）、
+  右栏属性行（勾选 / 精确·包含·正则 / 值可改），底部实时预览重组后的完整
+  selector JSON（保留 candidates）。重组规则唯一权威是
+  ``capture_kit.desktop_editing.compose_selector``——控件只改状态，不自己拼 JSON。
+- **简式形态**（旧资产无层级模型）：名称 + 可编辑定位 + 只读信息区。
 
 实现要点（全是从浮窗/前一版搬来的教训）：
 
@@ -20,12 +24,13 @@
 
 from __future__ import annotations
 
+import json
 import sys
 import threading
 from collections.abc import Callable
 from typing import Any
 
-from . import _win32, selector_tree
+from . import _win32, desktop_editing, selector_tree
 
 _CLASS = "RpaElementEditDialog"
 # 私有消息：窗口显示后再设焦点（同步 SetFocus 在本机实测会卡 ~1.5s）
@@ -38,6 +43,9 @@ _SIMPLE_H = 452
 _TREE_W = 780
 _TREE_H = 556
 
+# 桌面层级形态客户区（左节点 + 右属性 + 多行组合预览）
+_DESKTOP_W = 940
+_DESKTOP_H = 620
 # 固定控件 id：保存/取消沿对话框惯例（IsDialogMessage 会把 Enter/Esc 映到这两个 id）
 _ID_NAME = 201
 _ID_META = 202
@@ -45,14 +53,24 @@ _ID_ERROR = 203
 _ID_SELECTOR = 204
 _ID_PREVIEW = 205
 _ID_INFO = 206
-# 动态控件 id 起点（层级勾选 / 属性行）
+# 动态控件 id 起点（网页层级勾选 / 属性行）
 _ID_LEVEL_BASE = 1000
 _ID_ATTR_BASE = 2000
+# 桌面层级勾选 / 桌面属性行（与网页层级分开，免得两种形态互相抢 cid）
+_ID_NODE_BASE = 3000
+_ID_DESKTOP_ATTR_BASE = 4000
 # 层级区一屏放得下的行数（y 70 起、行高 32、预览标签在 402）；全链层级超出时
 # 窗口右侧给 WS_VSCROLL 滚动条，checkbox 按偏移重排（M69：目标→根的完整链）。
 _LEVEL_ROWS = 10
+_NODE_ROWS = 10
 
 _MATCH_MODES = ("精确", "包含")
+_DESKTOP_MODES = ("精确", "包含", "正则")
+
+
+def _clamp_node_scroll(scroll: int, total: int) -> int:
+    """把节点区偏移夹进 ``[0, total - _NODE_ROWS]``（不足一屏就是 0）。"""
+    return max(0, min(int(scroll or 0), max(0, int(total) - _NODE_ROWS)))
 
 
 class ElementEditDialog:
@@ -79,6 +97,14 @@ class ElementEditDialog:
         self._level_boxes: list[int] = []
         self._attr_controls: list[int] = []
         self._control_map: dict[int, tuple] = {}
+        # 桌面层级形态状态（nodes / descriptor 由内核编辑模型提供）
+        self._nodes: list[dict[str, Any]] = []
+        self._descriptor: dict[str, Any] | None = None
+        self._selected_node = 0
+        self._node_scroll = 0
+        self._node_boxes: list[int] = []
+        self._desktop_attr_controls: list[int] = []
+        self._desktop_control_map: dict[int, tuple] = {}
 
     @property
     def available(self) -> bool:
@@ -93,13 +119,16 @@ class ElementEditDialog:
         meta: str = "",
         info: str = "",
         levels: list[dict[str, Any]] | None = None,
+        nodes: list[dict[str, Any]] | None = None,
+        descriptor: dict[str, Any] | None = None,
         save_label: str = "保存",
         on_save: Callable[[str, str], str | None] | None = None,
         on_close: Callable[[bool], None] | None = None,
     ) -> None:
         """弹出编辑框。``on_save(name, selector)`` 返回 None = 成功关框；返回字符串 =
-        错误回显留框。``levels`` 给出时走影刀式层级形态（selector 参数忽略，以
-        重组预览为准）；否则走简式形态（selector 是可编辑文本）。
+        错误回显留框。``levels`` 给出时走网页层级形态（selector 参数忽略，以
+        重组预览为准）；``nodes`` 给出时走桌面层级/属性形态（同样以重组预览
+        为准，保存回写完整 selector 字典）；否则走简式形态（selector 是可编辑文本）。
         """
         if not self.available:
             return
@@ -109,7 +138,10 @@ class ElementEditDialog:
         self._meta = meta
         self._info = info
         self._levels = levels or []
+        self._nodes = nodes or []
+        self._descriptor = descriptor
         self._selected = 0
+        self._selected_node = 0
         self._save_label = save_label
         self._on_save = on_save
         self._on_close = on_close
@@ -135,13 +167,14 @@ class ElementEditDialog:
         import win32con
         import win32gui
 
-        tree_mode = bool(self._levels)
-        client_w = _TREE_W if tree_mode else _SIMPLE_W
-        client_h = _TREE_H if tree_mode else _SIMPLE_H
+        desktop_mode = bool(self._nodes)
+        tree_mode = bool(self._levels) and not desktop_mode
+        client_w = _DESKTOP_W if desktop_mode else (_TREE_W if tree_mode else _SIMPLE_W)
+        client_h = _DESKTOP_H if desktop_mode else (_TREE_H if tree_mode else _SIMPLE_H)
         _win32.register_class(_CLASS)
         ex_style = win32con.WS_EX_TOPMOST | win32con.WS_EX_DLGMODALFRAME
         style = win32con.WS_POPUP | win32con.WS_CAPTION | win32con.WS_SYSMENU
-        if len(self._levels) > _LEVEL_ROWS:
+        if len(self._levels) > _LEVEL_ROWS or len(self._nodes) > _NODE_ROWS:
             # 全链层级超一屏：给窗口原生垂直滚动条（WM_VSCROLL 里重排 checkbox）
             style |= win32con.WS_VSCROLL
         # ★ 外框尺寸从客户区反推：把客户区尺寸当外框传，标题栏和边框会吃掉
@@ -163,7 +196,9 @@ class ElementEditDialog:
         )
         self._hwnd = hwnd
         _win32._INSTANCES[int(hwnd)] = self
-        if tree_mode:
+        if desktop_mode:
+            self._build_desktop_children(hwnd)
+        elif tree_mode:
             self._build_tree_children(hwnd)
         else:
             self._build_simple_children(hwnd)
@@ -319,10 +354,30 @@ class ElementEditDialog:
             win32gui.ShowWindow(box, win32con.SW_SHOW if visible else win32con.SW_HIDE)
 
     def _on_vscroll(self, hwnd, wparam) -> None:
-        """滚动层级区：行/页/拖块三档都收。"""
+        """滚动层级区：行/页/拖块三档都收（桌面节点与网页层级各走各的偏移）。"""
         import win32con
         import win32gui
 
+        if self._nodes:
+            code = wparam & 0xFFFF
+            pos = (wparam >> 16) & 0xFFFF
+            limit = max(0, len(self._nodes) - _NODE_ROWS)
+            if code == win32con.SB_LINEUP:
+                self._node_scroll = max(0, self._node_scroll - 1)
+            elif code == win32con.SB_LINEDOWN:
+                self._node_scroll = min(limit, self._node_scroll + 1)
+            elif code == win32con.SB_PAGEUP:
+                self._node_scroll = max(0, self._node_scroll - _NODE_ROWS)
+            elif code == win32con.SB_PAGEDOWN:
+                self._node_scroll = min(limit, self._node_scroll + _NODE_ROWS)
+            elif code in (win32con.SB_THUMBTRACK, win32con.SB_THUMBPOSITION):
+                self._node_scroll = min(limit, max(0, pos))
+            win32gui.SetScrollInfo(
+                hwnd, win32con.SB_VERT,
+                (win32con.SIF_POS, 0, 0, 0, self._node_scroll), True,
+            )
+            self._layout_nodes(hwnd)
+            return
         code = wparam & 0xFFFF
         pos = (wparam >> 16) & 0xFFFF
         limit = max(0, len(self._levels) - _LEVEL_ROWS)
@@ -401,6 +456,216 @@ class ElementEditDialog:
         if self._preview_edit:
             win32gui.SetWindowText(self._preview_edit, selector_tree.compose(self._levels))
 
+    # -- 桌面层级形态（desktop，影刀式节点/属性编辑） -----------------------------
+    def _build_desktop_children(self, hwnd) -> None:
+        import win32con
+        import win32gui
+
+        self._make_font()
+        control = lambda *a: self._control(hwnd, *a)  # noqa: E731
+        control("STATIC", "资产名称", 0, 16, 12, 74, 24, 200)
+        self._name_edit = control(
+            "EDIT", self._name,
+            win32con.ES_AUTOHSCROLL | win32con.WS_BORDER,
+            96, 10, 828, 26, _ID_NAME,
+        )
+        # 层数写进标题：节点区只放得下 ``_NODE_ROWS`` 行，微信这类应用动辄十几层，
+        # 不报总数用户会以为层级抓漏了。
+        self._selected_node, self._node_scroll = self._initial_node_view()
+        control(
+            "STATIC",
+            f"层级（勾选参与定位）· 共 {len(self._nodes)} 层，可滚动",
+            0, 16, 46, 380, 20, 207,
+        )
+        control("STATIC", "属性（勾选参与本层定位）", 0, 420, 46, 460, 20, 208)
+        self._node_boxes = []
+        for index, node in enumerate(self._nodes):
+            label = f"{node.get('type') or '节点'} · {node.get('name') or '(无名)'}"
+            box = control(
+                "BUTTON", label, win32con.BS_AUTOCHECKBOX,
+                16, 70 + index * 32, 380, 26, _ID_NODE_BASE + index,
+            )
+            win32gui.SendMessage(
+                box, win32con.BM_SETCHECK, 1 if node.get("selected") else 0, 0
+            )
+            self._desktop_control_map[_ID_NODE_BASE + index] = ("node", index)
+            self._node_boxes.append(box)
+        self._setup_node_scroll(hwnd)
+        self._rebuild_desktop_attr_pane(hwnd)
+        control("STATIC", "组合选择器（完整 JSON，保留捕获候选）", 0, 16, 402, 500, 20, 209)
+        self._preview_edit = control(
+            "EDIT", "",
+            win32con.ES_MULTILINE | win32con.ES_READONLY | win32con.ES_AUTOVSCROLL
+            | win32con.WS_VSCROLL | win32con.WS_BORDER,
+            16, 424, 908, 96, _ID_PREVIEW,
+        )
+        control("STATIC", self._info, 0, 16, 526, 908, 18, _ID_INFO)
+        self._error_static = control("STATIC", "", 0, 16, 548, 908, 18, _ID_ERROR)
+        control(
+            "BUTTON", self._save_label, win32con.BS_DEFPUSHBUTTON,
+            748, 574, 84, 30, win32con.IDOK,
+        )
+        control("BUTTON", "取消", 0, 840, 574, 84, 30, win32con.IDCANCEL)
+        win32gui.SendMessage(self._name_edit, win32con.EM_SETSEL, 0, -1)
+        self._refresh_desktop_preview()
+
+    def _setup_node_scroll(self, hwnd) -> None:
+        import win32con
+        import win32gui
+
+        # 初始偏移由 ``_initial_node_view`` 决定（目标节点那条必须是可见的），
+        # 这里只负责把它夹回合法范围并同步滚动条位置。
+        self._node_scroll = _clamp_node_scroll(self._node_scroll, len(self._nodes))
+        if len(self._nodes) > _NODE_ROWS:
+            mask = win32con.SIF_RANGE | win32con.SIF_PAGE | win32con.SIF_POS
+            win32gui.SetScrollInfo(
+                hwnd, win32con.SB_VERT,
+                (mask, 0, len(self._nodes) - 1, _NODE_ROWS, self._node_scroll), True,
+            )
+        self._layout_nodes(hwnd)
+
+    def _initial_node_view(self) -> tuple[int, int]:
+        """默认把「目标节点」摆进可视区，返回 ``(选中行, 滚动偏移)``。
+
+        节点区只放得下 ``_NODE_ROWS`` 行，而微信这类应用的层级有十几层，且
+        **前缀全是无名容器**（``Group`` / ``Custom`` / ``mmui::XView``）。默认
+        停在最顶上时，用户看到的是一屏 ``(无名)``，目标那行被挤到窗口外——
+        看起来就像"层级没抓全"。选中行也跟着走，属性面板才显示目标自己的属性。
+        """
+        if not self._nodes:
+            return 0, 0
+        target = len(self._nodes) - 1
+        for index in range(len(self._nodes) - 1, -1, -1):
+            if self._nodes[index].get("selected"):
+                target = index
+                break
+        scroll = _clamp_node_scroll(target - _NODE_ROWS + 1, len(self._nodes))
+        return target, scroll
+
+    def _layout_nodes(self, hwnd) -> None:
+        import win32con
+        import win32gui
+
+        for index, box in enumerate(self._node_boxes):
+            row = index - self._node_scroll
+            visible = 0 <= row < _NODE_ROWS
+            win32gui.SetWindowPos(
+                box, 0, 16, 70 + row * 32, 0, 0,
+                win32con.SWP_NOSIZE | win32con.SWP_NOZORDER,
+            )
+            win32gui.ShowWindow(box, win32con.SW_SHOW if visible else win32con.SW_HIDE)
+
+    def _rebuild_desktop_attr_pane(self, hwnd) -> None:
+        import win32con
+        import win32gui
+
+        for handle in self._desktop_attr_controls:
+            win32gui.DestroyWindow(handle)
+        self._desktop_attr_controls = []
+        for cid in [
+            cid for cid, meta in self._desktop_control_map.items() if meta[0] != "node"
+        ]:
+            self._desktop_control_map.pop(cid, None)
+        node = self._nodes[self._selected_node]
+        readonly_node = bool(node.get("readonly"))
+        y = 70
+        for row_index, row in enumerate(node.get("attributes") or []):
+            base = _ID_DESKTOP_ATTR_BASE + row_index * 4
+            readonly = readonly_node or bool(row.get("readonly"))
+            box = self._control(
+                hwnd, "BUTTON", "", win32con.BS_AUTOCHECKBOX,
+                420, y, 20, 26, base,
+            )
+            win32gui.SendMessage(
+                box, win32con.BM_SETCHECK, 1 if row.get("required") else 0, 0
+            )
+            win32gui.EnableWindow(box, not readonly)
+            label = f"{row.get('label') or row.get('field') or ''}"
+            if readonly:
+                label += "（只读）"
+            self._control(hwnd, "STATIC", label, 0, 448, y + 3, 96, 20, base + 1)
+            combo = self._control(
+                hwnd, "COMBOBOX", "",
+                win32con.CBS_DROPDOWNLIST | win32con.WS_VSCROLL,
+                552, y, 84, 120, base + 2,
+            )
+            for mode in _DESKTOP_MODES:
+                win32gui.SendMessage(combo, win32con.CB_ADDSTRING, 0, mode)
+            win32gui.SendMessage(
+                combo, win32con.CB_SETCURSEL,
+                _DESKTOP_MODES.index(row.get("operator"))
+                if row.get("operator") in _DESKTOP_MODES else 0, 0,
+            )
+            # 运行期只有目标级 name/automationId 吃 matchMode；其余列不能装作可改。
+            win32gui.EnableWindow(
+                combo, not readonly and row.get("field") in desktop_editing.FUZZY_FIELDS
+            )
+            edit = self._control(
+                hwnd, "EDIT", str(row.get("value") or ""),
+                win32con.ES_AUTOHSCROLL | win32con.WS_BORDER
+                | (win32con.ES_READONLY if readonly else 0),
+                644, y, 280, 26, base + 3,
+            )
+            self._desktop_control_map[base] = ("attr_check", row_index)
+            self._desktop_control_map[base + 2] = ("attr_mode", row_index)
+            self._desktop_control_map[base + 3] = ("attr_value", row_index)
+            self._desktop_attr_controls += [box, combo, edit]
+            y += 34
+
+    def _refresh_desktop_preview(self) -> None:
+        import json
+
+        import win32gui
+
+        if not self._preview_edit:
+            return
+        try:
+            selector = desktop_editing.compose_selector(self._descriptor or {}, self._nodes)
+            text = json.dumps(selector, ensure_ascii=False, indent=2)
+        except (TypeError, ValueError) as exc:
+            text = f"（当前勾选无法组合：{exc}）"
+        win32gui.SetWindowText(self._preview_edit, text)
+
+    def _on_desktop_control(self, hwnd, cid: int, notif: int) -> None:
+        import win32con
+        import win32gui
+
+        meta = self._desktop_control_map.get(cid)
+        if meta is None:
+            return
+        role, index = meta
+        if role == "node" and notif == 0:  # BN_CLICKED
+            box = win32gui.GetDlgItem(hwnd, cid)
+            checked = bool(win32gui.SendMessage(box, win32con.BM_GETCHECK, 0, 0))
+            node = self._nodes[index]
+            if node.get("readonly"):
+                win32gui.SendMessage(box, win32con.BM_SETCHECK, 0, 0)
+                checked = False
+            elif index == len(self._nodes) - 1 and not checked:
+                # 目标级（链尾）必须参与定位：勾掉就回到勾选，绝不让它空着保存。
+                win32gui.SendMessage(box, win32con.BM_SETCHECK, 1, 0)
+                checked = True
+            node["selected"] = checked
+            self._selected_node = index
+            self._rebuild_desktop_attr_pane(hwnd)
+            self._refresh_desktop_preview()
+            return
+        row = (self._nodes[self._selected_node].get("attributes") or [])[index]
+        if role == "attr_check" and notif == 0:
+            box = win32gui.GetDlgItem(hwnd, cid)
+            row["required"] = bool(win32gui.SendMessage(box, win32con.BM_GETCHECK, 0, 0))
+            self._refresh_desktop_preview()
+        elif role == "attr_value" and notif == win32con.EN_CHANGE:
+            edit = win32gui.GetDlgItem(hwnd, cid)
+            row["value"] = win32gui.GetWindowText(edit)
+            self._refresh_desktop_preview()
+        elif role == "attr_mode" and notif == win32con.CBN_SELCHANGE:
+            combo = win32gui.GetDlgItem(hwnd, cid)
+            row["operator"] = _DESKTOP_MODES[
+                win32gui.SendMessage(combo, win32con.CB_GETCURSEL, 0, 0)
+            ]
+            self._refresh_desktop_preview()
+
     # -- 消息 -----------------------------------------------------------------
     def _wnd_proc(self, hwnd, msg, wparam, lparam):
         import win32con
@@ -415,7 +680,10 @@ class ElementEditDialog:
             if cid == win32con.IDCANCEL and notif == 0:
                 self._close(saved=False)
                 return 0
-            self._on_control(hwnd, cid, notif)
+            if self._nodes:
+                self._on_desktop_control(hwnd, cid, notif)
+            else:
+                self._on_control(hwnd, cid, notif)
             return 0
         if msg == win32con.WM_VSCROLL:
             self._on_vscroll(hwnd, wparam)
@@ -493,7 +761,14 @@ class ElementEditDialog:
         if not name:
             self._show_error("名字不能为空")
             return
-        if self._levels:
+        if self._nodes:
+            try:
+                composed = desktop_editing.compose_selector(self._descriptor or {}, self._nodes)
+                selector = json.dumps(composed, ensure_ascii=False, indent=2)
+            except (TypeError, ValueError) as exc:
+                self._show_error(str(exc))
+                return
+        elif self._levels:
             selector = selector_tree.compose(self._levels)
             if not selector:
                 self._show_error("组合选择器为空：至少保留目标层的一个特征")

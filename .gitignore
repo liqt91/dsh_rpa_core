@@ -60,3 +60,11 @@ node_modules/
 /.harness/spike/_*
 # 门禁逐条取证时重定向到仓库根的日志（§ 门禁：输出重定向到文件再读）
 /_gate_*.log
+
+# 测试/手测在仓库根留下的临时目录与日志（沙箱把 tempdir 指到仓库根时会重生）
+/pytest-of-Administrator/
+/apps/xhs-workbench/pytest-of-Administrator/
+/rpa-ext-bridge-*/
+/rpa-m73-wire-*/
+/rpa-capture-trace.log
+/apps/xhs-workbench/rpa-capture-trace.log

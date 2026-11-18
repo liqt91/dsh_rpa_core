@@ -238,11 +238,14 @@ def test_workflow_deadline_beats_pending_pause_mid_attempt(tmp_path):
         async def execute(self, invocation, cancellation):
             self.calls += 1
             holder["handle"].pause()
-            await asyncio.sleep(0.3)
+            # 远大于 workflow deadline；把「暂停已挂起但 attempt 还没退」留足窗口。
+            # 旧版 0.3s sleep / 0.1s deadline 在本机常因启动/写入开销先耗尽预算，
+            # calls=0 导致假红（M79 收口实测）；比例不变，绝对预算放宽到不抽风。
+            await asyncio.sleep(2.0)
             return CommandResult.success()
 
     slow = PauseThenSleepExecutor()
-    runner, plan = build(tmp_path, two_step_workflow(timeout_seconds=0.1), slow)
+    runner, plan = build(tmp_path, two_step_workflow(timeout_seconds=0.5), slow)
 
     async def scenario():
         holder["handle"] = runner.start(plan)

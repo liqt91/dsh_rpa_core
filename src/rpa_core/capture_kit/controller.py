@@ -263,6 +263,8 @@ class CaptureController:
             meta=model.get("meta") or "",
             info=model.get("info") or "",
             levels=model.get("levels"),
+            nodes=model.get("nodes"),
+            descriptor=doc if isinstance(doc, dict) else None,
             on_save=self._commit_from_dialog,
             on_close=self._close_edit,
         )

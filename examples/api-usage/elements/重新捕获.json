@@ -1,0 +1,247 @@
+{
+  "kind": "desktop",
+  "selector": {
+    "locator": {
+      "backend": "uia",
+      "controlType": "Group",
+      "automationId": "qt_scrollarea_viewport",
+      "path": [
+        {
+          "controlType": "Group",
+          "className": "QWidget"
+        },
+        {
+          "controlType": "Custom",
+          "className": "QStackedWidget"
+        },
+        {
+          "controlType": "Group",
+          "automationId": "MainView",
+          "className": "mmui::MainView"
+        },
+        {
+          "controlType": "Group",
+          "automationId": "MainView.main_window_corner_view",
+          "className": "QWidget"
+        },
+        {
+          "controlType": "Group",
+          "automationId": "MainView.main_window_corner_view.MainView",
+          "className": "mmui::MainView"
+        },
+        {
+          "controlType": "Custom",
+          "automationId": "MainView.main_window_corner_view.MainView.main_window_main_splitter_view",
+          "className": "mmui::XSplitterView"
+        },
+        {
+          "controlType": "Custom",
+          "automationId": "MainView.main_window_corner_view.MainView.main_window_main_splitter_view.main_window_sub_splitter_view",
+          "className": "mmui::XSplitterView"
+        },
+        {
+          "controlType": "Group",
+          "className": "mmui::XView"
+        },
+        {
+          "controlType": "Group",
+          "className": "mmui::ChatMasterView"
+        },
+        {
+          "controlType": "Group",
+          "className": "mmui::XVBoxView"
+        },
+        {
+          "controlType": "Group",
+          "className": "mmui::XView"
+        },
+        {
+          "controlType": "Custom",
+          "className": "mmui::XStackedWidget"
+        },
+        {
+          "controlType": "Group",
+          "className": "mmui::XSearchField"
+        },
+        {
+          "controlType": "Edit",
+          "name": "搜索",
+          "className": "mmui::XValidatorTextEdit"
+        }
+      ]
+    },
+    "candidates": [
+      {
+        "kind": "uia",
+        "locator": {
+          "backend": "uia",
+          "controlType": "Group",
+          "automationId": "qt_scrollarea_viewport",
+          "path": [
+            {
+              "controlType": "Group",
+              "className": "QWidget"
+            },
+            {
+              "controlType": "Custom",
+              "className": "QStackedWidget"
+            },
+            {
+              "controlType": "Group",
+              "automationId": "MainView",
+              "className": "mmui::MainView"
+            },
+            {
+              "controlType": "Group",
+              "automationId": "MainView.main_window_corner_view",
+              "className": "QWidget"
+            },
+            {
+              "controlType": "Group",
+              "automationId": "MainView.main_window_corner_view.MainView",
+              "className": "mmui::MainView"
+            },
+            {
+              "controlType": "Custom",
+              "automationId": "MainView.main_window_corner_view.MainView.main_window_main_splitter_view",
+              "className": "mmui::XSplitterView"
+            },
+            {
+              "controlType": "Custom",
+              "automationId": "MainView.main_window_corner_view.MainView.main_window_main_splitter_view.main_window_sub_splitter_view",
+              "className": "mmui::XSplitterView"
+            },
+            {
+              "controlType": "Group",
+              "className": "mmui::XView"
+            },
+            {
+              "controlType": "Group",
+              "className": "mmui::ChatMasterView"
+            },
+            {
+              "controlType": "Group",
+              "className": "mmui::XVBoxView"
+            },
+            {
+              "controlType": "Group",
+              "className": "mmui::XView"
+            },
+            {
+              "controlType": "Custom",
+              "className": "mmui::XStackedWidget"
+            },
+            {
+              "controlType": "Group",
+              "className": "mmui::XSearchField"
+            },
+            {
+              "controlType": "Edit",
+              "name": "搜索",
+              "className": "mmui::XValidatorTextEdit"
+            }
+          ]
+        },
+        "matchedCount": 1,
+        "penalty": 208
+      },
+      {
+        "kind": "uia",
+        "locator": {
+          "backend": "uia",
+          "controlType": "Group",
+          "path": [
+            {
+              "controlType": "Group",
+              "className": "QWidget"
+            },
+            {
+              "controlType": "Custom",
+              "className": "QStackedWidget"
+            },
+            {
+              "controlType": "Group",
+              "automationId": "MainView",
+              "className": "mmui::MainView"
+            },
+            {
+              "controlType": "Group",
+              "automationId": "MainView.main_window_corner_view",
+              "className": "QWidget"
+            },
+            {
+              "controlType": "Group",
+              "automationId": "MainView.main_window_corner_view.MainView",
+              "className": "mmui::MainView"
+            },
+            {
+              "controlType": "Custom",
+              "automationId": "MainView.main_window_corner_view.MainView.main_window_main_splitter_view",
+              "className": "mmui::XSplitterView"
+            },
+            {
+              "controlType": "Custom",
+              "automationId": "MainView.main_window_corner_view.MainView.main_window_main_splitter_view.main_window_sub_splitter_view",
+              "className": "mmui::XSplitterView"
+            },
+            {
+              "controlType": "Group",
+              "className": "mmui::XView"
+            },
+            {
+              "controlType": "Group",
+              "className": "mmui::ChatMasterView"
+            },
+            {
+              "controlType": "Group",
+              "className": "mmui::XVBoxView"
+            },
+            {
+              "controlType": "Group",
+              "className": "mmui::XView"
+            },
+            {
+              "controlType": "Custom",
+              "className": "mmui::XStackedWidget"
+            },
+            {
+              "controlType": "Group",
+              "className": "mmui::XSearchField"
+            },
+            {
+              "controlType": "Edit",
+              "name": "搜索",
+              "className": "mmui::XValidatorTextEdit"
+            }
+          ]
+        },
+        "matchedCount": 33,
+        "penalty": 208
+      }
+    ]
+  },
+  "verifyCount": 1,
+  "name": "重新捕获",
+  "group": null,
+  "framework": null,
+  "processName": null,
+  "winTitle": null,
+  "screenshot": null,
+  "lastVerifiedAt": null,
+  "lastVerifyError": null,
+  "metadata": {
+    "windowHandle": 25625676,
+    "windowTitle": "微信",
+    "controlType": "Group",
+    "automationId": "qt_scrollarea_viewport",
+    "name": null,
+    "className": "QWidget",
+    "rect": {
+      "left": 201,
+      "top": 162,
+      "width": 179,
+      "height": 19
+    }
+  },
+  "capturedAt": "2026-11-18T09:40:48.471616Z"
+}

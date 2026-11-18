@@ -96,14 +96,15 @@ def ensure_extension_host() -> dict[str, Any]:
     return {"changed": bool(refreshed), "installed": installed, "refreshed": refreshed}
 
 
-def build_hybrid_session() -> HybridCaptureSession:
+def build_hybrid_session(*, image: bool = False) -> HybridCaptureSession:
     """单入口混合会话：桌面 hover + 扩展双通道。
 
     ``hover=True`` 让桌面子进程进入框选态；``hybrid`` 由
     ``HybridCaptureSession`` 经 ``setdefault`` 注入（浏览器内容区让位给扩展）。
+    ``image=True`` 是用户显式选择的图像捕获，透传给桌面腿裁模板。
     """
     return HybridCaptureSession(
-        desktop_factory=lambda **kw: DesktopCaptureSession(hover=True, **kw),
+        desktop_factory=lambda **kw: DesktopCaptureSession(hover=True, image=image, **kw),
         extension_session=ExtensionCaptureSession(),
     )
 
@@ -133,6 +134,17 @@ def desktop_status(session: Any) -> tuple[str, bool]:
     click = capture_click_label()
     if getattr(session, "desktop_offline", False):
         return "桌面：本平台不可用（仅支持 Windows）", False
+    failure = getattr(session, "desktop_failure", None) or {}
+    reason = str(failure.get("error") or "").strip()
+    if reason:
+        # 桌面腿出局时扩展腿还活着，会话不会收场 —— 老实现这里照样写「就绪」，
+        # 用户按 F9 等到超时也看不到原因（2026-11-17：子进程缺导入路径秒退）。
+        # 前缀刻意比原因更中性：原因可能是「进程起不来」，也可能是捕获期内部错误
+        # （M85 的 AttributeError）或「读不到该位置的元素」——写死「起不来」会把
+        # 用户引去查环境/重装插件（2026-11-17 就这么被误导过一次）。
+        if len(reason) > 60:
+            reason = reason[:59] + "…"
+        return f"桌面：捕获不可用（{reason}）", False
     return f"桌面：就绪（F9 或 {click} / 右键）", True
 
 

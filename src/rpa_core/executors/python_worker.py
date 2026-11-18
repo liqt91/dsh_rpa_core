@@ -4,6 +4,7 @@ import sys
 
 from rpa_core.model.command import CommandInvocation, CommandResult
 from rpa_core.model.errors import ErrorCode
+from rpa_core.procenv import child_env
 
 from .base import CommandExecutor
 
@@ -29,6 +30,8 @@ class PythonWorkerExecutor(CommandExecutor):
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            # 同上：`-m` 依赖子进程自己的 sys.path，宿主只改过父进程时必须靠 env。
+            env=child_env(),
         )
         payload = invocation.model_dump_json().encode("utf-8")
         communicate = asyncio.create_task(process.communicate(payload))

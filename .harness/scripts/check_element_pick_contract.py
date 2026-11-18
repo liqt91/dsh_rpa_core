@@ -641,6 +641,111 @@ def case_poll_edit_states() -> None:
         api._CAPTURES.pop(key, None)
 
 
+def case_element_library_group_storage() -> None:
+    """元素库 P1：分组文件与显式元数据字段不能被「方便」地改回假实现。
+
+    两处历史坑：① 分组文件若落进 elements/，会被 listElements 当成一条无选择器
+    的假元素；② 顶层新字段若不在 ElementDescriptor 显式声明，会被 pydantic 的
+    extra=ignore 静默丢弃——界面写进去了、重开又没了。
+    """
+
+    def count(path: Path, needle: str, expected: int) -> None:
+        text = path.read_text(encoding="utf-8")
+        assert_true(
+            text.count(needle) == expected,
+            f"{path.name} 里 {needle!r} 出现 {text.count(needle)} 次（应为 {expected}）",
+        )
+
+    count(API, 'return _flow_path(path).parent / "element_groups.json"', 1)
+    count(API, "_fill_library_fields(doc)", 2)
+    model = ROOT / "src" / "rpa_core" / "model" / "capture.py"
+    for needle in ("group: str | None", "framework: str | None",
+                   "process_name: str | None", "win_title: str | None",
+                   "screenshot: str | None"):
+        count(model, needle, 1)
+
+
+def case_taskbar_shell_verification_wired() -> None:
+    """M95：任务栏搜索按钮的宿主没标题，桌面校验必须把壳窗放回链里。
+
+    三处缺一不可：枚举阶段不丢壳窗（即使带 WS_EX_TOOLWINDOW）、窗口链按开关
+    放行、桌面 verifier 真传开关。浏览器链不传 ⇒ 过滤规则一行不变。
+    """
+
+    def count(path: Path, needle: str, expected: int) -> None:
+        text = path.read_text(encoding="utf-8")
+        assert_true(
+            text.count(needle) == expected,
+            f"{path.name} 里 {needle!r} 出现 {text.count(needle)} 次（应为 {expected}）",
+        )
+
+    fg = ROOT / "src" / "rpa_core" / "capture" / "foreground_window.py"
+    count(fg, '_DESKTOP_SHELL_CLASSES = frozenset({"shell_traywnd", "shell_secondarytraywnd"})', 1)
+    count(fg, "is_shell = str(cls.value or \"\").strip().lower() in _DESKTOP_SHELL_CLASSES", 1)
+    count(fg, "include_desktop_shell: bool = False,", 2)
+    count(fg, "windows = visible_top_windows(api, include_desktop_shell=include_desktop_shell)", 1)
+    verify = ROOT / "src" / "rpa_core" / "capture" / "desktop_verification.py"
+    count(verify, "include_desktop_shell=True,", 1)
+
+
+def case_element_library_tree_wired() -> None:
+    """元素库 P2：树/右键/批量必须接在用户真走的同一份数据上。
+
+    坑：P1 只做了 RPC，界面仍按 kind 硬分三桶 ⇒ 分组建了看不见。这里钉住
+    三处接线：面板并行取分组/未使用、资产行按 group 分桶、管理动作走 RPC
+    且删除仍经网页端护栏（不借原生浮窗）。
+    """
+    main = ROOT / ".harness" / "demo" / "ppx_probe" / "app" / "gui" / "src" / "main.js"
+
+    def count(path: Path, needle: str, expected: int) -> None:
+        text = path.read_text(encoding="utf-8")
+        assert_true(
+            text.count(needle) == expected,
+            f"{path.name} 里 {needle!r} 出现 {text.count(needle)} 次（应为 {expected}）",
+        )
+
+    count(main, "ppx.call('rpa.listElementGroups', { path: currentPath })", 1)
+    count(main, "ppx.call('rpa.findUnusedElements', { path: currentPath })", 1)
+    count(main, "ppx.call('rpa.setElementGroupCollapsed', {", 1)
+    count(main, "function elementTreeBuckets(groups, elements)", 1)
+    count(main, "e.group === g.id", 1)
+    count(main, "function openLibMenu(event, kind, target)", 1)
+    count(main, "function renderBatchBar()", 1)
+    count(API, '@api_method("rpa.setElementGroupCollapsed")', 1)
+    count(API, "def set_element_group_collapsed(", 1)
+    # 右键删除复用 openAssetDetail/deleteAsset 的护栏链，不准直接打 deleteElement。
+    count(main, "libMenuItem(elemText('remove'), () => deleteAsset(name), true)", 1)
+
+
+def case_native_desktop_editor_wired() -> None:
+    """桌面详细编辑框必须接在**用户真走的两条路**上（不是只活在网页降级里）。
+
+    只测内核模型/网页 RPC 会漏掉本轮真事故：M90 做了桌面 nodes，但 win32
+    捕获确认框和「元素详情」都走原生框，用户看到的还是大 JSON 文本框。
+    这里钉住三处接线：控制器传模型、详情 RPC 传模型、原生框用内核重组。
+    """
+
+    def count(path: Path, needle: str, expected: int) -> None:
+        text = path.read_text(encoding="utf-8")
+        assert_true(
+            text.count(needle) == expected,
+            f"{path.name} 里 {needle!r} 出现 {text.count(needle)} 次（应为 {expected}）",
+        )
+
+    controller = ROOT / "src" / "rpa_core" / "capture_kit" / "controller.py"
+    dialog = ROOT / "src" / "rpa_core" / "capture_kit" / "edit_dialog.py"
+    count(controller, 'nodes=model.get("nodes"),', 1)
+    count(controller, "descriptor=doc if isinstance(doc, dict) else None,", 1)
+    count(API, 'show_args["nodes"] = model["nodes"]', 1)
+    count(API, 'show_args["descriptor"] = doc', 1)
+    count(dialog, "def _build_desktop_children(self, hwnd) -> None:", 1)
+    count(dialog, "self._on_desktop_control(hwnd, cid, notif)", 1)
+    # 预览与保存各调一次内核重组：少一处就会出现「看着对、存下去错」。
+    count(dialog, "desktop_editing.compose_selector(self._descriptor or {}, self._nodes)", 2)
+    # 建框时刷一次、节点点击和三种属性改动各刷一次：少一处界面就会停在旧 JSON。
+    count(dialog, "self._refresh_desktop_preview()", 5)
+
+
 def case_edit_element_desktop_dialog() -> None:
     """详情也走桌面编辑框：弹框带资产全文；改名联动 refs、重名回显、取消落 discarded。"""
     import tempfile
@@ -859,6 +964,47 @@ def case_all_refs_are_structured() -> None:
             api._flow_path = real_flow
 
 
+def case_capture_container_fallback_wired() -> None:
+    """M96/M97：捕获只拿到整窗容器时，必须回退屏幕级，且只认同一根窗口内的更细元素。
+
+    这条守的是「悬停框住搜索框、保存下来是整窗」那类不一致。四个锚点缺一不可：
+    ① 判「是不是只拿到整窗」；② 真的去问屏幕级；③ **只接受同一根窗口**——
+    少了 ③，任何浮层/覆盖层只要面积更小就会顶替目标，而这正是窗口作用域 DFS
+    优先要免疫的东西；④ 但「同一根窗口」的判法必须容忍 ``handle == 0`` 的虚拟元素
+    （微信搜索框就是这样），否则拿 0 去和根窗口比恒不等，唯一可用的命中被一票否决
+    ——M97 真机报了同一个现象的第二形态。
+    """
+    agent = ROOT / "src" / "rpa_core" / "capture" / "desktop_agent.py"
+    text = agent.read_text(encoding="utf-8")
+
+    def once(needle: str, why: str) -> None:
+        got = text.count(needle)
+        assert_true(got == 1, f"desktop_agent.py 里 {needle!r} 出现 {got} 次（应为 1）：{why}")
+
+    once(
+        "_rect_fills_window(\n"
+        '            scoped.get("metadata", {}).get("rect"), int(scope_hwnd)\n'
+        "        )",
+        "捕获没判「是不是只拿到整窗」",
+    )
+    once(
+        "finer = _finer_element_in_same_window(x, y, int(scope_hwnd))",
+        "整窗容器没回退屏幕级命中",
+    )
+    once(
+        "if (root_of_element or 0) != int(root_hwnd):",
+        "回退没校验同一根窗口（覆盖层会顶替目标）",
+    )
+    once(
+        "root_of_element = _root_window_handle(handle) if handle else _win32_root_at(x, y)",
+        "虚拟元素（handle=0）没按 win32 根窗口定位：拿 0 去比恒不等，唯一可用的命中被挡掉",
+    )
+    once(
+        "return elem_w * elem_h >= win_w * win_h * threshold",
+        "整窗判定的面积阈值丢了",
+    )
+
+
 def case_unbind_ref_writes_back() -> None:
     """网页端「解除引用 → 保存」真落盘；不传 element_refs 不许动引用。"""
     import tempfile
@@ -923,7 +1069,12 @@ for name, fn in (
     ("未知捕获会话有明确错误码", case_unknown_capture),
     ("轮询新三态：editing/committed/discarded", case_poll_edit_states),
     ("详情走桌面编辑框：改名/重名/取消", case_edit_element_desktop_dialog),
+    ("原生桌面详细编辑框：两入口接线", case_native_desktop_editor_wired),
+    ("元素库 P1：分组存储与显式元数据", case_element_library_group_storage),
+    ("M95 任务栏壳窗口：桌面校验放行，浏览器链不变", case_taskbar_shell_verification_wired),
+    ("元素库 P2：分组树/右键/批量接线", case_element_library_tree_wired),
     ("选择器编辑：校验、写回、入库", case_selector_edit_validation),
+    ("M96 捕获粒度：整窗容器回退屏幕级", case_capture_container_fallback_wired),
     ("引用清单结构化：nodeId+param+name+递归分支", case_all_refs_are_structured),
     ("解除引用随保存写回，不传则不动引用", case_unbind_ref_writes_back),
 ):

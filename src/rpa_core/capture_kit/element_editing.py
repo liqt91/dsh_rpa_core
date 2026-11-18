@@ -1,0 +1,142 @@
+"""元素编辑的**无 UI 语义层**：名称校验、定位校验、编辑模型、层级重组。
+
+边界（ADR 0022 编辑面服务化）：本模块只处理「一份描述符 ↔ 一份编辑模型」的
+纯语义，**不碰文件、不碰会话、不碰任何窗口**。工作台（``app/api/api.py``）负责
+会话与落盘，win32 编辑框与 PPX 的 HTML 编辑框都消费这里的同一份权威：
+
+- ``validate_name`` —— 入库/改名/删除共用的名字口径（允许中文，挡路径穿越）；
+- ``validate_selector`` / ``apply_selector`` —— 定位文本的校验与写回；
+- ``build_edit_model`` —— 捕获后编辑框的内容：网页层级树、桌面层级/属性树
+    （``desktop_editing``）或旧资产的定位文本；
+- ``compose`` / ``desktop_editing.compose_selector`` —— 勾选 → 定位的唯一权威。
+
+前端不感知 UIA / CDP / 对话框实现，只拿模型、提交名字与定位文本、收错误码。
+"""
+
+from __future__ import annotations
+
+import json
+from typing import Any
+
+from . import desktop_editing
+from .selector_tree import compose, levels_from_path
+
+NAME_BAD_CHARS = frozenset('/\\:*?"<>|.')
+RESERVED_NAMES = frozenset(
+    ["con", "prn", "aux", "nul"]
+    + [f"com{index}" for index in range(1, 10)]
+    + [f"lpt{index}" for index in range(1, 10)]
+)
+
+
+def validate_name(name: Any) -> str | None:
+    """名字不合法时返回可直接展示的文案；合法返回 ``None``。"""
+    if not isinstance(name, str):
+        return "名字不能为空"
+    if not name or len(name) > 48 or name != name.strip():
+        return "名字不能为空、不能超过 48 字，也不能带首尾空格"
+    if any(ch in NAME_BAD_CHARS or ord(ch) < 32 for ch in name):
+        return '名字不能含 / \\ : * ? " < > | . 这些字符'
+    if name.split(".")[0].lower() in RESERVED_NAMES:
+        return "这个名字是系统保留名，换一个"
+    return None
+
+
+def is_valid_name(name: Any) -> bool:
+    """``validate_name`` 的布尔口径，给只需要判定的调用点用。"""
+    return validate_name(name) is None
+
+
+def edit_text_for(descriptor: dict[str, Any]) -> str:
+    """可编辑的定位文本：网页给 css，桌面给 locator JSON（供编辑框预填）。"""
+    selector = descriptor.get("selector") or {}
+    if descriptor.get("kind") == "desktop":
+        return json.dumps(selector, ensure_ascii=False, indent=2)
+    return str(selector.get("css") or "")
+
+
+def validate_selector(descriptor: dict[str, Any], text: str) -> str | None:
+    """定位文本的校验（**不改 descriptor**）：错误文案或 ``None``。"""
+    text = (text or "").strip()
+    if descriptor.get("kind") == "browser":
+        if not text:
+            return "选择器不能为空"
+        if "\n" in text or "\r" in text:
+            return "网页选择器只能是一行"
+        return None
+    try:
+        parsed = json.loads(text)
+    except ValueError as exc:
+        return f"定位不是合法 JSON：{exc}"
+    if not isinstance(parsed, dict) or not isinstance(parsed.get("locator"), dict):
+        return '桌面定位必须是含 "locator" 字段的 JSON'
+    return None
+
+
+def apply_selector(descriptor: dict[str, Any], text: str) -> dict[str, Any]:
+    """把校验过的定位文本写回一份**新**描述符（调用前必须先过 ``validate_selector``）。"""
+    result = dict(descriptor or {})
+    text = (text or "").strip()
+    if descriptor.get("kind") == "browser":
+        selector = dict(descriptor.get("selector") or {})
+        selector["css"] = text
+        result["selector"] = selector
+    else:
+        result["selector"] = json.loads(text)
+    return result
+
+
+def build_edit_model(
+    descriptor: dict[str, Any],
+    *,
+    name: str = "",
+    kind: str = "",
+    matches: int = 0,
+    node_id: str | None = None,
+) -> dict[str, Any]:
+    """一份描述符 → 编辑框内容。
+
+    ``browser`` 且带 ``selector.path`` 时给**网页层级模型**（影刀式树形编辑，
+    前端勾完层级用 ``compose`` 重组 css）；``desktop`` 给**桌面层级/属性模型**
+    （``nodes``，重组回 selector 字典）；其余旧资产退化为可编辑定位文本。
+    ``info`` 是只读信息行，供两种编辑面共用。
+    """
+    actual_kind = kind or str(descriptor.get("kind") or "")
+    parts = ["网页元素" if actual_kind == "browser" else "桌面元素"]
+    if matches:
+        parts.append(f"命中 {matches} 个")
+    parts.append(f"将绑定到 {node_id}" if node_id else "存为资产（不绑定节点）")
+    info = " · ".join(parts)
+
+    path = (descriptor.get("selector") or {}).get("path")
+    model: dict[str, Any] = {
+        "title": "捕获到元素",
+        "name": str(name or ""),
+        "kind": actual_kind,
+        "info": info,
+    }
+    if actual_kind == "browser" and isinstance(path, list) and path:
+        levels = levels_from_path(path)
+        model["levels"] = levels
+        model["selector"] = compose(levels)
+        model["meta"] = info.replace(" · ", "\r\n")
+    else:
+        model["selector"] = edit_text_for(descriptor)
+        if actual_kind == "desktop":
+            model["nodes"] = desktop_editing.nodes_from_descriptor(descriptor)
+        model["meta"] = model["info"].replace(" · ", "\r\n")
+    return model
+
+
+__all__ = [
+    "NAME_BAD_CHARS",
+    "RESERVED_NAMES",
+    "apply_selector",
+    "build_edit_model",
+    "compose",
+    "edit_text_for",
+    "is_valid_name",
+    "levels_from_path",
+    "validate_name",
+    "validate_selector",
+]

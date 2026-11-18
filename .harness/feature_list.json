@@ -269,7 +269,7 @@
     },
     {
       "id": "element-self-healing",
-      "title": "Element self-healing: candidate selectors at runtime + pre-action validation",
+      "title": "Element self-healing: candidate selectors at runtime + pre-action validation + M75 image/OCR locator backend + M77 +M80",
       "passes": true
     },
     {
@@ -334,12 +334,12 @@
     },
     {
       "id": "element-verify-live",
-      "title": "M47 S1: live element verification over an on-demand bridge channel",
+      "title": "M47 S1 live verify + M74 facade + M76 CLI + M83 child env + M84 image box + M85 hover loop + M86-M88 a11y scan",
       "passes": true
     },
     {
       "id": "live-preview",
-      "title": "M47.1: live preview highlight (flash/preview/clear modes)",
+      "title": "M47.1: live preview highlight (flash/preview/clear modes) + M78 desktop + M79 real + M81 wechat + M82 image exec",
       "passes": true
     },
     {
@@ -359,7 +359,7 @@
     },
     {
       "id": "element-dialog-ux",
-      "title": "M47.10: capture-confirm dialog UX - side-by-side tree and attribute table",
+      "title": "M47.10 dialog UX + M89 kernel/HTML editor/library + M90 desktop nodes + M91 native desktop editor",
       "passes": true
     },
     {
@@ -474,7 +474,7 @@
     },
     {
       "id": "xhs-element-library",
-      "title": "Editor element library: constant capture/manual entry, detail, recapture, delete guard (preset assets)",
+      "title": "Editor element library: capture guard + M92-M100 (groups, tree, dock, taskbar, granularity, node view, verify wake)",
       "passes": true
     },
     {

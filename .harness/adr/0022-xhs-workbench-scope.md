@@ -172,3 +172,119 @@ R2 之后紧接着补拖拽与底栏：拖拽样式要落 `style.css`、底栏�
 工作台分支以后改原型任意文件都不必再动治理契约。代价是 `ppx-only` 不再拥有原型独占权，
 原型编辑面事实上成为三分支共享资产，跨分支同步仍靠显式 `cherry-pick`。
 `gui/dist` 依旧不入库，换机器要 `npm run build`。
+
+## 修订 0022-R4（2026-11-18）：编辑面服务化边界
+
+### 触发
+
+元素编辑界面升级时暴露出边界失守：`app/api/api.py` 直接 import 了
+`capture_kit.ElementEditDialog` 这个 **win32 UI 类**，还在应用层自己实现了名字校验、
+定位校验、编辑模型构造与 css 重组。R1 放行的 import 白名单只有
+`rpa_core.{catalog,compiler,model}`，现实早已越过却未成文；后果是「换一种编辑框形态
+就得改内核」，且 HTML 与 win32 两个编辑面各行一套判据。
+
+### 决策（吸收影刀做法：HTML 编辑器 + 语义化桥 + 后端服务）
+
+- **内核侧**：`capture_kit.element_editing` 是元素编辑语义的唯一权威——名字校验、
+  定位校验、编辑模型构造、层级勾选重组 css（转出 `selector_tree`）。该模块**不碰
+  文件、会话、窗口**，是纯函数层。
+- **工作台侧**：`api.py` 只负责会话与落盘，通过语义 RPC 暴露模型/校验/保存/重捕；
+  HTML 编辑框与 win32 框都消费同一份模型与错误码，前端不感知 UIA / CDP / 对话框实现。
+- **允许 import**：编辑面可 import 内核的公开无 UI 服务函数——`capture_kit.element_editing`
+  导出的全部符号，以及 `runtime.element_refs` 的参数键口径（`element_capable_keys` /
+  `element_kind_for_param_key` / `param_key_for_element_kind`），前端不硬编码 `selector`/`locator`。
+  `ElementEditDialog` 仅允许作为**降级/详情入口**被构造，不得再从它读取模型或校验口径。
+- **不做什么**：元素存储仍在 `<flowDir>/elements/*.json`（文件契约，不是 import），
+  `elementRefs` 仍是唯一接线（ADR-002 ref-only）；不新增 manifest 命令，控制流仍是 AST。
+
+### 后果
+
+编辑面换形态不再动内核；两套编辑面的判据不会漂移。代价是 RPC 多一层模型/错误码
+转换，且 `element_editing` 的每次判据变更都要两个编辑面一起回归。
+
+## 修订 0022-R5（2026-11-18）：win32 原生框升为主编辑面
+
+### 触发
+
+M90 把桌面 `nodes` 模型接进了网页 `#elemDialog`，但实测用户点「捕获元素」和
+「元素详情」拉起的都是 `capture_kit.ElementEditDialog`（win32 原生框）。R4 把它
+定性为「降级/详情入口」与事实不符：在 Windows 上它其实是两条主路径的唯一编辑面，
+网页框只在非 Windows / 桥不可用时出现。结果是功能做了，用户看不到。
+
+### 决策
+
+- `ElementEditDialog` 在 Windows 上是**主编辑面**，允许被捕获控制器与
+  `rpa.editElement` 直接构造；网页 `#elemDialog` 降级为备用面。
+- 两面仍然消费同一份内核语义：`element_editing.build_edit_model` 出模型、
+  `desktop_editing.compose_selector` / `selector_tree.compose` 出定位。原生框只维护
+  控件状态，不另写校验或重组口径。
+- 判据必须钉住**用户实际走的路**：控制器传 `nodes`/`descriptor`、`rpa.editElement`
+  传同一模型、原生框的预览与保存各调一次内核重组。缺一条就是「做了但没接线」。
+
+### 后果
+
+修改编辑模型时仍要两面一起回归；但用户不必知道有两套编辑框，桌面捕获与详情
+看到的是同一个影刀式层级/属性页。R4 的「仅降级/详情入口」措辞作废，其余边界不变。
+
+## 修订 0022-R6（2026-11-18）：元素库分组与来源元数据落地
+
+### 触发
+
+影刀元素库对标取证显示：库的核心是「按分组组织的资产树 + 来源/状态元数据」。
+我方只有按 `kind` 的三桶硬分组，元素文件也没有 `group/framework/processName/
+winTitle/screenshot` 权威。用户拍板先做「贴影刀单树」形态，但第一版只落 P1 数据模型。
+
+### 决策
+
+- 分组存 `<flowDir>/element_groups.json`，**不进 `elements/`**——`listElements` 用
+  `elements/*.json` 枚举资产，放进去会造出一条没有选择器的假元素。
+- 元素归属放 `ElementDescriptor` 的显式顶层 `group`（组 id）。顶层字段必须显式声明：
+  未知键会被 pydantic `extra=ignore` 静默丢弃（历史事故：顶层 `url` 从未落盘）。
+- `framework/processName/winTitle/screenshot/lastVerifiedAt/lastVerifyError` 同步显式化，
+  供 P2 树形库/P3 状态列消费；旧资产缺字段返回 `None`，**不做数据迁移**。
+- 文件名仍是元素与 `elementRefs` 的唯一接线（ADR-002 ref-only）；删除仍走引用护栏；
+  不恢复手写选择器入口。
+
+### 后果
+
+P2 可以直接消费 RPC 画单树，不必先改盘上格式；代价是多一份分组元数据文件，
+需要靠判据钉住它不混进 `elements/`，且每次新增顶层字段都必须同步模型与测试。
+
+## R7（2026-11-18，M93 P2：树形库落地）
+
+### 背景
+
+P1 的分组/RPC 建好后，面板仍按 `kind` 三桶硬分，分组建了也看不见。P2 把数据接成树。
+
+### 决策
+
+- 树用「分组头行 + 缩进资产行」的**扁平 DOM**，资产行仍是 `elemBody` 的直接子节点：
+  `verifyAllAssets` 按 `children` 找行写回命中数，嵌进容器会让它失效。
+- 管理入口（新建/重命名/删组、移动、复制、查引用、多选批量）走**动态 DOM 菜单**
+  （`#elemLibLayer`），不进 `index.html` 静态按钮区——静态按钮白名单是等值集合
+  （捕获×2 + 全部校验），加按钮就红；资产行也保持恰好「详情/校验/删除」三动作。
+- 分组折叠状态落盘（`setElementGroupCollapsed` 只改 `element_groups.json`），前端先
+  本地翻、RPC 失败回滚；未分组是虚拟桶，不落盘。
+- 右键删除复用行内 `deleteAsset` 的引用护栏链，不准另打 `deleteElement` 绕过。
+
+### 后果
+
+树/菜单/批量条都靠 `check_element_library.mjs` 的 DOM shim 真跑（含真右键事件），
+只扫源码抓不到「菜单建了但右键不弹」这类假绿灯——负向验证已证明确实漏过一次。
+`lastVerifiedAt/screenshot` 等状态字段 P2 只渲染已有值（processName/winTitle），
+校验状态列与缩略图留在 P3；不提前造 UI。
+
+### R8（M94：底栏高度）
+
+底栏默认高随视口 `clamp(300px, 34vh, 440px)`，顶边 6px 手柄可拖拽，范围夹在
+`140px ~ 视口-160px`，拉过的高度进 `localStorage`，折叠态隐藏手柄且不响应拖拽。
+手柄是 div 不进静态按钮白名单；三个 tab 共用同一高度，不给元素库单独开分支——
+视图切换不该让底栏跳高。拖拽只写 DOM 行内高度，不碰任何资产/流程数据。
+
+### R9（M95：桌面元素校验的窗口链）
+
+`visible_top_windows()` 的默认过滤是浏览器语义（空标题/桌面壳一律滤掉），桌面元素
+校验不能原样复用：任务栏搜索按钮的宿主 `Shell_TrayWnd` 标题恒为空，旧实现永远
+`count=0`。桌面 verifier 单独传 `include_desktop_shell=True`，只放行两种任务栏壳窗口
+且保持 Z 序位置；浏览器链不传，判据钉死两边不漂移。`preferred_hwnd` 的语义不变。
+若将来 automationId 漂移导致仍不命中，走候选回退，不放宽这条过滤。

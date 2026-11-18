@@ -32,6 +32,16 @@ class ElementDescriptor(BaseModel):
     selector: dict[str, Any]
     verify_count: int = Field(default=1, alias="verifyCount", ge=0)
     name: str | None = None
+    # 元素库管理字段（M92/P1）：影刀的 group/framework/processName/winTitle/screenshot
+    # 必须在描述符顶层有**显式**字段——顶层未知键会被 pydantic 静默丢弃（见上方注释），
+    # 只靠元数据字典会让「界面写进去了、重开又没了」变成假实现。
+    group: str | None = None
+    framework: str | None = None
+    process_name: str | None = Field(default=None, alias="processName")
+    win_title: str | None = Field(default=None, alias="winTitle")
+    screenshot: str | None = None
+    last_verified_at: str | None = Field(default=None, alias="lastVerifiedAt")
+    last_verify_error: str | None = Field(default=None, alias="lastVerifyError")
     metadata: dict[str, Any] = Field(default_factory=dict)
     captured_at: datetime = Field(
         default_factory=lambda: datetime.now(UTC), alias="capturedAt"
@@ -144,6 +154,15 @@ def selector_errors(element: ElementDescriptor) -> list[dict]:
         if not isinstance(locator, dict):
             errors.append({"path": "selector.locator", "message": "desktop 元素需要 locator 对象"})
             return errors
+        from rpa_core.capture.image_guard import image_locator_errors, is_explicit_image
+
+        if is_explicit_image(locator):
+            # M80：image locator 是独立形状，不再被 DesktopLocator.extra="forbid" 误判；
+            # 校验权威在 image_guard，一处定义，静态校验与活体校验共用。
+            for message in image_locator_errors(locator):
+                errors.append({"path": f"selector.locator.{message}", "message": message})
+            return errors
+
         from rpa_core.model.desktop import DesktopLocator
 
         try:

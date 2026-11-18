@@ -303,10 +303,11 @@ class FakeEditDialog:
         self._on_close = None
 
     def show(self, *, title, name, selector="", meta="", info="", levels=None,
-             save_label="保存", on_save=None, on_close=None):
+             nodes=None, descriptor=None, save_label="保存", on_save=None, on_close=None):
         self.shown = {
             "title": title, "name": name, "selector": selector,
             "meta": meta, "info": info, "levels": levels,
+            "nodes": nodes, "descriptor": descriptor,
         }
         self._on_save = on_save
         self._on_close = on_close
@@ -340,16 +341,39 @@ def _make_editing(session, dialog, *, on_commit=None, on_discard=None) -> Captur
 
 def test_captured_opens_edit_dialog_instead_of_ready() -> None:
     dialog = FakeEditDialog()
-    controller = _make_editing(
-        FakeSession({"kind": "browser", "selector": {"css": "#a"}}), dialog
-    )
+    doc = {"kind": "browser", "selector": {"css": "#a"}}
+    controller = _make_editing(FakeSession(doc), dialog)
     controller.start()
     state = _wait(controller, {"editing"})
     assert state["state"] == "editing"
     assert dialog.shown == {
         "title": "捕获到元素", "name": "元素1", "selector": "",
-        "meta": "m", "info": "", "levels": None,
+        "meta": "m", "info": "", "levels": None, "nodes": None, "descriptor": doc,
     }
+
+
+def test_captured_desktop_passes_nodes_and_descriptor_to_dialog() -> None:
+    """桌面详细编辑模型必须真送到 win32 框（只做在网页端 = 用户根本看不到）。"""
+    dialog = FakeEditDialog()
+    doc = {
+        "kind": "desktop",
+        "selector": {"locator": {"controlType": "Button", "name": "发送"}},
+        "metadata": {"windowTitle": "微信"},
+    }
+    nodes = [{"type": "Button", "name": "发送", "selected": True, "attributes": []}]
+    controller = CaptureController(
+        session_factory=lambda: FakeSession(doc),
+        on_captured=lambda captured: captured,
+        float_factory=FakeFloat,
+        heal_host=FakeHeal(),
+        edit_dialog_factory=lambda: dialog,
+        edit_model=lambda _doc: {"name": "发送按钮", "nodes": nodes},
+    )
+    controller.start()
+    assert _wait(controller, {"editing"})["state"] == "editing"
+    assert dialog.shown["nodes"] == nodes
+    assert dialog.shown["descriptor"] == doc
+    assert dialog.shown["levels"] is None
 
 
 def test_edit_dialog_commit_reports_committed_with_name() -> None:
@@ -538,3 +562,102 @@ def test_float_cancel_callback_ends_controller_session() -> None:
     window.on_cancel()
     assert _wait(controller, {"cancelled"}) == {"state": "cancelled"}
     assert host.restored >= 1 and window.hidden is True
+
+
+# ---- 桌面节点区初始视图（M99）------------------------------------------------
+
+
+def _node_dialog(nodes: list[dict]) -> object:
+    from rpa_core.capture_kit.edit_dialog import ElementEditDialog
+
+    dialog = ElementEditDialog()
+    dialog._nodes = nodes
+    return dialog
+
+
+def _chain(total: int, selected: int) -> list[dict]:
+    return [
+        {"type": "Group", "name": "", "selected": index < selected}
+        for index in range(total)
+    ]
+
+
+def test_node_view_opens_on_target_when_chain_exceeds_screen() -> None:
+    """★ 微信搜索框实测 16 层，节点区只放 10 行。
+
+    旧实现把偏移写死成 0 ⇒ 用户一开框看到的是一屏无名容器，目标那行被挤到
+    窗口外，被当成「层级展示不全」。判据盯的是**目标可见**，不是某个具体数字。
+    """
+    from rpa_core.capture_kit import edit_dialog
+
+    nodes = _chain(16, selected=16)
+    row, scroll = _node_dialog(nodes)._initial_node_view()
+
+    assert row == 15, "默认选中行应为最后一条（即目标节点）"
+    assert scroll <= row < scroll + edit_dialog._NODE_ROWS, "目标行必须落在可视区内"
+    assert scroll == 16 - edit_dialog._NODE_ROWS
+
+
+def test_node_view_keeps_top_when_chain_fits_screen() -> None:
+    """反向：层数没超一屏时不该平白滚动（否则顶部层级反而看不见）。"""
+    nodes = _chain(4, selected=4)
+    row, scroll = _node_dialog(nodes)._initial_node_view()
+
+    assert scroll == 0
+    assert row == 3
+
+
+def test_node_view_falls_back_to_last_when_nothing_selected() -> None:
+    """没有 selected 标记时按「最后一条 = 目标」处理，不能停在首行。"""
+    from rpa_core.capture_kit import edit_dialog
+
+    nodes = [{"type": "Group", "selected": False} for _ in range(14)]
+    row, scroll = _node_dialog(nodes)._initial_node_view()
+
+    assert row == 13
+    assert scroll <= row < scroll + edit_dialog._NODE_ROWS
+
+
+def test_node_view_of_empty_chain() -> None:
+    assert _node_dialog([])._initial_node_view() == (0, 0)
+
+
+@pytest.mark.parametrize(
+    ("scroll", "total", "expected"),
+    [
+        (0, 16, 0),
+        (6, 16, 6),
+        (99, 16, 6),   # 超上界夹回
+        (-3, 16, 0),   # 负偏移夹回
+        (5, 4, 0),     # 不足一屏恒 0
+    ],
+)
+def test_clamp_node_scroll(scroll: int, total: int, expected: int) -> None:
+    """滚动偏移必须夹在 ``[0, total - _NODE_ROWS]``，否则目标会被滚出可视区。"""
+    from rpa_core.capture_kit.edit_dialog import _clamp_node_scroll
+
+    assert _clamp_node_scroll(scroll, total) == expected
+
+
+def test_setup_node_scroll_keeps_initial_offset(monkeypatch) -> None:
+    """接线判据：``_build_desktop_children`` 算出的初始偏移不能被建滚动条时清零。
+
+    只测 ``_initial_node_view`` 会漏掉这一步——真机上把偏移写死成 0 的正是
+    ``_setup_node_scroll``，纯函数绿而接线红就是假绿灯。
+    """
+    win32gui = pytest.importorskip("win32gui")
+    dialog = _node_dialog(_chain(16, selected=16))
+    seen: dict[str, tuple] = {}
+
+    monkeypatch.setattr(
+        win32gui, "SetScrollInfo",
+        lambda hwnd, bar, info, redraw: seen.setdefault("info", info),
+    )
+    dialog._selected_node, dialog._node_scroll = dialog._initial_node_view()
+    dialog._setup_node_scroll(0)
+
+    from rpa_core.capture_kit import edit_dialog
+
+    assert dialog._node_scroll == 16 - edit_dialog._NODE_ROWS
+    assert dialog._selected_node == 15, "属性面板要显示目标自己的属性，不是窗口的"
+    assert seen["info"][4] == dialog._node_scroll, "滚动条位置必须与偏移同步"

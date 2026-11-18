@@ -1,8 +1,8 @@
 // 元素资产清单的 UI 契约判据（进默认门禁）。
 //
 // 与 check_element_pick_ui.mjs 分工：那边管「捕获 → 确认入库」这条链；这边管
-// 「清单本身」——结构（工具区在 elemBody 之外、只有一个按钮）、版式（行高/字号/
-// 危险动作色）、以及「详情 / 删除」两个动作真接线、删除失败不把行抹掉。
+// 「清单本身」——结构（工具区在 elemBody 之外、只有两个按钮）、版式（行高/字号/
+// 危险动作色）、以及「详情 / 校验 / 删除」三个动作真接线、删除失败不把行抹掉。
 //
 // 只读源码证明不了「有按钮但点不着」「删失败却从界面消失」，所以行为层用最小
 // DOM shim 真跑 main.js 的绑定与渲染。
@@ -115,11 +115,16 @@ const ref = (nodeId, param = 'selector', name = 'searchBox') => ({
 const state = {
   missing: [],
   elements: [{ name: 'searchBox', kind: 'browser', selector: '#q' }],
+  // M93：分组树数据源（右键/折叠/批量操作的判据都从这里喂）
+  groups: [],
+  unused: [],
   detailResponse: {
     ok: true, name: 'searchBox', selectorText: '#q', referencedBy: [ref('openHome')],
     document: { kind: 'browser', selector: { css: '#q' }, verifyCount: 2, capturedAt: '2026-11-12' },
   },
   deleteResponse: { ok: true, deleted: true, remaining: [] },
+  // 行内校验的 RPC 回传：默认命中 2 个；测「命中 0 的两种含义」时改它
+  verifyResponse: { ok: true, count: 2 },
 }
 
 function makeContext() {
@@ -151,7 +156,17 @@ function makeContext() {
     'rpa.bootstrap': { commands: [], flows: [], catalogDigest: '', python: '', catalogMs: 0 },
     'rpa.missingElements': () => ({ ok: true, missing: state.missing, resolved: [], capabilities: {} }),
     'rpa.listElements': () => ({ ok: true, elements: state.elements }),
+    'rpa.listElementGroups': () => ({ ok: true, groups: state.groups, ungrouped: 0 }),
+    'rpa.findUnusedElements': () => ({ ok: true, elements: state.unused }),
+    'rpa.createElementGroup': { ok: true, group: { id: 'gNew', name: '新分组' } },
+    'rpa.renameElementGroup': { ok: true },
+    'rpa.deleteElementGroup': { ok: true, moved: [] },
+    'rpa.setElementGroupCollapsed': { ok: true },
+    'rpa.copyElement': { ok: true, name: '副本' },
+    'rpa.moveElementsToGroup': { ok: true, moved: [] },
+    'rpa.elementReferences': () => ({ ok: true, references: [ref('openHome')] }),
     'rpa.elementDetail': () => state.detailResponse,
+    'rpa.verifyElement': () => state.verifyResponse,
     'rpa.deleteElement': () => state.deleteResponse,
     'rpa.startCapture': { ok: true, state: 'waiting', captureId: 'c1', name: null, suggestedName: '元素1' },
     'rpa.capturePoll': { ok: true, state: 'pending' },
@@ -206,6 +221,12 @@ function makeContext() {
   vm.runInContext(
     `globalThis.__api = { refreshElements, renderElementsPanel, openAssetDetail, deleteAsset,
        selectCard, saveParams, renderForm,
+       elementTreeBuckets, openLibMenu, closeLibMenu, toggleGroup, renderBatchBar,
+       getSelected: () => Array.from(elemSelected),
+       libShim: (groups, unused, onlyUnused) => {
+         pickGroups = groups; pickUnused = unused || []; elemOnlyUnused = !!onlyUnused
+         renderElementsPanel()
+       },
        setState: (missing, elements) => { pickMissing = missing; pickElements = elements; renderElementsPanel() },
        setCards: (list) => { cards = list },
        setCapture: (id, phase) => { captureSession = id ? { id } : null; capturePhase = phase },
@@ -223,14 +244,25 @@ function makeContext() {
 const flush = () => new Promise((resolve) => setImmediate(resolve))
 
 // ---------- 1. 结构层 ----------
-check('工具区在 elemBody 之外、只有一个按钮', () => {
+check('工具区在 elemBody 之外、只有两个捕获按钮', () => {
   const panelStart = html.indexOf('data-panel="elements"')
   const toolsAt = html.indexOf('class="elemTools"', panelStart)
   const bodyAt = html.indexOf('id="elemBody"', panelStart)
   assert(toolsAt > panelStart && toolsAt < bodyAt, '工具区不在元素面板里 / 落在 elemBody 之后')
   const tools = html.slice(toolsAt, bodyAt)
   const buttons = [...tools.matchAll(/<button[^>]*id="([^"]+)"/g)].map((m) => m[1])
-  assert(buttons.length === 1 && buttons[0] === 'elemCapture', `工具区按钮：${buttons}`)
+  assert(buttons.length === 2 && buttons[0] === 'elemCapture'
+    && buttons[1] === 'elemCaptureImage', `工具区按钮：${buttons}`)
+})
+
+await checkAsync('按图捕获显式透传 image=true', async () => {
+  const { calls } = makeContext()
+  const button = nodeById('elemCaptureImage')
+  await button.click()
+  await flush()
+  const hit = calls.find((c) => c.name === 'rpa.startCapture')
+  assert(hit, '没调捕获入口')
+  assert(hit.args.image === true, `image 没透传：${JSON.stringify(hit.args)}`)
 })
 
 check('版式在 style.css，main.js 没有运行时注入样式', () => {
@@ -248,6 +280,7 @@ check('main.js 真接了清单与四个资产 RPC', () => {
     "ppx.call('rpa.missingElements'",
     "ppx.call('rpa.listElements'",
     "ppx.call('rpa.elementDetail'",
+    "ppx.call('rpa.verifyElement'",
     "ppx.call('rpa.deleteElement'",
     "ppx.call('rpa.commitElement'",
   ]) {
@@ -269,14 +302,63 @@ await checkAsync('刷新真跑：待补段与资产段同时渲染', async () =>
   assert(calls.filter((c) => c.name === 'rpa.listElements').length === 1, '资产没刷新')
 })
 
-check('资产行有 详情 / 删除 两个动作', () => {
+check('资产行有 详情 / 校验 / 删除 三个动作', () => {
   const { api } = makeContext()
   api.setState([], [{ name: 'searchBox', kind: 'browser', selector: '#q' }])
   const row = walk(nodeById('elemBody')).find((n) => hasClass(n, 'asset'))
   assert(row, '没有资产行')
   const labels = walk(row).filter((n) => hasClass(n, 'elemAct')).map((n) => n.textContent)
-  assert(labels.length === 2, `动作数 ${labels.length}：${labels}`)
-  assert(labels.includes('详情') && labels.includes('删除'), labels.join('/'))
+  assert(labels.length === 3, `动作数 ${labels.length}：${labels}`)
+  assert(labels.includes('详情') && labels.includes('校验') && labels.includes('删除'), labels.join('/'))
+})
+
+await checkAsync('点校验走统一入口并把命中数写回资产行', async () => {
+  const { api, calls } = makeContext()
+  api.setState([], [{ name: 'searchBox', kind: 'browser', selector: '#q' }])
+  const row = walk(nodeById('elemBody')).find((n) => hasClass(n, 'asset'))
+  const verify = walk(row).find((n) => hasClass(n, 'elemAct') && n.textContent === '校验')
+  await verify.click()
+  await flush()
+  const hit = calls.find((c) => c.name === 'rpa.verifyElement')
+  assert(hit, '没调活体校验入口')
+  assert(hit.args.name === 'searchBox', `校验了别的元素：${hit.args.name}`)
+  const meta = walk(row).find((n) => hasClass(n, 'elemMeta'))
+  assert(meta.textContent.includes('校验命中 2 个'), `行内没显示结果：${meta.textContent}`)
+})
+
+await checkAsync('命中 0 且带 tree-missing：行内说清是对方没有无障碍树', async () => {
+  // M100：count=0 有两种含义，糊成一句用户只会反复改选择器。
+  state.verifyResponse = { ok: true, count: 0, hint: 'tree-missing' }
+  try {
+    const { api } = makeContext()
+    api.setState([], [{ name: 'searchBox', kind: 'browser', selector: '#q' }])
+    const row = walk(nodeById('elemBody')).find((n) => hasClass(n, 'asset'))
+    const verify = walk(row).find((n) => hasClass(n, 'elemAct') && n.textContent === '校验')
+    await verify.click()
+    await flush()
+    const meta = walk(row).find((n) => hasClass(n, 'elemMeta'))
+    assert(meta.textContent.includes('无障碍树'), `没说明原因：${meta.textContent}`)
+    assert(!meta.textContent.includes('这次没命中'), `还是笼统文案：${meta.textContent}`)
+  } finally {
+    state.verifyResponse = { ok: true, count: 2 }
+  }
+})
+
+await checkAsync('命中 0 但树是活的：仍是「这次没命中」，不误导用户重开应用', async () => {
+  state.verifyResponse = { ok: true, count: 0 }
+  try {
+    const { api } = makeContext()
+    api.setState([], [{ name: 'searchBox', kind: 'browser', selector: '#q' }])
+    const row = walk(nodeById('elemBody')).find((n) => hasClass(n, 'asset'))
+    const verify = walk(row).find((n) => hasClass(n, 'elemAct') && n.textContent === '校验')
+    await verify.click()
+    await flush()
+    const meta = walk(row).find((n) => hasClass(n, 'elemMeta'))
+    assert(meta.textContent.includes('这次没命中'), `文案不对：${meta.textContent}`)
+    assert(!meta.textContent.includes('无障碍树'), `把选择器问题说成环境问题：${meta.textContent}`)
+  } finally {
+    state.verifyResponse = { ok: true, count: 2 }
+  }
 })
 
 await checkAsync('点详情取完整描述符并弹编辑框（不是行内展开）', async () => {
@@ -427,6 +509,193 @@ check('清单里不出现提示节点（说明走可关闭的网页弹框）', (
   for (const banned of ['pickBar', 'elemNewNote', 'hint']) {
     assert(!nodes.some((n) => hasClass(n, banned)), `清单里还有提示节点：${banned}`)
   }
+})
+
+check('结构层：元素面板有搜索与全部校验，且不占捕获按钮名额', () => {
+  assert(/<input[^>]*id="elemSearch"[^>]*type="search"/.test(html), '搜索框不是 search 输入')
+  assert(html.includes('id="elemVerifyAll"'), '缺全部校验按钮')
+  const panelAt = html.indexOf('data-panel="elements"')
+  const searchAt = html.indexOf('id="elemSearch"')
+  const toolsAt = html.indexOf('class="elemTools"')
+  assert(panelAt < searchAt && searchAt < toolsAt, '搜索框不在捕获工具区之前')
+})
+
+check('契约层：搜索/分组/引用数/全部校验都真接线', () => {
+  for (const needle of [
+    "el.elemSearch?.addEventListener('input'",
+    "el.elemVerifyAll?.addEventListener('click'",
+    "ppx.call('rpa.verifyAllElements'",
+    "elemFilterText = String(el.elemSearch.value || '')",
+    'e.refCount',
+    'elemGroup',
+  ]) {
+    assert(mainSrc.includes(needle), `main.js 缺 ${needle}`)
+  }
+  for (const needle of ['.elemFilter {', '.elemGroup {', '.elemRefs {']) {
+    assert(css.includes(needle), `style.css 缺 ${needle}`)
+  }
+})
+
+// ---------- M93：影刀式分组树 / 右键菜单 / 多选批量 ----------
+check('契约层：P2 管理 RPC 与树渲染函数都真接线', () => {
+  for (const needle of [
+    'elementTreeBuckets', 'groupHeaderRow', 'openLibMenu', 'renderBatchBar',
+    "ppx.call('rpa.listElementGroups'", "ppx.call('rpa.findUnusedElements'",
+    "ppx.call('rpa.createElementGroup'", "ppx.call('rpa.renameElementGroup'",
+    "ppx.call('rpa.deleteElementGroup'", "ppx.call('rpa.setElementGroupCollapsed'",
+    "ppx.call('rpa.copyElement'", "ppx.call('rpa.moveElementsToGroup'",
+    "ppx.call('rpa.elementReferences'", 'elemLibLayer',
+  ]) {
+    assert(mainSrc.includes(needle), `main.js 缺 ${needle}`)
+  }
+  assert(html.includes('id="elemLibLayer"'), 'index.html 缺动态菜单宿主')
+  for (const needle of ['.elemGroupRow {', '.libMenu, .libPrompt {', '.libBatchBar {', '.elemPick {']) {
+    assert(css.includes(needle), `style.css 缺 ${needle}`)
+  }
+})
+
+check('分组桶：按服务端顺序 + 未分组兜底，空分组保留、折叠态带出', () => {
+  const { api } = makeContext()
+  const groups = [
+    { id: 'g1', name: '登录相关', order: 0, collapsed: false },
+    { id: 'g2', name: '空组', order: 1, collapsed: true },
+  ]
+  const elements = [
+    { name: 'a', group: 'g1' }, { name: 'b', group: 'g2' },
+    { name: 'c', group: null }, { name: 'd', group: '未知组' },
+  ]
+  const buckets = api.elementTreeBuckets(groups, elements)
+  assert(buckets.length === 3 && buckets[0].id === 'g1' && buckets[1].id === 'g2'
+    && buckets[2].id === null, `桶顺序 ${JSON.stringify(buckets.map((b) => b.id))}`)
+  assert(buckets[0].elements.map((e) => e.name).join(',') === 'a', 'g1 分桶错')
+  assert(buckets[2].elements.map((e) => e.name).join(',') === 'c,d', '未分组兜底错')
+  assert(buckets[1].collapsed === true && buckets[1].elements.length === 1, '空组/折叠态丢了')
+})
+
+check('树渲染：分组头与资产行同树，折叠组不渲染其子行', () => {
+  const { api } = makeContext()
+  api.setState([], [
+    { name: 'a', kind: 'browser', selector: '#a', group: 'g1' },
+    { name: 'b', kind: 'desktop', selector: 'x', group: 'g2' },
+    { name: 'c', kind: 'browser', selector: '#c', group: null },
+  ])
+  api.libShim([
+    { id: 'g1', name: '登录相关', order: 0, collapsed: false },
+    { id: 'g2', name: '空组', order: 1, collapsed: true },
+  ], [])
+  const body = nodeById('elemBody')
+  const heads = walk(body).filter((n) => hasClass(n, 'elemGroupRow'))
+  assert(heads.length === 3, `分组头数 ${heads.length}`)
+  const rows = walk(body).filter((n) => hasClass(n, 'elemRow') && hasClass(n, 'asset'))
+  assert(rows.length === 2, `资产行数 ${rows.length}（折叠组不该出子行）`)
+  assert(rows.some((n) => n.dataset.elemName === 'a'), 'g1 的子行没渲染')
+  assert(!rows.some((n) => n.dataset.elemName === 'b'), '折叠组 g2 的子行还在')
+})
+
+await checkAsync('点分组头折叠：先本地收起再落盘，失败回滚', async () => {
+  const { api, calls } = makeContext()
+  api.setState([], [
+    { name: 'a', kind: 'browser', selector: '#a', group: 'g1' },
+    { name: 'c', kind: 'browser', selector: '#c', group: null },
+  ])
+  const group = { id: 'g1', name: '登录相关', order: 0, collapsed: false }
+  api.libShim([group], [])
+  const head = walk(nodeById('elemBody')).find((n) => hasClass(n, 'elemGroupRow'))
+  await head.handlers.click[0]({ type: 'click' })
+  await flush()
+  const hit = calls.find((c) => c.name === 'rpa.setElementGroupCollapsed')
+  assert(hit, '折叠没落盘')
+  assert(hit.args.group_id === 'g1' && hit.args.collapsed === true, `折叠参数 ${JSON.stringify(hit.args)}`)
+  assert(group.collapsed === true, '本地折叠态没翻')
+  const rows = walk(nodeById('elemBody')).filter((n) => hasClass(n, 'elemRow') && hasClass(n, 'asset'))
+  assert(rows.length === 1 && rows[0].dataset.elemName === 'c', '收起后子行没隐藏')
+})
+
+check('资产右键菜单：详情/复制/移动/查引用/删除五项齐全，分组菜单有 CRUD', () => {
+  const { api } = makeContext()
+  api.setState([], [{ name: 'searchBox', kind: 'browser', selector: '#q' }])
+  api.openLibMenu({ clientX: 12, clientY: 8 }, 'asset', { name: 'searchBox' })
+  const labels = walk(nodeById('elemLibLayer')).filter((n) => hasClass(n, 'libMenuItem')).map((n) => n.textContent)
+  assert(labels.length === 5, `资产菜单项 ${labels}`)
+  assert(['详情', '复制一份', '移动到分组', '查找引用', '删除'].every((x) => labels.includes(x)), labels.join('/'))
+  api.openLibMenu({ clientX: 0, clientY: 0 }, 'group', { id: 'g1', name: '登录相关' })
+  const gl = walk(nodeById('elemLibLayer')).filter((n) => hasClass(n, 'libMenuItem')).map((n) => n.textContent)
+  assert(['在这里新建元素', '新建分组', '重命名分组', '折叠 / 展开', '删除分组'].every((x) => gl.includes(x)), gl.join('/'))
+})
+
+check('资产行的右键事件真拉起菜单（不是只测 openLibMenu 本身）', () => {
+  const { api } = makeContext()
+  api.setState([], [{ name: 'searchBox', kind: 'browser', selector: '#q' }])
+  const row = walk(nodeById('elemBody')).find((n) => hasClass(n, 'elemRow') && hasClass(n, 'asset'))
+  const events = row?.handlers?.contextmenu || []
+  assert(events.length === 1, '资产行没绑右键事件')
+  events[0]({ preventDefault() {} })
+  const labels = walk(nodeById('elemLibLayer')).filter((n) => hasClass(n, 'libMenuItem')).map((n) => n.textContent)
+  assert(labels.length === 5, `右键事件没拉起资产菜单：${labels}`)
+})
+
+await checkAsync('右键删除资产走护栏：与行内删除同入口，不绕过引用检查', async () => {
+  state.detailResponse = { ok: true, referencedBy: [ref('openHome', 'selector')] }
+  const { api, calls } = makeContext()
+  api.setState([], [{ name: 'searchBox', kind: 'browser', selector: '#q' }])
+  api.openLibMenu({ clientX: 0, clientY: 0 }, 'asset', { name: 'searchBox' })
+  const del = walk(nodeById('elemLibLayer')).find((n) => hasClass(n, 'libMenuItem') && n.textContent === '删除')
+  const before = calls.length
+  await del.click()
+  await flush()
+  const after = calls.slice(before).map((c) => c.name)
+  assert(after.includes('rpa.elementDetail'), '菜单删除没走删前引用检查')
+  assert(!after.includes('rpa.deleteElement'), '查到引用还直接删了')
+  state.detailResponse = { ok: true, referencedBy: [] }
+})
+
+await checkAsync('多选批量：勾选进选中集、批量条浮出、取消选择清空', async () => {
+  const { api } = makeContext()
+  api.setState([], [
+    { name: 'a', kind: 'browser', selector: '#a' },
+    { name: 'b', kind: 'browser', selector: '#b' },
+  ])
+  const rows = walk(nodeById('elemBody')).filter((n) => hasClass(n, 'elemRow') && hasClass(n, 'asset'))
+  const pickA = walk(rows[0]).find((n) => hasClass(n, 'elemPick'))
+  const pickB = walk(rows[1]).find((n) => hasClass(n, 'elemPick'))
+  assert(pickA && pickB, '资产行缺多选复选框')
+  pickA.checked = true
+  await pickA.handlers.change[0]({ type: 'change' })
+  pickB.checked = true
+  await pickB.handlers.change[0]({ type: 'change' })
+  assert(api.getSelected().join(',') === 'a,b', `选中集 ${api.getSelected()}`)
+  const bar = walk(nodeById('elemLibLayer')).find((n) => hasClass(n, 'libBatchBar'))
+  assert(bar, '批量条没浮出')
+  const barLabels = walk(bar).filter((n) => hasClass(n, 'libMenuItem')).map((n) => n.textContent)
+  assert(['批量移动', '批量校验', '批量删除', '取消选择'].every((x) => barLabels.includes(x)), barLabels.join('/'))
+  const clear = walk(bar).find((n) => hasClass(n, 'libMenuItem') && n.textContent === '取消选择')
+  await clear.click()
+  await flush()
+  assert(api.getSelected().length === 0, '取消选择没清空')
+})
+
+await checkAsync('新入库资产带来源/状态字段，但界面不伪造旧资产的值', async () => {
+  const { api } = makeContext()
+  api.setState([], [
+    { name: 'rich', kind: 'desktop', selector: 'x', processName: '微信', winTitle: '聊天', refCount: 2 },
+    { name: 'legacy', kind: 'browser', selector: '#q' },
+  ])
+  const rows = walk(nodeById('elemBody')).filter((n) => hasClass(n, 'elemRow') && hasClass(n, 'asset'))
+  const rich = rows.find((n) => n.dataset.elemName === 'rich')
+  const richText = walk(rich).map((n) => n.textContent).join('|')
+  assert(richText.includes('微信') && richText.includes('聊天'), `来源列没显示：${richText}`)
+  assert(walk(rich).some((n) => hasClass(n, 'elemRefs')), '引用徽标没显示')
+})
+
+check('只看未使用：开关真过滤，空结果给专门文案', () => {
+  const { api } = makeContext()
+  api.setState([], [
+    { name: 'a', kind: 'browser', selector: '#a' },
+    { name: 'b', kind: 'browser', selector: '#b' },
+  ])
+  api.libShim([], ['b'], true)
+  const rows = walk(nodeById('elemBody')).filter((n) => hasClass(n, 'elemRow') && hasClass(n, 'asset'))
+  assert(rows.length === 1 && rows[0].dataset.elemName === 'b', `未使用过滤 ${rows.map((r) => r.dataset.elemName)}`)
 })
 
 for (const result of results) {

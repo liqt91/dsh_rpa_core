@@ -105,6 +105,11 @@ def test_bridge_registers_asset_rpcs_and_drops_manual_entry() -> None:
         "rpa.saveElement",
         "rpa.discardCapture",
         "rpa.editElement",
+        "rpa.listElementGroups",
+        "rpa.createElementGroup",
+        "rpa.moveElementsToGroup",
+        "rpa.findUnusedElements",
+        "rpa.elementReferences",
     ):
         assert name in registry, f"{name} 没注册进桥层"
         assert callable(registry[name]), f"{name} 不是可调用的处理函数"
@@ -339,3 +344,131 @@ def test_dist_bundle_is_rebuilt_from_source() -> None:
         "rpa.commitElement", "rpa.saveElement", "rpa.editElement", ".elemTools", "elemCapture"
     ):
         assert token in joined, f"dist 产物里没有 {token}（改了源码忘了 npm run build）"
+
+
+def test_element_groups_crud_and_move_persist(flow: tuple[str, Path, Any]) -> None:
+    """影刀式分组骨架：分组 CRUD + 批量移动真落盘，分组文件不伪装成元素。"""
+    path, target, _api = flow
+    elements = target.parent / "elements"
+    _put_element(target, "in_use", "#used")
+    _put_element(target, "free", "#free")
+
+    wechat = _call("rpa.createElementGroup", path=path, name="微信")
+    browser = _call("rpa.createElementGroup", path=path, name="网页常用")
+    gid = wechat["group"]["id"]
+    assert pb.dispatch("rpa.createElementGroup", {"path": path, "name": "微信"})["data"][
+        "code"
+    ] == "GROUP_NAME_TAKEN"
+
+    moved = _call(
+        "rpa.moveElementsToGroup", path=path,
+        names=["in_use", "free"], group_id=gid,
+    )
+    assert moved["moved"] == ["free", "in_use"]
+    listed = _call("rpa.listElements", path=path)["elements"]
+    by_name = {e["name"]: e for e in listed}
+    assert by_name["in_use"]["groupName"] == "微信"
+    assert by_name["free"]["groupName"] == "微信"
+    assert set(by_name) == {"in_use", "free"}, "分组文件被当成元素了"
+
+    renamed = _call(
+        "rpa.renameElementGroup", path=path, group_id=gid, name="微信控件"
+    )
+    assert renamed["group"]["name"] == "微信控件"
+    groups = _call("rpa.listElementGroups", path=path)
+    assert [(g["name"], g["elementCount"]) for g in groups["groups"]] == [
+        ("微信控件", 2), ("网页常用", 0),
+    ]
+
+    gone = _call(
+        "rpa.deleteElementGroup", path=path, group_id=gid,
+        move_to=browser["group"]["id"],
+    )
+    assert gone["moved"] == ["free", "in_use"]
+    assert json.loads((elements / "in_use.json").read_text(encoding="utf-8"))[
+        "group"
+    ] == browser["group"]["id"]
+    assert (target.parent / "element_groups.json").is_file()
+
+
+def test_group_collapse_persists_and_reflects_in_list(flow: tuple[str, Path, Any]) -> None:
+    """P2 折叠落盘：刷新后树的展开/收起保持，且只改分组文件不碰元素。"""
+    path, target, _api = flow
+    _put_element(target, "branch_ref", "#branch")
+    group = _call("rpa.createElementGroup", path=path, name="登录组")
+    gid = group["group"]["id"]
+    _call("rpa.moveElementsToGroup", path=path, names=["branch_ref"], group_id=gid)
+
+    assert _call("rpa.listElementGroups", path=path)["groups"][0]["collapsed"] is False
+    folded = _call("rpa.setElementGroupCollapsed", path=path, group_id=gid, collapsed=True)
+    assert folded["collapsed"] is True
+    groups_file = json.loads((target.parent / "element_groups.json").read_text(encoding="utf-8"))
+    assert groups_file["groups"][0]["collapsed"] is True
+    # 重新读盘（等价刷新页面）仍然是收起态
+    assert _call("rpa.listElementGroups", path=path)["groups"][0]["collapsed"] is True
+    # 只改归属标志，不破坏元素与引用
+    assert _call("rpa.elementReferences", path=path, name="branch_ref")["count"] == 3
+    assert _call("rpa.setElementGroupCollapsed", path=path, group_id=gid, collapsed=False)[
+        "collapsed"
+    ] is False
+    assert pb.dispatch(
+        "rpa.setElementGroupCollapsed", {"path": path, "group_id": "missing", "collapsed": True}
+    )["data"]["code"] == "GROUP_NOT_FOUND"
+
+
+def test_copy_unused_and_references_are_structured(flow: tuple[str, Path, Any]) -> None:
+    """复制不绑引用；查找未使用/引用与删除护栏同源，不能另扫一遍流程。"""
+    path, target, _api = flow
+    _put_element(target, "branch_ref", "#branch")
+    _put_element(target, "free", "#free")
+
+    assert _call("rpa.findUnusedElements", path=path)["elements"] == ["free"]
+    refs = _call("rpa.elementReferences", path=path, name="branch_ref")
+    assert refs["count"] == 3
+    assert {r["nodeId"] for r in refs["references"]} == {
+        "inThen", "inElse", "inCatch",
+    }
+
+    copied = _call(
+        "rpa.copyElement", path=path, name="branch_ref", new_name="副本"
+    )
+    assert copied["name"] == "副本"
+    doc = json.loads((target.parent / "elements" / "副本.json").read_text(encoding="utf-8"))
+    assert doc["selector"]["css"] == "#branch" and doc["name"] == "副本"
+    assert set(_call("rpa.findUnusedElements", path=path)["elements"]) == {
+        "free", "副本",
+    }
+    assert pb.dispatch(
+        "rpa.copyElement", {"path": path, "name": "branch_ref", "new_name": "副本"}
+    )["data"]["code"] == "NAME_TAKEN"
+
+
+def test_commit_fills_library_fields_without_migrating_old_assets(
+    flow: tuple[str, Path, Any],
+) -> None:
+    """新入库资产带影刀对齐字段；老资产缺字段也照样能列出，不改旧文件。"""
+    path, target, api = flow
+    old = _put_element(target, "旧资产")
+    old_bytes = old.read_bytes()
+
+    api._CAPTURES.clear()
+    api._CAPTURES[api._capture_key(path, "lib1")] = {
+        "id": "lib1", "path": path, "name": None, "overwrite": False,
+        "captured": {
+            "kind": "desktop",
+            "selector": {"locator": {"backend": "uia", "controlType": "Button", "name": "发送"}},
+            "metadata": {"windowTitle": "微信", "processName": "Weixin", "backend": "uia"},
+        },
+        "preview": {}, "controller": None,
+    }
+    assert _call("rpa.commitElement", path=path, capture_id="lib1", name="新资产")["ok"]
+    doc = json.loads((target.parent / "elements" / "新资产.json").read_text(encoding="utf-8"))
+    assert doc["group"] is None
+    assert doc["framework"] == "uia"
+    assert doc["winTitle"] == "微信"
+    assert doc["processName"] == "Weixin"
+
+    listed = {e["name"]: e for e in _call("rpa.listElements", path=path)["elements"]}
+    assert listed["旧资产"]["framework"] is None
+    assert listed["旧资产"]["group"] is None
+    assert old.read_bytes() == old_bytes, "P1 不该迁移旧资产文件"

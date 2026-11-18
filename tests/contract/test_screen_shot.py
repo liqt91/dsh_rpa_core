@@ -26,10 +26,11 @@ from rpa_core.capture.screen_shot import (
 class FakeAPI:
     """``_ScreenAPI`` 替身：窗口矩形与截屏都按注入给，不碰真屏。"""
 
-    def __init__(self, rect=None, png=None, exists=True):
+    def __init__(self, rect=None, png=None, exists=True, dpi=120):
         self._rect = rect
         self._png = png if png is not None else _ONE_PIXEL_PNG
         self._exists = exists
+        self._dpi = dpi
         self.grabbed: list[tuple[int, int, int, int]] = []
 
     def window_rect(self, hwnd):
@@ -41,6 +42,9 @@ class FakeAPI:
 
     def window_exists(self, hwnd):
         return self._exists
+
+    def window_dpi(self, hwnd):
+        return {"dpi": self._dpi, "scale": self._dpi / 96 if self._dpi else None}
 
 
 #: 1×1 真 PNG（手写字节，不引 Pillow——判据不该依赖被测对象的依赖）。
@@ -351,6 +355,9 @@ def test_grab_window_returns_origin_and_image_size():
     assert result["windowOrigin"] == [10, 20]
     assert result["imageSize"] == [1, 1]  # 1×1 真 PNG
     assert result["dataUrl"].startswith("data:image/png;base64,")
+    # M80：截图必须带 DPI provenance，且 scale = dpi/96（替身给 120 ⇒ 1.25）。
+    assert result["dpi"] == 120
+    assert result["scale"] == 1.25
 
 
 def test_grab_window_returns_none_when_window_gone():

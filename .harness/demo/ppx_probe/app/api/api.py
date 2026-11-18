@@ -69,6 +69,15 @@ from rpa_core.capture_kit import (  # noqa: E402
     CaptureController,
     CaptureFloat,
     ElementEditDialog,
+    apply_selector as _kernel_apply_selector,
+    build_edit_model as _kernel_build_edit_model,
+    build_hybrid_session,
+    compose as _kernel_compose,
+    compose_selector as _kernel_compose_selector,
+    edit_text_for as _kernel_edit_text_for,
+    is_valid_name,
+    validate_name,
+    validate_selector,
 )
 from rpa_core.catalog import load_catalog  # noqa: E402
 from rpa_core.compiler.compiler import WorkflowCompileError, WorkflowCompiler  # noqa: E402
@@ -80,6 +89,10 @@ from rpa_core.model.inputs import (  # noqa: E402
     declaration_from_entries,
 )
 from rpa_core.model.workflow import Condition, Workflow  # noqa: E402
+from rpa_core.runtime.element_refs import (  # noqa: E402
+    element_capable_keys,
+    element_kind_for_param_key,
+)
 
 # 捕获的会话 / 浮窗 / 「无超时」全在 rpa_core.capture_kit 里，ppx 只负责 RPC 与落盘。
 
@@ -2175,69 +2188,33 @@ def _new_edit_dialog() -> ElementEditDialog | None:
     return ElementEditDialog()
 
 
+# 以下几个薄包装只做「entry/doc 形状 ↔ 内核纯函数」的适配；校验与模型构造的
+# 唯一权威在 rpa_core.capture_kit.element_editing，HTML 与 win32 两个编辑面共用。
 def _selector_edit_text(doc: dict[str, Any]) -> str:
-    """可编辑的定位文本：网页给 css，桌面给 locator JSON（供编辑框预填）。"""
-    selector = doc.get("selector") or {}
-    if doc.get("kind") == "desktop":
-        return json.dumps(selector, ensure_ascii=False, indent=2)
-    return str(selector.get("css") or "")
+    return _kernel_edit_text_for(doc)
 
 
 def _selector_edit_error(doc: dict[str, Any], text: str) -> str | None:
-    """选择器编辑的校验（**不改 doc**）：返回错误文案或 None。"""
-    text = (text or "").strip()
-    if doc.get("kind") == "browser":
-        if not text:
-            return "选择器不能为空"
-        if "\n" in text or "\r" in text:
-            return "网页选择器只能是一行"
-        return None
-    try:
-        parsed = json.loads(text)
-    except ValueError as exc:
-        return f"定位不是合法 JSON：{exc}"
-    if not isinstance(parsed, dict) or not isinstance(parsed.get("locator"), dict):
-        return '桌面定位必须是含 "locator" 字段的 JSON'
-    return None
+    return validate_selector(doc, text)
 
 
 def _apply_selector_edit(doc: dict[str, Any], text: str) -> None:
-    """把校验过的定位写回 doc（调用前必须先过 _selector_edit_error）。"""
-    text = (text or "").strip()
-    if doc.get("kind") == "browser":
-        doc.setdefault("selector", {})["css"] = text
-    else:
-        doc["selector"] = json.loads(text)
+    """校验过的定位写回 doc（原地，兼容 win32 回调）；新描述符不共享引用。"""
+    if validate_selector(doc, text) is not None:
+        return
+    doc["selector"] = _kernel_apply_selector(doc, text)["selector"]
 
 
 def _capture_edit_model(entry: dict[str, Any]) -> dict[str, Any]:
-    """捕获确认框的内容：建议名 + 定位编辑素材 + 信息行。
-
-    browser 且有 ``selector.path`` 时给**层级模型**（影刀式树形编辑）；
-    desktop / 无 path 时退化为可编辑文本（简式形态）。
-    """
-    from rpa_core.capture_kit import selector_tree
-
+    """会话条目 → 编辑框内容；语义在内核，这里只拆出 preview 字段。"""
     preview = entry.get("preview") or {}
-    captured = entry.get("captured") or {}
-    kind = preview.get("kind")
-    parts = ["网页元素" if kind == "browser" else "桌面元素"]
-    if preview.get("matches"):
-        parts.append(f"命中 {preview['matches']} 个")
-    node = preview.get("nodeId")
-    parts.append(f"将绑定到 {node}" if node else "存为资产（不绑定节点）")
-    path = (captured.get("selector") or {}).get("path")
-    model: dict[str, Any] = {
-        "title": "捕获到元素",
-        "name": str(preview.get("name") or entry.get("suggestName") or ""),
-        "info": " · ".join(parts),
-    }
-    if kind == "browser" and isinstance(path, list) and path:
-        model["levels"] = selector_tree.levels_from_path(path)
-    else:
-        model["selector"] = _selector_edit_text(captured)
-        model["meta"] = model["info"].replace(" · ", "\r\n")
-    return model
+    return _kernel_build_edit_model(
+        entry.get("captured") or {},
+        name=str(preview.get("name") or entry.get("suggestName") or ""),
+        kind=str(preview.get("kind") or ""),
+        matches=int(preview.get("matches") or 0),
+        node_id=preview.get("nodeId"),
+    )
 
 
 def _commit_from_dialog(entry: dict[str, Any], name: str, selector: str) -> str | None:
@@ -2256,6 +2233,79 @@ def _commit_from_dialog(entry: dict[str, Any], name: str, selector: str) -> str 
 
 def _elements_dir(path: str) -> Path:
     return _flow_path(path).parent / "elements"
+
+
+# -- 元素库管理元数据（M92/P1） ------------------------------------------------
+# 分组放在流程目录的 element_groups.json，**不进 elements/**——listElements 用
+# elements/*.json 枚举资产，分组文件放进去会被当成一条没有选择器的假元素。
+# 元素归属用顶层显式 group 字段（见 ElementDescriptor），文件名仍是 ref-only 权威。
+
+
+def _element_groups_path(path: str) -> Path:
+    return _flow_path(path).parent / "element_groups.json"
+
+
+def _load_element_groups(path: str) -> dict[str, Any]:
+    target = _element_groups_path(path)
+    if not target.is_file():
+        return {"version": 1, "groups": []}
+    try:
+        doc = json.loads(target.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise ValueError(f"分组文件读不了：{exc}") from exc
+    if not isinstance(doc, dict) or not isinstance(doc.get("groups"), list):
+        raise ValueError("分组文件格式不对（需要 groups 数组）")
+    groups: list[dict[str, Any]] = []
+    for item in doc["groups"]:
+        if not isinstance(item, dict) or not item.get("id") or not item.get("name"):
+            raise ValueError("分组条目缺 id/name")
+        groups.append({
+            "id": str(item["id"]),
+            "name": str(item["name"]),
+            "order": int(item.get("order") or 0),
+            "collapsed": bool(item.get("collapsed") or False),
+        })
+    return {"version": 1, "groups": sorted(groups, key=lambda g: (g["order"], g["name"]))}
+
+
+def _save_element_groups(path: str, doc: dict[str, Any]) -> None:
+    _write_element_doc(_element_groups_path(path), doc)
+
+
+def _group_by_id(groups: list[dict[str, Any]], group_id: str | None) -> dict[str, Any] | None:
+    if group_id is None:
+        return None
+    return next((g for g in groups if g["id"] == group_id), None)
+
+
+def _element_documents(path: str) -> list[tuple[str, dict[str, Any]]]:
+    ed = _elements_dir(path)
+    if not ed.is_dir():
+        return []
+    out: list[tuple[str, dict[str, Any]]] = []
+    for f in sorted(ed.glob("*.json")):
+        try:
+            doc = json.loads(f.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if isinstance(doc, dict):
+            out.append((f.stem, doc))
+    return out
+
+
+def _fill_library_fields(doc: dict[str, Any]) -> None:
+    """新入库资产补齐影刀对齐字段；**不迁移旧资产**（缺字段就显示未分组/未知）。"""
+    meta = doc.get("metadata") or {}
+    doc.setdefault("group", None)
+    doc.setdefault(
+        "framework",
+        "web" if doc.get("kind") == "browser" else (meta.get("backend") or "win32"),
+    )
+    doc.setdefault("processName", meta.get("processName"))
+    doc.setdefault("winTitle", meta.get("windowTitle"))
+    doc.setdefault("screenshot", None)
+    doc.setdefault("lastVerifiedAt", None)
+    doc.setdefault("lastVerifyError", None)
 
 
 def _present_elements(path: str) -> set[str]:
@@ -2459,9 +2509,24 @@ def missing_elements(path: str) -> dict[str, Any]:
 
 @api_method("rpa.listElements")
 def list_elements(path: str) -> dict[str, Any]:
-    """列出流程已捕获的元素资产（elements/*.json）。"""
+    """列出流程已捕获的元素资产（elements/*.json）。
+
+    附带 ``refCount``（流程里多少参数指向它）——元素面板据此把「被引用」显示出来，
+    数与引用清单一同源，不许前端自己再扫一遍流程文件。M92/P1 起同时返回分组与
+    影刀对齐的来源字段（framework/processName/winTitle/screenshot/校验状态），
+    供 P2 的树形元素库直接渲染；缺字段的旧资产返回 None，不迁移、不猜值。
+    """
     started = time.perf_counter()
+    try:
+        group_names = {
+            g["id"]: g["name"] for g in _load_element_groups(path)["groups"]
+        }
+    except ValueError:
+        group_names = {}
     ed = _elements_dir(path)
+    counts: dict[str, int] = {}
+    for ref in _all_element_refs(path):
+        counts[ref["name"]] = counts.get(ref["name"], 0) + 1
     items: list[dict[str, Any]] = []
     if ed.is_dir():
         for f in sorted(ed.glob("*.json")):
@@ -2473,16 +2538,222 @@ def list_elements(path: str) -> dict[str, Any]:
                         "name": f.stem,
                         "kind": doc.get("kind"),
                         "selector": sel.get("css") or sel.get("locator"),
+                        "refCount": counts.get(f.stem, 0),
+                        "group": doc.get("group"),
+                        "groupName": group_names.get(doc.get("group")),
+                        "framework": doc.get("framework"),
+                        "processName": doc.get("processName"),
+                        "winTitle": doc.get("winTitle"),
+                        "screenshot": doc.get("screenshot"),
+                        "capturedAt": doc.get("capturedAt"),
+                        "verifyCount": doc.get("verifyCount"),
+                        "lastVerifiedAt": doc.get("lastVerifiedAt"),
+                        "lastVerifyError": doc.get("lastVerifyError"),
                     }
                 )
             except Exception:
-                items.append({"name": f.stem, "kind": None, "selector": None, "error": "解析失败"})
+                items.append({
+                    "name": f.stem, "kind": None, "selector": None,
+                    "refCount": counts.get(f.stem, 0), "error": "解析失败",
+                })
     return {
         "ok": True,
         "elements": items,
         "dir": str(ed),
         "ms": round((time.perf_counter() - started) * 1000, 1),
     }
+
+
+# -- M92/P1：元素库管理 RPC（只做数据与文件，界面在 P2 消费） -------------------
+# 红线：不恢复手写选择器入口；不动 ref-only（文件名就是名字）；批量删除仍走
+# deleteElement 的引用护栏，这里只提供「移动/复制/查引用」等不会造悬空引用的操作。
+
+
+def _groups_or_error(path: str) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    try:
+        return _load_element_groups(path), None
+    except ValueError as exc:
+        return None, _element_error("BAD_GROUPS", str(exc))
+
+
+@api_method("rpa.listElementGroups")
+def list_element_groups(path: str) -> dict[str, Any]:
+    """分组树的数据源：分组 + 元素数 + 未分组数（只读，不改盘）。"""
+    doc, error = _groups_or_error(path)
+    if error:
+        return error
+    assert doc is not None
+    ids = {g["id"] for g in doc["groups"]}
+    counts: dict[str, int] = {}
+    ungrouped = 0
+    for _name, element in _element_documents(path):
+        gid = element.get("group")
+        if gid in ids:
+            counts[gid] = counts.get(gid, 0) + 1
+        else:
+            ungrouped += 1
+    return {
+        "ok": True,
+        "groups": [{**g, "elementCount": counts.get(g["id"], 0)} for g in doc["groups"]],
+        "ungrouped": ungrouped,
+    }
+
+
+@api_method("rpa.setElementGroupCollapsed")
+def set_element_group_collapsed(
+    path: str, group_id: str, collapsed: bool
+) -> dict[str, Any]:
+    """折叠状态落盘：刷新后树的展开/收起保持。只改 groups.json，不碰元素。"""
+    doc, error = _groups_or_error(path)
+    if error:
+        return error
+    assert doc is not None
+    group = _group_by_id(doc["groups"], group_id)
+    if group is None:
+        return _element_error("GROUP_NOT_FOUND", "没有这个分组")
+    group["collapsed"] = bool(collapsed)
+    _save_element_groups(path, doc)
+    return {"ok": True, "group_id": group_id, "collapsed": bool(collapsed)}
+
+
+@api_method("rpa.createElementGroup")
+def create_element_group(path: str, name: str) -> dict[str, Any]:
+    name = (name or "").strip()
+    if not _valid_element_name(name):
+        return _element_error("BAD_NAME", "分组名不能用这个字")
+    doc, error = _groups_or_error(path)
+    if error:
+        return error
+    assert doc is not None
+    if any(g["name"] == name for g in doc["groups"]):
+        return _element_error("GROUP_NAME_TAKEN", f"已经有分组叫「{name}」了")
+    import uuid
+
+    group = {
+        "id": uuid.uuid4().hex[:12],
+        "name": name,
+        "order": max((g["order"] for g in doc["groups"]), default=-1) + 1,
+        "collapsed": False,
+    }
+    doc["groups"].append(group)
+    _save_element_groups(path, doc)
+    return {"ok": True, "group": {**group, "elementCount": 0}}
+
+
+@api_method("rpa.renameElementGroup")
+def rename_element_group(path: str, group_id: str, name: str) -> dict[str, Any]:
+    name = (name or "").strip()
+    if not _valid_element_name(name):
+        return _element_error("BAD_NAME", "分组名不能用这个字")
+    doc, error = _groups_or_error(path)
+    if error:
+        return error
+    assert doc is not None
+    group = _group_by_id(doc["groups"], group_id)
+    if group is None:
+        return _element_error("GROUP_NOT_FOUND", "没有这个分组")
+    if any(g["name"] == name and g["id"] != group_id for g in doc["groups"]):
+        return _element_error("GROUP_NAME_TAKEN", f"已经有分组叫「{name}」了")
+    group["name"] = name
+    _save_element_groups(path, doc)
+    return {"ok": True, "group": group}
+
+
+@api_method("rpa.deleteElementGroup")
+def delete_element_group(
+    path: str, group_id: str, move_to: str | None = None
+) -> dict[str, Any]:
+    """删分组；组内元素移到 ``move_to``（None = 未分组），**不删元素**。"""
+    doc, error = _groups_or_error(path)
+    if error:
+        return error
+    assert doc is not None
+    group = _group_by_id(doc["groups"], group_id)
+    if group is None:
+        return _element_error("GROUP_NOT_FOUND", "没有这个分组")
+    if move_to is not None and _group_by_id(doc["groups"], move_to) is None:
+        return _element_error("GROUP_NOT_FOUND", "目标分组不存在")
+    moved: list[str] = []
+    for name, element in _element_documents(path):
+        if element.get("group") != group_id:
+            continue
+        element["group"] = move_to
+        _write_element_doc(_elements_dir(path) / f"{name}.json", element)
+        moved.append(name)
+    doc["groups"] = [g for g in doc["groups"] if g["id"] != group_id]
+    _save_element_groups(path, doc)
+    return {"ok": True, "group_id": group_id, "moved": sorted(moved)}
+
+
+@api_method("rpa.moveElementsToGroup")
+def move_elements_to_group(
+    path: str, names: list[str], group_id: str | None = None
+) -> dict[str, Any]:
+    """批量移动元素到分组；``group_id=None`` = 移回未分组。只改归属，不碰引用。"""
+    doc, error = _groups_or_error(path)
+    if error:
+        return error
+    assert doc is not None
+    if group_id is not None and _group_by_id(doc["groups"], group_id) is None:
+        return _element_error("GROUP_NOT_FOUND", "目标分组不存在")
+    wanted = sorted({str(n).strip() for n in (names or []) if str(n).strip()})
+    if not wanted:
+        return _element_error("BAD_NAME", "没有要移动的元素")
+    existing = dict(_element_documents(path))
+    missing = [name for name in wanted if name not in existing]
+    if missing:
+        return _element_error("NOT_FOUND", f"没有这些资产：{', '.join(missing)}")
+    for name in wanted:
+        element = existing[name]
+        element["group"] = group_id
+        _write_element_doc(_elements_dir(path) / f"{name}.json", element)
+    return {"ok": True, "moved": wanted, "group": group_id}
+
+
+@api_method("rpa.copyElement")
+def copy_element(path: str, name: str, new_name: str) -> dict[str, Any]:
+    """复制资产为新名字；新资产不绑节点（ref-only 下未引用就是库存）。"""
+    name = (name or "").strip()
+    new_name = (new_name or "").strip()
+    if not _valid_element_name(name) or not _valid_element_name(new_name):
+        return _element_error("BAD_NAME", "名字不能用这个值")
+    target_dir = _elements_dir(path)
+    source = target_dir / f"{name}.json"
+    target = target_dir / f"{new_name}.json"
+    if not source.is_file():
+        return _element_error("NOT_FOUND", f"没有这个资产：{name}")
+    if target.exists():
+        return _element_error("NAME_TAKEN", f"已经有一个叫「{new_name}」的元素了")
+    try:
+        doc = json.loads(source.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        return _element_error("BAD_JSON", f"资产文件读不了：{exc}")
+    doc["name"] = new_name
+    _fill_library_fields(doc)
+    _write_element_doc(target, doc)
+    return {"ok": True, "name": new_name, "copiedFrom": name}
+
+
+@api_method("rpa.findUnusedElements")
+def find_unused_elements(path: str) -> dict[str, Any]:
+    """查找未使用元素：引用计数为 0 的资产（库面板的筛选数据源）。"""
+    counts: dict[str, int] = {}
+    for ref in _all_element_refs(path):
+        counts[ref["name"]] = counts.get(ref["name"], 0) + 1
+    unused = [
+        name for name, _doc in _element_documents(path)
+        if counts.get(name, 0) == 0
+    ]
+    return {"ok": True, "elements": unused}
+
+
+@api_method("rpa.elementReferences")
+def element_references(path: str, name: str) -> dict[str, Any]:
+    """查找引用：与删除护栏/详情同源的结构化引用清单。"""
+    if not _valid_element_name(name):
+        return _element_error("BAD_NAME", "这个名字用不了")
+    refs = _element_references(path, name)
+    return {"ok": True, "name": name, "count": len(refs), "references": refs}
 
 
 # ---- 提示面：宿主界面里不出现提示（2026-11-12 交互改版） --------------------
@@ -2516,10 +2787,23 @@ def _notify(title: str, detail: str = "", *, auto_hide_ms: int = 12000) -> None:
 
 
 def _selector_text(doc: dict[str, Any]) -> str:
-    """描述符 → 一行给人看的定位（网页给 CSS，桌面给控件名）。"""
+    """描述符 → 一行给人看的定位（网页给 CSS，桌面给控件名 / 图像尺寸）。"""
     selector = doc.get("selector") or {}
     if doc.get("kind") == "desktop":
-        steps = (selector.get("locator") or {}).get("path") or []
+        locator = selector.get("locator") or {}
+        # 图像定位没有控件树可读，`path` 恒空——不特判就会在确认框里显示成
+        # 「桌面控件」，用户完全看不出自己截了多大一块（M84 实测反馈：
+        # 「没有更细的粒度」）。直接报模板尺寸与屏幕原点。
+        if str(locator.get("driver") or "") == "image":
+            size = locator.get("templateSize") or []
+            rect = locator.get("sourceRect") or []
+            if len(size) == 2:
+                text = f"图像 {size[0]}×{size[1]}"
+                if len(rect) == 4:
+                    text += f" @ ({rect[0]}, {rect[1]})"
+                return text
+            return "图像"
+        steps = locator.get("path") or []
         last = steps[-1] if steps else {}
         label = last.get("name") or last.get("automationId") or last.get("controlType")
         return str(label or "桌面控件")
@@ -2623,7 +2907,10 @@ class _WebviewHost:
 
 @api_method("rpa.startCapture")
 def start_capture(
-    path: str, name: str | None = None, override: str | None = None
+    path: str,
+    name: str | None = None,
+    override: str | None = None,
+    image: bool = False,
 ) -> dict[str, Any]:
     """点一下就抓：**不预填名字、不选网页/桌面、不写选择器**。
 
@@ -2678,6 +2965,7 @@ def start_capture(
     _CAPTURES[key] = entry
     try:
         controller = CaptureController(
+            session_factory=lambda: build_hybrid_session(image=bool(image)),
             on_captured=lambda captured: _hold_captured(entry, captured),
             host=_WebviewHost(),
             # 与「正在准备…」共用同一个浮窗：就绪时**原地**变成捕获窗，不闪窗。
@@ -2803,27 +3091,8 @@ def cancel_capture(path: str, capture_id: str) -> dict[str, Any]:
 
 
 def _valid_element_name(name: str | None) -> bool:
-    """资产名唯一口径：入库、改名、详情、删除共用，同时挡掉路径穿越。
-
-    ★ **允许中文**（用户侧要求「资产名称支持中文输入」）。只挡真正会弄坏磁盘名的字符：
-    路径分隔符、Windows 保留字符、控制字符、点（避免与 ``.json`` 后缀混淆）、
-    首尾空白、以及 ``CON``/``NUL`` 这类设备名。
-    """
-    if not isinstance(name, str):
-        return False
-    if not name or len(name) > 48 or name != name.strip():
-        return False
-    if any(ch in _NAME_BAD_CHARS or ord(ch) < 32 for ch in name):
-        return False
-    return name.split(".")[0].lower() not in _RESERVED_NAMES
-
-
-_NAME_BAD_CHARS = frozenset('/\\:*?"<>|.')
-_RESERVED_NAMES = frozenset(
-    ["con", "prn", "aux", "nul"]
-    + [f"com{index}" for index in range(1, 10)]
-    + [f"lpt{index}" for index in range(1, 10)]
-)
+    """资产名判定：权威在内核 element_editing.validate_name（允许中文、挡路径穿越）。"""
+    return is_valid_name(name)
 
 
 def _element_error(code: str, message: str) -> dict[str, Any]:
@@ -2883,6 +3152,7 @@ def _do_commit(entry: dict[str, Any], name: str) -> dict[str, Any]:
         return _element_error("NAME_TAKEN", f"已经有一个叫「{name}」的元素了，换个名字")
     doc = dict(entry["captured"] or {})
     doc["name"] = name
+    _fill_library_fields(doc)
     _write_element_doc(target, doc)
     renamed: list[str] = []
     ref = entry.get("name") or ""
@@ -2901,17 +3171,27 @@ def _do_commit(entry: dict[str, Any], name: str) -> dict[str, Any]:
 
 
 @api_method("rpa.commitElement")
-def commit_element(path: str, capture_id: str, name: str) -> dict[str, Any]:
-    """用户确认后入库：捕获描述符 + 用户改好的名字 → ``elements/<name>.json``。
+def commit_element(
+    path: str, capture_id: str, name: str, selector: str | None = None
+) -> dict[str, Any]:
+    """用户确认后入库：捕获描述符 + 用户改好的名字/定位 → ``elements/<name>.json``。
 
     这是捕获链路上**唯一**写元素文件的地方（捕获本身只暂存）。名字被改过时，
     流程里同名的 elementRefs 一起改名——否则资产与引用就对不上，等于白抓。
+    ``selector`` 不传时保持旧行为（win32 框自报已改好的描述符）；传了就先过内核校验，
+    非法时**不 pop 会话**，让用户留在编辑框里改。
     """
     started = time.perf_counter()
     key = _capture_key(path, capture_id)
     entry = _CAPTURES.get(key)
     if entry is None or not entry.get("captured"):
         return _element_error("NO_CAPTURE", "这次捕获已经结束了，重新抓一次")
+    captured = entry["captured"]
+    if selector is not None:
+        error = _selector_edit_error(captured, selector)
+        if error:
+            return _element_error("BAD_SELECTOR", error)
+        _apply_selector_edit(captured, selector)
     res = _do_commit(entry, name)
     if not res["ok"]:
         return res
@@ -2928,6 +3208,107 @@ def discard_capture(path: str, capture_id: str) -> dict[str, Any]:
     if entry is None:
         return {"ok": True, "discarded": False, "captureId": capture_id}
     return {"ok": True, "discarded": True, "captureId": capture_id}
+
+
+@api_method("rpa.elementEditModel")
+def element_edit_model(path: str, capture_id: str) -> dict[str, Any]:
+    """捕获后编辑框的内容：会话里的描述符 + 预览信息 → 内核编辑模型。
+
+    ``capturePoll`` 的 preview 只有定位字符串（够列表展示用），层级树要这里的
+    完整描述符才能构造。语义在 ``element_editing.build_edit_model``，与 win32 框同源。
+    """
+    key = _capture_key(path, capture_id)
+    entry = _CAPTURES.get(key)
+    if entry is None or not entry.get("captured"):
+        return _element_error("NO_CAPTURE", "这次捕获已经结束了，重新抓一次")
+    return {"ok": True, **_capture_edit_model(entry)}
+
+
+@api_method("rpa.elementCompose")
+def element_compose(
+    levels: list[dict[str, Any]] | None = None,
+    nodes: list[dict[str, Any]] | None = None,
+    path: str | None = None,
+    capture_id: str | None = None,
+) -> dict[str, Any]:
+    """层级勾选 → 定位文本；重组唯一权威在内核，前端不拼字符串。
+
+    网页传 ``levels`` → css（``selector_tree.compose``）；桌面传 ``nodes`` →
+    完整 selector 的 JSON（``desktop_editing.compose_selector``）。桌面要带
+    ``capture_id`` 才能保住原 selector 的 ``candidates`` 等未编辑字段。
+    """
+    if nodes is not None:
+        entry = (
+            _CAPTURES.get(_capture_key(path, capture_id))
+            if path and capture_id else None
+        )
+        descriptor = (entry or {}).get("captured") or {"kind": "desktop", "selector": {}}
+        try:
+            selector = _kernel_compose_selector(descriptor, nodes)
+            return {"ok": True, "selector": json.dumps(selector, ensure_ascii=False)}
+        except (KeyError, TypeError, ValueError) as exc:
+            return _element_error("BAD_NODES", f"桌面层级数据不对：{exc}")
+    if not isinstance(levels, list):
+        return _element_error("BAD_LEVELS", "层级数据不对")
+    try:
+        return {"ok": True, "selector": _kernel_compose(levels)}
+    except (KeyError, TypeError, ValueError) as exc:
+        return _element_error("BAD_LEVELS", f"层级数据不对：{exc}")
+
+
+@api_method("rpa.elementCandidates")
+def element_candidates(path: str, param_key: str | None = None) -> dict[str, Any]:
+    """参数面板「从元素库选」的候选。
+
+    ``capableKeys`` 来自内核 ``element_refs``（与运行期解析同一份集合），前端据此
+    决定哪些参数给选择入口。指定 ``param_key`` 时只列该键接受的那类元素——
+    否则会出现「面板能选、运行期换不进去」的静默失配。
+    """
+    wanted = element_kind_for_param_key(param_key) if param_key else None
+    items = list_elements(path).get("elements", [])
+    if wanted:
+        items = [e for e in items if e.get("kind") == wanted]
+    return {
+        "ok": True,
+        "capableKeys": sorted(element_capable_keys()),
+        "paramKey": param_key,
+        "kind": wanted,
+        "elements": items,
+    }
+
+
+@api_method("rpa.elementValidate")
+def element_validate(
+    path: str, name: str, selector: str, capture_id: str | None = None
+) -> dict[str, Any]:
+    """编辑框内的静态校验：名字、定位、重名。只查不改，不碰会话与盘。"""
+    error = validate_name(name)
+    if error:
+        return _element_error("BAD_NAME", error)
+    entry = _CAPTURES.get(_capture_key(path, capture_id)) if capture_id else None
+    descriptor = (entry or {}).get("captured")
+    if descriptor is None:
+        source = _elements_dir(path) / f"{name}.json"
+        if source.is_file():
+            try:
+                descriptor = json.loads(source.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                descriptor = None
+    if descriptor is not None:
+        error = validate_selector(descriptor, selector)
+        if error:
+            return _element_error("BAD_SELECTOR", error)
+    overwrite = bool((entry or {}).get("overwrite")) and name == (entry or {}).get("name")
+    if (not overwrite) and (_elements_dir(path) / f"{name}.json").exists():
+        return _element_error("NAME_TAKEN", f"已经有一个叫「{name}」的元素了，换个名字")
+    return {"ok": True, "valid": True}
+
+
+@api_method("rpa.recaptureElement")
+def recapture_element(path: str, capture_id: str, name: str | None = None) -> dict[str, Any]:
+    """编辑框里点「重新捕获 / 保存并继续」：收掉当前会话再起一次。"""
+    cancel_capture(path, capture_id)
+    return start_capture(path, name=name)
 
 
 def _do_rename(path: str, name: str, new_name: str | None) -> dict[str, Any]:
@@ -3005,8 +3386,8 @@ class _EditSession:
 def edit_element(path: str, name: str) -> dict[str, Any]:
     """已入库资产的详情编辑：桌面原生框（win32），与捕获确认框同一个。
 
-    框里可改名字（改名联动 elementRefs），meta 是资产文档全文。非 Windows 返回
-    ``EDIT_DIALOG_UNAVAILABLE``，前端回退页面弹窗。
+    框里可改名字（改名联动 elementRefs）和定位：网页走层级树、桌面走节点/属性树，
+    meta 是资产文档全文。非 Windows 返回 ``EDIT_DIALOG_UNAVAILABLE``，前端回退页面弹窗。
     """
     dialog = _new_edit_dialog()
     if dialog is None:
@@ -3052,21 +3433,25 @@ def edit_element(path: str, name: str) -> dict[str, Any]:
         session.finish({"state": "committed", "name": res["name"]})
         return None
 
-    from rpa_core.capture_kit import selector_tree
-
-    path_chain = (doc.get("selector") or {}).get("path")
+    # 捕获确认与详情框共用同一份内核编辑模型：桌面节点/属性树不能只在捕获路径有。
+    model = _kernel_build_edit_model(
+        doc, name=name, matches=int(doc.get("verifyCount") or 0)
+    )
     show_args: dict[str, Any] = {
         "title": f"元素详情 · {name}",
         "name": name,
+        "info": model["info"],
         "on_save": _save,
         "on_close": lambda saved: saved or session.finish({"state": "discarded"}),
     }
-    if doc.get("kind") == "browser" and isinstance(path_chain, list) and path_chain:
-        show_args["levels"] = selector_tree.levels_from_path(path_chain)
-        show_args["info"] = f"网页元素 · 命中 {doc.get('verifyCount', 0)} 个"
+    if model.get("levels"):
+        show_args["levels"] = model["levels"]
     else:
-        show_args["selector"] = _selector_edit_text(doc)
+        show_args["selector"] = model["selector"]
         show_args["meta"] = json.dumps(doc, ensure_ascii=False, indent=2)
+        if model.get("nodes"):
+            show_args["nodes"] = model["nodes"]
+            show_args["descriptor"] = doc
     dialog.show(**show_args)
     return {"ok": True, "editId": edit_id, "state": "editing"}
 
@@ -3139,6 +3524,60 @@ def element_detail(path: str, name: str) -> dict[str, Any]:
         "referencedBy": _element_references(path, name),
         "ms": round((time.perf_counter() - started) * 1000, 1),
     }
+
+
+@api_method("rpa.verifyElement")
+def verify_element(
+    path: str,
+    name: str,
+    mode: str = "flash",
+    want_shot: bool = False,
+) -> dict[str, Any]:
+    """点资产行的「校验」：读盘后调 M74 门面，不复制任何分派逻辑。
+
+    RPC 的 ``ok`` 只表示「这次调用走通了」；元素没命中或校验通道坏，分别由
+    ``count=0`` 与 ``error`` 区分，与 CLI/契约测试的口径完全一致。
+    """
+    started = time.perf_counter()
+    if not _valid_element_name(name):
+        return _element_error("BAD_NAME", "这个名字用不了")
+    target = _elements_dir(path) / f"{name}.json"
+    if not target.is_file():
+        return _element_error("NOT_FOUND", f"没有这个资产：{name}")
+    try:
+        doc = json.loads(target.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        return _element_error("BAD_JSON", f"资产文件读不了：{exc}")
+
+    from rpa_core.capture.verification import verify_element as _verify
+
+    result = _verify(doc, mode=mode, want_shot=want_shot)
+    return {
+        "ok": True,
+        "name": name,
+        **result.to_dict(),
+        "ms": round((time.perf_counter() - started) * 1000, 1),
+    }
+
+
+@api_method("rpa.verifyAllElements")
+def verify_all_elements(path: str) -> dict[str, Any]:
+    """元素面板的「全部校验」：逐个走同一个 verify_element 门面，不另写分派。
+
+    单个失败不阻断其余元素；每条结果带 ``error`` 或 ``count``，与行内校验同口径。
+    """
+    names = [e["name"] for e in list_elements(path).get("elements", []) if e.get("name")]
+    results: list[dict[str, Any]] = []
+    for name in names:
+        res = verify_element(path, name)
+        results.append(
+            {
+                "name": name,
+                "count": res.get("count", 0),
+                "error": res.get("error"),
+            }
+        )
+    return {"ok": True, "results": results}
 
 
 @api_method("rpa.deleteElement")

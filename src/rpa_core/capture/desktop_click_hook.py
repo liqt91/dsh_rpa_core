@@ -25,6 +25,10 @@ from ctypes import wintypes
 
 from rpa_core.capture._trace import trace as _trace
 
+# 进程名判定（浏览器 vs Electron 定制客户端）复用同一份权威。此模块只依赖 ctypes，
+# 不引入 pywinauto/comtypes——「零 UIA 依赖」这条约束仍然成立。
+from rpa_core.capture.foreground_window import is_browser_content
+
 WH_MOUSE_LL = 14
 WM_LBUTTONDOWN = 0x0201
 WM_LBUTTONUP = 0x0202
@@ -35,9 +39,8 @@ PROCESS_SYNCHRONIZE = 0x00100000
 WAIT_OBJECT_0 = 0
 INFINITE = 0xFFFFFFFF
 
-# 与 desktop_agent._BROWSER_CONTENT_CLASSES 保持一致（刻意复制：本进程刻意
-# 不 import agent 模块，保持零 UIA/comtypes 依赖）
-_BROWSER_CONTENT_CLASSES = {"Chrome_RenderWidgetHostHWND"}
+# 浏览器内容区的判据不在这里复制：`foreground_window.is_browser_content` 是唯一权威
+# （类名 + 进程名）。本进程仍然只依赖 ctypes，不引入 pywinauto/comtypes。
 
 
 class _MSLLHOOKSTRUCT(ctypes.Structure):
@@ -67,6 +70,8 @@ if sys.platform == "win32":
     user32.WindowFromPoint.restype = wintypes.HWND
     user32.GetClassNameW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
     user32.GetClassNameW.restype = ctypes.c_int
+    user32.GetAncestor.argtypes = [wintypes.HWND, wintypes.UINT]
+    user32.GetAncestor.restype = wintypes.HWND
     user32.PostThreadMessageW.argtypes = [
         wintypes.DWORD, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM,
     ]
@@ -93,6 +98,21 @@ def _class_name_of(hwnd: int) -> str:
 def _window_class_at(x: int, y: int) -> str:
     hwnd = int(user32.WindowFromPoint(wintypes.POINT(x, y)) or 0)
     return _class_name_of(hwnd)
+
+
+def _over_browser_content(x: int, y: int) -> bool:
+    """点是否在**真浏览器**的网页内容区（只有这类区域才不吞 Ctrl+Click）。
+
+    只看类名会把 Electron 定制客户端（WorkBuddy / 咚咚 / VS Code）误判成网页内容区：
+    它们的渲染子窗也是 ``Chrome_RenderWidgetHostHWND``，但页面里没有我们的扩展。
+    误判的后果是「Ctrl+Click 既不被吞、扩展也没接住」，用户点了毫无反应（M84）。
+    判据与 agent 同源：``foreground_window.browser_of_window``（进程名）。
+    """
+    hwnd = int(user32.WindowFromPoint(wintypes.POINT(x, y)) or 0)
+    if not hwnd:
+        return False
+    root = int(user32.GetAncestor(hwnd, 2)) or hwnd  # 2 = GA_ROOT
+    return is_browser_content(_class_name_of(hwnd), root)
 
 
 def _swallow_decision(
@@ -166,8 +186,7 @@ def main() -> int:
                 over_browser = bool(
                     ctrl
                     and state["respect_browser_content"]
-                    and _window_class_at(info.pt.x, info.pt.y)
-                    in _BROWSER_CONTENT_CLASSES
+                    and _over_browser_content(info.pt.x, info.pt.y)
                 )
                 swallow, state["swallow_pair"] = _swallow_decision(
                     ctrl, over_browser, is_down, state["swallow_pair"]

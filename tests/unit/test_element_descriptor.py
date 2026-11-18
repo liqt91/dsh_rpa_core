@@ -101,6 +101,24 @@ def test_top_level_unknown_keys_are_dropped():
     assert "url" not in document
 
 
+def test_library_fields_survive_roundtrip():
+    """M92/P1：元素库字段必须显式存在的顶层字段，不能像 url 那样被静默丢弃。"""
+    document = validate_element_document(
+        _browser_document(
+            group="g1", framework="web", processName="chrome", winTitle="小红书",
+            screenshot=".dev/screenshot/g1.jpg", lastVerifiedAt="2026-11-18T00:00:00Z",
+            lastVerifyError="",
+        )
+    ).document()
+    assert document["group"] == "g1"
+    assert document["framework"] == "web"
+    assert document["processName"] == "chrome"
+    assert document["winTitle"] == "小红书"
+    assert document["screenshot"] == ".dev/screenshot/g1.jpg"
+    assert document["lastVerifiedAt"] == "2026-11-18T00:00:00Z"
+    assert document["lastVerifyError"] == ""
+
+
 def test_semantic_metadata_survives_roundtrip():
     document = validate_element_document(
         _browser_document(
@@ -137,6 +155,40 @@ def test_desktop_selector_ignores_candidates_validation():
         }
     )
     assert selector_errors(element) == []
+
+
+def test_desktop_selector_accepts_v2_image_locator():
+    """M80：image locator 是独立形状，不再被 DesktopLocator.extra=forbid 误判。"""
+    element = validate_element_document(
+        {
+            "kind": "desktop",
+            "selector": {"locator": {
+                "driver": "image", "backend": "image", "windowHandle": 7,
+                "imageTemplate": "AAAA", "templateSize": [8, 8], "templateSchema": 2,
+                "captureDpi": 96, "captureScale": 1.0,
+            }},
+            "verifyCount": 0,
+            "metadata": {},
+        }
+    )
+    assert selector_errors(element) == []
+
+
+def test_desktop_selector_rejects_v1_image_template():
+    """V1 模板静态校验就报错，等用户重新捕获，不做数据迁移。"""
+    element = validate_element_document(
+        {
+            "kind": "desktop",
+            "selector": {"locator": {
+                "driver": "image", "windowHandle": 7,
+                "imageTemplate": "AAAA", "templateSize": [8, 8],
+            }},
+            "verifyCount": 0,
+            "metadata": {},
+        }
+    )
+    paths = [error["path"] for error in selector_errors(element)]
+    assert paths == ["selector.locator.template-schema-requires-recapture"]
 
 
 # ---- selector.path（M44 S1）：祖先链可选，出现即须结构正确 -------------------

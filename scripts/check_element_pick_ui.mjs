@@ -117,8 +117,8 @@ check('样式层：编辑框是浮层、按钮可禁用、焦点环可见', () =
 })
 
 // ---------- 3. 结构层（index.html） ----------
-check('结构层：元素面板只有一个捕获按钮，没有预填名/选类型/写选择器', () => {
-  assert(html.includes('id="elemCapture"'), 'index.html 缺单个捕获按钮')
+check('结构层：元素面板只有两个捕获按钮，管理按钮在白名单内', () => {
+  assert(html.includes('id="elemCapture"'), 'index.html 缺捕获按钮')
   for (const gone of [
     'elemNewName', 'elemNewWhere', 'elemNewCapture', 'elemNewSelector',
     'elemNewWrite', 'elemNewNote',
@@ -127,7 +127,14 @@ check('结构层：元素面板只有一个捕获按钮，没有预填名/选类
   }
   const panel = html.slice(html.indexOf('data-panel="elements"'), html.indexOf('data-panel="globals"'))
   const buttons = [...panel.matchAll(/<button[^>]*id="([^"]+)"/g)].map((m) => m[1])
-  assert(buttons.length === 1 && buttons[0] === 'elemCapture', `面板里的按钮：${buttons}`)
+  // 捕获入口必须恰好两个且顺序固定；元素库自己的管理按钮只允许白名单里的
+  // 「全部校验」。白名单是等值集合，不是「放行任何新按钮」的宽松判断。
+  const captures = buttons.filter((id) => id === 'elemCapture' || id === 'elemCaptureImage')
+  assert(captures.length === 2 && captures[0] === 'elemCapture'
+    && captures[1] === 'elemCaptureImage', `捕获按钮：${buttons}`)
+  const allowed = new Set(['elemCapture', 'elemCaptureImage', 'elemVerifyAll'])
+  const extra = buttons.filter((id) => !allowed.has(id))
+  assert(extra.length === 0, `面板里混进了旧入口按钮：${extra}`)
   assert(!/提示|hint/i.test(panel.replace(/<!--[\s\S]*?-->/g, '')), '元素面板里还留着提示区')
 })
 
@@ -592,6 +599,144 @@ check('契约层：被引用参数不假报未设置，解除引用随保存全�
   )
   assert(/element_refs: dict\[str, str\] \| None = None/.test(apiSave), '服务端没接 element_refs')
   assert(/node\.pop\("elementRefs", None\)/.test(apiSave), '清空引用没真的删掉键')
+})
+
+check('结构层：编辑框有层级/属性/定位区与三个新出口', () => {
+  const dialog = html.slice(html.indexOf('id="elemDialog"'))
+  for (const id of [
+    'elemDialogEditor', 'elemTreePane', 'elemAttrPane', 'elemSimplePane',
+    'elemDialogLevels', 'elemDialogAttrs', 'elemDialogSelector',
+    'elemDialogPreview', 'elemDialogRecapture', 'elemDialogValidate',
+    'elemDialogSaveContinue',
+  ]) {
+    assert(dialog.includes(`id="${id}"`), `编辑框缺 #${id}`)
+  }
+})
+
+check('契约层：编辑模型/重组/校验/重捕走语义 RPC，前端不拼 css', () => {
+  for (const needle of [
+    "ppx.call('rpa.elementEditModel'",
+    "ppx.call('rpa.elementCompose'",
+    "ppx.call('rpa.elementValidate'",
+    "ppx.call('rpa.recaptureElement'",
+    'confirmElemDialog(true)',
+    'dialogLevels = levels.map(',
+  ]) {
+    assert(mainSrc.includes(needle), `main.js 缺 ${needle}`)
+  }
+  for (const rpc of [
+    'rpa.elementEditModel', 'rpa.elementCompose', 'rpa.elementValidate', 'rpa.recaptureElement',
+  ]) {
+    assert(apiSrc.includes(`@api_method("${rpc}")`), `api.py 缺 ${rpc} 的定义`)
+  }
+  assert(!/selector\s*=\s*[`'"]#\$\{/.test(mainSrc), '前端自己拼了 css 选择器')
+})
+
+check('契约层：参数面板的选择入口拿内核参数键集合', () => {
+  for (const needle of [
+    "ppx.call('rpa.elementCandidates'",
+    'elemCapableKeys.has(field.key)',
+    'nodeRefs[field.key] = name',
+  ]) {
+    assert(mainSrc.includes(needle), `main.js 缺 ${needle}`)
+  }
+  assert(apiSrc.includes('element_capable_keys()'), '候选集合没取内核权威')
+  assert(apiSrc.includes('element_kind_for_param_key(param_key)'), '没按参数键过滤元素类型')
+})
+
+await checkAsync('渲染层：层级模型渲染成树，组合选择器由后端给', async () => {
+  const levels = [
+    { tag: 'html', included: false, id: { on: false, value: '' }, classes: [], nth: { on: false, value: '' } },
+    { tag: 'div', included: true, id: { on: true, value: 'root' }, classes: [], nth: { on: false, value: '' } },
+  ]
+  const { calls } = await startOnce({
+    responses: {
+      'rpa.elementEditModel': { ok: true, name: '元素1', kind: 'browser', selector: '#root', levels },
+      'rpa.elementCompose': { ok: true, selector: '#root' },
+    },
+  })
+  assert(calls.some((c) => c.name === 'rpa.elementEditModel'), '没取编辑模型')
+  assert(nodeById('elemDialogLevels').children.length === 2, '层级树没渲染出来')
+  assert(nodeById('elemTreePane').hidden === false, '层级面板没显示')
+  assert(nodeById('elemSimplePane').hidden === true, '简式定位没隐藏')
+  assert(nodeById('elemDialogPreview').value === '#root', '组合选择器没填')
+})
+
+check('契约层：桌面编辑也走内核模型与重组，前端不拼 locator', () => {
+  for (const needle of [
+    'dialogEditorKind = \'desktop\'',
+    'renderDesktopLevels()',
+    'renderDesktopAttrs()',
+    'nodes: dialogNodes',
+    'capture_id: dialogCaptureId',
+    'dialogCaptureId = options.captureId || null',
+  ]) {
+    assert(mainSrc.includes(needle), `main.js 缺 ${needle}`)
+  }
+  for (const needle of [
+    'compose_selector as _kernel_compose_selector',
+    'nodes: list[dict[str, Any]] | None = None',
+    '_kernel_compose_selector(descriptor, nodes)',
+  ]) {
+    assert(apiSrc.includes(needle), `api.py 缺 ${needle}`)
+  }
+  // 匹配方式只给运行期真支持的字段，别做点了不生效的假下拉
+  const attrs = mainSrc.slice(
+    mainSrc.indexOf('function renderDesktopAttrs'),
+    mainSrc.indexOf('async function refreshElemCompose'),
+  )
+  assert(attrs.includes("attr.field === 'name' || attr.field === 'automationId'"),
+    '桌面属性表的匹配方式没限定到运行期支持的字段')
+  assert(attrs.includes('mode.disabled = !canFuzzy'), '其它属性行的匹配方式没锁成精确')
+})
+
+await checkAsync('渲染层：桌面模型渲染成层级树与属性表，勾选让后端重组 selector', async () => {
+  const nodes = [
+    { type: 'wnd', name: '微信', selected: false, readonly: true, attributes: [
+      { field: 'windowTitle', label: '窗口标题', value: '微信', operator: '精确',
+        required: true, readonly: true },
+    ] },
+    { type: 'Button', name: '发送', selected: true, attributes: [
+      { field: 'controlType', label: '控件类型', value: 'Button', operator: '精确', required: true },
+      { field: 'name', label: '名称', value: '发送', operator: '精确', required: true },
+    ] },
+  ]
+  const { calls } = await startOnce({
+    responses: {
+      'rpa.elementEditModel': { ok: true, name: '发送按钮', kind: 'desktop',
+        selector: '{"locator":{"backend":"uia","name":"发送"}}', nodes },
+      'rpa.elementCompose': { ok: true, selector: '{"locator":{"backend":"uia","name":"新"}}' },
+    },
+  })
+  assert(nodeById('elemDialogLevels').children.length === 2, '桌面层级树没渲染')
+  assert(nodeById('elemTreePane').hidden === false, '桌面层级面板没显示')
+  assert(nodeById('elemDialogAttrs').children.length === 2, '目标级属性表没渲染')
+  const boxes = walk(nodeById('elemDialogAttrs')).filter((n) => n.type === 'checkbox')
+  assert(boxes.length === 2 && !boxes[0].disabled && !boxes[1].disabled,
+    '目标级两行属性该可勾选')
+  const selects = walk(nodeById('elemDialogAttrs')).filter((n) => n.tagName === 'SELECT')
+  assert(selects.length === 2 && selects[0].disabled && selects[1].disabled === false,
+    '控件类型该锁精确、名称该允许换匹配方式')
+
+  // 点窗口信息行：属性表切成只读，不能让用户改出运行期不认的字段
+  await nodeById('elemDialogLevels').children[0].click()
+  await flush()
+  const winBoxes = walk(nodeById('elemDialogAttrs')).filter((n) => n.type === 'checkbox')
+  assert(winBoxes.length === 1 && winBoxes[0].disabled, '窗口信息行不该可改')
+  assert(nodeById('elemDialogAttrs').children.length === 1, '窗口属性表没切成单行')
+
+  // 点回目标级，勾掉名称属性 → 后端重组（带 capture_id 才保住 candidates）
+  await nodeById('elemDialogLevels').children[1].click()
+  await flush()
+  const targetBoxes = walk(nodeById('elemDialogAttrs')).filter((n) => n.type === 'checkbox')
+  targetBoxes[1].checked = false
+  await targetBoxes[1].handlers.change[0]({ type: 'change' })
+  await flush()
+  const compose = calls.filter((c) => c.name === 'rpa.elementCompose').at(-1)
+  assert(compose, '勾属性后没让后端重组')
+  assert(Array.isArray(compose.args.nodes), '重组没把桌面 nodes 交给后端')
+  assert(compose.args.capture_id === 'c1', `没带 capture_id：${JSON.stringify(compose.args)}`)
+  assert(nodeById('elemDialogPreview').value.includes('"新"'), '桌面组合定位预览没更新')
 })
 
 const failed = results.filter((r) => !r.ok)

@@ -50,6 +50,10 @@ const el = {
   elemBody: document.querySelector('#elemBody'),
   elemCount: document.querySelector('#elemCount'),
   elemCapture: document.querySelector('#elemCapture'),
+  elemCaptureImage: document.querySelector('#elemCaptureImage'),
+  elemSearch: document.querySelector('#elemSearch'),
+  elemVerifyAll: document.querySelector('#elemVerifyAll'),
+  elemLibLayer: document.querySelector('#elemLibLayer'),
   dialog: document.querySelector('#elemDialog'),
   dialogTitle: document.querySelector('#elemDialogTitle'),
   dialogName: document.querySelector('#elemDialogName'),
@@ -58,8 +62,21 @@ const el = {
   dialogSave: document.querySelector('#elemDialogSave'),
   dialogCancel: document.querySelector('#elemDialogCancel'),
   dialogClose: document.querySelector('#elemDialogClose'),
+  dialogEditor: document.querySelector('#elemDialogEditor'),
+  dialogTreePane: document.querySelector('#elemTreePane'),
+  dialogAttrPane: document.querySelector('#elemAttrPane'),
+  dialogSimplePane: document.querySelector('#elemSimplePane'),
+  dialogLevels: document.querySelector('#elemDialogLevels'),
+  dialogAttrs: document.querySelector('#elemDialogAttrs'),
+  dialogSelector: document.querySelector('#elemDialogSelector'),
+  dialogPreviewField: document.querySelector('#elemDialogPreviewField'),
+  dialogPreview: document.querySelector('#elemDialogPreview'),
+  dialogRecapture: document.querySelector('#elemDialogRecapture'),
+  dialogValidate: document.querySelector('#elemDialogValidate'),
+  dialogSaveContinue: document.querySelector('#elemDialogSaveContinue'),
   dock: document.querySelector('#bottomDock'),
   dockFold: document.querySelector('.dockFold'),
+  dockResize: document.querySelector('#dockResize'),
   globalsRows: document.querySelector('#globalsRows'),
   globalsCount: document.querySelector('#globalsCount'),
   globalsAdd: document.querySelector('#globalsAdd'),
@@ -104,6 +121,69 @@ function activateDockTab(key) {
   }
 }
 
+/* ---- 底栏高度：顶边拖拽 + 记住高度（M94）---------------------------------
+ * CSS 的 clamp 只解决「默认够高」；元素一多还是得按屏幕自己拉。这里把影刀式
+ * 可拖拽底栏接上：上拖加高、下拖压低，范围夹在 140px ~ 视口减 160px（给顶栏和
+ * 画布留地方），拉完写 localStorage，刷新后保持。折叠态由 CSS 隐藏手柄。
+ */
+const DOCK_H_MIN = 140
+const DOCK_H_RESERVE = 160
+const DOCK_H_KEY = 'rpa.dockHeight'
+function dockHeightBounds() {
+  const vh = typeof window !== 'undefined' && Number.isFinite(window.innerHeight)
+    ? window.innerHeight : 900
+  return { min: DOCK_H_MIN, max: Math.max(DOCK_H_MIN, vh - DOCK_H_RESERVE) }
+}
+function savedDockHeight() {
+  if (typeof localStorage === 'undefined') return 0
+  try { return Number(localStorage.getItem(DOCK_H_KEY)) || 0 } catch { return 0 }
+}
+function saveDockHeight(px) {
+  if (typeof localStorage === 'undefined') return
+  try { localStorage.setItem(DOCK_H_KEY, String(px)) } catch { /* 隐私模式不阻止拖拽 */ }
+}
+function setDockHeight(px) {
+  const { min, max } = dockHeightBounds()
+  const height = Math.round(Math.min(max, Math.max(min, px)))
+  el.dock.style.height = `${height}px`
+  return height
+}
+function bindDockResize() {
+  const grip = el.dockResize
+  if (!grip || !el.dock) return
+  const saved = savedDockHeight()
+  const bounds = dockHeightBounds()
+  if (saved >= bounds.min && saved <= bounds.max) setDockHeight(saved)
+
+  let startY = 0
+  let startH = 0
+  let onMove = null
+  let onUp = null
+  grip.addEventListener('mousedown', (event) => {
+    if (el.dock.classList.contains('collapsed')) return
+    const box = el.dock.getBoundingClientRect?.()
+    const measured = box && Number.isFinite(box.height) ? box.height : 0
+    startH = measured || (saved > 0 ? saved : 320)
+    startY = Number.isFinite(event.clientY) ? event.clientY : 0
+    grip.classList.add('dragging')
+    onMove = (move) => {
+      if (!Number.isFinite(move.clientY)) return
+      setDockHeight(startH + (startY - move.clientY))
+    }
+    onUp = () => {
+      grip.classList.remove('dragging')
+      document.removeEventListener?.('mousemove', onMove)
+      document.removeEventListener?.('mouseup', onUp)
+      onMove = onUp = null
+      const px = parseFloat(el.dock.style.height)
+      if (Number.isFinite(px)) saveDockHeight(px)
+    }
+    document.addEventListener?.('mousemove', onMove)
+    document.addEventListener?.('mouseup', onUp)
+    event.preventDefault?.()
+  })
+}
+
 function bindBottomDock() {
   const tabNodes = Array.from(document.querySelectorAll('.dockTab') || [])
   const panelNodes = Array.from(document.querySelectorAll('.dockPanel') || [])
@@ -126,6 +206,7 @@ function bindBottomDock() {
     })
   }
   // 两个 details 在 HTML 里已 open，这里再钉一次：runFlow 也会重设，别让旧态复活。
+  bindDockResize()
   if (el.runBox) {
     el.runBox.hidden = false
     el.runBox.open = true
@@ -326,6 +407,8 @@ let formError = null
 // ★ ref-only：被引用参数故意不进 with，参数表里就是「未设置」。真值只在
 // node.elementRefs 里，不渲染出来用户就会以为删除提示是假的、也找不到地方改。
 let nodeRefs = {} // 当前节点的 elementRefs 全量快照（param → 资产名）
+let elemCapableKeys = null // null=还没问过后端；不猜参数键，事实源在内核 element_refs
+let elemCapableLoading = false
 let pendingUnbinds = new Set() // 待随「保存参数」一起提交的解除项
 // 待补元素所在的节点 id 集合：AI 生成的工作流把交互元素写成 elementRefs 占位，
 // 这些节点在卡片上标「⚠ 待补」，并在元素面板里给出捕获入口。
@@ -694,6 +777,40 @@ function addOption(control, value, label) {
   return option
 }
 
+/* ---- 参数面板的「从元素库选」 -------------------------------------------
+ * 哪些参数能引用元素由内核 element_refs 决定（与运行期解析同一份集合），
+ * 前端不硬编码 selector/locator。选中只写 nodeRefs，随「保存参数」全量提交。
+ */
+
+async function fillElemPick(select, key) {
+  try {
+    const res = await ppx.call('rpa.elementCandidates', { path: currentPath, param_key: key })
+    for (const e of res?.elements || []) {
+      addOption(select, e.name, `${e.name}（${kindLabel(e.kind)}）`)
+    }
+  } catch {
+    // 候选拿不到就留空选项：不猜名字，更不把手填的值当引用写进去。
+  }
+}
+
+function buildElemPick(field, refName) {
+  if (!elemCapableKeys || !elemCapableKeys.has(field.key)) return null
+  const select = mk('select', 'elemPick')
+  addOption(select, '', refName ? '换一个元素…' : '从元素库选…')
+  select.dataset.key = field.key
+  select.title = '选中后只写元素引用，运行期从资产库取最新定位'
+  fillElemPick(select, field.key)
+  select.addEventListener('change', () => {
+    const name = select.value
+    if (!name) return
+    nodeRefs[field.key] = name
+    pendingUnbinds.delete(field.key)
+    refreshDirty()
+    renderForm()
+  })
+  return select
+}
+
 function defaultHint(field) {
   if (!field.hasDefault) return ''
   const text = typeof field.default === 'string' ? field.default : JSON.stringify(field.default)
@@ -728,6 +845,8 @@ function buildControl(field) {
     control.value = field.valueText
     wrap.classList.add('refBound')
     wrap.append(mk('div', 'refBoundValue', `已引用元素「${refName}」`))
+    const replace = buildElemPick(field, refName)
+    if (replace) wrap.append(replace)
   } else if (field.enum.length) {
     control = document.createElement('select')
     // 结构字段的 enum（条件操作符）必有值，不给「未设置」——空操作符没有语义
@@ -781,6 +900,10 @@ function buildControl(field) {
     desc.title = note
     wrap.append(desc)
   }
+  if (!refName) {
+    const pick = buildElemPick(field, refName)
+    if (pick) wrap.append(pick)
+  }
   return wrap
 }
 
@@ -827,6 +950,22 @@ function buildRefPanel() {
 }
 
 function renderForm() {
+  // 能引用元素的参数集合只在内核定义；异步取一次，回来再重画一次表单。
+  // 成功/失败都赋值，避免 RPC 一直失败时每次 renderForm 都发起新请求。
+  if (!elemCapableKeys && !elemCapableLoading && currentPath) {
+    elemCapableLoading = true
+    ppx.call('rpa.elementCandidates', { path: currentPath })
+      .then((res) => {
+        elemCapableKeys = new Set(
+          res && res.ok && Array.isArray(res.capableKeys) ? res.capableKeys : [],
+        )
+      })
+      .catch(() => { elemCapableKeys = new Set() })
+      .finally(() => {
+        elemCapableLoading = false
+        renderForm()
+      })
+  }
   el.form.replaceChildren()
   if (formError) el.form.append(mk('div', 'formError', formError))
   if (Object.keys(nodeRefs).length) el.form.append(buildRefPanel())
@@ -1060,6 +1199,12 @@ const ELEM_TEXT = {
   fill: '补一下',
   none: '这个流程还没有元素',
   detail: '详情',
+  verify: '校验',
+  verifyRunning: '校验中…',
+  verifyHit: '校验命中 {count} 个',
+  verifyNone: '这次没命中',
+  verifyNoTree: '没命中：该窗口没有无障碍树，退出应用重开后再试',
+  verifyError: '没校验成：{reason}',
   remove: '删除',
   confirmTitle: '确认这个元素',
   detailTitle: '元素属性',
@@ -1090,6 +1235,28 @@ const ELEM_TEXT = {
   deleteCheckFailed: '没查到引用情况：{reason}',
   deleteFailed: '没删掉：{reason}',
   deleteFailedHint: '删除没成功，元素还在清单里',
+  // M93：影刀式分组树 / 右键管理
+  ungrouped: '未分组',
+  groupNew: '新建分组',
+  groupRename: '重命名分组',
+  groupDelete: '删除分组',
+  groupNameEmpty: '给分组起个名字',
+  groupNameTaken: '已经有同名分组了',
+  moveTo: '移动到分组',
+  copy: '复制一份',
+  findRefs: '查找引用',
+  selCount: '已选 {count} 项',
+  batchMove: '批量移动',
+  batchVerify: '批量校验',
+  batchDelete: '批量删除',
+  clearSel: '取消选择',
+  onlyUnused: '只看未使用',
+  unusedNone: '没有未使用的元素',
+  menuNewHere: '在这里新建元素',
+  menuFold: '折叠 / 展开',
+  refsTitle: '引用了「{name}」的位置',
+  refsZero: '没有流程引用它',
+  copiedAs: '已复制为「{name}」',
 }
 
 function elemText(key, vars = {}) {
@@ -1098,6 +1265,12 @@ function elemText(key, vars = {}) {
 
 let pickMissing = []
 let pickElements = []
+let pickGroups = [] // M93：element_groups.json 的分组树（含 elementCount/collapsed）
+let pickUnused = [] // M93：引用计数为 0 的资产名
+let elemFilterText = '' // 只影响显示，不动资产与引用
+let elemOnlyUnused = false // M93：「只看未使用」筛选开关
+let elemSelected = new Set() // M93：多选资产名（批量操作）
+let libMenu = null // M93：当前右键菜单节点（点别处收起）
 let captureSession = null // { id, name, nodeId } —— 捕获期唯一的状态
 let captureTimer = null
 // 'pending' | 'editing'：桌面编辑框开着时 Esc 归它自己（IDCANCEL → discarded），
@@ -1106,6 +1279,15 @@ let capturePhase = null
 let dialogMode = null // 'capture' | 'detail' | 'blocked'
 let dialogSave = null
 let dialogDiscard = null
+let dialogSaveContinue = null // 保存后不关框，直接起下一次捕获
+let dialogRecapture = null
+let dialogLevels = null // 网页层级编辑的工作副本（勾选/属性改动只动它）
+let dialogNodes = null // 桌面层级/属性编辑的工作副本
+let dialogEditorKind = null // 'web' | 'desktop' | null
+// 捕获结束时 captureSession 已被 endCapture() 清掉，编辑框要自己留住 id，
+// 否则重组/校验都拿不到会话（桌面会丢 candidates、覆盖同名会误报重名）。
+let dialogCaptureId = null
+let dialogSelectedLevel = -1
 
 function stepOf(nodeId) {
   const card = cards.find((c) => c.id === nodeId)
@@ -1132,12 +1314,17 @@ async function refreshElements() {
     return
   }
   try {
-    const [miss, list] = await Promise.all([
+    const [miss, list, groups, unused] = await Promise.all([
       ppx.call('rpa.missingElements', { path: currentPath }),
       ppx.call('rpa.listElements', { path: currentPath }),
+      ppx.call('rpa.listElementGroups', { path: currentPath }),
+      ppx.call('rpa.findUnusedElements', { path: currentPath }),
     ])
     pickMissing = miss.missing || []
     pickElements = list.elements || []
+    // M93：分组/未使用是锦上添花，RPC 缺席（旧宿主）时按空处理，别拖垮清单。
+    pickGroups = groups?.groups || []
+    pickUnused = unused?.elements || []
     missingNodeIds = new Set(pickMissing.map((m) => m.nodeId).filter(Boolean))
     renderCards()
     renderElementsPanel()
@@ -1150,7 +1337,20 @@ async function refreshElements() {
 
 function bindElementTools() {
   el.elemCapture?.addEventListener('click', () => startCapture(null))
+  el.elemCaptureImage?.addEventListener('click', () => startCapture(null, true))
+  el.elemSearch?.addEventListener('input', () => {
+    elemFilterText = String(el.elemSearch.value || '')
+    renderElementsPanel()
+  })
+  el.elemVerifyAll?.addEventListener('click', () => verifyAllAssets())
   el.dialogSave?.addEventListener('click', () => confirmElemDialog())
+  el.dialogSaveContinue?.addEventListener('click', () => confirmElemDialog(true))
+  el.dialogValidate?.addEventListener('click', () => validateElemDialog())
+  el.dialogRecapture?.addEventListener('click', async () => {
+    const run = dialogRecapture
+    closeElemDialog()
+    if (run) await run()
+  })
   el.dialogCancel?.addEventListener('click', () => cancelElemDialog())
   el.dialogClose?.addEventListener('click', () => cancelElemDialog())
   el.dialogName?.addEventListener('keydown', (event) => {
@@ -1164,11 +1364,15 @@ function bindElementTools() {
 
 /* ---- 捕获：一个按钮 → 浮窗负责全部提示 → 抓完弹编辑框 -------------------- */
 
-async function startCapture(name) {
+async function startCapture(name, image = false) {
   if (!currentPath) return
   let res
   try {
-    res = await ppx.call('rpa.startCapture', { path: currentPath, name: name || null })
+    res = await ppx.call('rpa.startCapture', {
+      path: currentPath,
+      name: name || null,
+      image,
+    })
   } catch (error) {
     // 起捕获失败的原因已经写在桌面浮窗里（后端 _show_blocked），这里不再显示提示。
     return
@@ -1258,10 +1462,292 @@ function setDialogNote(text, isError = false) {
   el.dialogNote.classList[isError && text ? 'add' : 'remove']('error')
 }
 
+/* ---- 影刀式编辑区 -------------------------------------------------------
+ * 层级/属性/定位三者共用后端给的一份模型；前端只改工作副本。网页勾层级让后端
+ * rpa.elementCompose(levels) 重组 css；桌面勾层级/属性让它 compose(nodes) 重组
+ * selector 字典（含命中候选）。重组侧唯一权威在内核，前端不拼字符串。
+ * 没有层级模型时退回单一定位文本框——旧资产走这条。
+ */
+
+function elemLevelLabel(level) {
+  const bits = [String(level.tag || '*')]
+  if (level.id && level.id.value) bits.push(`id="${level.id.value}"`)
+  const classes = (level.classes || []).map((c) => c.value).filter(Boolean).join(' ')
+  if (classes) bits.push(`class="${classes}"`)
+  if (level.nth && level.nth.value) bits.push(`index="${level.nth.value}"`)
+  return `<${bits.join(' ')}>`
+}
+
+function renderElemEditor(model) {
+  dialogLevels = null
+  dialogNodes = null
+  dialogEditorKind = null
+  dialogSelectedLevel = -1
+  if (!el.dialogEditor) return
+  const levels = model && Array.isArray(model.levels) && model.levels.length ? model.levels : null
+  const nodes = model && Array.isArray(model.nodes) && model.nodes.length ? model.nodes : null
+  if (!model || (!levels && !nodes && model.selector == null)) {
+    el.dialogEditor.hidden = true
+    if (el.dialogPreviewField) el.dialogPreviewField.hidden = true
+    return
+  }
+  el.dialogEditor.hidden = false
+  if (levels || nodes) {
+    if (levels) {
+      dialogEditorKind = 'web'
+      dialogLevels = levels.map((lv) => JSON.parse(JSON.stringify(lv)))
+      dialogSelectedLevel = levels.length - 1
+    } else {
+      dialogEditorKind = 'desktop'
+      dialogNodes = nodes.map((n) => JSON.parse(JSON.stringify(n)))
+      dialogSelectedLevel = nodes.length - 1
+    }
+    if (el.dialogTreePane) el.dialogTreePane.hidden = false
+    if (el.dialogAttrPane) el.dialogAttrPane.hidden = false
+    if (el.dialogSimplePane) el.dialogSimplePane.hidden = true
+    if (el.dialogPreviewField) el.dialogPreviewField.hidden = false
+    if (el.dialogPreview) {
+      el.dialogPreview.value = String(model.selector || '')
+      el.dialogPreview.title = String(model.selector || '')
+    }
+    if (dialogEditorKind === 'web') {
+      renderElemLevels()
+      renderElemAttrs()
+    } else {
+      renderDesktopLevels()
+      renderDesktopAttrs()
+    }
+  } else {
+    if (el.dialogTreePane) el.dialogTreePane.hidden = true
+    if (el.dialogAttrPane) el.dialogAttrPane.hidden = true
+    if (el.dialogSimplePane) el.dialogSimplePane.hidden = false
+    if (el.dialogPreviewField) el.dialogPreviewField.hidden = true
+    if (el.dialogSelector) el.dialogSelector.value = String(model.selector || '')
+  }
+}
+
+function renderElemLevels() {
+  if (!el.dialogLevels || !dialogLevels) return
+  el.dialogLevels.replaceChildren(...dialogLevels.map((level, index) => {
+    const row = mk('div', `elemLevel${index === dialogSelectedLevel ? ' selected' : ''}`)
+    const box = mk('input')
+    box.type = 'checkbox'
+    box.checked = Boolean(level.included)
+    box.disabled = index === dialogLevels.length - 1 // 目标级不许勾掉
+    box.addEventListener('change', () => {
+      level.included = box.checked
+      refreshElemCompose()
+    })
+    row.append(box, mk('span', '', elemLevelLabel(level)))
+    row.addEventListener('click', (event) => {
+      if (event && event.target === box) return
+      dialogSelectedLevel = index
+      renderElemLevels()
+      renderElemAttrs()
+    })
+    return row
+  }))
+}
+
+function renderElemAttrs() {
+  if (!el.dialogAttrs || !dialogLevels) return
+  const level = dialogLevels[dialogSelectedLevel]
+  if (!level) {
+    el.dialogAttrs.replaceChildren()
+    return
+  }
+  const rows = []
+  const addRow = (label, obj, withMode) => {
+    const row = mk('div', 'elemAttr')
+    const on = mk('input')
+    on.type = 'checkbox'
+    on.checked = Boolean(obj.on)
+    on.addEventListener('change', () => {
+      obj.on = on.checked
+      refreshElemCompose()
+    })
+    const value = mk('input')
+    value.value = String(obj.value || '')
+    value.addEventListener('input', () => {
+      obj.value = value.value
+      refreshElemCompose()
+    })
+    row.append(on, value)
+    if (withMode) {
+      const mode = mk('select')
+      for (const option of ['精确', '包含']) {
+        const opt = mk('option', '', option)
+        opt.value = option
+        mode.append(opt)
+      }
+      mode.value = obj.mode || '精确'
+      mode.addEventListener('change', () => {
+        obj.mode = mode.value
+        refreshElemCompose()
+      })
+      row.append(mode)
+    } else {
+      row.append(mk('span', 'modalLabel', label))
+    }
+    rows.push(row)
+  }
+  addRow('id', level.id, false)
+  for (const cls of level.classes || []) addRow('class', cls, true)
+  if (level.nth) addRow('序号', level.nth, false)
+  el.dialogAttrs.replaceChildren(...rows)
+}
+
+/** 桌面节点标签：<控件类型 "名称">，与影刀层级树同形。 */
+function desktopNodeLabel(node) {
+  const bits = [String(node.type || '?')]
+  if (node.name) bits.push(`"${node.name}"`)
+  return `<${bits.join(' ')}>`
+}
+
+function renderDesktopLevels() {
+  if (!el.dialogLevels || !dialogNodes) return
+  el.dialogLevels.replaceChildren(...dialogNodes.map((node, index) => {
+    const row = mk('div', `elemLevel${index === dialogSelectedLevel ? ' selected' : ''}`)
+    const box = mk('input')
+    box.type = 'checkbox'
+    box.checked = Boolean(node.selected)
+    // 窗口信息行只读；目标级恒参与（勾掉会让 locator 没有身份字段）。
+    box.disabled = Boolean(node.readonly) || index === dialogNodes.length - 1
+    box.addEventListener('change', () => {
+      node.selected = box.checked
+      refreshElemCompose()
+    })
+    row.append(box, mk('span', '', desktopNodeLabel(node)))
+    row.addEventListener('click', (event) => {
+      if (event && event.target === box) return
+      dialogSelectedLevel = index
+      renderDesktopLevels()
+      renderDesktopAttrs()
+    })
+    return row
+  }))
+}
+
+function renderDesktopAttrs() {
+  if (!el.dialogAttrs || !dialogNodes) return
+  const node = dialogNodes[dialogSelectedLevel]
+  if (!node) {
+    el.dialogAttrs.replaceChildren()
+    return
+  }
+  const isTarget = dialogSelectedLevel === dialogNodes.length - 1
+  const rows = []
+  for (const attr of node.attributes || []) {
+    const row = mk('div', 'elemAttr desk')
+    const on = mk('input')
+    on.type = 'checkbox'
+    on.checked = Boolean(attr.required)
+    on.disabled = Boolean(attr.readonly)
+    on.addEventListener('change', () => {
+      attr.required = on.checked
+      refreshElemCompose()
+    })
+    const label = mk('span', 'modalLabel', String(attr.label || attr.field || ''))
+    const value = mk('input')
+    value.value = String(attr.value || '')
+    value.readOnly = Boolean(attr.readonly)
+    value.addEventListener('input', () => {
+      attr.value = value.value
+      refreshElemCompose()
+    })
+    const mode = mk('select')
+    // 运行期 matchMode 是 locator 的单个字段，只作用于 name / automationId
+    // （controlType 恒等值）⇒ 其它行给只读「精确」，不给点了不生效的假下拉。
+    const canFuzzy = !attr.readonly && isTarget
+      && (attr.field === 'name' || attr.field === 'automationId')
+    for (const option of ['精确', '包含', '正则']) {
+      const opt = mk('option', '', option)
+      opt.value = option
+      mode.append(opt)
+    }
+    mode.value = attr.operator || '精确'
+    mode.disabled = !canFuzzy
+    if (canFuzzy) {
+      mode.addEventListener('change', () => {
+        attr.operator = mode.value
+        refreshElemCompose()
+      })
+    }
+    row.append(on, label, mode, value)
+    rows.push(row)
+  }
+  el.dialogAttrs.replaceChildren(...rows)
+}
+
+async function refreshElemCompose() {
+  if (dialogEditorKind === 'desktop') {
+    if (!dialogNodes || !el.dialogPreview) return
+    try {
+      const res = await ppx.call('rpa.elementCompose', {
+        nodes: dialogNodes,
+        path: currentPath,
+        capture_id: dialogCaptureId,
+      })
+      if (res && res.ok && typeof res.selector === 'string') {
+        el.dialogPreview.value = res.selector
+        el.dialogPreview.title = res.selector
+      } else if (res && res.error) setDialogNote(res.error, true)
+    } catch {
+      // 桥异常时保留上一次预览，不把用户已勾的层级丢掉。
+    }
+    return
+  }
+  if (dialogEditorKind !== 'web' || !dialogLevels || !el.dialogPreview) return
+  try {
+    const res = await ppx.call('rpa.elementCompose', { levels: dialogLevels })
+    if (res && res.ok && typeof res.selector === 'string') el.dialogPreview.value = res.selector
+    else if (res && res.error) setDialogNote(res.error, true)
+  } catch {
+    // 桥异常时保留上一次预览，不把用户已勾的层级丢掉。
+  }
+}
+
+function elemEditorSelector() {
+  if (dialogLevels && el.dialogPreview) return el.dialogPreview.value
+  return el.dialogSelector ? el.dialogSelector.value : ''
+}
+
+async function validateElemDialog() {
+  if (!dialogMode) return
+  const name = String(el.dialogName?.value || '').trim()
+  setDialogNote('')
+  const args = { path: currentPath, name, selector: elemEditorSelector() }
+  if (dialogCaptureId) args.capture_id = dialogCaptureId
+  try {
+    const res = await ppx.call('rpa.elementValidate', args)
+    if (res && res.ok) setDialogNote('校验通过：名字和定位都没有问题')
+    else setDialogNote((res && res.error) || '校验没过', true)
+  } catch (error) {
+    setDialogNote(`校验没过：${error?.message || error}`, true)
+  }
+}
+
+async function recaptureFromDialog() {
+  const old = captureSession?.id
+  if (!old) return
+  try {
+    const res = await ppx.call('rpa.recaptureElement', { path: currentPath, capture_id: old })
+    if (!res || !res.ok) return
+    captureSession = { id: res.captureId, name: res.name || null, nodeId: res.nodeId || null }
+    capturePhase = 'pending'
+    pollCapture()
+  } catch {
+    // 起不来时后端浮窗已经说了原因。
+  }
+}
+
 function showElemDialog(options) {
   dialogMode = options.mode
   dialogSave = options.save || null
   dialogDiscard = options.discard || null
+  dialogSaveContinue = options.saveContinue || null
+  dialogRecapture = options.recapture || null
+  dialogCaptureId = options.captureId || null
   if (!el.dialog) return
   el.dialog.hidden = false
   el.dialog.classList.add('open')
@@ -1284,6 +1770,10 @@ function showElemDialog(options) {
     )
   }
   if (el.dialogSave) el.dialogSave.disabled = !dialogSave
+  if (el.dialogValidate) el.dialogValidate.disabled = options.mode === 'detail'
+  if (el.dialogRecapture) el.dialogRecapture.disabled = !dialogRecapture
+  if (el.dialogSaveContinue) el.dialogSaveContinue.disabled = !dialogSaveContinue
+  renderElemEditor(options.model)
   setDialogNote(options.note || '', Boolean(options.error))
 }
 
@@ -1291,22 +1781,30 @@ function closeElemDialog() {
   dialogMode = null
   dialogSave = null
   dialogDiscard = null
+  dialogSaveContinue = null
+  dialogRecapture = null
+  dialogLevels = null
+  dialogNodes = null
+  dialogEditorKind = null
+  dialogCaptureId = null
+  dialogSelectedLevel = -1
   if (!el.dialog) return
   el.dialog.hidden = true
   el.dialog.classList.remove('open')
   setDialogNote('')
 }
 
-async function confirmElemDialog() {
+async function confirmElemDialog(keepOpen = false) {
   if (!dialogSave) return
   const name = String(el.dialogName?.value || '').trim()
   if (!name) {
     setDialogNote(elemText('nameEmpty'), true)
     return
   }
+  const selector = elemEditorSelector()
   let res
   try {
-    res = await dialogSave(name)
+    res = await dialogSave(name, selector)
   } catch (error) {
     setDialogNote(elemText('saveFailed', { reason: error?.message || error }), true)
     return
@@ -1315,8 +1813,11 @@ async function confirmElemDialog() {
     setDialogNote(elemText('saveFailed', { reason: (res && res.error) || '' }), true)
     return
   }
+  // 「保存并继续」要先记住回调：closeElemDialog 会把面板状态清空。
+  const next = keepOpen ? dialogSaveContinue : null
   closeElemDialog()
   await refreshElements()
+  if (next) await next()
 }
 
 async function cancelElemDialog() {
@@ -1330,7 +1831,7 @@ async function cancelElemDialog() {
   }
 }
 
-function openCaptureDialog(captureId, preview) {
+async function openCaptureDialog(captureId, preview) {
   const meta = []
   meta.push(`${kindLabel(preview.kind)} · ${preview.selector || ''}`.trim())
   if (preview.matches) meta.push(elemText('matches', { count: preview.matches }))
@@ -1339,13 +1840,27 @@ function openCaptureDialog(captureId, preview) {
       ? elemText('refStep', { step: stepOf(preview.nodeId) })
       : elemText('refNone'),
   )
+  // preview 只带定位字符串；层级树要单独取完整描述符（拿不到就退回简式文本框）。
+  let model = { kind: preview.kind, selector: preview.selector || '' }
+  try {
+    const res = await ppx.call('rpa.elementEditModel', { path: currentPath, capture_id: captureId })
+    if (res && res.ok) model = { ...res, selector: res.selector ?? preview.selector ?? '' }
+  } catch {
+    // 模型 RPC 不可用时保留 preview 的简式形态，捕获确认不能被它卡住。
+  }
   showElemDialog({
     mode: 'capture',
     title: elemText('confirmTitle'),
     name: preview.name || '',
     meta,
-    save: (name) => ppx.call('rpa.commitElement', { path: currentPath, capture_id: captureId, name }),
+    model,
+    captureId,
+    save: (name, selector) => ppx.call('rpa.commitElement', {
+      path: currentPath, capture_id: captureId, name, selector,
+    }),
     discard: () => ppx.call('rpa.discardCapture', { path: currentPath, capture_id: captureId }),
+    recapture: () => recaptureFromDialog(),
+    saveContinue: () => startCapture(null),
   })
 }
 
@@ -1495,35 +2010,388 @@ function missingRow(m) {
 
 function assetRow(e) {
   const row = mk('div', 'elemRow asset')
+  row.dataset.elemName = e.name
+  const pick = mk('input', 'elemPick')
+  pick.type = 'checkbox'
+  pick.checked = elemSelected.has(e.name)
+  pick.addEventListener('change', () => {
+    if (pick.checked) elemSelected.add(e.name)
+    else elemSelected.delete(e.name)
+    renderBatchBar()
+  })
   row.append(mk('span', 'elemName', e.name))
-  row.append(mk('span', 'elemMeta', `${kindLabel(e.kind)} · ${e.selector || ''}`.trim()))
+  const bits = []
+  if (kindLabel(e.kind)) bits.push(kindLabel(e.kind))
+  if (e.processName) bits.push(e.processName)
+  if (e.winTitle) bits.push(e.winTitle)
+  bits.push(e.selector || '')
+  const meta = mk('span', 'elemMeta', bits.filter(Boolean).join(' · '))
+  row.append(meta)
+  if (e.refCount) row.append(mk('span', 'elemRefs', `${e.refCount} 处引用`))
   const detail = mk('button', 'elemAct', elemText('detail'))
   detail.addEventListener('click', () => openAssetDetail(e.name))
+  const verify = mk('button', 'elemAct', elemText('verify'))
+  verify.addEventListener('click', () => verifyAsset(e.name, meta, verify))
   const remove = mk('button', 'elemAct danger', elemText('remove'))
   remove.addEventListener('click', () => deleteAsset(e.name))
-  row.append(detail, remove)
+  row.append(detail, verify, remove, pick)
+  row.addEventListener('contextmenu', (event) => {
+    event.preventDefault?.()
+    openLibMenu(event, 'asset', e)
+  })
+  return row
+}
+
+async function verifyAsset(name, meta, button) {
+  const original = meta.textContent
+  button.disabled = true
+  meta.textContent = elemText('verifyRunning')
+  try {
+    const res = await ppx.call('rpa.verifyElement', { path: currentPath, name })
+    if (!res || res.ok === false) {
+      meta.textContent = elemText('verifyError', { reason: (res && res.message) || '' })
+    } else if (res.error) {
+      meta.textContent = elemText('verifyError', { reason: res.error })
+    } else if (res.count === 0) {
+      // 命中 0 有两种含义，不能都糊成「这次没命中」：目标窗口根本没有无障碍树时，
+      // 改选择器怎么改都没用，得让应用重新走一次「首次 UIA 查询」（M98/M100）。
+      meta.textContent = res.hint === 'tree-missing'
+        ? elemText('verifyNoTree')
+        : elemText('verifyNone')
+    } else {
+      meta.textContent = elemText('verifyHit', { count: res.count })
+    }
+  } catch (error) {
+    meta.textContent = elemText('verifyError', { reason: error?.message || error })
+  } finally {
+    button.disabled = false
+    setTimeout(() => {
+      if (meta.isConnected) meta.textContent = original
+    }, 4000)
+  }
+}
+
+/* M93：影刀式「分组 + 元素同树」。分组来自 element_groups.json，元素归属用
+   顶层 group（组 id）。前端只按 group 分桶，不在前端算引用数/校验状态——那些
+   都由 listElements RPC 给。行仍是 elemBody 的**直接子节点**（verifyAllAssets
+   按 children 找行），所以树用「分组头行 + 缩进资产行」的扁平形态表达。 */
+function visibleAssets() {
+  const q = elemFilterText.trim().toLowerCase()
+  let assets = q
+    ? pickElements.filter((e) =>
+        `${e.name || ''} ${e.selector || ''} ${e.groupName || ''} ${e.processName || ''}`
+          .toLowerCase().includes(q))
+    : pickElements.slice()
+  if (elemOnlyUnused) assets = assets.filter((e) => pickUnused.includes(e.name))
+  return assets
+}
+
+// 纯函数：分组桶顺序 = 服务端分组顺序 + 末尾未分组桶。测试可直接断言，
+// 不依赖 DOM。空分组也保留（影刀允许先建组再拖元素进来）。
+function elementTreeBuckets(groups, elements) {
+  const ids = new Set(groups.map((g) => g.id))
+  const buckets = groups.map((g) => ({
+    id: g.id, name: g.name, collapsed: !!g.collapsed,
+    elements: elements.filter((e) => e.group === g.id),
+  }))
+  const ungrouped = elements.filter((e) => !e.group || !ids.has(e.group))
+  buckets.push({
+    id: null, name: elemText('ungrouped'), collapsed: false, elements: ungrouped,
+  })
+  return buckets
+}
+
+function groupHeaderRow(bucket) {
+  const row = mk('div', 'elemGroup elemGroupRow')
+  row.dataset.groupId = bucket.id == null ? '' : bucket.id
+  const caret = mk('span', 'elemGroupCaret', bucket.collapsed ? '▸' : '▾')
+  const name = mk('span', 'elemGroupName', bucket.name)
+  const count = mk('span', 'elemGroupCount', String(bucket.elements.length))
+  const more = mk('button', 'elemGroupMore', '⋯')
+  more.type = 'button'
+  more.setAttribute('aria-label', elemText('groupRename'))
+  row.append(caret, name, count, more)
+  row.addEventListener('click', () => toggleGroup(bucket))
+  more.addEventListener('click', (event) => {
+    event.stopPropagation?.()
+    openLibMenu(event, 'group', bucket)
+  })
+  row.addEventListener('contextmenu', (event) => {
+    event.preventDefault?.()
+    openLibMenu(event, 'group', bucket)
+  })
   return row
 }
 
 function renderElementsPanel() {
   el.elemBody.replaceChildren()
   el.elemCount.textContent = pickMissing.length ? String(pickMissing.length) : ''
-  if (!pickMissing.length && !pickElements.length) {
-    el.elemBody.append(mk('div', 'hint', elemText('none')))
+  const assets = visibleAssets()
+  if (!pickMissing.length && !assets.length) {
+    el.elemBody.append(mk('div', 'hint',
+      elemOnlyUnused ? elemText('unusedNone') : (elemFilterText.trim() ? '没有匹配的元素' : elemText('none'))))
     return
   }
   if (pickMissing.length) {
     el.elemBody.append(mk('div', 'elemHead', elemText('missingHead')))
     for (const m of pickMissing) el.elemBody.append(missingRow(m))
   }
-  if (pickElements.length) {
+  if (assets.length || pickGroups.length) {
     el.elemBody.append(mk('div', 'elemHead', elemText('doneHead')))
-    for (const e of pickElements) el.elemBody.append(assetRow(e))
+    for (const bucket of elementTreeBuckets(pickGroups, assets)) {
+      el.elemBody.append(groupHeaderRow(bucket))
+      if (bucket.collapsed) continue
+      for (const e of bucket.elements) el.elemBody.append(assetRow(e))
+    }
+  }
+  // 选中集可能因刷新而失效（资产被删），同步收敛后再决定是否显示批量条。
+  const names = new Set(pickElements.map((e) => e.name))
+  for (const name of Array.from(elemSelected)) if (!names.has(name)) elemSelected.delete(name)
+  renderBatchBar()
+}
+
+/* ---- M93：影刀式分组树管理（右键菜单 / 多选批量条） -------------------------
+ * 菜单与批量条都是动态 DOM（建在 elemBody 之外的 elemLibLayer），不碰
+ * index.html 静态按钮白名单，也不动资产行「详情/校验/删除」三按钮。
+ * 所有写操作走 P1 RPC；前端只负责收集参数与刷新，不自己改盘、不算引用。 */
+
+function closeLibMenu() {
+  libMenu = null
+  if (el.elemLibLayer) el.elemLibLayer.replaceChildren()
+  // 菜单收起后若有选中项，批量条重新浮出（两者共用 layer）。
+  if (elemSelected.size) renderBatchBar()
+}
+
+function libMenuItem(label, action, danger) {
+  const b = mk('button', `libMenuItem${danger ? ' danger' : ''}`, label)
+  b.type = 'button'
+  b.addEventListener('click', async () => {
+    closeLibMenu()
+    await action()
+  })
+  return b
+}
+
+// 相对视口的右键定位（shim 里 event 没有坐标就落到 0，不影响断言）。
+function openLibMenu(event, kind, target) {
+  closeLibMenu()
+  if (!el.elemLibLayer) return
+  const menu = mk('div', 'libMenu')
+  const x = Number(event && event.clientX) || 0
+  const y = Number(event && event.clientY) || 0
+  menu.style.left = `${x}px`
+  menu.style.top = `${y}px`
+  if (kind === 'group') {
+    menu.append(libMenuItem(elemText('menuNewHere'), () => startCapture(null)))
+    menu.append(libMenuItem(elemText('groupNew'), () => createGroupFlow()))
+    menu.append(libMenuItem(elemText('onlyUnused'), () => {
+      elemOnlyUnused = !elemOnlyUnused
+      renderElementsPanel()
+    }))
+    if (target.id != null) {
+      menu.append(libMenuItem(elemText('groupRename'), () => renameGroupFlow(target)))
+      menu.append(libMenuItem(elemText('menuFold'), () => toggleGroup(target)))
+      menu.append(libMenuItem(elemText('groupDelete'), () => deleteGroupFlow(target), true))
+    }
+  } else {
+    const name = target.name
+    menu.append(libMenuItem(elemText('detail'), () => openAssetDetail(name)))
+    menu.append(libMenuItem(elemText('copy'), () => copyAssetFlow(name)))
+    menu.append(libMenuItem(elemText('moveTo'), () => moveFlow([name])))
+    menu.append(libMenuItem(elemText('findRefs'), () => showRefsFlow(name)))
+    menu.append(libMenuItem(elemText('remove'), () => deleteAsset(name), true))
+  }
+  el.elemLibLayer.append(menu)
+  libMenu = menu
+}
+
+// 文本输入浮层：分组命名、复制命名、查引用结果都在这里（不引入 window.prompt）。
+function libPrompt(title, initial, onOk) {
+  closeLibMenu()
+  if (!el.elemLibLayer) return
+  const box = mk('div', 'libPrompt')
+  box.append(mk('div', 'libPromptTitle', title))
+  const input = mk('input', 'libPromptInput')
+  input.type = 'text'
+  input.value = initial || ''
+  box.append(input)
+  const confirm = libMenuItem(elemText('save'), async () => {
+    const value = String(input.value || '').trim()
+    if (!value) return
+    await onOk(value)
+  })
+  const cancel = libMenuItem(elemText('cancel'), () => {})
+  box.append(confirm, cancel)
+  input.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter' && !event.isComposing) confirm.click()
+  })
+  el.elemLibLayer.append(box)
+  input.focus?.()
+  input.select?.()
+}
+
+function notifyLib(res, okText) {
+  if (!res || !res.ok) setStatus((res && res.error) || elemText('saveFailed', { reason: '' }))
+  else if (okText) setStatus(okText)
+}
+
+async function createGroupFlow() {
+  libPrompt(elemText('groupNew'), '', async (name) => {
+    const res = await ppx.call('rpa.createElementGroup', { path: currentPath, name })
+    if (res && res.ok) await refreshElements()
+    notifyLib(res)
+  })
+}
+
+async function renameGroupFlow(group) {
+  libPrompt(elemText('groupRename'), group.name, async (name) => {
+    const res = await ppx.call('rpa.renameElementGroup', {
+      path: currentPath, group_id: group.id, name,
+    })
+    if (res && res.ok) await refreshElements()
+    notifyLib(res)
+  })
+}
+
+async function deleteGroupFlow(group) {
+  // 删分组不删元素：组内元素移到未分组（后端 deleteElementGroup 已保证）。
+  const res = await ppx.call('rpa.deleteElementGroup', { path: currentPath, group_id: group.id })
+  if (res && res.ok) await refreshElements()
+  notifyLib(res)
+}
+
+async function copyAssetFlow(name) {
+  libPrompt(elemText('copy'), `${name} 副本`, async (newName) => {
+    const res = await ppx.call('rpa.copyElement', { path: currentPath, name, new_name: newName })
+    if (res && res.ok) await refreshElements()
+    notifyLib(res, elemText('copiedAs', { name: newName }))
+  })
+}
+
+async function moveFlow(names) {
+  if (!pickGroups.length) {
+    setStatus(elemText('groupNameEmpty'))
+    return
+  }
+  libPrompt(elemText('moveTo'), '', async (groupName) => {
+    const group = pickGroups.find((g) => g.name === groupName)
+    if (!group) return
+    const res = await ppx.call('rpa.moveElementsToGroup', {
+      path: currentPath, names, group_id: group.id,
+    })
+    if (res && res.ok) {
+      elemSelected.clear()
+      await refreshElements()
+    }
+    notifyLib(res)
+  })
+}
+
+async function showRefsFlow(name) {
+  const res = await ppx.call('rpa.elementReferences', { path: currentPath, name })
+  const refs = (res && res.references) || []
+  const lines = refs.length
+    ? refs.map((r) => mk('div', 'modalLine',
+        elemText('refDetail', { step: stepOf(r.nodeId), param: r.param, name: r.name })))
+    : [elemText('refsZero')]
+  showElemDialog({
+    mode: 'detail', title: elemText('refsTitle', { name }), name, meta: lines,
+    note: '', readOnly: true,
+  })
+}
+
+async function toggleGroup(bucket) {
+  if (bucket.id == null) return // 未分组桶不落盘
+  const group = pickGroups.find((g) => g.id === bucket.id)
+  if (!group) return
+  const collapsed = !group.collapsed
+  group.collapsed = collapsed // 先本地翻，刷新后与落盘一致
+  renderElementsPanel()
+  const res = await ppx.call('rpa.setElementGroupCollapsed', {
+    path: currentPath, group_id: group.id, collapsed,
+  })
+  if (!res || !res.ok) {
+    group.collapsed = !collapsed
+    renderElementsPanel()
+    notifyLib(res)
   }
 }
 
+function renderBatchBar() {
+  if (!el.elemLibLayer) return
+  // 右键菜单开着时批量条让位；两者共用 layer，避免互相覆盖。
+  if (libMenu || !elemSelected.size) return
+  const bar = mk('div', 'libBatchBar')
+  bar.append(mk('span', 'libBatchCount', elemText('selCount', { count: elemSelected.size })))
+  const names = Array.from(elemSelected)
+  bar.append(libMenuItem(elemText('batchMove'), () => moveFlow(names)))
+  bar.append(libMenuItem(elemText('batchVerify'), () => batchVerifyFlow(names)))
+  bar.append(libMenuItem(elemText('batchDelete'), () => batchDeleteFlow(names), true))
+  bar.append(libMenuItem(elemText('clearSel'), () => {
+    elemSelected.clear()
+    renderElementsPanel()
+  }))
+  el.elemLibLayer.append(bar)
+}
+
+async function batchVerifyFlow(names) {
+  for (const name of names) {
+    try {
+      await ppx.call('rpa.verifyElement', { path: currentPath, name })
+    } catch {
+      // 单个失败不挡后面；行内校验会给出细节。
+    }
+  }
+}
+
+async function batchDeleteFlow(names) {
+  for (const name of names) await deleteAsset(name)
+}
+
+async function verifyAllAssets() {
+  if (!currentPath || !pickElements.length) return
+  const button = el.elemVerifyAll
+  if (button) button.disabled = true
+  try {
+    const res = await ppx.call('rpa.verifyAllElements', { path: currentPath })
+    const byName = new Map((res?.results || []).map((r) => [r.name, r]))
+    for (const e of pickElements) {
+      const r = byName.get(e.name)
+      if (!r) continue
+      const meta = Array.from(el.elemBody.children || [])
+        .filter((n) => n.classList?.contains('elemRow') && n.classList.contains('asset'))
+        .find((n) => n.children?.[0]?.textContent === e.name)
+        ?.children?.[1]
+      if (!meta) continue
+      const original = meta.textContent
+      meta.textContent = r.error
+        ? `校验失败：${r.error}`
+        : r.count
+          ? `命中 ${r.count} 个`
+          : '没有命中'
+      setTimeout(() => { if (meta.isConnected) meta.textContent = original }, 4000)
+    }
+  } catch {
+    // 单个失败已经写在行上；这里是整条桥断了，用户可重试。
+  } finally {
+    if (button) button.disabled = false
+  }
+}
+
+document.addEventListener('click', (event) => {
+  // 点菜单/浮层之外收起；动态菜单里的按钮自己会先 closeLibMenu 再动作。
+  if (!libMenu || !el.elemLibLayer) return
+  if (typeof event.target?.closest === 'function' && event.target.closest('.libMenu, .libPrompt, .libBatchBar')) return
+  closeLibMenu()
+})
+
 document.addEventListener('keydown', (event) => {
   if (event.key !== 'Escape') return
+  // 右键菜单先于其它层收起，避免一次 Esc 同时关菜单和整次捕获。
+  if (libMenu) {
+    closeLibMenu()
+    return
+  }
   // 捕获等待期：Esc 取消整次捕获（桌面浮窗也在全局轮询，两条路都幂等）。
   // editing 时桌面编辑框自己接 Esc，这里不能抢；页面弹框打开时 Esc 先关它。
   if (captureSession && capturePhase === 'pending' && !dialogMode) {

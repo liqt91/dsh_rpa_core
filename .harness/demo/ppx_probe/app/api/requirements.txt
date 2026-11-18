@@ -1,3 +1,8 @@
-# rpa_core 能力层的最小依赖（原型只读 catalog / 编译，不跑执行器）
+# rpa_core 能力层依赖：catalog / 编译，**以及桌面捕获与执行**。
+# 原型最初只读 catalog + 编译，故只声明了前两项；接上 capture_kit 后
+# 浮窗（win32con）与 desktop_agent（pywinauto/UIA）都缺依赖 ⇒ 点捕获
+# 没任何反应（浮窗线程一起就 ModuleNotFoundError）。缺一不可。
 pydantic>=2.10,<3
 jsonschema>=4.23,<5
+pywin32>=306
+pywinauto>=0.6.9,<0.7

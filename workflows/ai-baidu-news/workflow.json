@@ -1,0 +1,97 @@
+{
+  "schema_version": "1.0",
+  "id": "ai-baidu-news",
+  "name": "AI生成：百度搜索新闻，取前10条标题存文本",
+  "inputs": {
+    "query": "新闻",
+    "resultSelector": "#content_left h3",
+    "workspace": "run_artifacts"
+  },
+  "root": {
+    "type": "sequence",
+    "id": "root",
+    "children": [
+      {
+        "type": "action",
+        "id": "openHome",
+        "command": "browser.navigate",
+        "with": {
+          "url": "https://www.baidu.com",
+          "browserType": "msedge",
+          "timeoutMs": 20000
+        }
+      },
+      {
+        "type": "action",
+        "id": "typeQuery",
+        "command": "browser.input",
+        "with": {
+          "sessionId": "${steps.openHome.outputs.sessionId}",
+          "text": "${inputs.query}",
+          "clickBeforeInput": true
+        },
+        "elementRefs": {
+          "selector": "baidu_search_input"
+        }
+      },
+      {
+        "type": "action",
+        "id": "clickSearch",
+        "command": "browser.click",
+        "with": {
+          "sessionId": "${steps.openHome.outputs.sessionId}",
+          "clickType": "single"
+        },
+        "elementRefs": {
+          "selector": "baidu_search_button"
+        }
+      },
+      {
+        "type": "action",
+        "id": "waitResults",
+        "command": "browser.waitFor",
+        "with": {
+          "sessionId": "${steps.openHome.outputs.sessionId}",
+          "selector": "${inputs.resultSelector}",
+          "timeoutMs": 15000
+        }
+      },
+      {
+        "type": "action",
+        "id": "grabTitles",
+        "command": "browser.queryAll",
+        "with": {
+          "sessionId": "${steps.openHome.outputs.sessionId}",
+          "selector": "${inputs.resultSelector}"
+        }
+      },
+      {
+        "type": "action",
+        "id": "limitTitles",
+        "command": "data.limit",
+        "with": {
+          "items": "${steps.grabTitles.outputs.items}",
+          "count": 10
+        }
+      },
+      {
+        "type": "action",
+        "id": "saveTitles",
+        "command": "data.writeText",
+        "with": {
+          "workspace": "${inputs.workspace}",
+          "path": "ai-baidu-top10.txt",
+          "lines": "${steps.limitTitles.outputs.items}"
+        }
+      },
+      {
+        "type": "action",
+        "id": "close",
+        "command": "browser.close",
+        "with": {
+          "sessionId": "${steps.openHome.outputs.sessionId}"
+        }
+      }
+    ]
+  }
+}

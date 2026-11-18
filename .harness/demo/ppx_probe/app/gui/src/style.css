@@ -426,6 +426,47 @@ button.modalLine.refLink:hover { border-color: var(--info); }
 }
 .modalBar button.primary { border-color: var(--info); color: var(--info); font-weight: 500; }
 .modalBar button:disabled { opacity: .5; cursor: default; }
+.barSpacer { flex: 1 1 auto; }
+
+/* 影刀式编辑区：左层级、右属性；简式定位单独一行。 */
+.elemEditor[hidden], .elemPane[hidden], #elemDialogPreviewField[hidden] { display: none; }
+.elemEditor { display: flex; flex-direction: column; gap: 8px; }
+.elemEditor:has(.elemTreePane:not([hidden])) {
+  display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+}
+.elemPane {
+  display: flex; flex-direction: column; gap: 6px; min-width: 0;
+  border: 1px solid var(--border); border-radius: 6px; padding: 8px;
+  background: var(--sunken);
+}
+.elemPaneHead { font-size: 12px; color: var(--muted); }
+.elemLevels, .elemAttrs { display: flex; flex-direction: column; gap: 3px; max-height: 176px; overflow: auto; }
+.elemLevel {
+  display: flex; align-items: center; gap: 6px; width: 100%; min-height: 26px;
+  padding: 3px 6px; font: 12px/1.4 Consolas, "Microsoft YaHei", monospace;
+  border: 1px solid transparent; border-radius: 5px; background: transparent;
+  color: var(--text); cursor: pointer; text-align: left;
+}
+.elemLevel:hover { background: var(--hover); }
+.elemLevel.selected { border-color: var(--info); background: var(--surface); }
+.elemLevel input { width: 15px; height: 15px; flex: none; cursor: pointer; }
+.elemLevel span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.elemAttr { display: grid; grid-template-columns: 18px minmax(0, 1fr) 78px; align-items: center; gap: 5px; }
+.elemAttr.desk { grid-template-columns: 18px 62px 62px minmax(0, 1fr); }
+.elemAttr input, .elemAttr select {
+  box-sizing: border-box; width: 100%; height: 26px; padding: 0 6px; font: 12px/1.4 inherit;
+  border: 1px solid var(--border); border-radius: 5px; background: var(--surface); color: var(--text);
+}
+.elemAttr input[type="checkbox"] { width: 15px; height: 15px; }
+.elemAttr select { cursor: pointer; }
+.elemSelector {
+  box-sizing: border-box; width: 100%; min-height: 72px; resize: vertical; padding: 7px 9px;
+  font: 12px/1.5 Consolas, "Microsoft YaHei", monospace;
+  border: 1px solid var(--border-strong); border-radius: 6px;
+  background: var(--surface); color: var(--text);
+}
+.elemSelector:focus, .elemAttr input:focus, .elemAttr select:focus { border-color: var(--info); outline: none; }
+.field .elemPick { margin-top: 6px; color: var(--info); cursor: pointer; }
 
 @media (max-width: 960px) {
   .elemMeta { flex: 1 1 100%; }
@@ -525,13 +566,23 @@ select {
  * 自动切到日志。两个 details 强制常开、藏掉 summary、吃掉 panel 余高。 */
 #bottomDock {
   grid-column: 1 / -1; grid-row: 2;
+  position: relative; /* 顶边拖拽条的包含块 */
   display: flex; flex-direction: column;
-  height: 228px; min-height: 0;
+  /* M94：默认高随视口给够，元素树一次能看全来源/引用两行；底栏整块仍可收起。
+     顶边拖拽改的是行内 height，优先级高于这里（见 main.js bindDockResize）。 */
+  height: clamp(300px, 34vh, 440px); min-height: 0;
   border-top: 1px solid var(--border-strong);
   background: var(--surface);
 }
 #bottomDock.collapsed { height: 34px; }
 #bottomDock.collapsed .dockPanels { display: none; }
+/* M94：顶边拖拽条（不是按钮，不进捕获按钮白名单）。压在 tab 顶端 6px。 */
+.dockResize {
+  position: absolute; z-index: 6; left: 0; right: 0; top: 0; height: 6px;
+  cursor: ns-resize; touch-action: none;
+}
+.dockResize:hover, .dockResize.dragging { background: var(--info); opacity: .45; }
+#bottomDock.collapsed .dockResize { display: none; }
 .dockTabs {
   flex: 0 0 34px; display: flex; align-items: stretch;
   background: var(--sunken); border-bottom: 1px solid var(--border);
@@ -563,6 +614,42 @@ select {
 #bottomDock .elemBody, #bottomDock .runLog { flex: 1 1 auto; height: 100%; max-height: none; }
 
 /* ---- 元素资产：常驻入库工具条 + 已就绪行的管理动作 ---- */
+.elemFilter {
+  flex: 0 0 auto; display: flex; align-items: center; gap: 8px;
+  padding: 6px 12px; border-bottom: 1px dashed var(--border); background: var(--surface);
+}
+.elemFilter input {
+  box-sizing: border-box; flex: 1 1 auto; min-width: 0; height: 27px;
+  padding: 0 8px; font: inherit; font-size: 12px; color: var(--text);
+  border: 1px solid var(--border); border-radius: 6px; background: var(--surface);
+}
+.elemFilter input:focus { border-color: var(--info); outline: none; }
+.elemFilter button { flex: 0 0 auto; height: 27px; font-size: 12px; }
+.elemGroup { color: var(--faint); padding: 5px 12px 2px; font-size: 11.5px; }
+/* M93：影刀式分组树 —— 分组头可折叠/右键，资产行缩进一级。 */
+.elemGroupRow {
+  display: flex; align-items: center; gap: 7px; cursor: pointer;
+  padding: 6px 12px 3px; user-select: none;
+}
+.elemGroupRow:hover { background: var(--sunken); }
+.elemGroupCaret { display: inline-block; width: 12px; color: var(--muted); font-size: 12px; }
+.elemGroupName { color: var(--text); font-size: 13px; font-weight: 600; }
+.elemGroupCount {
+  color: var(--muted); font-size: 11px; border: 1px solid var(--border);
+  border-radius: 9px; padding: 0 6px; line-height: 16px;
+}
+.elemGroupMore {
+  margin-left: auto; min-width: 24px; min-height: 24px; cursor: pointer;
+  border: 1px solid transparent; border-radius: 5px;
+  background: transparent; color: var(--muted); font-size: 15px; line-height: 1;
+}
+.elemGroupMore:hover { border-color: var(--border); color: var(--text); }
+.elemRow.asset[data-elem-name] { padding-left: 30px; }
+.elemPick { flex: 0 0 auto; width: 15px; height: 15px; cursor: pointer; }
+.elemRefs {
+  flex: none; color: var(--info); border: 1px solid var(--border);
+  border-radius: 10px; padding: 0 6px; font-size: 11px; line-height: 17px;
+}
 .elemTools {
   flex: 0 0 auto; padding: 7px 12px;
   border-bottom: 1px dashed var(--border);
@@ -585,6 +672,39 @@ select {
 .elemNewNote.error { color: var(--danger); }
 .elemRow.asset { border-bottom: 1px dashed var(--border); }
 .elemAct.danger { color: var(--danger); }
+
+/* M93：右键菜单 / 文本输入浮层 / 多选批量条（动态挂 #elemLibLayer） */
+.elemLibLayer { position: relative; flex: 0 0 auto; }
+.libMenu, .libPrompt {
+  position: absolute; z-index: 20; min-width: 172px;
+  padding: 5px; border: 1px solid var(--border); border-radius: 8px;
+  background: var(--surface); box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
+}
+.libMenu { left: 0; top: 0; }
+.libMenuItem {
+  display: block; width: 100%; text-align: left; cursor: pointer;
+  min-height: 28px; padding: 4px 10px; font: inherit; font-size: 13px;
+  color: var(--text); border: 0; border-radius: 5px; background: transparent;
+}
+.libMenuItem:hover { background: var(--sunken); }
+.libMenuItem.danger { color: var(--danger); }
+.libPrompt { left: 12px; bottom: 8px; min-width: 260px; }
+.libPromptTitle { padding: 4px 6px 7px; color: var(--muted); font-size: 12px; }
+.libPromptInput {
+  box-sizing: border-box; width: 100%; height: 28px; margin-bottom: 6px;
+  padding: 0 8px; font: inherit; font-size: 13px; color: var(--text);
+  border: 1px solid var(--border); border-radius: 6px; background: var(--surface);
+}
+.libBatchBar {
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+  padding: 6px 12px; border-top: 1px dashed var(--border); background: var(--sunken);
+}
+.libBatchCount { color: var(--info); font-size: 12px; margin-right: 4px; }
+.libBatchBar .libMenuItem {
+  width: auto; min-height: 26px; padding: 2px 10px;
+  border: 1px solid var(--border); background: var(--surface);
+}
+.libBatchBar .libMenuItem.danger { color: var(--danger); }
 .elemDetail {
   flex: 1 1 100%; padding: 6px 10px; border-radius: 6px;
   background: var(--sunken); font-size: 12px;

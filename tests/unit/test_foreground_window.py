@@ -1,4 +1,4 @@
-"""M47.9 前台浏览器窗口识别（Z 序）的单元判据。
+"""前台窗口 Z 序识别（M47.9 浏览器 / M74 S2 跨窗口搜索）的单元判据。
 
 纯逻辑用替身 API 测（任意平台可跑）；Windows 真实 API 的行为另有真机探针
 （``.harness/spike``）与维护者真机验收，不在单测里依赖。
@@ -11,10 +11,13 @@ from __future__ import annotations
 
 from rpa_core.capture.foreground_window import (
     ForegroundBrowser,
+    TopWindow,
     _is_browser_window,
     _is_user_window,
     bring_to_foreground,
+    find_window_for_element,
     first_browser_window,
+    visible_top_windows,
 )
 
 
@@ -156,3 +159,124 @@ def test_foreground_browser_is_frozen():
         assert "frozen" in str(exc).lower() or isinstance(exc, AttributeError)
     else:  # pragma: no cover - frozen dataclass 必抛
         raise AssertionError("ForegroundBrowser 应为不可变")
+
+
+# ---- M74 S2：跨窗口搜索（Z 序顺序 + 命中即停）-------------------------------
+
+
+def test_visible_top_windows_preserves_zorder_and_filters():
+    """原语按传入顺序（Z 序）返回所有可见用户窗，过滤系统窗/不可见/无标题。"""
+    api = FakeAPI([
+        _row(10, "tooltips_class32", "", "sys.exe", visible=False),   # 不可见
+        _row(11, "Chrome_WidgetWin_1", "Edge", "msedge.exe"),
+        _row(12, "CabinetWClass", "此电脑", "explorer.exe"),          # 资源管理器也是用户窗
+        _row(13, "Progman", "Program Manager", "explorer.exe"),      # 桌面壳
+        _row(14, "Chrome_WidgetWin_1", "Chrome", "chrome.exe"),
+    ])
+    got = visible_top_windows(api)
+    assert [w.hwnd for w in got] == [11, 12, 14]  # 顺序=Z 序，一个都不能少/换
+    assert all(isinstance(w, TopWindow) for w in got)
+
+
+def test_visible_top_windows_include_desktop_shell_for_taskbar():
+    """M95：任务栏无标题，桌面校验需按原 Z 序位置放行；默认链仍当系统窗滤掉。"""
+    api = FakeAPI([
+        _row(70, "Chrome_WidgetWin_1", "Edge", "msedge.exe"),
+        _row(71, "Shell_TrayWnd", "", "explorer.exe"),
+        _row(72, "Shell_SecondaryTrayWnd", "", "explorer.exe"),
+        _row(73, "Progman", "Program Manager", "explorer.exe"),
+        _row(74, "CabinetWClass", "此电脑", "explorer.exe"),
+    ])
+    assert [w.hwnd for w in visible_top_windows(api)] == [70, 74]
+    got = visible_top_windows(api, include_desktop_shell=True)
+    assert [w.hwnd for w in got] == [70, 71, 72, 74]  # 原位插入；Progman 仍滤
+
+
+def test_find_window_stops_at_first_hit_in_zorder():
+    """顺序判据（等值）：两个窗口都命中时，**必须返回更靠前的那个**。
+
+    只断言「返回非 None」是恒绿假判据；这里钉死 hwnd 等值 + probe 命中即停
+    （第三个窗口的 probe 根本不该被调用）。
+    """
+    api = FakeAPI([
+        _row(21, "Chrome_WidgetWin_1", "A", "chrome.exe"),
+        _row(22, "Chrome_WidgetWin_1", "B", "msedge.exe"),
+        _row(23, "Chrome_WidgetWin_1", "C", "chrome.exe"),
+    ])
+    probed: list[int] = []
+
+    def probe(window: TopWindow) -> bool:
+        probed.append(window.hwnd)
+        return window.hwnd in (22, 23)  # B 和 C 都「有元素」，A 没有
+
+    hit = find_window_for_element(probe, api)
+    assert hit is not None and hit.hwnd == 22      # 更靠前的 B
+    assert probed == [21, 22]                       # C 没被 probe（命中即停）
+
+
+def test_find_window_flips_when_order_reversed():
+    """把命中窗口挪到链尾 ⇒ 返回更靠前的另一个（证明依赖的是顺序，不是 hwnd 大小）。"""
+    api = FakeAPI([
+        _row(31, "Chrome_WidgetWin_1", "B", "msedge.exe"),
+        _row(32, "Chrome_WidgetWin_1", "A", "chrome.exe"),
+    ])
+    hit = find_window_for_element(lambda w: True, api)
+    assert hit is not None and hit.hwnd == 31  # 链首，即使 31 < 32
+
+
+def test_find_window_preferred_hwnd_jumps_to_front():
+    """元素记下的窗口句柄优先查：即便它在 Z 序里排第三，也第一个被 probe。"""
+    api = FakeAPI([
+        _row(41, "Chrome_WidgetWin_1", "A", "chrome.exe"),
+        _row(42, "Chrome_WidgetWin_1", "B", "msedge.exe"),
+        _row(43, "Chrome_WidgetWin_1", "C", "chrome.exe"),
+    ])
+    probed: list[int] = []
+
+    def probe(window: TopWindow) -> bool:
+        probed.append(window.hwnd)
+        return True  # 三个都命中 ⇒ 返回链首
+
+    hit = find_window_for_element(probe, api, preferred_hwnd=43)
+    assert hit is not None and hit.hwnd == 43
+    assert probed == [43]  # 插队到链首且命中即停，后面两个一概不碰
+
+
+def test_find_window_include_desktop_shell_reaches_taskbar():
+    """M95：默认链够不到任务栏；打开开关后按 Z 序 probe 到它并命中即停。"""
+    api = FakeAPI([
+        _row(80, "Chrome_WidgetWin_1", "Edge", "msedge.exe"),
+        _row(81, "Shell_TrayWnd", "", "explorer.exe"),
+    ])
+    probed: list[int] = []
+
+    def probe(window: TopWindow) -> bool:
+        probed.append(window.hwnd)
+        return window.hwnd == 81
+
+    assert find_window_for_element(probe, api) is None
+    assert probed == [80]
+    probed.clear()
+    hit = find_window_for_element(probe, api, include_desktop_shell=True)
+    assert hit is not None and hit.hwnd == 81
+    assert probed == [80, 81]
+
+
+def test_find_window_none_when_no_hit():
+    """全不命中 ⇒ None（调用方报 count=0，不猜不降级）。"""
+    api = FakeAPI([_row(51, "Chrome_WidgetWin_1", "A", "chrome.exe")])
+    assert find_window_for_element(lambda w: False, api) is None
+
+
+def test_find_window_ignores_preferred_not_in_chain():
+    """preferred 句柄不在当前 Z 序（窗口已关）⇒ 退回整条链，不报错。"""
+    api = FakeAPI([_row(61, "Chrome_WidgetWin_1", "A", "chrome.exe")])
+    hit = find_window_for_element(lambda w: True, api, preferred_hwnd=99999)
+    assert hit is not None and hit.hwnd == 61
+
+
+def test_find_window_api_unavailable_is_none():
+    """非 Windows / API 不可用 ⇒ None（不是抛异常）。"""
+    hit = find_window_for_element(lambda w: True, None)  # 默认 API 在非 Windows 为 None
+    # 真机上默认 API 非 None，这里只保证「不抛、返回 TopWindow 或 None」
+    assert hit is None or isinstance(hit, TopWindow)

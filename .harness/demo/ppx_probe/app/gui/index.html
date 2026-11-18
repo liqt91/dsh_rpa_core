@@ -54,6 +54,9 @@
            id 一个不改，main.js 里 renderElementsPanel / setRunTitle / runLog
            的既有写入路径原样有效，只是父节点换了。 -->
       <section id="bottomDock">
+        <!-- M94：顶边拖拽条。放在 tab 之前但不占 flex 高度（CSS 绝对定位），
+             所以静态按钮白名单与三个 tab/panel 的 key 都不受影响。 -->
+        <div id="dockResize" class="dockResize" title="拖动调整底栏高度"></div>
         <div class="dockTabs">
           <button type="button" class="dockTab" data-tab="elements">元素资产 <span id="elemCount" class="count"></span></button>
           <button type="button" class="dockTab active" data-tab="globals">全局参数 <span id="globalsCount" class="count"></span></button>
@@ -63,16 +66,24 @@
         </div>
         <div class="dockPanels">
           <div class="dockPanel" data-panel="elements">
+            <div class="elemFilter">
+              <input id="elemSearch" type="search" autocomplete="off" placeholder="搜索元素名称 / 选择器" aria-label="搜索元素" />
+              <button type="button" id="elemVerifyAll">全部校验</button>
+            </div>
             <!-- 只有一个按钮：点一下就抓。名字等抓完在弹窗里填，网页/桌面由后端判断，
                  也不再提供手写选择器入库。环境与失败提示一律走桌面浮窗，这块区域
                  不显示任何提示（2026-11-12 交互改版）。 -->
             <div class="elemTools">
               <button type="button" id="elemCapture" class="elemCapture">捕获元素</button>
+              <button type="button" id="elemCaptureImage" class="elemCapture">按图捕获</button>
             </div>
             <details class="elemBox" id="elemBox" open>
               <summary></summary>
               <div id="elemBody" class="elemBody"></div>
             </details>
+            <!-- M93：右键菜单 / 文本输入浮层 / 多选批量条的动态宿主。
+                 不是按钮，不占捕获按钮白名单；不嵌在 elemBody 里，刷新清单不会清掉它。 -->
+            <div id="elemLibLayer" class="elemLibLayer"></div>
           </div>
           <div class="dockPanel active" data-panel="globals">
             <div class="globalsPanel">
@@ -111,11 +122,33 @@
             <span class="modalLabel">资产名称</span>
             <input id="elemDialogName" class="modalInput" type="text" autocomplete="off" spellcheck="false" />
           </label>
+          <div id="elemDialogEditor" class="elemEditor" hidden>
+            <div class="elemPane elemTreePane" id="elemTreePane" hidden>
+              <div class="elemPaneHead">层级（勾选参与定位）</div>
+              <div id="elemDialogLevels" class="elemLevels"></div>
+            </div>
+            <div class="elemPane elemAttrPane" id="elemAttrPane" hidden>
+              <div class="elemPaneHead">属性（勾选参与本层定位）</div>
+              <div id="elemDialogAttrs" class="elemAttrs"></div>
+            </div>
+            <div class="elemPane elemSimplePane" id="elemSimplePane">
+              <div class="elemPaneHead">定位</div>
+              <textarea id="elemDialogSelector" class="modalInput elemSelector" rows="3" spellcheck="false"></textarea>
+            </div>
+          </div>
+          <label class="modalField" id="elemDialogPreviewField" hidden>
+            <span class="modalLabel">组合选择器</span>
+            <input id="elemDialogPreview" class="modalInput" type="text" readonly />
+          </label>
           <div id="elemDialogMeta" class="modalMeta"></div>
           <div id="elemDialogNote" class="modalNote" role="status" aria-live="polite"></div>
         </div>
         <div class="modalBar">
+          <button type="button" id="elemDialogRecapture">重新捕获</button>
+          <button type="button" id="elemDialogValidate">校验</button>
+          <span class="barSpacer"></span>
           <button type="button" id="elemDialogCancel">取消</button>
+          <button type="button" id="elemDialogSaveContinue">保存并继续</button>
           <button type="button" id="elemDialogSave" class="primary">保存</button>
         </div>
       </div>

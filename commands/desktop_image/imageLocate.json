@@ -1,0 +1,68 @@
+{
+  "id": "desktop.imageLocate",
+  "version": "1.0.0",
+  "executor": "desktop.image",
+  "kind": "query",
+  "risk": "read",
+  "capabilities": ["desktop.control"],
+  "resources": ["desktop.window"],
+  "stability": "stable",
+  "effect": {"kind": "read", "replay": "safe", "idempotency": "none"},
+  "input_schema": {
+    "type": "object",
+    "required": ["windowHandle"],
+    "properties": {
+      "windowHandle": {
+        "type": "integer",
+        "minimum": 1,
+        "description": "目标窗口句柄（顶层窗口截图来源）。图像定位不跨窗口盲搜，必须显式给窗口"
+      },
+      "imageTemplate": {
+        "type": "string",
+        "description": "目标控件模板图的 Base64。与 imageKeyword 二选一；走模板匹配（TM_CCOEFF_NORMED）"
+      },
+      "imageKeyword": {
+        "type": "string",
+        "minLength": 1,
+        "description": "目标控件文本关键词。与 imageTemplate 二选一；走 OCR 文本检测命中"
+      },
+      "templateSize": {
+        "type": "array",
+        "minItems": 2,
+        "maxItems": 2,
+        "items": {"type": "integer", "minimum": 1},
+        "description": "模板图 [宽, 高]，用于把匹配中心还原成矩形；仅 imageTemplate 时有效"
+      },
+      "minConfidence": {
+        "type": "number",
+        "minimum": 0,
+        "maximum": 1,
+        "description": "最低置信度（归一化相关系数），低于此值判未找到；默认 0.8"
+      }
+    },
+    "additionalProperties": false
+  },
+  "output_schema": {
+    "type": "object",
+    "required": ["left", "top", "width", "height", "count"],
+    "properties": {
+      "left": {"type": "integer", "description": "屏幕绝对坐标 X"},
+      "top": {"type": "integer", "description": "屏幕绝对坐标 Y"},
+      "width": {"type": "integer", "minimum": 1},
+      "height": {"type": "integer", "minimum": 1},
+      "count": {"type": "integer", "minimum": 1, "description": "命中数；>1 表示多命中（歧义）"}
+    },
+    "additionalProperties": false
+  },
+  "x-outputs": {
+    "left": {"label": "左边界"},
+    "top": {"label": "上边界"},
+    "width": {"label": "宽度"},
+    "height": {"label": "高度"},
+    "count": {"label": "命中数"}
+  },
+  "errors": ["INVALID_INPUT", "ELEMENT_NOT_FOUND", "EXECUTOR_FAILED", "TIMEOUT", "CANCELLED"],
+  "implementation": {"handler": "desktop.image:execute"},
+  "default_timeout_seconds": 30,
+  "retryable": true
+}

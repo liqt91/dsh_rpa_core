@@ -21,6 +21,7 @@ from typing import Any
 
 from rpa_core.model.command import CommandInvocation, CommandResult
 from rpa_core.model.errors import ErrorCode
+from rpa_core.procenv import child_env
 
 from .base import CommandExecutor
 
@@ -74,6 +75,9 @@ class OcrExecutor(CommandExecutor):
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            # worker 是 `-m rpa_core.workers.ocr_worker`：宿主只改过 sys.path 时
+            # 子进程找不到包（见 rpa_core.procenv）。
+            env=child_env(),
         )
         self._process = process
         return process

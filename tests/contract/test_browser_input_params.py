@@ -64,10 +64,13 @@ def test_post_delay_sleeps_only_when_declared():
     asyncio.run(executor._post_delay({"postDelayMs": 60}))
     assert time.monotonic() - started >= 0.05
 
-    started = time.monotonic()
+    # 逐次判据，不是累计判据：4 次 `asyncio.run` 的固定开销（每次十几毫秒）会累加，
+    # 累计 50ms 预算在机器有负载时必然假红（M82 复跑门禁时实测 78ms）。逐次 50ms 既
+    # 排掉这一层的噪声，又比原来更严——**任何一次**真的等了 60ms 都会被这一条抓住。
     for value in (None, 0, -10, "abc"):
+        started = time.monotonic()
         asyncio.run(executor._post_delay({"postDelayMs": value}))
-    assert time.monotonic() - started < 0.05
+        assert time.monotonic() - started < 0.05, f"postDelayMs={value!r} 不该等待"
 
 
 class _RecordingExt:

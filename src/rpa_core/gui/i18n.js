@@ -67,6 +67,7 @@ window.RPA_I18N = {
     "desktop.screenshot": "元素截图（UIA）",
     "desktop.select": "设置下拉框（UIA）",
     "desktop.drag": "拖拽元素（UIA）",
+    "desktop.imageLocate": "图像定位控件（显式）",
     "desktop.win32.screenshot": "元素截图（Win32）",
     "desktop.win32.select": "设置下拉框（Win32）",
     "desktop.win32.drag": "拖拽元素（Win32）",
