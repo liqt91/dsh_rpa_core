@@ -85,7 +85,7 @@ class ElementEditDialog:
         self._selector_edit = None
         self._error_static = None
         self._preview_edit = None
-        self._on_save: Callable[[str, str], str | None] | None = None
+        self._on_save: Callable[[str, str, dict | None], str | None] | None = None
         self._on_close: Callable[[bool], None] | None = None
         self._closed = False
         # 探针可观察的最近一次保存错误（界面文案以外的事实源）
@@ -122,13 +122,15 @@ class ElementEditDialog:
         nodes: list[dict[str, Any]] | None = None,
         descriptor: dict[str, Any] | None = None,
         save_label: str = "保存",
-        on_save: Callable[[str, str], str | None] | None = None,
+        on_save: Callable[[str, str, dict | None], str | None] | None = None,
         on_close: Callable[[bool], None] | None = None,
     ) -> None:
-        """弹出编辑框。``on_save(name, selector)`` 返回 None = 成功关框；返回字符串 =
-        错误回显留框。``levels`` 给出时走网页层级形态（selector 参数忽略，以
-        重组预览为准）；``nodes`` 给出时走桌面层级/属性形态（同样以重组预览
-        为准，保存回写完整 selector 字典）；否则走简式形态（selector 是可编辑文本）。
+        """弹出编辑框。``on_save(name, selector, edit_state)`` 返回 None = 成功关框；
+        返回字符串 = 错误回显留框。``edit_state`` 是 ``{"levels": ...}`` 或
+        ``{"nodes": ...}`` 的勾选快照，随定位文本一起落盘，供下次打开详情精确还原。
+        ``levels`` 给出时走网页层级形态（selector 参数忽略，以重组预览为准）；
+        ``nodes`` 给出时走桌面层级/属性形态（同样以重组预览为准，保存回写完整
+        selector 字典）；否则走简式形态（selector 是可编辑文本）。
         """
         if not self.available:
             return
@@ -775,8 +777,15 @@ class ElementEditDialog:
                 return
         else:
             selector = win32gui.GetWindowText(self._selector_edit)
+        # 勾选快照必须和定位文本同一次交出去：只存 css / locator 的话，用户
+        # 取消过的层级/class 重开详情就没了（2026-11-19 现场）。
+        edit_state: dict[str, Any] | None = None
+        if self._nodes:
+            edit_state = {"nodes": self._nodes}
+        elif self._levels:
+            edit_state = {"levels": self._levels}
         if self._on_save is not None:
-            error = self._on_save(name, selector)
+            error = self._on_save(name, selector, edit_state)
         else:
             error = None
         if error:

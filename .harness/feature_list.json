@@ -474,7 +474,7 @@
     },
     {
       "id": "xhs-element-library",
-      "title": "Editor element library: M92-M102 (groups, tree, dock, verify wake, scan, viewport shots + size, split pane, batch bar)",
+      "title": "Editor element library: M92-M104 (groups, tree, dock, wake, scan, shots, split pane, batch bar, editState, window)",
       "passes": true
     },
     {

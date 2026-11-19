@@ -1728,6 +1728,12 @@ function elemEditorSelector() {
   return el.dialogSelector ? el.dialogSelector.value : ''
 }
 
+function elemEditorState() {
+  if (dialogEditorKind === 'web' && dialogLevels) return { levels: dialogLevels }
+  if (dialogEditorKind === 'desktop' && dialogNodes) return { nodes: dialogNodes }
+  return null
+}
+
 async function validateElemDialog() {
   if (!dialogMode) return
   const name = String(el.dialogName?.value || '').trim()
@@ -1818,9 +1824,10 @@ async function confirmElemDialog(keepOpen = false) {
     return
   }
   const selector = elemEditorSelector()
+  const editState = elemEditorState()
   let res
   try {
-    res = await dialogSave(name, selector)
+    res = await dialogSave(name, selector, editState)
   } catch (error) {
     setDialogNote(elemText('saveFailed', { reason: error?.message || error }), true)
     return
@@ -1871,8 +1878,8 @@ async function openCaptureDialog(captureId, preview) {
     meta,
     model,
     captureId,
-    save: (name, selector) => ppx.call('rpa.commitElement', {
-      path: currentPath, capture_id: captureId, name, selector,
+    save: (name, selector, editState) => ppx.call('rpa.commitElement', {
+      path: currentPath, capture_id: captureId, name, selector, edit_state: editState,
     }),
     discard: () => ppx.call('rpa.discardCapture', { path: currentPath, capture_id: captureId }),
     recapture: () => recaptureFromDialog(),
@@ -1926,7 +1933,9 @@ async function openAssetDetail(name) {
     title: elemText('detailTitle'),
     name,
     meta,
-    save: (newName) => ppx.call('rpa.saveElement', { path: currentPath, name, new_name: newName }),
+    save: (newName, _selector, editState) => ppx.call('rpa.saveElement', {
+      path: currentPath, name, new_name: newName, edit_state: editState,
+    }),
   })
 }
 

@@ -83,6 +83,7 @@ from rpa_core.capture_kit import (  # noqa: E402
     is_valid_name,
     validate_name,
     validate_selector,
+    MaximizedAwareHost,
 )
 from rpa_core.catalog import load_catalog  # noqa: E402
 from rpa_core.compiler.compiler import WorkflowCompileError, WorkflowCompiler  # noqa: E402
@@ -2203,11 +2204,13 @@ def _selector_edit_error(doc: dict[str, Any], text: str) -> str | None:
     return validate_selector(doc, text)
 
 
-def _apply_selector_edit(doc: dict[str, Any], text: str) -> None:
+def _apply_selector_edit(
+    doc: dict[str, Any], text: str, edit_state: dict[str, Any] | None = None,
+) -> None:
     """校验过的定位写回 doc（原地，兼容 win32 回调）；新描述符不共享引用。"""
     if validate_selector(doc, text) is not None:
         return
-    doc["selector"] = _kernel_apply_selector(doc, text)["selector"]
+    doc["selector"] = _kernel_apply_selector(doc, text, edit_state=edit_state)["selector"]
 
 
 def _capture_edit_model(entry: dict[str, Any]) -> dict[str, Any]:
@@ -2222,7 +2225,10 @@ def _capture_edit_model(entry: dict[str, Any]) -> dict[str, Any]:
     )
 
 
-def _commit_from_dialog(entry: dict[str, Any], name: str, selector: str) -> str | None:
+def _commit_from_dialog(
+    entry: dict[str, Any], name: str, selector: str,
+    edit_state: dict[str, Any] | None = None,
+) -> str | None:
     """win32 确认框的保存回调：返回 None=成功关框 / 文案=错误回显留框。
 
     先校验定位再动盘：定位非法时用户留在框里改，盘上不落半成品。
@@ -2231,7 +2237,7 @@ def _commit_from_dialog(entry: dict[str, Any], name: str, selector: str) -> str 
     error = _selector_edit_error(captured, selector)
     if error:
         return error
-    _apply_selector_edit(captured, selector)
+    _apply_selector_edit(captured, selector, edit_state)
     res = _do_commit(entry, name)
     return None if res["ok"] else str(res["error"])
 
@@ -2928,12 +2934,9 @@ def _pick_plan(path: str, name: str | None, override: str | None = None) -> dict
     }
 
 
-class _WebviewHost:
-    """PPX 宿主适配：同进程的 pywebview 主窗（与 ppx 内置 ``window.minimize`` 同一对象）。
-
-    后端直接调 ``window.minimize()/restore()``，不依赖前端 JS 定时器——窗口最小化后
-    脚本可能被节流，「还原」不能押在它身上。非 pywebview 环境（门禁/纯浏览器）静默跳过。
-    """
+class _RawWebviewHost:
+    """pywebview 主窗原生操作。``restore()`` 会把它设成 Normal —— 最小化前
+    若是最大化，还原后就缩了（M104）。状态修复在外层 MaximizedAwareHost。"""
 
     @staticmethod
     def _window():
@@ -2953,6 +2956,33 @@ class _WebviewHost:
         window = self._window()
         if window is not None:
             window.restore()
+
+    def maximize(self) -> None:
+        window = self._window()
+        if window is not None:
+            window.maximize()
+
+
+def _webview_is_maximized() -> bool:
+    """探测 ppx 主窗此刻是否最大化；拿不到就 False，不阻塞捕获。"""
+    try:
+        import win32gui
+
+        window = _RawWebviewHost._window()
+        if window is None:
+            return False
+        title = window.title
+        hwnd = win32gui.FindWindow(None, title) if title else 0
+        return bool(hwnd and win32gui.IsZoomed(hwnd))
+    except Exception:  # noqa: BLE001 - 探针失败退回普通还原
+        return False
+
+
+class _WebviewHost(MaximizedAwareHost):
+    """PPX 宿主适配：包一层状态感知，最小化前最大化 ⇒ 还原时重新最大化。"""
+
+    def __init__(self) -> None:
+        super().__init__(_RawWebviewHost(), _webview_is_maximized)
 
 
 @api_method("rpa.startCapture")
@@ -3025,7 +3055,8 @@ def start_capture(
             # ready 语义，前端弹自己的页面框兜底。
             edit_dialog_factory=_new_edit_dialog,
             edit_model=lambda doc: _capture_edit_model(entry),
-            on_commit=lambda name, selector: _commit_from_dialog(entry, name, selector),
+            on_commit=lambda name, selector, edit_state=None: _commit_from_dialog(
+                entry, name, selector, edit_state),
         )
         launched = controller.start()
     except Exception as exc:  # noqa: BLE001 - 起捕获失败必须如实回前端，别闷成等待态
@@ -3227,7 +3258,8 @@ def _do_commit(entry: dict[str, Any], name: str) -> dict[str, Any]:
 
 @api_method("rpa.commitElement")
 def commit_element(
-    path: str, capture_id: str, name: str, selector: str | None = None
+    path: str, capture_id: str, name: str, selector: str | None = None,
+    edit_state: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """用户确认后入库：捕获描述符 + 用户改好的名字/定位 → ``elements/<name>.json``。
 
@@ -3246,7 +3278,7 @@ def commit_element(
         error = _selector_edit_error(captured, selector)
         if error:
             return _element_error("BAD_SELECTOR", error)
-        _apply_selector_edit(captured, selector)
+        _apply_selector_edit(captured, selector, edit_state)
     res = _do_commit(entry, name)
     if not res["ok"]:
         return res
@@ -3407,10 +3439,25 @@ def _do_rename(path: str, name: str, new_name: str | None) -> dict[str, Any]:
 
 
 @api_method("rpa.saveElement")
-def save_element(path: str, name: str, new_name: str | None = None) -> dict[str, Any]:
-    """详情框的保存：改的只有资产名称（重名/改名后引用一起更新）。"""
+def save_element(
+    path: str, name: str, new_name: str | None = None,
+    edit_state: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """详情框的保存：改名 + 勾选快照（定位文本由 win32 框走 editElement）。"""
     started = time.perf_counter()
     res = _do_rename(path, name, new_name)
+    if res["ok"] and isinstance(edit_state, dict) and edit_state:
+        target = _elements_dir(path) / f"{res['name']}.json"
+        try:
+            doc = json.loads(target.read_text(encoding="utf-8"))
+            selector = doc.get("selector")
+            selector = selector if isinstance(selector, dict) else {}
+            selector["editState"] = edit_state
+            doc["selector"] = selector
+            _write_element_doc(target, doc)
+        except (OSError, ValueError):
+            # 快照写失败不影响改名这个主操作；win32 路径不经过这里。
+            pass
     res["ms"] = round((time.perf_counter() - started) * 1000, 1)
     return res
 
@@ -3473,7 +3520,8 @@ def edit_element(path: str, name: str) -> dict[str, Any]:
     }
     _CAPTURES[_capture_key(path, edit_id)] = entry
 
-    def _save(new_name: str, new_selector: str) -> str | None:
+    def _save(new_name: str, new_selector: str,
+              edit_state: dict[str, Any] | None = None) -> str | None:
         # 先校验定位再动文件：名字改了、定位非法会留下半成品。
         error = _selector_edit_error(doc, new_selector)
         if error:
@@ -3483,7 +3531,7 @@ def edit_element(path: str, name: str) -> dict[str, Any]:
             return str(res["error"])
         # 改名后回写的是打开时读出的那份 doc：名字与定位都要同步成最新
         doc["name"] = res["name"]
-        _apply_selector_edit(doc, new_selector)
+        _apply_selector_edit(doc, new_selector, edit_state)
         _write_element_doc(_elements_dir(path) / f"{res['name']}.json", doc)
         session.finish({"state": "committed", "name": res["name"]})
         return None

@@ -73,8 +73,44 @@ def validate_selector(descriptor: dict[str, Any], text: str) -> str | None:
     return None
 
 
-def apply_selector(descriptor: dict[str, Any], text: str) -> dict[str, Any]:
-    """把校验过的定位文本写回一份**新**描述符（调用前必须先过 ``validate_selector``）。"""
+EDIT_STATE_KEY = "editState"
+
+
+def saved_edit_state(descriptor: dict[str, Any], part: str) -> list[dict[str, Any]] | None:
+    """资产里存的**编辑态勾选快照**（`levels` / `nodes`），形状不对就当没有。
+
+    ★ 没有这份快照时，重开详情只能从捕获期的 `path[i].inCss` 和「首 class 默认勾」
+    反推勾选——用户后来在编辑框里取消的层级/class 全部丢失（2026-11-19 现场：
+    网页元素全没勾、桌面元素没勾的层级直接消失）。所以勾选状态必须随 css /
+    locator 一起落盘，而不是只活在编辑框内存里。
+
+    旧资产没有这个键 ⇒ 返回 None，调用方回退到现有推断（开发期硬切，不做迁移）。
+    """
+    if not isinstance(descriptor, dict):
+        return None
+    selector = descriptor.get("selector")
+    if not isinstance(selector, dict):
+        return None
+    state = selector.get(EDIT_STATE_KEY)
+    if not isinstance(state, dict):
+        return None
+    value = state.get(part)
+    if not isinstance(value, list) or not value:
+        return None
+    if not all(isinstance(item, dict) for item in value):
+        return None
+    return value
+
+
+def apply_selector(
+    descriptor: dict[str, Any], text: str,
+    edit_state: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """把校验过的定位文本写回一份**新**描述符（调用前必须先过 ``validate_selector``）。
+
+    ``edit_state`` 是编辑框的勾选快照：网页 levels / 桌面 nodes。必须与定位文本
+    同一次保存写入，否则下次打开详情又只能猜勾选状态。
+    """
     result = dict(descriptor or {})
     text = (text or "").strip()
     if descriptor.get("kind") == "browser":
@@ -83,6 +119,8 @@ def apply_selector(descriptor: dict[str, Any], text: str) -> dict[str, Any]:
         result["selector"] = selector
     else:
         result["selector"] = json.loads(text)
+    if isinstance(edit_state, dict) and edit_state:
+        result["selector"][EDIT_STATE_KEY] = edit_state
     return result
 
 
@@ -116,14 +154,21 @@ def build_edit_model(
         "info": info,
     }
     if actual_kind == "browser" and isinstance(path, list) and path:
-        levels = levels_from_path(path)
+        levels = saved_edit_state(descriptor, "levels")
+        # 快照按层级索引对应 path：层数变了就宁可回退推断，别把勾选错位到别的层。
+        if levels is None or len(levels) != len(path):
+            levels = levels_from_path(path)
         model["levels"] = levels
         model["selector"] = compose(levels)
         model["meta"] = info.replace(" · ", "\r\n")
     else:
         model["selector"] = edit_text_for(descriptor)
         if actual_kind == "desktop":
-            model["nodes"] = desktop_editing.nodes_from_descriptor(descriptor)
+            nodes = saved_edit_state(descriptor, "nodes")
+            model["nodes"] = (
+                nodes if nodes is not None
+                else desktop_editing.nodes_from_descriptor(descriptor)
+            )
         model["meta"] = model["info"].replace(" · ", "\r\n")
     return model
 
@@ -137,6 +182,7 @@ __all__ = [
     "edit_text_for",
     "is_valid_name",
     "levels_from_path",
+    "saved_edit_state",
     "validate_name",
     "validate_selector",
 ]

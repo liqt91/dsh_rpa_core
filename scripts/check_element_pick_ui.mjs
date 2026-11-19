@@ -503,14 +503,17 @@ check('契约层：后端没有手填写入口、捕获不落盘、名字允许�
 })
 
 // 行级等值断言：只搜「on_commit 出现过」会被 lambda 自身喂成恒绿。
-// 控制器从 M69 起传 (name, selector)，宿主 _commit_from_dialog 也是三参（含 entry）。
-// 接线停在单参数时用户点保存直接 TypeError「入库失败」，而旧的 key 存在性判据全绿。
-check('契约层：确认框保存接线收两参并透传 selector 给入库', () => {
-  const line = apiSrc.split('\n').find((l) => /^\s*on_commit=lambda /.test(l))
-  assert(line, 'start_capture 没接 on_commit')
+// 控制器从 M104 起传 (name, selector, edit_state)：编辑态勾选快照必须与
+// 定位文本同一次交给宿主，否则重开详情时用户取消过的层级全丢。
+// 接线停在两参时用户点保存直接 TypeError「入库失败」。
+check('契约层：确认框保存接线收三参并透传 selector 与勾选快照', () => {
+  const lines = apiSrc.split('\n')
+  const at = lines.findIndex((l) => /^\s*on_commit=lambda /.test(l))
+  assert(at >= 0, 'start_capture 没接 on_commit')
+  const joined = (lines[at] || '') + (lines[at + 1] || '')
   assert(
-    /^\s*on_commit=lambda name, selector: _commit_from_dialog\(entry, name, selector\),\s*$/.test(line),
-    `保存接线没把编辑后的 selector 透传给入库：${line.trim()}`,
+    /^\s*on_commit=lambda name, selector, edit_state=None: _commit_from_dialog\(\s*entry, name, selector, edit_state\),\s*$/.test(joined),
+    `保存接线没把 selector/edit_state 透传给入库：${joined.trim()}`,
   )
 })
 

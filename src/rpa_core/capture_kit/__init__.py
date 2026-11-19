@@ -52,12 +52,14 @@ from .engine import (
     web_status,
 )
 from .float_window import CaptureFloat
+from .window_host import MaximizedAwareHost
 
 __all__ = [
     "NEVER_TIMEOUT",
     "CaptureController",
     "CaptureFloat",
     "ElementEditDialog",
+    "MaximizedAwareHost",
     "apply_selector",
     "build_edit_model",
     "build_hybrid_session",

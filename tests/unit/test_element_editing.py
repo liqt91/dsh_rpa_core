@@ -91,3 +91,99 @@ def test_level_composition_is_the_single_authority_for_checked_paths():
     assert ee.compose(levels) == "html span.a:nth-of-type(2)"
     levels[1]["included"] = True
     assert ee.compose(levels) == "html > #root > span.a:nth-of-type(2)"
+
+
+def test_web_edit_state_survives_save_and_reopens_exactly():
+    """网页勾选快照随 css 一起落盘，重开详情**逐项**还原（含被取消的层级）。
+
+    没有快照时只能从捕获期的 inCss / 首 class 猜，用户在编辑框里取消的
+    层级和 class 会全部丢失（2026-11-19 现场：网页元素详情全没勾）。
+    """
+    descriptor = {
+        "kind": "browser",
+        "selector": {
+            "css": "div.a2 > span.b",
+            "path": [
+                {"tag": "div", "classes": ["a", "a2"]},
+                {"tag": "span", "classes": ["b"]},
+            ],
+        },
+    }
+    levels = [
+        {
+            "tag": "div", "included": True,
+            "id": {"on": False, "value": ""},
+            "classes": [
+                {"on": False, "value": "a", "mode": "精确"},
+                {"on": True, "value": "a2", "mode": "精确"},
+            ],
+            "nth": {"on": False, "value": ""},
+        },
+        {
+            "tag": "span", "included": True,
+            "id": {"on": False, "value": ""},
+            "classes": [{"on": True, "value": "b", "mode": "精确"}],
+            "nth": {"on": False, "value": ""},
+        },
+    ]
+    updated = ee.apply_selector(descriptor, "div.a2 > span.b", {"levels": levels})
+    assert updated["selector"]["css"] == "div.a2 > span.b"
+    assert updated["selector"]["editState"]["levels"] == levels
+    model = ee.build_edit_model(updated, kind="browser")
+    assert model["levels"] == levels
+    assert model["selector"] == "div.a2 > span.b"
+
+
+def test_old_asset_without_edit_state_falls_back_to_path_inference():
+    """旧资产没有 editState ⇒ 回退现有推断，不因新字段打不开详情。"""
+    descriptor = {
+        "kind": "browser",
+        "selector": {
+            "css": "div > span",
+            "path": [{"tag": "div", "classes": ["a"]}, {"tag": "span"}],
+        },
+    }
+    model = ee.build_edit_model(descriptor, kind="browser")
+    assert [level["included"] for level in model["levels"]] == [True, True]
+
+
+def test_mismatched_edit_state_is_ignored_instead_of_misaligned():
+    """快照层数与 path 对不上时宁可回退推断，别把勾选错位到别的层。"""
+    descriptor = {
+        "kind": "browser",
+        "selector": {
+            "css": "div > span",
+            "path": [{"tag": "div"}, {"tag": "span"}],
+            "editState": {"levels": [{"tag": "div", "included": False}]},
+        },
+    }
+    model = ee.build_edit_model(descriptor, kind="browser")
+    assert [level["included"] for level in model["levels"]] == [True, True]
+
+
+def test_desktop_edit_state_keeps_unchecked_levels():
+    """桌面快照整份存 nodes：取消勾选的层级重开详情仍在树里且仍未勾。"""
+    descriptor = {
+        "kind": "desktop",
+        "selector": {
+            "locator": {"controlType": "Button", "name": "搜索", "path": [
+                {"controlType": "ToolBar", "name": "任务栏"},
+            ]},
+        },
+    }
+    nodes = [
+        {"type": "wnd", "name": "窗口", "selected": False, "readonly": True,
+         "attributes": []},
+        {"type": "ToolBar", "name": "任务栏", "selected": False, "readonly": False,
+         "attributes": [{"field": "name", "label": "名称", "value": "任务栏",
+                         "operator": "精确", "required": False, "readonly": False}]},
+        {"type": "Button", "name": "搜索", "selected": True, "readonly": False,
+         "attributes": [{"field": "name", "label": "名称", "value": "搜索",
+                         "operator": "精确", "required": True, "readonly": False}]},
+    ]
+    selector_text = json.dumps(descriptor["selector"], ensure_ascii=False)
+    updated = ee.apply_selector(descriptor, selector_text, {"nodes": nodes})
+    assert updated["selector"]["editState"]["nodes"] == nodes
+    model = ee.build_edit_model(updated, kind="desktop")
+    assert model["nodes"] == nodes
+    assert [node["selected"] for node in model["nodes"]] == [False, False, True]

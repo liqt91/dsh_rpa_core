@@ -175,6 +175,18 @@ function makeContext() {
     'rpa.capturePoll': { ok: true, state: 'pending' },
     'rpa.commitElement': { ok: true, name: 'searchBox' },
     'rpa.discardCapture': { ok: true, discarded: true },
+    'rpa.elementEditModel': () => ({
+      ok: true, kind: 'browser', selector: 'div.a2 > span.b',
+      levels: [
+        { tag: 'div', included: true, id: { on: false, value: '' },
+          classes: [{ on: false, value: 'a', mode: '精确' },
+                    { on: true, value: 'a2', mode: '精确' }],
+          nth: { on: false, value: '' } },
+        { tag: 'span', included: true, id: { on: false, value: '' },
+          classes: [{ on: true, value: 'b', mode: '精确' }],
+          nth: { on: false, value: '' } },
+      ],
+    }),
     'rpa.saveElement': { ok: true, name: 'searchBox' },
     // 默认按「桌面编辑框不可用」处理：详情走页面兜底（非 Windows 路径）
     'rpa.editElement': { ok: false, code: 'EDIT_DIALOG_UNAVAILABLE' },
@@ -223,6 +235,7 @@ function makeContext() {
   vm.runInContext(mainSrc.replace(/^import .*$/gm, ''), ctx, { filename: 'main.js' })
   vm.runInContext(
     `globalThis.__api = { refreshElements, renderElementsPanel, openAssetDetail, deleteAsset,
+       openCaptureDialog, confirmElemDialog,
        selectCard, saveParams, renderForm,
        elementTreeBuckets, openLibMenu, closeLibMenu, toggleGroup, renderBatchBar,
        getSelected: () => Array.from(elemSelected),
@@ -686,6 +699,23 @@ await checkAsync('多选批量：勾选进选中集、批量条浮出、取消�
   await flush()
   assert(api.getSelected().length === 0, '取消选择没清空')
   assert(bars().length === 0, `取消选择后批量条还剩 ${bars().length} 条`)
+})
+
+await checkAsync('捕获确认保存把勾选快照随定位一起交给后端', async () => {
+  const { api, calls } = makeContext()
+  await api.openCaptureDialog('c7', {
+    kind: 'browser', selector: 'div.a2 > span.b', name: '搜索框',
+  })
+  await flush()
+  await nodeById('elemDialogSave').click()
+  await flush()
+  const saved = calls.filter((c) => c.name === 'rpa.commitElement').pop()
+  assert(saved, '保存没发 commitElement')
+  const levels = saved.args.edit_state?.levels
+  assert(Array.isArray(levels) && levels.length === 2,
+    `勾选快照没传：${JSON.stringify(saved.args)}`)
+  assert(levels[0].classes[0].on === false && levels[0].classes[1].on === true,
+    `取消勾选的 class 没保留：${JSON.stringify(levels)}`)
 })
 
 await checkAsync('新入库资产带来源/状态字段，但界面不伪造旧资产的值', async () => {

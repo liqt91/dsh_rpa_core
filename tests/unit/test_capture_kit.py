@@ -315,8 +315,9 @@ class FakeEditDialog:
     def close(self) -> None:
         self.closed = True
 
-    def click_save(self, name: str, selector: str = "") -> str | None:
-        error = self._on_save(name, selector)
+    def click_save(self, name: str, selector: str = "",
+                   edit_state: dict | None = None) -> str | None:
+        error = self._on_save(name, selector, edit_state)
         if error:
             return error  # 错误回显留框（真实对话框的 _try_save 同款分支）
         self._on_close(True)
@@ -382,7 +383,8 @@ def test_edit_dialog_commit_reports_committed_with_name() -> None:
     controller = _make_editing(
         FakeSession({"kind": "browser", "selector": {"css": "#a"}}),
         dialog,
-        on_commit=lambda name, selector: committed.append((name, selector)) or None,
+        on_commit=lambda name, selector, edit_state=None:
+            committed.append((name, selector)) or None,
     )
     controller.start()
     _wait(controller, {"editing"})
@@ -397,7 +399,7 @@ def test_edit_dialog_save_error_stays_editing() -> None:
     controller = _make_editing(
         FakeSession({"kind": "browser", "selector": {"css": "#a"}}),
         dialog,
-        on_commit=lambda name, selector: "这个名字被占了",
+        on_commit=lambda name, selector, edit_state=None: "这个名字被占了",
     )
     controller.start()
     _wait(controller, {"editing"})
