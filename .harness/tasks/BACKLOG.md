@@ -958,6 +958,30 @@
     `docs/manifest-param-config.md` ④ 的追加说明 · 判据在
     `tests/contract/test_variable_scope_visibility.py` + `scripts/check_scope_visibility.mjs`。
 
+- [ ] **`browser_viewport_in_window` 把「横向 chrome」当边框用，左侧竖排标签栏的窗口算出负的视口原点**（`planned`，2026-11-19 实测）
+  - **现象**：真机窗口 `outerWidth/innerWidth = 1607/1299`、`outerHeight/innerHeight = 922/862`
+    （`GetWindowRect` 给出 `[44,-1014,1651,-92]`，Edge **左侧竖排标签栏** + 8px resize border），
+    `browser_viewport_in_window` 算出 `border=(1607-1299)/2=154`、`origin_x=154`、
+    `origin_y = 922-862-154 = **-94**`。负的 `origin_y` 意为「视口顶在窗口顶之上」，
+    任何按它换算的窗口图裁剪都会整体**偏上 94px、横向偏右 146px**。
+  - **成因**：函数把 `(outerWidth-innerWidth)/2` 当成**边框**，并把同一个数**同时用在两轴**
+    （`origin_y = oh - vh - border`）。对称窗口下它恰好是 8px 因而看不出问题；一旦横向 chrome
+    不对称（Edge/Chrome 左侧竖排标签栏、左侧停靠的侧边栏），这个数变成「侧栏宽度的一半」，
+    两轴一起被污染。docstring 里「左右对称、跨窗口稳定」那条前提只在无侧栏窗口成立。
+  - **影响面**：`screen_shot.py:550` 与 `:798` 两条**窗口图**腿（元素缩略图的 browser 路径）；
+    视口图那条腿走 `viewport_box_in_image`，不受影响。目前缩略图优先走视口图，所以是
+    「特定窗口形态 + 退到窗口图」才发作的暗坑，**不是必现**——这也是它一直没被发现的原因。
+  - **判据缺口**：`tests/contract/test_screen_shot.py` 的 `REAL_VIEWPORT` 是 `ow-vw=16` 的对称
+    窗口，**这个形态永远覆盖不到**（与 §2 那四类门禁盲区同形：判据绿 ≠ 覆盖到了真实形态）。
+  - **候选**（从轻到重，均未开工）：(a) `origin_y` 不再复用 `border`，改用**下边框**独立常量
+    （Windows resize border 实测 8px）⇒ 负值消失，横向仍偏；(b) 检测**非对称 chrome**
+    （如 `ow-vw > 24`）时**返回 `None`**，宁可不出窗口图也不给错图（与「缺 `outerWidth` 时返回
+    `None`」同一条既有取向）；(c) 窗口图这条腿整体退场，统一走 `captureVisibleTab` 的视口图——
+    M107 探针已验证视口图能直接裁出元素模板、并能在另一图源里匹配回来，`origin` 这个概念随之
+    消失，代价是多一次页面截图。
+  - **佐证**：`.harness/spike/probe_m107_trusted_click.py`（`windowFacts.chromeImplied` 与
+    `geometry.viewport` 都打进报告，复现只需跑一次）· `.workbuddy/memory/2026-11-19.md`。
+
 ## 远期任务
 
 - [ ] **AI 按自然语言生成流程（设计期）**（`planned`）——自然语言 → 流程草稿 AST（catalog 命令 +
