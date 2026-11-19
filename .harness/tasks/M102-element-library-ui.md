@@ -447,3 +447,62 @@ locator 里（`image_proposal.py:151`），运行期由 `executors/image_target.
 - S4（参数面板选元素改组合框 + 就地捕获绑定）：候选合并原本依赖 S3，S3 搁置后
   可以只在 `elements/` 内做，需要单独拍板；
 - 旧资产（`screenshot: null`）不迁移，界面显示首字母占位。
+
+## S2b 网页元素为什么没缩略图（2026-11-19，S1 上线后真机反馈）
+
+维护者测完 S1：「桌面元素有截图了，网页元素没有呢？」。真机 trace 一读，是三处各错
+一点叠出来的，每一处单独看都「像是对的」：
+
+1. **`viewport` 在描述符顶层**（`content.js::buildDescriptor` 与 `selector` 平级）。
+   ppx 的 `_hold_captured` 先把它归一化成 `ElementDescriptor`，顶层未知键被
+   `extra="ignore"` 静默丢掉；`element_shot_from_descriptor` 又只读
+   `selector.viewport` ⇒ 视口恒 `None` ⇒ `browser_box_in_window` 返回 `None` ⇒
+   `element_shot no_box`。而 S1 的契约用例和接线探针**都把 viewport 写在
+   `selector.viewport`**——判据覆盖的是错的形状，所以一路绿。
+2. **窗口几何在 Edge 开侧栏时崩**：`browser_viewport_in_window` 用
+   `border=(outerWidth-width)/2` 当**垂直**边框。真机 `viewport 1628 / outerWidth 1920`
+   ⇒ border=146 ⇒ `origin_y=(1040-996-146)×1.008=-102.85`，元素被推成负 y，判成
+   「滚出窗口」。`capture_shot` 那边同一份数也给出 `has_crop=false`。
+3. **扩展从来没有要过视口图**：host 只能用整窗截图，而整窗截图天生要猜「视口在窗口里
+   偏多少」。
+
+### 改法（拍板：走视口图，含兜底）
+
+- `content.js`：点击那一刻**先收掉覆盖层**（否则红框/hint 被拍进缩略图）→ 向
+  background 要一张视口图（800ms 超时兜底，background 可能收到不回）→ 附在
+  `rpa-capture-result` 上。
+- `background.js`：新增 `rpa-shot-request` → `chrome.tabs.captureVisibleTab`，转
+  JPEG q=0.9（1920×1040 的 PNG base64 1~3MB，native messaging 扛不住；坐标不变）。
+  **`rpa-capture-result` 分支必须显式透传 `viewportShot`**——只挑
+  `descriptor/contentBuild` 两个字段的话图在这里就没了。
+- `extension.py`：`_take_viewport_shot` 挂成
+  `captureShot={dataUrl, space:"viewport"}`；没有图就退回窗口截图（老扩展/无权限）。
+  标记 `space` 是必需的：同一字段两种几何口径，消费方得能分辨。
+- `screen_shot.py`：新增 `viewport_box_in_image`（rect 本来就是视口坐标 ⇒ 只乘
+  「图宽/视口宽」，**没有第二个原点**）；抽 `_clamp_box` 给两条腿共用钳位；
+  浏览器腿算不出框时**兜底整图缩略图**（桌面腿不兜底：rect 来自 UIA，缺了就是元素没了）。
+- `descriptor_viewport`：读顶层，回退 `selector.viewport`（既有 `capture_shot` 一直认它）。
+- 扩展版本 0.9.4（manifest / background / content 三方一致）。
+
+### 判据（都做过负向验证）
+
+- `tests/contract/test_element_shot.py`：+视口图用例（用真机那组数：视口 800 / 窗口 1920）、
+  +整图兜底用例、+桌面腿不兜底用例；
+- `tests/contract/test_extension_viewport_shot.py` 3 条：挂图带 `space`、无图退回窗口截图、
+  非图载荷不当图；
+- `scripts/check_capture_shot.mjs` 18 条（新，已进门禁）：content 取图函数四种回包 + 超时、
+  capture 体的顺序与字段、background 透传与请求接线、两端 type 常量对账；
+- `check_capture_lifecycle.mjs` 适配 async：`gesture()` 现在 await 一个 tick
+  （捕获要等截图，同步断言会读到「还没发生」）；
+- `probe_m102_s2b_negative.py` 7 个注入，逐项断言失败集相等 + md5 还原：
+  `selector-only` / `space-ignored` / `no-fallback` / `host-drops-shot` /
+  `content-no-shot` / `host-forgets` / `overlay-first`。其中
+  `host-drops-shot`、`content-no-shot`、`host-forgets` 三条**纯函数层全绿**，只有接线探针
+  或 JS 通道判据会红——「纯函数层绿 ≠ 接线层绿」的现成样本。
+
+### 仍需真机确认
+
+改完要**重载扩展**（Load unpacked 是快照，不自动重载）并重启 ppx，然后抓一个网页元素看
+右栏大图。判断依据：trace 里 `capture_shot mark=viewport` 出现，且 `element_shot mark=ok`
+的 `crop` 落在视口坐标范围内；若出现 `fallback_full` 说明几何仍没算出来（此时有整图，但
+不是特写）。

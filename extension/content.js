@@ -23,7 +23,7 @@
   // 构建标识：与 background.js 的 EXT_BUILD、manifest.json 的 version 三方一致（契约测试钉住）。
   // 随捕获结果回传——诊断「页面里跑的脚本是哪个年代的」（Load unpacked 不自动重载，
   // 补注入前已开页面里的可能还是旧快照；见 background.js 顶部的完整说明）。
-  const EXT_BUILD = "0.9.3";
+  const EXT_BUILD = "0.9.4";
 
   // ---- 实例接管守卫（M42）----------------------------------------------------
   // 声明式 content_scripts **只在页面加载时**注入：扩展装载/重载后，已经打开的标签页
@@ -571,8 +571,31 @@
     };
   };
 
-  // 真正落地一次捕获：buildDescriptor → 经 background 回传。
-  const capture = (e) => {
+  // 视口截图（M102 S2b）：缩略图的权威底图。content script 没有截图 API，只能
+  // 向 background 要一次；失败（扩展刚重载、页面不可见、配额）一律给 null——
+  // 缩略图是增强，不能把一次成功的捕获拖成失败。回调里必须读 lastError，
+  // 否则扩展重载后这里会抛「Unchecked runtime.lastError」。
+  // ★ 超时兜底不可省：background 有「收到却不回」的形态（service worker 正在重启、
+  //   消息通道半开），没有它这次捕获会**永远**停在 await 上，用户看到的是「点了没反应」。
+  const SHOT_REQUEST_TIMEOUT_MS = 800;
+  const requestVisibleShot = () => new Promise((resolve) => {
+    let done = false;
+    const finish = (value) => { if (!done) { done = true; resolve(value); } };
+    const timer = setTimeout(() => finish(null), SHOT_REQUEST_TIMEOUT_MS);
+    try {
+      chrome.runtime.sendMessage({ type: "rpa-shot-request" }, (reply) => {
+        clearTimeout(timer);
+        if (chrome.runtime.lastError) { finish(null); return; }
+        finish(reply && reply.ok && typeof reply.dataUrl === "string" ? reply.dataUrl : null);
+      });
+    } catch {
+      clearTimeout(timer);
+      finish(null);
+    }
+  });
+
+  // 真正落地一次捕获：buildDescriptor → 视口截图 → 经 background 回传。
+  const capture = async (e) => {
     if (!armed) return;
     const now = Date.now();
     // 同一次手势会连发多个事件（macOS 的 mousedown→contextmenu、部分站点的 click→auxclick），
@@ -593,21 +616,28 @@
       setHint("扩展已重载 · 请刷新本页（⌘/Ctrl+R）后重新捕获");
       return;
     }
+    const descriptor = buildDescriptor(el);
+    // ★ 先**收掉覆盖层再截图**：视口图会被裁成元素缩略图，顶着红框/hint 条拍进去
+    //   等于把「选中态」存进资产。rect 已在上一步取好，overlay 是 fixed 定位，
+    //   移除它不改任何布局。
+    hideOverlay();
+    const viewportShot = await requestVisibleShot();
     try {
       chrome.runtime.sendMessage({
         type: "rpa-capture-result",
-        descriptor: buildDescriptor(el),
+        descriptor,
         contentBuild: EXT_BUILD,
+        viewportShot: viewportShot || undefined,
       });
     } catch (err) {
       // 通道失效等异常：同上下——红框不能赖着不走（它已经不会被任何人清掉），
       // 提示条保留原因，用户可再试；不要静默吞掉
       hideBox();
+      clearCaptureCursor();
       setHint("捕获失败：" + ((err && err.message) || err));
       return;
     }
     lastCaptureAt = now;
-    hideOverlay();
     clearCaptureCursor();   // 已捕获：不再处于「就绪待点」状态
   };
 

@@ -156,10 +156,19 @@ const makeChrome = () => {
         addListener: (fn) => messageListeners.add(fn),
         removeListener: (fn) => messageListeners.delete(fn),
       },
-      sendMessage: (msg) => {
+      sendMessage: (msg, callback) => {
         if (!chrome.runtime.id) throw new Error("Extension context invalidated.");
         sent.push(msg);
-        if (msg && msg.type === "rpa-capture-state") return Promise.resolve({ armed: false });
+        if (msg && msg.type === "rpa-capture-state") {
+          if (callback) callback({ armed: false });
+          return Promise.resolve({ armed: false });
+        }
+        if (msg && msg.type === "rpa-shot-request") {
+          // 视口截图（M102 S2b）：这些用例钉的是捕获生命周期，不关心缩略图，
+          // 一律回「没图」。**必须回包**——capture 在 await 它，不回就永远出不来结果。
+          if (callback) callback({ ok: false });
+          return Promise.resolve({ ok: false });
+        }
         return Promise.resolve({ ok: true });
       },
     },
@@ -183,11 +192,16 @@ const arm = (state, armed = true) => {
   }
 };
 
-const gesture = (world, type = "click", extra = {}) => {
+// 捕获流程是 async 的（M102 S2b：要 await 一次视口截图），结果落在一个 tick 之后。
+// 断言若还按同步写，读到的是「还没发生」，会红成「捕获没生效」——与真实故障长得一样。
+const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+const gesture = async (world, type = "click", extra = {}) => {
   world.fire(world.documentEmitter, type, {
     clientX: 5, clientY: 5, ctrlKey: true, metaKey: false, button: 0,
     preventDefault() {}, stopPropagation() {}, ...extra,
   });
+  await settle();
 };
 
 const aliveOf = (world) => Boolean(
@@ -280,7 +294,7 @@ const EXPECTED_LISTENERS = 9;
   check("S5 捕获前：有框", world.overlays(), 2);
 
   state.chrome.runtime.id = undefined;   // 点下去的瞬间通道已失效
-  gesture(world, "click");
+  await gesture(world, "click");
   check("S5 通道失效时点捕获：红框被收掉（只剩提示条）", world.overlays(), 1);
   check("S5 通道失效时点捕获：提示条说明原因",
     world.html.children[0].textContent.includes("扩展已重载"), true);
@@ -297,7 +311,7 @@ const EXPECTED_LISTENERS = 9;
   const state = makeChrome();
   install(world, state);
   arm(state, true);
-  gesture(world, "contextmenu", { ctrlKey: false, metaKey: false, button: 0 });
+  await gesture(world, "contextmenu", { ctrlKey: false, metaKey: false, button: 0 });
   check("S6 macOS 路径：contextmenu（button=0、无修饰键）也能捕获",
     state.sent.filter((m) => m.type === "rpa-capture-result").length, 1);
 }
@@ -306,7 +320,7 @@ const EXPECTED_LISTENERS = 9;
   const state = makeChrome();
   install(world, state);
   arm(state, true);
-  gesture(world, "mousedown", { ctrlKey: false, metaKey: false, button: 2 });
+  await gesture(world, "mousedown", { ctrlKey: false, metaKey: false, button: 2 });
   check("S7 右键路径：mousedown(button=2) 也能捕获",
     state.sent.filter((m) => m.type === "rpa-capture-result").length, 1);
 }
@@ -315,7 +329,7 @@ const EXPECTED_LISTENERS = 9;
   const state = makeChrome();
   install(world, state);
   arm(state, true);
-  gesture(world, "click", { ctrlKey: true, metaKey: false });
+  await gesture(world, "click", { ctrlKey: true, metaKey: false });
   check("S8 Windows/Linux 路径：Ctrl+左键能捕获",
     state.sent.filter((m) => m.type === "rpa-capture-result").length, 1);
 }
@@ -324,7 +338,7 @@ const EXPECTED_LISTENERS = 9;
   const state = makeChrome();
   install(world, state);
   arm(state, true);
-  gesture(world, "click", { ctrlKey: false, metaKey: false });
+  await gesture(world, "click", { ctrlKey: false, metaKey: false });
   check("S9 无修饰键的普通单击不算捕获（只回显诊断）",
     state.sent.filter((m) => m.type === "rpa-capture-result").length, 0);
 }
@@ -410,7 +424,7 @@ console.log(failed ? `\n${failed} 项失败` : "\n全部通过");
   install(world, state);
   arm(state, true);
   world.fire(world.documentEmitter, "keydown", { key: "Control" });
-  gesture(world, "click", { ctrlKey: true, metaKey: false });
+  await gesture(world, "click", { ctrlKey: true, metaKey: false });
   check("S11 按住 Ctrl 完成捕获：光标还原", world.cursorStyles(), 0);
 }
 {
@@ -435,7 +449,7 @@ console.log(failed ? `\n${failed} 项失败` : "\n全部通过");
   const state = makeChrome();
   install(world, state);
   arm(state, true);
-  gesture(world, "click", { ctrlKey: true, metaKey: false });
+  await gesture(world, "click", { ctrlKey: true, metaKey: false });
   const msg = state.sent.find((m) => m.type === "rpa-capture-result");
   const selector = (msg && msg.descriptor && msg.descriptor.selector) || {};
   const path = selector.path;

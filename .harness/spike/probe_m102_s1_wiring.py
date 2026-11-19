@@ -24,6 +24,7 @@ sys.path.insert(0, str(ROOT / ".harness" / "demo" / "ppx_probe" / "app"))
 from PIL import Image  # noqa: E402
 
 from api import api as A  # noqa: E402
+from rpa_core.capture import screen_shot as ss  # noqa: E402
 
 
 def make_png(width: int, height: int) -> bytes:
@@ -45,27 +46,31 @@ def main() -> int:
             encoding="utf-8",
         )
 
-        # 浏览器腿：captureShot 就是捕获那一刻的整窗快照（810×640）
-        data_url = "data:image/png;base64," + base64.b64encode(make_png(810, 640)).decode()
+        # 浏览器腿：captureVisibleTab 的**视口图**（800×600，与视口 1:1），
+        # viewport 放**顶层**——content.js::buildDescriptor 的真实形状。
+        # 早先探针把 viewport 放在 ``selector.viewport``（host 的旧假设），真机网页
+        # 元素却没有缩略图（M102 S2b）：形状错一层，判据就只在测试里成立。
+        data_url = "data:image/png;base64," + base64.b64encode(make_png(800, 600)).decode()
         descriptor = {
             "kind": "browser",
-            "selector": {
-                "css": "#search",
-                "viewport": {"width": 800, "height": 600,
-                             "outerWidth": 810, "outerHeight": 640},
-            },
+            "selector": {"css": "#search"},
+            "viewport": {"width": 800, "height": 600,
+                         "outerWidth": 1920, "outerHeight": 1040},
             "verifyCount": 1,
             "metadata": {"rect": {"left": 100, "top": 100, "width": 100, "height": 20}},
-            "captureShot": {"dataUrl": data_url, "windowOrigin": [0, 0],
-                            "imageSize": [810, 640]},
+            "captureShot": {"dataUrl": data_url, "imageSize": [800, 600],
+                            "space": "viewport"},
         }
 
         entry = {"path": str(flow), "name": None, "suggestName": "元素1", "nodeId": None}
         A._hold_captured(entry, descriptor)
         shot = entry.get("shot")
-        print("· _hold_captured 产出缩略图:", bool(shot),
-              "尺寸:", (shot or {}).get("width"), "x", (shot or {}).get("height"))
-        if not shot:
+        size = ((shot or {}).get("width"), (shot or {}).get("height"))
+        # 只判「有没有图」不够：几何读错位置时也能出一张（兜底整图 512 长边），
+        # 那正是 S2b 现场之前一直绿着的原因。尺寸必须**恰好**是元素特写。
+        want = (100 + 2 * ss._SHOT_PAD, 20 + 2 * ss._SHOT_PAD)
+        print("· _hold_captured 产出缩略图:", bool(shot), "尺寸:", size, "期望:", want)
+        if size != want:
             print("FAIL: 捕获阶段没产出缩略图")
             return 1
 

@@ -116,7 +116,12 @@ def test_element_shot_desktop_leg_uses_box_in_window(monkeypatch):
 
 
 def test_element_shot_browser_leg_uses_browser_geometry(monkeypatch):
-    """浏览器腿走 ``browser_box_in_window``：视口 CSS 像素 ≠ 窗口像素。"""
+    """浏览器腿走 ``browser_box_in_window``：视口 CSS 像素 ≠ 窗口像素。
+
+    ★ ``viewport`` 放**顶层**。这是 ``content.js::buildDescriptor`` 的真实形状；
+    本用例原来把它写在 ``selector.viewport``，于是「读错位置 ⇒ 网页元素恒无图」
+    在测试里永远是绿的（M102 S2b 现场：桌面有截图、网页没有）。
+    """
     calls: list[object] = []
     real = ss.browser_box_in_window
 
@@ -127,10 +132,9 @@ def test_element_shot_browser_leg_uses_browser_geometry(monkeypatch):
     monkeypatch.setattr(ss, "browser_box_in_window", spy)
     descriptor = {
         "kind": "browser",
+        "viewport": {"width": 800, "height": 600, "outerWidth": 810, "outerHeight": 640},
         "metadata": {"rect": {"left": 100, "top": 100, "width": 100, "height": 20}},
-        "selector": {
-            "viewport": {"width": 800, "height": 600, "outerWidth": 810, "outerHeight": 640},
-        },
+        "selector": {"css": "#search"},
     }
     shot = element_shot_from_descriptor(
         descriptor,
@@ -138,8 +142,69 @@ def test_element_shot_browser_leg_uses_browser_geometry(monkeypatch):
     )
     assert shot is not None
     assert len(calls) == 1
+    # 读到的必须就是顶层那份（读错位置时这里是 None，图也就没了）
+    assert calls[0] == descriptor["viewport"]
     # 视口原点 8/32 → 图内 (108,132)，裁 100×20 后仍是 100×20 加 PAD
     assert (shot["width"], shot["height"]) == (100 + 2 * ss._SHOT_PAD, 20 + 2 * ss._SHOT_PAD)
+
+
+def test_element_shot_viewport_shot_uses_scale_only():
+    """视口图（扩展 ``captureVisibleTab``）：rect 已经是视口坐标 ⇒ 只乘一个缩放比。
+
+    ★ 这条用的是**真机现场的数**：视口 800 宽、窗口 1920 宽（Edge 开着侧栏）。
+    窗口图口径在这里会算出负的 origin_y（把 146 的水平边框当垂直边框），元素被判成
+    「滚出窗口」；视口图口径只看「图宽 / 视口宽」，侧栏多宽完全无关。
+    """
+    descriptor = {
+        "kind": "browser",
+        "viewport": {"width": 800, "height": 600, "outerWidth": 1920, "outerHeight": 1040},
+        "metadata": {"rect": {"left": 400, "top": 300, "width": 100, "height": 20}},
+        "selector": {"css": "#search"},
+    }
+    shot = element_shot_from_descriptor(
+        descriptor,
+        shot={
+            "dataUrl": _window_png(1600, 1200),
+            "imageSize": [1600, 1200],
+            "space": "viewport",
+        },
+    )
+    assert shot is not None
+    # dpr=2 ⇒ 元素 200×40 图内像素，加两侧 PAD；没有兜底（兜底会是 512 长边的整图）
+    assert (shot["width"], shot["height"]) == (200 + 2 * ss._SHOT_PAD, 40 + 2 * ss._SHOT_PAD)
+
+
+def test_element_shot_browser_without_viewport_falls_back_to_full_image():
+    """几何算不出来（没有视口信息）⇒ 给整图缩略图，**但绝不许猜坐标**。
+
+    浏览器腿的图就是「用户当时看到的那一页」，仍有辨识价值；而按窗口左上角硬套
+    会让元素整体偏上一截（旧 bug 的复发路径），所以宁可不裁。
+    """
+    descriptor = {
+        "kind": "browser",
+        "metadata": {"rect": {"left": 100, "top": 100, "width": 100, "height": 20}},
+        "selector": {"css": "#search"},
+    }
+    shot = element_shot_from_descriptor(
+        descriptor,
+        shot={"dataUrl": _window_png(810, 640), "windowOrigin": (0, 0), "imageSize": (810, 640)},
+    )
+    assert shot is not None
+    assert max(shot["width"], shot["height"]) == ss._SHOT_MAX_EDGE  # 整图压到长边上限
+    assert (shot["width"], shot["height"]) == (
+        ss._SHOT_MAX_EDGE,
+        max(1, int(round(640 * ss._SHOT_MAX_EDGE / 810))),
+    )
+
+
+def test_element_shot_desktop_without_rect_gives_up():
+    """桌面腿不兜底：rect 来自 UIA，缺了就是元素没了，整窗图会误导成「元素还在」。"""
+    descriptor = {"kind": "desktop", "metadata": {"windowHandle": 4242}}
+    shot = element_shot_from_descriptor(
+        descriptor,
+        shot={"dataUrl": _window_png(200, 100), "windowOrigin": (0, 0), "imageSize": (200, 100)},
+    )
+    assert shot is None
 
 
 def test_element_shot_shrinks_huge_tiles():

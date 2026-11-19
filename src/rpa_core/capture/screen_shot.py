@@ -340,6 +340,26 @@ def browser_crop_in_window(
     return {"x": cx1, "y": cy1, "width": cw, "height": ch}
 
 
+def descriptor_viewport(descriptor: dict[str, Any] | None) -> dict[str, Any] | None:
+    """浏览器描述符里的**视口信息**，读取的唯一权威。
+
+    ★ 真机形状是**顶层**：``content.js::buildDescriptor`` 把 ``viewport`` 与
+    ``selector`` 平级回传。M102 S1 只读了 ``selector.viewport``（那是更早一版 host
+    的假设，从未是真形状），于是网页元素的缩略图恒为 ``None``——而契约用例和接线
+    探针恰好也用了旧形状，一路绿到维护者现场报「桌面有图、网页没图」（2026-11-19）。
+    ``selector.viewport`` 只作为回退保留：``capture_shot_from_descriptor`` 一直认它，
+    删掉会顺手弄断那条路。
+    """
+    if not isinstance(descriptor, dict):
+        return None
+    sel = descriptor.get("selector")
+    sel = sel if isinstance(sel, dict) else {}
+    for candidate in (descriptor.get("viewport"), sel.get("viewport")):
+        if isinstance(candidate, dict):
+            return candidate
+    return None
+
+
 def browser_box_in_window(
     rect: dict[str, Any] | None,
     viewport: dict[str, Any] | None,
@@ -376,21 +396,67 @@ def browser_box_in_window(
     y = top * scale + origin_y
     w = width * scale
     h = height * scale
-    # 完全在窗口外（元素被滚出视口）⇒ 不画；部分在外 ⇒ 钳到图内，
-    # 与用户「看得出有个框贴着边」的预期一致。
+    return _clamp_box(x, y, w, h, image_size)
+
+
+def _clamp_box(
+    x: float, y: float, w: float, h: float, image_size: tuple[int, int]
+) -> dict[str, float] | None:
+    """把图内矩形钳进画面：**只收窄、不挪元素**（窗口图/视口图共用）。
+
+    完全在图外（元素被滚出视口）返回 ``None``；部分在外则裁掉越界的那截，
+    并把宽高一起收窄——只把 x 钉到 0 而不动 width，框会从 0 铺到 100，比元素宽
+    一倍，看起来「框住了旁边的东西」。
+    """
     img_w, img_h = float(image_size[0]), float(image_size[1])
     if x + w <= 0 or y + h <= 0:
         return None
     if x >= img_w or y >= img_h:
         return None
-    # 钳位必须**同时收窄**：元素横跨 -50~50 时，光把 x 钉到 0 而不动 width，框会
-    # 从 0 铺到 100——比元素宽一倍，看起来「框住了旁边的东西」。
-    # 正确做法是按被切掉的那截从宽高里扣掉。
     clamped_x = max(0.0, x)
     clamped_y = max(0.0, y)
     w = max(2.0, min(w - (clamped_x - x), img_w - clamped_x))
     h = max(2.0, min(h - (clamped_y - y), img_h - clamped_y))
     return {"x": clamped_x, "y": clamped_y, "width": w, "height": h}
+
+
+def viewport_box_in_image(
+    rect: dict[str, Any] | None,
+    viewport: dict[str, Any] | None,
+    image_size: tuple[int, int] | None,
+) -> dict[str, float] | None:
+    """**视口图**（扩展 ``captureVisibleTab``）里的元素矩形——浏览器腿的首选口径。
+
+    元素 rect 是 ``getBoundingClientRect()``，本来就是**视口 CSS 坐标**；视口图也是
+    「页面可见区域」。两者之间只差一个缩放比，**没有第二个原点**，所以：
+
+    - 不必知道浏览器窗口在哪、边框多宽、有没有侧栏；
+    - 不必减「视口顶到窗口顶」那段（那正是旧口径在 Edge 开侧栏时算出负 y、
+      判成「元素滚出窗口」的原因，2026-11-19 trace：viewport 1628 / outerWidth 1920
+      ⇒ border 被当成 146 的垂直边框，origin_y = -102.85）。
+
+    缩放比按两个方向分别算（``图宽/视口宽``、``图高/视口高``）：dpr 与浏览器缩放
+    都已经体现在图里，横竖偶尔差半像素则各用各的，不强行统一。
+    """
+    if not isinstance(rect, dict) or not isinstance(viewport, dict) or not image_size:
+        return None
+    try:
+        vw = float(viewport["width"])
+        vh = float(viewport["height"])
+        left = float(rect["left"])
+        top = float(rect["top"])
+        width = float(rect["width"])
+        height = float(rect["height"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    if vw <= 0 or vh <= 0 or width <= 0 or height <= 0:
+        return None
+    img_w, img_h = float(image_size[0]), float(image_size[1])
+    if img_w <= 0 or img_h <= 0:
+        return None
+    sx = img_w / vw
+    sy = img_h / vh
+    return _clamp_box(left * sx, top * sy, width * sx, height * sy, image_size)
 
 
 # ---------------------------------------------------------------- 取图
@@ -579,14 +645,8 @@ def capture_shot_from_descriptor(
     rect = meta.get("rect")
     rect = rect if isinstance(rect, dict) else None
     # 注意 viewport 在 descriptor **顶层**（content.js 的 viewportInfo()），
-    # 不在 selector 里 —— 早期版本读错位置，恒为 None，红框整个消失且不报错。
-    viewport = descriptor.get("viewport")
-    viewport = viewport if isinstance(viewport, dict) else None
-    if viewport is None:
-        sel = descriptor.get("selector")
-        sel = sel if isinstance(sel, dict) else {}
-        legacy = sel.get("viewport")
-        viewport = legacy if isinstance(legacy, dict) else None
+    # 也可能只剩在 selector / metadata 里（见 descriptor_viewport 的说明）。
+    viewport = descriptor_viewport(descriptor)
     shot = grab_window(hwnd, api=api)
     if shot is None:
         _trace("capture_shot", "no_window", hwnd=int(hwnd))
@@ -681,8 +741,7 @@ def element_shot_from_descriptor(
     meta = descriptor.get("metadata")
     meta = meta if isinstance(meta, dict) else {}
     rect = meta.get("rect")
-    if not isinstance(rect, dict):
-        return None
+    rect = rect if isinstance(rect, dict) else None
 
     handle = hwnd
     if not isinstance(handle, int) or isinstance(handle, bool) or handle <= 0:
@@ -703,14 +762,29 @@ def element_shot_from_descriptor(
     if not image_size or len(image_size) < 2:
         return None
 
-    if str(descriptor.get("kind") or "") == "browser":
-        viewport = descriptor.get("viewport")
-        if not isinstance(viewport, dict):
-            sel = descriptor.get("selector")
-            sel = sel if isinstance(sel, dict) else {}
-            viewport = sel.get("viewport")
-        box = browser_box_in_window(rect, viewport, image_size)  # 换算唯一权威
+    kind = str(descriptor.get("kind") or "")
+    if kind == "browser":
+        viewport = descriptor_viewport(descriptor)
+        if str(shot.get("space") or "") == "viewport":
+            # 视口图（扩展 captureVisibleTab）：rect 本来就是视口坐标 ⇒ 只有一个缩放比
+            box = viewport_box_in_image(rect, viewport, image_size)
+        else:
+            box = browser_box_in_window(rect, viewport, image_size)  # 窗口图：要减边框
+        if box is None:
+            # 兜底（M102 S2b）：浏览器腿几何算不出来时，宁可给一张整图缩略图，也不
+            # 让元素库里是个空位——那张图就是用户当时看到的那一页，仍有辨识价值。
+            # 桌面腿**不**兜底：那边的 rect 来自 UIA，缺了就是元素没了，整窗图会误导。
+            box = {
+                "x": 0.0,
+                "y": 0.0,
+                "width": float(image_size[0]),
+                "height": float(image_size[1]),
+            }
+            _trace("element_shot", "fallback_full", space=shot.get("space"), kind=kind)
     else:
+        if rect is None:
+            _trace("element_shot", "no_rect", hwnd=int(handle or 0))
+            return None
         origin = shot.get("windowOrigin")
         origin = tuple(origin) if isinstance(origin, (list, tuple)) else None
         box = box_in_window(rect, origin)  # 换算唯一权威

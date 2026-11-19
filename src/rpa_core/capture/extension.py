@@ -170,6 +170,23 @@ class ExtensionCaptureSession:
     def result(self) -> dict | None:
         return self._result
 
+    def _take_viewport_shot(self, descriptor: dict, shot: object) -> None:
+        """优先用**扩展给的视口图**当缩略图底图，拿不到再退回窗口截图。
+
+        视口图（``chrome.tabs.captureVisibleTab``）就是「页面可见区域」，与元素的
+        ``getBoundingClientRect()`` 同一个坐标系——裁剪只差一个缩放比。窗口截图那条路
+        要先猜「视口在窗口里偏了多少」，Edge 开侧栏时（真机 viewport 1628 / 窗口 1920）
+        猜出来是负的 origin_y，元素直接被判成「滚出窗口」（2026-11-19 trace）。
+
+        标记 ``space="viewport"``：同一个 ``captureShot`` 字段存在两种几何口径，
+        消费方（``element_shot_from_descriptor``）必须能分辨，否则又要各自猜一遍。
+        """
+        if isinstance(shot, str) and shot.startswith("data:image/"):
+            descriptor["captureShot"] = {"dataUrl": shot, "space": "viewport"}
+            _trace("capture_shot", "viewport", bytes=len(shot))
+            return
+        self._attach_capture_shot(descriptor)
+
     def _attach_capture_shot(self, descriptor: dict) -> None:
         """捕获成功那一刻给descriptor 挂上窗口快照（预览页签直接展示它）。
 
@@ -382,7 +399,7 @@ class ExtensionCaptureSession:
                     descriptor = message.get("descriptor")
                     if isinstance(descriptor, dict):
                         self._score_candidates(descriptor)
-                        self._attach_capture_shot(descriptor)
+                        self._take_viewport_shot(descriptor, message.get("viewportShot"))
                         self.submit(descriptor)
                     else:
                         self.submit(message)

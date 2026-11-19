@@ -2876,7 +2876,10 @@ def _hold_captured(entry: dict[str, Any], descriptor: dict[str, Any]) -> dict[st
     #   盖在目标窗口上，等到 commit 再截，截到的就是自己的对话框。浏览器腿更直接
     #   ——捕获时挂上的 ``captureShot`` 就是那一刻的整窗快照，复用它连截屏都省了。
     #   存盘仍归 ``_do_commit``：用户点取消不该在盘上留一张孤儿 png。
-    entry["shot"] = _capture_element_shot(doc, descriptor.get("captureShot"))
+    # ★ 传**原始捕获结果**而不是上面归一化出来的 ``doc``：``viewport`` 在描述符顶层，
+    #   经 ``ElementDescriptor`` 会被 `extra="ignore"` 丢掉，网页元素的缩略图因此恒为
+    #   None（M102 S2b 现场：桌面有图、网页没图）。几何归原始产出，落盘才归 doc。
+    entry["shot"] = _capture_element_shot(descriptor)
     entry["preview"] = {
         "name": entry.get("name") or entry.get("suggestName"),
         "kind": doc["kind"],
@@ -2889,10 +2892,17 @@ def _hold_captured(entry: dict[str, Any], descriptor: dict[str, Any]) -> dict[st
     return doc
 
 
-def _capture_element_shot(doc: dict[str, Any], shot: Any) -> dict[str, Any] | None:
-    """捕获那一刻的元素缩略图（PNG + 尺寸）；拿不到就 None，绝不影响捕获结果。"""
+def _capture_element_shot(descriptor: dict[str, Any]) -> dict[str, Any] | None:
+    """捕获那一刻的元素缩略图（PNG + 尺寸）；拿不到就 None，绝不影响捕获结果。
+
+    入参是**原始捕获结果**（含顶层 ``viewport`` 与 ``captureShot``），不是落盘的
+    ``ElementDescriptor`` 文档——文档会丢掉顶层 ``viewport``，网页腿就再也算不出位置。
+    """
     try:
-        return element_shot_from_descriptor(doc, shot=shot if isinstance(shot, dict) else None)
+        shot = descriptor.get("captureShot") if isinstance(descriptor, dict) else None
+        return element_shot_from_descriptor(
+            descriptor, shot=shot if isinstance(shot, dict) else None
+        )
     except Exception:  # noqa: BLE001 - 缩略图是增强，不能把成功的捕获拖成失败
         return None
 

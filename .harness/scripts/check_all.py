@@ -83,6 +83,11 @@ PURE_FUNCTION_SCRIPTS = (
     # 看起来像功能没实现而不是键名对不上。必须**真跑一次求值 + 与 host 换算函数交叉对账**
     # ——Python 读源码只能证明「文件里出现过 left」，证明不了键名真对得上。
     "check_capture_descriptor_rect.mjs",
+    # 网页元素缩略图的取图通道（M102 S2b）：content 的取图函数（四种回包真跑）、
+    # background 的 viewportShot 透传与 rpa-shot-request 接线、两端 type 常量对账。
+    # 2026-11-19 现场「桌面有截图、网页没有」正是这三段各错一点叠出来的——
+    # Python 契约测试只管「拿到数据能不能算对」，管不到「数据有没有被带过去」。
+    "check_capture_shot.mjs",
     # 捕获脚本的**实例生命周期**（content.js，M42）：可接管守卫（活实例拦人、僵尸实例
     # 先拆干净再接管）、僵尸在 mousemove 下不再留框、失败路径只收框不留残影。
     # 这几个语义只在浏览器里跑：Python 读源码最多证明「写了 if (previous.alive())」。

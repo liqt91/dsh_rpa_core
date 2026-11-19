@@ -15,7 +15,7 @@ const HOST_NAME = "com.rpa_core.ext_bridge";
 // 快照（2026-09-29 真机排障：仓库已修好「已开网页无红框」，但浏览器还跑着旧 background，
 // 表现成「修复无效」）。把标识随 ack/进度/结果回传，host 侧对账即可判「扩展过期」，
 // 不用再靠症状猜。
-const EXT_BUILD = "0.9.3";
+const EXT_BUILD = "0.9.4";
 const RECONNECT_MS = 3000;      // 断开后的重连退避
 const ALARM_NAME = "rpa-bridge-reconnect";  // SW 被回收时的兜底拉起（MV3 alarm 最小 30s）
 const PERMISSION_KEY = "rpaExecPermission";
@@ -485,15 +485,71 @@ chrome.tabs.onUpdated.addListener(async (tabId, info) => {
   if (await isCaptureArmed()) armTab(tabId, true);
 });
 
+// ---------------------------------------------------------------- 视口截图（M102 S2b）
+// 元素缩略图的**权威图源**：captureVisibleTab 给的就是「页面可见区域」，与元素的
+// getBoundingClientRect() 同一个坐标系，host 侧只要按「图宽 / 视口宽」放大就能裁准。
+// 窗口截图那条路要先猜「视口在窗口里偏了多少」——Edge 开侧栏时真机算出负的
+// origin_y，元素直接被判成「滚出窗口」（2026-11-19 trace：viewport 1628 / 窗口 1920）。
+//
+// 为什么在 background 截：content script 没有这个 API。为什么转 JPEG：1920×1040 的
+// 页面 PNG base64 后 1~3MB，native messaging 的单条消息扛不住；缩略图最终只显示几百
+// 像素，q=0.9 的 JPEG 看不出差别，而**坐标完全不变**，裁剪精度不受影响。
+const SHOT_JPEG_QUALITY = 0.9;
+
+async function shrinkToJpeg(dataUrl) {
+  try {
+    const blob = await (await fetch(dataUrl)).blob();
+    const bitmap = await createImageBitmap(blob);
+    const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
+    canvas.getContext("2d").drawImage(bitmap, 0, 0);
+    const out = await canvas.convertToBlob({ type: "image/jpeg", quality: SHOT_JPEG_QUALITY });
+    const encoded = await new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result || ""));
+      reader.onerror = () => reject(reader.error);
+      reader.readAsDataURL(out);
+    });
+    return encoded.startsWith("data:image/jpeg") ? encoded : null;
+  } catch {
+    return null;   // 压缩失败就用原 PNG：宁可大一点，也别没图
+  }
+}
+
+async function captureVisibleShot() {
+  let dataUrl = null;
+  try {
+    dataUrl = await chrome.tabs.captureVisibleTab(
+      chrome.windows.WINDOW_ID_CURRENT, { format: "png" });
+  } catch {
+    return null;   // 无权限/页面不可见/配额：捕获本身不该因此失败
+  }
+  if (typeof dataUrl !== "string" || !dataUrl.startsWith("data:image/")) return null;
+  return (await shrinkToJpeg(dataUrl)) || dataUrl;
+}
+
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg && msg.type === "rpa-capture-state") {
     isCaptureArmed().then((armed) => sendResponse({ armed }));
     return true;   // 异步应答
   }
+  if (msg && msg.type === "rpa-shot-request") {
+    // content 在**点击那一刻**请求，此时用户眼前的页面就是刚捕获的那一页
+    captureVisibleShot().then((dataUrl) => {
+      sendResponse(dataUrl ? { ok: true, dataUrl } : { ok: false });
+    });
+    return true;
+  }
   if (msg && msg.type === "rpa-capture-result") {
     // contentBuild：页面里 content script 自己报的构建标识——background 是新的不代表
     // 页面里的脚本是新的（补注入前的那份可能还是扩展上次加载时的快照）
-    sendCapture({ descriptor: msg.descriptor, contentBuild: msg.contentBuild });
+    // viewportShot：捕获那一刻的视口图（M102 S2b）。**必须显式透传**：这里若只挑
+    // descriptor/contentBuild 两个字段，图在 background 就被丢掉，host 侧永远收不到，
+    // 表现是「网页元素没有缩略图」而链路上每一段都「看起来没问题」。
+    sendCapture({
+      descriptor: msg.descriptor,
+      contentBuild: msg.contentBuild,
+      viewportShot: msg.viewportShot,
+    });
     sendResponse({ ok: true });
     return true;
   }
