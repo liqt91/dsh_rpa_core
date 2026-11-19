@@ -506,3 +506,22 @@ locator 里（`image_proposal.py:151`），运行期由 `executors/image_target.
 右栏大图。判断依据：trace 里 `capture_shot mark=viewport` 出现，且 `element_shot mark=ok`
 的 `crop` 落在视口坐标范围内；若出现 `fallback_full` 说明几何仍没算出来（此时有整图，但
 不是特写）。
+
+## S2c（现场复验后）：视口图没有 imageSize，消费侧静默放弃
+
+维护者重载扩展 0.9.4 后再抓网页元素，「还是没有截图」。trace 铁证：
+`capture_shot mark=viewport` 有、`element_shot` 一行没有（连 `no_box` 都没有）。
+
+根因不在几何，而在**字段契约**：`_take_viewport_shot` 只挂 `{"dataUrl", "space"}`，
+`element_shot_from_descriptor` 却硬性要求 `imageSize`，缺失就 `return None` 且不打任何
+trace。S2b 的探针和契约都自己塞了 `imageSize` —— 判据形状 ≠ 生产接线形状，又是假绿。
+
+改法：消费侧新增 `data_url_image_size`，从 dataUrl 只读图像头量尺寸；仍量不出来时打
+`element_shot no_image_size` 再放弃。上游不必多传一个自己也未必知道的字段。
+
+判据：
+- 两个探针改成真机形状（captureShot 只有 dataUrl + space），**先证红再证绿**；
+- 新契约 `test_element_shot_viewport_shot_without_image_size`；
+- `probe_m102_s2c_negative.py` 1 注入：期望 pytest 1 / node 0 / 两探针红；
+- 既有 7 注入的期望集补上新用例（同一因连带，非误红）后复跑；
+- 全量 1076 passed。本次只改 Python，**需重启 ppx**，扩展不必再动。

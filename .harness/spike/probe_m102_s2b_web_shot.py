@@ -29,9 +29,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / ".harness" / "demo" / "ppx_probe" / "app"))
 
+from api import api as A  # noqa: E402
 from PIL import Image  # noqa: E402
 
-from api import api as A  # noqa: E402
 from rpa_core.capture import screen_shot as ss  # noqa: E402
 
 PAD = ss._SHOT_PAD
@@ -83,9 +83,11 @@ def _size(shot: dict | None) -> tuple:
 def main() -> int:
     failures: list[str] = []
 
-    # 1. 真机视口图：图就是视口（1628×996），rect 是视口坐标 ⇒ 只差缩放比 1
+    # 1. 真机视口图：图就是视口（1628×996），rect 是视口坐标 ⇒ 只差缩放比 1。
+    #    ★ 只给 dataUrl + space，与 host::_take_viewport_shot 的产出逐字段一致——
+    #    它**不**给 imageSize（2026-11-20「还是没有截图」的根因就藏在这）。
     real = _shot(1628, 996)
-    real["space"] = "viewport"
+    real = {"dataUrl": real["dataUrl"], "space": "viewport"}
     got = _hold(_browser(REAL_RECT, REAL_VIEWPORT, real))
     print("1. 真机视口图:", _size(got), "期望", (54 + 2 * PAD, 54 + 2 * PAD))
     if _size(got) != (54 + 2 * PAD, 54 + 2 * PAD):

@@ -54,7 +54,9 @@ CASES = [
         # 这是**同一因**的两条断言，不是误红
         "expected": {
             "pytest": {T + "test_element_shot_browser_leg_uses_browser_geometry",
-                       T + "test_element_shot_viewport_shot_uses_scale_only"},
+                       T + "test_element_shot_viewport_shot_uses_scale_only",
+                       # 新用例的 viewport 也在顶层：读不到同样只能兜底整图，尺寸就不对
+                       T + "test_element_shot_viewport_shot_without_image_size"},
             "s2b": True, "wiring": True, "node": set(),
         },
     },
@@ -63,7 +65,9 @@ CASES = [
         "file": SHOT,
         "edits": [('        if str(shot.get("space") or "") == "viewport":', "        if False:")],
         "expected": {
-            "pytest": {T + "test_element_shot_viewport_shot_uses_scale_only"},
+            "pytest": {T + "test_element_shot_viewport_shot_uses_scale_only",
+                       # 新用例的视口也只有 width/height：当成窗口图算会走错原点 ⇒ 红
+                       T + "test_element_shot_viewport_shot_without_image_size"},
             "s2b": True, "wiring": True, "node": set(),
         },
     },

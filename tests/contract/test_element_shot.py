@@ -174,6 +174,31 @@ def test_element_shot_viewport_shot_uses_scale_only():
     assert (shot["width"], shot["height"]) == (200 + 2 * ss._SHOT_PAD, 40 + 2 * ss._SHOT_PAD)
 
 
+def test_element_shot_viewport_shot_without_image_size():
+    """视口图**没有 imageSize**：host 只挂 dataUrl + space，尺寸必须从图自己量。
+
+    ★ 2026-11-20 真机「网页元素还是没有截图」的根因：trace 里
+    ``capture_shot mark=viewport`` 打了、``element_shot`` 一行都没有——消费侧看到
+    imageSize 缺失就静默 return None（连 trace 都不打）。上一条用例自己塞了
+    imageSize，所以判据一路绿到维护者现场。
+    """
+    descriptor = {
+        "kind": "browser",
+        "viewport": {"width": 100, "height": 80},
+        "metadata": {"rect": {"left": 10, "top": 20, "width": 30, "height": 12}},
+        "selector": {"css": "#search"},
+    }
+    shot = element_shot_from_descriptor(
+        descriptor,
+        shot={"dataUrl": _window_png(100, 80), "space": "viewport"},
+    )
+    assert shot is not None
+    assert (shot["width"], shot["height"]) == (
+        30 + 2 * ss._SHOT_PAD,
+        12 + 2 * ss._SHOT_PAD,
+    )
+
+
 def test_element_shot_browser_without_viewport_falls_back_to_full_image():
     """几何算不出来（没有视口信息）⇒ 给整图缩略图，**但绝不许猜坐标**。
 

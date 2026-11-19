@@ -570,6 +570,28 @@ def data_len(shot: dict[str, Any]) -> int:
     return len(url.split(",", 1)[1])
 
 
+def data_url_image_size(data_url: object) -> tuple[int, int] | None:
+    """从 dataUrl 量出图的像素尺寸（只读图像头，不解码整张像素）。
+
+    ★ 扩展 ``captureVisibleTab`` 回来的视口图只有 ``dataUrl`` + ``space``，
+    **不带 imageSize**——host 的 ``_take_viewport_shot`` 没理由知道自己拿到的
+    图有多大。2026-11-20 真机「网页元素还是没有截图」就死在这里：trace 里
+    ``capture_shot mark=viewport`` 打了，``element_shot`` 一行都没有，因为
+    消费侧看到 imageSize 缺失就静默 ``return None``。让消费方量图，比要求
+    上游多传一个必须记得同步的字段可靠。
+    """
+    if not isinstance(data_url, str) or "," not in data_url:
+        return None
+    try:
+        from PIL import Image
+
+        payload = data_url.split(",", 1)[1]
+        with Image.open(io.BytesIO(base64.b64decode(payload))) as img:
+            return int(img.width), int(img.height)
+    except Exception:  # noqa: BLE001 - 图坏了当没图，缩略图是增强
+        return None
+
+
 # ---------------------------------------------------------------- 服务层
 
 def browser_preview_shot(verify_result: dict[str, Any]) -> dict[str, Any] | None:
@@ -760,6 +782,10 @@ def element_shot_from_descriptor(
     image_size = shot.get("imageSize")
     image_size = tuple(image_size) if isinstance(image_size, (list, tuple)) else None
     if not image_size or len(image_size) < 2:
+        # 视口图没有 imageSize（见 data_url_image_size）：从图自己量。
+        image_size = data_url_image_size(shot.get("dataUrl"))
+    if not image_size or len(image_size) < 2:
+        _trace("element_shot", "no_image_size", space=shot.get("space"))
         return None
 
     kind = str(descriptor.get("kind") or "")

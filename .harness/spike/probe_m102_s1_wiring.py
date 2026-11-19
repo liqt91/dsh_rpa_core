@@ -21,9 +21,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / ".harness" / "demo" / "ppx_probe" / "app"))
 
+from api import api as A  # noqa: E402
 from PIL import Image  # noqa: E402
 
-from api import api as A  # noqa: E402
 from rpa_core.capture import screen_shot as ss  # noqa: E402
 
 
@@ -58,8 +58,10 @@ def main() -> int:
                          "outerWidth": 1920, "outerHeight": 1040},
             "verifyCount": 1,
             "metadata": {"rect": {"left": 100, "top": 100, "width": 100, "height": 20}},
-            "captureShot": {"dataUrl": data_url, "imageSize": [800, 600],
-                            "space": "viewport"},
+            # ★ 真机形状：host 的 _take_viewport_shot 只挂 dataUrl + space，
+            # **没有 imageSize**。早先探针自己塞了 imageSize，于是这次 bug
+            # （消费侧静默 return None）一路绿到维护者现场报「还是没有截图」。
+            "captureShot": {"dataUrl": data_url, "space": "viewport"},
         }
 
         entry = {"path": str(flow), "name": None, "suggestName": "元素1", "nodeId": None}

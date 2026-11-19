@@ -474,7 +474,7 @@
     },
     {
       "id": "xhs-element-library",
-      "title": "Editor element library: capture guard + M92-M102 (groups, tree, dock, verify wake, scan, viewport shots, split pane)",
+      "title": "Editor element library: M92-M102 (groups, tree, dock, verify wake, scan, viewport shots + size, split pane)",
       "passes": true
     },
     {
