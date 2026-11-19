@@ -40,11 +40,16 @@ def _invocation(inputs: dict) -> CommandInvocation:
 class _RecordingExt:
     """同时记录 page.call 与 cdp.click：用来证明「走了哪条通道」。"""
 
-    def __init__(self, cdp_error: Exception | None = None) -> None:
+    def __init__(self, cdp_error: Exception | None = None, version: str | None = "0.9.7") -> None:
         self.page_calls: list[dict] = []
         self.cdp_calls: list[dict] = []
         self.cdp_error = cdp_error
+        self.version = version
         self.client = type("C", (), {"status": lambda self: {"online": True}})()
+
+    def ext_version(self, target_host=None):
+        """执行器用它做版本对账（M107 S2：旧扩展没有 cdp.click 这个 op）。"""
+        return self.version
 
     def page_call(
         self, tab_id, selector, method, *, args=None, timeout_seconds=1, target_host=None
@@ -181,3 +186,44 @@ def test_cdp_precheck_failure_does_not_try_candidates_for_main_selector():
     assert caught.value.code == "ELEMENT_COVERED"
     # 主选择器就抛了，没有进入候选循环
     assert len(ext.cdp_calls) == 1
+
+
+# ---- 版本对账：旧扩展没有 cdp.click，必须点名而不是「unsupported op」 ---------
+#
+# 实测过的真实事故（2026-11-19）：同一台机器上 Chrome 装 0.9.2、Edge 装 0.9.7，
+# 流程写 `browserType=chrome` ⇒ `cdp.click` 被旧扩展回 `unsupported op`，
+# 看起来像 CDP 通道坏了。以下三条把「报清楚」钉住。
+
+
+@pytest.mark.parametrize("version", ["0.9.2", "0.8.9", "0.9.6"])
+def test_outdated_extension_fails_with_actionable_code(version):
+    ext = _RecordingExt(version=version)
+    result = _run_click(ext, {"selector": "#ok", "injection": "cdp"})
+    assert result.status == "error"
+    error = result.error
+    assert error.code == "EXTENSION_OUTDATED"
+    # 必须点名三件事：哪个浏览器、装的是哪版、要哪版——否则用户还得回来问
+    assert error.details["browser"] == "msedge"
+    assert error.details["extVersion"] == version
+    assert error.details["requiredVersion"] == "0.9.7"
+    assert "重新加载" in error.message
+    # 关键：一个事件都没派发（不是「点了但不 trusted」）
+    assert ext.cdp_calls == []
+    assert ext.page_calls == []
+
+
+@pytest.mark.parametrize("version", ["0.9.7", "0.10.0", "1.0.0", None])
+def test_current_or_unknown_version_proceeds(version):
+    """版本够、或根本探测不到版本时都要放行——探测抖动不能拦下能跑的流程。"""
+    ext = _RecordingExt(version=version)
+    result = _run_click(ext, {"selector": "#ok", "injection": "cdp"})
+    assert result.status == "success", result.error
+    assert len(ext.cdp_calls) == 1
+
+
+def test_outdated_extension_does_not_affect_dom_channel():
+    """只有 cdp 通道受版本影响：`injection=dom` 在 0.9.2 上照旧能用。"""
+    ext = _RecordingExt(version="0.9.2")
+    result = _run_click(ext, {"selector": "#ok"})
+    assert result.status == "success", result.error
+    assert [call["method"] for call in ext.page_calls] == ["click"]

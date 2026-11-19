@@ -264,6 +264,31 @@ class ExtensionExecSession:
             timeout_seconds=timeout_seconds, target_host=target_host,
         )
 
+    def ext_version(self, target_host: str | None = None) -> str | None:
+        """目标浏览器上**在线**扩展的版本号；取不到就返回 ``None``。
+
+        用途只有一个：在使用「只有新版本才有」的 op 之前先对账。M107 实测踩过——
+        同一个人在 Chrome 里装的是 0.9.2、Edge 里是 0.9.7，而流程写的是
+        ``browserType=chrome``，于是 ``cdp.click`` 被旧扩展回一句
+        ``unsupported op: cdp.click``，看起来像「通道坏了」。
+
+        ★ **取不到就返回 None、由调用方决定放行**：这里不做「未知即失败」的判断，
+        否则一次状态探测抖动就会把本来能跑的流程拦下来。
+        """
+        try:
+            status = self._client.status()
+        except Exception:  # noqa: BLE001 - 探测失败按「未知」处理，不改变主流程
+            return None
+        for instance in status.get("instances") or []:
+            if not isinstance(instance, dict):
+                continue
+            if target_host and instance.get("browser") != target_host:
+                continue
+            version = instance.get("extVersion")
+            if version:
+                return str(version)
+        return None
+
     # -- Cookie（chrome.cookies，浏览器级） ----------------------------------
 
     # Cookie：作用域 url 由扩展按**会话绑定的标签页**推导（`args.url || tabUrl(args.tabId)`），

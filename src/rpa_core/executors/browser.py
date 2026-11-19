@@ -78,6 +78,44 @@ def _injection_mode(inputs: dict[str, Any]) -> str:
     return "cdp" if str(inputs.get("injection") or "").strip().lower() == "cdp" else "dom"
 
 
+# `injection=cdp` 需要的**最低扩展版本**：`debugger` 权限与 `cdp.click` 从 0.9.7 起才有。
+# 为什么在 host 侧对账而不是等扩展报错：旧扩展面对未知 op 只会回一句
+# `unsupported op: cdp.click`，里面既没有「哪个浏览器」也没有「装的哪一版」——
+# 实测就是这样把一次版本不同步误读成「CDP 通道坏了」，白查一轮。
+_CDP_MIN_EXT_VERSION = (0, 9, 7)
+_CDP_REQUIRED = ".".join(str(part) for part in _CDP_MIN_EXT_VERSION)
+
+
+def _version_tuple(raw: Any) -> tuple[int, ...]:
+    """``"0.9.7"`` → ``(0, 9, 7)``；遇到解析不出的段就停（``"0.9.7-beta"`` 也能比）。"""
+    parts: list[int] = []
+    for chunk in str(raw or "").split("."):
+        digits = "".join(ch for ch in chunk if ch.isdigit())
+        if not digits:
+            break
+        parts.append(int(digits))
+    return tuple(parts)
+
+
+def _ext_outdated(version: str | None) -> bool:
+    """扩展版本是否**明确**低于 `injection=cdp` 的要求。
+
+    ``None``（探测不到）与解析不出的一律按「不落后」处理——宁可放行让它去试，
+    也不要因为一次状态探测抖动把本来能跑的流程拦下来。
+    """
+    parsed = _version_tuple(version)
+    return bool(parsed) and parsed < _CDP_MIN_EXT_VERSION
+
+
+def _outdated_message(target_host: str, version: str | None) -> str:
+    """告诉用户「哪个浏览器、装的哪版、要哪版、怎么修」——少一样他就得回来问一遍。"""
+    return (
+        f"{target_host} 里加载的插件是 {version}，「调试协议真事件」需要 ≥ {_CDP_REQUIRED}："
+        f"请到 {target_host} 的扩展管理页对 rpa_core 插件点一次「重新加载」，"
+        "或把节点的「浏览器类型」改成插件已更新的那个（两个浏览器各装一份、版本常常不同步）。"
+    )
+
+
 # 已带 scheme（http(s)/file/data/about 等）则原样保留；否则默认补 https（对用户友好）
 _SCHEME_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9+.-]*:")
 
@@ -1083,10 +1121,30 @@ class PlaywrightExecutor(CommandExecutor):
         target_host: str,
     ) -> CommandResult:
         # CDP 真事件点击走独立通道（M107 第 2 层）：事件由浏览器生成，不经页面 dispatchEvent
-        if command == "browser.click" and _injection_mode(inputs) == "cdp":
-            return await self._ext_cdp_click(
-                invocation, inputs, session_id, tab_id, selector, timeout_s, target_host,
-            )
+        #
+        # ★ 这里刻意写成**两层 if**而不是 `command == "browser.click" and cdp`：
+        # `check_error_contract` 的 `_command_names` 只认裸 `Compare` 的 `if` 测试，
+        # `and` 会构成 BoolOp、整条分支对它隐形 ⇒ `EXTENSION_OUTDATED` 的声明面从此
+        # 无人校验（那条门禁的 docstring 里把这种形状记为已知盲区）。嵌套后字面量
+        # 仍是裸比较、分支体也被整棵收集。
+        if command == "browser.click":
+            if _injection_mode(inputs) == "cdp":
+                ext_version = await asyncio.to_thread(self._ext.ext_version, target_host)
+                if _ext_outdated(ext_version):
+                    return CommandResult.failure(
+                        ErrorCode.EXTENSION_OUTDATED,
+                        _outdated_message(target_host, ext_version),
+                        details={
+                            "channel": "extension",
+                            "browser": target_host,
+                            "extVersion": ext_version,
+                            "requiredVersion": _CDP_REQUIRED,
+                            "reason": "extension_outdated",
+                        },
+                    )
+                return await self._ext_cdp_click(
+                    invocation, inputs, session_id, tab_id, selector, timeout_s, target_host,
+                )
         method = _EXT_PAGE_METHODS[command]
         resource = f"browser.session:{session_id}:selector:{selector}"
         payload, fallback = await self._page_call_with_fallback(
@@ -1157,6 +1215,10 @@ class PlaywrightExecutor(CommandExecutor):
 
         `simulateHuman` 在这里不生效——CDP 派发的本来就是完整真事件链
         （mouseMoved → mousePressed → mouseReleased），没有「最短路径」可走。
+
+        版本对账不在这里做：`ErrorCode.EXTENSION_OUTDATED` 的返回点必须留在
+        `_ext_page_command` 的 `command == "browser.click"` 分支里，否则
+        `check_error_contract` 看不见它（见那边的注释）。
         """
         args = {
             "clickPosition": inputs.get("clickPosition") or "center",

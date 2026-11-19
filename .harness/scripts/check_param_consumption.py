@@ -133,10 +133,21 @@ def _is_carrier(node: ast.AST, names: set[str]) -> bool:
 
 
 def _command_names(test: ast.AST) -> list[str]:
-    """从 `command == "x"` / `invocation.command_id == "x"` / `... in (...)` 取字面量命令名。"""
+    """从 `command == "x"` / `invocation.command_id == "x"` / `... in (...)` 取字面量命令名。
+
+    **复合条件也要下钻**（M107 实测补的洞）：`if command == "browser.click" and cdp:`
+    的测试是 `BoolOp`，早先直接 `return []` ⇒ **整条分支对错误契约与参数消费两道门禁
+    同时隐形**，而它照样在跑。那时只能用「两层 if」绕过去；现在两处口径都能看见复合条件，
+    但两个门禁共用本函数，改这里等于同时改两条判据的覆盖面。
+    """
+    if isinstance(test, ast.BoolOp):
+        names: list[str] = []
+        for value in test.values:
+            names.extend(_command_names(value))
+        return names
     if not isinstance(test, ast.Compare) or not _is_carrier(test.left, COMMAND_CARRIERS):
         return []
-    names: list[str] = []
+    names = []
     for op, comparator in zip(test.ops, test.comparators, strict=True):
         if isinstance(op, (ast.Eq, ast.In)):
             names.extend(_literal_strings(comparator))

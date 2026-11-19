@@ -149,7 +149,8 @@
     "EXECUTOR_FAILED",
     "ELEMENT_COVERED",
     "ELEMENT_DISABLED",
-    "ELEMENT_NOT_VISIBLE"
+    "ELEMENT_NOT_VISIBLE",
+    "EXTENSION_OUTDATED"
   ],
   "implementation": {
     "handler": "browser.playwright:click"

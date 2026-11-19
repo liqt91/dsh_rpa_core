@@ -22,6 +22,12 @@ class ErrorCode(StrEnum):
     ELEMENT_COVERED = "ELEMENT_COVERED"
     ELEMENT_DISABLED = "ELEMENT_DISABLED"
     ELEMENT_NOT_VISIBLE = "ELEMENT_NOT_VISIBLE"
+    # M107 S2：目标协议 op（如 `cdp.click`）**只有新版本扩展才有**。同一个人机器上
+    # 两个浏览器各自装着一份插件、版本可以差好几个小版本（实测 Chrome 0.9.2 /
+    # Edge 0.9.7），而流程只写了 `browserType`。此时旧扩展只会回一句
+    # `unsupported op`，看起来像通道坏了 ⇒ 单列一个码，直接说「哪个浏览器、装的
+    # 是哪版、要哪版」，用户照着点一下「重新加载」就好了。
+    EXTENSION_OUTDATED = "EXTENSION_OUTDATED"
     SESSION_NOT_FOUND = "SESSION_NOT_FOUND"
     SESSION_LOST = "SESSION_LOST"
     TIMEOUT = "TIMEOUT"
