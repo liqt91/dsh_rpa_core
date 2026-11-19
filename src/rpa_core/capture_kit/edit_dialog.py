@@ -55,6 +55,8 @@ _ID_PREVIEW = 205
 _ID_INFO = 206
 # 动态控件 id 起点（网页层级勾选 / 属性行）
 _ID_LEVEL_BASE = 1000
+# 层级行左端的小复选框（与行文字分开：点文字只看属性，点方框才切勾选）
+_ID_LEVEL_CHECK_BASE = 1100
 _ID_ATTR_BASE = 2000
 # 桌面层级勾选 / 桌面属性行（与网页层级分开，免得两种形态互相抢 cid）
 _ID_NODE_BASE = 3000
@@ -95,6 +97,7 @@ class ElementEditDialog:
         self._selected = 0
         self._level_scroll = 0
         self._level_boxes: list[int] = []
+        self._level_check_boxes: list[int] = []
         self._attr_controls: list[int] = []
         self._control_map: dict[int, tuple] = {}
         # 桌面层级形态状态（nodes / descriptor 由内核编辑模型提供）
@@ -293,21 +296,31 @@ class ElementEditDialog:
         )
         control("STATIC", "层级（勾选参与定位）", 0, 16, 46, 240, 20, 207)
         control("STATIC", "属性（勾选参与本层定位）", 0, 312, 46, 280, 20, 208)
-        # 层级勾选：点哪层，右栏就编辑哪层（勾选与选中同一击，与影刀的 tree 一致）
+        # 层级行 = 文字（只选中查看属性）+ 左端小方框（才切换勾选）。
+        # 旧实现整行是 BS_AUTOCHECKBOX：点文字就切勾选，和目标级整行禁用一样反直觉。
         self._level_boxes = []
+        self._level_check_boxes = []
         for index, level in enumerate(self._levels):
+            # 行文字与小方框必须**分家**：旧实现行是 BS_CHECKBOX 且 x=16，
+            # 与 BS_AUTOCHECKBOX 小方框完全重叠；行那个勾框从没设过状态（恒空），
+            # 鼠标扫过时 Windows 重绘 hot 态，空框盖住小方框的勾看起来像“勾没了”。
+            # 现在行是纯文字按钮（无勾框），从 x=44 起；只有 x=16 的 box 表示 included。
+            row = control(
+                "BUTTON", selector_tree.summary(level),
+                win32con.BS_LEFT | win32con.BS_FLAT,  # 只选中看属性，不画勾框
+                44, 70 + index * 32, 252, 26, _ID_LEVEL_BASE + index,
+            )
             box = control(
-                "BUTTON", selector_tree.summary(level), win32con.BS_AUTOCHECKBOX,
-                16, 70 + index * 32, 280, 26, _ID_LEVEL_BASE + index,
+                "BUTTON", "", win32con.BS_AUTOCHECKBOX,
+                16, 70 + index * 32, 20, 26, _ID_LEVEL_CHECK_BASE + index,
             )
             win32gui.SendMessage(
                 box, win32con.BM_SETCHECK, 1 if level["included"] else 0, 0
             )
             self._control_map[_ID_LEVEL_BASE + index] = ("level", index)
-            # 目标级（链尾）不许勾掉：锁勾选
-            if index == len(self._levels) - 1:
-                win32gui.EnableWindow(box, False)
-            self._level_boxes.append(box)
+            self._control_map[_ID_LEVEL_CHECK_BASE + index] = ("level_check", index)
+            self._level_boxes.append(row)
+            self._level_check_boxes.append(box)
         self._setup_level_scroll(hwnd)
         self._rebuild_attr_pane(hwnd)
         control("STATIC", "组合选择器", 0, 16, 402, 200, 20, 209)
@@ -346,14 +359,25 @@ class ElementEditDialog:
         import win32con
         import win32gui
 
-        for index, box in enumerate(self._level_boxes):
-            row = index - self._level_scroll
-            visible = 0 <= row < _LEVEL_ROWS
+        for index, (row, box) in enumerate(
+            zip(self._level_boxes, self._level_check_boxes, strict=True)
+        ):
+            line = index - self._level_scroll
+            visible = 0 <= line < _LEVEL_ROWS
+            y = 70 + line * 32
+            # 行文字与小方框分开摆放：box 在 x=16，row 从 x=44 起，互不覆盖
             win32gui.SetWindowPos(
-                box, 0, 16, 70 + row * 32, 0, 0,
+                box, 0, 16, y, 0, 0,
                 win32con.SWP_NOSIZE | win32con.SWP_NOZORDER,
             )
-            win32gui.ShowWindow(box, win32con.SW_SHOW if visible else win32con.SW_HIDE)
+            win32gui.SetWindowPos(
+                row, 0, 44, y, 0, 0,
+                win32con.SWP_NOSIZE | win32con.SWP_NOZORDER,
+            )
+            for handle in (row, box):
+                win32gui.ShowWindow(
+                    handle, win32con.SW_SHOW if visible else win32con.SW_HIDE
+                )
 
     def _on_vscroll(self, hwnd, wparam) -> None:
         """滚动层级区：行/页/拖块三档都收（桌面节点与网页层级各走各的偏移）。"""
@@ -656,6 +680,18 @@ class ElementEditDialog:
         if role == "attr_check" and notif == 0:
             box = win32gui.GetDlgItem(hwnd, cid)
             row["required"] = bool(win32gui.SendMessage(box, win32con.BM_GETCHECK, 0, 0))
+            # 与网页层级同一口径：勾上属性 ⇒ 所在节点参与定位。readonly 节点
+            # （窗口信息行）的属性本身禁勾，不会被改到；目标级本来就恒参与。
+            node = self._nodes[self._selected_node]
+            selected = selector_tree.included_after_attr_check(
+                node.get("selected", False), row["required"]
+            )
+            if selected != bool(node.get("selected")):
+                node["selected"] = selected
+                win32gui.SendMessage(
+                    self._node_boxes[self._selected_node],
+                    win32con.BM_SETCHECK, 1 if selected else 0, 0,
+                )
             self._refresh_desktop_preview()
         elif role == "attr_value" and notif == win32con.EN_CHANGE:
             edit = win32gui.GetDlgItem(hwnd, cid)
@@ -728,19 +764,37 @@ class ElementEditDialog:
         if meta is None:
             return
         role = meta[0]
-        if role == "level" and notif == 0:  # BN_CLICKED
+        if role == "level" and notif == 0:  # BN_CLICKED：只选中看属性，不改勾选
+            self._selected = meta[1]
+            self._rebuild_attr_pane(hwnd)
+            return
+        if role == "level_check" and notif == 0:  # 点左端小方框才切 included
             index = meta[1]
             box = win32gui.GetDlgItem(hwnd, cid)
-            self._levels[index]["included"] = bool(
-                win32gui.SendMessage(box, win32con.BM_GETCHECK, 0, 0)
+            wanted = bool(win32gui.SendMessage(box, win32con.BM_GETCHECK, 0, 0))
+            included = selector_tree.level_included_after_toggle(
+                len(self._levels), index, wanted
             )
-            self._selected = index
-            self._rebuild_attr_pane(hwnd)
+            if included != wanted:  # 目标级点掉也弹回，但控件仍可点、可查看属性
+                win32gui.SendMessage(box, win32con.BM_SETCHECK, 1, 0)
+            self._levels[index]["included"] = included
             self._refresh_preview()
             return
         if role == "check" and notif == 0:
             box = win32gui.GetDlgItem(hwnd, cid)
             meta[2]["on"] = bool(win32gui.SendMessage(box, win32con.BM_GETCHECK, 0, 0))
+            # 勾上本层属性 ⇒ 本层自动参与定位（否则属性勾了选择器不变）。
+            # 取消属性不反取消层：层可能被别的属性或用户手动勾着。
+            level = self._levels[self._selected]
+            included = selector_tree.included_after_attr_check(
+                level["included"], meta[2]["on"]
+            )
+            if included != level["included"]:
+                level["included"] = included
+                win32gui.SendMessage(
+                    self._level_check_boxes[self._selected],
+                    win32con.BM_SETCHECK, 1 if included else 0, 0,
+                )
             self._refresh_preview()
             return
         if role == "value" and notif == win32con.EN_CHANGE:

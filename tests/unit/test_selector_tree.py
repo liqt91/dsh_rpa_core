@@ -10,6 +10,8 @@ from rpa_core.capture_kit.selector_tree import (
     attr_escape,
     compose,
     css_escape,
+    included_after_attr_check,
+    level_included_after_toggle,
     levels_from_path,
     summary,
 )
@@ -100,6 +102,28 @@ def test_escape_rules() -> None:
 def test_summary_renders_attributes() -> None:
     level = levels_from_path(PATH)[1]
     assert summary(level) == '<div class="layout wide">'
+
+
+def test_target_level_checkbox_bounces_but_other_levels_follow_click() -> None:
+    """目标级是必选项：点掉必须弹回；其余层严格跟随用户点击。"""
+    assert level_included_after_toggle(4, 3, False) is True
+    assert level_included_after_toggle(4, 3, True) is True
+    assert level_included_after_toggle(4, 2, False) is False
+    assert level_included_after_toggle(4, 2, True) is True
+    assert level_included_after_toggle(0, 0, True) is True
+
+
+def test_attr_check_pulls_in_its_level_but_uncheck_does_not_push_out() -> None:
+    """勾上属性必须让所在层参与定位；取消属性不能反过来取消层。
+
+    否则用户在未勾的层上勾了属性，选择器纹丝不动，看起来像点了没反应。
+    """
+    # 未勾层 + 勾上属性 ⇒ 层被拉进来
+    assert included_after_attr_check(False, True) is True
+    # 已勾层 + 取消属性 ⇒ 层保持（别的属性或用户手动勾着）
+    assert included_after_attr_check(True, False) is True
+    assert included_after_attr_check(True, True) is True
+    assert included_after_attr_check(False, False) is False
 
 
 def test_compose_empty_path() -> None:

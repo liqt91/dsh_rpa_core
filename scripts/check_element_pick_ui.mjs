@@ -16,6 +16,8 @@ const MAIN = path.join(GUI, 'src/main.js')
 const HTML = path.join(GUI, 'index.html')
 const CSS = path.join(GUI, 'src/style.css')
 const API = path.join(ROOT, '.harness/demo/ppx_probe/app/api/api.py')
+const EDIT_DIALOG = path.join(ROOT, 'src/rpa_core/capture_kit/edit_dialog.py')
+const SELECTOR_TREE = path.join(ROOT, 'src/rpa_core/capture_kit/selector_tree.py')
 
 const results = []
 function check(name, fn) {
@@ -42,6 +44,8 @@ const mainSrc = fs.readFileSync(MAIN, 'utf8')
 const html = fs.readFileSync(HTML, 'utf8')
 const css = fs.readFileSync(CSS, 'utf8')
 const apiSrc = fs.readFileSync(API, 'utf8')
+const editDialogSrc = fs.readFileSync(EDIT_DIALOG, 'utf8')
+const selectorTreeSrc = fs.readFileSync(SELECTOR_TREE, 'utf8')
 const BANNED = ['capture', 'browser', 'desktop', 'serve', 'session', 'UIA', '扩展']
 
 // ---------- 1. 文案表 ----------
@@ -635,6 +639,58 @@ check('契约层：编辑模型/重组/校验/重捕走语义 RPC，前端不拼
   assert(!/selector\s*=\s*[`'"]#\$\{/.test(mainSrc), '前端自己拼了 css 选择器')
 })
 
+check('契约层：层级行点文字只看属性、点左方框才切换勾选', () => {
+  for (const needle of [
+    'win32con.BS_LEFT | win32con.BS_FLAT', // 行是纯文字按钮：无勾框，hover 重绘不盖小方框
+    '_ID_LEVEL_CHECK_BASE + index',
+    '("level_check", index)',
+    'if role == "level" and notif == 0:  # BN_CLICKED：只选中看属性，不改勾选',
+    'selector_tree.level_included_after_toggle(',
+  ]) {
+    assert(editDialogSrc.includes(needle), `edit_dialog.py 缺 ${needle}`)
+  }
+  // 行与小方框必须分开摆：两者同 x 重叠时，hover 重绘的空勾框看起来像“勾没了”
+  assert(!/BS_CHECKBOX \| win32con\.BS_LEFT/.test(editDialogSrc),
+    '层级行又变回 BS_CHECKBOX，与小方框重叠')
+  assert(/win32gui\.SetWindowPos\(\s*box, 0, 16, y/.test(editDialogSrc),
+    '小方框没摆在 x=16')
+  assert(/win32gui\.SetWindowPos\(\s*row, 0, 44, y/.test(editDialogSrc),
+    '行文字没避开小方框（x=44）')
+  // 目标级（链尾）不再整行禁用成灰色，但仍强制参与定位
+  assert(!/EnableWindow\(box, False\)/.test(editDialogSrc), '目标级又被整行禁用成灰色')
+  assert(selectorTreeSrc.includes('def level_included_after_toggle('), '内核缺目标级勾选兜底')
+  assert(mainSrc.includes('levelIncludedAfterToggle(dialogLevels.length, index'),
+    'Web 层级树没走同一条目标级兜底')
+  assert(!mainSrc.includes('box.disabled = index === dialogLevels.length - 1'),
+    'Web 目标级复选框还被禁用成灰色')
+})
+
+check('契约层：勾属性自动勾上所在层，取消属性不反取消', () => {
+  // 内核一条布尔口径，四条产出路径（原生层级/原生桌面/Web 层级/Web 桌面）都调它
+  assert(selectorTreeSrc.includes('def included_after_attr_check('), '内核缺属性联动纯函数')
+  assert(/return bool\(included\) or bool\(attr_on\)/.test(selectorTreeSrc),
+    '属性联动口径不是「勾上拉进来、取消不推出去」')
+  const nativeHits = (editDialogSrc.match(/selector_tree\.included_after_attr_check\(/g) || []).length
+  assert(nativeHits === 2, `原生两条属性路径该各调一次内核口径，实际 ${nativeHits}`)
+  const webHits = (mainSrc.match(/includedAfterAttrCheck\(/g) || []).length
+  assert(webHits === 3, `Web 应有一处定义 + 两处调用，实际 ${webHits}`)
+  assert(/level\.included = includedAfterAttrCheck\(/.test(mainSrc), 'Web 层级属性没联动层勾选')
+  assert(/node\.selected = includedAfterAttrCheck\(/.test(mainSrc), 'Web 桌面属性没联动节点勾选')
+  assert(/selector_tree\.included_after_attr_check\(\s*level\["included"\]/.test(editDialogSrc),
+    '原生层级属性没调内核口径')
+  assert(/selector_tree\.included_after_attr_check\(\s*node\.get\("selected"/.test(editDialogSrc),
+    '原生桌面属性没调内核口径')
+  // 联动后要同步复选框 UI，不然数据勾了、界面还是空框
+  assert(/self\._level_check_boxes\[self\._selected\]/.test(editDialogSrc),
+    '原生层级属性联动没同步小方框')
+  assert(/self\._node_boxes\[self\._selected_node\]/.test(editDialogSrc),
+    '原生桌面属性联动没同步节点框')
+  assert(/if \(level\.included !== wasIncluded\) renderElemLevels\(\)/.test(mainSrc),
+    'Web 层级属性联动没重绘层级框')
+  assert(/if \(node\.selected !== wasSelected\) renderDesktopLevels\(\)/.test(mainSrc),
+    'Web 桌面属性联动没重绘节点框')
+})
+
 check('契约层：参数面板的选择入口拿内核参数键集合', () => {
   for (const needle of [
     "ppx.call('rpa.elementCandidates'",
@@ -663,6 +719,72 @@ await checkAsync('渲染层：层级模型渲染成树，组合选择器由后�
   assert(nodeById('elemTreePane').hidden === false, '层级面板没显示')
   assert(nodeById('elemSimplePane').hidden === true, '简式定位没隐藏')
   assert(nodeById('elemDialogPreview').value === '#root', '组合选择器没填')
+})
+
+await checkAsync('渲染层：网页层级点文字只选中，目标级方框点掉弹回', async () => {
+  const levels = [
+    { tag: 'html', included: false, id: { on: false, value: '' }, classes: [], nth: { on: false, value: '' } },
+    { tag: 'span', included: true, id: { on: true, value: 'root' }, classes: [], nth: { on: false, value: '' } },
+  ]
+  const { calls } = await startOnce({
+    responses: {
+      'rpa.elementEditModel': { ok: true, name: '元素1', kind: 'browser', selector: '#root', levels },
+      'rpa.elementCompose': { ok: true, selector: '#root' },
+    },
+  })
+  const rows = () => nodeById('elemDialogLevels').children
+  const boxes = () => walk(nodeById('elemDialogLevels')).filter((n) => n.type === 'checkbox')
+  assert(boxes().length === 2 && boxes()[1].disabled === false, '目标级复选框不该灰掉')
+
+  await rows()[0].click()
+  await flush()
+  assert(hasClass(rows()[0], 'selected'), '点层级文字没选中该层')
+  assert(boxes()[0].checked === false, '点层级文字不该切换勾选')
+
+  boxes()[1].checked = false
+  await boxes()[1].handlers.change[0]({ type: 'change' })
+  await flush()
+  const compose = calls.filter((c) => c.name === 'rpa.elementCompose').at(-1)
+  assert(compose, '目标级勾选弹回后没触发重组')
+  assert(compose.args.levels[1].included === true, '目标级被勾掉了')
+  assert(boxes()[1].checked === true, '目标级复选框没弹回')
+})
+
+await checkAsync('渲染层：未勾层勾属性会自动勾上层，取消属性不反取消', async () => {
+  const levels = [
+    { tag: 'html', included: false, id: { on: false, value: '' },
+      classes: [{ on: false, value: 'root', mode: '精确' }], nth: { on: false, value: '' } },
+    { tag: 'span', included: true, id: { on: true, value: 'root' },
+      classes: [], nth: { on: false, value: '' } },
+  ]
+  const { calls } = await startOnce({
+    responses: {
+      'rpa.elementEditModel': { ok: true, name: '元素1', kind: 'browser', selector: '#root', levels },
+      'rpa.elementCompose': { ok: true, selector: '#root' },
+    },
+  })
+  const levelBoxes = () => walk(nodeById('elemDialogLevels')).filter((n) => n.type === 'checkbox')
+  const attrBoxes = () => walk(nodeById('elemDialogAttrs')).filter((n) => n.type === 'checkbox')
+  // 点第一层（未勾）看它的属性：id 框 + class 框
+  await nodeById('elemDialogLevels').children[0].click()
+  await flush()
+  assert(levelBoxes()[0].checked === false, '起始第一层就不该勾选')
+  const classBox = attrBoxes()[1] // id 是第 0 行，class 是第 1 行
+  assert(classBox && classBox.checked === false, '起始 class 属性不该勾选')
+  classBox.checked = true
+  await classBox.handlers.change[0]({ type: 'change' })
+  await flush()
+  assert(levelBoxes()[0].checked === true, '勾上属性后所在层复选框没跟着勾')
+  const last = calls.filter((c) => c.name === 'rpa.elementCompose').at(-1)
+  assert(last && last.args.levels[0].included === true, '联动没进重组请求')
+  // 取消该属性：层应保持勾选
+  await nodeById('elemDialogLevels').children[0].click()
+  await flush()
+  const again = walk(nodeById('elemDialogAttrs')).filter((n) => n.type === 'checkbox')[1]
+  again.checked = false
+  await again.handlers.change[0]({ type: 'change' })
+  await flush()
+  assert(levelBoxes()[0].checked === true, '取消属性不该反过来取消层')
 })
 
 check('契约层：桌面编辑也走内核模型与重组，前端不拼 locator', () => {

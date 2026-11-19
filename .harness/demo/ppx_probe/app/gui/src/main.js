@@ -1542,6 +1542,17 @@ function renderElemEditor(model) {
   }
 }
 
+// 层级勾选口径：目标级（链尾）永远参与；与内核 selector_tree 的同名纯函数一致。
+function levelIncludedAfterToggle(count, index, wanted) {
+  return count > 0 && index === count - 1 ? true : Boolean(wanted)
+}
+
+// 勾上本层任一属性 ⇒ 该层自动参与定位；取消属性不反取消层。
+// 与内核 selector_tree.included_after_attr_check 同口径，桌面节点共用。
+function includedAfterAttrCheck(included, attrOn) {
+  return Boolean(included) || Boolean(attrOn)
+}
+
 function renderElemLevels() {
   if (!el.dialogLevels || !dialogLevels) return
   el.dialogLevels.replaceChildren(...dialogLevels.map((level, index) => {
@@ -1549,9 +1560,10 @@ function renderElemLevels() {
     const box = mk('input')
     box.type = 'checkbox'
     box.checked = Boolean(level.included)
-    box.disabled = index === dialogLevels.length - 1 // 目标级不许勾掉
     box.addEventListener('change', () => {
-      level.included = box.checked
+      // 目标级必须参与定位：点掉弹回，但方框保持可点（点行文字只选中看属性）
+      level.included = levelIncludedAfterToggle(dialogLevels.length, index, box.checked)
+      box.checked = level.included
       refreshElemCompose()
     })
     row.append(box, mk('span', '', elemLevelLabel(level)))
@@ -1580,6 +1592,11 @@ function renderElemAttrs() {
     on.checked = Boolean(obj.on)
     on.addEventListener('change', () => {
       obj.on = on.checked
+      // 勾上属性 ⇒ 所在层自动参与定位（否则选择器不变，等于点了没反应）。
+      // 取消属性不反取消层；层级框的显示要跟着刷新。
+      const wasIncluded = Boolean(level.included)
+      level.included = includedAfterAttrCheck(wasIncluded, obj.on)
+      if (level.included !== wasIncluded) renderElemLevels()
       refreshElemCompose()
     })
     const value = mk('input')
@@ -1661,6 +1678,11 @@ function renderDesktopAttrs() {
     on.disabled = Boolean(attr.readonly)
     on.addEventListener('change', () => {
       attr.required = on.checked
+      // 窗口信息行 readonly（属性框已禁用）；目标级恒参与。
+      // 其余节点：勾上属性 ⇒ 该节点自动参与定位，并刷新层级框显示。
+      const wasSelected = Boolean(node.selected)
+      node.selected = includedAfterAttrCheck(wasSelected, attr.required)
+      if (node.selected !== wasSelected) renderDesktopLevels()
       refreshElemCompose()
     })
     const label = mk('span', 'modalLabel', String(attr.label || attr.field || ''))

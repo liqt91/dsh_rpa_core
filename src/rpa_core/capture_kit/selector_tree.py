@@ -61,6 +61,27 @@ def levels_from_path(path: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return levels
 
 
+def level_included_after_toggle(count: int, index: int, wanted: bool) -> bool:
+    """用户点层级复选框后的勾选值：目标级（链尾）永远参与，点掉也弹回。
+
+    两条产出路径（原生对话框 / Web 对话框）都调这一条口径；别在控件里各写一份
+    ``index == len(levels) - 1``——一处改了另一处就会静默漂移。
+    """
+    return True if count > 0 and index == count - 1 else bool(wanted)
+
+
+def included_after_attr_check(included: bool, attr_on: bool) -> bool:
+    """勾上本层任一属性 ⇒ 该层必须参与定位；取消属性不反过来取消层。
+
+    属性只在该层 ``included`` 时才进选择器；用户在未勾的层上勾了属性却看不到
+    选择器变化，等于点了没反应。所以勾属性时把所在层一并勾上（目标级本来就
+    恒参与，无需特判）。反向不联动：取消一个属性时，层可能还被别的属性或用户
+    手动勾着，不能替用户取消。桌面节点（``selected``/``required``）与网页层级
+    （``included``/``on``）共用这一条布尔口径，避免两端各写一份漂移。
+    """
+    return bool(included) or bool(attr_on)
+
+
 def _fragment_for(level: dict[str, Any]) -> str:
     ident = level["id"]
     if ident["on"] and ident["value"]:
