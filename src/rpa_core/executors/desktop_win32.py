@@ -825,17 +825,15 @@ class Win32DesktopExecutor(CommandExecutor):
                 start_y = rect.top + (rect.bottom - rect.top) // 2
             except Exception:
                 start_x, start_y = 0, 0
-            import ctypes
-            user32 = ctypes.windll.user32
-            user32.SetCursorPos(start_x, start_y)
-            user32.mouse_event(0x0002, 0, 0, 0, 0)
-            steps = 10
-            for i in range(1, steps + 1):
-                cx = start_x + (target_x - start_x) * i // steps
-                cy = start_y + (target_y - start_y) * i // steps
-                user32.SetCursorPos(cx, cy)
-                time.sleep(0.01)
-            user32.mouse_event(0x0004, 0, 0, 0, 0)
+            from rpa_core.executors import human_input
+
+            human_input.move_to(start_x, start_y, duration_ms=0)
+            human_input.send_button(human_input.MOUSEEVENTF_LEFTDOWN)
+            try:
+                human_input.move_smooth((start_x, start_y), (target_x, target_y))
+            finally:
+                # 抬起写在 finally：拖拽中途异常也不能把左键按住不放
+                human_input.send_button(human_input.MOUSEEVENTF_LEFTUP)
             return CommandResult.success(
                 effects=[
                     EffectRecord.committed(

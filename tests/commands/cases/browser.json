@@ -795,6 +795,64 @@
             "op": "page.call"
           }
         }
+      },
+      {
+        "name": "injection-dom-keeps-synthetic-channel",
+        "inputs": {
+          "sessionId": "s",
+          "selector": "#t",
+          "injection": "dom"
+        },
+        "expect": {
+          "onlyCall": {
+            "op": "page.call",
+            "args": {
+              "method": "click"
+            }
+          },
+          "outputs": {
+            "matchedCount": 1,
+            "sessionId": "s"
+          }
+        }
+      },
+      {
+        "name": "injection-cdp-uses-debugger-channel",
+        "stub": {
+          "cdp.click": {
+            "matchedCount": 1,
+            "result": {
+              "dispatched": 3,
+              "x": 10,
+              "y": 20,
+              "cdpVersion": "1.3"
+            }
+          }
+        },
+        "inputs": {
+          "sessionId": "s",
+          "selector": "#t",
+          "injection": "cdp"
+        },
+        "expect": {
+          "onlyCall": {
+            "op": "cdp.click",
+            "args": {
+              "tabId": "7",
+              "selector": "#t",
+              "clickPosition": "center",
+              "button": "left",
+              "clickType": "single",
+              "modifiers": []
+            },
+            "timeoutSeconds": 30.0
+          },
+          "outputs": {
+            "matchedCount": 1,
+            "sessionId": "s"
+          },
+          "effect": "unsafe-write"
+        }
       }
     ]
   },

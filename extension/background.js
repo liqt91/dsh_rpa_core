@@ -15,7 +15,7 @@ const HOST_NAME = "com.rpa_core.ext_bridge";
 // 快照（2026-09-29 真机排障：仓库已修好「已开网页无红框」，但浏览器还跑着旧 background，
 // 表现成「修复无效」）。把标识随 ack/进度/结果回传，host 侧对账即可判「扩展过期」，
 // 不用再靠症状猜。
-const EXT_BUILD = "0.9.4";
+const EXT_BUILD = "0.9.7";
 const RECONNECT_MS = 3000;      // 断开后的重连退避
 const ALARM_NAME = "rpa-bridge-reconnect";  // SW 被回收时的兜底拉起（MV3 alarm 最小 30s）
 const PERMISSION_KEY = "rpaExecPermission";
@@ -561,6 +561,179 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   return false;
 });
 
+// ------------------------------------------------- CDP 输入通道（第 2 层，M107 S2）
+//
+// 为什么需要它：`page.call` 的 click 是页面内 `dispatchEvent`（isTrusted=false），
+// 而操作系统级注入（SendInput）在企业环境会被 EDR 降权拦掉——进程令牌是 Low 时，
+// SendInput 返回 1 但事件被吞、SetCursorPos 返回 0 且**不设错误码**（实测深信服 EDR）。
+// `chrome.debugger` + `Input.dispatchMouseEvent` 由浏览器自己生成事件（isTrusted=true），
+// 不经过 OS 输入队列，也不需要窗口置前——EDR 拦不到，多屏负坐标/遮挡/DPI 一并绕开。
+//
+// 代价：attach 期间浏览器顶部会有「正在调试此浏览器」横幅，所以默认用完即 detach
+// （`detachAfter !== false`）；连续点击可显式传 false 复用同一条调试会话，减少横幅闪烁。
+const CDP_VERSION = "1.3";
+const CDP_ATTACHED = new Map(); // tabId -> attach 时间戳（ms）
+// Input.dispatchMouseEvent 的 modifiers 是位掩码，与 DOM 的 altKey/ctrlKey 不是一回事
+const CDP_MODIFIER_BITS = [
+  [["alt"], 1],
+  [["ctrl", "control"], 2],
+  [["win", "meta", "cmd", "command"], 4],
+  [["shift"], 8],
+];
+const CDP_BUTTON_BITS = { left: 1, right: 2, middle: 4 };
+
+function cdpModifierMask(modifiers) {
+  let mask = 0;
+  for (const item of Array.isArray(modifiers) ? modifiers : []) {
+    const name = String(item == null ? "" : item).trim().toLowerCase();
+    for (const [aliases, bit] of CDP_MODIFIER_BITS) {
+      if (aliases.includes(name)) mask |= bit;
+    }
+  }
+  return mask;
+}
+
+function cdpButton(raw) {
+  const name = String(raw == null ? "left" : raw).trim().toLowerCase();
+  return name === "right" || name === "middle" ? name : "left";
+}
+
+async function cdpAttach(tabId) {
+  if (CDP_ATTACHED.has(tabId)) return { attached: false, reused: true };
+  // manifest 加了 debugger 权限但扩展没重载时，chrome.debugger 是 undefined——
+  // 报成 TypeError 会被 errorCode 兜成 EXECUTOR_FAILED，看不出「只是没重载」。
+  if (!chrome.debugger) {
+    const error = new Error("扩展没有 debugger 权限：manifest 已改但扩展未重载");
+    error.code = "CDP_ATTACH_FAILED";
+    throw error;
+  }
+  try {
+    await chrome.debugger.attach({ tabId }, CDP_VERSION);
+  } catch (err) {
+    const message = String((err && err.message) || err);
+    const error = new Error(message);
+    // 「已有调试器挂着」与「attach 被拒」必须分开：前者关掉 DevTools 即可，后者是权限/版本问题
+    error.code = /another debugger|already attached/i.test(message)
+      ? "CDP_ALREADY_ATTACHED"
+      : "CDP_ATTACH_FAILED";
+    throw error;
+  }
+  CDP_ATTACHED.set(tabId, Date.now());
+  return { attached: true, reused: false };
+}
+
+async function cdpDetach(tabId) {
+  if (!CDP_ATTACHED.has(tabId)) return false;
+  CDP_ATTACHED.delete(tabId);
+  try {
+    await chrome.debugger.detach({ tabId });
+  } catch (_) {
+    // 页面已关或已被外部 detach：状态已清掉，不必再抛
+  }
+  return true;
+}
+
+async function cdpSend(tabId, method, params) {
+  try {
+    return await chrome.debugger.sendCommand({ tabId }, method, params);
+  } catch (err) {
+    const error = new Error(String((err && err.message) || err));
+    error.code = "CDP_COMMAND_FAILED";
+    throw error;
+  }
+}
+
+// 按下与抬起之间留一点人手间隔（同毫秒内 press/release 是典型脚本特征）
+async function cdpPressGap(ms) {
+  const value = Number(ms);
+  if (!Number.isFinite(value) || value <= 0) return;
+  await new Promise((resolve) => setTimeout(resolve, Math.min(value, 2000)));
+}
+
+async function cdpClickAt(tabId, point, options) {
+  const button = cdpButton(options.button);
+  const clickCount =
+    String(options.clickType == null ? "single" : options.clickType).trim().toLowerCase() === "double"
+      ? 2
+      : 1;
+  const modifiers = cdpModifierMask(options.modifiers);
+  const buttons = CDP_BUTTON_BITS[button] || 1;
+  // 先 hover 到位：很多菜单/下拉依赖 mouseover 才出现，直接 press 会点在「还没展开」的位置
+  await cdpSend(tabId, "Input.dispatchMouseEvent", {
+    type: "mouseMoved", x: point.x, y: point.y, button: "none", buttons: 0, modifiers,
+  });
+  for (let round = 1; round <= clickCount; round += 1) {
+    await cdpSend(tabId, "Input.dispatchMouseEvent", {
+      type: "mousePressed", x: point.x, y: point.y, button, buttons, modifiers, clickCount: round,
+    });
+    await cdpPressGap(options.pressDelayMs);
+    await cdpSend(tabId, "Input.dispatchMouseEvent", {
+      type: "mouseReleased", x: point.x, y: point.y, button, buttons: 0, modifiers, clickCount: round,
+    });
+  }
+  return { dispatched: 1 + clickCount * 2, clickCount, button };
+}
+
+async function cdpClick(args) {
+  const tabId = Number(args.tabId);
+  if (!args.tabId || !Number.isFinite(tabId)) throw new Error("cdp.click 需要 tabId");
+  if (!args.selector) throw new Error("cdp.click 需要 selector");
+  const state = await cdpAttach(tabId);
+  try {
+    // 坐标与预检都复用页面侧唯一实现（domOp 的 actionPoint 分支）——
+    // 「判定是否被遮挡的点」与「真正派发的点」必须同源，不能各算一套。
+    const probe = await pageCall({
+      tabId,
+      selector: args.selector,
+      method: "actionPoint",
+      args: { clickPosition: args.clickPosition },
+    });
+    if (probe && probe.precheck && probe.precheck.code) {
+      return { matchedCount: 0, precheck: probe.precheck };
+    }
+    const count = Number((probe && probe.matchedCount) || 0);
+    if (count <= 0 || !probe.result) return { matchedCount: count, result: null };
+    const point = { x: Number(probe.result.x), y: Number(probe.result.y) };
+    if (!Number.isFinite(point.x) || !Number.isFinite(point.y)) {
+      throw new Error(`cdp.click 拿到非法坐标 ${JSON.stringify(probe.result)}`);
+    }
+    const hit = await cdpClickAt(tabId, point, args);
+    return {
+      matchedCount: count,
+      result: {
+        ...hit,
+        x: point.x,
+        y: point.y,
+        attached: !!state.attached,
+        reusedSession: !!state.reused,
+        cdpVersion: CDP_VERSION,
+      },
+    };
+  } finally {
+    if (args.detachAfter !== false) await cdpDetach(tabId);
+  }
+}
+
+// 标签页关闭 / 调试器被外部 detach 时清状态，避免下次 attach 被「已经挂着」挡住。
+// ★ 必须容错注册：没有 debugger 权限时 `chrome.debugger` 就是 undefined，
+// 顶层无条件 addListener 会让整个 background.js 在加载时抛异常（扩展直接不可用，
+// 而不是「cdp 不可用」）。脚本侧的桩环境也没有这些事件对象。
+function registerCdpCleanup() {
+  try {
+    if (chrome.tabs && chrome.tabs.onRemoved) {
+      chrome.tabs.onRemoved.addListener((tabId) => { CDP_ATTACHED.delete(tabId); });
+    }
+    if (chrome.debugger && chrome.debugger.onDetach) {
+      chrome.debugger.onDetach.addListener((source) => {
+        if (source && source.tabId != null) CDP_ATTACHED.delete(Number(source.tabId));
+      });
+    }
+  } catch (_) {
+    // 清理只是兜底：注册不上不影响命令执行，真实 attach/detach 仍会自己维护状态
+  }
+}
+registerCdpCleanup();
+
 // ---------------------------------------------------------------- 执行通道
 
 async function getPermission() {
@@ -626,6 +799,10 @@ const KNOWN_ERROR_CODES = [
   "ELEMENT_NOT_VISIBLE",
   "PERMISSION_DENIED",
   "TIMEOUT",
+  // CDP 输入通道（M107 S2）：attach 被拒 / 已有调试器 / 命令失败，各自可诊断，不混成 EXECUTOR_FAILED
+  "CDP_ATTACH_FAILED",
+  "CDP_ALREADY_ATTACHED",
+  "CDP_COMMAND_FAILED",
 ];
 
 function errorCode(err) {
@@ -808,6 +985,10 @@ async function executeCommand(cmd) {
       return await pageCall(args);
     case "page.eval":
       return await pageEval(args);
+    case "cdp.click":
+      // 真事件点击：浏览器自己生成 mousedown/mouseup/click（isTrusted=true），
+      // 不经过 OS 输入队列 ⇒ 不受 EDR 对合成输入的拦截影响。
+      return await cdpClick(args);
     case "cookies.getAll": {
       const filter = {};
       for (const key of ["url", "name", "domain", "path"]) {
@@ -930,7 +1111,11 @@ async function domOp(payload) {
   // 可操作动作：只有这些 method 需要预检（读取类 getText/getPosition 等照旧允许读隐藏元素）
   const precheckRequired = (raw) => {
     const value = String(raw == null ? "" : raw).trim().toLowerCase();
-    return ["click", "hover", "input", "select", "check", "drag"].includes(value);
+    // actionPoint：CDP 通道只取坐标（事件由 background 的 Input.dispatchMouseEvent 派发），
+    // 必须走同一套预检，否则「判定可点」与「实际派发点」会分成两套口径。
+    // ★ 这里比对的是 value（已 toLowerCase），所以必须是全小写 "actionpoint"；
+    // 写成驼峰会静默不命中 → actionPoint 恒 null → CDP 一律报 ELEMENT_NOT_VISIBLE。
+    return ["click", "hover", "input", "select", "check", "drag", "actionpoint"].includes(value);
   };
   // 元素是否禁用：原生 disabled + ARIA 语义 + inert 子树（继承祖先可用 closest 判定）
   const isDisabledElement = (el) => {
@@ -1216,7 +1401,9 @@ async function domOp(payload) {
     el.scrollIntoView({ block: "center", inline: "nearest" });
     const rect = el.getBoundingClientRect();
     actionPoint = clickPoint(
-      method === "click" ? args.clickPosition : "center",
+      // actionPoint 是 CDP 通道的「只要坐标、不要合成事件」分支：选点口径必须与 click 完全一致，
+      // 否则「判定是否被遮挡的点」和「真正派发鼠标事件的点」会变成两个点。
+      method === "click" || method === "actionPoint" ? args.clickPosition : "center",
       rect,
       Math.random,
       { width: window.innerWidth, height: window.innerHeight },
@@ -1254,6 +1441,18 @@ async function domOp(payload) {
     case "getPosition": {
       const r = el.getBoundingClientRect();
       return { matchedCount, result: { x: r.x, y: r.y, width: r.width, height: r.height } };
+    }
+    case "actionPoint": {
+      // 只回带坐标，不派发任何事件：真正的鼠标事件由 background 走 chrome.debugger 的
+      // Input.dispatchMouseEvent 生成（事件由浏览器自己发，isTrusted=true）。
+      if (!actionPoint) {
+        return {
+          matchedCount,
+          result: null,
+          precheck: { code: "ELEMENT_NOT_VISIBLE", message: PRECHECK_MESSAGES.ELEMENT_NOT_VISIBLE },
+        };
+      }
+      return { matchedCount, result: { x: actionPoint.x, y: actionPoint.y } };
     }
     case "getSelectOptions": {
       const options = Array.from(el.options || []).map((o, index) => ({

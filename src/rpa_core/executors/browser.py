@@ -69,6 +69,15 @@ _EXT_PAGE_METHODS = {
 }
 
 
+def _injection_mode(inputs: dict[str, Any]) -> str:
+    """点击注入通道（manifest 的 `injection`）：只有显式 cdp 才走调试协议。
+
+    缺省/脏值一律 dom。**不做静默降级**：cdp 不可用时如实报错，否则用户会以为
+    已经绕过了风控，实际仍在派发合成事件——那是最坏的一种假绿。
+    """
+    return "cdp" if str(inputs.get("injection") or "").strip().lower() == "cdp" else "dom"
+
+
 # 已带 scheme（http(s)/file/data/about 等）则原样保留；否则默认补 https（对用户友好）
 _SCHEME_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9+.-]*:")
 
@@ -1073,6 +1082,11 @@ class PlaywrightExecutor(CommandExecutor):
         timeout_s: float,
         target_host: str,
     ) -> CommandResult:
+        # CDP 真事件点击走独立通道（M107 第 2 层）：事件由浏览器生成，不经页面 dispatchEvent
+        if command == "browser.click" and _injection_mode(inputs) == "cdp":
+            return await self._ext_cdp_click(
+                invocation, inputs, session_id, tab_id, selector, timeout_s, target_host,
+            )
         method = _EXT_PAGE_METHODS[command]
         resource = f"browser.session:{session_id}:selector:{selector}"
         payload, fallback = await self._page_call_with_fallback(
@@ -1125,6 +1139,94 @@ class PlaywrightExecutor(CommandExecutor):
             },
             outputs={"matchedCount": count, "sessionId": session_id},
         )
+
+    async def _ext_cdp_click(
+        self,
+        invocation: CommandInvocation,
+        inputs: dict[str, Any],
+        session_id: str,
+        tab_id: str,
+        selector: str,
+        timeout_s: float,
+        target_host: str,
+    ) -> CommandResult:
+        """`injection=cdp`：经 chrome.debugger 派发真事件（``isTrusted=true``）。
+
+        元素自愈与预检口径与 dom 通道一致：主选择器预检不过就直接报（元素已经找到了，
+        换候选只会把「点错地方」换成「点到另一个元素」）；主选择器未命中才按候选重试。
+
+        `simulateHuman` 在这里不生效——CDP 派发的本来就是完整真事件链
+        （mouseMoved → mousePressed → mouseReleased），没有「最短路径」可走。
+        """
+        args = {
+            "clickPosition": inputs.get("clickPosition") or "center",
+            "button": inputs.get("button") or "left",
+            "clickType": inputs.get("clickType") or "single",
+            "modifiers": inputs.get("modifiers") or [],
+        }
+        payload, fallback = await self._cdp_click_with_fallback(
+            tab_id, selector, args=args, timeout_s=timeout_s, target_host=target_host
+        )
+        count = int(payload.get("matchedCount") or 0)
+        if count == 0:
+            return self._ext_not_found(
+                inputs, candidates_tried=len(self._element_candidates(selector))
+            )
+        await self._post_delay(inputs)
+        result = payload.get("result") or {}
+        return self._ext_success(
+            invocation, EffectKind.UNSAFE_WRITE,
+            f"browser.session:{session_id}:selector:{selector}",
+            {
+                "operation": "click",
+                "injection": "cdp",
+                "matchedCount": count,
+                "point": {"x": result.get("x"), "y": result.get("y")},
+                "dispatched": result.get("dispatched"),
+                "cdpVersion": result.get("cdpVersion"),
+                **_fallback_details(fallback),
+            },
+            outputs={"matchedCount": count, "sessionId": session_id},
+        )
+
+    async def _cdp_click_with_fallback(
+        self,
+        tab_id: str,
+        selector: str,
+        *,
+        args: dict[str, Any],
+        timeout_s: float,
+        target_host: str,
+    ) -> tuple[dict[str, Any], dict[str, Any] | None]:
+        """CDP 点击的元素自愈：与 `_page_call_with_fallback` 同语义，只是换了通道。"""
+        payload = await asyncio.to_thread(
+            self._ext.cdp_click, tab_id, selector,
+            args=args, timeout_seconds=timeout_s, target_host=target_host,
+        )
+        if int(payload.get("matchedCount") or 0) > 0:
+            return payload, None
+        candidates = self._element_candidates(selector)
+        for index, candidate in enumerate(candidates, start=1):
+            candidate_selector = str(candidate["selector"])
+            try:
+                retry = await asyncio.to_thread(
+                    self._ext.cdp_click, tab_id, candidate_selector,
+                    args=args, timeout_seconds=timeout_s, target_host=target_host,
+                )
+            except ExtensionChannelError as exc:
+                # 候选命中了但预检失败：换下一条（与 dom 通道同一处理）
+                if exc.code in _PRECHECK_CODES:
+                    continue
+                raise
+            if int(retry.get("matchedCount") or 0) > 0:
+                return retry, {
+                    "mainSelector": selector,
+                    "usedSelector": candidate_selector,
+                    "kind": candidate.get("kind"),
+                    "index": index,
+                    "candidateCount": len(candidates),
+                }
+        return {"matchedCount": 0}, None
 
     async def _ext_phase_d(
         self,

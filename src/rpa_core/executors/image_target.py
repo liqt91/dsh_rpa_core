@@ -461,13 +461,19 @@ def _default_verifier() -> Any:
 
 
 def _default_mouse(event: str, x: int, y: int, flag: int) -> None:
-    import ctypes
+    """真实鼠标后端（M107 S1）：SendInput + 缓动轨迹，不再用 legacy 的 mouse_event。
 
-    user32 = ctypes.windll.user32
+    签名保持不变——``perform_click`` 的 ``mouse`` 注入点契约与既有契约测试
+    （``test_desktop_image_element`` 的 MouseRecorder）都依赖 ``(event, x, y, flag)``。
+    """
+    from rpa_core.executors import human_input
+
     if event == "move":
-        user32.SetCursorPos(int(x), int(y))
+        human_input.move_to(int(x), int(y))
+        # 到位后犹豫一小段再按：真人不会「移到位立刻点」，这是最廉价的拟人特征
+        human_input.settle()
     else:
-        user32.mouse_event(int(flag), 0, 0, 0, 0)
+        human_input.send_button(int(flag))
 
 
 def _default_keys(sequence: str) -> None:

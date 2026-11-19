@@ -237,6 +237,33 @@ class ExtensionExecSession:
             target_host=target_host,
         )
 
+    def cdp_click(
+        self,
+        tab_id: str,
+        selector: str,
+        *,
+        args: dict[str, Any] | None = None,
+        timeout_seconds: float = DEFAULT_COMMAND_TIMEOUT_SECONDS,
+        target_host: str | None = None,
+    ) -> dict[str, Any]:
+        """CDP 真事件点击（M107 第 2 层）：事件由浏览器自己生成（``isTrusted=true``）。
+
+        与 ``page_call(click)`` 的差别只在事件来源：这里经 ``chrome.debugger`` 的
+        ``Input.dispatchMouseEvent`` 派发，既不走页面 ``dispatchEvent``（合成事件），
+        也不走 OS 输入队列（SendInput）——所以既躲得开「识别合成事件」的页面，
+        也躲得开企业 EDR 对合成输入的拦截。
+
+        坐标与预检仍由页面侧**同一份** ``actionPoint`` 算（扩展内部完成），
+        调用方只给选择器，避免 Python/JS 各实现一套选点逻辑。
+        参数平铺（扩展 ``cdpClick`` 直接读顶层字段），不嵌在 ``args`` 里。
+        """
+        payload: dict[str, Any] = {"tabId": tab_id, "selector": selector}
+        payload.update(args or {})
+        return self._client.submit(
+            "cdp.click", payload,
+            timeout_seconds=timeout_seconds, target_host=target_host,
+        )
+
     # -- Cookie（chrome.cookies，浏览器级） ----------------------------------
 
     # Cookie：作用域 url 由扩展按**会话绑定的标签页**推导（`args.url || tabUrl(args.tabId)`），

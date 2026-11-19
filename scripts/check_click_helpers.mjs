@@ -122,7 +122,7 @@ const mustMatch = [
   ["点击事件带上真实坐标 x", /clientX: point\.x/],
   ["点击事件带上真实坐标 y", /clientY: point\.y/],
   ["修饰键走归一化函数（而非直接比字符串）", /Object\.assign\(init, modifierFlags\(modifiers\)\)/],
-  ["点击点按 manifest 的 clickPosition 选点", /method === "click" \? args\.clickPosition : "center"/],
+  ["点击点按 manifest 的 clickPosition 选点（click 与 CDP 的 actionPoint 同口径）", /method === "click" \|\| method === "actionPoint" \? args\.clickPosition : "center"/],
   ["点击点由 clickPoint 统一裁剪计算", /actionPoint = clickPoint\(/],
   ["遮挡判定使用同一个点击点", /coveringElement\(el, el\.getClientRects\(\), actionPoint\)/],
   ["视口外/交集为空时结构化报 ELEMENT_NOT_VISIBLE", /precheck:\s*\{\s*code:\s*"ELEMENT_NOT_VISIBLE"/],
@@ -141,6 +141,23 @@ if (/===\s*"Control"/.test(source)) {
   console.error('FAIL | 又出现了 "Control"：manifest 枚举是 Ctrl，直接比字符串会让 ctrlKey 永远不生效');
 } else {
   console.log("PASS | 没有回退到与 manifest 枚举对不上的字符串比较");
+}
+
+// ---- 行为断言：precheckRequired 必须认得 actionPoint ----
+// 补一个真实踩过的坑：precheckRequired 会先把入参 toLowerCase，而登记表里若写成驼峰
+// "actionPoint" 就永远不命中 ⇒ actionPoint 恒为 null ⇒ CDP 通道一律误报 ELEMENT_NOT_VISIBLE。
+// 只断言「数组里有这个字符串」抓不住它（驼峰也含同样字母），必须真的求值。
+const precheckStart = source.indexOf("const precheckRequired = (raw) => {");
+const precheckEnd = source.indexOf("// 元素是否禁用", precheckStart);
+if (precheckStart < 0 || precheckEnd <= precheckStart) {
+  failed += 1;
+  console.error("FAIL | 未能定位 precheckRequired 实现（CDP 取坐标依赖它）");
+} else {
+  const precheckSlice = source.slice(precheckStart, precheckEnd);
+  const precheckRequired = new Function(`${precheckSlice}\nreturn precheckRequired;`)();
+  check("precheckRequired('actionPoint') → true（CDP 取坐标走同一套预检）", precheckRequired("actionPoint"), true);
+  check("precheckRequired('click') → true", precheckRequired("click"), true);
+  check("precheckRequired('getPosition') → false（只读几何不必预检）", precheckRequired("getPosition"), false);
 }
 
 // ---- 交叉校验：Python 侧必须转发这两个参数（默认值与 manifest 一致） ----
