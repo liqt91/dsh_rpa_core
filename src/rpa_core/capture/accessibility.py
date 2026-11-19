@@ -48,6 +48,7 @@ _LEA_OPCODE = b"\x8d"
 # 4.2.0.13 的距离是 0x925（2026-11-18 用新旧两版实现逐项比对 refs 后确认）。
 _MAX_CORE_DISTANCE = 0x20000
 
+
 _ACCESS = 0x0008 | 0x0010 | 0x0020 | 0x0400  # VM_OPERATION | VM_READ | VM_WRITE | QUERY
 _WM_GETOBJECT = 0x003D
 _OBJID_CLIENT = -4
@@ -150,7 +151,13 @@ def offset_to_rva(sections: list[PeSection], offset: int) -> int | None:
     return None
 
 
-def rip_xrefs_to(data: bytes, sections: list[PeSection], target_rva: int) -> list[int]:
+def rip_xrefs_to(
+    data: bytes,
+    sections: list[PeSection],
+    target_rva: int,
+    *,
+    rva_windows: list[tuple[int, int]] | None = None,
+) -> list[int]:
     """可执行段里指向 ``target_rva`` 的 RIP 相对 LEA 引用点（RVA 列表）。
 
     ★ 用 ``bytes.find`` 定位 ``lea`` 操作码（C 层 memchr），只在命中处解析 disp。
@@ -158,33 +165,57 @@ def rip_xrefs_to(data: bytes, sections: list[PeSection], target_rva: int) -> lis
       分项计时：读文件 0.11s / 本函数 14.58s / gate 正则 0.25s），而这一步正卡在
       hover 的第一帧上——用户侧看到的就是「点捕获后假死十几秒」。改后同一文件
       <1 秒，判定语义不变（同一批指令、同一起始 RVA）。
+
+    ``rva_windows`` 把扫描限制在若干 RVA 区间里：调用方已经知道只需要「离某个
+    位置不超过 D」的引用点时（``scan_gate_rva`` 的距离过滤），全段扫是在算一份
+    绝大部分会被丢掉的结果——实测 196 MB 的 Weixin.dll 里 ``\\x8d`` 命中 **314 万**
+    次、全扫 892 ms，而 gate 候选附近真正需要的窗口只有几百 KB。
+
+    ★ 契约：区间只需是「所有可能被采用的引用点」的**超集**，多收不漏收即可——
+      距离过滤仍由调用方做。区间按 RVA 给出（不是文件偏移），跨段区间由本函数
+      与各可执行段求交；重叠区间命中的同一指令只记一次（结果去重排序）。
     """
     out: list[int] = []
     for sec in sections:
         if not sec.executable:
             continue
-        start = sec.raw_ptr
-        end = min(len(data), start + sec.raw_size)
-        raw = data[start:end]
-        pos = raw.find(_LEA_OPCODE)
-        while pos >= 0:
-            # ModRM mod=00, rm=101 ⇒ RIP 相对寻址（reg 字段任意）
-            if pos + 2 <= len(raw) and (raw[pos + 1] & 0xC7) == 0x05:
-                rex = pos - 1
-                has_rex = rex >= 0 and 0x40 <= raw[rex] <= 0x4F
-                if has_rex:
-                    # REX.W + lea r64, [rip+disp32]：指令从 REX 起算，共 7 字节
-                    if rex + 7 <= len(raw):
-                        disp = struct.unpack_from("<i", raw, rex + 3)[0]
-                        if sec.rva + rex + 7 + disp == target_rva:
-                            out.append(sec.rva + rex)
-                elif pos + 6 <= len(raw):
-                    # lea r32, [rip+disp32]（不带 REX）共 6 字节。带 REX 的已在上面
-                    # 算过，不能按 6 字节再算一次——否则同一指令的 xref 数翻倍。
-                    disp = struct.unpack_from("<i", raw, pos + 2)[0]
-                    if sec.rva + pos + 6 + disp == target_rva:
-                        out.append(sec.rva + pos)
-            pos = raw.find(_LEA_OPCODE, pos + 1)
+        seg_start = sec.raw_ptr
+        seg_end = min(len(data), seg_start + sec.raw_size)
+        if rva_windows is None:
+            spans = [(seg_start, seg_end)]
+        else:
+            spans = []
+            for lo_rva, hi_rva in rva_windows:
+                lo = max(seg_start, seg_start + (lo_rva - sec.rva))
+                hi = min(seg_end, seg_start + (hi_rva - sec.rva))
+                if hi > lo:
+                    spans.append((lo, hi))
+        for raw_start, raw_end in spans:
+            raw = data[raw_start:raw_end]
+            # raw 里的偏移要换回 RVA：窗口起点可能不在段首，基准 RVA 随 raw_start 平移。
+            base_rva = sec.rva + (raw_start - seg_start)
+            pos = raw.find(_LEA_OPCODE)
+            while pos >= 0:
+                # ModRM mod=00, rm=101 ⇒ RIP 相对寻址（reg 字段任意）
+                if pos + 2 <= len(raw) and (raw[pos + 1] & 0xC7) == 0x05:
+                    rex = pos - 1
+                    has_rex = rex >= 0 and 0x40 <= raw[rex] <= 0x4F
+                    if has_rex:
+                        # REX.W + lea r64, [rip+disp32]：指令从 REX 起算，共 7 字节
+                        if rex + 7 <= len(raw):
+                            disp = struct.unpack_from("<i", raw, rex + 3)[0]
+                            if base_rva + rex + 7 + disp == target_rva:
+                                out.append(base_rva + rex)
+                    elif pos + 6 <= len(raw):
+                        # lea r32, [rip+disp32]（不带 REX）共 6 字节。带 REX 的已在上面
+                        # 算过，不能按 6 字节再算一次——否则同一指令的 xref 数翻倍。
+                        disp = struct.unpack_from("<i", raw, pos + 2)[0]
+                        if base_rva + pos + 6 + disp == target_rva:
+                            out.append(base_rva + pos)
+                pos = raw.find(_LEA_OPCODE, pos + 1)
+    if rva_windows is not None:
+        # 相邻/重叠的候选窗口会重复命中同一条指令，去重后才对得上「引用点个数」。
+        return sorted(set(out))
     return out
 
 
@@ -194,6 +225,12 @@ def scan_gate_rva(data: bytes) -> GateScan:
     判据三层（缺一不可）：指令落在可执行段、disp 目标落在可写段、
     与该 dll 里 ``qt.accessibility.core`` 引用点同段且距离不超过阈值。
     多候选时取距离最近者——gate 和这个日志类别在源码上就是邻居。
+
+    ★ 两遍扫描：第一遍只做**结构**粗筛（不需要 core 引用点），第二遍才在候选
+      ± ``_MAX_CORE_DISTANCE`` 的窗口里找 core 引用点。原因是距离过滤的上限本身
+      就决定了「窗口外的引用点不可能赢」，而全段找引用点在 196 MB 的 Weixin.dll
+      上要 892 ms（``\\x8d`` 命中 314 万次）——那正是用户说的「首次校验约 2 秒」
+      里最粗的一段。改成按候选开窗后，同一文件整体降到 ~200 ms。
     """
     sections = pe_sections(data)
     if not sections:
@@ -201,15 +238,11 @@ def scan_gate_rva(data: bytes) -> GateScan:
 
     core_off = data.find(CORE_STRING)
     core_rva = offset_to_rva(sections, core_off) if core_off >= 0 else None
-    core_xrefs = rip_xrefs_to(data, sections, core_rva) if core_rva is not None else []
+    if core_rva is None:
+        return GateScan(None, 0, 0, None)
 
-    # 没有 ``qt.accessibility.core``、或它在代码里没有任何引用点，就不做猜测。
-    # 这条是安全取向：写错一个字节会打进别人的进程，宁可「不唤醒」也不能蒙。
-    if not core_xrefs:
-        return GateScan(None, 0, len(core_xrefs), None)
-
-    best: tuple[int, int] | None = None
-    count = 0
+    # 第一遍：结构粗筛（指令可执行 + disp 指向可写段），此时还不用 core 引用点。
+    rough: list[tuple[int, int]] = []  # (指令 RVA, gate 目标 RVA)
     for match in GATE_PATTERN.finditer(data):
         match_rva = offset_to_rva(sections, match.start())
         disp_rva = offset_to_rva(sections, match.start("disp"))
@@ -224,6 +257,28 @@ def scan_gate_rva(data: bytes) -> GateScan:
         tsec = section_for_rva(sections, target_rva)
         if tsec is None or not tsec.writable:
             continue
+        rough.append((match_rva, target_rva))
+
+    # 没有候选就没有必要去找引用点。
+    if not rough:
+        return GateScan(None, 0, 0, None)
+
+    # 第二遍：只在候选附近找 core 引用点。窗口按 RVA 给，跨段由 rip_xrefs_to 求交。
+    # 窗口边界就是阈值本身：距离 > 阈值的引用点会被下面过滤掉，不需要额外余量。
+    radius = _MAX_CORE_DISTANCE
+    core_xrefs = rip_xrefs_to(
+        data, sections, core_rva,
+        rva_windows=[(rva - radius, rva + radius) for rva, _ in rough],
+    )
+
+    # 没有 ``qt.accessibility.core`` 的引用点，就不做猜测。
+    # 这条是安全取向：写错一个字节会打进别人的进程，宁可「不唤醒」也不能蒙。
+    if not core_xrefs:
+        return GateScan(None, 0, 0, None)
+
+    best: tuple[int, int] | None = None
+    count = 0
+    for match_rva, target_rva in rough:
         distance = min(abs(match_rva - x) for x in core_xrefs)
         if distance > _MAX_CORE_DISTANCE:
             continue

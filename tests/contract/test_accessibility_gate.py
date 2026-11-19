@@ -321,3 +321,166 @@ def test_wake_if_dormant_activates_qt_shell(monkeypatch):
 def test_wake_if_dormant_zero_hwnd(monkeypatch):
     monkeypatch.setattr(acc, "window_class_name", lambda hwnd: "Qt51514QWindowIcon")
     assert acc.wake_if_dormant(0) is None
+
+
+# --------------------------------------------------------------------------
+# M101：按 gate 候选开窗找 core 引用点
+#
+# 全段找引用点在 196 MB 的 Weixin.dll 上要 892 ms（`\x8d` 命中 314 万次），而
+# 判定条件本身只接受「离候选不超过 _MAX_CORE_DISTANCE」的引用点。开窗后同一
+# 文件 283 ms。这里锁三件「改坏了会静默写错字节」的事：
+#   ① 窗口外的不许漏进来（否则等于没限窗，白改）；
+#   ② 重叠窗口不许把同一条指令记两次（会让 core_xref_count 虚高）；
+#   ③ 距离恰好等于阈值时必须仍然命中（边界上少一字节就漏掉真实 gate）。
+# --------------------------------------------------------------------------
+
+BIG_TEXT_SIZE = 0x30000
+
+
+def _build_big_pe(text: bytes, rdata: bytes, data: bytes) -> tuple[bytes, dict]:
+    """段大小按内容取整的最小 PE；返回 ``(镜像, {段名: (rva, raw_ptr)})``。
+
+    比 :func:`_build_pe` 多的是「够大」：距离阈值 0x20000 需要 .text 里放得下
+    两个相距 128 KB 的指令，而固定 0x400 的段装不下。
+    """
+    def align(n: int) -> int:
+        return max(0x1000, (n + 0xFFF) // 0x1000 * 0x1000)
+
+    t_size, r_size, d_size = align(len(text)), align(len(rdata)), align(len(data))
+    layout: dict = {}
+    text_rva, text_raw = 0x1000, 0x400
+    rdata_rva, rdata_raw = text_rva + t_size, text_raw + t_size
+    data_rva, data_raw = rdata_rva + r_size, rdata_raw + r_size
+    layout["text"] = (text_rva, text_raw)
+    layout["rdata"] = (rdata_rva, rdata_raw)
+    layout["data"] = (data_rva, data_raw)
+
+    headers = 0x400
+    opt_size = 0xF0
+    blob = bytearray(data_raw + d_size)
+    blob[0:2] = b"MZ"
+    struct.pack_into("<I", blob, 0x3C, 0x80)
+    blob[0x80:0x84] = b"PE\0\0"
+    struct.pack_into("<H", blob, 0x84, 0x8664)
+    struct.pack_into("<H", blob, 0x84 + 2, 3)
+    struct.pack_into("<H", blob, 0x84 + 16, opt_size)
+    sect_off = 0x80 + 4 + 20 + opt_size
+    specs = [
+        (b".text", text_rva, text_raw, t_size, 0x60000020),
+        (b".rdata", rdata_rva, rdata_raw, r_size, 0x40000040),
+        (b".data", data_rva, data_raw, d_size, 0xC0000040),
+    ]
+    for i, (name, rva, raw, size, chars) in enumerate(specs):
+        base = sect_off + i * 40
+        blob[base:base + 8] = name.ljust(8, b"\0")
+        struct.pack_into("<IIII", blob, base + 8, size, rva, size, raw)
+        struct.pack_into("<I", blob, base + 36, chars)
+    blob[text_raw:text_raw + len(text)] = text
+    blob[rdata_raw:rdata_raw + len(rdata)] = rdata
+    blob[data_raw:data_raw + len(data)] = data
+    del headers
+    return bytes(blob), layout
+
+
+def _lea_at(text: bytearray, lea_off: int, text_rva: int, target_rva: int) -> None:
+    """在 ``text[lea_off]`` 写一条 ``lea rcx, [rip+disp]`` 指向 ``target_rva``。"""
+    disp = target_rva - (text_rva + lea_off + 7)
+    text[lea_off:lea_off + 7] = b"\x48\x8d\x0d" + struct.pack("<i", disp)
+
+
+def _big_pe_with_gate_and_lea(lea_distance: int) -> tuple[bytes, int]:
+    """gate 指令与一条 core 引用点相距 ``lea_distance``（RVA）。
+
+    返回 ``(镜像, gate 目标 RVA)``；``lea_distance`` 可以是负数（引用点在 gate 之前）。
+    """
+    gate_off = 0x2F000
+    lea_off = gate_off - lea_distance
+    text = bytearray(b"\x90" * BIG_TEXT_SIZE)
+    rdata = acc.CORE_STRING
+    data = b"\x00" * 0x100
+    blob, layout = _build_big_pe(bytes(text), rdata, data)
+    text_rva, text_raw = layout["text"]
+    rdata_rva, _ = layout["rdata"]
+    data_rva, _ = layout["data"]
+
+    # lea 指向 core 字符串
+    _lea_at(text, lea_off, text_rva, rdata_rva)
+    # gate 指令：cmp byte[rip+disp],0 指向 .data 里的字节
+    target = data_rva + 0x10
+    cmp_at = text_rva + gate_off + 9
+    disp = target - (cmp_at + 7)
+    # ★ 这条指令是 22 字节（`48 85 c9` + `0f 84 rel32` + `80 3d disp32 imm8`
+    #   + `0f 84 rel32`）。切片长度必须与写入等长，否则 bytearray 会被撑长，
+    #   回写时把后面的 .rdata 开头盖成 0x90（M101 首版就这么红了一次）。
+    gate_bytes = (
+        b"\x48\x85\xc9\x0f\x84" + b"\x00\x00\x00\x00"
+        + b"\x80\x3d" + struct.pack("<i", disp) + b"\x00\x0f\x84" + b"\x00\x00\x00\x00"
+    )
+    text[gate_off:gate_off + len(gate_bytes)] = gate_bytes
+    assert len(text) == BIG_TEXT_SIZE
+    blob = bytearray(blob)
+    blob[text_raw:text_raw + BIG_TEXT_SIZE] = text
+    return bytes(blob), target
+
+
+def test_rip_xrefs_window_excludes_refs_outside():
+    """窗口外的引用点不许进结果——否则限窗等于没做。
+
+    ★ ``far_off`` 必须落在 .text **段内**（段是 ``0x400..0x800``）：写成 ``0x400``
+      会落到 .rdata，全段扫也找不到它，注入「忽略窗口」时判据依然全绿——那是一条
+      验证不了任何东西的假判据（M101 首版就这样红过一次，原因是判据写错而不是实现）。
+    """
+    text = bytearray(b"\x90" * SEC_SIZE)
+    near_off, far_off = 0x100, 0x300
+    _lea_at(text, near_off, TEXT_RVA, RDATA_RVA)
+    _lea_at(text, far_off, TEXT_RVA, RDATA_RVA)
+    pe = _build_pe(bytes(text), acc.CORE_STRING, b"\x00" * SEC_SIZE)
+    sections = acc.pe_sections(pe)
+
+    near_rva = TEXT_RVA + near_off
+    refs = acc.rip_xrefs_to(
+        pe, sections, RDATA_RVA, rva_windows=[(near_rva - 0x10, near_rva + 0x10)]
+    )
+    assert refs == [near_rva], "只应留下窗口内的那一条，窗口外的必须被排除"
+
+
+def test_rip_xrefs_overlapping_windows_dedupe():
+    """重叠窗口会重复命中同一条指令，结果必须去重。"""
+    text = bytearray(b"\x90" * SEC_SIZE)
+    off_a, off_b = 0x100, 0x180
+    _lea_at(text, off_a, TEXT_RVA, RDATA_RVA)
+    _lea_at(text, off_b, TEXT_RVA, RDATA_RVA)
+    pe = _build_pe(bytes(text), acc.CORE_STRING, b"\x00" * SEC_SIZE)
+
+    refs = acc.rip_xrefs_to(
+        pe, acc.pe_sections(pe), RDATA_RVA,
+        rva_windows=[(TEXT_RVA, TEXT_RVA + 0x200), (TEXT_RVA + 0x100, TEXT_RVA + 0x300)],
+    )
+    assert refs == [TEXT_RVA + off_a, TEXT_RVA + off_b], (
+        "两个窗口都覆盖这两条指令时只能各记一次"
+    )
+
+
+def test_rip_xrefs_window_outside_sections_is_empty():
+    """窗口整个落在可执行段之外时返回空，不能把相邻段当代码扫。"""
+    pe = _pe_with_gate()
+    refs = acc.rip_xrefs_to(
+        pe, acc.pe_sections(pe), RDATA_RVA,
+        rva_windows=[(RDATA_RVA, RDATA_RVA + 0x100)],
+    )
+    assert refs == []
+
+
+def test_scan_finds_gate_at_exact_distance_limit():
+    """引用点与 gate 的距离恰好等于阈值时必须命中（判定是 ``> 上限才丢``）。"""
+    pe, gate_target = _big_pe_with_gate_and_lea(acc._MAX_CORE_DISTANCE)
+    scan = acc.scan_gate_rva(pe)
+    assert scan.rva == gate_target
+    assert scan.distance == acc._MAX_CORE_DISTANCE
+
+
+def test_scan_drops_gate_beyond_distance_limit():
+    """超出阈值一个字节就必须丢掉——否则「窗口」会漏进不该采信的引用点。"""
+    pe, _ = _big_pe_with_gate_and_lea(acc._MAX_CORE_DISTANCE + 0x20)
+    scan = acc.scan_gate_rva(pe)
+    assert scan.rva is None
