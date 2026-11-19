@@ -2495,6 +2495,12 @@ async function toggleGroup(bucket) {
 
 function renderBatchBar() {
   if (!el.elemLibLayer) return
+  // 批量条是**单例**：每次重绘先撤掉上一条，再按当前选中集决定要不要浮出。
+  // 早先只 append 不清理 ⇒ 勾 N 项叠 N 条；取消最后一项时旧的「已选 N 项」
+  // 还会赖着不走。layer 同时承载右键菜单/提示框，只能挑掉批量条，不能整层清空。
+  const kept = Array.from(el.elemLibLayer.children).filter(
+    (node) => !node.classList?.contains('libBatchBar'))
+  el.elemLibLayer.replaceChildren(...kept)
   // 右键菜单开着时批量条让位；两者共用 layer，避免互相覆盖。
   if (libMenu || !elemSelected.size) return
   const bar = mk('div', 'libBatchBar')

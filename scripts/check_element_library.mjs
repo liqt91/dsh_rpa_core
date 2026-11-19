@@ -662,12 +662,22 @@ await checkAsync('多选批量：勾选进选中集、批量条浮出、取消�
   const pickA = walk(rows[0]).find((n) => hasClass(n, 'elemPick'))
   const pickB = walk(rows[1]).find((n) => hasClass(n, 'elemPick'))
   assert(pickA && pickB, '资产行缺多选复选框')
+  const bars = () => walk(nodeById('elemLibLayer')).filter((n) => hasClass(n, 'libBatchBar'))
+  const countText = (bar) => (bar
+    ? walk(bar).find((n) => hasClass(n, 'libBatchCount'))?.textContent
+    : '<none>')
   pickA.checked = true
   await pickA.handlers.change[0]({ type: 'change' })
+  // 单例判据：勾 N 项只能有 1 条，且计数跟着变。早先每次勾选都 append，
+  // 勾 5 项就叠 5 条（现场截图），而用例只用 find 取一条 ⇒ 一直假绿。
+  assert(bars().length === 1 && countText(bars()[0]) === '已选 1 项',
+    `勾 1 项后批量条 ${bars().length} 条 / ${countText(bars()[0])}`)
   pickB.checked = true
   await pickB.handlers.change[0]({ type: 'change' })
   assert(api.getSelected().join(',') === 'a,b', `选中集 ${api.getSelected()}`)
-  const bar = walk(nodeById('elemLibLayer')).find((n) => hasClass(n, 'libBatchBar'))
+  assert(bars().length === 1 && countText(bars()[0]) === '已选 2 项',
+    `勾 2 项后批量条 ${bars().length} 条 / ${countText(bars()[0])}`)
+  const bar = bars()[0]
   assert(bar, '批量条没浮出')
   const barLabels = walk(bar).filter((n) => hasClass(n, 'libMenuItem')).map((n) => n.textContent)
   assert(['批量移动', '批量校验', '批量删除', '取消选择'].every((x) => barLabels.includes(x)), barLabels.join('/'))
@@ -675,6 +685,7 @@ await checkAsync('多选批量：勾选进选中集、批量条浮出、取消�
   await clear.click()
   await flush()
   assert(api.getSelected().length === 0, '取消选择没清空')
+  assert(bars().length === 0, `取消选择后批量条还剩 ${bars().length} 条`)
 })
 
 await checkAsync('新入库资产带来源/状态字段，但界面不伪造旧资产的值', async () => {

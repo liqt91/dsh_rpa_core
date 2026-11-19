@@ -525,3 +525,20 @@ trace。S2b 的探针和契约都自己塞了 `imageSize` —— 判据形状 �
 - `probe_m102_s2c_negative.py` 1 注入：期望 pytest 1 / node 0 / 两探针红；
 - 既有 7 注入的期望集补上新用例（同一因连带，非误红）后复跑；
 - 全量 1076 passed。本次只改 Python，**需重启 ppx**，扩展不必再动。
+
+## S2d（现场截图）：勾选元素叠出多行批量条
+
+维护者截图：勾 5 项，元素列表下方出现 5 行「已选 1 项 … 已选 5 项」批量操作条。
+
+根因：`renderBatchBar()` 每次 `append` 一条、从不清理。勾选走 checkbox 的 change
+事件，每勾一次就重绘一次 ⇒ 累积 N 条；取消最后一项时 `if (!elemSelected.size) return`
+在清理之前 ⇒ 旧条还会赖着不走。旧判据用 `find` 找「有一条」，所以一直假绿。
+
+改法：`renderBatchBar()` 开头先从 `elemLibLayer` 里挑掉所有 `.libBatchBar`，
+再按当前选中集决定要不要浮出。layer 与右键菜单/提示框共用，**不能整层
+`replaceChildren()`**——只保留非批量条节点。
+
+判据（`check_element_library.mjs` 多选用例）：勾 1 项/2 项后批量条**恰好 1 条**且
+计数分别是「已选 1 项」「已选 2 项」；取消选择后归零。负向 2 注入分别打中
+「防累积」与「取消后消失」（按 detail 关键字断言，不只判 rc）；`npm run build`
+重建 dist；全量 1076 passed。前端 dev server 会热更新，刷新页面即可看到。
