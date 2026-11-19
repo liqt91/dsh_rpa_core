@@ -77,10 +77,17 @@
               <button type="button" id="elemCapture" class="elemCapture">捕获元素</button>
               <button type="button" id="elemCaptureImage" class="elemCapture">按图捕获</button>
             </div>
-            <details class="elemBox" id="elemBox" open>
-              <summary></summary>
-              <div id="elemBody" class="elemBody"></div>
-            </details>
+            <!-- M102 S2：左列表 + 右详情。底栏宽度富余、高度稀缺，所以详情常驻在
+                 右侧而不是弹窗：连续核对多个元素时不必开框关框。窄窗口（<1100px）
+                 由 CSS 回落成单列，DOM 不动、不写两套渲染。 -->
+            <div class="elemSplit" id="elemSplit">
+              <details class="elemBox" id="elemBox" open>
+                <summary></summary>
+                <div id="elemBody" class="elemBody"></div>
+              </details>
+              <!-- 内容全部由 main.js 建：静态按钮白名单是等值集合，这里不放 <button>。 -->
+              <aside id="elemDetail" class="elemDetail" hidden></aside>
+            </div>
             <!-- M93：右键菜单 / 文本输入浮层 / 多选批量条的动态宿主。
                  不是按钮，不占捕获按钮白名单；不嵌在 elemBody 里，刷新清单不会清掉它。 -->
             <div id="elemLibLayer" class="elemLibLayer"></div>

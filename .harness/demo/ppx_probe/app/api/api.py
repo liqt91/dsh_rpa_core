@@ -65,6 +65,11 @@ if FROZEN_RES is not None:
     os.environ.setdefault("RPA_I18N_JS", str(FROZEN_RES / "i18n.js"))
 
 import rpa_core  # noqa: E402
+from rpa_core.capture.screen_shot import (  # noqa: E402
+    element_shot_from_descriptor,
+    element_shot_payload,
+    store_element_shot,
+)
 from rpa_core.capture_kit import (  # noqa: E402
     CaptureController,
     CaptureFloat,
@@ -2533,10 +2538,12 @@ def list_elements(path: str) -> dict[str, Any]:
             try:
                 doc = json.loads(f.read_text(encoding="utf-8"))
                 sel = doc.get("selector") or {}
+                locator = sel.get("locator")
                 items.append(
                     {
                         "name": f.stem,
                         "kind": doc.get("kind"),
+                        "driver": locator.get("driver") if isinstance(locator, dict) else None,
                         "selector": sel.get("css") or sel.get("locator"),
                         "refCount": counts.get(f.stem, 0),
                         "group": doc.get("group"),
@@ -2562,6 +2569,26 @@ def list_elements(path: str) -> dict[str, Any]:
         "dir": str(ed),
         "ms": round((time.perf_counter() - started) * 1000, 1),
     }
+
+
+@api_method("rpa.elementShot")
+def element_shot(path: str, name: str) -> dict[str, Any]:
+    """按资产名取它的缩略图（data URL）——**按需拉**，不塞进 ``listElements``。
+
+    二十个元素各带一张几百 KB 的 base64，会把每次刷新都拖成几百毫秒；而缩略图只在
+    详情卡里看一张。所以列表只回 ``screenshot`` 那几个标量字段，图要单独来拿。
+
+    没有图（旧资产 ``screenshot: null``、或 png 被删）回 ``shot: None`` + ``ok: true``：
+    「没图」是正常状态，不是错误——界面显示占位块即可。
+    """
+    ed = _elements_dir(path)
+    target = ed / f"{name}.json"
+    try:
+        doc = json.loads(target.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+        return {"ok": False, "code": "NOT_FOUND", "error": f"没有这个元素：{name}"}
+    entry = doc.get("screenshot") if isinstance(doc, dict) else None
+    return {"ok": True, "name": name, "shot": element_shot_payload(ed, entry)}
 
 
 # -- M92/P1：元素库管理 RPC（只做数据与文件，界面在 P2 消费） -------------------
@@ -2845,6 +2872,11 @@ def _hold_captured(entry: dict[str, Any], descriptor: dict[str, Any]) -> dict[st
         metadata=descriptor.get("metadata", {}),
     ).document()
     entry["captured"] = doc
+    # ★ 缩略图在**这一刻**截（M102 S1），不是入库那一刻：桌面腿的确认框马上就要
+    #   盖在目标窗口上，等到 commit 再截，截到的就是自己的对话框。浏览器腿更直接
+    #   ——捕获时挂上的 ``captureShot`` 就是那一刻的整窗快照，复用它连截屏都省了。
+    #   存盘仍归 ``_do_commit``：用户点取消不该在盘上留一张孤儿 png。
+    entry["shot"] = _capture_element_shot(doc, descriptor.get("captureShot"))
     entry["preview"] = {
         "name": entry.get("name") or entry.get("suggestName"),
         "kind": doc["kind"],
@@ -2855,6 +2887,14 @@ def _hold_captured(entry: dict[str, Any], descriptor: dict[str, Any]) -> dict[st
         "overwrite": bool(entry.get("overwrite")),
     }
     return doc
+
+
+def _capture_element_shot(doc: dict[str, Any], shot: Any) -> dict[str, Any] | None:
+    """捕获那一刻的元素缩略图（PNG + 尺寸）；拿不到就 None，绝不影响捕获结果。"""
+    try:
+        return element_shot_from_descriptor(doc, shot=shot if isinstance(shot, dict) else None)
+    except Exception:  # noqa: BLE001 - 缩略图是增强，不能把成功的捕获拖成失败
+        return None
 
 
 def _pick_plan(path: str, name: str | None, override: str | None = None) -> dict[str, Any]:
@@ -3153,6 +3193,11 @@ def _do_commit(entry: dict[str, Any], name: str) -> dict[str, Any]:
     doc = dict(entry["captured"] or {})
     doc["name"] = name
     _fill_library_fields(doc)
+    # 缩略图在捕获那一刻已经拍好（``entry["shot"]``），到入库才落盘：用户点取消
+    # 不该在盘上留孤儿 png。编辑/改名这条路没有新图 ⇒ 保留资产里原有的那张。
+    shot_path = store_element_shot(entry.get("shot"), _elements_dir(path))
+    if shot_path is not None:
+        doc["screenshot"] = shot_path
     _write_element_doc(target, doc)
     renamed: list[str] = []
     ref = entry.get("name") or ""

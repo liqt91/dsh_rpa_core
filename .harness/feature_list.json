@@ -474,7 +474,7 @@
     },
     {
       "id": "xhs-element-library",
-      "title": "Editor element library: capture guard + M92-M101 (groups, tree, dock, taskbar, granularity, verify wake, scan window)",
+      "title": "Editor element library: capture guard + M92-M102 (groups, tree, dock, verify wake, scan window, shots, split pane)",
       "passes": true
     },
     {

@@ -62,11 +62,20 @@ PrintWindow 正常（红色定位标记恰好出现 1 次）⇒ **不是 PrintWi
 from __future__ import annotations
 
 import base64
+import hashlib
 import io
 import sys
+from pathlib import Path
 from typing import Any, Protocol
 
 from rpa_core.capture._trace import trace as _trace
+
+#: 元素缩略图四周留的上下文（像素）：只为了让边缘不被切掉，不追求「看出在哪」。
+_SHOT_PAD = 2
+
+#: 元素缩略图长边上限。整窗级元素（比如浏览器根容器）不设上限就是几百 KB 一张，
+#: 而缩略图在界面上最多显示两三百像素——超过这个数就是纯浪费。
+_SHOT_MAX_EDGE = 512
 
 #: 浏览器窗口类名（**仅作文档参考**，判定走进程名——见 M47.9 实测教训：
 #: ``Chrome_WidgetWin_1`` 被 Chrome/Edge 与定制 Chromium 客户端共用）。
@@ -609,3 +618,229 @@ def capture_shot_from_descriptor(
         crop=crop,
     )
     return shot
+
+
+# ------------------------------------------------- 元素资产缩略图（M102 S1）
+
+def _padded_crop(
+    box: dict[str, Any] | None, image_size: tuple[int, int] | None
+) -> tuple[int, int, int, int] | None:
+    """元素框 → 外扩 ``_SHOT_PAD`` 并夹回图内的 PIL crop box ``(l, u, r, b)``。
+
+    ★ 这里**不是坐标换算**：进出的都是「图内像素」，减法已由
+      :func:`box_in_window` / :func:`browser_box_in_window` 做完。本函数只做
+      「往外让 2px、别越出图」这一件事，别把缩放/边框/视口逻辑再抄进来。
+    """
+    if not isinstance(box, dict) or not image_size:
+        return None
+    try:
+        x = float(box["x"])
+        y = float(box["y"])
+        width = float(box["width"])
+        height = float(box["height"])
+        img_w = float(image_size[0])
+        img_h = float(image_size[1])
+    except (KeyError, TypeError, ValueError):
+        return None
+    if width <= 0 or height <= 0 or img_w <= 0 or img_h <= 0:
+        return None
+    left = max(0.0, x - _SHOT_PAD)
+    upper = max(0.0, y - _SHOT_PAD)
+    right = min(img_w, x + width + _SHOT_PAD)
+    lower = min(img_h, y + height + _SHOT_PAD)
+    # 元素整个在窗口外（滚出视口 / 窗口挪走了）：宁可不存图，也不存一张空图。
+    if right - left < 1 or lower - upper < 1:
+        return None
+    return (int(round(left)), int(round(upper)), int(round(right)), int(round(lower)))
+
+
+def element_shot_from_descriptor(
+    descriptor: dict[str, Any],
+    hwnd: int | None = None,
+    api: _ScreenAPI | None = None,
+    shot: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    """捕获那一刻的**元素缩略图**：整窗截图 → 裁到元素附近 → PNG 字节。
+
+    与 :func:`capture_shot_from_descriptor` 的区别是产出形态：那个给预览页签
+    看「元素在窗口的哪个位置」（dataUrl 整窗 + 红框/裁剪区），这个给元素库存
+    「这个元素长什么样」（几 KB 的 PNG + 尺寸 + 缩放），是一份**资产**而不是一次预览。
+
+    ``shot`` 可以传入已经拿到的整窗快照（浏览器腿捕获时 ``captureShot`` 就在手边，
+    复用它可以省掉一次截屏，也保证图与捕获同一时刻）；不给就现场 ``grab_window``。
+
+    几何**只调用既有换算**：桌面腿 :func:`box_in_window`、浏览器腿
+    :func:`browser_box_in_window`。本模块不允许出现第二套坐标算术——
+    ``screen_shot.py`` 头注释记着 150% 缩放下二次换算会偏，这条红线同样适用于缩略图。
+
+    拿不到 rect / 窗口 / 图 / PIL 时返回 ``None``：缩略图是**增强**，绝不能把一次
+    成功的捕获拖成失败（同 :func:`capture_shot_from_descriptor` 的口径）。
+    """
+    if not isinstance(descriptor, dict):
+        return None
+    meta = descriptor.get("metadata")
+    meta = meta if isinstance(meta, dict) else {}
+    rect = meta.get("rect")
+    if not isinstance(rect, dict):
+        return None
+
+    handle = hwnd
+    if not isinstance(handle, int) or isinstance(handle, bool) or handle <= 0:
+        recorded = meta.get("windowHandle")
+        handle = recorded if isinstance(recorded, int) and not isinstance(recorded, bool) else None
+
+    if not isinstance(shot, dict):
+        if not handle or int(handle) <= 0:
+            _trace("element_shot", "no_window")
+            return None
+        shot = grab_window(int(handle), api=api)
+    if not shot or not shot.get("dataUrl"):
+        _trace("element_shot", "grab_failed", hwnd=int(handle or 0))
+        return None
+
+    image_size = shot.get("imageSize")
+    image_size = tuple(image_size) if isinstance(image_size, (list, tuple)) else None
+    if not image_size or len(image_size) < 2:
+        return None
+
+    if str(descriptor.get("kind") or "") == "browser":
+        viewport = descriptor.get("viewport")
+        if not isinstance(viewport, dict):
+            sel = descriptor.get("selector")
+            sel = sel if isinstance(sel, dict) else {}
+            viewport = sel.get("viewport")
+        box = browser_box_in_window(rect, viewport, image_size)  # 换算唯一权威
+    else:
+        origin = shot.get("windowOrigin")
+        origin = tuple(origin) if isinstance(origin, (list, tuple)) else None
+        box = box_in_window(rect, origin)  # 换算唯一权威
+
+    crop = _padded_crop(box, image_size)
+    if crop is None:
+        _trace("element_shot", "no_box", hwnd=int(handle or 0))
+        return None
+
+    try:
+        from PIL import Image
+
+        payload = str(shot["dataUrl"]).split(",", 1)[-1]
+        with Image.open(io.BytesIO(base64.b64decode(payload))) as img:
+            tile = img.convert("RGBA").crop(crop)
+        scale = 1.0
+        long_edge = max(tile.size)
+        if long_edge > _SHOT_MAX_EDGE:
+            scale = _SHOT_MAX_EDGE / float(long_edge)
+            size = (
+                max(1, int(round(tile.width * scale))),
+                max(1, int(round(tile.height * scale))),
+            )
+            resample = getattr(Image, "Resampling", Image).LANCZOS
+            tile = tile.resize(size, resample)
+        out = io.BytesIO()
+        tile.save(out, format="PNG", optimize=True)
+        png = out.getvalue()
+        width, height = tile.size
+    except Exception as exc:  # noqa: BLE001 - 裁剪/编码失败一样只是「没有缩略图」
+        _trace("element_shot", "encode_failed", error=type(exc).__name__)
+        return None
+
+    _trace(
+        "element_shot",
+        "ok",
+        hwnd=int(handle or 0),
+        crop=list(crop),
+        size=[int(width), int(height)],
+        scale=round(scale, 4),
+        bytes=len(png),
+    )
+    return {
+        "png": png,
+        "width": int(width),
+        "height": int(height),
+        "scale": round(float(scale), 4),
+    }
+
+
+#: 元素缩略图的子目录名（位于流程的 ``elements/`` 下）。资产里的 ``screenshot``
+#: 记的是**相对 elements/ 的路径**（``shots/<hash>.png``）：整个元素目录挪位置、
+#: 打包、拷给别人都不用改资产。
+SHOTS_DIRNAME = "shots"
+
+#: 文件名里的内容哈希长度（sha256 前 16 位十六进制）。用内容哈希而不是 ``<名字>.png``：
+#: 改名、复制一份、覆盖重捕这三条路都不必再去动附属文件——少三个「必漏其一」的地方。
+_SHOT_HASH_LEN = 16
+
+
+def store_element_shot(
+    shot: dict[str, Any] | None,
+    elements_dir: Path | str,
+) -> str | None:
+    """把 :func:`element_shot_from_descriptor` 的产出存成 ``shots/<hash>.png``。
+
+    返回**相对 elements/ 的路径字符串**——这就是资产里 ``screenshot`` 的值。
+    ``ElementDescriptor.screenshot`` 的类型是 ``str | None``（M92/P1 对齐影刀口径），
+    所以这里不返回结构化字典：把 dict 塞进去会让 ``element validate`` 直接判资产非法
+    （``cli.py`` 用同一个模型校验盘上的文件）。宽高不存也能拿到——图里就有。
+
+    内容相同的图会映射到同一个文件名：重捕同一个元素不会堆出一堆文件，mtime 也不乱动。
+
+    任何失败都返回 ``None``——缩略图是**增强**，写不进去只是「这个资产没图」，
+    绝不能让一次成功的捕获变成失败（同 :func:`capture_shot_from_descriptor` 口径）。
+    """
+    if not isinstance(shot, dict):
+        return None
+    png = shot.get("png")
+    if not isinstance(png, (bytes, bytearray)) or not png:
+        return None
+    try:
+        digest = hashlib.sha256(bytes(png)).hexdigest()[:_SHOT_HASH_LEN]
+        shots_dir = Path(elements_dir) / SHOTS_DIRNAME
+        shots_dir.mkdir(parents=True, exist_ok=True)
+        target = shots_dir / f"{digest}.png"
+        if not target.is_file():
+            target.write_bytes(bytes(png))
+    except OSError as exc:
+        _trace("element_shot", "store_failed", error=type(exc).__name__)
+        return None
+    return f"{SHOTS_DIRNAME}/{digest}.png"
+
+
+def read_element_shot(
+    elements_dir: Path | str,
+    screenshot: str | None,
+) -> bytes | None:
+    """按资产里的 ``screenshot``（相对路径）读回 PNG 字节；读不到返回 ``None``。
+
+    ``screenshot`` 来自盘上的 JSON，可能被人手改过，所以这里**限定**在
+    ``<elements_dir>/shots/`` 之内——路径穿越（``../../x.png``）一律拒绝，
+    不让一次「显示缩略图」变成任意文件读取。
+    """
+    if not isinstance(screenshot, str) or not screenshot:
+        return None
+    root = (Path(elements_dir) / SHOTS_DIRNAME).resolve()
+    try:
+        target = (Path(elements_dir) / screenshot).resolve()
+    except OSError:
+        return None
+    if root not in target.parents:
+        _trace("element_shot", "read_outside_root", file=screenshot)
+        return None
+    try:
+        data = target.read_bytes()
+    except OSError:
+        return None
+    return data or None
+
+
+def element_shot_payload(elements_dir: Path | str, screenshot: str | None) -> str | None:
+    """``screenshot`` → 可直接塞进 ``<img src>`` 的 data URL；读不到返回 ``None``。
+
+    ★ 按需取：``listElements`` 只回 ``screenshot`` 这个路径，图本身要单独来拿。
+      二十个元素各带一张几百 KB 的 base64 会把每次刷新都拖成几百毫秒。
+    """
+    png = read_element_shot(elements_dir, screenshot)
+    if not png:
+        return None
+    return "data:image/png;base64," + base64.b64encode(png).decode("ascii")
+
+

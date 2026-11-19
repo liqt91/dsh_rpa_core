@@ -48,6 +48,7 @@ const el = {
   dirty: document.querySelector('#dirty'),
   unset: document.querySelector('#unset'),
   elemBody: document.querySelector('#elemBody'),
+  elemDetail: document.querySelector('#elemDetail'),
   elemCount: document.querySelector('#elemCount'),
   elemCapture: document.querySelector('#elemCapture'),
   elemCaptureImage: document.querySelector('#elemCaptureImage'),
@@ -1257,6 +1258,16 @@ const ELEM_TEXT = {
   refsTitle: '引用了「{name}」的位置',
   refsZero: '没有流程引用它',
   copiedAs: '已复制为「{name}」',
+  // M102 S2：右栏详情
+  detailPick: '点左边一行，这里显示它的截图和完整定位',
+  shotNone: '这个元素还没有截图',
+  detailKind: '类型',
+  detailWhere: '所属',
+  detailGroup: '分组',
+  detailSelector: '定位',
+  detailRefs: '引用',
+  detailCaptured: '捕获时间',
+  detailNoRefs: '还没被流程引用',
 }
 
 function elemText(key, vars = {}) {
@@ -1270,6 +1281,11 @@ let pickUnused = [] // M93：引用计数为 0 的资产名
 let elemFilterText = '' // 只影响显示，不动资产与引用
 let elemOnlyUnused = false // M93：「只看未使用」筛选开关
 let elemSelected = new Set() // M93：多选资产名（批量操作）
+// M102 S2：右栏正在看的资产名 + 缩略图缓存（按「名字|screenshot 路径」做键，
+// 重捕或改名后自动失效，不用手动清）。图按需拉，不进 listElements 的批量响应。
+let elemActive = null
+const elemShotCache = new Map()
+const elemThumbNodes = new Map()
 let libMenu = null // M93：当前右键菜单节点（点别处收起）
 let captureSession = null // { id, name, nodeId } —— 捕获期唯一的状态
 let captureTimer = null
@@ -2008,9 +2024,19 @@ function missingRow(m) {
   return row
 }
 
+/* M102 S2：一个资产行 = 缩略图 + 名字 + 一行元信息 + 悬停动作。
+ *
+ * 为什么把选择器从「独占一行」收回成单行截断：M93 那版为了看得全让 meta 折行，
+ * 行高被撑到 60px 上下，一屏看不到几项。现在完整定位在右栏常驻显示，行里只需要
+ * 「能不能认出是哪个」。反过来说，这也是**故意**改回单行——不是没注意到旧反馈。
+ *
+ * 三个动作仍留在行里（详情/校验/删除），只是默认透明、hover 或聚焦时浮现：
+ * 删除依然是最后一个，且要 hover 才现形，避免手滑点掉。
+ */
 function assetRow(e) {
   const row = mk('div', 'elemRow asset')
   row.dataset.elemName = e.name
+  if (e.name === elemActive) row.classList.add('active')
   const pick = mk('input', 'elemPick')
   pick.type = 'checkbox'
   pick.checked = elemSelected.has(e.name)
@@ -2019,27 +2045,173 @@ function assetRow(e) {
     else elemSelected.delete(e.name)
     renderBatchBar()
   })
+  row.append(pick)
+  row.append(assetThumb(e))
   row.append(mk('span', 'elemName', e.name))
   const bits = []
   if (kindLabel(e.kind)) bits.push(kindLabel(e.kind))
   if (e.processName) bits.push(e.processName)
   if (e.winTitle) bits.push(e.winTitle)
-  bits.push(e.selector || '')
+  if (e.selector) bits.push(selectorLine(e.selector))
   const meta = mk('span', 'elemMeta', bits.filter(Boolean).join(' · '))
+  meta.title = selectorText(e.selector)
   row.append(meta)
   if (e.refCount) row.append(mk('span', 'elemRefs', `${e.refCount} 处引用`))
+  const actions = mk('span', 'elemRowAct')
   const detail = mk('button', 'elemAct', elemText('detail'))
   detail.addEventListener('click', () => openAssetDetail(e.name))
   const verify = mk('button', 'elemAct', elemText('verify'))
   verify.addEventListener('click', () => verifyAsset(e.name, meta, verify))
   const remove = mk('button', 'elemAct danger', elemText('remove'))
   remove.addEventListener('click', () => deleteAsset(e.name))
-  row.append(detail, verify, remove, pick)
+  actions.append(detail, verify, remove)
+  row.append(actions)
+  // 点行本身 = 选中（右栏看截图与完整定位）；行内按钮自己 stopPropagation 不了，
+  // 但 selector 只影响右栏，误触也无副作用。
+  row.addEventListener('click', () => selectAssetRow(e.name))
   row.addEventListener('contextmenu', (event) => {
     event.preventDefault?.()
     openLibMenu(event, 'asset', e)
   })
   return row
+}
+
+function selectAssetRow(name) {
+  elemActive = name
+  for (const node of Array.from(el.elemBody.children || [])) {
+    if (!node.classList?.contains?.('elemRow')) continue
+    if (node.dataset?.elemName === name) node.classList.add('active')
+    else if (node.dataset?.elemName) node.classList.remove('active')
+  }
+  renderElementDetail()
+}
+
+// 元信息里那一小段定位：单行截断用，桌面 locator 也压成一句。
+function selectorLine(value) {
+  if (typeof value === 'string') return value.replace(/\s+/g, ' ').trim()
+  const locator = value && typeof value === 'object' ? value : null
+  if (!locator) return ''
+  const path = Array.isArray(locator.path) ? locator.path : []
+  const last = path[path.length - 1]
+  if (last && typeof last === 'object') {
+    return String(last.name || last.automationId || last.controlType || '')
+  }
+  if (locator.driver === 'image') return '图像'
+  return String(locator.controlType || locator.control_type || '')
+}
+
+// 右栏/详情里要看得全：对象形状直接摊成 JSON，别显示成 [object Object]。
+function selectorText(value) {
+  if (value == null || value === '') return '—'
+  if (typeof value === 'string') return value
+  try {
+    return JSON.stringify(value, null, 2)
+  } catch {
+    return String(value)
+  }
+}
+
+function shotKey(e) {
+  return `${e.name}|${e.screenshot || ''}`
+}
+
+function assetThumb(e) {
+  const box = mk('span', 'elemThumb')
+  const key = shotKey(e)
+  const url = elemShotCache.get(key)
+  if (url) {
+    box.classList.add('has')
+    const img = mk('img', 'elemThumbImg')
+    img.src = url
+    img.alt = ''
+    box.append(img)
+  } else {
+    box.append(mk('span', 'elemThumbFallback', String((e.name || '?').slice(0, 1))))
+  }
+  const nodes = elemThumbNodes.get(key) || new Set()
+  nodes.add(box)
+  elemThumbNodes.set(key, nodes)
+  if (e.screenshot && !elemShotCache.has(key)) loadElementShot(e, key)
+  return box
+}
+
+// 缩略图按需拉：一次几个 KB，但二十个元素一起塞进 listElements 就是几百 KB。
+async function loadElementShot(e, key) {
+  elemShotCache.set(key, null) // 先钉住，避免同一次渲染重复发请求
+  try {
+    const res = await ppx.call('rpa.elementShot', { path: currentPath, name: e.name })
+    const url = res && res.shot ? String(res.shot) : ''
+    if (!url) return
+    elemShotCache.set(key, url)
+    for (const node of elemThumbNodes.get(key) || []) {
+      // 用 `=== false` 而不是 `!node.isConnected`：真 DOM 里它恒为布尔值，
+      // 而最小 DOM shim 里根本没有这个属性——写成取反会让缩略图永远不出现。
+      if (node.isConnected === false) continue
+      node.classList.add('has')
+      const img = document.createElement('img')
+      img.className = 'elemThumbImg'
+      img.src = url
+      img.alt = ''
+      node.replaceChildren(img)
+    }
+    if (elemActive === e.name) renderElementDetail()
+  } catch {
+    // 没图就是没图：界面显示首字母占位，不弹错。
+  }
+}
+
+/* 右栏详情：截图 + 完整定位 + 引用/来源。**只读展示**——三个动作仍在行上，
+ * 这里不复制第二套按钮（两处按钮必然漂移成两种行为）。 */
+function renderElementDetail() {
+  const pane = el.elemDetail
+  if (!pane) return
+  const asset = pickElements.find((e) => e.name === elemActive) || null
+  pane.replaceChildren()
+  if (pane.hidden !== !asset) pane.hidden = !asset
+  if (!asset) {
+    pane.append(mk('div', 'elemDetailPick', elemText('detailPick')))
+    return
+  }
+  const head = mk('div', 'elemDetailHead')
+  head.append(mk('div', 'elemDetailName', asset.name))
+  const sub = []
+  if (kindLabel(asset.kind)) sub.push(kindLabel(asset.kind))
+  if (asset.groupName) sub.push(asset.groupName)
+  head.append(mk('div', 'elemDetailSub', sub.join(' · ')))
+  pane.append(head)
+
+  const shotBox = mk('div', 'elemDetailShot')
+  const url = elemShotCache.get(shotKey(asset))
+  if (url) {
+    const img = mk('img', 'elemDetailImg')
+    img.src = url
+    img.alt = ''
+    shotBox.append(img)
+  } else {
+    shotBox.append(mk('div', 'elemDetailShotNone', elemText('shotNone')))
+  }
+  pane.append(shotBox)
+
+  const rows = []
+  if (asset.winTitle) rows.push([elemText('detailWhere'), asset.winTitle])
+  if (asset.refCount) rows.push([elemText('detailRefs'), `${asset.refCount} 处`])
+  else rows.push([elemText('detailRefs'), elemText('detailNoRefs')])
+  if (asset.capturedAt) rows.push([elemText('detailCaptured'), String(asset.capturedAt)])
+  if (rows.length) {
+    const info = mk('div', 'elemDetailInfo')
+    for (const [label, value] of rows) {
+      const line = mk('div', 'elemDetailLine')
+      line.append(mk('span', 'elemDetailLabel', label))
+      line.append(mk('span', 'elemDetailValue', String(value)))
+      info.append(line)
+    }
+    pane.append(info)
+  }
+
+  const block = mk('div', 'elemDetailBlock')
+  block.append(mk('div', 'elemDetailLabel', elemText('detailSelector')))
+  block.append(mk('pre', 'elemDetailCode', selectorText(asset.selector)))
+  pane.append(block)
 }
 
 async function verifyAsset(name, meta, button) {
@@ -2130,6 +2302,7 @@ function renderElementsPanel() {
   if (!pickMissing.length && !assets.length) {
     el.elemBody.append(mk('div', 'hint',
       elemOnlyUnused ? elemText('unusedNone') : (elemFilterText.trim() ? '没有匹配的元素' : elemText('none'))))
+    renderElementDetail()
     return
   }
   if (pickMissing.length) {
@@ -2147,6 +2320,9 @@ function renderElementsPanel() {
   // 选中集可能因刷新而失效（资产被删），同步收敛后再决定是否显示批量条。
   const names = new Set(pickElements.map((e) => e.name))
   for (const name of Array.from(elemSelected)) if (!names.has(name)) elemSelected.delete(name)
+  // 右栏跟着收敛：元素被删/改名后不能还挂着上一份详情。
+  if (elemActive && !names.has(elemActive)) elemActive = null
+  renderElementDetail()
   renderBatchBar()
 }
 

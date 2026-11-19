@@ -352,15 +352,84 @@ aside, section { min-height: 0; overflow: auto; background: var(--surface); }
 .elemRow.missing { background: var(--sunken); }
 .elemName { font: 14px/1.4 Consolas, "Microsoft YaHei", monospace; color: var(--text); font-weight: 500; }
 .elemMeta { flex: 1 1 120px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 14px; }
-/* 已有资产行：名字与按钮一行，选择器独占一行并允许折行——长 css 单行截断时
-   用户看不见后半截（2026-11-13 维护者反馈「元素资产显示太挤」） */
-.elemRow.asset .elemMeta {
-  flex: 1 1 100%; order: 5; white-space: normal; word-break: break-all;
-  font-size: 12.5px; line-height: 1.5; padding-left: 2px;
+/* M102 S2：资产行收成 40px 单行（32px 控件 + 上下各 4px）。
+ * 完整定位挪到右栏常驻显示，所以这里**故意**从 M93 的「选择器独占一行、允许折行」
+ * 收回单行截断——那是一屏看不到几项的根因，而不是要复刻的规格。 */
+.elemRow.asset {
+  align-items: center; flex-wrap: nowrap; gap: 8px;
+  padding: 4px 10px 4px 6px; cursor: pointer;
+  border-bottom: 1px dashed var(--border);
 }
-.elemRow.asset { align-items: flex-start; }
+.elemRow.asset:hover { background: var(--hover); }
+.elemRow.asset.active { background: var(--sunken); box-shadow: inset 2px 0 0 0 var(--info); }
+.elemRow.asset .elemMeta {
+  flex: 1 1 auto; order: 0; min-width: 0;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  font-size: 12.5px; line-height: 1.4;
+}
+.elemRow.asset .elemName {
+  flex: 0 0 auto; max-width: 168px; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap;
+}
 .elemRow.asset .elemAct { flex: 0 0 auto; }
-.elemRow.asset .elemName { padding-top: 5px; }
+
+/* 行内动作默认隐身，hover / 键盘聚焦 / 当前选中时浮现。删除排在最后一个，
+ * 且必须先让这一层出现才点得到（手滑删掉的代价太高）。 */
+.elemRowAct {
+  flex: 0 0 auto; display: flex; align-items: center; gap: 4px;
+  opacity: 0; transition: opacity .12s;
+}
+.elemRow.asset:hover .elemRowAct,
+.elemRow.asset:focus-within .elemRowAct,
+.elemRow.asset.active .elemRowAct { opacity: 1; }
+
+/* 缩略图：28px 方框，元素图按 contain 放（179×19 的搜索框用 cover 会被裁成一条）。 */
+.elemThumb {
+  flex: 0 0 auto; width: 28px; height: 28px; border-radius: 5px; overflow: hidden;
+  border: 1px solid var(--border); background: var(--sunken);
+  display: flex; align-items: center; justify-content: center;
+}
+.elemThumbImg { width: 100%; height: 100%; object-fit: contain; display: block; }
+.elemThumbFallback { color: var(--faint); font-size: 12px; line-height: 1; }
+
+/* ---- M102 S2：左列表 + 右详情（底栏宽、矮，详情常驻比弹窗顺手） ----------- */
+.elemSplit { flex: 1 1 auto; min-height: 0; display: flex; }
+.elemSplit > .elemBox { flex: 1 1 auto; min-width: 0; }
+.elemDetail {
+  flex: 0 0 288px; min-width: 0; overflow: auto;
+  border-left: 1px solid var(--border); background: var(--surface);
+  padding: 10px 12px; display: flex; flex-direction: column; gap: 10px;
+}
+.elemDetail[hidden] { display: none; }
+.elemDetailPick { color: var(--muted); font-size: 13px; line-height: 1.6; }
+.elemDetailHead { display: flex; flex-direction: column; gap: 2px; }
+.elemDetailName { font-size: 15px; font-weight: 600; color: var(--text); word-break: break-all; }
+.elemDetailSub { color: var(--muted); font-size: 12px; }
+.elemDetailShot {
+  min-height: 64px; padding: 6px; overflow: hidden;
+  display: flex; align-items: center; justify-content: center;
+  border: 1px dashed var(--border); border-radius: 8px; background: var(--sunken);
+}
+.elemDetailImg { max-width: 100%; max-height: 120px; display: block; }
+.elemDetailShotNone { color: var(--faint); font-size: 12px; }
+.elemDetailInfo { display: flex; flex-direction: column; gap: 4px; }
+.elemDetailLine { display: flex; gap: 8px; font-size: 12px; }
+.elemDetailLabel { flex: 0 0 56px; color: var(--muted); }
+.elemDetailValue {
+  flex: 1 1 auto; min-width: 0; color: var(--text);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.elemDetailBlock { display: flex; flex-direction: column; gap: 4px; }
+.elemDetailCode {
+  margin: 0; padding: 6px 8px; max-height: 140px; overflow: auto;
+  font: 12px/1.5 Consolas, monospace; color: var(--text);
+  border: 1px solid var(--border); border-radius: 6px; background: var(--sunken);
+  white-space: pre-wrap; word-break: break-all;
+}
+/* 窄窗口回落单列：同一份 DOM 换布局，不做两套渲染。 */
+@media (max-width: 1100px) {
+  .elemDetail { display: none; }
+}
 
 .elemCapture {
   min-height: 32px; min-width: 96px; padding: 0 14px; font-size: 14px;

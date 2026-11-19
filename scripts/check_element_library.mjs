@@ -125,6 +125,8 @@ const state = {
   deleteResponse: { ok: true, deleted: true, remaining: [] },
   // 行内校验的 RPC 回传：默认命中 2 个；测「命中 0 的两种含义」时改它
   verifyResponse: { ok: true, count: 2 },
+  // M102 S2：缩略图按需拉的 RPC 回传（假 data URL，只为断言「真塞进 <img>」）
+  shotResponse: { ok: true, shot: 'data:image/png;base64,TUlOMTAy' },
 }
 
 function makeContext() {
@@ -166,6 +168,7 @@ function makeContext() {
     'rpa.moveElementsToGroup': { ok: true, moved: [] },
     'rpa.elementReferences': () => ({ ok: true, references: [ref('openHome')] }),
     'rpa.elementDetail': () => state.detailResponse,
+    'rpa.elementShot': () => state.shotResponse,
     'rpa.verifyElement': () => state.verifyResponse,
     'rpa.deleteElement': () => state.deleteResponse,
     'rpa.startCapture': { ok: true, state: 'waiting', captureId: 'c1', name: null, suggestedName: '元素1' },
@@ -696,6 +699,75 @@ check('只看未使用：开关真过滤，空结果给专门文案', () => {
   api.libShim([], ['b'], true)
   const rows = walk(nodeById('elemBody')).filter((n) => hasClass(n, 'elemRow') && hasClass(n, 'asset'))
   assert(rows.length === 1 && rows[0].dataset.elemName === 'b', `未使用过滤 ${rows.map((r) => r.dataset.elemName)}`)
+})
+
+// ---------- M102 S2：左列表 + 右详情、缩略图按需拉 ----------
+// 这一组判据都必须在「改回旧形状」时变红：详情栏挪进弹窗、缩略图改回批量塞进
+// listElements、行内动作改回常显、行高改回折行——每一条对上一种退化。
+
+check('结构层：详情栏在 elemSplit 里、排在列表之后，且不放静态按钮', () => {
+  const panel = html.slice(html.indexOf('data-panel="elements"'), html.indexOf('data-panel="globals"'))
+  const splitAt = panel.indexOf('id="elemSplit"')
+  const bodyAt = panel.indexOf('id="elemBody"')
+  const detailAt = panel.indexOf('id="elemDetail"')
+  assert(splitAt > 0 && splitAt < bodyAt, '列表没被 elemSplit 包住，右栏没法并排')
+  assert(detailAt > bodyAt, '详情栏排在列表之前（会被盖住）')
+  const tail = panel.slice(detailAt, panel.indexOf('id="elemLibLayer"'))
+  assert(!/<button/i.test(tail), '详情栏里放了静态按钮：会混进捕获按钮白名单')
+})
+
+check('样式层：窄窗口回落单列、行内动作默认隐身、行是单行截断', () => {
+  assert(
+    /@media\s*\(max-width:\s*1100px\)[\s\S]{0,160}\.elemDetail\s*\{\s*display:\s*none/.test(css),
+    '没有「窄窗口隐藏右栏」的规则：窄屏会被挤成两条竖缝',
+  )
+  assert(/\.elemRowAct\s*\{[^}]*opacity:\s*0/.test(css), '行内动作不是默认隐藏，删除就没降权')
+  assert(/\.elemRow\.asset:hover \.elemRowAct/.test(css), 'hover 不浮现动作，那就点不到了')
+  const meta = css.match(/\.elemRow\.asset \.elemMeta\s*\{[^}]*\}/)
+  assert(meta, 'style.css 缺 .elemRow.asset .elemMeta 规则')
+  assert(/white-space:\s*nowrap/.test(meta[0]), '元信息还在折行——行高会被撑开，一屏看不到几项')
+  assert(/text-overflow:\s*ellipsis/.test(meta[0]), '单行却没有省略号，长选择器会被硬切')
+})
+
+await checkAsync('行为层：点一行把名字与**完整**定位放进右栏（不截断）', async () => {
+  const { api } = makeContext()
+  const long = '#main > div.search-bar > input[type="search"][placeholder="搜索你感兴趣的内容"]'
+  api.setState([], [{ name: 'searchBox', kind: 'browser', selector: long }])
+  const row = walk(nodeById('elemBody')).find((n) => hasClass(n, 'asset'))
+  await row.click()
+  const pane = nodeById('elemDetail')
+  assert(pane.hidden !== true, '选中了元素右栏还藏着')
+  const texts = walk(pane).map((n) => n.textContent)
+  assert(texts.includes('searchBox'), `右栏没显示名字：${texts.slice(0, 6)}`)
+  const code = walk(pane).find((n) => hasClass(n, 'elemDetailCode'))
+  assert(code && code.textContent === long, `右栏定位不是原文：${code && code.textContent}`)
+})
+
+await checkAsync('行为层：只有带截图的资产才去拉图，图回来真塞进 <img>', async () => {
+  const { api, calls } = makeContext()
+  api.setState([], [
+    { name: 'withShot', kind: 'browser', selector: '#a', screenshot: 'shots/aa.png' },
+    { name: 'noShot', kind: 'browser', selector: '#b' },
+  ])
+  await flush()
+  const shots = calls.filter((c) => c.name === 'rpa.elementShot')
+  assert(shots.length === 1, `按需拉的含义是「有图才拉」，实际拉了 ${shots.map((s) => s.args.name)}`)
+  assert(shots[0].args.name === 'withShot', `拉错了元素：${shots[0].args.name}`)
+  const row = walk(nodeById('elemBody'))
+    .filter((n) => hasClass(n, 'asset'))
+    .find((n) => n.dataset.elemName === 'withShot')
+  const img = walk(row).find((n) => hasClass(n, 'elemThumbImg'))
+  assert(img && String(img.src).startsWith('data:image/png'), `行内没出现缩略图：${img && img.src}`)
+})
+
+await checkAsync('行为层：资产没了右栏收敛，不挂着上一份详情', async () => {
+  const { api } = makeContext()
+  api.setState([], [{ name: 'searchBox', kind: 'browser', selector: '#q' }])
+  const row = walk(nodeById('elemBody')).find((n) => hasClass(n, 'asset'))
+  await row.click()
+  assert(nodeById('elemDetail').hidden !== true, '选了却没显示')
+  api.setState([], [])
+  assert(nodeById('elemDetail').hidden === true, '元素已经没了，右栏还开着')
 })
 
 for (const result of results) {
