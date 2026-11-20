@@ -403,6 +403,13 @@ aside, section { min-height: 0; overflow: auto; background: var(--surface); }
   padding: 10px 12px; display: flex; flex-direction: column; gap: 10px;
 }
 .elemDetail[hidden] { display: none; }
+/* M112：右栏是分栏的一部分，随时可退回列表；按钮是动态建的，不进静态白名单。 */
+.elemDetailBack {
+  align-self: flex-start; min-height: 26px; padding: 2px 9px;
+  border: 1px solid var(--border); border-radius: 6px;
+  background: var(--surface); color: var(--muted); font: inherit; font-size: 12px; cursor: pointer;
+}
+.elemDetailBack:hover { border-color: var(--info); color: var(--info); }
 .elemDetailPick { color: var(--muted); font-size: 13px; line-height: 1.6; }
 .elemDetailHead { display: flex; flex-direction: column; gap: 2px; }
 .elemDetailName { font-size: 15px; font-weight: 600; color: var(--text); word-break: break-all; }
@@ -804,11 +811,9 @@ select {
   border: 1px solid var(--border); background: var(--surface);
 }
 .libBatchBar .libMenuItem.danger { color: var(--danger); }
-.elemDetail {
-  flex: 1 1 100%; padding: 6px 10px; border-radius: 6px;
-  background: var(--sunken); font-size: 12px;
-  white-space: pre-wrap; word-break: break-all; max-height: 132px; overflow: auto;
-}
+/* M112：这里原先有一条同名的 .elemDetail（flex:1 1 100% / max-height:132px），
+   写在分栏规则之后，把右栏撑成整宽、左列表压成 0 —— 点开详情就回不去列表。
+   分栏的样式只在上面那一处定义，不许再出现第二条同名规则。 */
 
 /* ---- 全局参数：名称 / 类型 / 默认值 三列，末列是删除 ---- */
 .globalsPanel { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }

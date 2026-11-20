@@ -775,6 +775,18 @@ check('结构层：详情栏在 elemSplit 里、排在列表之后，且不放�
   assert(!/<button/i.test(tail), '详情栏里放了静态按钮：会混进捕获按钮白名单')
 })
 
+check('样式层：.elemDetail 只有一条定义，右栏不再被旧规则撑成整宽', () => {
+  // M112：M93 那条同名规则写在分栏后面，flex:1 1 100% 把列表压成 0 —— 点开详情
+  // 就回不去。光断言「有分栏规则」不够，必须确认同名规则只有一条。
+  // 只认顶格定义：媒体查询里的 `  .elemDetail {` 是同一元素的响应式回落，
+  // 不算第二条「撑满整宽」的定义。
+  const rules = css.match(/^\.elemDetail\s*\{/gm) || []
+  assert(rules.length === 1, `.elemDetail 定义了 ${rules.length} 条，旧规则会把右栏撑满`)
+  const rule = /\.elemDetail\s*\{([^}]*)\}/.exec(css)
+  assert(rule && /flex:\s*0 0 288px/.test(rule[1]), '右栏不是固定宽分栏')
+  assert(/\.elemDetailBack\s*\{[^}]*cursor:\s*pointer/.test(css), '右栏退出口没有可点样式')
+})
+
 check('样式层：窄窗口回落单列、行内动作默认隐身、行是单行截断', () => {
   assert(
     /@media\s*\(max-width:\s*1100px\)[\s\S]{0,160}\.elemDetail\s*\{\s*display:\s*none/.test(css),
@@ -800,6 +812,31 @@ await checkAsync('行为层：点一行把名字与**完整**定位放进右栏�
   assert(texts.includes('searchBox'), `右栏没显示名字：${texts.slice(0, 6)}`)
   const code = walk(pane).find((n) => hasClass(n, 'elemDetailCode'))
   assert(code && code.textContent === long, `右栏定位不是原文：${code && code.textContent}`)
+})
+
+await checkAsync('行为层：右栏有返回按钮，点它收起详情回到列表', async () => {
+  const { api } = makeContext()
+  api.setState([], [{ name: 'searchBox', kind: 'browser', selector: '#q' }])
+  const pane = nodeById('elemDetail')
+  const row = walk(nodeById('elemBody')).find((n) => hasClass(n, 'asset'))
+  await row.click()
+  assert(pane.hidden !== true, '选中后右栏没打开')
+  const back = walk(pane).find((n) => hasClass(n, 'elemDetailBack'))
+  assert(back, '右栏没有「返回列表」按钮')
+  await back.click()
+  assert(pane.hidden === true, '点了返回，右栏还开着（回不到列表）')
+  assert(!row.classList.contains('active'), '返回后行还亮着选中态')
+})
+
+await checkAsync('行为层：再点同一行取消选中，右栏收起', async () => {
+  const { api } = makeContext()
+  api.setState([], [{ name: 'searchBox', kind: 'browser', selector: '#q' }])
+  const pane = nodeById('elemDetail')
+  const row = walk(nodeById('elemBody')).find((n) => hasClass(n, 'asset'))
+  await row.click()
+  assert(pane.hidden !== true, '第一次点没打开右栏')
+  await row.click()
+  assert(pane.hidden === true, '第二次点没关掉右栏')
 })
 
 await checkAsync('行为层：只有带截图的资产才去拉图，图回来真塞进 <img>', async () => {

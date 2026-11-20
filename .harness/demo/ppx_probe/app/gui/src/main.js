@@ -1272,6 +1272,8 @@ const ELEM_TEXT = {
   detailRefs: '引用',
   detailCaptured: '捕获时间',
   detailNoRefs: '还没被流程引用',
+  // M112：右栏的显式退出口。详情不再是「接管整栏」，随时能回列表。
+  detailBack: '返回列表',
 }
 
 function elemText(key, vars = {}) {
@@ -2194,9 +2196,12 @@ function assetRow(e) {
   remove.addEventListener('click', () => deleteAsset(e.name))
   actions.append(detail, verify, remove)
   row.append(actions)
-  // 点行本身 = 选中（右栏看截图与完整定位）；行内按钮自己 stopPropagation 不了，
-  // 但 selector 只影响右栏，误触也无副作用。
-  row.addEventListener('click', () => selectAssetRow(e.name))
+  // 点行本身 = 选中 / 再点取消；行内按钮与勾选框的点击不算「点行」，否则
+  // 点「详情/校验/删除」会把刚选中的行顺手取消掉（M112）。
+  row.addEventListener('click', (event) => {
+    if (event?.target?.closest?.('.elemAct, .elemPick')) return
+    selectAssetRow(e.name)
+  })
   row.addEventListener('contextmenu', (event) => {
     event.preventDefault?.()
     openLibMenu(event, 'asset', e)
@@ -2205,10 +2210,12 @@ function assetRow(e) {
 }
 
 function selectAssetRow(name) {
-  elemActive = name
+  // M112：再点同一行 = 取消选中，右栏收起、列表回到全宽。这是「回到列表」的
+  // 第二条路径（第一条是右栏的返回按钮），键盘/鼠标都能退出详情，不会被困住。
+  elemActive = name && elemActive === name ? null : name
   for (const node of Array.from(el.elemBody.children || [])) {
     if (!node.classList?.contains?.('elemRow')) continue
-    if (node.dataset?.elemName === name) node.classList.add('active')
+    if (node.dataset?.elemName && node.dataset.elemName === elemActive) node.classList.add('active')
     else if (node.dataset?.elemName) node.classList.remove('active')
   }
   renderElementDetail()
@@ -2300,6 +2307,12 @@ function renderElementDetail() {
     pane.append(mk('div', 'elemDetailPick', elemText('detailPick')))
     return
   }
+  // 显式退出口：详情只是右栏，不是新的「页面」。点它回到列表并收起右栏。
+  const back = mk('button', 'elemDetailBack', elemText('detailBack'))
+  back.type = 'button'
+  back.addEventListener('click', () => selectAssetRow(null))
+  pane.append(back)
+
   const head = mk('div', 'elemDetailHead')
   head.append(mk('div', 'elemDetailName', asset.name))
   const sub = []
