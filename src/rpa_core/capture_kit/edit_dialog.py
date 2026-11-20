@@ -603,9 +603,19 @@ class ElementEditDialog:
         for handle in self._attr_controls:
             win32gui.DestroyWindow(handle)
         self._attr_controls = []
-        for cid in [cid for cid, meta in self._control_map.items() if meta[0] != "level"]:
+        # ★ 只清属性行（check/value/mode）。层级树控件（level 与 level_check）
+        # 必须留着映射——漏掉 level_check 时，点完层级行再看属性，小方框就
+        # 「点不动了」（WM_COMMAND 查不到 meta 直接 return），且没有任何报错。
+        for cid in [
+            cid
+            for cid, meta in self._control_map.items()
+            if meta[0] not in ("level", "level_check")
+        ]:
             self._control_map.pop(cid, None)
         level = self._levels[self._selected]
+        # ★ 层级勾选是唯一门禁（M109）：这一层没勾上时，属性区只读——字段值
+        # 保留（重新勾上就能继续改），但它们不会进选择器，也不许在这里改。
+        level_on = bool(level["included"])
         rows: list[tuple[str, str, bool, dict]] = [("id", "id", False, level["id"])]
         rows += [
             ("class", "class", True, cls) for cls in level["classes"]
@@ -619,6 +629,7 @@ class ElementEditDialog:
                 312, y, 20, 26, base,
             )
             win32gui.SendMessage(box, win32con.BM_SETCHECK, 1 if state["on"] else 0, 0)
+            win32gui.EnableWindow(box, level_on)
             self._control(hwnd, "STATIC", label, 0, 338, y + 3, 52, 20, base + 1)
             if has_mode:
                 combo = self._control(
@@ -635,11 +646,13 @@ class ElementEditDialog:
                 )
                 self._control_map[base + 2] = ("mode", kind, state)
                 self._attr_controls.append(combo)
+                win32gui.EnableWindow(combo, level_on)
             value_x = 480 if has_mode else 396
             value_w = 764 - value_x
             edit = self._control(
                 hwnd, "EDIT", state["value"],
-                win32con.ES_AUTOHSCROLL | win32con.WS_BORDER,
+                win32con.ES_AUTOHSCROLL | win32con.WS_BORDER
+                | (0 if level_on else win32con.ES_READONLY),
                 value_x, y, value_w, 26, base + 3,
             )
             self._control_map[base] = ("check", kind, state)
@@ -784,10 +797,15 @@ class ElementEditDialog:
             self._desktop_control_map.pop(cid, None)
         node = self._nodes[self._selected_node]
         readonly_node = bool(node.get("readonly"))
+        # ★ 层级勾选是唯一门禁：节点没勾上时它的属性一律不生效，属性区只读
+        # （勾选值保留，重新勾上这层即可继续编辑）。不做「勾属性回勾层」的
+        # 反向联动——那会让用户取消掉的层又出现在选择器里。
+        node_on = bool(node.get("selected"))
         y = 70
         for row_index, row in enumerate(node.get("attributes") or []):
             base = _ID_DESKTOP_ATTR_BASE + row_index * 4
             readonly = readonly_node or bool(row.get("readonly"))
+            editable = not readonly and node_on
             box = self._control(
                 hwnd, "BUTTON", "", win32con.BS_AUTOCHECKBOX,
                 420, y, 20, 26, base,
@@ -795,10 +813,12 @@ class ElementEditDialog:
             win32gui.SendMessage(
                 box, win32con.BM_SETCHECK, 1 if row.get("required") else 0, 0
             )
-            win32gui.EnableWindow(box, not readonly)
+            win32gui.EnableWindow(box, editable)
             label = f"{row.get('label') or row.get('field') or ''}"
             if readonly:
                 label += "（只读）"
+            elif not node_on:
+                label += "（该层未参与定位）"
             self._control(hwnd, "STATIC", label, 0, 448, y + 3, 96, 20, base + 1)
             combo = self._control(
                 hwnd, "COMBOBOX", "",
@@ -814,12 +834,12 @@ class ElementEditDialog:
             )
             # 运行期只有目标级 name/automationId 吃 matchMode；其余列不能装作可改。
             win32gui.EnableWindow(
-                combo, not readonly and row.get("field") in desktop_editing.FUZZY_FIELDS
+                combo, editable and row.get("field") in desktop_editing.FUZZY_FIELDS
             )
             edit = self._control(
                 hwnd, "EDIT", str(row.get("value") or ""),
                 win32con.ES_AUTOHSCROLL | win32con.WS_BORDER
-                | (win32con.ES_READONLY if readonly else 0),
+                | (0 if editable else win32con.ES_READONLY),
                 644, y, 280, 26, base + 3,
             )
             self._desktop_control_map[base] = ("attr_check", row_index)
@@ -870,18 +890,9 @@ class ElementEditDialog:
         if role == "attr_check" and notif == 0:
             box = win32gui.GetDlgItem(hwnd, cid)
             row["required"] = bool(win32gui.SendMessage(box, win32con.BM_GETCHECK, 0, 0))
-            # 与网页层级同一口径：勾上属性 ⇒ 所在节点参与定位。readonly 节点
-            # （窗口信息行）的属性本身禁勾，不会被改到；目标级本来就恒参与。
-            node = self._nodes[self._selected_node]
-            selected = selector_tree.included_after_attr_check(
-                node.get("selected", False), row["required"]
-            )
-            if selected != bool(node.get("selected")):
-                node["selected"] = selected
-                win32gui.SendMessage(
-                    self._node_boxes[self._selected_node],
-                    win32con.BM_SETCHECK, 1 if selected else 0, 0,
-                )
+            # ★ 只改「这一层用哪些字段」，不改「这一层参不参与」（M109）：
+            # 勾属性绝不把已取消的层拉回来，否则选择器里又会冒出这一层。
+            # 层未勾上时属性框本来就是禁用的，这里只是双保险。
             self._refresh_desktop_preview()
         elif role == "attr_value" and notif == win32con.EN_CHANGE:
             edit = win32gui.GetDlgItem(hwnd, cid)
@@ -971,23 +982,16 @@ class ElementEditDialog:
             if included != wanted:  # 目标级点掉也弹回，但控件仍可点、可查看属性
                 win32gui.SendMessage(box, win32con.BM_SETCHECK, 1, 0)
             self._levels[index]["included"] = included
+            if index == self._selected:
+                # 属性区能否编辑跟着这层走：取消勾选后整区只读，重新勾上再放开
+                self._rebuild_attr_pane(hwnd)
             self._refresh_preview()
             return
         if role == "check" and notif == 0:
             box = win32gui.GetDlgItem(hwnd, cid)
             meta[2]["on"] = bool(win32gui.SendMessage(box, win32con.BM_GETCHECK, 0, 0))
-            # 勾上本层属性 ⇒ 本层自动参与定位（否则属性勾了选择器不变）。
-            # 取消属性不反取消层：层可能被别的属性或用户手动勾着。
-            level = self._levels[self._selected]
-            included = selector_tree.included_after_attr_check(
-                level["included"], meta[2]["on"]
-            )
-            if included != level["included"]:
-                level["included"] = included
-                win32gui.SendMessage(
-                    self._level_check_boxes[self._selected],
-                    win32con.BM_SETCHECK, 1 if included else 0, 0,
-                )
+            # ★ 同桌面：属性勾选只管字段，不管层级参与（M109）。层被取消后
+            # 这些属性即便还勾着也不会进选择器，`compose` 只收 included 的层。
             self._refresh_preview()
             return
         if role == "value" and notif == win32con.EN_CHANGE:

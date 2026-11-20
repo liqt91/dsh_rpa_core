@@ -146,3 +146,31 @@ def test_build_edit_model_desktop_carries_nodes_and_selector_text():
     validate = ee.validate_selector(doc, model["selector"])
     assert validate is None
     assert ee.apply_selector(doc, model["selector"])["selector"] == doc["selector"]
+
+
+def test_unchecked_step_drops_out_of_path_even_with_attributes_on():
+    """取消的中间层不进 path，属性还勾着也一样（M109 层级唯一门禁）。
+
+    用户场景：层级框取消掉，但属性面板里的 controlType/name/className 仍勾着。
+    旧实现里勾属性会把节点重新拉回参与状态，选择器里又出现这一层。
+    """
+    doc = _descriptor()
+    nodes = de.nodes_from_descriptor(doc)
+    assert [n["name"] for n in nodes] == ["微信", "聊天区", "导航", "发送"]
+    before = de.compose_selector(doc, nodes)["locator"]["path"]
+    assert [step.get("name") for step in before] == ["聊天区", "导航"]
+
+    cancelled = 1  # 聊天区
+    nodes[cancelled]["selected"] = False
+    still_on = [
+        row["field"] for row in nodes[cancelled]["attributes"] if row["required"]
+    ]
+    assert still_on, "这个用例要的就是「属性还勾着」"
+
+    after = de.compose_selector(doc, nodes)["locator"]["path"]
+    assert [step.get("name") for step in after] == ["导航"], "取消的层还留在 path 里"
+    assert all("聊天区" not in json.dumps(step, ensure_ascii=False) for step in after)
+    # 重新勾上，之前保留的属性勾选立刻恢复生效（属性值没被清掉）
+    nodes[cancelled]["selected"] = True
+    restored = de.compose_selector(doc, nodes)["locator"]["path"]
+    assert [step.get("name") for step in restored] == ["聊天区", "导航"]

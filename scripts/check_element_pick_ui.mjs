@@ -683,30 +683,33 @@ check('契约层：多层级树重绘不丢滚动位置，原生框接滚轮', (
   }
 })
 
-check('契约层：勾属性自动勾上所在层，取消属性不反取消', () => {
-  // 内核一条布尔口径，四条产出路径（原生层级/原生桌面/Web 层级/Web 桌面）都调它
-  assert(selectorTreeSrc.includes('def included_after_attr_check('), '内核缺属性联动纯函数')
-  assert(/return bool\(included\) or bool\(attr_on\)/.test(selectorTreeSrc),
-    '属性联动口径不是「勾上拉进来、取消不推出去」')
-  const nativeHits = (editDialogSrc.match(/selector_tree\.included_after_attr_check\(/g) || []).length
-  assert(nativeHits === 2, `原生两条属性路径该各调一次内核口径，实际 ${nativeHits}`)
-  const webHits = (mainSrc.match(/includedAfterAttrCheck\(/g) || []).length
-  assert(webHits === 3, `Web 应有一处定义 + 两处调用，实际 ${webHits}`)
-  assert(/level\.included = includedAfterAttrCheck\(/.test(mainSrc), 'Web 层级属性没联动层勾选')
-  assert(/node\.selected = includedAfterAttrCheck\(/.test(mainSrc), 'Web 桌面属性没联动节点勾选')
-  assert(/selector_tree\.included_after_attr_check\(\s*level\["included"\]/.test(editDialogSrc),
-    '原生层级属性没调内核口径')
-  assert(/selector_tree\.included_after_attr_check\(\s*node\.get\("selected"/.test(editDialogSrc),
-    '原生桌面属性没调内核口径')
-  // 联动后要同步复选框 UI，不然数据勾了、界面还是空框
-  assert(/self\._level_check_boxes\[self\._selected\]/.test(editDialogSrc),
-    '原生层级属性联动没同步小方框')
-  assert(/self\._node_boxes\[self\._selected_node\]/.test(editDialogSrc),
-    '原生桌面属性联动没同步节点框')
-  assert(/if \(level\.included !== wasIncluded\) renderElemLevels\(\)/.test(mainSrc),
-    'Web 层级属性联动没重绘层级框')
-  assert(/if \(node\.selected !== wasSelected\) renderDesktopLevels\(\)/.test(mainSrc),
-    'Web 桌面属性联动没重绘节点框')
+check('契约层：层级勾选是唯一门禁，属性勾选不回勾层级', () => {
+  // M109 用户拍板：取消层级后，即使这层属性还勾着，选择器也不能保留该层。
+  // 实现上就是**不允许**存在「勾属性把层拉回来」的联动——谁加回来就红。
+  assert(!selectorTreeSrc.includes('included_after_attr_check'),
+    '内核又出现「勾属性回勾层级」的联动')
+  assert(!editDialogSrc.includes('included_after_attr_check'),
+    '原生属性面板又在回勾层级/节点')
+  assert(!mainSrc.includes('includedAfterAttrCheck'),
+    'Web 属性面板又在回勾层级/节点')
+  // 未参与层的属性区整片只读：值保留（重新勾上就能继续改），但改不动。
+  // 不这么做就只有两种坏结果：勾了没反应，或者把层拉回来。
+  for (const needle of [
+    'win32gui.EnableWindow(box, editable)',
+    '0 if editable else win32con.ES_READONLY',
+    'win32gui.EnableWindow(box, level_on)',
+  ]) {
+    assert(editDialogSrc.includes(needle), `edit_dialog.py 缺 ${needle}`)
+  }
+  assert(mainSrc.includes('on.disabled = !levelOn'),
+    'Web 层级属性框没按层参与态禁用')
+  assert(mainSrc.includes('on.disabled = Boolean(attr.readonly) || !nodeOn'),
+    'Web 桌面属性框没按层参与态禁用')
+  // 取消层要立刻刷新属性区可编辑态，不能等用户再点一行才变
+  assert(mainSrc.includes('if (index === dialogSelectedLevel) renderElemAttrs()'),
+    'Web 层级取消勾选后没刷新属性区')
+  assert(mainSrc.includes('if (index === dialogSelectedLevel) renderDesktopAttrs()'),
+    'Web 桌面节点取消勾选后没刷新属性区')
 })
 
 check('契约层：参数面板的选择入口拿内核参数键集合', () => {
@@ -788,7 +791,7 @@ await checkAsync('渲染层：多层级点行查看属性不丢滚动位置', as
   assert(hasClass(container.children[3], 'selected'), '点行没选中该层')
 })
 
-await checkAsync('渲染层：未勾层勾属性会自动勾上层，取消属性不反取消', async () => {
+await checkAsync('渲染层：未勾层的属性区只读，勾属性不回勾层级', async () => {
   const levels = [
     { tag: 'html', included: false, id: { on: false, value: '' },
       classes: [{ on: false, value: 'root', mode: '精确' }], nth: { on: false, value: '' } },
@@ -809,20 +812,30 @@ await checkAsync('渲染层：未勾层勾属性会自动勾上层，取消属�
   assert(levelBoxes()[0].checked === false, '起始第一层就不该勾选')
   const classBox = attrBoxes()[1] // id 是第 0 行，class 是第 1 行
   assert(classBox && classBox.checked === false, '起始 class 属性不该勾选')
+  assert(attrBoxes().every((box) => box.disabled), '未勾层的属性框还能点（该整片只读）')
+  // 强行触发 change（真实浏览器里 disabled 点不动，这里证明即使触发也不回勾）
   classBox.checked = true
   await classBox.handlers.change[0]({ type: 'change' })
   await flush()
-  assert(levelBoxes()[0].checked === true, '勾上属性后所在层复选框没跟着勾')
+  assert(levelBoxes()[0].checked === false, '勾属性把层级又拉回来了（M109 不允许）')
   const last = calls.filter((c) => c.name === 'rpa.elementCompose').at(-1)
-  assert(last && last.args.levels[0].included === true, '联动没进重组请求')
-  // 取消该属性：层应保持勾选
-  await nodeById('elemDialogLevels').children[0].click()
+  assert(last && last.args.levels[0].included === false, '未勾层被塞进重组请求')
+  // 重新勾上这层：属性区恢复可编辑，之前勾的属性还在（值没被清掉）
+  const box0 = levelBoxes()[0]
+  box0.checked = true
+  await box0.handlers.change[0]({ type: 'change' })
   await flush()
-  const again = walk(nodeById('elemDialogAttrs')).filter((n) => n.type === 'checkbox')[1]
-  again.checked = false
-  await again.handlers.change[0]({ type: 'change' })
+  const again = attrBoxes()[1]
+  assert(again && again.disabled === false, '勾上层后属性框还是灰的')
+  assert(again.checked === true, '重新勾上层丢了之前勾的属性')
+  // 再取消该层：属性值保留但整片回到只读，选择器里不再有这层
+  const box0b = levelBoxes()[0]
+  box0b.checked = false
+  await box0b.handlers.change[0]({ type: 'change' })
   await flush()
-  assert(levelBoxes()[0].checked === true, '取消属性不该反过来取消层')
+  assert(attrBoxes().every((box) => box.disabled), '取消层后属性区没回到只读')
+  const final = calls.filter((c) => c.name === 'rpa.elementCompose').at(-1)
+  assert(final && final.args.levels[0].included === false, '取消层后重组请求还带着这层')
 })
 
 check('契约层：桌面编辑也走内核模型与重组，前端不拼 locator', () => {

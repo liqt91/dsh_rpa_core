@@ -10,7 +10,6 @@ from rpa_core.capture_kit.selector_tree import (
     attr_escape,
     compose,
     css_escape,
-    included_after_attr_check,
     level_included_after_toggle,
     levels_from_path,
     summary,
@@ -113,17 +112,22 @@ def test_target_level_checkbox_bounces_but_other_levels_follow_click() -> None:
     assert level_included_after_toggle(0, 0, True) is True
 
 
-def test_attr_check_pulls_in_its_level_but_uncheck_does_not_push_out() -> None:
-    """勾上属性必须让所在层参与定位；取消属性不能反过来取消层。
+def test_unchecked_level_contributes_nothing_even_with_attributes_on() -> None:
+    """层级勾选是唯一门禁：取消层级后，这层属性勾着也不进选择器（M109）。
 
-    否则用户在未勾的层上勾了属性，选择器纹丝不动，看起来像点了没反应。
+    用户报的就是这个：层级框已经取消，但那一层仍出现在选择器里——因为勾属性
+    会反向把层拉回来。属性和层级是两件事，属性只决定「这层用哪些字段」。
     """
-    # 未勾层 + 勾上属性 ⇒ 层被拉进来
-    assert included_after_attr_check(False, True) is True
-    # 已勾层 + 取消属性 ⇒ 层保持（别的属性或用户手动勾着）
-    assert included_after_attr_check(True, False) is True
-    assert included_after_attr_check(True, True) is True
-    assert included_after_attr_check(False, False) is False
+    levels = levels_from_path(PATH)
+    # 中间层把 id/class/序号全勾上，只把层级本身取消
+    levels[1]["included"] = False
+    levels[1]["id"] = {"on": True, "value": "main"}
+    levels[1]["classes"][1]["on"] = True
+    assert compose(levels) == "#app li.item:nth-of-type(3) > span"
+    assert "main" not in compose(levels) and "wide" not in compose(levels)
+    # 重新勾上层，之前保留的属性勾选立刻恢复生效（值没被清掉）
+    levels[1]["included"] = True
+    assert compose(levels) == "#app > #main > li.item:nth-of-type(3) > span"
 
 
 def test_compose_empty_path() -> None:

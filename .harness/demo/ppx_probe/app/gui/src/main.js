@@ -1547,11 +1547,9 @@ function levelIncludedAfterToggle(count, index, wanted) {
   return count > 0 && index === count - 1 ? true : Boolean(wanted)
 }
 
-// 勾上本层任一属性 ⇒ 该层自动参与定位；取消属性不反取消层。
-// 与内核 selector_tree.included_after_attr_check 同口径，桌面节点共用。
-function includedAfterAttrCheck(included, attrOn) {
-  return Boolean(included) || Boolean(attrOn)
-}
+// 层级勾选是唯一的参与门禁（M109）：属性勾选只决定「这层用哪些字段」，
+// 绝不把已取消的层拉回来——否则用户取消层级后选择器里又冒出这一层。
+// 层没勾上时属性区整片只读，属性值保留，重新勾上这层即可继续编辑。
 
 function renderElemLevels() {
   if (!el.dialogLevels || !dialogLevels) return
@@ -1568,6 +1566,8 @@ function renderElemLevels() {
       // 目标级必须参与定位：点掉弹回，但方框保持可点（点行文字只选中看属性）
       level.included = levelIncludedAfterToggle(dialogLevels.length, index, box.checked)
       box.checked = level.included
+      // 属性区的可编辑态跟着这层走：取消勾选后整片只读，属性值本身保留。
+      if (index === dialogSelectedLevel) renderElemAttrs()
       refreshElemCompose()
     })
     row.append(box, mk('span', '', elemLevelLabel(level)))
@@ -1593,22 +1593,22 @@ function renderElemAttrs() {
     return
   }
   const rows = []
+  // ★ 层级没勾 ⇒ 这层的属性一律不生效，整片只读（值保留，重新勾上可改）。
+  const levelOn = Boolean(level.included)
   const addRow = (label, obj, withMode) => {
     const row = mk('div', 'elemAttr')
     const on = mk('input')
     on.type = 'checkbox'
     on.checked = Boolean(obj.on)
+    on.disabled = !levelOn
     on.addEventListener('change', () => {
       obj.on = on.checked
-      // 勾上属性 ⇒ 所在层自动参与定位（否则选择器不变，等于点了没反应）。
-      // 取消属性不反取消层；层级框的显示要跟着刷新。
-      const wasIncluded = Boolean(level.included)
-      level.included = includedAfterAttrCheck(wasIncluded, obj.on)
-      if (level.included !== wasIncluded) renderElemLevels()
+      // 只改「这层用哪些字段」，不改「这层参不参与」（M109）。
       refreshElemCompose()
     })
     const value = mk('input')
     value.value = String(obj.value || '')
+    value.readOnly = !levelOn
     value.addEventListener('input', () => {
       obj.value = value.value
       refreshElemCompose()
@@ -1622,6 +1622,7 @@ function renderElemAttrs() {
         mode.append(opt)
       }
       mode.value = obj.mode || '精确'
+      mode.disabled = !levelOn
       mode.addEventListener('change', () => {
         obj.mode = mode.value
         refreshElemCompose()
@@ -1658,6 +1659,8 @@ function renderDesktopLevels() {
     box.disabled = Boolean(node.readonly) || index === dialogNodes.length - 1
     box.addEventListener('change', () => {
       node.selected = box.checked
+      // 属性区的可编辑态跟着节点走：取消勾选后整片只读，属性值保留。
+      if (index === dialogSelectedLevel) renderDesktopAttrs()
       refreshElemCompose()
     })
     row.append(box, mk('span', '', desktopNodeLabel(node)))
@@ -1682,26 +1685,24 @@ function renderDesktopAttrs() {
     return
   }
   const isTarget = dialogSelectedLevel === dialogNodes.length - 1
+  // ★ 节点没勾 ⇒ 这层属性不参与定位，整片只读（值保留）。
+  const nodeOn = Boolean(node.selected)
   const rows = []
   for (const attr of node.attributes || []) {
     const row = mk('div', 'elemAttr desk')
     const on = mk('input')
     on.type = 'checkbox'
     on.checked = Boolean(attr.required)
-    on.disabled = Boolean(attr.readonly)
+    on.disabled = Boolean(attr.readonly) || !nodeOn
     on.addEventListener('change', () => {
       attr.required = on.checked
-      // 窗口信息行 readonly（属性框已禁用）；目标级恒参与。
-      // 其余节点：勾上属性 ⇒ 该节点自动参与定位，并刷新层级框显示。
-      const wasSelected = Boolean(node.selected)
-      node.selected = includedAfterAttrCheck(wasSelected, attr.required)
-      if (node.selected !== wasSelected) renderDesktopLevels()
+      // 只改「这一层用哪些字段」，不改「这一层参不参与」（M109）。
       refreshElemCompose()
     })
     const label = mk('span', 'modalLabel', String(attr.label || attr.field || ''))
     const value = mk('input')
     value.value = String(attr.value || '')
-    value.readOnly = Boolean(attr.readonly)
+    value.readOnly = Boolean(attr.readonly) || !nodeOn
     value.addEventListener('input', () => {
       attr.value = value.value
       refreshElemCompose()
@@ -1709,7 +1710,7 @@ function renderDesktopAttrs() {
     const mode = mk('select')
     // 运行期 matchMode 是 locator 的单个字段，只作用于 name / automationId
     // （controlType 恒等值）⇒ 其它行给只读「精确」，不给点了不生效的假下拉。
-    const canFuzzy = !attr.readonly && isTarget
+    const canFuzzy = nodeOn && !attr.readonly && isTarget
       && (attr.field === 'name' || attr.field === 'automationId')
     for (const option of ['精确', '包含', '正则']) {
       const opt = mk('option', '', option)

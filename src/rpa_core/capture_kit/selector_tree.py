@@ -12,6 +12,11 @@ fragment 以 ``" > "`` 连接）。本模块是**重组侧**的唯一权威：�
 - 级间连接：原链上**相邻**的两个勾选级用 ``" > "``，中间隔着被勾掉的级用 ``" "``
   （后代）——全部用 ``" > "`` 连接非相邻级会得到匹配不到的死选择器；
 - 目标级（链尾）永远参与，不允许勾掉。
+
+★ **层级勾选是唯一的参与门禁**：一层被勾掉，它下面勾着的属性（id/class/序号）
+一个都不进选择器，也不存在「勾属性把层拉回来」的反向联动——M109 拍板。属性
+只是「该层参与时用哪些字段」，不决定「该层参不参与」；两件事混在一起时，用户
+取消层级后发现选择器里还留着这一层（属性勾选把它拉回去了）。
 """
 
 from __future__ import annotations
@@ -68,18 +73,6 @@ def level_included_after_toggle(count: int, index: int, wanted: bool) -> bool:
     ``index == len(levels) - 1``——一处改了另一处就会静默漂移。
     """
     return True if count > 0 and index == count - 1 else bool(wanted)
-
-
-def included_after_attr_check(included: bool, attr_on: bool) -> bool:
-    """勾上本层任一属性 ⇒ 该层必须参与定位；取消属性不反过来取消层。
-
-    属性只在该层 ``included`` 时才进选择器；用户在未勾的层上勾了属性却看不到
-    选择器变化，等于点了没反应。所以勾属性时把所在层一并勾上（目标级本来就
-    恒参与，无需特判）。反向不联动：取消一个属性时，层可能还被别的属性或用户
-    手动勾着，不能替用户取消。桌面节点（``selected``/``required``）与网页层级
-    （``included``/``on``）共用这一条布尔口径，避免两端各写一份漂移。
-    """
-    return bool(included) or bool(attr_on)
 
 
 def _fragment_for(level: dict[str, Any]) -> str:

@@ -810,3 +810,126 @@ def test_level_layout_syncs_checks_from_model(monkeypatch) -> None:
     dialog._layout_levels(0)
     assert (1002, 1) in set_calls
     assert checks[1002] == 1
+
+
+def test_rebuild_attr_pane_keeps_level_boxes_and_gates_attributes(monkeypatch) -> None:
+    """属性区重建只清属性行；未参与层的属性只读，勾上后放开（M109）。
+
+    两个真实事故：
+    1. 重建属性行时把 `level_check` 的映射一起清了 ⇒ 看一次属性再点小方框，
+       勾选纹丝不动（WM_COMMAND 查不到 meta 直接 return，没有任何报错）；
+    2. 层取消勾选后属性区仍可编辑 ⇒ 用户以为改了会生效，选择器却不动。
+    """
+    win32gui = pytest.importorskip("win32gui")
+    win32con = pytest.importorskip("win32con")
+    from rpa_core.capture_kit.edit_dialog import ElementEditDialog
+
+    dialog = ElementEditDialog()
+    levels = _web_levels(3, (2,))
+    levels[0]["id"] = {"on": True, "value": "app"}  # 属性勾着，层级取消
+    dialog._levels = levels
+    dialog._selected = 0
+    enabled: dict[int, bool] = {}
+    styles: list[tuple[str, int]] = []
+    handles = iter(range(9000, 9999))
+
+    def fake_control(_hwnd, cls, _text, style, *_args):
+        styles.append((cls, int(style)))
+        return next(handles)
+
+    monkeypatch.setattr(win32gui, "DestroyWindow", lambda hwnd: None)
+    monkeypatch.setattr(win32gui, "SendMessage", lambda *a: 0)
+    monkeypatch.setattr(
+        win32gui, "EnableWindow", lambda hwnd, on: enabled.__setitem__(hwnd, bool(on))
+    )
+    monkeypatch.setattr(dialog, "_control", fake_control)
+    dialog._attr_controls = []
+    dialog._control_map = {
+        11: ("level", 0),
+        12: ("level_check", 0),
+        13: ("check", "id", {}),
+        14: ("value", "id", {}),
+    }
+
+    dialog._rebuild_attr_pane(0)
+
+    assert dialog._control_map[11] == ("level", 0)
+    assert dialog._control_map[12] == ("level_check", 0), "层级小方框映射被属性重建清掉了"
+    assert 13 not in dialog._control_map and 14 not in dialog._control_map, (
+        "旧属性行映射没清掉，点上去会改到已销毁的控件"
+    )
+    assert enabled and not any(enabled.values()), "未勾层的属性框还能勾"
+    edits = [style for cls, style in styles if cls == "EDIT"]
+    assert edits and all(style & win32con.ES_READONLY for style in edits), (
+        "未勾层的属性值还能改"
+    )
+
+    dialog._levels[0]["included"] = True
+    enabled.clear()
+    styles.clear()
+    dialog._rebuild_attr_pane(0)
+    assert enabled and all(enabled.values()), "勾上层后属性框还是灰的"
+    edits = [style for cls, style in styles if cls == "EDIT"]
+    assert edits and not any(style & win32con.ES_READONLY for style in edits), (
+        "勾上层后属性值还是只读"
+    )
+
+
+def test_attr_check_never_pulls_its_level_back_in(monkeypatch) -> None:
+    """点属性只改字段，不许改层级参与——否则取消掉的层又出现在选择器里。
+
+    源码级判据只能拦住 `included_after_attr_check` 这个符号；手写一句
+    `level["included"] = True` 一样是回勾，所以这里直接跑真实的 WM_COMMAND 分支。
+    """
+    win32gui = pytest.importorskip("win32gui")
+    from rpa_core.capture_kit.edit_dialog import ElementEditDialog
+
+    dialog = ElementEditDialog()
+    levels = _web_levels(2, (1,))
+    levels[0]["id"] = {"on": False, "value": "app"}
+    dialog._levels = levels
+    dialog._selected = 0
+    dialog._control_map = {21: ("check", "id", levels[0]["id"])}
+    dialog._preview_edit = 0
+    # 属性框被点成「勾上」
+    monkeypatch.setattr(win32gui, "SendMessage", lambda *a: 1)
+    monkeypatch.setattr(win32gui, "GetDlgItem", lambda hwnd, cid: cid)
+
+    dialog._on_control(0, 21, 0)
+
+    assert levels[0]["id"]["on"] is True, "属性本身该记下来（值保留）"
+    assert levels[0]["included"] is False, "勾属性把已取消的层级又拉回来了"
+
+
+def test_desktop_attr_check_never_pulls_its_node_back_in(monkeypatch) -> None:
+    """桌面节点同理：勾属性不许把 `selected=False` 的节点改回参与。"""
+    win32gui = pytest.importorskip("win32gui")
+    from rpa_core.capture_kit import desktop_editing
+    from rpa_core.capture_kit.edit_dialog import ElementEditDialog
+
+    descriptor = {
+        "kind": "desktop",
+        "selector": {
+            "locator": {
+                "controlType": "Button",
+                "name": "发送",
+                "path": [{"controlType": "Pane", "name": "聊天区"}],
+            }
+        },
+    }
+    nodes = desktop_editing.nodes_from_descriptor(descriptor)
+    nodes[0]["selected"] = False  # 取消中间层，属性仍勾着
+    dialog = ElementEditDialog()
+    dialog._nodes = nodes
+    dialog._descriptor = descriptor
+    dialog._selected_node = 0
+    dialog._desktop_control_map = {31: ("attr_check", 0)}
+    dialog._preview_edit = 0
+    monkeypatch.setattr(win32gui, "SendMessage", lambda *a: 1)
+    monkeypatch.setattr(win32gui, "GetDlgItem", lambda hwnd, cid: cid)
+
+    dialog._on_desktop_control(0, 31, 0)
+
+    row = nodes[0]["attributes"][0]
+    assert row["required"] is True, "属性本身该记下来（值保留）"
+    assert nodes[0]["selected"] is False, "勾属性把已取消的节点又拉回来了"
