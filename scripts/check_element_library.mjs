@@ -291,6 +291,24 @@ check('版式在 style.css，main.js 没有运行时注入样式', () => {
   }
 })
 
+check('底栏 details 内容自己滚，不会把下面的资产剪掉', () => {
+  // M111：浏览器里 <details> 的内容槽按内容撑高，flex/height:100% 压不住。
+  // 少了包含块，.elemBox 的 overflow:hidden 会把第 3 行以后的资产直接剪掉，
+  // 而且不出现滚动条——源码层钉住这两条规则，渲染层由 CDP 真量 client/scrollHeight 复核。
+  const host = /#bottomDock \.elemBox, #bottomDock \.runBox\s*\{([^}]*)\}/.exec(css)
+  assert(host && /position:\s*relative/.test(host[1]), 'details 容器缺 position:relative')
+  const body = /#bottomDock \.elemBody, #bottomDock \.runLog\s*\{([^}]*)\}/.exec(css)
+  assert(body, 'style.css 缺 elemBody/runLog 的滚动规则')
+  for (const [re, label] of [
+    [/position:\s*absolute/, 'position:absolute'],
+    [/inset:\s*0/, 'inset:0'],
+    [/overflow:\s*auto/, 'overflow:auto'],
+    [/height:\s*auto/, 'height:auto'],
+  ]) {
+    assert(re.test(body[1]), `滚动内容缺 ${label}`)
+  }
+})
+
 check('main.js 真接了清单与四个资产 RPC', () => {
   for (const needle of [
     "ppx.call('rpa.missingElements'",

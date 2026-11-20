@@ -700,10 +700,17 @@ select {
 .dockPanel.active { display: flex; }
 #bottomDock .elemBox, #bottomDock .runBox {
   flex: 1 1 auto; height: 100%; max-height: none; min-height: 0;
+  /* M111：<details> 的内容槽按内容撑高，flex/height:100% 都压不住它；
+     不给包含块就只能在槽里长高，被上面的 overflow:hidden 剪掉——实测 4 行资产
+     时长出 178px 容器、下面的行完全点不到。改成相对包含块，让内容自己滚。 */
+  position: relative;
   border: 0; display: flex; flex-direction: column; overflow: hidden;
 }
 #bottomDock .elemBox > summary, #bottomDock .runBox > summary { display: none; }
-#bottomDock .elemBody, #bottomDock .runLog { flex: 1 1 auto; height: 100%; max-height: none; }
+#bottomDock .elemBody, #bottomDock .runLog {
+  position: absolute; inset: 0; height: auto;
+  flex: 1 1 auto; max-height: none; min-height: 0; overflow: auto;
+}
 
 /* ---- 元素资产：常驻入库工具条 + 已就绪行的管理动作 ---- */
 .elemFilter {
