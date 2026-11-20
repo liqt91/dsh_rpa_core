@@ -121,7 +121,7 @@ check('样式层：编辑框是浮层、按钮可禁用、焦点环可见', () =
 })
 
 // ---------- 3. 结构层（index.html） ----------
-check('结构层：元素面板只有两个捕获按钮，管理按钮在白名单内', () => {
+check('结构层：捕获元素在元素面板，按图捕获只在图像资产 tab', () => {
   assert(html.includes('id="elemCapture"'), 'index.html 缺捕获按钮')
   for (const gone of [
     'elemNewName', 'elemNewWhere', 'elemNewCapture', 'elemNewSelector',
@@ -129,16 +129,21 @@ check('结构层：元素面板只有两个捕获按钮，管理按钮在白名�
   ]) {
     assert(!html.includes(`id="${gone}"`), `旧的工具条控件还在：${gone}`)
   }
-  const panel = html.slice(html.indexOf('data-panel="elements"'), html.indexOf('data-panel="globals"'))
-  const buttons = [...panel.matchAll(/<button[^>]*id="([^"]+)"/g)].map((m) => m[1])
-  // 捕获入口必须恰好两个且顺序固定；元素库自己的管理按钮只允许白名单里的
-  // 「全部校验」。白名单是等值集合，不是「放行任何新按钮」的宽松判断。
-  const captures = buttons.filter((id) => id === 'elemCapture' || id === 'elemCaptureImage')
+  const elementsAt = html.indexOf('data-panel="elements"')
+  const imagesAt = html.indexOf('data-panel="images"')
+  const globalsAt = html.indexOf('data-panel="globals"')
+  const panel = html.slice(elementsAt, imagesAt)
+  const imagePanel = html.slice(imagesAt, globalsAt)
+  const buttonIds = (part) => [...part.matchAll(/<button[^>]*id="([^"]+)"/g)].map((m) => m[1])
+  // 等值集合，不是「放行任何新按钮」：元素面板只有捕获元素 + 全部校验，
+  // 按图捕获搬去图像资产 tab，两处都不能多塞旧入口。
+  assert(JSON.stringify(buttonIds(panel)) === JSON.stringify(['elemCapture', 'elemVerifyAll']),
+    `元素面板按钮：${buttonIds(panel)}`)
+  assert(JSON.stringify(buttonIds(imagePanel)) === JSON.stringify(['elemCaptureImage']),
+    `图像资产 tab 按钮：${buttonIds(imagePanel)}`)
+  const captures = [...html.matchAll(/<button[^>]*id="(elemCapture(?:Image)?)"/g)].map((m) => m[1])
   assert(captures.length === 2 && captures[0] === 'elemCapture'
-    && captures[1] === 'elemCaptureImage', `捕获按钮：${buttons}`)
-  const allowed = new Set(['elemCapture', 'elemCaptureImage', 'elemVerifyAll'])
-  const extra = buttons.filter((id) => !allowed.has(id))
-  assert(extra.length === 0, `面板里混进了旧入口按钮：${extra}`)
+    && captures[1] === 'elemCaptureImage', `捕获按钮：${captures}`)
   assert(!/提示|hint/i.test(panel.replace(/<!--[\s\S]*?-->/g, '')), '元素面板里还留着提示区')
 })
 
@@ -228,12 +233,12 @@ function makeContext({ responses = {}, sequences = {} } = {}) {
   registry.clear()
   const timers = []
   const calls = []
-  const dockTabs = ['elements', 'globals', 'log'].map((key) => {
+  const dockTabs = ['elements', 'images', 'globals', 'log'].map((key) => {
     const node = new El('button')
     node.dataset.tab = key
     return node
   })
-  const dockPanels = ['elements', 'globals', 'log'].map((key) => {
+  const dockPanels = ['elements', 'images', 'globals', 'log'].map((key) => {
     const node = new El('div')
     node.dataset.panel = key
     return node

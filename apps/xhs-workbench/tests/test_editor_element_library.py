@@ -315,7 +315,7 @@ def test_frontend_wires_single_button_and_dialog() -> None:
     for gone in ("elemNewName", "elemNewWhere", "elemNewSelector", "elemNewWrite"):
         assert f'id="{gone}"' not in html, f"index.html 还留着旧控件 {gone}"
     assert 'id="elemNewNote"' not in html, "元素面板还留着提示位（提示应只在桌面浮窗）"
-    for selector in (".elemTools {", ".elemCapture {", ".elemAct.danger {", ".modal {"):
+    for selector in (".imageAssetsPanel {", ".elemCapture {", ".elemAct.danger {", ".modal {"):
         assert selector in css, f"style.css 缺 {selector}"
 
 
@@ -341,7 +341,8 @@ def test_dist_bundle_is_rebuilt_from_source() -> None:
     bundles = list(DIST_DIR.glob("*.js")) + list(DIST_DIR.glob("*.css"))
     joined = "\n".join(p.read_text(encoding="utf-8") for p in bundles)
     for token in (
-        "rpa.commitElement", "rpa.saveElement", "rpa.editElement", ".elemTools", "elemCapture"
+        "rpa.commitElement", "rpa.saveElement", "rpa.editElement",
+        ".imageAssetsPanel", "elemCapture",
     ):
         assert token in joined, f"dist 产物里没有 {token}（改了源码忘了 npm run build）"
 

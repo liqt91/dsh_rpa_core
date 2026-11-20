@@ -253,22 +253,48 @@ function makeContext() {
   )
   return {
     ctx, calls, api: vm.runInContext('globalThis.__api', ctx),
-    keydown: docHandlers.keydown || [],
+    keydown: docHandlers.keydown || [], dockTabs, dockPanels,
   }
 }
 
 const flush = () => new Promise((resolve) => setImmediate(resolve))
 
 // ---------- 1. 结构层 ----------
-check('工具区在 elemBody 之外、只有两个捕获按钮', () => {
-  const panelStart = html.indexOf('data-panel="elements"')
-  const toolsAt = html.indexOf('class="elemTools"', panelStart)
-  const bodyAt = html.indexOf('id="elemBody"', panelStart)
-  assert(toolsAt > panelStart && toolsAt < bodyAt, '工具区不在元素面板里 / 落在 elemBody 之后')
-  const tools = html.slice(toolsAt, bodyAt)
-  const buttons = [...tools.matchAll(/<button[^>]*id="([^"]+)"/g)].map((m) => m[1])
-  assert(buttons.length === 2 && buttons[0] === 'elemCapture'
-    && buttons[1] === 'elemCaptureImage', `工具区按钮：${buttons}`)
+check('结构层：捕获元素在搜索行、按图捕获独占图像资产 tab', () => {
+  const elementsAt = html.indexOf('data-panel="elements"')
+  const imagesAt = html.indexOf('data-panel="images"')
+  const globalsAt = html.indexOf('data-panel="globals"')
+  assert(elementsAt > 0 && imagesAt > elementsAt && globalsAt > imagesAt,
+    'elements / images / globals 面板顺序不对')
+  const elementsPanel = html.slice(elementsAt, imagesAt)
+  const imagesPanel = html.slice(imagesAt, globalsAt)
+  const filterAt = elementsPanel.indexOf('class="elemFilter"')
+  const captureAt = elementsPanel.indexOf('id="elemCapture"')
+  const bodyAt = elementsPanel.indexOf('id="elemBody"')
+  assert(filterAt >= 0 && captureAt > filterAt && captureAt < bodyAt,
+    '捕获元素没落在搜索行 / 跑到列表之后')
+  assert(!elementsPanel.includes('id="elemCaptureImage"'), '元素面板里还有按图捕获')
+  assert(!elementsPanel.includes('class="elemTools"'), '元素面板里还留着旧工具区')
+  const imgButtons = [...imagesPanel.matchAll(/<button[^>]*id="([^"]+)"/g)].map((m) => m[1])
+  assert(JSON.stringify(imgButtons) === JSON.stringify(['elemCaptureImage']),
+    `图像资产 tab 按钮：${imgButtons}`)
+  assert(imagesPanel.includes('图像资产列表暂未开放'), '图像资产 tab 没占位')
+  for (const key of ['elements', 'images', 'globals', 'log']) {
+    assert(html.includes(`data-tab="${key}"`) && html.includes(`data-panel="${key}"`), `缺 ${key} tab/panel`)
+  }
+})
+
+check('行为层：图像资产 tab 能切入、元素 tab 能切回', () => {
+  const { ctx, dockTabs, dockPanels } = makeContext()
+  const run = (expr) => vm.runInContext(expr, ctx)
+  run("activateDockTab('images')")
+  assert(run('dockActive') === 'images', '切不到图像资产 tab')
+  const imagesTab = dockTabs.find((n) => n.dataset.tab === 'images')
+  const imagesPanel = dockPanels.find((n) => n.dataset.panel === 'images')
+  assert(imagesTab?.classList.contains('active'), '图像资产 tab 没点亮')
+  assert(imagesPanel?.classList.contains('active'), '图像资产面板没显示')
+  run("activateDockTab('elements')")
+  assert(run('dockActive') === 'elements' && !imagesTab.classList.contains('active'), '回不到元素资产 tab')
 })
 
 await checkAsync('按图捕获显式透传 image=true', async () => {
@@ -283,7 +309,7 @@ await checkAsync('按图捕获显式透传 image=true', async () => {
 
 check('版式在 style.css，main.js 没有运行时注入样式', () => {
   // 带花括号的等值形状：只写 '.elemTools' 会被 .elemToolsRow 之类子串糊弄成恒绿。
-  for (const needle of ['.elemTools {', '.elemRow {', '.elemMeta {', '.elemAct.danger {']) {
+  for (const needle of ['.imageAssetsPanel {', '.imageAssetsPlaceholder {', '.elemRow {', '.elemMeta {', '.elemAct.danger {']) {
     assert(css.includes(needle), `style.css 缺 ${needle}`)
   }
   for (const banned of ['DND_CSS', 'DOCK_CSS', 'injectDndStyles', 'injectDockStyles', 'mountBottomDock']) {
@@ -545,13 +571,17 @@ check('清单里不出现提示节点（说明走可关闭的网页弹框）', (
   }
 })
 
-check('结构层：元素面板有搜索与全部校验，且不占捕获按钮名额', () => {
+check('结构层：搜索、捕获元素、全部校验同在搜索行', () => {
   assert(/<input[^>]*id="elemSearch"[^>]*type="search"/.test(html), '搜索框不是 search 输入')
-  assert(html.includes('id="elemVerifyAll"'), '缺全部校验按钮')
   const panelAt = html.indexOf('data-panel="elements"')
-  const searchAt = html.indexOf('id="elemSearch"')
-  const toolsAt = html.indexOf('class="elemTools"')
-  assert(panelAt < searchAt && searchAt < toolsAt, '搜索框不在捕获工具区之前')
+  const imagesAt = html.indexOf('data-panel="images"')
+  const panel = html.slice(panelAt, imagesAt)
+  const searchAt = panel.indexOf('id="elemSearch"')
+  const captureAt = panel.indexOf('id="elemCapture"')
+  const verifyAt = panel.indexOf('id="elemVerifyAll"')
+  const bodyAt = panel.indexOf('id="elemBody"')
+  assert(searchAt > 0 && captureAt > searchAt && verifyAt > captureAt && bodyAt > verifyAt,
+    '搜索行顺序不是 搜索→捕获元素→全部校验→列表')
 })
 
 check('契约层：搜索/分组/引用数/全部校验都真接线', () => {

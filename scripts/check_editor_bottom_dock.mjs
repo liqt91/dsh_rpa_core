@@ -1,7 +1,7 @@
-// 编辑器底栏（元素资产 / 全局参数 / 运行日志）的 UI 契约判据（进默认门禁）。
+// 编辑器底栏（元素资产 / 图像资产 / 全局参数 / 运行日志）的 UI 契约判据（进默认门禁）。
 //
 // 分两层，缺一层都会漏：
-//   1. 结构层 —— index.html 里三个模块各就各位、id 齐全、版式在 style.css 里，
+//   1. 结构层 —— index.html 里四个模块各就各位、id 齐全、版式在 style.css 里，
 //      且 HTML 的 tab/panel key 与 main.js 的 DOCK_TABS 不漂移；
 //   2. 行为层 —— 用带父子关系的 DOM shim **真跑 main.js 的绑定**，再驱动 tab、
 //      折叠、全局参数增删改与保存 RPC。只扫源码证明不了「结构在但点不着」。
@@ -121,7 +121,7 @@ const mainHost = new El('main')
 const dock = make('section', 'bottomDock', 'bottomDock')
 const tabBar = make('div', '', 'dockTabs')
 const panelsWrap = make('div', '', 'dockPanels')
-const labels = { elements: '元素资产', globals: '全局参数', log: '运行日志' }
+const labels = { elements: '元素资产', images: '图像资产', globals: '全局参数', log: '运行日志' }
 // shim 的 key **从 index.html 解析**，不手写一份：否则 HTML 改了 key 时动态判据
 // 还在跑旧的替身结构，静态层会红而行为层假装没事（判据覆盖不到用户走的那条路）。
 const htmlTabKeys = [...html.matchAll(/data-tab="([a-z]+)"/g)].map((m) => m[1])
@@ -136,12 +136,14 @@ for (const key of htmlPanelKeys) {
   const panel = make('div', '', `dockPanel${key === 'globals' ? ' active' : ''}`, { panel: key })
   panelsWrap.append(panel)
 }
-make('span', 'elemCount', 'count').parent = tabBar.children[0]
-tabBar.children[0].children.push(byId.get('elemCount'))
-make('span', 'globalsCount', 'count').parent = tabBar.children[1]
-tabBar.children[1].children.push(byId.get('globalsCount'))
-make('span', 'runTitle', '').parent = tabBar.children[2]
-tabBar.children[2].children.push(byId.get('runTitle'))
+// 按 key 找 tab，不按 children 下标：新增图像资产 tab 后下标会平移。
+const tabOf = (key) => tabBar.children.find((n) => n.dataset?.tab === key)
+for (const [id, key] of [['elemCount', 'elements'], ['globalsCount', 'globals'], ['runTitle', 'log']]) {
+  const host = tabOf(key)
+  assert(host, `shim 缺 ${key} tab`)
+  make('span', id, '').parent = host
+  host.children.push(byId.get(id))
+}
 const fold = make('button', '', 'dockFold')
 fold.textContent = '收起'
 tabBar.append(fold)
@@ -235,10 +237,10 @@ vm.runInContext(src, ctx, { filename: 'main.js' })
 const run = (expr) => vm.runInContext(expr, ctx)
 
 // ---------- 1. 结构层 ----------
-check('index.html 里三个模块各就各位，折叠面板都搬进底栏', () => {
+check('index.html 里四个模块各就各位，折叠面板都搬进底栏', () => {
   assert(html.includes('id="bottomDock"'), 'index.html 没有底栏')
   // 期望集是设计规格，不能从 HTML 自己解析出来的 key 反查 HTML（那样恒绿）。
-  for (const key of ['elements', 'globals', 'log']) {
+  for (const key of ['elements', 'images', 'globals', 'log']) {
     assert(html.includes(`data-tab="${key}"`), `缺 ${key} tab`)
     assert(html.includes(`data-panel="${key}"`), `缺 ${key} panel`)
   }
@@ -259,7 +261,7 @@ check('HTML 的 tab/panel key 与 main.js 的 DOCK_TABS 不漂移', () => {
   const htmlTabs = [...html.matchAll(/data-tab="([a-z]+)"/g)].map((m) => m[1])
   const htmlPanels = [...html.matchAll(/data-panel="([a-z]+)"/g)].map((m) => m[1])
   const jsKeys = [...mainSrc.matchAll(/key: '([a-z]+)'/g)].map((m) => m[1])
-  assert(jsKeys.length === 3, `DOCK_TABS 有 ${jsKeys.length} 项，应为 3`)
+  assert(jsKeys.length === 4, `DOCK_TABS 有 ${jsKeys.length} 项，应为 4`)
   assert(JSON.stringify(htmlTabs) === JSON.stringify(jsKeys), 'tab key 与 DOCK_TABS 不一致')
   assert(JSON.stringify(htmlPanels) === JSON.stringify(jsKeys), 'panel key 与 DOCK_TABS 不一致')
 })
@@ -282,9 +284,9 @@ check('版式在 style.css，main.js 不再运行时注入样式或 DOM', () => 
 })
 
 // ---------- 2. 行为层 ----------
-check('真跑绑定：三个 tab / panel 都接上，默认展示全局参数', () => {
-  assert(run('Object.keys(dockTabs).length') === 3, 'dockTabs 没绑满')
-  assert(run('Object.keys(dockPanels).length') === 3, 'dockPanels 没绑满')
+check('真跑绑定：四个 tab / panel 都接上，默认展示全局参数', () => {
+  assert(run('Object.keys(dockTabs).length') === 4, 'dockTabs 没绑满')
+  assert(run('Object.keys(dockPanels).length') === 4, 'dockPanels 没绑满')
   assert(run('dockActive') === 'globals', '默认 tab 不是全局参数')
   assert(tabByKey('globals').classList.contains('active'), 'globals tab 没激活')
   assert(panelByKey('globals').classList.contains('active'), 'globals panel 没激活')
@@ -295,6 +297,10 @@ check('真跑绑定：三个 tab / panel 都接上，默认展示全局参数', 
 })
 
 check('tab 切换与折叠按钮真的改变状态', () => {
+  tabByKey('images').click()
+  assert(run('dockActive') === 'images', '点图像资产 tab 没切过去')
+  assert(panelByKey('images').classList.contains('active'), '图像资产面板没显示')
+  assert(!panelByKey('globals').classList.contains('active'), '切到图像资产后全局参数还没隐藏')
   tabByKey('log').click()
   assert(run('dockActive') === 'log', '点日志 tab 没切过去')
   assert(panelByKey('log').classList.contains('active'), '日志 panel 没显示')

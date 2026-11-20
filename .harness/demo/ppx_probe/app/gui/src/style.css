@@ -339,9 +339,8 @@ aside, section { min-height: 0; overflow: auto; background: var(--surface); }
 .compileOut pre { margin: 6px 0 0; white-space: pre-wrap; font: 11.5px/1.6 Consolas, monospace; }
 
 /* ---- 元素资产（捕获入库 + 待补元素） ---------------------------------------
- * 面板里只有一个按钮，所有提示都在桌面浮窗里。正文 ≥14px、可点区域 ≥32×32、
+ * 捕获入口常驻搜索行，所有提示都在桌面浮窗里。正文 ≥14px、可点区域 ≥32×32、
  * 语义色走 token、焦点环全局可见（WCAG 2.2 2.5.8 / 1.4.3 口径不变）。 */
-.elemTools { display: flex; align-items: center; gap: 8px; padding: 8px 12px 6px; }
 .elemBox { flex: 0 1 auto; min-height: 0; display: flex; flex-direction: column; border-top: 1px solid var(--border); }
 .elemBox > summary {
   padding: 6px 12px; cursor: pointer; color: var(--faint); font-size: 12px; user-select: none;
@@ -731,6 +730,8 @@ select {
 }
 .elemFilter input:focus { border-color: var(--info); outline: none; }
 .elemFilter button { flex: 0 0 auto; height: 27px; font-size: 12px; }
+/* 捕获元素是主操作：跟搜索同一行，但保住 14px 正文与 32px 命中区。 */
+.elemFilter #elemCapture { font-size: 14px; }
 .elemGroup { color: var(--faint); padding: 5px 12px 2px; font-size: 11.5px; }
 /* M93：影刀式分组树 —— 分组头可折叠/右键，资产行缩进一级。 */
 .elemGroupRow {
@@ -756,10 +757,11 @@ select {
   flex: none; color: var(--info); border: 1px solid var(--border);
   border-radius: 10px; padding: 0 6px; font-size: 11px; line-height: 17px;
 }
-.elemTools {
-  flex: 0 0 auto; padding: 7px 12px;
-  border-bottom: 1px dashed var(--border);
+.imageAssetsPanel {
+  flex: 1 1 auto; min-height: 0; display: flex; align-items: flex-start;
+  gap: 12px; padding: 10px 12px;
 }
+.imageAssetsPlaceholder { color: var(--faint); font-size: 13px; }
 .elemToolsRow { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .elemToolsLabel { color: var(--muted); font-size: 12px; }
 .elemNewName, .elemNewSelector, .elemNewWhere {

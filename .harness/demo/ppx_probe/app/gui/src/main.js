@@ -90,13 +90,15 @@ const el = {
   globalsNote: document.querySelector('#globalsNote'),
 }
 
-/* ---- 底部 dock：元素资产 / 全局参数 / 运行日志 ----------------------------
- * 三块原本分散且都是折叠的：元素资产缩在右栏、运行日志缩在中栏、全局参数没有界面。
+/* ---- 底部 dock：元素资产 / 图像资产 / 全局参数 / 运行日志 -------------------
+ * 前三块原本分散：元素资产缩在右栏、运行日志缩在中栏、全局参数没有界面；
+ * 图像资产本轮只占一个 tab，放按图捕获入口。
  * 现在整块搬进横跨三列的底栏，节点 id 一个不改，所以 renderElementsPanel /
  * setRunTitle / runLog 的既有写入路径原样有效（只是父节点换了）。
  */
 const DOCK_TABS = [
   { key: 'elements', label: '元素资产' },
+  { key: 'images', label: '图像资产' },
   { key: 'globals', label: '全局参数' },
   { key: 'log', label: '运行日志' },
 ]
