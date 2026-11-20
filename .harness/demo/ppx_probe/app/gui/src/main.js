@@ -1555,7 +1555,11 @@ function includedAfterAttrCheck(included, attrOn) {
 
 function renderElemLevels() {
   if (!el.dialogLevels || !dialogLevels) return
-  el.dialogLevels.replaceChildren(...dialogLevels.map((level, index) => {
+  const container = el.dialogLevels
+  // replaceChildren 会把滚动容器的 scrollTop 夹回 0：多层级链里点一行看属性，
+  // 视图就跳回顶部，用户以为「没法滚动查看」。重绘前后自己守住滚动位置。
+  const keepTop = container.scrollTop
+  container.replaceChildren(...dialogLevels.map((level, index) => {
     const row = mk('div', `elemLevel${index === dialogSelectedLevel ? ' selected' : ''}`)
     const box = mk('input')
     box.type = 'checkbox'
@@ -1570,11 +1574,15 @@ function renderElemLevels() {
     row.addEventListener('click', (event) => {
       if (event && event.target === box) return
       dialogSelectedLevel = index
-      renderElemLevels()
+      // 只挪选中态，不重建整棵树——重建会把容器滚动位置带走。
+      for (let i = 0; i < container.children.length; i += 1) {
+        container.children[i].classList.toggle('selected', i === index)
+      }
       renderElemAttrs()
     })
     return row
   }))
+  container.scrollTop = keepTop
 }
 
 function renderElemAttrs() {
@@ -1639,7 +1647,9 @@ function desktopNodeLabel(node) {
 
 function renderDesktopLevels() {
   if (!el.dialogLevels || !dialogNodes) return
-  el.dialogLevels.replaceChildren(...dialogNodes.map((node, index) => {
+  const container = el.dialogLevels
+  const keepTop = container.scrollTop
+  container.replaceChildren(...dialogNodes.map((node, index) => {
     const row = mk('div', `elemLevel${index === dialogSelectedLevel ? ' selected' : ''}`)
     const box = mk('input')
     box.type = 'checkbox'
@@ -1654,11 +1664,14 @@ function renderDesktopLevels() {
     row.addEventListener('click', (event) => {
       if (event && event.target === box) return
       dialogSelectedLevel = index
-      renderDesktopLevels()
+      for (let i = 0; i < container.children.length; i += 1) {
+        container.children[i].classList.toggle('selected', i === index)
+      }
       renderDesktopAttrs()
     })
     return row
   }))
+  container.scrollTop = keepTop
 }
 
 function renderDesktopAttrs() {

@@ -663,3 +663,93 @@ def test_setup_node_scroll_keeps_initial_offset(monkeypatch) -> None:
     assert dialog._node_scroll == 16 - edit_dialog._NODE_ROWS
     assert dialog._selected_node == 15, "属性面板要显示目标自己的属性，不是窗口的"
     assert seen["info"][4] == dialog._node_scroll, "滚动条位置必须与偏移同步"
+
+
+# ---- 网页层级区：滚轮 / 拖动 / 勾选态回写 -----------------------------------
+
+
+def _web_levels(total: int, included: tuple[int, ...] = ()) -> list[dict]:
+    wanted = set(included)
+    return [
+        {
+            "tag": "div",
+            "included": index in wanted,
+            "id": {"on": False, "value": ""},
+            "classes": [],
+            "nth": {"on": False, "value": ""},
+        }
+        for index in range(total)
+    ]
+
+
+def _mock_level_dialog(monkeypatch, levels: list[dict]) -> tuple:
+    """给层级区控件做桩：只关心滚动条位置与复选框的 BM_SETCHECK 回写。"""
+    win32gui = pytest.importorskip("win32gui")
+    win32con = pytest.importorskip("win32con")
+    from rpa_core.capture_kit.edit_dialog import ElementEditDialog
+
+    dialog = ElementEditDialog()
+    dialog._levels = levels
+    dialog._level_boxes = [2000 + i for i in range(len(levels))]
+    dialog._level_check_boxes = [1000 + i for i in range(len(levels))]
+    checks = {1000 + i: 0 for i in range(len(levels))}
+    set_calls: list[tuple[int, int]] = []
+    scroll_calls: list[tuple[tuple, bool]] = []
+
+    def send(hwnd, msg, wp, lp):
+        if msg == win32con.BM_GETCHECK:
+            return checks.get(hwnd, 0)
+        if msg == win32con.BM_SETCHECK:
+            checks[hwnd] = wp
+            set_calls.append((hwnd, wp))
+        return 0
+
+    monkeypatch.setattr(win32gui, "SendMessage", send)
+    monkeypatch.setattr(win32gui, "SetWindowPos", lambda *a: None)
+    monkeypatch.setattr(win32gui, "ShowWindow", lambda *a: None)
+    monkeypatch.setattr(
+        win32gui, "SetScrollInfo",
+        lambda hwnd, bar, info, redraw: scroll_calls.append((info, redraw)),
+    )
+    return dialog, checks, set_calls, scroll_calls
+
+
+def test_mouse_wheel_scrolls_levels_and_rewrites_checks(monkeypatch) -> None:
+    """多层级必须能用滚轮看；滚动后复选框按模型回写，不能只信上一次的画法。"""
+    win32con = pytest.importorskip("win32con")
+    dialog, checks, set_calls, scroll_calls = _mock_level_dialog(
+        monkeypatch, _web_levels(15, (2, 14))
+    )
+    # WM_MOUSEWHEEL: 高 16 位是带符号 delta，向下滚一格是 -120。
+    # 直接走 _wnd_proc，纯函数绿而没接线的情况也算红。
+    dialog._wnd_proc(0, win32con.WM_MOUSEWHEEL, ((-120) & 0xFFFF) << 16, 0)
+
+    assert dialog._level_scroll == 3
+    assert scroll_calls and scroll_calls[-1][0][4] == 3, "滚动条位置没跟上层偏移"
+    assert set_calls and (1002, 1) in set_calls, "勾选态没从模型回写"
+    assert checks[1002] == 1
+
+    dialog._on_mouse_wheel(0, 120 << 16)
+    assert dialog._level_scroll == 0, "反向滚轮要能滚回顶部"
+
+
+def test_thumbtrack_does_not_redraw_scrollbar(monkeypatch) -> None:
+    """拖块时关重绘：真机「点滚动条后假死」就是拖动循环和 SetScrollInfo 抢画。"""
+    win32con = pytest.importorskip("win32con")
+    dialog, _checks, _sets, scroll_calls = _mock_level_dialog(
+        monkeypatch, _web_levels(15)
+    )
+    dialog._on_vscroll(0, (4 << 16) | win32con.SB_THUMBTRACK)
+    assert scroll_calls and scroll_calls[-1][1] is False, "拖动中不该重画滚动条"
+    dialog._on_vscroll(0, (4 << 16) | win32con.SB_THUMBPOSITION)
+    assert scroll_calls[-1][1] is True, "拖完要重画一次同步滑块"
+
+
+def test_level_layout_syncs_checks_from_model(monkeypatch) -> None:
+    """滚动重排后，组合里有哪层，方框就必须是勾着的。"""
+    dialog, checks, set_calls, _scrolls = _mock_level_dialog(
+        monkeypatch, _web_levels(15, (2,))
+    )
+    dialog._layout_levels(0)
+    assert (1002, 1) in set_calls
+    assert checks[1002] == 1

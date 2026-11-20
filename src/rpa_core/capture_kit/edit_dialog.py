@@ -75,6 +75,24 @@ def _clamp_node_scroll(scroll: int, total: int) -> int:
     return max(0, min(int(scroll or 0), max(0, int(total) - _NODE_ROWS)))
 
 
+def _clamp_level_scroll(scroll: int, total: int) -> int:
+    """层级区与节点区同口径：偏移永远落在 ``[0, total - _LEVEL_ROWS]``。"""
+    return max(0, min(int(scroll or 0), max(0, int(total) - _LEVEL_ROWS)))
+
+
+def _set_vert_scroll_pos(hwnd, pos: int, *, redraw: bool = True) -> None:
+    """只改滚动条位置（range/page 由建窗时定死），拖动期间可关掉重绘。"""
+    import win32con
+    import win32gui
+
+    # pywin32 的 SCROLLINFO 按位tuple：(mask, min, max, page, pos[, trackPos])；
+    # mask 只有 SIF_POS 时后面仍要占位，否则 TypeError。
+    win32gui.SetScrollInfo(
+        hwnd, win32con.SB_VERT,
+        (win32con.SIF_POS, 0, 0, 0, int(pos)), bool(redraw),
+    )
+
+
 class ElementEditDialog:
     """一次性使用的编辑框：show() 起线程弹窗，保存/取消后自行销毁。"""
 
@@ -378,51 +396,93 @@ class ElementEditDialog:
                 win32gui.ShowWindow(
                     handle, win32con.SW_SHOW if visible else win32con.SW_HIDE
                 )
+        # ★ 勾选态的唯一事实源是 self._levels，不是复选框上一次画出来的样子。
+        # 滚动/重绘后 Windows 会重画子控件；这里按模型回写一遍（只在不一致时
+        # 发 BM_SETCHECK），避免「组合里有这一层、方框却是空的」视觉错位。
+        self._sync_level_checks(hwnd)
 
-    def _on_vscroll(self, hwnd, wparam) -> None:
-        """滚动层级区：行/页/拖块三档都收（桌面节点与网页层级各走各的偏移）。"""
+    def _sync_level_checks(self, hwnd) -> None:
+        """把层级复选框画成模型里的 included（不动模型，只读回写）。"""
         import win32con
         import win32gui
 
-        if self._nodes:
-            code = wparam & 0xFFFF
-            pos = (wparam >> 16) & 0xFFFF
-            limit = max(0, len(self._nodes) - _NODE_ROWS)
-            if code == win32con.SB_LINEUP:
-                self._node_scroll = max(0, self._node_scroll - 1)
-            elif code == win32con.SB_LINEDOWN:
-                self._node_scroll = min(limit, self._node_scroll + 1)
-            elif code == win32con.SB_PAGEUP:
-                self._node_scroll = max(0, self._node_scroll - _NODE_ROWS)
-            elif code == win32con.SB_PAGEDOWN:
-                self._node_scroll = min(limit, self._node_scroll + _NODE_ROWS)
-            elif code in (win32con.SB_THUMBTRACK, win32con.SB_THUMBPOSITION):
-                self._node_scroll = min(limit, max(0, pos))
-            win32gui.SetScrollInfo(
-                hwnd, win32con.SB_VERT,
-                (win32con.SIF_POS, 0, 0, 0, self._node_scroll), True,
-            )
-            self._layout_nodes(hwnd)
-            return
+        for index, box in enumerate(self._level_check_boxes):
+            if index >= len(self._levels):
+                break
+            wanted = 1 if self._levels[index]["included"] else 0
+            current = win32gui.SendMessage(box, win32con.BM_GETCHECK, 0, 0)
+            if current != wanted:
+                win32gui.SendMessage(box, win32con.BM_SETCHECK, wanted, 0)
+
+    def _on_vscroll(self, hwnd, wparam) -> None:
+        """滚动层级区：行/页/拖块三档都收（桌面节点与网页层级各走各的偏移）。
+
+        ★ 拖动块（`SB_THUMBTRACK`）时更新滚动条位置必须关掉重绘：拖动期间
+        Windows 自己管滑块，这里再 `SetScrollInfo(..., True)` 会跟拖动循环抢
+        着重画，真机表现为「滑块跟不上鼠标，界面像假死」。拖完的
+        `SB_THUMBPOSITION` 再重绘一次即可。
+        """
+        import win32con
+
         code = wparam & 0xFFFF
         pos = (wparam >> 16) & 0xFFFF
-        limit = max(0, len(self._levels) - _LEVEL_ROWS)
+        desktop = bool(self._nodes)
+        before = self._node_scroll if desktop else self._level_scroll
+        total = len(self._nodes) if desktop else len(self._levels)
+        rows = _NODE_ROWS if desktop else _LEVEL_ROWS
+        limit = max(0, total - rows)
+        after = before
         if code == win32con.SB_LINEUP:
-            self._level_scroll = max(0, self._level_scroll - 1)
+            after = max(0, before - 1)
         elif code == win32con.SB_LINEDOWN:
-            self._level_scroll = min(limit, self._level_scroll + 1)
+            after = min(limit, before + 1)
         elif code == win32con.SB_PAGEUP:
-            self._level_scroll = max(0, self._level_scroll - _LEVEL_ROWS)
+            after = max(0, before - rows)
         elif code == win32con.SB_PAGEDOWN:
-            self._level_scroll = min(limit, self._level_scroll + _LEVEL_ROWS)
+            after = min(limit, before + rows)
         elif code in (win32con.SB_THUMBTRACK, win32con.SB_THUMBPOSITION):
-            self._level_scroll = min(limit, max(0, pos))
-        # SCROLLINFO 元组按位填充：min/max 必须成对给（给了 mask=SIF_POS 也得占位）。
-        win32gui.SetScrollInfo(
-            hwnd, win32con.SB_VERT,
-            (win32con.SIF_POS, 0, 0, 0, self._level_scroll), True,
+            after = min(limit, max(0, pos))
+        else:
+            return
+        if desktop:
+            self._node_scroll = after
+        else:
+            self._level_scroll = after
+        _set_vert_scroll_pos(
+            hwnd, after, redraw=code != win32con.SB_THUMBTRACK,
         )
-        self._layout_levels(hwnd)
+        if desktop:
+            self._layout_nodes(hwnd)
+        else:
+            self._layout_levels(hwnd)
+
+    def _on_mouse_wheel(self, hwnd, wparam) -> None:
+        """滚轮滚层级/节点区：原生框没有内嵌滚动控件，WM_MOUSEWHEEL 要自己接。
+
+        没接这条时用户只能去拖窗口最右侧的滚动条；多层级页面滚不动，
+        拖一次又容易和上面的滑块重绘打架。一格 120，滚 3 行（与常见列表一致）。
+        """
+        delta = (((int(wparam) >> 16) & 0xFFFF) + 0x8000) % 0x10000 - 0x8000
+        if not delta:
+            return
+        notches = max(1, abs(delta) // 120)
+        rows = 3 * notches * (1 if delta > 0 else -1)
+        desktop = bool(self._nodes)
+        clamp = _clamp_node_scroll if desktop else _clamp_level_scroll
+        total = len(self._nodes) if desktop else len(self._levels)
+        before = self._node_scroll if desktop else self._level_scroll
+        after = clamp(before - rows, total)  # 正 delta = 向上滚 = 偏移变小
+        if after == before:
+            return
+        if desktop:
+            self._node_scroll = after
+        else:
+            self._level_scroll = after
+        _set_vert_scroll_pos(hwnd, after)
+        if desktop:
+            self._layout_nodes(hwnd)
+        else:
+            self._layout_levels(hwnd)
 
     def _rebuild_attr_pane(self, hwnd) -> None:
         """右栏属性行随选中层重建（行数随层级属性变，池化比重排省事）。"""
@@ -725,6 +785,9 @@ class ElementEditDialog:
             return 0
         if msg == win32con.WM_VSCROLL:
             self._on_vscroll(hwnd, wparam)
+            return 0
+        if msg == win32con.WM_MOUSEWHEEL:
+            self._on_mouse_wheel(hwnd, wparam)
             return 0
         if msg == _WM_APP_FOCUS:
             try:

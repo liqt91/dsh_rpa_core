@@ -187,7 +187,7 @@ class El {
     }
   }
   append(...nodes) { for (const n of nodes) this.children.push(n) }
-  replaceChildren(...nodes) { this.children = [...nodes] }
+  replaceChildren(...nodes) { this.children = [...nodes]; this.scrollTop = 0 }
   setAttribute(k, v) { this.attributes[k] = v }
   addEventListener(type, fn) { (this.handlers[type] ||= []).push(fn) }
   click() {
@@ -665,6 +665,22 @@ check('契约层：层级行点文字只看属性、点左方框才切换勾选'
     'Web 目标级复选框还被禁用成灰色')
 })
 
+check('契约层：多层级树重绘不丢滚动位置，原生框接滚轮', () => {
+  const keepers = (mainSrc.match(/const keepTop = container\.scrollTop/g) || []).length
+  const restorers = (mainSrc.match(/container\.scrollTop = keepTop/g) || []).length
+  assert(keepers === 2 && restorers === 2,
+    `Web 层级/节点树都要存+还原 scrollTop，实际 ${keepers}/${restorers}`)
+  assert(!/row\.addEventListener\('click'[\s\S]{0,240}renderElemLevels\(\)/.test(mainSrc),
+    'Web 点层级行又整树重绘了（滚动位置会跳回顶部）')
+  for (const needle of [
+    'def _on_mouse_wheel(self, hwnd, wparam)',
+    'if msg == win32con.WM_MOUSEWHEEL:',
+    'self._sync_level_checks(hwnd)',
+  ]) {
+    assert(editDialogSrc.includes(needle), `edit_dialog.py 缺 ${needle}`)
+  }
+})
+
 check('契约层：勾属性自动勾上所在层，取消属性不反取消', () => {
   // 内核一条布尔口径，四条产出路径（原生层级/原生桌面/Web 层级/Web 桌面）都调它
   assert(selectorTreeSrc.includes('def included_after_attr_check('), '内核缺属性联动纯函数')
@@ -748,6 +764,26 @@ await checkAsync('渲染层：网页层级点文字只选中，目标级方框�
   assert(compose, '目标级勾选弹回后没触发重组')
   assert(compose.args.levels[1].included === true, '目标级被勾掉了')
   assert(boxes()[1].checked === true, '目标级复选框没弹回')
+})
+
+await checkAsync('渲染层：多层级点行查看属性不丢滚动位置', async () => {
+  const levels = Array.from({ length: 12 }, (_, i) => ({
+    tag: `tag${i}`, included: i === 11,
+    id: { on: false, value: '' }, classes: [], nth: { on: false, value: '' },
+  }))
+  await startOnce({
+    responses: {
+      'rpa.elementEditModel': { ok: true, name: '多层级', kind: 'browser', selector: 'tag11', levels },
+      'rpa.elementCompose': { ok: true, selector: 'tag11' },
+    },
+  })
+  const container = nodeById('elemDialogLevels')
+  assert(container.children.length === 12, '12 层没全渲染出来')
+  container.scrollTop = 42
+  await container.children[3].click()
+  await flush()
+  assert(container.scrollTop === 42, '点行看属性把层级区滚回顶部')
+  assert(hasClass(container.children[3], 'selected'), '点行没选中该层')
 })
 
 await checkAsync('渲染层：未勾层勾属性会自动勾上层，取消属性不反取消', async () => {
