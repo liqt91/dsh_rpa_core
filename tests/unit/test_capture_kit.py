@@ -683,9 +683,13 @@ def _web_levels(total: int, included: tuple[int, ...] = ()) -> list[dict]:
 
 
 def _mock_level_dialog(monkeypatch, levels: list[dict]) -> tuple:
-    """给层级区控件做桩：只关心滚动条位置与复选框的 BM_SETCHECK 回写。"""
+    """给层级区控件做桩：滚动条位置、勾选回写、平移与批量移动调用。
+
+    返回 ``(dialog, checks, set_calls, scroll_calls, scroll_ex_calls, move_calls)``。
+    """
     win32gui = pytest.importorskip("win32gui")
     win32con = pytest.importorskip("win32con")
+    from rpa_core.capture_kit import edit_dialog
     from rpa_core.capture_kit.edit_dialog import ElementEditDialog
 
     dialog = ElementEditDialog()
@@ -695,6 +699,8 @@ def _mock_level_dialog(monkeypatch, levels: list[dict]) -> tuple:
     checks = {1000 + i: 0 for i in range(len(levels))}
     set_calls: list[tuple[int, int]] = []
     scroll_calls: list[tuple[tuple, bool]] = []
+    scroll_ex_calls: list[tuple] = []
+    move_calls: list[list] = []
 
     def send(hwnd, msg, wp, lp):
         if msg == win32con.BM_GETCHECK:
@@ -711,13 +717,20 @@ def _mock_level_dialog(monkeypatch, levels: list[dict]) -> tuple:
         win32gui, "SetScrollInfo",
         lambda hwnd, bar, info, redraw: scroll_calls.append((info, redraw)),
     )
-    return dialog, checks, set_calls, scroll_calls
+    # 位图平移与批量移动都不碰真窗口（桩句柄无效，真调会把单测打死）
+    monkeypatch.setattr(win32gui, "ScrollWindowEx", lambda *a: scroll_ex_calls.append(a))
+    monkeypatch.setattr(win32gui, "InvalidateRect", lambda *a: None)
+    monkeypatch.setattr(
+        edit_dialog._win32, "move_windows",
+        lambda moves: move_calls.append(list(moves)) or True,
+    )
+    return dialog, checks, set_calls, scroll_calls, scroll_ex_calls, move_calls
 
 
 def test_mouse_wheel_scrolls_levels_and_rewrites_checks(monkeypatch) -> None:
     """多层级必须能用滚轮看；滚动后复选框按模型回写，不能只信上一次的画法。"""
     win32con = pytest.importorskip("win32con")
-    dialog, checks, set_calls, scroll_calls = _mock_level_dialog(
+    dialog, checks, set_calls, scroll_calls, _sx, _moves = _mock_level_dialog(
         monkeypatch, _web_levels(15, (2, 14))
     )
     # WM_MOUSEWHEEL: 高 16 位是带符号 delta，向下滚一格是 -120。
@@ -733,21 +746,65 @@ def test_mouse_wheel_scrolls_levels_and_rewrites_checks(monkeypatch) -> None:
     assert dialog._level_scroll == 0, "反向滚轮要能滚回顶部"
 
 
-def test_thumbtrack_does_not_redraw_scrollbar(monkeypatch) -> None:
-    """拖块时关重绘：真机「点滚动条后假死」就是拖动循环和 SetScrollInfo 抢画。"""
+def test_thumbtrack_never_writes_scrollbar_and_is_throttled(monkeypatch) -> None:
+    """拖滚动块：一条都不写位置（滑块归 Windows 管），重排按 25ms 合并。
+
+    真机事故（M108）：拖动时每移动一点就一条 `SB_THUMBTRACK`，每次全量重排
+    19ms ⇒ 100 条消息耗 1916ms、界面 646ms 完全不响应 = 用户说的「点滚动条
+    假死」。上一版只把 `SetScrollInfo` 的 redraw 关掉、位置照样写，所以仍卡。
+    """
     win32con = pytest.importorskip("win32con")
-    dialog, _checks, _sets, scroll_calls = _mock_level_dialog(
+    dialog, _checks, _sets, scroll_calls, _sx, _moves = _mock_level_dialog(
         monkeypatch, _web_levels(15)
     )
+    layouts: list[int] = []
+    monkeypatch.setattr(dialog, "_layout_levels", lambda hwnd: layouts.append(dialog._level_scroll))
+
     dialog._on_vscroll(0, (4 << 16) | win32con.SB_THUMBTRACK)
-    assert scroll_calls and scroll_calls[-1][1] is False, "拖动中不该重画滚动条"
-    dialog._on_vscroll(0, (4 << 16) | win32con.SB_THUMBPOSITION)
-    assert scroll_calls[-1][1] is True, "拖完要重画一次同步滑块"
+    assert dialog._level_scroll == 4, "偏移要跟着走"
+    assert scroll_calls == [], "拖动中绝不写滚动条位置（会和拖动循环抢滑块）"
+    assert layouts == [4], "第一条要重排一帧"
+
+    dialog._on_vscroll(0, (5 << 16) | win32con.SB_THUMBTRACK)
+    assert dialog._level_scroll == 5
+    assert layouts == [4], "25ms 内的第二条只记偏移，不再重排"
+
+    dialog._on_vscroll(0, (5 << 16) | win32con.SB_THUMBPOSITION)
+    assert scroll_calls and scroll_calls[-1][0][4] == 5, "松手才写位置对齐滑块"
+    assert layouts == [4, 5], "松手立刻补齐布局"
+
+
+def test_smooth_scroll_moves_only_edges(monkeypatch) -> None:
+    """滚一格只动「进出视口」的两行，其余交给 ScrollWindowEx 位图平移。
+
+    逐个 SetWindowPos 摆一屏要 16ms（M108 真机），滚动块拖动时根本跟不上。
+    """
+    win32con = pytest.importorskip("win32con")
+    dialog, _checks, _sets, _scrolls, scroll_ex, move_calls = _mock_level_dialog(
+        monkeypatch, _web_levels(15)
+    )
+    dialog._layout_levels(0)  # 首帧全量
+    move_calls.clear()
+
+    dialog._on_vscroll(0, win32con.SB_LINEDOWN)
+
+    assert scroll_ex, "滚一格必须走 ScrollWindowEx 位图平移"
+    assert scroll_ex[-1][2] == -32, "偏移 +1 行 = 内容上移一行"
+    assert len(move_calls) == 1, "一帧只提交一次批量移动"
+    handles = {move[0] for move in move_calls[-1]}
+    assert handles == {1000, 2000, 1010, 2010}, (
+        "只该动滚出去的 0 层与滚进来的 10 层（方框+文字各一），"
+        f"实际动了 {sorted(handles)}"
+    )
+    # 显隐必须并进同一批：单独的 ShowWindow 一次 0.5~1.3ms，一帧四次就够呛
+    shows = {move[0]: move[3] for move in move_calls[-1]}
+    assert shows[1000] is False and shows[2000] is False, "滚出去的行要隐藏"
+    assert shows[1010] is True and shows[2010] is True, "滚进来的行要显示"
 
 
 def test_level_layout_syncs_checks_from_model(monkeypatch) -> None:
     """滚动重排后，组合里有哪层，方框就必须是勾着的。"""
-    dialog, checks, set_calls, _scrolls = _mock_level_dialog(
+    dialog, checks, set_calls, _scrolls, _sx, _moves = _mock_level_dialog(
         monkeypatch, _web_levels(15, (2,))
     )
     dialog._layout_levels(0)

@@ -652,9 +652,11 @@ check('契约层：层级行点文字只看属性、点左方框才切换勾选'
   // 行与小方框必须分开摆：两者同 x 重叠时，hover 重绘的空勾框看起来像“勾没了”
   assert(!/BS_CHECKBOX \| win32con\.BS_LEFT/.test(editDialogSrc),
     '层级行又变回 BS_CHECKBOX，与小方框重叠')
-  assert(/win32gui\.SetWindowPos\(\s*box, 0, 16, y/.test(editDialogSrc),
+  // 两种落地形态都认：逐个 SetWindowPos（旧）与批量 moves.append（M108 起，
+  // 一帧只提交一次，避免拖动滚动块时每挪一个控件重绘一轮）
+  assert(/(?:SetWindowPos\(\s*box, 0, 16, y|moves\.append\(\(box, 16, y)/.test(editDialogSrc),
     '小方框没摆在 x=16')
-  assert(/win32gui\.SetWindowPos\(\s*row, 0, 44, y/.test(editDialogSrc),
+  assert(/(?:SetWindowPos\(\s*row, 0, 44, y|moves\.append\(\(row, 44, y)/.test(editDialogSrc),
     '行文字没避开小方框（x=44）')
   // 目标级（链尾）不再整行禁用成灰色，但仍强制参与定位
   assert(!/EnableWindow\(box, False\)/.test(editDialogSrc), '目标级又被整行禁用成灰色')

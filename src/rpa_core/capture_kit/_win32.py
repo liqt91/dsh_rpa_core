@@ -56,6 +56,61 @@ def pump_dialog(hwnd: int) -> None:
         user32.DispatchMessageW(ctypes.byref(msg))
 
 
+def move_windows(moves: list[tuple[int, int, int, bool | None]]) -> bool:
+    """批量移动子窗口并可顺带显隐（Begin/Defer/EndDeferWindowPos），尺寸不变。
+
+    ★ ``win32gui`` 没有这三个成员（与 ``CreateFont``/``SetTimer``/
+    ``IsDialogMessage`` 同款缺成员），只能走 user32。批量提交的意义是把失效
+    与重绘合并成一轮：逐个 ``SetWindowPos`` 时每挪一个控件都要重算一次父窗口
+    可见区域，重排一屏十几行就是十几轮（M108 实测 30 个控件 16ms → 7ms）。
+
+    ``moves`` 是 ``[(hwnd, x, y, show), ...]``：``show`` 为 ``True`` 带
+    ``SWP_SHOWWINDOW``、``False`` 带 ``SWP_HIDEWINDOW``、``None`` 只管位置。
+    显隐并进同一批的理由：单独的 ``ShowWindow`` 一次要 0.5~1.3ms（它要发
+    ``WM_SHOWWINDOW`` 并重算可见性），而滚动一格总要进出各一行、两个控件。
+
+    成功返回 True；任一步失败返回 False，调用方自己退回逐个 ``SetWindowPos``
+    （宁可慢，不能停摆）。
+    """
+    import win32con
+
+    if not moves:
+        return True
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
+    user32.BeginDeferWindowPos.argtypes = [ctypes.c_int]
+    user32.BeginDeferWindowPos.restype = ctypes.c_void_p
+    user32.DeferWindowPos.argtypes = [
+        ctypes.c_void_p,
+        ctypes.c_void_p,
+        ctypes.c_void_p,
+        ctypes.c_int,
+        ctypes.c_int,
+        ctypes.c_int,
+        ctypes.c_int,
+        ctypes.c_uint,
+    ]
+    user32.DeferWindowPos.restype = ctypes.c_void_p
+    user32.EndDeferWindowPos.argtypes = [ctypes.c_void_p]
+    user32.EndDeferWindowPos.restype = ctypes.c_bool
+
+    base = win32con.SWP_NOSIZE | win32con.SWP_NOZORDER | win32con.SWP_NOACTIVATE
+    hdwp = user32.BeginDeferWindowPos(len(moves))
+    if not hdwp:
+        return False
+    for hwnd, x, y, show in moves:
+        flags = base
+        if show is True:
+            flags |= win32con.SWP_SHOWWINDOW
+        elif show is False:
+            flags |= win32con.SWP_HIDEWINDOW
+        hdwp = user32.DeferWindowPos(
+            hdwp, ctypes.c_void_p(int(hwnd)), None, int(x), int(y), 0, 0, flags
+        )
+        if not hdwp:  # 失败时 hdwp 已失效，不能再 End
+            return False
+    return bool(user32.EndDeferWindowPos(hdwp))
+
+
 class _RECT(ctypes.Structure):
     _fields_ = [
         ("left", ctypes.c_long),

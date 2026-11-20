@@ -65,6 +65,13 @@ _ID_DESKTOP_ATTR_BASE = 4000
 # 窗口右侧给 WS_VSCROLL 滚动条，checkbox 按偏移重排（M69：目标→根的完整链）。
 _LEVEL_ROWS = 10
 _NODE_ROWS = 10
+# 滚动只滚左栏这一块（客户坐标 l/t/r/b）：`ScrollWindowEx` 会连带移动与区域相交
+# 的子窗口，右栏属性控件从 x=312（网页）/ 420（桌面）起，不能被卷进来。
+_LEVEL_AREA = (0, 64, 302, 70 + _LEVEL_ROWS * 32)
+_NODE_AREA = (0, 64, 410, 70 + _NODE_ROWS * 32)
+# 拖动滚动块时把「重排子控件」合并到 ~40fps：一条消息 19ms 全量重排会把
+# 窗口线程堵死（M108 实测 100 条 1916ms、界面冻结 646ms）。
+_SCROLL_THROTTLE = 0.025
 
 _MATCH_MODES = ("精确", "包含")
 _DESKTOP_MODES = ("精确", "包含", "正则")
@@ -116,6 +123,15 @@ class ElementEditDialog:
         self._level_scroll = 0
         self._level_boxes: list[int] = []
         self._level_check_boxes: list[int] = []
+        # 上一帧每行落到第几行 / 是否屏内。★ 两件事分开记：滚动一格时「行号」
+        # 全变（要移动）、可见性只翻两行（要 ShowWindow），混成一个键会让十几
+        # 个没变的控件白跑 SetWindowPos + SW_SHOW（实测各占 6.6ms / 4.4ms）。
+        self._level_pos: dict[int, int] = {}
+        self._level_vis: dict[int, bool] = {}
+        # 上一帧画到哪个偏移（None = 还没画）：差值 ±1 行以内才能整段平移
+        self._level_painted: int | None = None
+        # 最近一次真正重排的时刻（monotonic 秒），用于拖动节流
+        self._last_layout = 0.0
         self._attr_controls: list[int] = []
         self._control_map: dict[int, tuple] = {}
         # 桌面层级形态状态（nodes / descriptor 由内核编辑模型提供）
@@ -124,6 +140,9 @@ class ElementEditDialog:
         self._selected_node = 0
         self._node_scroll = 0
         self._node_boxes: list[int] = []
+        self._node_pos: dict[int, int] = {}
+        self._node_vis: dict[int, bool] = {}
+        self._node_painted: int | None = None
         self._desktop_attr_controls: list[int] = []
         self._desktop_control_map: dict[int, tuple] = {}
 
@@ -165,6 +184,14 @@ class ElementEditDialog:
         self._descriptor = descriptor
         self._selected = 0
         self._selected_node = 0
+        # 布局缓存按这次的数据重建（同一个 dialog 实例可复用）
+        self._level_pos = {}
+        self._level_vis = {}
+        self._level_painted = None
+        self._node_pos = {}
+        self._node_vis = {}
+        self._node_painted = None
+        self._last_layout = 0.0
         self._save_label = save_label
         self._on_save = on_save
         self._on_close = on_close
@@ -196,7 +223,14 @@ class ElementEditDialog:
         client_h = _DESKTOP_H if desktop_mode else (_TREE_H if tree_mode else _SIMPLE_H)
         _win32.register_class(_CLASS)
         ex_style = win32con.WS_EX_TOPMOST | win32con.WS_EX_DLGMODALFRAME
-        style = win32con.WS_POPUP | win32con.WS_CAPTION | win32con.WS_SYSMENU
+        style = (
+            win32con.WS_POPUP
+            | win32con.WS_CAPTION
+            | win32con.WS_SYSMENU
+            # 子控件挪位会让父窗口那块区域失效；没有 WS_CLIPCHILDREN 时父窗口
+            # 先拿白刷把子控件区域整个擦一遍再让它们重画，一次重排就翻倍。
+            | win32con.WS_CLIPCHILDREN
+        )
         if len(self._levels) > _LEVEL_ROWS or len(self._nodes) > _NODE_ROWS:
             # 全链层级超一屏：给窗口原生垂直滚动条（WM_VSCROLL 里重排 checkbox）
             style |= win32con.WS_VSCROLL
@@ -363,6 +397,9 @@ class ElementEditDialog:
         import win32gui
 
         self._level_scroll = 0
+        self._level_pos = {}
+        self._level_vis = {}
+        self._level_painted = None
         if len(self._levels) > _LEVEL_ROWS:
             # pywin32 的 SCROLLINFO 是 (mask, min, max, page, pos[, trackPos]) 元组
             mask = win32con.SIF_RANGE | win32con.SIF_PAGE | win32con.SIF_POS
@@ -372,30 +409,88 @@ class ElementEditDialog:
             )
         self._layout_levels(hwnd)
 
-    def _layout_levels(self, hwnd) -> None:
-        """按滚动偏移摆放层级 checkbox：屏内显示、屏外隐藏。"""
+    def _apply_layout(
+        self,
+        hwnd,
+        moves: list[tuple[int, int, int, bool | None]],
+    ) -> None:
+        """提交一帧的「移动 + 显隐」；批量失败就退回逐个 SetWindowPos。"""
         import win32con
         import win32gui
 
+        if not _win32.move_windows(moves):
+            for handle, x, y, show in moves:
+                flags = (
+                    win32con.SWP_NOSIZE | win32con.SWP_NOZORDER
+                    | win32con.SWP_NOACTIVATE
+                )
+                if show is True:
+                    flags |= win32con.SWP_SHOWWINDOW
+                elif show is False:
+                    flags |= win32con.SWP_HIDEWINDOW
+                win32gui.SetWindowPos(handle, 0, x, y, 0, 0, flags)
+
+    def _layout_levels(self, hwnd) -> None:
+        """按滚动偏移摆放层级行：整段平移 + 只补边缘，`O(滚动差)` 而不是 `O(层数)`。
+
+        ★ 一次滚动**绝不重摆一屏**。实测（M108 真机）把 30 个控件挨个
+        `SetWindowPos` 要 16ms，批量提交 7ms，而 `ScrollWindowEx` 把整块内容
+        （含子控件，`SW_SCROLLCHILDREN`）位图平移只要 0.12ms——差 60 倍。
+        滚动一格时只需把**滚进来的那一行**摆到边上、把**滚出去的那行**藏起来。
+
+        区域裁在左栏（`_LEVEL_AREA`）：`ScrollWindowEx` 会连带移动与区域相交
+        的子窗口，右栏属性控件从 x=312 起，绝不能被卷进来。
+
+        真机取证：`.harness/spike/probe_m108_drag.py`（拖动 100 条消息的滞后与
+        界面冻结时长）、`.harness/spike/probe_m108_verify.py`（滚到底/回顶后逐行
+        核对文字、行距、勾选）。
+        """
+        import win32con
+        import win32gui
+
+        delta = 0 if self._level_painted is None else self._level_scroll - self._level_painted
+        smooth = 0 < abs(delta) < _LEVEL_ROWS
+        moves: list[tuple[int, int, int, bool | None]] = []
+        if smooth:
+            # 只 BitBlt + 移子控件，**不** SW_INVALIDATE：那会把整块区域
+            # 交给父窗口擦白重画（30 个控件的背景全刷一遍）。滚出来的只有边上
+            # 那一两行，单独失效那条就够。
+            win32gui.ScrollWindowEx(
+                hwnd, 0, -delta * 32, _LEVEL_AREA, None, None,
+                win32con.SW_SCROLLCHILDREN,
+            )
+            rows = min(abs(delta), _LEVEL_ROWS)
+            if delta > 0:  # 内容上移，底部露白
+                edge_top = 70 + (_LEVEL_ROWS - rows) * 32
+            else:
+                edge_top = 70
+            win32gui.InvalidateRect(
+                hwnd,
+                (_LEVEL_AREA[0], edge_top, _LEVEL_AREA[2], edge_top + rows * 32),
+                True,
+            )
+            # 系统把屏内行整体挪了 -delta 行，缓存跟着走（否则边缘补位会错行）。
+            for index in self._level_pos:
+                self._level_pos[index] -= delta
         for index, (row, box) in enumerate(
             zip(self._level_boxes, self._level_check_boxes, strict=True)
         ):
             line = index - self._level_scroll
             visible = 0 <= line < _LEVEL_ROWS
+            if smooth:
+                # 平移已经把屏内行摆好，只处理进出视口的那几行
+                if self._level_vis.get(index) is visible:
+                    continue
+            elif self._level_pos.get(index) == line and self._level_vis.get(index) is visible:
+                continue
+            self._level_pos[index] = line
+            self._level_vis[index] = visible
             y = 70 + line * 32
             # 行文字与小方框分开摆放：box 在 x=16，row 从 x=44 起，互不覆盖
-            win32gui.SetWindowPos(
-                box, 0, 16, y, 0, 0,
-                win32con.SWP_NOSIZE | win32con.SWP_NOZORDER,
-            )
-            win32gui.SetWindowPos(
-                row, 0, 44, y, 0, 0,
-                win32con.SWP_NOSIZE | win32con.SWP_NOZORDER,
-            )
-            for handle in (row, box):
-                win32gui.ShowWindow(
-                    handle, win32con.SW_SHOW if visible else win32con.SW_HIDE
-                )
+            moves.append((box, 16, y, visible))
+            moves.append((row, 44, y, visible))
+        self._apply_layout(hwnd, moves)
+        self._level_painted = self._level_scroll
         # ★ 勾选态的唯一事实源是 self._levels，不是复选框上一次画出来的样子。
         # 滚动/重绘后 Windows 会重画子控件；这里按模型回写一遍（只在不一致时
         # 发 BM_SETCHECK），避免「组合里有这一层、方框却是空的」视觉错位。
@@ -417,11 +512,19 @@ class ElementEditDialog:
     def _on_vscroll(self, hwnd, wparam) -> None:
         """滚动层级区：行/页/拖块三档都收（桌面节点与网页层级各走各的偏移）。
 
-        ★ 拖动块（`SB_THUMBTRACK`）时更新滚动条位置必须关掉重绘：拖动期间
-        Windows 自己管滑块，这里再 `SetScrollInfo(..., True)` 会跟拖动循环抢
-        着重画，真机表现为「滑块跟不上鼠标，界面像假死」。拖完的
-        `SB_THUMBPOSITION` 再重绘一次即可。
+        ★ 拖动块（`SB_THUMBTRACK`）有两条硬规矩，缺一条真机就「卡死」
+        （M108 实测：100 条拖动消息耗 1916ms、界面最长 646ms 不响应）：
+
+        1. **不写滚动条位置**。`DefWindowProc` 的拖动循环自己维护滑块，这里
+           再 `SetScrollInfo(SIF_POS)` 会把滑块钉到我们算的值上，和拖动循环
+           来回拉扯（上一版只是把 `redraw` 关掉，位置照样写，所以仍卡）。
+        2. **布局节流**。拖动时每移动一像素就一条 `SB_THUMBTRACK`，而一次全
+           量重排（移动 2N 个子控件 + 改可见性）要 19ms，等于把窗口线程按在
+           地上：消息越积越多，用户看到的就是假死。这里把重排合并到 ~40fps，
+           松手（`SB_THUMBPOSITION`/`SB_ENDSCROLL`）立刻补齐并校正滑块。
         """
+        import time
+
         import win32con
 
         code = wparam & 0xFFFF
@@ -442,15 +545,20 @@ class ElementEditDialog:
             after = min(limit, before + rows)
         elif code in (win32con.SB_THUMBTRACK, win32con.SB_THUMBPOSITION):
             after = min(limit, max(0, pos))
-        else:
+        elif code != win32con.SB_ENDSCROLL:
             return
         if desktop:
             self._node_scroll = after
         else:
             self._level_scroll = after
-        _set_vert_scroll_pos(
-            hwnd, after, redraw=code != win32con.SB_THUMBTRACK,
-        )
+        now = time.perf_counter()
+        if code == win32con.SB_THUMBTRACK:
+            # 只记偏移；滑块交给拖动循环，重排按节流合并（见 docstring）。
+            if now - self._last_layout < _SCROLL_THROTTLE:
+                return
+        else:
+            _set_vert_scroll_pos(hwnd, after, redraw=True)
+        self._last_layout = now
         if desktop:
             self._layout_nodes(hwnd)
         else:
@@ -462,6 +570,8 @@ class ElementEditDialog:
         没接这条时用户只能去拖窗口最右侧的滚动条；多层级页面滚不动，
         拖一次又容易和上面的滑块重绘打架。一格 120，滚 3 行（与常见列表一致）。
         """
+        import time
+
         delta = (((int(wparam) >> 16) & 0xFFFF) + 0x8000) % 0x10000 - 0x8000
         if not delta:
             return
@@ -483,6 +593,7 @@ class ElementEditDialog:
             self._layout_nodes(hwnd)
         else:
             self._layout_levels(hwnd)
+        self._last_layout = time.perf_counter()
 
     def _rebuild_attr_pane(self, hwnd) -> None:
         """右栏属性行随选中层重建（行数随层级属性变，池化比重排省事）。"""
@@ -602,6 +713,9 @@ class ElementEditDialog:
         # 初始偏移由 ``_initial_node_view`` 决定（目标节点那条必须是可见的），
         # 这里只负责把它夹回合法范围并同步滚动条位置。
         self._node_scroll = _clamp_node_scroll(self._node_scroll, len(self._nodes))
+        self._node_pos = {}
+        self._node_vis = {}
+        self._node_painted = None
         if len(self._nodes) > _NODE_ROWS:
             mask = win32con.SIF_RANGE | win32con.SIF_PAGE | win32con.SIF_POS
             win32gui.SetScrollInfo(
@@ -629,17 +743,33 @@ class ElementEditDialog:
         return target, scroll
 
     def _layout_nodes(self, hwnd) -> None:
+        """节点区与层级区同口径：整段平移 + 补边缘（见 `_layout_levels`）。"""
         import win32con
         import win32gui
 
-        for index, box in enumerate(self._node_boxes):
-            row = index - self._node_scroll
-            visible = 0 <= row < _NODE_ROWS
-            win32gui.SetWindowPos(
-                box, 0, 16, 70 + row * 32, 0, 0,
-                win32con.SWP_NOSIZE | win32con.SWP_NOZORDER,
+        delta = 0 if self._node_painted is None else self._node_scroll - self._node_painted
+        smooth = 0 < abs(delta) < _NODE_ROWS
+        moves: list[tuple[int, int, int, bool | None]] = []
+        if smooth:
+            win32gui.ScrollWindowEx(
+                hwnd, 0, -delta * 32, _NODE_AREA, None, None,
+                win32con.SW_SCROLLCHILDREN | win32con.SW_INVALIDATE,
             )
-            win32gui.ShowWindow(box, win32con.SW_SHOW if visible else win32con.SW_HIDE)
+            for index in self._node_pos:
+                self._node_pos[index] -= delta
+        for index, box in enumerate(self._node_boxes):
+            line = index - self._node_scroll
+            visible = 0 <= line < _NODE_ROWS
+            if smooth:
+                if self._node_vis.get(index) is visible:
+                    continue
+            elif self._node_pos.get(index) == line and self._node_vis.get(index) is visible:
+                continue
+            self._node_pos[index] = line
+            self._node_vis[index] = visible
+            moves.append((box, 16, 70 + line * 32, visible))
+        self._apply_layout(hwnd, moves)
+        self._node_painted = self._node_scroll
 
     def _rebuild_desktop_attr_pane(self, hwnd) -> None:
         import win32con
