@@ -31,21 +31,43 @@ from collections.abc import Callable
 from typing import Any
 
 from . import _win32, desktop_editing, selector_tree
+from .edit_check import EditCheckResult, check_draft, check_structure
+from .shot_view import ShotView
+from .toast import CheckToast
 
 _CLASS = "RpaElementEditDialog"
 # 私有消息：窗口显示后再设焦点（同步 SetFocus 在本机实测会卡 ~1.5s）
 _WM_APP_FOCUS = 0x8000 + 2
+# 校验线程跑完 → 主线程收尾（只当信号，结果在 _pending_result 里）
+_WM_APP_CHECK = 0x8000 + 3
 
 # 简式形态客户区
 _SIMPLE_W = 560
 _SIMPLE_H = 452
-# 层级形态客户区（左层级 + 右属性，信息密度高，要更宽）
+# 层级形态客户区（左层级 + 右属性 + 信息行 + 截图预览）
 _TREE_W = 780
-_TREE_H = 556
+# 不含截图区的固定高度（按钮行下沿 + 边距）：截图区按屏幕余量伸缩
+_TREE_BASE_H = 552
+_TREE_H = 850
 
-# 桌面层级形态客户区（左节点 + 右属性 + 多行组合预览）
+# 桌面层级形态客户区（左节点 + 右属性 + 多行组合预览 + 截图预览）
 _DESKTOP_W = 940
-_DESKTOP_H = 620
+_DESKTOP_BASE_H = 614
+_DESKTOP_H = 912
+
+# 截图预览区（底部一大块）：等比缩放，留白处给提示语。
+# ★ 高度不是常量：小屏（1366×768）上按 280 硬排会把「保存/取消」顶到屏幕外，
+# 所以按工作区余量收缩；余量太小就整个不建（见 ``_fit_shot_height``）。
+_SHOT_MARGIN = 16
+_SHOT_H = 280
+_SHOT_MIN = 120
+_SHOT_GAP = 18
+
+# 结果条配色（与保存错误行的红区分：成功绿、警告琥珀、失败红）
+_COLOR_OK = (22, 132, 74)
+_COLOR_WARN = (176, 106, 0)
+_COLOR_ERROR = (192, 0, 0)
+_COLOR_PLAIN = (96, 96, 96)
 # 固定控件 id：保存/取消沿对话框惯例（IsDialogMessage 会把 Enter/Esc 映到这两个 id）
 _ID_NAME = 201
 _ID_META = 202
@@ -53,6 +75,8 @@ _ID_ERROR = 203
 _ID_SELECTOR = 204
 _ID_PREVIEW = 205
 _ID_INFO = 206
+# 「校验元素」（影刀 §5 主动校验）：显式按钮，别做成边打字边跑
+_ID_CHECK = 210
 # 动态控件 id 起点（网页层级勾选 / 属性行）
 _ID_LEVEL_BASE = 1000
 # 层级行左端的小复选框（与行文字分开：点文字只看属性，点方框才切勾选）
@@ -75,6 +99,30 @@ _SCROLL_THROTTLE = 0.025
 
 _MATCH_MODES = ("精确", "包含")
 _DESKTOP_MODES = ("精确", "包含", "正则")
+# 标题栏 + 边框 + 任务栏留出来的余量（估大一点，宁可窄不可挤出屏幕）
+_WINDOW_CHROME = 96
+
+
+def _work_area_height() -> int:
+    """鼠标所在显示器的工作区高度（与 ``_place`` 同一取舍）。"""
+    try:
+        import win32api
+        import win32con
+
+        cursor = win32api.GetCursorPos()
+        monitor = win32api.MonitorFromPoint(cursor, win32con.MONITOR_DEFAULTTONEAREST)
+        left, top, right, bottom = win32api.GetMonitorInfo(monitor)["Work"]
+        return int(bottom - top)
+    except Exception:  # noqa: BLE001 - 拿不到就按 1080 保守算
+        return 1080
+
+
+def _fit_shot_height(base_h: int) -> int:
+    """截图区高度：屏幕放得下就 280，放不下就缩，缩到 120 以下干脆不要。"""
+    room = _work_area_height() - _WINDOW_CHROME - base_h - _SHOT_GAP
+    if room < _SHOT_MIN:
+        return 0
+    return min(_SHOT_H, room)
 
 
 def _clamp_node_scroll(scroll: int, total: int) -> int:
@@ -145,6 +193,22 @@ class ElementEditDialog:
         self._node_painted: int | None = None
         self._desktop_attr_controls: list[int] = []
         self._desktop_control_map: dict[int, tuple] = {}
+        # 校验（影刀 §5 主动校验）：结果条复用 info 行，截图区是独立自绘子窗口
+        self._check_btn = None
+        self._result_static = None
+        self._result_color: tuple[int, int, int] | None = None
+        self._shot_view: ShotView | None = None
+        self._toast: CheckToast | None = None
+        # 截图区的实际几何（``_run`` 按屏幕余量算，_build_* 照着摆）
+        self._shot_x = _SHOT_MARGIN
+        self._shot_y = 0
+        self._shot_w = 0
+        self._shot_h = 0
+        self._checking = False
+        # worker 线程写、主线程读；消息只当信号，结果走这个槽（带序号，防旧结果覆盖新的）
+        self._pending_result: tuple[int, EditCheckResult] | None = None
+        self._check_seq = 0
+        self._kind = ""
 
     @property
     def available(self) -> bool:
@@ -182,6 +246,22 @@ class ElementEditDialog:
         self._levels = levels or []
         self._nodes = nodes or []
         self._descriptor = descriptor
+        # 校验要的 element kind：网页层级形态拿不到完整描述符，但确知自己是 browser
+        if self._nodes:
+            self._kind = "desktop"
+        elif self._levels:
+            self._kind = "browser"
+        else:
+            self._kind = str((descriptor or {}).get("kind") or "browser")
+        # 校验状态每轮清零（同一个 dialog 实例可复用）
+        self._checking = False
+        self._pending_result = None
+        self._check_seq = 0
+        self._result_color = None
+        self._result_static = None
+        self._check_btn = None
+        self._shot_view = None
+        self._toast = None
         self._selected = 0
         self._selected_node = 0
         # 布局缓存按这次的数据重建（同一个 dialog 实例可复用）
@@ -220,7 +300,27 @@ class ElementEditDialog:
         desktop_mode = bool(self._nodes)
         tree_mode = bool(self._levels) and not desktop_mode
         client_w = _DESKTOP_W if desktop_mode else (_TREE_W if tree_mode else _SIMPLE_W)
-        client_h = _DESKTOP_H if desktop_mode else (_TREE_H if tree_mode else _SIMPLE_H)
+        # 截图区按屏幕余量伸缩：小屏上宁可矮一点，也不能让底部按钮掉出屏幕。
+        # 简式形态本来就窄，不放截图（它的提示行与保存错误共用一行）。
+        if desktop_mode:
+            self._shot_y = _DESKTOP_BASE_H
+            self._shot_x = _SHOT_MARGIN
+            self._shot_w = _DESKTOP_W - 2 * _SHOT_MARGIN
+        elif tree_mode:
+            self._shot_y = _TREE_BASE_H
+            self._shot_x = _SHOT_MARGIN
+            self._shot_w = _TREE_W - 2 * _SHOT_MARGIN
+        else:
+            self._shot_y = _SIMPLE_H
+            self._shot_x = self._shot_w = 0
+        self._shot_h = (
+            _fit_shot_height(self._shot_y) if (desktop_mode or tree_mode) else 0
+        )
+        client_h = self._shot_y + (
+            self._shot_h + _SHOT_GAP if self._shot_h else 0
+        )
+        if not (desktop_mode or tree_mode):
+            client_h = _SIMPLE_H
         _win32.register_class(_CLASS)
         ex_style = win32con.WS_EX_TOPMOST | win32con.WS_EX_DLGMODALFRAME
         style = (
@@ -326,6 +426,9 @@ class ElementEditDialog:
             16, 248, 528, 122, _ID_META,
         )
         self._error_static = control("STATIC", "", 0, 16, 378, 528, 20, _ID_ERROR)
+        # 简式只有一行提示位，校验结果与保存错误复用（颜色由 _result_color 决定）
+        self._result_static = self._error_static
+        self._check_btn = control("BUTTON", "校验元素", 0, 16, 406, 100, 30, _ID_CHECK)
         control(
             "BUTTON", self._save_label, win32con.BS_DEFPUSHBUTTON,
             368, 406, 84, 30, win32con.IDOK,
@@ -381,13 +484,22 @@ class ElementEditDialog:
             win32con.ES_AUTOHSCROLL | win32con.ES_READONLY | win32con.WS_BORDER,
             16, 424, 748, 28, _ID_PREVIEW,
         )
-        control("STATIC", self._info, 0, 16, 460, 748, 18, _ID_INFO)
+        # 结果条复用 info 行：平时灰字说明，校验后按结果换色（影刀「找到 N 个」同位置）
+        self._result_static = control("STATIC", self._info, 0, 16, 460, 748, 18, _ID_INFO)
         self._error_static = control("STATIC", "", 0, 16, 484, 748, 18, _ID_ERROR)
+        self._check_btn = control(
+            "BUTTON", "校验元素", 0, 16, 512, 120, 30, _ID_CHECK,
+        )
         control(
             "BUTTON", self._save_label, win32con.BS_DEFPUSHBUTTON,
             580, 512, 88, 30, win32con.IDOK,
         )
         control("BUTTON", "取消", 0, 676, 512, 88, 30, win32con.IDCANCEL)
+        if self._shot_h:
+            self._shot_view = ShotView()
+            self._shot_view.create(
+                hwnd, self._shot_x, self._shot_y, self._shot_w, self._shot_h
+            )
         win32gui.SendMessage(self._name_edit, win32con.EM_SETSEL, 0, -1)
         self._refresh_preview()
 
@@ -665,6 +777,16 @@ class ElementEditDialog:
 
         if self._preview_edit:
             win32gui.SetWindowText(self._preview_edit, selector_tree.compose(self._levels))
+        self._invalidate_check()
+
+    def _invalidate_check(self) -> None:
+        """选择器一改，上一轮校验结果就过期了——必须显式作废。
+
+        留着「找到 1 个」而用户已经把某层取消勾选，等于用旧结论担保新选择器。
+        """
+        if self._checking or self._result_color is None:
+            return
+        self._set_result("已修改，点「校验元素」重新检查", _COLOR_PLAIN)
 
     # -- 桌面层级形态（desktop，影刀式节点/属性编辑） -----------------------------
     def _build_desktop_children(self, hwnd) -> None:
@@ -709,13 +831,21 @@ class ElementEditDialog:
             | win32con.WS_VSCROLL | win32con.WS_BORDER,
             16, 424, 908, 96, _ID_PREVIEW,
         )
-        control("STATIC", self._info, 0, 16, 526, 908, 18, _ID_INFO)
+        self._result_static = control("STATIC", self._info, 0, 16, 526, 908, 18, _ID_INFO)
         self._error_static = control("STATIC", "", 0, 16, 548, 908, 18, _ID_ERROR)
+        self._check_btn = control(
+            "BUTTON", "校验元素", 0, 16, 574, 120, 30, _ID_CHECK,
+        )
         control(
             "BUTTON", self._save_label, win32con.BS_DEFPUSHBUTTON,
             748, 574, 84, 30, win32con.IDOK,
         )
         control("BUTTON", "取消", 0, 840, 574, 84, 30, win32con.IDCANCEL)
+        if self._shot_h:
+            self._shot_view = ShotView()
+            self._shot_view.create(
+                hwnd, self._shot_x, self._shot_y, self._shot_w, self._shot_h
+            )
         win32gui.SendMessage(self._name_edit, win32con.EM_SETSEL, 0, -1)
         self._refresh_desktop_preview()
 
@@ -861,6 +991,7 @@ class ElementEditDialog:
         except (TypeError, ValueError) as exc:
             text = f"（当前勾选无法组合：{exc}）"
         win32gui.SetWindowText(self._preview_edit, text)
+        self._invalidate_check()
 
     def _on_desktop_control(self, hwnd, cid: int, notif: int) -> None:
         import win32con
@@ -919,6 +1050,9 @@ class ElementEditDialog:
             if cid == win32con.IDCANCEL and notif == 0:
                 self._close(saved=False)
                 return 0
+            if cid == _ID_CHECK and notif == 0:
+                self._start_check(hwnd)
+                return 0
             if self._nodes:
                 self._on_desktop_control(hwnd, cid, notif)
             else:
@@ -936,13 +1070,23 @@ class ElementEditDialog:
             except Exception:  # noqa: BLE001 - 焦点没设上不影响功能
                 pass
             return 0
-        if msg == win32con.WM_CTLCOLORSTATIC and int(lparam) == int(self._error_static or 0):
-            # 错误行画红：返回画刷前先把文字颜色设上
+        if msg == _WM_APP_CHECK:
+            self._finish_check(hwnd)
+            return 0
+        if msg == win32con.WM_CTLCOLORSTATIC:
             import win32api
 
-            win32gui.SetTextColor(wparam, win32api.RGB(192, 0, 0))
-            win32gui.SetBkMode(wparam, win32con.TRANSPARENT)
-            return win32gui.GetStockObject(win32con.WHITE_BRUSH)
+            target = int(lparam)
+            # 结果条优先：简式形态把这两行合成同一个控件，得让校验结果的颜色生效
+            if target == int(self._result_static or 0) and self._result_color:
+                win32gui.SetTextColor(wparam, win32api.RGB(*self._result_color))
+                win32gui.SetBkMode(wparam, win32con.TRANSPARENT)
+                return win32gui.GetStockObject(win32con.WHITE_BRUSH)
+            if target == int(self._error_static or 0):
+                # 错误行画红：返回画刷前先把文字颜色设上
+                win32gui.SetTextColor(wparam, win32api.RGB(*_COLOR_ERROR))
+                win32gui.SetBkMode(wparam, win32con.TRANSPARENT)
+                return win32gui.GetStockObject(win32con.WHITE_BRUSH)
         if msg == win32con.WM_CLOSE:
             self._close(saved=False)
             return 0
@@ -1006,6 +1150,145 @@ class ElementEditDialog:
             ]
             self._refresh_preview()
 
+    # -- 校验（影刀 §5 主动校验） ------------------------------------------------
+    def _current_selector(self) -> Any:
+        """当前编辑态的定位：桌面给 selector 字典，网页/简式给文本。"""
+        if self._nodes:
+            return desktop_editing.compose_selector(
+                self._descriptor or {}, self._nodes
+            )
+        if self._levels:
+            return selector_tree.compose(self._levels)
+        if self._selector_edit:
+            import win32gui
+
+            return win32gui.GetWindowText(self._selector_edit)
+        return ""
+
+    def _set_result(self, text: str, color: tuple[int, int, int]) -> None:
+        """写结果条（复用 info 行）；颜色在 ``WM_CTLCOLORSTATIC`` 里落地。"""
+        import win32gui
+
+        self._result_color = color
+        if self._result_static:
+            win32gui.SetWindowText(self._result_static, text)
+            win32gui.InvalidateRect(self._result_static, None, True)
+
+    def _restore_ui(self, hwnd) -> None:
+        """收起 toast、按钮复位、把编辑框放回来（取消与完成共用）。"""
+        import win32con
+        import win32gui
+
+        if self._toast is not None:
+            self._toast.close()
+            self._toast = None
+        if self._check_btn:
+            try:
+                win32gui.SetWindowText(self._check_btn, "校验元素")
+            except Exception:  # noqa: BLE001 - 控件没了就别管
+                pass
+        try:
+            win32gui.ShowWindow(hwnd, win32con.SW_SHOW)
+            win32gui.SetForegroundWindow(hwnd)
+        except Exception:  # noqa: BLE001 - 抢不到前台不影响用
+            pass
+
+    def _cancel_check(self, hwnd) -> None:
+        """中止等待：立刻回框，在跑的那轮结果作废（红框还会自己闪完，无害）。"""
+        if not self._checking:
+            return
+        self._check_seq += 1
+        self._checking = False
+        self._restore_ui(hwnd)
+        self._set_result("校验已取消", _COLOR_PLAIN)
+
+    def _start_check(self, hwnd) -> None:
+        """点「校验元素」：结构先本地判，再藏框 → toast → 后台定位。"""
+        import win32con
+        import win32gui
+
+        if self._checking:
+            self._cancel_check(hwnd)
+            return
+        try:
+            selector = self._current_selector()
+        except (TypeError, ValueError) as exc:
+            self._show_error(f"当前勾选无法组合：{exc}")
+            return
+        # 结构不对就别藏框了：本地判完立刻回显，用户还能直接改
+        structure_error = check_structure(self._kind, selector)
+        if structure_error:
+            self._show_error(structure_error)
+            self._set_result(structure_error, _COLOR_ERROR)
+            return
+
+        self._check_seq += 1
+        seq = self._check_seq
+        self._checking = True
+        self._pending_result = None
+        self._show_error("")
+        if self._check_btn:
+            win32gui.SetWindowText(self._check_btn, "取消")
+        self._set_result("正在校验元素…", _COLOR_PLAIN)
+        # toast 必须在**有消息泵的线程**创建：worker 线程没有泵，窗口会白着不画
+        self._toast = CheckToast()
+        self._toast.show("正在校验元素")
+        # 藏起来才能看见目标窗口被置前 + 红框（影刀同一交互）
+        win32gui.ShowWindow(hwnd, win32con.SW_HIDE)
+        threading.Thread(
+            target=self._check_worker,
+            args=(selector, seq),
+            name="element-check",
+            daemon=True,
+        ).start()
+
+    def _check_worker(self, selector: Any, seq: int) -> None:
+        """后台定位：活体查询是阻塞的（桌面 UIA 几十~几百毫秒），绝不进消息循环。"""
+        try:
+            result = check_draft(
+                self._descriptor or {}, selector, kind=self._kind
+            )
+        except Exception as exc:  # noqa: BLE001 - 线程里抛出去没人接，只能自己兜
+            result = EditCheckResult(
+                success=False,
+                error_code="verify-exception",
+                message=f"校验出错：{type(exc).__name__}",
+            )
+        self._pending_result = (seq, result)
+        hwnd = self._hwnd
+        if not hwnd:
+            return
+        try:
+            import win32gui
+
+            win32gui.PostMessage(hwnd, _WM_APP_CHECK, 0, 0)
+        except Exception:  # noqa: BLE001 - 框已关就没人收，结果自然丢弃
+            pass
+
+    def _finish_check(self, hwnd) -> None:
+        """主线程收尾：旧轮次（被取消/被顶掉）的结果直接丢。"""
+        payload = self._pending_result
+        self._pending_result = None
+        if payload is None:
+            return
+        seq, result = payload
+        if seq != self._check_seq:
+            return
+        self._checking = False
+        self._restore_ui(hwnd)
+        self._render_result(result)
+
+    def _render_result(self, result: EditCheckResult) -> None:
+        if result.error_code and result.error_code != "tree-missing":
+            color = _COLOR_ERROR
+        elif result.success:
+            color = _COLOR_OK
+        else:
+            color = _COLOR_WARN
+        self._set_result(result.message, color)
+        if self._shot_view is not None and result.shot:
+            self._shot_view.set_shot(result.shot)
+
     # -- 保存 / 关闭 ------------------------------------------------------------
     def _try_save(self) -> None:
         import win32gui
@@ -1048,6 +1331,9 @@ class ElementEditDialog:
         import win32gui
 
         self.last_error = text
+        if text:
+            # 保存错误优先：别让上一轮校验的绿字把错误染成绿色（简式两行合一）
+            self._result_color = None
         win32gui.SetWindowText(self._error_static, text)
 
     def _close(self, saved: bool) -> None:
@@ -1058,6 +1344,15 @@ class ElementEditDialog:
 
         on_close = self._on_close
         self._on_close = None
+        # 校验还在跑就作废：worker 回来时句柄已失效，不能再去 PostMessage
+        self._check_seq += 1
+        self._checking = False
+        if self._toast is not None:
+            self._toast.close()
+            self._toast = None
+        if self._shot_view is not None:
+            self._shot_view.destroy()
+            self._shot_view = None
         hwnd = self._hwnd
         if hwnd is not None:
             win32gui.DestroyWindow(hwnd)

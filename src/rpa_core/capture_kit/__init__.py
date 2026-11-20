@@ -28,6 +28,7 @@
 
 from .controller import CaptureController
 from .desktop_editing import compose_selector, nodes_from_descriptor
+from .edit_check import EditCheckResult, check_draft, check_structure
 from .edit_dialog import ElementEditDialog
 from .element_editing import (
     apply_selector,
@@ -52,18 +53,25 @@ from .engine import (
     web_status,
 )
 from .float_window import CaptureFloat
+from .shot_view import ShotView, load_shot_bitmap
+from .toast import CheckToast
 from .window_host import MaximizedAwareHost
 
 __all__ = [
     "NEVER_TIMEOUT",
     "CaptureController",
     "CaptureFloat",
+    "CheckToast",
+    "EditCheckResult",
     "ElementEditDialog",
     "MaximizedAwareHost",
+    "ShotView",
     "apply_selector",
     "build_edit_model",
     "build_hybrid_session",
     "capture_click_label",
+    "check_draft",
+    "check_structure",
     "compose",
     "compose_selector",
     "desktop_status",
@@ -74,6 +82,7 @@ __all__ = [
     "gesture_hint",
     "is_valid_name",
     "levels_from_path",
+    "load_shot_bitmap",
     "nodes_from_descriptor",
     "status_snapshot",
     "validate_name",

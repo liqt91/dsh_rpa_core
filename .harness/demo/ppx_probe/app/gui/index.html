@@ -149,10 +149,13 @@
           </label>
           <div id="elemDialogMeta" class="modalMeta"></div>
           <div id="elemDialogNote" class="modalNote" role="status" aria-live="polite"></div>
+          <div id="elemDialogShot" class="elemShot" hidden>
+            <img id="elemDialogShotImg" alt="目标元素截图预览" />
+          </div>
         </div>
         <div class="modalBar">
           <button type="button" id="elemDialogRecapture">重新捕获</button>
-          <button type="button" id="elemDialogValidate">校验</button>
+          <button type="button" id="elemDialogValidate">校验元素</button>
           <span class="barSpacer"></span>
           <button type="button" id="elemDialogCancel">取消</button>
           <button type="button" id="elemDialogSaveContinue">保存并继续</button>
@@ -161,6 +164,8 @@
       </div>
     </div>
   </div>
+  <!-- 校验期间屏幕中间的提示条：编辑框整层收起，只留这一句，用户才知道在等什么 -->
+  <div id="elemToast" class="toast" role="status" aria-live="polite" hidden></div>
   <script type="module" src="/src/main.js"></script>
 </body>
 </html>

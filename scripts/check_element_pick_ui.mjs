@@ -381,6 +381,102 @@ await checkAsync('渲染层：取消编辑框就丢弃这次捕获，不入库',
   assert(dialogNode().hidden === true, '取消后编辑框没关')
 })
 
+// ---------- 4b. 编辑期校验（影刀 §5 主动校验） ------------------------------
+// 交互顺序是这条功能的全部价值：先把编辑层收起来，目标才露得出来、红框才看得见。
+// 顺序错了功能就白做，所以「藏层 → 活体 → 放开」用源码下标锁死。
+function cutBlock(src, startMarker, endMarker) {
+  const from = src.indexOf(startMarker)
+  const to = src.indexOf(endMarker, from + 1)
+  return from >= 0 && to > from ? src.slice(from, to) : ''
+}
+
+await check('契约层：校验先收起编辑层再跑活体，回来才放开', () => {
+  const block = cutBlock(mainSrc, 'async function validateElemDialog', 'function recaptureFromDialog')
+  assert(block, '找不到 validateElemDialog')
+  const hideAt = block.indexOf("classList.add('checking')")
+  const toastAt = block.indexOf("showToast('正在校验元素')")
+  const liveAt = block.indexOf("'rpa.verifyDraft'")
+  const showAt = block.indexOf("classList.remove('checking')")
+  const clearToastAt = block.indexOf('hideToast()')
+  assert(hideAt > 0, '校验时没有收起编辑层')
+  assert(toastAt > 0, '校验时没有提示条')
+  assert(clearToastAt > 0, '提示条没有收回')
+  assert(liveAt > 0, '没有走活体校验 rpa.verifyDraft')
+  assert(hideAt < liveAt, '先跑活体才藏层——红框会画在弹层背后')
+  assert(liveAt < showAt, '活体还没跑完就把编辑层放回来了')
+  assert(toastAt < showAt, '提示条没覆盖整个校验过程')
+})
+
+await check('契约层：改勾选就作废旧校验结论（两个重组分支都要）', () => {
+  const compose = cutBlock(mainSrc, 'async function refreshElemCompose', 'function elemEditorSelector')
+  assert(compose, '找不到 refreshElemCompose')
+  const hits = (compose.match(/invalidateDialogCheck\(\)/g) || []).length
+  assert(hits === 2, `作废判据应同时挂在网页/桌面两个分支上，实际 ${hits} 处`)
+})
+
+await check('样式层：校验期间整层不显示，提示条在屏幕正中', () => {
+  const checking = ruleBlock('.modal.checking')
+  assert(/display:\s*none/.test(checking), '.modal.checking 没有藏起来')
+  const toast = ruleBlock('.toast')
+  assert(/position:\s*fixed/.test(toast), '提示条不是浮层')
+  assert(/translate\(-50%,\s*-50%\)/.test(toast), '提示条没居中')
+  assert(/pointer-events:\s*none/.test(toast), '提示条会挡住鼠标')
+  assert(ruleBlock('.elemShot'), '没有截图预览区样式')
+})
+
+await checkAsync('渲染层：校验成功显示「找到 1 个」并带出截图', async () => {
+  const { calls } = await startOnce({
+    responses: {
+      'rpa.elementValidate': { ok: true, valid: true },
+      'rpa.verifyDraft': {
+        ok: true, success: true, count: 1, message: '找到 1 个元素',
+        errorCode: null, shot: { dataUrl: 'data:image/png;base64,AA' },
+      },
+    },
+  })
+  await nodeById('elemDialogValidate').click()
+  await flush()
+  const note = nodeById('elemDialogNote')
+  assert(hasClass(note, 'ok'), `成功却没走 ok 态：${note.className}`)
+  assert(note.textContent === '找到 1 个元素', `文案不对：${note.textContent}`)
+  assert(nodeById('elemDialogShot').hidden === false, '有截图却没显示')
+  assert(!hasClass(dialogNode(), 'checking'), '校验完没把编辑层放回来')
+  assert(nodeById('elemToast').hidden === true, '提示条没收')
+  assert(calls.some((c) => c.name === 'rpa.verifyDraft'), '没走活体校验')
+})
+
+await checkAsync('渲染层：未命中只给警告态，不当成错误也不拦保存', async () => {
+  const { calls } = await startOnce({
+    responses: {
+      'rpa.elementValidate': { ok: true, valid: true },
+      'rpa.verifyDraft': {
+        ok: true, success: false, count: 0, errorCode: null,
+        message: '未找到元素，请确认窗口已激活', shot: null,
+      },
+    },
+  })
+  await nodeById('elemDialogValidate').click()
+  await flush()
+  const note = nodeById('elemDialogNote')
+  assert(hasClass(note, 'warn'), `未命中该是警告态：${note.className}`)
+  assert(!hasClass(note, 'error'), '未命中被当成了错误')
+  assert(nodeById('elemDialogShot').hidden === true, '没有截图却显示了截图区')
+  assert(calls.some((c) => c.name === 'rpa.verifyDraft'), '没走活体校验')
+})
+
+await checkAsync('渲染层：名字/重名没过多，不藏层也不跑活体', async () => {
+  const { calls } = await startOnce({
+    responses: {
+      'rpa.elementValidate': { ok: false, error: '已经有一个叫「搜索框」的元素了' },
+    },
+  })
+  await nodeById('elemDialogValidate').click()
+  await flush()
+  assert(!calls.some((c) => c.name === 'rpa.verifyDraft'), '名字没过还去跑了活体')
+  assert(hasClass(nodeById('elemDialogNote'), 'error'), '静态校验失败却没用错误态')
+  assert(!hasClass(dialogNode(), 'checking'), '名字没过却把编辑层收起来了')
+})
+
 await checkAsync('渲染层：桌面编辑框开着（editing）只轮询，不弹页面框', async () => {
   const run = await startOnce({
     sequences: { 'rpa.capturePoll': [{ ok: true, state: 'editing' }] },

@@ -74,6 +74,10 @@ const el = {
   dialogPreview: document.querySelector('#elemDialogPreview'),
   dialogRecapture: document.querySelector('#elemDialogRecapture'),
   dialogValidate: document.querySelector('#elemDialogValidate'),
+  // 校验：提示条 + 命中截图（与 win32 编辑框同一套语义）
+  toast: document.querySelector('#elemToast'),
+  dialogShot: document.querySelector('#elemDialogShot'),
+  dialogShotImg: document.querySelector('#elemDialogShotImg'),
   dialogSaveContinue: document.querySelector('#elemDialogSaveContinue'),
   dock: document.querySelector('#bottomDock'),
   dockFold: document.querySelector('.dockFold'),
@@ -1293,6 +1297,8 @@ let captureTimer = null
 // 网页端不能顺手把整次会话取消掉。
 let capturePhase = null
 let dialogMode = null // 'capture' | 'detail' | 'blocked'
+// 校验进行中：按钮禁用 + 结果不得被「已修改」覆盖
+let validateBusy = false
 let dialogSave = null
 let dialogDiscard = null
 let dialogSaveContinue = null // 保存后不关框，直接起下一次捕获
@@ -1472,10 +1478,44 @@ async function pollCapture() {
 
 /* ---- 编辑框（抓完确认 + 详情改名共用同一个） ------------------------------ */
 
-function setDialogNote(text, isError = false) {
+function setDialogNote(text, tone = '') {
   if (!el.dialogNote) return
+  // 兼容老调用方传的 true（= 错误）；新代码用 'ok' / 'warn' / 'error' 三态
+  const kind = tone === true ? 'error' : (tone || '')
   el.dialogNote.textContent = text || ''
-  el.dialogNote.classList[isError && text ? 'add' : 'remove']('error')
+  el.dialogNote.classList.remove('error', 'ok', 'warn')
+  if (text && kind) el.dialogNote.classList.add(kind)
+}
+
+function showToast(text) {
+  if (!el.toast) return
+  el.toast.textContent = text || ''
+  el.toast.hidden = false
+}
+
+function hideToast() {
+  if (el.toast) el.toast.hidden = true
+}
+
+function showDialogShot(shot) {
+  if (!el.dialogShot || !el.dialogShotImg) return
+  const url = shot && shot.dataUrl
+  if (!url) {
+    // 只藏不置空 src：img[src=""] 在部分浏览器会去请求当前页地址
+    el.dialogShot.hidden = true
+    return
+  }
+  el.dialogShotImg.src = url
+  el.dialogShot.hidden = false
+}
+
+/** 选择器一改，上一轮校验结论就过期了——旧的截图也不能留着。 */
+function invalidateDialogCheck() {
+  if (validateBusy) return
+  const note = el.dialogNote
+  if (!note?.classList.contains('ok') && !note?.classList.contains('warn')) return
+  setDialogNote('已修改，点「校验元素」重新检查', '')
+  showDialogShot(null)
 }
 
 /* ---- 影刀式编辑区 -------------------------------------------------------
@@ -1743,6 +1783,7 @@ async function refreshElemCompose() {
       if (res && res.ok && typeof res.selector === 'string') {
         el.dialogPreview.value = res.selector
         el.dialogPreview.title = res.selector
+        invalidateDialogCheck()
       } else if (res && res.error) setDialogNote(res.error, true)
     } catch {
       // 桥异常时保留上一次预览，不把用户已勾的层级丢掉。
@@ -1752,8 +1793,10 @@ async function refreshElemCompose() {
   if (dialogEditorKind !== 'web' || !dialogLevels || !el.dialogPreview) return
   try {
     const res = await ppx.call('rpa.elementCompose', { levels: dialogLevels })
-    if (res && res.ok && typeof res.selector === 'string') el.dialogPreview.value = res.selector
-    else if (res && res.error) setDialogNote(res.error, true)
+    if (res && res.ok && typeof res.selector === 'string') {
+      el.dialogPreview.value = res.selector
+      invalidateDialogCheck()
+    } else if (res && res.error) setDialogNote(res.error, true)
   } catch {
     // 桥异常时保留上一次预览，不把用户已勾的层级丢掉。
   }
@@ -1771,18 +1814,55 @@ function elemEditorState() {
 }
 
 async function validateElemDialog() {
-  if (!dialogMode) return
+  if (!dialogMode || validateBusy) return
   const name = String(el.dialogName?.value || '').trim()
-  setDialogNote('')
   const args = { path: currentPath, name, selector: elemEditorSelector() }
   if (dialogCaptureId) args.capture_id = dialogCaptureId
+
+  // 先本地静态校验（名字/重名/语法）：不过关就没必要藏框闪红框
   try {
-    const res = await ppx.call('rpa.elementValidate', args)
-    if (res && res.ok) setDialogNote('校验通过：名字和定位都没有问题')
-    else setDialogNote((res && res.error) || '校验没过', true)
+    const local = await ppx.call('rpa.elementValidate', args)
+    if (!local || !local.ok) {
+      setDialogNote((local && local.error) || '名字或定位不合格', 'error')
+      return
+    }
   } catch (error) {
-    setDialogNote(`校验没过：${error?.message || error}`, true)
+    setDialogNote(`校验没走通：${error?.message || error}`, 'error')
+    return
   }
+
+  validateBusy = true
+  if (el.dialogValidate) el.dialogValidate.disabled = true
+  setDialogNote('')
+  // 影刀同一交互：整个编辑层收起 → 屏幕中间提示条 → 目标被置前闪红框 → 再回来。
+  // 不藏起来的话，红框就画在自己的弹层背后，等于没校验。
+  el.dialog?.classList.add('checking')
+  showToast('正在校验元素')
+  let res
+  try {
+    res = await ppx.call('rpa.verifyDraft', args)
+  } catch (error) {
+    res = { ok: false, error: `校验没走通：${error?.message || error}` }
+  } finally {
+    hideToast()
+    el.dialog?.classList.remove('checking')
+    if (el.dialogValidate) el.dialogValidate.disabled = false
+    validateBusy = false
+  }
+
+  if (!res || !res.ok) {
+    setDialogNote((res && res.error) || '校验没走通', 'error')
+    return
+  }
+  // 命中多个 / 没命中都是「提醒」，不拦保存（弹窗类元素编辑时本来就不在）
+  if (res.errorCode && res.errorCode !== 'tree-missing') {
+    setDialogNote(res.message || '无法校验', 'error')
+  } else if (res.success) {
+    setDialogNote(res.message || '找到 1 个元素', 'ok')
+  } else {
+    setDialogNote(res.message || '未找到元素', 'warn')
+  }
+  showDialogShot(res.shot)
 }
 
 async function recaptureFromDialog() {
@@ -1848,8 +1928,11 @@ function closeElemDialog() {
   dialogSelectedLevel = -1
   if (!el.dialog) return
   el.dialog.hidden = true
-  el.dialog.classList.remove('open')
+  el.dialog.classList.remove('open', 'checking')
   setDialogNote('')
+  // 校验态不能带出这个框：下一轮打开时残留的截图/提示会张冠李戴
+  hideToast()
+  showDialogShot(null)
 }
 
 async function confirmElemDialog(keepOpen = false) {

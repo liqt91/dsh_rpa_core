@@ -3364,14 +3364,14 @@ def element_candidates(path: str, param_key: str | None = None) -> dict[str, Any
     }
 
 
-@api_method("rpa.elementValidate")
-def element_validate(
-    path: str, name: str, selector: str, capture_id: str | None = None
-) -> dict[str, Any]:
-    """编辑框内的静态校验：名字、定位、重名。只查不改，不碰会话与盘。"""
-    error = validate_name(name)
-    if error:
-        return _element_error("BAD_NAME", error)
+def _edit_descriptor(
+    path: str, capture_id: str | None, name: str
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    """编辑框当前编辑对象：``(entry, descriptor)``，两处都找不到就给 ``(None, None)``。
+
+    捕获会话里优先（还没落盘），否则读盘上的同名资产。校验与「能不能存」共用这一条
+    查找口径——两份实现迟早会分叉（一个认会话、一个只认盘）。
+    """
     entry = _CAPTURES.get(_capture_key(path, capture_id)) if capture_id else None
     descriptor = (entry or {}).get("captured")
     if descriptor is None:
@@ -3381,6 +3381,18 @@ def element_validate(
                 descriptor = json.loads(source.read_text(encoding="utf-8"))
             except (OSError, ValueError):
                 descriptor = None
+    return entry, descriptor
+
+
+@api_method("rpa.elementValidate")
+def element_validate(
+    path: str, name: str, selector: str, capture_id: str | None = None
+) -> dict[str, Any]:
+    """编辑框内的静态校验：名字、定位、重名。只查不改，不碰会话与盘。"""
+    error = validate_name(name)
+    if error:
+        return _element_error("BAD_NAME", error)
+    entry, descriptor = _edit_descriptor(path, capture_id, name)
     if descriptor is not None:
         error = validate_selector(descriptor, selector)
         if error:
@@ -3389,6 +3401,51 @@ def element_validate(
     if (not overwrite) and (_elements_dir(path) / f"{name}.json").exists():
         return _element_error("NAME_TAKEN", f"已经有一个叫「{name}」的元素了，换个名字")
     return {"ok": True, "valid": True}
+
+
+@api_method("rpa.verifyDraft")
+def verify_draft(
+    path: str,
+    selector: str,
+    capture_id: str | None = None,
+    name: str = "",
+    validate_type: str = "selector",
+) -> dict[str, Any]:
+    """编辑框里的「校验元素」：对**当前编辑态**跑一次，不落盘也不改描述符。
+
+    与 ``rpa.elementValidate``（能不能存）分开：这个回答「现在能不能命中」。
+    语义全在 ``capture_kit.edit_check.check_draft``，win32 编辑框与本接口共用同一份。
+    """
+    started = time.perf_counter()
+    entry, descriptor = _edit_descriptor(path, capture_id, name)
+    if descriptor is None:
+        return _element_error("NOT_FOUND", "找不到这个元素，先重新捕获")
+    kind = str(descriptor.get("kind") or "")
+
+    # 桌面定位是 JSON 文本：解析失败就走不到活体那一层，先给出可读原因
+    if kind == "desktop":
+        try:
+            draft_selector: Any = json.loads(selector)
+        except ValueError as exc:
+            return _element_error("BAD_SELECTOR", f"定位不是合法 JSON：{exc}")
+    else:
+        draft_selector = selector
+
+    from rpa_core.capture_kit import check_draft as _check_draft
+
+    result = _check_draft(
+        descriptor, draft_selector, kind=kind, validate_type=validate_type
+    )
+    return {
+        "ok": True,
+        "success": result.success,
+        "count": result.count,
+        "message": result.message,
+        "errorCode": result.error_code,
+        "cancelled": result.cancelled,
+        "shot": result.shot,
+        "ms": round((time.perf_counter() - started) * 1000, 1),
+    }
 
 
 @api_method("rpa.recaptureElement")
