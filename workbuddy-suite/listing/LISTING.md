@@ -9,7 +9,7 @@
 | 技能包 | `dist/workflow-studio-skill.zip` | 发布管理 → 技能 | **folder 布局**：`workflow-studio/SKILL.md`（官方「技能基础结构」要求套一层）；唯一的编排技能，含 89 条能力参考 |
 | 连接器 | `dist/rpa-core-connector.zip` | 发布管理 → 连接器（CLI + Skill） | `connector-meta.json` + `cli.json` + `icon.svg` + `skills/rpa-core-cli/`（必带的接线配件，不编排） |
 | 浏览器扩展 | `dist/workbuddy-studio-extension.zip` | 扩展分发（Chrome / Edge 商店，或内部分发） | MV3，解压后「加载已解压的扩展」也能用 |
-| 编辑窗口 | `.harness/demo/ppx_probe/app/`（PPX 工程）→ `ppx build` | 技能附件 / 官网下载 | 便携版 `ppx_probe/app/build/RPA Probe/`；本机没装 Inno Setup 6，未出安装包 |
+| 编辑窗口 | `apps/editor/`（PPX 工程）→ `ppx build` | 技能附件 / 官网下载 | 便携版 `ppx_probe/app/build/RPA Probe/`；本机没装 Inno Setup 6，未出安装包 |
 
 > 生成命令：`python tools/pack.py`（一条命令同步版本、打三个 zip，并断言包内结构）。
 > 技能包默认 folder 布局；`--layout flat` 只在控制台亲测要求 flat 时用。

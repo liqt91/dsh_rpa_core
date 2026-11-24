@@ -30,7 +30,7 @@ ACC = ROOT / "src/rpa_core/capture/accessibility.py"
 DV = ROOT / "src/rpa_core/capture/desktop_verification.py"
 FG = ROOT / "src/rpa_core/capture/foreground_window.py"
 VF = ROOT / "src/rpa_core/capture/verification.py"
-JS = ROOT / ".harness/demo/ppx_probe/app/gui/src/main.js"
+JS = ROOT / "apps/editor/gui/src/main.js"
 JS_CHECK = ROOT / "scripts/check_element_library.mjs"
 
 DV_TESTS = ["tests/contract/test_desktop_verification.py"]

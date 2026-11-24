@@ -290,10 +290,8 @@ def test_editor_palette_wires_control_flow_group_to_new_rpc() -> None:
     """
     main_js = (
         APP.parents[1]
-        / ".harness"
-        / "demo"
-        / "ppx_probe"
-        / "app"
+        / "apps"
+        / "editor"
         / "gui"
         / "src"
         / "main.js"

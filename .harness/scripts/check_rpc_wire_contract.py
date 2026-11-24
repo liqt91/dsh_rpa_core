@@ -19,8 +19,8 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-API = ROOT / ".harness" / "demo" / "ppx_probe" / "app" / "api" / "api.py"
-MAIN = ROOT / ".harness" / "demo" / "ppx_probe" / "app" / "gui" / "src" / "main.js"
+API = ROOT / "apps" / "editor" / "api" / "api.py"
+MAIN = ROOT / "apps" / "editor" / "gui" / "src" / "main.js"
 
 # 这些方法不在原型 api.py 注册（宿主/桥层提供，失败被前端显式容忍），不纳入校验
 _HOST_METHODS = {"window.restore", "window.minimize"}

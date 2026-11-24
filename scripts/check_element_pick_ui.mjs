@@ -11,11 +11,11 @@ import vm from 'node:vm'
 import path from 'node:path'
 
 const ROOT = path.resolve(import.meta.dirname, '..')
-const GUI = path.join(ROOT, '.harness/demo/ppx_probe/app/gui')
+const GUI = path.join(ROOT, 'apps/editor/gui')
 const MAIN = path.join(GUI, 'src/main.js')
 const HTML = path.join(GUI, 'index.html')
 const CSS = path.join(GUI, 'src/style.css')
-const API = path.join(ROOT, '.harness/demo/ppx_probe/app/api/api.py')
+const API = path.join(ROOT, 'apps/editor/api/api.py')
 const EDIT_DIALOG = path.join(ROOT, 'src/rpa_core/capture_kit/edit_dialog.py')
 const SELECTOR_TREE = path.join(ROOT, 'src/rpa_core/capture_kit/selector_tree.py')
 

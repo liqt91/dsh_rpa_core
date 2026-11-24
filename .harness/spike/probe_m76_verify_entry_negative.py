@@ -21,8 +21,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 CLI = ROOT / "src/rpa_core/cli.py"
 TEST = ROOT / "tests/contract/test_cli_parity.py"
-API = ROOT / ".harness/demo/ppx_probe/app/api/api.py"
-JS = ROOT / ".harness/demo/ppx_probe/app/gui/src/main.js"
+API = ROOT / "apps/editor/api/api.py"
+JS = ROOT / "apps/editor/gui/src/main.js"
 MJS = ROOT / "scripts/check_element_library.mjs"
 
 CLI_LIVE = 'if getattr(args, "live", False):'

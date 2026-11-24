@@ -27,7 +27,7 @@ import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(ROOT / ".harness" / "demo" / "ppx_probe" / "app"))
+sys.path.insert(0, str(ROOT / "apps" / "editor"))
 
 from api import api as A  # noqa: E402
 from PIL import Image  # noqa: E402

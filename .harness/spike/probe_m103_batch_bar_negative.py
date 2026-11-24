@@ -20,7 +20,7 @@ import pathlib
 import subprocess
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
-MAIN = ROOT / ".harness/demo/ppx_probe/app/gui/src/main.js"
+MAIN = ROOT / "apps/editor/gui/src/main.js"
 CHECK = "scripts/check_element_library.mjs"
 CASE = "多选批量：勾选进选中集、批量条浮出、取消选择清空"
 MARKER = "  // <<<M103-INJECTED>>>"

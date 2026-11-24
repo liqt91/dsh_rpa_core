@@ -207,7 +207,7 @@ proposal 在候选表里标 `kind=image` / `proposed=true` / `matchedCount=0`：
 
 PPX 原型的资产行「校验」按钮走同一个门面：`rpa.verifyElement(path, name, mode, want_shot)`
 只读元素文件后转调，不复制 kind 分派或浏览器目标选择。Qt 源码仍冻结（ADR 0019），本分支
-只改 CLI 与 `.harness/demo/ppx_probe/app/`。
+只改 CLI 与 `apps/editor/`。
 
 ## 模板 V2 与 DPI 自适应（M80）
 
@@ -272,7 +272,7 @@ M77/M80 解决了「图像元素怎么产生」，M82 补的是「产生之后�
 所以图像点击永远是合成鼠标，退让会写进证据的 `note`；`simulateHuman=false` 与
 `clickPosition=random` 仍互斥（与 UIA 路径同一条口径）。
 
-**宿主入口**：PPX 工作台的「按图捕获」（`.harness/demo/ppx_probe/app/gui/index.html`）
+**宿主入口**：PPX 工作台的「按图捕获」（`apps/editor/gui/index.html`）
 已经接通 `rpa.startCapture(image=true)` → `build_hybrid_session(image=...)` →
 `DesktopCaptureSession(hover=True, image=True)`。M82 当时写的「PPX 编辑窗口不在本仓」
 是错的——`Grep` 默认跳过 `.harness/` 隐藏目录，那次搜索没看到消费者。

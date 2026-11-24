@@ -41,7 +41,7 @@ if not PY.is_file():
 ZIP = ROOT / "dist" / "RPA-Editor-win64.zip"
 STUDIO = ROOT / "workbuddy-suite" / "skills" / "workflow-studio" / "scripts" / "studio.py"
 INSTALLER = ROOT / "bin" / "rpa-skill.mjs"
-PPX_TOML = ROOT / ".harness" / "demo" / "ppx_probe" / "app" / "ppx.toml"
+PPX_TOML = ROOT / "apps" / "editor" / "ppx.toml"
 
 
 def editor_version() -> str:

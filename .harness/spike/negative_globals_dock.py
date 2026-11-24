@@ -24,10 +24,10 @@ APP = ROOT / "apps" / "xhs-workbench"
 PY = ROOT / ".venv" / "Scripts" / "python.exe"
 NODE = shutil.which("node")
 
-API = ".harness/demo/ppx_probe/app/api/api.py"
-JS = ".harness/demo/ppx_probe/app/gui/src/main.js"
-HTML = ".harness/demo/ppx_probe/app/gui/index.html"
-CSS = ".harness/demo/ppx_probe/app/gui/src/style.css"
+API = "apps/editor/api/api.py"
+JS = "apps/editor/gui/src/main.js"
+HTML = "apps/editor/gui/index.html"
+CSS = "apps/editor/gui/src/style.css"
 SCOPE = ".harness/branch-scope.json"
 CHECK_ALL = ".harness/scripts/check_all.py"
 TEST = "tests/test_editor_globals.py"  # pytest nodeid（cwd=APP）
@@ -132,7 +132,7 @@ CASES = [
     ),
     case(
         "P8", "原型目录退回 ppx-only 独占（治理放宽作废）", SCOPE,
-        '    ".harness/demo/ppx_probe/"\n  ],',
+        '    "apps/editor/"\n  ],',
         '    "bin/rpa-skill.mjs"\n  ],',
         {P_SCOPE}, set(),
     ),
@@ -221,7 +221,7 @@ def main() -> int:
         return 2
     dist = next(
         (
-            p for p in sorted((ROOT / ".harness/demo/ppx_probe/app/gui/dist/assets").glob("*.js"))
+            p for p in sorted((ROOT / "apps/editor/gui/dist/assets").glob("*.js"))
             if "rpa.saveFlowInputs" in p.read_text(encoding="utf-8")
         ),
         None,

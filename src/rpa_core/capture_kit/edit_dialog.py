@@ -40,6 +40,8 @@ _CLASS = "RpaElementEditDialog"
 _WM_APP_FOCUS = 0x8000 + 2
 # 校验线程跑完 → 主线程收尾（只当信号，结果在 _pending_result 里）
 _WM_APP_CHECK = 0x8000 + 3
+# 热键线程读到 F10 上升沿 → 窗口线程起校验（同样只当信号）
+_WM_APP_HOTKEY = 0x8000 + 4
 
 # 简式形态客户区
 _SIMPLE_W = 560
@@ -68,6 +70,8 @@ _COLOR_OK = (22, 132, 74)
 _COLOR_WARN = (176, 106, 0)
 _COLOR_ERROR = (192, 0, 0)
 _COLOR_PLAIN = (96, 96, 96)
+# 热键提示那行灰字（比正文浅一档，别跟校验结果抢注意力）
+_COLOR_FAINT = (128, 128, 128)
 # 固定控件 id：保存/取消沿对话框惯例（IsDialogMessage 会把 Enter/Esc 映到这两个 id）
 _ID_NAME = 201
 _ID_META = 202
@@ -77,6 +81,16 @@ _ID_PREVIEW = 205
 _ID_INFO = 206
 # 「校验元素」（影刀 §5 主动校验）：显式按钮，别做成边打字边跑
 _ID_CHECK = 210
+# 按钮右边那行灰字提示（F10 是全局热键，框里不写一句就没人知道）
+_ID_HOTKEY_HINT = 211
+# 全局校验热键 F10。现场是「鼠标悬停在页面上把下拉菜单悬出来」，这时焦点在
+# 浏览器、编辑框被盖住，「校验元素」按钮根本点不到。所以用 watch 线程读
+# GetAsyncKeyState（与捕获 agent 同一套机制：只观察、不拦也不改输入流），
+# 上升沿 PostMessage 回窗口线程 —— 校验本身仍只在窗口线程里起。
+_VK_F10 = 0x79
+_HOTKEY_POLL_S = 0.04
+# 提示文案放在按钮右边：不写一句，用户不会知道有全局热键这回事
+_HOTKEY_HINT_TEXT = "悬停到页面上按 F10 也能校验"
 # 动态控件 id 起点（网页层级勾选 / 属性行）
 _ID_LEVEL_BASE = 1000
 # 层级行左端的小复选框（与行文字分开：点文字只看属性，点方框才切勾选）
@@ -197,6 +211,7 @@ class ElementEditDialog:
         self._check_btn = None
         self._result_static = None
         self._result_color: tuple[int, int, int] | None = None
+        self._hotkey_hint = None
         self._shot_view: ShotView | None = None
         self._toast: CheckToast | None = None
         # 截图区的实际几何（``_run`` 按屏幕余量算，_build_* 照着摆）
@@ -209,6 +224,8 @@ class ElementEditDialog:
         self._pending_result: tuple[int, EditCheckResult] | None = None
         self._check_seq = 0
         self._kind = ""
+        # F10 watch 线程的停止信号（关框即置位，别让线程陪到进程退出）
+        self._hotkey_stop: threading.Event | None = None
 
     @property
     def available(self) -> bool:
@@ -260,8 +277,10 @@ class ElementEditDialog:
         self._result_color = None
         self._result_static = None
         self._check_btn = None
+        self._hotkey_hint = None
         self._shot_view = None
         self._toast = None
+        self._hotkey_stop = None
         self._selected = 0
         self._selected_node = 0
         # 布局缓存按这次的数据重建（同一个 dialog 实例可复用）
@@ -372,8 +391,54 @@ class ElementEditDialog:
             win32gui.PostMessage(hwnd, _WM_APP_FOCUS, 0, 0)
         except Exception:  # noqa: BLE001 - 设不了焦点也能用，顶多用户多点一下
             pass
+        self._start_hotkey_watch(hwnd)
         _win32.pump_dialog(hwnd)
+        self._stop_hotkey_watch()
         self._hwnd = None
+
+    # -- F10 全局校验热键 ----------------------------------------------------
+    def _f10_down(self) -> bool:
+        """只读按键状态：不改输入流，也不影响别人收键。"""
+        try:
+            import win32api
+
+            return bool(win32api.GetAsyncKeyState(_VK_F10) & 0x8000)
+        except Exception:  # noqa: BLE001 - 读不到就当没按，绝不能把窗口线程打死
+            return False
+
+    def _start_hotkey_watch(self, hwnd: int) -> None:
+        stop = threading.Event()
+        self._hotkey_stop = stop
+        threading.Thread(
+            target=self._watch_hotkey,
+            args=(hwnd, stop),
+            name="element-check-hotkey",
+            daemon=True,
+        ).start()
+
+    def _stop_hotkey_watch(self) -> None:
+        stop = self._hotkey_stop
+        self._hotkey_stop = None
+        if stop is not None:
+            stop.set()
+
+    def _watch_hotkey(self, hwnd: int, stop: threading.Event) -> None:
+        """等 F10 上升沿（按住不放只算一次），然后把活交给窗口线程。
+
+        ★ 必须是上升沿：用户悬停页面时手指多半会多按几下，按住持续的按
+        ``GetAsyncKeyState`` 会一直报按下，不判边沿就会连开好几轮校验。
+        """
+        was = self._f10_down()
+        while not stop.wait(_HOTKEY_POLL_S):
+            down = self._f10_down()
+            if down and not was:
+                try:
+                    import win32gui
+
+                    win32gui.PostMessage(hwnd, _WM_APP_HOTKEY, 0, 0)
+                except Exception:  # noqa: BLE001 - 框已销毁就收工
+                    return
+            was = down
 
     def _make_font(self) -> int:
         import win32con
@@ -429,6 +494,9 @@ class ElementEditDialog:
         # 简式只有一行提示位，校验结果与保存错误复用（颜色由 _result_color 决定）
         self._result_static = self._error_static
         self._check_btn = control("BUTTON", "校验元素", 0, 16, 406, 100, 30, _ID_CHECK)
+        self._hotkey_hint = control(
+            "STATIC", _HOTKEY_HINT_TEXT, 0, 126, 412, 230, 20, _ID_HOTKEY_HINT,
+        )
         control(
             "BUTTON", self._save_label, win32con.BS_DEFPUSHBUTTON,
             368, 406, 84, 30, win32con.IDOK,
@@ -489,6 +557,9 @@ class ElementEditDialog:
         self._error_static = control("STATIC", "", 0, 16, 484, 748, 18, _ID_ERROR)
         self._check_btn = control(
             "BUTTON", "校验元素", 0, 16, 512, 120, 30, _ID_CHECK,
+        )
+        self._hotkey_hint = control(
+            "STATIC", _HOTKEY_HINT_TEXT, 0, 146, 518, 420, 20, _ID_HOTKEY_HINT,
         )
         control(
             "BUTTON", self._save_label, win32con.BS_DEFPUSHBUTTON,
@@ -836,6 +907,9 @@ class ElementEditDialog:
         self._check_btn = control(
             "BUTTON", "校验元素", 0, 16, 574, 120, 30, _ID_CHECK,
         )
+        self._hotkey_hint = control(
+            "STATIC", _HOTKEY_HINT_TEXT, 0, 146, 580, 580, 20, _ID_HOTKEY_HINT,
+        )
         control(
             "BUTTON", self._save_label, win32con.BS_DEFPUSHBUTTON,
             748, 574, 84, 30, win32con.IDOK,
@@ -1073,6 +1147,11 @@ class ElementEditDialog:
         if msg == _WM_APP_CHECK:
             self._finish_check(hwnd)
             return 0
+        if msg == _WM_APP_HOTKEY:
+            # 已经在校验就不再起（连按 F10 不该把这一轮顶掉，取消仍走按钮）
+            if not self._checking:
+                self._start_check(hwnd)
+            return 0
         if msg == win32con.WM_CTLCOLORSTATIC:
             import win32api
 
@@ -1087,10 +1166,15 @@ class ElementEditDialog:
                 win32gui.SetTextColor(wparam, win32api.RGB(*_COLOR_ERROR))
                 win32gui.SetBkMode(wparam, win32con.TRANSPARENT)
                 return win32gui.GetStockObject(win32con.WHITE_BRUSH)
+            if target == int(self._hotkey_hint or 0):
+                win32gui.SetTextColor(wparam, win32api.RGB(*_COLOR_FAINT))
+                win32gui.SetBkMode(wparam, win32con.TRANSPARENT)
+                return win32gui.GetStockObject(win32con.WHITE_BRUSH)
         if msg == win32con.WM_CLOSE:
             self._close(saved=False)
             return 0
         if msg == win32con.WM_DESTROY:
+            self._stop_hotkey_watch()
             _win32._INSTANCES.pop(int(hwnd), None)
             if self._font_owned and self._hfont is not None:
                 try:

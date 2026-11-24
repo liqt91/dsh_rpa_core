@@ -12,7 +12,7 @@ import vm from 'node:vm'
 import path from 'node:path'
 
 const ROOT = path.resolve(import.meta.dirname, '..')
-const GUI = path.join(ROOT, '.harness/demo/ppx_probe/app/gui')
+const GUI = path.join(ROOT, 'apps/editor/gui')
 const MAIN = path.join(GUI, 'src/main.js')
 const HTML = path.join(GUI, 'index.html')
 const CSS = path.join(GUI, 'src/style.css')

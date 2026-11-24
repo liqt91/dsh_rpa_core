@@ -10,26 +10,11 @@
       {
         "type": "action",
         "id": "n1",
-        "command": "data.setVar",
-        "with": {
-          "varName": "url",
-          "value": "\"www.xiaohongshu.com\""
-        },
-        "_exprModes": {
-          "value": "python"
-        }
-      },
-      {
-        "type": "action",
-        "id": "n2",
         "command": "browser.navigate",
         "with": {
           "browserType": "chrome",
-          "url": "[url]",
+          "url": "www.xiaohongshu.com",
           "action": "goto"
-        },
-        "_exprModes": {
-          "url": "fx"
         }
       },
       {
@@ -37,13 +22,65 @@
         "id": "n3",
         "command": "browser.input",
         "with": {
-          "text": "摄影",
-          "mode": "clipboard",
+          "text": "东方财富",
+          "mode": "fill",
           "pressEnter": true,
-          "clickBeforeInput": true
+          "keyIntervalMs": 340,
+          "clickBeforeInput": true,
+          "postDelayMs": 1200
         },
         "elementRefs": {
-          "selector": "input_el_textarea"
+          "selector": "小红书输入框1"
+        }
+      },
+      {
+        "id": "n6",
+        "type": "try",
+        "children": [
+          {
+            "type": "action",
+            "id": "n2",
+            "command": "browser.waitFor",
+            "with": {
+              "state": "visible"
+            },
+            "elementRefs": {
+              "selector": "AI搜索框关闭按钮"
+            }
+          },
+          {
+            "type": "action",
+            "id": "n4",
+            "command": "browser.click",
+            "with": {
+              "clickType": "single"
+            },
+            "elementRefs": {
+              "selector": "AI搜索框关闭按钮"
+            }
+          }
+        ],
+        "catch": [
+          {
+            "type": "action",
+            "id": "n5",
+            "command": "data.log",
+            "with": {
+              "message": "[error]"
+            }
+          }
+        ],
+        "error_var": "error"
+      },
+      {
+        "type": "action",
+        "id": "n7",
+        "command": "browser.hover",
+        "with": {
+          "timeoutMs": 1000
+        },
+        "elementRefs": {
+          "selector": "筛选按钮（无删选条件）"
         }
       }
     ]

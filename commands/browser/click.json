@@ -104,8 +104,32 @@
           "dom": "页面内合成事件",
           "cdp": "调试协议真事件"
         },
-        "description": "点击事件的注入通道。dom=扩展在页面内 dispatchEvent 派发合成事件（isTrusted=false，最快，但页面能识别出事件不是人点的）；cdp=经 chrome.debugger 的 Input.dispatchMouseEvent 由浏览器自己生成事件（isTrusted=true，与真实鼠标点击无法区分，适用于只信任真事件的页面/风控场景）。cdp 需要扩展 0.9.6 及以上，点击瞬间浏览器顶部会短暂出现调试提示横幅；injection=cdp 时 simulateHuman 不再生效（CDP 本身就是完整真事件链）",
+        "description": "点击事件的注入通道。dom=扩展在页面内 dispatchEvent 派发合成事件（isTrusted=false，最快，但页面能识别出事件不是人点的）；cdp=经 chrome.debugger 的 Input.dispatchMouseEvent 由浏览器自己生成事件（isTrusted=true，与真实鼠标点击无法区分，适用于只信任真事件的页面/风控场景）。cdp 需要扩展 0.9.6 及以上，点击瞬间浏览器顶部会短暂出现调试提示横幅；injection=cdp 时 simulateHuman 不生效（真事件链固定完整），改用 hoverMode / pressDelayMs / detachAfter 调节拟人度",
         "default": "dom"
+      },
+      "hoverMode": {
+        "type": "string",
+        "enum": [
+          "before",
+          "none"
+        ],
+        "x-enum-labels": {
+          "before": "点击前先悬停",
+          "none": "不悬停直接点击"
+        },
+        "description": "仅 injection=cdp 生效：点击前是否先派发 mouseMoved。before=先悬停到目标点（默认，兼容依赖 mouseover 才展开的下拉/菜单）；none=不悬停直接按下（适配 hover 和 click 都会触发同一动作的组件——这类组件先 hover 展开、再 click 会 toggle 关掉，表现为「一闪而过」）。dom 通道本身不派发 mouseMoved，此参数对其无影响",
+        "default": "before"
+      },
+      "pressDelayMs": {
+        "type": "integer",
+        "minimum": 0,
+        "description": "仅 injection=cdp 生效：鼠标按下到抬起之间的间隔（毫秒，上限 2000）。默认 0 表示不额外等待（保持历史行为）；设为 40~120 更接近真人按键时长。dom 通道无此参数",
+        "default": 0
+      },
+      "detachAfter": {
+        "type": "boolean",
+        "description": "仅 injection=cdp 生效：点击后是否立即断开调试会话。默认 true（保持历史行为，避免浏览器顶部调试横幅久留）；设为 false 可复用同一条调试会话，减少连续点击时的横幅闪烁，也避免 detach 引发的失焦关闭浮层",
+        "default": true
       },
       "postDelayMs": {
         "type": "integer",

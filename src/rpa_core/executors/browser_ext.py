@@ -264,6 +264,28 @@ class ExtensionExecSession:
             timeout_seconds=timeout_seconds, target_host=target_host,
         )
 
+    def cdp_hover(
+        self,
+        tab_id: str,
+        selector: str,
+        *,
+        args: dict[str, Any] | None = None,
+        timeout_seconds: float = DEFAULT_COMMAND_TIMEOUT_SECONDS,
+        target_host: str | None = None,
+    ) -> dict[str, Any]:
+        """CDP 真事件悬停：只派发一次 ``mouseMoved``（``isTrusted=true``）。
+
+        与 ``cdp_click`` 共用同一套 attach / 坐标预检 / detach 逻辑，只是不派发
+        按键事件——用于「先悬停展开菜单、再点击子项」的显式编排。事件来源同样是
+        浏览器自身，能触发 CSS ``:hover`` 与只认真事件的监听器。
+        """
+        payload: dict[str, Any] = {"tabId": tab_id, "selector": selector}
+        payload.update(args or {})
+        return self._client.submit(
+            "cdp.hover", payload,
+            timeout_seconds=timeout_seconds, target_host=target_host,
+        )
+
     def ext_version(self, target_host: str | None = None) -> str | None:
         """目标浏览器上**在线**扩展的版本号；取不到就返回 ``None``。
 

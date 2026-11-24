@@ -199,6 +199,88 @@ if (props.simulateHuman && /被遮挡时可用/.test(String(props.simulateHuman.
   console.log("PASS | simulateHuman 说明未误导「可绕过遮挡」");
 }
 
+// ---- CDP 拟人参数：三层对齐（manifest 声明 → executor 转发 → 扩展决策纯函数） ----
+const CDP_START = "// [cdp-human-helpers:start]";
+const CDP_END = "// [cdp-human-helpers:end]";
+const cdpStart = source.indexOf(CDP_START);
+const cdpEnd = source.indexOf(CDP_END);
+if (cdpStart < 0 || cdpEnd <= cdpStart) {
+  failed += 1;
+  console.error(`FAIL | 未能定位 CDP 拟人纯函数区（锚点 ${CDP_START} / ${CDP_END}）`);
+} else {
+  const cdpSlice = source.slice(cdpStart, cdpEnd);
+  let cdpFns;
+  try {
+    cdpFns = new Function(`${cdpSlice}\nreturn { cdpHoverFirst, cdpPressDelay };`);
+  } catch (err) {
+    failed += 1;
+    console.error(`FAIL | CDP 拟人纯函数区求值失败 → ${err.message}`);
+  }
+  if (cdpFns) {
+    const { cdpHoverFirst, cdpPressDelay } = cdpFns();
+    // hoverMode：只有显式 none（含大小写/空白变体）才跳过 hover；缺省必须保持历史行为
+    const hoverCases = [
+      [undefined, true], [null, true], [{}, true],
+      [{ hoverMode: "before" }, true],
+      [{ hoverMode: "none" }, false],
+      [{ hoverMode: " NONE " }, false],
+      [{ hoverMode: "NONE" }, false],
+      [{ hoverMode: "hover" }, true], // 未知值不猜，按 before
+    ];
+    for (const [input, expected] of hoverCases) {
+      check(`cdpHoverFirst(${JSON.stringify(input)})`, cdpHoverFirst(input), expected);
+    }
+    // pressDelayMs：非法/负值归零，上限 2000
+    const delayCases = [
+      [undefined, 0], [null, 0], [{}, 0],
+      [{ pressDelayMs: 0 }, 0],
+      [{ pressDelayMs: 40 }, 40],
+      [{ pressDelayMs: "80" }, 80],
+      [{ pressDelayMs: -5 }, 0],
+      [{ pressDelayMs: "abc" }, 0],
+      [{ pressDelayMs: 9999 }, 2000],
+    ];
+    for (const [input, expected] of delayCases) {
+      check(`cdpPressDelay(${JSON.stringify(input)})`, cdpPressDelay(input), expected);
+    }
+  }
+}
+
+// manifest 默认值必须保持历史行为（老流程零回归）
+for (const [key, expected] of [
+  ["hoverMode", "before"],
+  ["pressDelayMs", 0],
+  ["detachAfter", true],
+]) {
+  if (!props[key]) {
+    failed += 1;
+    console.error(`FAIL | manifest 缺少 ${key} 声明`);
+  } else if (props[key].default !== expected) {
+    failed += 1;
+    console.error(`FAIL | manifest ${key} 默认值应为 ${JSON.stringify(expected)}，实际 ${JSON.stringify(props[key].default)}`);
+  } else {
+    console.log(`PASS | manifest ${key} 默认 ${JSON.stringify(expected)}`);
+  }
+}
+
+// executor 必须转发三个参数；detachAfter 不能用 `or True` 兜底（显式 false 会被吞）
+for (const [key, pattern, label] of [
+  ["hoverMode", /"hoverMode": inputs\.get\("hoverMode"\) or "before"/, "hoverMode（默认 before）"],
+  ["pressDelayMs", /"pressDelayMs": inputs\.get\("pressDelayMs", 0\)/, "pressDelayMs（默认 0）"],
+  ["detachAfter", /inputs\["detachAfter"\] if inputs\.get\("detachAfter"\) is not None else True/, "detachAfter（显式 false 不被吞）"],
+]) {
+  if (!pattern.test(executorPy)) {
+    failed += 1;
+    console.error(`FAIL | 执行器未正确转发 ${label}`);
+  } else {
+    console.log(`PASS | 执行器转发 ${label}`);
+  }
+}
+if (/"detachAfter": inputs\.get\("detachAfter"\) or True/.test(executorPy)) {
+  failed += 1;
+  console.error("FAIL | detachAfter 出现了 `or True` 写法——显式 false 会被吞成 true");
+}
+
 if (failed) {
   console.error(`\n点击参数纯函数校验失败：${failed} 项`);
   process.exit(1);

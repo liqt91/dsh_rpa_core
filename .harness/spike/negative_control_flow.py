@@ -20,9 +20,9 @@ APP = ROOT / "apps" / "xhs-workbench"
 PY = ROOT / ".venv" / "Scripts" / "python.exe"
 
 WD = "apps/xhs-workbench/src/workflow_doc.py"
-API = ".harness/demo/ppx_probe/app/api/api.py"
+API = "apps/editor/api/api.py"
 BRIDGE = "apps/xhs-workbench/src/ppx_bridge.py"
-JS = ".harness/demo/ppx_probe/app/gui/src/main.js"
+JS = "apps/editor/gui/src/main.js"
 
 T_WD = "tests/test_workflow_doc.py"
 T_BR = "tests/test_ppx_bridge.py"

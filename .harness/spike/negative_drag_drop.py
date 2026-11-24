@@ -21,9 +21,9 @@ ROOT = Path(__file__).resolve().parents[2]
 APP = ROOT / "apps" / "xhs-workbench"
 PY = ROOT / ".venv" / "Scripts" / "python.exe"
 
-API = ".harness/demo/ppx_probe/app/api/api.py"
-JS = ".harness/demo/ppx_probe/app/gui/src/main.js"
-DIST_DIR = ROOT / ".harness" / "demo" / "ppx_probe" / "app" / "gui" / "dist" / "assets"
+API = "apps/editor/api/api.py"
+JS = "apps/editor/gui/src/main.js"
+DIST_DIR = ROOT / "apps" / "editor" / "gui" / "dist" / "assets"
 
 T_DND = "tests/test_editor_drag_drop.py"
 T_BR = "tests/test_ppx_bridge.py"

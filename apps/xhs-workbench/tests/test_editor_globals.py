@@ -23,11 +23,11 @@ from src import ppx_bridge as pb
 
 APP = Path(__file__).resolve().parents[1]
 ROOT = APP.parents[1]
-MAIN_JS = ROOT / ".harness" / "demo" / "ppx_probe" / "app" / "gui" / "src" / "main.js"
-INDEX_HTML = ROOT / ".harness" / "demo" / "ppx_probe" / "app" / "gui" / "index.html"
-STYLE_CSS = ROOT / ".harness" / "demo" / "ppx_probe" / "app" / "gui" / "src" / "style.css"
-API_PY = ROOT / ".harness" / "demo" / "ppx_probe" / "app" / "api" / "api.py"
-DIST_DIR = ROOT / ".harness" / "demo" / "ppx_probe" / "app" / "gui" / "dist" / "assets"
+MAIN_JS = ROOT / "apps" / "editor" / "gui" / "src" / "main.js"
+INDEX_HTML = ROOT / "apps" / "editor" / "gui" / "index.html"
+STYLE_CSS = ROOT / "apps" / "editor" / "gui" / "src" / "style.css"
+API_PY = ROOT / "apps" / "editor" / "api" / "api.py"
+DIST_DIR = ROOT / "apps" / "editor" / "gui" / "dist" / "assets"
 CHECK_ALL = ROOT / ".harness" / "scripts" / "check_all.py"
 DOCK_SCRIPT = ROOT / "scripts" / "check_editor_bottom_dock.mjs"
 BRANCH_SCOPE = ROOT / ".harness" / "branch-scope.json"
@@ -213,22 +213,25 @@ def test_dist_bundle_is_rebuilt_from_source() -> None:
         assert needle in built_css, f"dist CSS 产物缺 {needle}"
 
 
-def test_prototype_dir_is_shared_runtime() -> None:
-    """ADR 0022-R3：原型目录整体共享，客户端打包配置仍精确留给 ppx-only。"""
+def test_editor_dir_is_shared_runtime() -> None:
+    """ADR 0021/0022-R3：编辑器整体共享，客户端打包配置仍精确留给 ppx-only。"""
     scope = json.loads(BRANCH_SCOPE.read_text(encoding="utf-8"))
-    assert ".harness/demo/ppx_probe/" in scope["shared_runtime"]
+    assert "apps/editor/" in scope["shared_runtime"]
     sys.path.insert(0, str(ROOT / ".harness" / "scripts"))
     import check_branch_scope as gate
 
     for rel in (
-        "app/gui/index.html",
-        "app/gui/src/style.css",
-        "app/api/api.py",
-        "app/gui/src/main.js",
+        "gui/index.html",
+        "gui/src/style.css",
+        "api/api.py",
+        "gui/src/main.js",
     ):
-        path = ".harness/demo/ppx_probe/" + rel
+        path = "apps/editor/" + rel
         assert gate.owner_of(path, scope) is None, f"{path} 仍被独占"
-    assert gate.owner_of(".harness/demo/ppx_probe/app/ppx.toml", scope) == "ppx-only"
+    # ADR 0021：转正后编辑器整棵共享（含 ppx.toml 等构建配置），
+    # ppx-only 的独占收窄到打包产物目录 —— 只有它出包。
+    assert gate.owner_of("apps/editor/ppx.toml", scope) is None
+    assert gate.owner_of("apps/editor/build/RPA Probe/RPA Probe.exe", scope) == "ppx-only"
 
 
 def test_bottom_dock_check_script_passes() -> None:

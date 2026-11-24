@@ -170,7 +170,7 @@ def cases(c1: str, split_sha: str) -> list[dict]:
 
     def committed_ppx_on_plugin(repo: Path) -> object:
         git(repo, "checkout", "-q", "plugin-only")
-        write_and_commit(repo, ".harness/demo/ppx_probe/app/gui/src/main.js", "// injected\n")
+        write_and_commit(repo, "apps/editor/gui/src/main.js", "// injected\n")
 
         def restore() -> None:
             git(repo, "reset", "--hard", "HEAD~1")
@@ -184,7 +184,7 @@ def cases(c1: str, split_sha: str) -> list[dict]:
 
     def committed_ppx_on_xhs(repo: Path) -> object:
         git(repo, "checkout", "-q", "xhs-workbench")
-        write_and_commit(repo, ".harness/demo/ppx_probe/app/gui/src/main.js", "// injected\n")
+        write_and_commit(repo, "apps/editor/gui/src/main.js", "// injected\n")
 
         def restore() -> None:
             git(repo, "reset", "--hard", "HEAD~1")

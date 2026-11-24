@@ -43,6 +43,7 @@ class _RecordingExt:
     def __init__(self, cdp_error: Exception | None = None, version: str | None = "0.9.7") -> None:
         self.page_calls: list[dict] = []
         self.cdp_calls: list[dict] = []
+        self.cdp_hover_calls: list[dict] = []
         self.cdp_error = cdp_error
         self.version = version
         self.client = type("C", (), {"status": lambda self: {"online": True}})()
@@ -65,9 +66,31 @@ class _RecordingExt:
         )
         if self.cdp_error is not None:
             raise self.cdp_error
+        # 按真实扩展的派发口径回显：mouseMoved（除非 none）+ 每轮 press/release
+        args = dict(args or {})
+        hover_first = str(args.get("hoverMode") or "before").lower() != "none"
+        click_count = 2 if str(args.get("clickType") or "single").lower() == "double" else 1
         return {
             "matchedCount": 1,
-            "result": {"dispatched": 3, "x": 10, "y": 20, "cdpVersion": "1.3"},
+            "result": {
+                "dispatched": (1 if hover_first else 0) + click_count * 2,
+                "x": 10,
+                "y": 20,
+                "cdpVersion": "1.3",
+                "hoverFirst": hover_first,
+            },
+        }
+
+    def cdp_hover(self, tab_id, selector, *, args=None, timeout_seconds=1, target_host=None):
+        """browser.hover + injection=cdp 的通道记录（只派发 mouseMoved）。"""
+        self.cdp_hover_calls.append(
+            {"tab_id": tab_id, "selector": selector, "args": dict(args or {})}
+        )
+        if self.cdp_error is not None:
+            raise self.cdp_error
+        return {
+            "matchedCount": 1,
+            "result": {"x": 10, "y": 20, "cdpVersion": "1.3"},
         }
 
 
@@ -128,6 +151,9 @@ def test_cdp_injection_routes_to_debugger_and_never_touches_page_call():
                 "button": "right",
                 "clickType": "double",
                 "modifiers": ["Ctrl"],
+                "hoverMode": "before",
+                "pressDelayMs": 0,
+                "detachAfter": True,
             },
         }
     ]
@@ -139,7 +165,7 @@ def test_cdp_injection_routes_to_debugger_and_never_touches_page_call():
 
 
 def test_cdp_injection_defaults_match_manifest():
-    """cdp 通道的缺省值必须与 manifest 一致（center / left / single / 无修饰键）。"""
+    """cdp 通道的缺省值必须与 manifest 一致（center/left/single，拟人参数保持历史值）。"""
     ext = _RecordingExt()
     result = _run_click(ext, {"selector": "#ok", "injection": "cdp"})
     assert result.status == "success", result.error
@@ -148,6 +174,39 @@ def test_cdp_injection_defaults_match_manifest():
         "button": "left",
         "clickType": "single",
         "modifiers": [],
+        "hoverMode": "before",
+        "pressDelayMs": 0,
+        "detachAfter": True,
+    }
+    # 回显字段证明扩展确实收到了 hover 决策（扩展未重载时会是 None）
+    assert result.effects[0].details["hoverFirst"] is True
+
+
+def test_cdp_human_params_are_forwarded():
+    """拟人参数必须原样透传到扩展——否则属性面板填了也是摆设。
+
+    专门锁 `detachAfter=false`：`or True` 兜底会把它吞成 True（布尔值陷阱）。
+    """
+    ext = _RecordingExt()
+    result = _run_click(
+        ext,
+        {
+            "selector": "#ok",
+            "injection": "cdp",
+            "hoverMode": "none",
+            "pressDelayMs": 80,
+            "detachAfter": False,
+        },
+    )
+    assert result.status == "success", result.error
+    assert ext.cdp_calls[0]["args"] == {
+        "clickPosition": "center",
+        "button": "left",
+        "clickType": "single",
+        "modifiers": [],
+        "hoverMode": "none",
+        "pressDelayMs": 80,
+        "detachAfter": False,
     }
 
 
@@ -227,3 +286,58 @@ def test_outdated_extension_does_not_affect_dom_channel():
     result = _run_click(ext, {"selector": "#ok"})
     assert result.status == "success", result.error
     assert [call["method"] for call in ext.page_calls] == ["click"]
+
+
+# ---- browser.hover 的 CDP 通道（显式编排 hover → click 用） ----------------
+
+
+def _run_hover(ext: _RecordingExt, inputs: dict):
+    executor = PlaywrightExecutor(ext_session=ext)
+    invocation = CommandInvocation(
+        command_id="browser.hover",
+        command_version="1.0.0",
+        run_id="run",
+        step_id="step",
+        inputs=dict(inputs),
+    )
+    return asyncio.run(
+        executor._ext_page_command(
+            "browser.hover", invocation, invocation.inputs, "sess", "7", "#ok", 5.0, "msedge",
+        )
+    )
+
+
+def test_hover_default_still_uses_page_call():
+    """不传 injection：hover 仍是页面内合成事件（老流程零回归）。"""
+    ext = _RecordingExt()
+    result = _run_hover(ext, {"selector": "#ok"})
+    assert result.status == "success", result.error
+    assert ext.cdp_hover_calls == []
+    assert [call["method"] for call in ext.page_calls] == ["hover"]
+
+
+def test_hover_cdp_routes_to_debugger_and_never_touches_page_call():
+    """injection=cdp：必须走 cdp.hover，且一次 page.call 都不能有。"""
+    ext = _RecordingExt()
+    result = _run_hover(ext, {"selector": "#ok", "injection": "cdp"})
+    assert result.status == "success", result.error
+    assert ext.page_calls == []
+    assert ext.cdp_calls == []
+    assert ext.cdp_hover_calls == [
+        {"tab_id": "7", "selector": "#ok", "args": {"clickPosition": "center"}}
+    ]
+    details = result.effects[0].details
+    assert details["injection"] == "cdp"
+    assert details["operation"] == "hover"
+    assert result.outputs["matchedCount"] == 1
+
+
+def test_hover_cdp_outdated_extension_fails_actionably():
+    """旧扩展必须报 EXTENSION_OUTDATED，且一次事件都不派发。"""
+    ext = _RecordingExt(version="0.9.6")
+    result = _run_hover(ext, {"selector": "#ok", "injection": "cdp"})
+    assert result.status == "error"
+    assert result.error.code == "EXTENSION_OUTDATED"
+    assert result.error.details["requiredVersion"] == "0.9.7"
+    assert ext.cdp_hover_calls == []
+    assert ext.page_calls == []

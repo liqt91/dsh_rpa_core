@@ -11,7 +11,7 @@ import vm from 'node:vm'
 import path from 'node:path'
 
 const ROOT = path.resolve(import.meta.dirname, '..')
-const GUI = path.join(ROOT, '.harness/demo/ppx_probe/app/gui')
+const GUI = path.join(ROOT, 'apps/editor/gui')
 const MAIN = path.join(GUI, 'src/main.js')
 const HTML = path.join(GUI, 'index.html')
 const CSS = path.join(GUI, 'src/style.css')
@@ -125,6 +125,10 @@ const state = {
   deleteResponse: { ok: true, deleted: true, remaining: [] },
   // 行内校验的 RPC 回传：默认命中 2 个；测「命中 0 的两种含义」时改它
   verifyResponse: { ok: true, count: 2 },
+  // F10 全局热键：累计次数由后端给出，前端只认「比上次大」
+  hotkeyFired: 0,
+  // 长轮询的挂起点：用例按住不放，代表后端正挂着等按键（不是秒回空转）
+  awaitResolvers: [],
   // M102 S2：缩略图按需拉的 RPC 回传（假 data URL，只为断言「真塞进 <img>」）
   shotResponse: { ok: true, shot: 'data:image/png;base64,TUlOMTAy' },
 }
@@ -172,6 +176,14 @@ function makeContext() {
     'rpa.verifyElement': () => state.verifyResponse,
     'rpa.deleteElement': () => state.deleteResponse,
     'rpa.startCapture': { ok: true, state: 'waiting', captureId: 'c1', name: null, suggestedName: '元素1' },
+    'rpa.startVerifyHotkey': () => ({ ok: true, sessionId: 'v1', fired: state.hotkeyFired }),
+    // 真后端会把调用挂到按键或超时才返回；替身必须同样「挂住」，
+    // 否则测的就不是用户实际走的那条路（秒回会被 main.js 判成「不像在等」而退回定时器）
+    'rpa.awaitVerifyHotkey': () => new Promise((resolve) => {
+      state.awaitResolvers.push(resolve)
+    }),
+    'rpa.pollVerifyHotkey': () => ({ ok: true, fired: state.hotkeyFired, active: true }),
+    'rpa.stopVerifyHotkey': () => ({ ok: true, stopped: true }),
     'rpa.capturePoll': { ok: true, state: 'pending' },
     'rpa.commitElement': { ok: true, name: 'searchBox' },
     'rpa.discardCapture': { ok: true, discarded: true },
@@ -235,7 +247,8 @@ function makeContext() {
   vm.runInContext(mainSrc.replace(/^import .*$/gm, ''), ctx, { filename: 'main.js' })
   vm.runInContext(
     `globalThis.__api = { refreshElements, renderElementsPanel, openAssetDetail, deleteAsset,
-       openCaptureDialog, confirmElemDialog,
+       openCaptureDialog, confirmElemDialog, showElemDialog, closeElemDialog,
+       pollVerifyHotkey,
        selectCard, saveParams, renderForm,
        elementTreeBuckets, openLibMenu, closeLibMenu, toggleGroup, renderBatchBar,
        getSelected: () => Array.from(elemSelected),
@@ -894,6 +907,65 @@ await checkAsync('行为层：资产没了右栏收敛，不挂着上一份详�
   assert(nodeById('elemDetail').hidden !== true, '选了却没显示')
   api.setState([], [])
   assert(nodeById('elemDetail').hidden === true, '元素已经没了，右栏还开着')
+})
+
+// 后端收到一次 F10：累计值 +1，并唤醒挂着的那次长轮询（真后端就是这么返回的）
+function pressHotkey(fired) {
+  state.hotkeyFired = fired
+  const waiting = state.awaitResolvers.splice(0)
+  for (const resolve of waiting) resolve({ ok: true, fired, active: true })
+}
+
+await checkAsync('F10 全局热键：弹窗打开即挂长轮询，一次按键只校验一次，关窗停监听', async () => {
+  state.hotkeyFired = 0
+  state.awaitResolvers.length = 0
+  const { api, calls } = makeContext()
+  await api.openCaptureDialog('c7', {
+    kind: 'browser', selector: 'div.a2 > span.b', name: '搜索框',
+  })
+  await flush()
+  assert(calls.some((c) => c.name === 'rpa.startVerifyHotkey'), '弹窗打开没起 F10 监听')
+  assert(
+    state.awaitResolvers.length === 1,
+    `打开后应立即挂一次 awaitVerifyHotkey（不靠定时器），实际挂起 ${state.awaitResolvers.length} 次`,
+  )
+
+  pressHotkey(1)
+  await flush()
+  await flush()
+  const validates = calls.filter((c) => c.name === 'rpa.verifyDraft')
+  assert(validates.length === 1, `按一次 F10 应校验一次，实际 ${validates.length} 次`)
+  assert(state.awaitResolvers.length === 1, '校验完要立刻重新挂上等待，否则第二次按键就丢了')
+
+  // 同一次按键（累计值没涨）：就算后端再返回一次也不能重复校验
+  await new Promise((resolve) => setTimeout(resolve, 600)) // 让 500ms 去重窗口过期，单测游标本身
+  pressHotkey(1)
+  await flush()
+  await flush()
+  assert(calls.filter((c) => c.name === 'rpa.verifyDraft').length === 1, '同一次按键被重复校验')
+
+  api.closeElemDialog()
+  await flush()
+  assert(calls.some((c) => c.name === 'rpa.stopVerifyHotkey'), '关窗没停 F10 监听')
+  state.hotkeyFired = 0
+  state.awaitResolvers.length = 0
+})
+
+await checkAsync('F10 第三条路：PPX 窗口有焦点时窗口键盘也触发校验', async () => {
+  state.hotkeyFired = 0
+  state.awaitResolvers.length = 0
+  const { api, calls, keydown } = makeContext()
+  await api.openCaptureDialog('c8', { kind: 'browser', selector: '#q', name: '搜索框' })
+  await flush()
+  assert(keydown.length > 0, '没接窗口键盘的 F10（系统热键接不上时就没有退路了）')
+  let prevented = 0
+  for (const handler of keydown) handler({ key: 'F10', preventDefault: () => { prevented += 1 } })
+  await flush()
+  await flush()
+  assert(calls.some((c) => c.name === 'rpa.verifyDraft'), '窗口内按 F10 没触发校验')
+  assert(prevented === 1, `F10 应 preventDefault 一次（免被浏览器菜单吃掉），实际 ${prevented}`)
+  api.closeElemDialog()
+  state.awaitResolvers.length = 0
 })
 
 for (const result of results) {

@@ -70,10 +70,11 @@ _EXT_PAGE_METHODS = {
 
 
 def _injection_mode(inputs: dict[str, Any]) -> str:
-    """点击注入通道（manifest 的 `injection`）：只有显式 cdp 才走调试协议。
+    """注入通道（manifest 的 `injection`）：只有显式 cdp 才走调试协议。
 
-    缺省/脏值一律 dom。**不做静默降级**：cdp 不可用时如实报错，否则用户会以为
-    已经绕过了风控，实际仍在派发合成事件——那是最坏的一种假绿。
+    点击与悬停共用（`browser.click` / `browser.hover`）：两条通道都必须由用户
+    显式选择，缺省/脏值一律 dom。**不做静默降级**：cdp 不可用时如实报错，
+    否则用户会以为已经绕过了风控，实际仍在派发合成事件——那是最坏的一种假绿。
     """
     return "cdp" if str(inputs.get("injection") or "").strip().lower() == "cdp" else "dom"
 
@@ -1129,6 +1130,9 @@ class PlaywrightExecutor(CommandExecutor):
         # 仍是裸比较、分支体也被整棵收集。
         if command == "browser.click":
             if _injection_mode(inputs) == "cdp":
+                # ★ 版本对账**故意内联**在这里，不抽 helper：抽走后 ErrorCode 归属会落到
+                # 公共函数，`check_error_contract` 切不到 `EXTENSION_OUTDATED`，manifest
+                # 的 errors 声明就没人守了（负向验证实测过：删声明门禁仍绿）。
                 ext_version = await asyncio.to_thread(self._ext.ext_version, target_host)
                 if _ext_outdated(ext_version):
                     return CommandResult.failure(
@@ -1143,6 +1147,25 @@ class PlaywrightExecutor(CommandExecutor):
                         },
                     )
                 return await self._ext_cdp_click(
+                    invocation, inputs, session_id, tab_id, selector, timeout_s, target_host,
+                )
+        if command == "browser.hover":
+            if _injection_mode(inputs) == "cdp":
+                # 同上：对账内联，保证错误契约门禁能把它归到 browser.hover
+                ext_version = await asyncio.to_thread(self._ext.ext_version, target_host)
+                if _ext_outdated(ext_version):
+                    return CommandResult.failure(
+                        ErrorCode.EXTENSION_OUTDATED,
+                        _outdated_message(target_host, ext_version),
+                        details={
+                            "channel": "extension",
+                            "browser": target_host,
+                            "extVersion": ext_version,
+                            "requiredVersion": _CDP_REQUIRED,
+                            "reason": "extension_outdated",
+                        },
+                    )
+                return await self._ext_cdp_hover(
                     invocation, inputs, session_id, tab_id, selector, timeout_s, target_host,
                 )
         method = _EXT_PAGE_METHODS[command]
@@ -1198,6 +1221,87 @@ class PlaywrightExecutor(CommandExecutor):
             outputs={"matchedCount": count, "sessionId": session_id},
         )
 
+    async def _ext_cdp_hover(
+        self,
+        invocation: CommandInvocation,
+        inputs: dict[str, Any],
+        session_id: str,
+        tab_id: str,
+        selector: str,
+        timeout_s: float,
+        target_host: str,
+    ) -> CommandResult:
+        """`browser.hover` + `injection=cdp`：只派发 mouseMoved 真事件。
+
+        与 dom 通道（mouseover/mouseenter/mousemove 合成事件）的区别是
+        `isTrusted=true` 且能触发 CSS `:hover`——用于「先悬停展开、再点击」的编排。
+        坐标仍取页面侧 `actionPoint`，与点击同源（同一遮挡预检口径）。
+        """
+        args = {
+            "clickPosition": inputs.get("clickPosition") or "center",
+        }
+        payload, fallback = await self._cdp_hover_with_fallback(
+            tab_id, selector, args=args, timeout_s=timeout_s, target_host=target_host
+        )
+        count = int(payload.get("matchedCount") or 0)
+        if count == 0:
+            return self._ext_not_found(
+                inputs, candidates_tried=len(self._element_candidates(selector))
+            )
+        await self._post_delay(inputs)
+        result = payload.get("result") or {}
+        return self._ext_success(
+            invocation, EffectKind.UNSAFE_WRITE,
+            f"browser.session:{session_id}:selector:{selector}",
+            {
+                "operation": "hover",
+                "injection": "cdp",
+                "matchedCount": count,
+                "point": {"x": result.get("x"), "y": result.get("y")},
+                "cdpVersion": result.get("cdpVersion"),
+                **_fallback_details(fallback),
+            },
+            outputs={"matchedCount": count, "sessionId": session_id},
+        )
+
+    async def _cdp_hover_with_fallback(
+        self,
+        tab_id: str,
+        selector: str,
+        *,
+        args: dict[str, Any],
+        timeout_s: float,
+        target_host: str,
+    ) -> tuple[dict[str, Any], dict[str, Any] | None]:
+        """CDP 悬停的元素自愈：与 `_cdp_click_with_fallback` 同语义。"""
+        payload = await asyncio.to_thread(
+            self._ext.cdp_hover, tab_id, selector,
+            args=args, timeout_seconds=timeout_s, target_host=target_host,
+        )
+        if int(payload.get("matchedCount") or 0) > 0:
+            return payload, None
+        candidates = self._element_candidates(selector)
+        for index, candidate in enumerate(candidates, start=1):
+            candidate_selector = str(candidate["selector"])
+            try:
+                retry = await asyncio.to_thread(
+                    self._ext.cdp_hover, tab_id, candidate_selector,
+                    args=args, timeout_seconds=timeout_s, target_host=target_host,
+                )
+            except ExtensionChannelError as exc:
+                if exc.code in _PRECHECK_CODES:
+                    continue
+                raise
+            if int(retry.get("matchedCount") or 0) > 0:
+                return retry, {
+                    "mainSelector": selector,
+                    "usedSelector": candidate_selector,
+                    "kind": candidate.get("kind"),
+                    "index": index,
+                    "candidateCount": len(candidates),
+                }
+        return {"matchedCount": 0}, None
+
     async def _ext_cdp_click(
         self,
         invocation: CommandInvocation,
@@ -1225,6 +1329,13 @@ class PlaywrightExecutor(CommandExecutor):
             "button": inputs.get("button") or "left",
             "clickType": inputs.get("clickType") or "single",
             "modifiers": inputs.get("modifiers") or [],
+            # 拟人参数：默认值与 manifest 严格一致（before / 0 / true）。
+            # detachAfter 是布尔值，**不能**用 `or True` 兜底——显式 false 会被吞掉。
+            "hoverMode": inputs.get("hoverMode") or "before",
+            "pressDelayMs": inputs.get("pressDelayMs", 0),
+            "detachAfter": (
+                inputs["detachAfter"] if inputs.get("detachAfter") is not None else True
+            ),
         }
         payload, fallback = await self._cdp_click_with_fallback(
             tab_id, selector, args=args, timeout_s=timeout_s, target_host=target_host
@@ -1246,6 +1357,9 @@ class PlaywrightExecutor(CommandExecutor):
                 "point": {"x": result.get("x"), "y": result.get("y")},
                 "dispatched": result.get("dispatched"),
                 "cdpVersion": result.get("cdpVersion"),
+                # 回显实际生效的 hover 决策：扩展未重载时 hoverMode 会被忽略，
+                # 日志里看到 hoverFirst=true 就能立刻定位「参数没到扩展」。
+                "hoverFirst": result.get("hoverFirst"),
                 **_fallback_details(fallback),
             },
             outputs={"matchedCount": count, "sessionId": session_id},

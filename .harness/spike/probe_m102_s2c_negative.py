@@ -24,7 +24,7 @@ import subprocess
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 PY = ROOT / ".venv/Scripts/python.exe"
-PPX_PY = ROOT / ".harness/demo/ppx_probe/.venv/Scripts/python.exe"
+PPX_PY = ROOT / "apps/editor/.venv/Scripts/python.exe"
 SHOT = ROOT / "src/rpa_core/capture/screen_shot.py"
 TESTS = "tests/contract/test_element_shot.py"
 T = TESTS + "::"

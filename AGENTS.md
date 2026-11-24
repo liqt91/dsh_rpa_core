@@ -21,11 +21,13 @@ This repository is a clean-room RPA core experiment. Do not import runtime code 
   `.harness/scripts/check_host_boundary.py` 在门禁里比对，任何改动都红。
 - 确需解冻时，**先问维护者**，再跑 `check_host_boundary.py --update-freeze` 重建基线，
   并在提交信息里写明原因（那一步的基线 diff 就是签字）。
-- PPX 原型只待在 `.harness/demo/ppx_probe/`：不进 `src/`、不进主 `pyproject.toml`、
-  不往主 venv 装 PPX。它只能通过 RPC 薄层消费能力层，不得 import `PySide6` 或 gui 的
-  UI 模块（唯一豁免 `rpa_core.gui.i18n`）；能力层也不得反向依赖 `ppx_py`。
+- PPX 编辑器住在 `apps/editor/`（ADR 0021 转正，不再是 `.harness/demo/ppx_probe/`）：
+  不进 `src/`、不进主 `pyproject.toml`、不往主 venv 装 PPX。它只能通过 RPC 薄层消费能力层，
+  不得 import `PySide6` 或 gui 的 UI 模块（唯一豁免 `rpa_core.gui.i18n`）；能力层也不得反向
+  依赖 `ppx_py`。判据是 `check_host_boundary.py` 的第四条：编辑器必须在 `apps/editor`
+  且不得再回到 `.harness/demo/ppx_probe/`（产品代码不住脚手架，探针才住 `.harness/spike/ppx/`）。
 - 迁移讨论的门槛是 ADR 0019 §2.3 的三条实证（覆盖层 / 打包分发 / 桌面集成）。
-  三条没过之前，不讨论 14.7k 行 Qt 的处置。
+  已由 ADR 0021 结案：① 过 ② 过（zip 通道，不走 Inno Setup）③ **半过**（单实例、全局热键有，托盘缺）。
 
 ## Commands
 

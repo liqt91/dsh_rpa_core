@@ -18,9 +18,9 @@ from src import ppx_bridge as pb
 
 APP = Path(__file__).resolve().parents[1]
 ROOT = APP.parents[1]
-MAIN_JS = ROOT / ".harness" / "demo" / "ppx_probe" / "app" / "gui" / "src" / "main.js"
-STYLE_CSS = ROOT / ".harness" / "demo" / "ppx_probe" / "app" / "gui" / "src" / "style.css"
-DIST_DIR = ROOT / ".harness" / "demo" / "ppx_probe" / "app" / "gui" / "dist" / "assets"
+MAIN_JS = ROOT / "apps" / "editor" / "gui" / "src" / "main.js"
+STYLE_CSS = ROOT / "apps" / "editor" / "gui" / "src" / "style.css"
+DIST_DIR = ROOT / "apps" / "editor" / "gui" / "dist" / "assets"
 
 
 def _flow_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[str, Path]:

@@ -93,7 +93,7 @@ cd apps/xhs-workbench
 | POST | `/api/pause`、`/api/resume`、`/api/pause-all`、`/api/resume-all` | 监控池暂停/恢复 |
 | POST | `/editor-ppx-rpc` | 编辑器 RPC（`{method, params, requestId}` → `{ok,data,error,requestId}`） |
 
-**编辑器页复用 PPX 原型**（ADR 0022-R1）：`/editor-ppx/` 托管 `.harness/demo/ppx_probe`
+**编辑器页复用 PPX 编辑器**（ADR 0022-R1）：`/editor-ppx/` 托管 `apps/editor`
 的 `gui/dist` 构建产物，注入一个 `window.pywebview.api.call` 的 fetch 替身，后端由
 `src/ppx_bridge.py` 装载原型的 `app/api/api.py`（补一个 `ppx_py` 语义替身，不装原型的
 venv）。所以左侧指令栏 / 中间画布 / 右侧结构属性 / 下方日志、if/forEach/try 的结构编辑、
@@ -173,7 +173,7 @@ run 目录是**并集**：控制台采集写 `<data>/run_artifacts/`，编辑器
 - **跨 run 会话复用**：workflow 末尾仍 `browser.close`。`browser.attach` 的
   `sessionId` 是 run 内逻辑 id，能否跨 run 复用没实测；一天跑几十次时应当改成
   常驻标签页 + attach，否则又慢又像机器人。
-- **PPX 编辑器是「运行期消费原型」**：原型在 `.harness/demo/ppx_probe`（归 `ppx-only`，
-  ADR 0019 冻结判据仍生效）。原型大改时桥层要跟着修——这是 ADR 0022-R1 明确接受的代价。
+- **PPX 编辑器是「运行期消费宿主」**：编辑器在 `apps/editor`（整棵共享，ADR 0021；`ppx-only`
+  只占 `apps/editor/build/`）。编辑器大改时桥层要跟着修——这是 ADR 0022-R1 明确接受的代价。
   浏览器里 `studio.pollSession`（Agent 推流程进窗口）返回「离线」，那个通道只有桌面宿主有。
 - **真机采集仍要手动开浏览器**：Agent 会话内起 Chrome 会被 Crashpad 拒访。

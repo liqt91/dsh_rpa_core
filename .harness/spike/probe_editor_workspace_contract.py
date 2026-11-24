@@ -23,8 +23,8 @@ STATE = ROOT / ".harness" / "spike" / "_m67_nv_state.json"
 SENTINEL = "NV-M67-INJECTED"
 
 FILES = {
-    "api": ROOT / ".harness" / "demo" / "ppx_probe" / "app" / "api" / "api.py",
-    "js": ROOT / ".harness" / "demo" / "ppx_probe" / "app" / "gui" / "src" / "main.js",
+    "api": ROOT / "apps" / "editor" / "api" / "api.py",
+    "js": ROOT / "apps" / "editor" / "gui" / "src" / "main.js",
     "studio": ROOT / "workbuddy-suite" / "skills" / "workflow-studio" / "scripts" / "studio.py",
 }
 

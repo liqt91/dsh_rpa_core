@@ -14,8 +14,8 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-MAIN = ROOT / ".harness/demo/ppx_probe/app/gui/src/main.js"
-CSS = ROOT / ".harness/demo/ppx_probe/app/gui/src/style.css"
+MAIN = ROOT / "apps/editor/gui/src/main.js"
+CSS = ROOT / "apps/editor/gui/src/style.css"
 CHECK = ROOT / "scripts/check_element_pick_ui.mjs"
 SENTINEL = "__NEG_INJECT__"
 

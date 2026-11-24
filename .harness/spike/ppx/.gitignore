@@ -1,0 +1,18 @@
+# PPX 原型期的一次性探针产物（脚本本身要提交，只有输出忽略）
+_*.log
+_*.out
+_*.txt
+_shot*.png
+_overlay_*.png
+_*.png
+_sandbox/
+
+# 布局探针（_layout_shots/）的临时产物
+#   _chrome*      —— CDP 用的独立 profile（正常会删，崩了才留）
+#   report.json   —— probe.mjs 每次跑出来的度量结果，由 assert_layout.mjs 消费
+#   _style_backup —— nv_step.py 注入破坏前的逐字节备份
+_layout_shots/_chrome*/
+_layout_shots/report.json
+_layout_shots/mock.json
+_style_backup.css
+_style_backup.md5

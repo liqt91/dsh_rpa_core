@@ -21,7 +21,7 @@ import types
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-API = ROOT / ".harness" / "demo" / "ppx_probe" / "app" / "api" / "api.py"
+API = ROOT / "apps" / "editor" / "api" / "api.py"
 
 results: list[tuple[str, bool, str]] = []
 
@@ -695,7 +695,7 @@ def case_element_library_tree_wired() -> None:
     三处接线：面板并行取分组/未使用、资产行按 group 分桶、管理动作走 RPC
     且删除仍经网页端护栏（不借原生浮窗）。
     """
-    main = ROOT / ".harness" / "demo" / "ppx_probe" / "app" / "gui" / "src" / "main.js"
+    main = ROOT / "apps" / "editor" / "gui" / "src" / "main.js"
 
     def count(path: Path, needle: str, expected: int) -> None:
         text = path.read_text(encoding="utf-8")

@@ -1,0 +1,227 @@
+{
+  "kind": "browser",
+  "selector": {
+    "css": "div.ai-feeds-page > div.ai-chat-section > div.ai-chat-inner > div.xhs-ai-chat-header > button.xhs-ai-chat-header__close > svg",
+    "path": [
+      {
+        "tag": "div",
+        "id": null,
+        "classes": [
+          "ai-feeds-page",
+          "with-ai-chat"
+        ],
+        "nthOfType": null,
+        "fragment": "div.ai-feeds-page"
+      },
+      {
+        "tag": "div",
+        "id": null,
+        "classes": [
+          "ai-chat-section"
+        ],
+        "nthOfType": null,
+        "fragment": "div.ai-chat-section"
+      },
+      {
+        "tag": "div",
+        "id": null,
+        "classes": [
+          "ai-chat-inner"
+        ],
+        "nthOfType": null,
+        "fragment": "div.ai-chat-inner"
+      },
+      {
+        "tag": "div",
+        "id": null,
+        "classes": [
+          "xhs-ai-chat-header"
+        ],
+        "nthOfType": null,
+        "fragment": "div.xhs-ai-chat-header"
+      },
+      {
+        "tag": "button",
+        "id": null,
+        "classes": [
+          "xhs-ai-chat-header__close"
+        ],
+        "nthOfType": null,
+        "fragment": "button.xhs-ai-chat-header__close"
+      },
+      {
+        "tag": "svg",
+        "id": null,
+        "classes": [],
+        "nthOfType": null,
+        "fragment": "svg"
+      }
+    ],
+    "candidates": [
+      {
+        "kind": "path",
+        "selector": "div.xhs-ai-chat-header > button.xhs-ai-chat-header__close > svg",
+        "matchedCount": 1,
+        "penalty": 20
+      },
+      {
+        "kind": "path",
+        "selector": "button.xhs-ai-chat-header__close > svg",
+        "matchedCount": 1,
+        "penalty": 20
+      },
+      {
+        "kind": "path",
+        "selector": "svg",
+        "matchedCount": 54,
+        "penalty": 20
+      }
+    ],
+    "editState": {
+      "levels": [
+        {
+          "tag": "div",
+          "included": true,
+          "id": {
+            "on": false,
+            "value": ""
+          },
+          "classes": [
+            {
+              "on": true,
+              "value": "ai-feeds-page",
+              "mode": "精确"
+            },
+            {
+              "on": false,
+              "value": "with-ai-chat",
+              "mode": "精确"
+            }
+          ],
+          "nth": {
+            "on": false,
+            "value": ""
+          }
+        },
+        {
+          "tag": "div",
+          "included": true,
+          "id": {
+            "on": false,
+            "value": ""
+          },
+          "classes": [
+            {
+              "on": true,
+              "value": "ai-chat-section",
+              "mode": "精确"
+            }
+          ],
+          "nth": {
+            "on": false,
+            "value": ""
+          }
+        },
+        {
+          "tag": "div",
+          "included": true,
+          "id": {
+            "on": false,
+            "value": ""
+          },
+          "classes": [
+            {
+              "on": true,
+              "value": "ai-chat-inner",
+              "mode": "精确"
+            }
+          ],
+          "nth": {
+            "on": false,
+            "value": ""
+          }
+        },
+        {
+          "tag": "div",
+          "included": true,
+          "id": {
+            "on": false,
+            "value": ""
+          },
+          "classes": [
+            {
+              "on": true,
+              "value": "xhs-ai-chat-header",
+              "mode": "精确"
+            }
+          ],
+          "nth": {
+            "on": false,
+            "value": ""
+          }
+        },
+        {
+          "tag": "button",
+          "included": true,
+          "id": {
+            "on": false,
+            "value": ""
+          },
+          "classes": [
+            {
+              "on": true,
+              "value": "xhs-ai-chat-header__close",
+              "mode": "精确"
+            }
+          ],
+          "nth": {
+            "on": false,
+            "value": ""
+          }
+        },
+        {
+          "tag": "svg",
+          "included": true,
+          "id": {
+            "on": false,
+            "value": ""
+          },
+          "classes": [],
+          "nth": {
+            "on": false,
+            "value": ""
+          }
+        }
+      ]
+    }
+  },
+  "verifyCount": 1,
+  "name": "AI搜索框关闭按钮",
+  "group": null,
+  "framework": null,
+  "processName": null,
+  "winTitle": null,
+  "screenshot": "shots/a1eff1612306c981.png",
+  "lastVerifiedAt": null,
+  "lastVerifyError": null,
+  "metadata": {
+    "tag": "svg",
+    "id": null,
+    "classes": [],
+    "text": "",
+    "rect": {
+      "left": 1203,
+      "top": 166,
+      "width": 16,
+      "height": 16
+    },
+    "role": null,
+    "accessibleName": null,
+    "placeholder": null,
+    "label": null,
+    "containerText": null,
+    "url": "https://www.xiaohongshu.com/search_result_ai?keyword=%25E4%25B8%259C%25E6%2596%25B9%25E8%25B4%25A2%25E5%25AF%258C&source=web_explore_feed",
+    "title": "东方财富 - 小红书搜索"
+  },
+  "capturedAt": "2026-11-19T05:44:43.688920Z"
+}

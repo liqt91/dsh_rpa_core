@@ -1,224 +1,546 @@
 {
-  "kind": "desktop",
+  "kind": "browser",
   "selector": {
-    "locator": {
-      "backend": "uia",
-      "controlType": "Group",
-      "automationId": "qt_scrollarea_viewport",
-      "path": [
-        {
-          "controlType": "Group",
-          "className": "QWidget"
-        },
-        {
-          "controlType": "Custom",
-          "className": "QStackedWidget"
-        },
-        {
-          "controlType": "Group",
-          "automationId": "MainView",
-          "className": "mmui::MainView"
-        },
-        {
-          "controlType": "Group",
-          "automationId": "MainView.main_window_corner_view",
-          "className": "QWidget"
-        },
-        {
-          "controlType": "Group",
-          "automationId": "MainView.main_window_corner_view.MainView",
-          "className": "mmui::MainView"
-        },
-        {
-          "controlType": "Custom",
-          "automationId": "MainView.main_window_corner_view.MainView.main_window_main_splitter_view",
-          "className": "mmui::XSplitterView"
-        },
-        {
-          "controlType": "Custom",
-          "automationId": "MainView.main_window_corner_view.MainView.main_window_main_splitter_view.main_window_sub_splitter_view",
-          "className": "mmui::XSplitterView"
-        },
-        {
-          "controlType": "Group",
-          "className": "mmui::XView"
-        },
-        {
-          "controlType": "Group",
-          "className": "mmui::ChatMasterView"
-        },
-        {
-          "controlType": "Group",
-          "className": "mmui::XVBoxView"
-        },
-        {
-          "controlType": "Group",
-          "className": "mmui::XView"
-        },
-        {
-          "controlType": "Custom",
-          "className": "mmui::XStackedWidget"
-        },
-        {
-          "controlType": "Group",
-          "className": "mmui::XSearchField"
-        },
-        {
-          "controlType": "Edit",
-          "name": "搜索",
-          "className": "mmui::XValidatorTextEdit"
-        }
-      ]
-    },
-    "candidates": [
+    "css": "#search-input-in-feeds",
+    "path": [
       {
-        "kind": "uia",
-        "locator": {
-          "backend": "uia",
-          "controlType": "Group",
-          "automationId": "qt_scrollarea_viewport",
-          "path": [
-            {
-              "controlType": "Group",
-              "className": "QWidget"
-            },
-            {
-              "controlType": "Custom",
-              "className": "QStackedWidget"
-            },
-            {
-              "controlType": "Group",
-              "automationId": "MainView",
-              "className": "mmui::MainView"
-            },
-            {
-              "controlType": "Group",
-              "automationId": "MainView.main_window_corner_view",
-              "className": "QWidget"
-            },
-            {
-              "controlType": "Group",
-              "automationId": "MainView.main_window_corner_view.MainView",
-              "className": "mmui::MainView"
-            },
-            {
-              "controlType": "Custom",
-              "automationId": "MainView.main_window_corner_view.MainView.main_window_main_splitter_view",
-              "className": "mmui::XSplitterView"
-            },
-            {
-              "controlType": "Custom",
-              "automationId": "MainView.main_window_corner_view.MainView.main_window_main_splitter_view.main_window_sub_splitter_view",
-              "className": "mmui::XSplitterView"
-            },
-            {
-              "controlType": "Group",
-              "className": "mmui::XView"
-            },
-            {
-              "controlType": "Group",
-              "className": "mmui::ChatMasterView"
-            },
-            {
-              "controlType": "Group",
-              "className": "mmui::XVBoxView"
-            },
-            {
-              "controlType": "Group",
-              "className": "mmui::XView"
-            },
-            {
-              "controlType": "Custom",
-              "className": "mmui::XStackedWidget"
-            },
-            {
-              "controlType": "Group",
-              "className": "mmui::XSearchField"
-            },
-            {
-              "controlType": "Edit",
-              "name": "搜索",
-              "className": "mmui::XValidatorTextEdit"
-            }
-          ]
-        },
-        "matchedCount": 1,
-        "penalty": 208
+        "tag": "html",
+        "id": null,
+        "classes": [
+          "ai-layout-active"
+        ],
+        "nthOfType": null,
+        "fragment": "html.ai-layout-active",
+        "inCss": false
       },
       {
-        "kind": "uia",
-        "locator": {
-          "backend": "uia",
-          "controlType": "Group",
-          "path": [
-            {
-              "controlType": "Group",
-              "className": "QWidget"
-            },
-            {
-              "controlType": "Custom",
-              "className": "QStackedWidget"
-            },
-            {
-              "controlType": "Group",
-              "automationId": "MainView",
-              "className": "mmui::MainView"
-            },
-            {
-              "controlType": "Group",
-              "automationId": "MainView.main_window_corner_view",
-              "className": "QWidget"
-            },
-            {
-              "controlType": "Group",
-              "automationId": "MainView.main_window_corner_view.MainView",
-              "className": "mmui::MainView"
-            },
-            {
-              "controlType": "Custom",
-              "automationId": "MainView.main_window_corner_view.MainView.main_window_main_splitter_view",
-              "className": "mmui::XSplitterView"
-            },
-            {
-              "controlType": "Custom",
-              "automationId": "MainView.main_window_corner_view.MainView.main_window_main_splitter_view.main_window_sub_splitter_view",
-              "className": "mmui::XSplitterView"
-            },
-            {
-              "controlType": "Group",
-              "className": "mmui::XView"
-            },
-            {
-              "controlType": "Group",
-              "className": "mmui::ChatMasterView"
-            },
-            {
-              "controlType": "Group",
-              "className": "mmui::XVBoxView"
-            },
-            {
-              "controlType": "Group",
-              "className": "mmui::XView"
-            },
-            {
-              "controlType": "Custom",
-              "className": "mmui::XStackedWidget"
-            },
-            {
-              "controlType": "Group",
-              "className": "mmui::XSearchField"
-            },
-            {
-              "controlType": "Edit",
-              "name": "搜索",
-              "className": "mmui::XValidatorTextEdit"
-            }
-          ]
-        },
-        "matchedCount": 35,
-        "penalty": 208
+        "tag": "body",
+        "id": null,
+        "classes": [
+          "ai-layout-active"
+        ],
+        "nthOfType": null,
+        "fragment": "body.ai-layout-active",
+        "inCss": false
+      },
+      {
+        "tag": "div",
+        "id": "app",
+        "classes": [
+          "ai-layout-active"
+        ],
+        "nthOfType": null,
+        "fragment": "#app",
+        "inCss": false
+      },
+      {
+        "tag": "div",
+        "id": "global",
+        "classes": [
+          "layout",
+          "ai-layout",
+          "limit"
+        ],
+        "nthOfType": null,
+        "fragment": "#global",
+        "inCss": false
+      },
+      {
+        "tag": "div",
+        "id": null,
+        "classes": [
+          "main-container"
+        ],
+        "nthOfType": null,
+        "fragment": "div.main-container",
+        "inCss": false
+      },
+      {
+        "tag": "div",
+        "id": null,
+        "classes": [
+          "with-side-bar",
+          "main-content"
+        ],
+        "nthOfType": null,
+        "fragment": "div.with-side-bar",
+        "inCss": false
+      },
+      {
+        "tag": "div",
+        "id": "mfContainer",
+        "classes": [
+          "feeds-page",
+          "xhs-feeds-page--wendian-topics"
+        ],
+        "nthOfType": null,
+        "fragment": "#mfContainer",
+        "inCss": false
+      },
+      {
+        "tag": "div",
+        "id": null,
+        "classes": [
+          "feeds-content"
+        ],
+        "nthOfType": null,
+        "fragment": "div.feeds-content",
+        "inCss": false
+      },
+      {
+        "tag": "div",
+        "id": null,
+        "classes": [
+          "search-area",
+          "search-area-opacity",
+          "search-area--hide-narrow"
+        ],
+        "nthOfType": null,
+        "fragment": "div.search-area",
+        "inCss": false
+      },
+      {
+        "tag": "div",
+        "id": null,
+        "classes": [
+          "input-box",
+          "search-box-in-content"
+        ],
+        "nthOfType": null,
+        "fragment": "div.input-box",
+        "inCss": false
+      },
+      {
+        "tag": "div",
+        "id": null,
+        "classes": [
+          "wendian-wrapper",
+          "wendian-wrapper--panel-open",
+          "wendian-wrapper--focused",
+          "search-input",
+          "large"
+        ],
+        "nthOfType": null,
+        "fragment": "div.wendian-wrapper",
+        "inCss": false
+      },
+      {
+        "tag": "div",
+        "id": null,
+        "classes": [
+          "textarea-container",
+          "textarea-container-single-line",
+          "textarea-container-when-history-visible"
+        ],
+        "nthOfType": null,
+        "fragment": "div.textarea-container",
+        "inCss": false
+      },
+      {
+        "tag": "div",
+        "id": null,
+        "classes": [
+          "xhs-single-line-row-with-reference",
+          "single-line-row"
+        ],
+        "nthOfType": null,
+        "fragment": "div.xhs-single-line-row-with-reference",
+        "inCss": false
+      },
+      {
+        "tag": "div",
+        "id": null,
+        "classes": [
+          "textarea-wrapper"
+        ],
+        "nthOfType": null,
+        "fragment": "div.textarea-wrapper",
+        "inCss": false
+      },
+      {
+        "tag": "textarea",
+        "id": "search-input-in-feeds",
+        "classes": [
+          "textarea"
+        ],
+        "nthOfType": null,
+        "fragment": "#search-input-in-feeds",
+        "inCss": true
       }
-    ]
+    ],
+    "candidates": [
+      {
+        "kind": "attribute",
+        "selector": "textarea[name=\"aiSearchTextarea\"]",
+        "matchedCount": 3,
+        "penalty": 3
+      },
+      {
+        "kind": "attribute",
+        "selector": "textarea[placeholder=\"antropic上市\"]",
+        "matchedCount": 3,
+        "penalty": 5
+      }
+    ],
+    "editState": {
+      "levels": [
+        {
+          "tag": "html",
+          "included": false,
+          "id": {
+            "on": false,
+            "value": ""
+          },
+          "classes": [
+            {
+              "on": true,
+              "value": "ai-layout-active",
+              "mode": "精确"
+            }
+          ],
+          "nth": {
+            "on": false,
+            "value": ""
+          }
+        },
+        {
+          "tag": "body",
+          "included": false,
+          "id": {
+            "on": false,
+            "value": ""
+          },
+          "classes": [
+            {
+              "on": true,
+              "value": "ai-layout-active",
+              "mode": "精确"
+            }
+          ],
+          "nth": {
+            "on": false,
+            "value": ""
+          }
+        },
+        {
+          "tag": "div",
+          "included": false,
+          "id": {
+            "on": true,
+            "value": "app"
+          },
+          "classes": [
+            {
+              "on": true,
+              "value": "ai-layout-active",
+              "mode": "精确"
+            }
+          ],
+          "nth": {
+            "on": false,
+            "value": ""
+          }
+        },
+        {
+          "tag": "div",
+          "included": false,
+          "id": {
+            "on": true,
+            "value": "global"
+          },
+          "classes": [
+            {
+              "on": true,
+              "value": "layout",
+              "mode": "精确"
+            },
+            {
+              "on": false,
+              "value": "ai-layout",
+              "mode": "精确"
+            },
+            {
+              "on": false,
+              "value": "limit",
+              "mode": "精确"
+            }
+          ],
+          "nth": {
+            "on": false,
+            "value": ""
+          }
+        },
+        {
+          "tag": "div",
+          "included": false,
+          "id": {
+            "on": false,
+            "value": ""
+          },
+          "classes": [
+            {
+              "on": true,
+              "value": "main-container",
+              "mode": "精确"
+            }
+          ],
+          "nth": {
+            "on": false,
+            "value": ""
+          }
+        },
+        {
+          "tag": "div",
+          "included": false,
+          "id": {
+            "on": false,
+            "value": ""
+          },
+          "classes": [
+            {
+              "on": true,
+              "value": "with-side-bar",
+              "mode": "精确"
+            },
+            {
+              "on": false,
+              "value": "main-content",
+              "mode": "精确"
+            }
+          ],
+          "nth": {
+            "on": false,
+            "value": ""
+          }
+        },
+        {
+          "tag": "div",
+          "included": false,
+          "id": {
+            "on": true,
+            "value": "mfContainer"
+          },
+          "classes": [
+            {
+              "on": true,
+              "value": "feeds-page",
+              "mode": "精确"
+            },
+            {
+              "on": false,
+              "value": "xhs-feeds-page--wendian-topics",
+              "mode": "精确"
+            }
+          ],
+          "nth": {
+            "on": false,
+            "value": ""
+          }
+        },
+        {
+          "tag": "div",
+          "included": false,
+          "id": {
+            "on": false,
+            "value": ""
+          },
+          "classes": [
+            {
+              "on": true,
+              "value": "feeds-content",
+              "mode": "精确"
+            }
+          ],
+          "nth": {
+            "on": false,
+            "value": ""
+          }
+        },
+        {
+          "tag": "div",
+          "included": false,
+          "id": {
+            "on": false,
+            "value": ""
+          },
+          "classes": [
+            {
+              "on": true,
+              "value": "search-area",
+              "mode": "精确"
+            },
+            {
+              "on": false,
+              "value": "search-area-opacity",
+              "mode": "精确"
+            },
+            {
+              "on": false,
+              "value": "search-area--hide-narrow",
+              "mode": "精确"
+            }
+          ],
+          "nth": {
+            "on": false,
+            "value": ""
+          }
+        },
+        {
+          "tag": "div",
+          "included": false,
+          "id": {
+            "on": false,
+            "value": ""
+          },
+          "classes": [
+            {
+              "on": true,
+              "value": "input-box",
+              "mode": "精确"
+            },
+            {
+              "on": false,
+              "value": "search-box-in-content",
+              "mode": "精确"
+            }
+          ],
+          "nth": {
+            "on": false,
+            "value": ""
+          }
+        },
+        {
+          "tag": "div",
+          "included": false,
+          "id": {
+            "on": false,
+            "value": ""
+          },
+          "classes": [
+            {
+              "on": true,
+              "value": "wendian-wrapper",
+              "mode": "精确"
+            },
+            {
+              "on": false,
+              "value": "wendian-wrapper--panel-open",
+              "mode": "精确"
+            },
+            {
+              "on": false,
+              "value": "wendian-wrapper--focused",
+              "mode": "精确"
+            },
+            {
+              "on": false,
+              "value": "search-input",
+              "mode": "精确"
+            },
+            {
+              "on": false,
+              "value": "large",
+              "mode": "精确"
+            }
+          ],
+          "nth": {
+            "on": false,
+            "value": ""
+          }
+        },
+        {
+          "tag": "div",
+          "included": false,
+          "id": {
+            "on": false,
+            "value": ""
+          },
+          "classes": [
+            {
+              "on": true,
+              "value": "textarea-container",
+              "mode": "精确"
+            },
+            {
+              "on": false,
+              "value": "textarea-container-single-line",
+              "mode": "精确"
+            },
+            {
+              "on": false,
+              "value": "textarea-container-when-history-visible",
+              "mode": "精确"
+            }
+          ],
+          "nth": {
+            "on": false,
+            "value": ""
+          }
+        },
+        {
+          "tag": "div",
+          "included": false,
+          "id": {
+            "on": false,
+            "value": ""
+          },
+          "classes": [
+            {
+              "on": true,
+              "value": "xhs-single-line-row-with-reference",
+              "mode": "精确"
+            },
+            {
+              "on": false,
+              "value": "single-line-row",
+              "mode": "精确"
+            }
+          ],
+          "nth": {
+            "on": false,
+            "value": ""
+          }
+        },
+        {
+          "tag": "div",
+          "included": false,
+          "id": {
+            "on": false,
+            "value": ""
+          },
+          "classes": [
+            {
+              "on": true,
+              "value": "textarea-wrapper",
+              "mode": "精确"
+            }
+          ],
+          "nth": {
+            "on": false,
+            "value": ""
+          }
+        },
+        {
+          "tag": "textarea",
+          "included": true,
+          "id": {
+            "on": true,
+            "value": "search-input-in-feeds"
+          },
+          "classes": [
+            {
+              "on": true,
+              "value": "textarea",
+              "mode": "精确"
+            }
+          ],
+          "nth": {
+            "on": false,
+            "value": ""
+          }
+        }
+      ]
+    }
   },
   "verifyCount": 1,
   "name": "元素2",
@@ -226,22 +548,29 @@
   "framework": null,
   "processName": null,
   "winTitle": null,
-  "screenshot": null,
+  "screenshot": "shots/b4a13234dc8510e9.png",
   "lastVerifiedAt": null,
   "lastVerifyError": null,
   "metadata": {
-    "windowHandle": 9046138,
-    "windowTitle": "微信",
-    "controlType": "Group",
-    "automationId": "qt_scrollarea_viewport",
-    "name": null,
-    "className": "QWidget",
+    "tag": "textarea",
+    "id": "search-input-in-feeds",
+    "classes": [
+      "textarea"
+    ],
+    "text": "",
     "rect": {
-      "left": 982,
-      "top": 205,
-      "width": 179,
-      "height": 19
-    }
+      "left": 322,
+      "top": 79,
+      "width": 765,
+      "height": 24
+    },
+    "role": "textbox",
+    "accessibleName": "antropic上市",
+    "placeholder": "antropic上市",
+    "label": null,
+    "containerText": null,
+    "url": "https://www.xiaohongshu.com/explore?channel_id=homefeed_recommend",
+    "title": "小红书 - 你的生活兴趣社区"
   },
-  "capturedAt": "2026-11-18T08:49:48.830235Z"
+  "capturedAt": "2026-11-20T05:51:55.065365Z"
 }

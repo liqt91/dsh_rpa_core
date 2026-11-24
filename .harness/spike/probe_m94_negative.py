@@ -17,7 +17,7 @@ import subprocess
 from pathlib import Path
 
 ROOT = Path(r"D:\Users\Administrator\Documents\代码\rpa_core")
-GUI = ROOT / ".harness/demo/ppx_probe/app/gui"
+GUI = ROOT / "apps/editor/gui"
 CSS = GUI / "src/style.css"
 HTML = GUI / "index.html"
 MAIN = GUI / "src/main.js"

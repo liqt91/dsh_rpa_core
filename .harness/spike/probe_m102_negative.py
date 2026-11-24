@@ -29,14 +29,14 @@ import sys
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 PY = sys.executable
 SHOT = ROOT / "src/rpa_core/capture/screen_shot.py"
-API = ROOT / ".harness/demo/ppx_probe/app/api/api.py"
-MAIN_JS = ROOT / ".harness/demo/ppx_probe/app/gui/src/main.js"
-CSS = ROOT / ".harness/demo/ppx_probe/app/gui/src/style.css"
+API = ROOT / "apps/editor/api/api.py"
+MAIN_JS = ROOT / "apps/editor/gui/src/main.js"
+CSS = ROOT / "apps/editor/gui/src/style.css"
 SHOT_TESTS = ["tests/contract/test_element_shot.py"]
 T = "tests/contract/test_element_shot.py::"
 LIB_CHECK = "scripts/check_element_library.mjs"
 WIRING = ".harness/spike/probe_m102_s1_wiring.py"
-PPX_PY = ROOT / ".harness/demo/ppx_probe/.venv/Scripts/python.exe"
+PPX_PY = ROOT / "apps/editor/.venv/Scripts/python.exe"
 
 # 右栏那两条行为判据的完整名字（改 main.js 里 renderElementDetail 会一起红）
 _R_DETAIL = "行为层：点一行把名字与**完整**定位放进右栏（不截断）"

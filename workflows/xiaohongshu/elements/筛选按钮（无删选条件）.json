@@ -1,0 +1,243 @@
+{
+  "kind": "browser",
+  "selector": {
+    "css": "div.main-content > div.ai-feeds-page > div.search-layout-wrapper > div.search-layout > div.search-layout__top > div.filter",
+    "path": [
+      {
+        "tag": "div",
+        "id": null,
+        "classes": [
+          "main-content",
+          "with-side-bar",
+          "with-side-bar-collapse"
+        ],
+        "nthOfType": null,
+        "fragment": "div.main-content"
+      },
+      {
+        "tag": "div",
+        "id": null,
+        "classes": [
+          "ai-feeds-page"
+        ],
+        "nthOfType": null,
+        "fragment": "div.ai-feeds-page"
+      },
+      {
+        "tag": "div",
+        "id": null,
+        "classes": [
+          "search-layout-wrapper"
+        ],
+        "nthOfType": null,
+        "fragment": "div.search-layout-wrapper"
+      },
+      {
+        "tag": "div",
+        "id": null,
+        "classes": [
+          "search-layout"
+        ],
+        "nthOfType": null,
+        "fragment": "div.search-layout"
+      },
+      {
+        "tag": "div",
+        "id": null,
+        "classes": [
+          "search-layout__top"
+        ],
+        "nthOfType": null,
+        "fragment": "div.search-layout__top"
+      },
+      {
+        "tag": "div",
+        "id": null,
+        "classes": [
+          "filter"
+        ],
+        "nthOfType": null,
+        "fragment": "div.filter"
+      }
+    ],
+    "candidates": [
+      {
+        "kind": "path",
+        "selector": "div.search-layout > div.search-layout__top > div.filter",
+        "matchedCount": 1,
+        "penalty": 20
+      },
+      {
+        "kind": "path",
+        "selector": "div.search-layout__top > div.filter",
+        "matchedCount": 1,
+        "penalty": 20
+      },
+      {
+        "kind": "path",
+        "selector": "div.filter",
+        "matchedCount": 1,
+        "penalty": 20
+      }
+    ],
+    "editState": {
+      "levels": [
+        {
+          "tag": "div",
+          "included": true,
+          "id": {
+            "on": false,
+            "value": ""
+          },
+          "classes": [
+            {
+              "on": true,
+              "value": "main-content",
+              "mode": "精确"
+            },
+            {
+              "on": false,
+              "value": "with-side-bar",
+              "mode": "精确"
+            },
+            {
+              "on": false,
+              "value": "with-side-bar-collapse",
+              "mode": "精确"
+            }
+          ],
+          "nth": {
+            "on": false,
+            "value": ""
+          }
+        },
+        {
+          "tag": "div",
+          "included": true,
+          "id": {
+            "on": false,
+            "value": ""
+          },
+          "classes": [
+            {
+              "on": true,
+              "value": "ai-feeds-page",
+              "mode": "精确"
+            }
+          ],
+          "nth": {
+            "on": false,
+            "value": ""
+          }
+        },
+        {
+          "tag": "div",
+          "included": true,
+          "id": {
+            "on": false,
+            "value": ""
+          },
+          "classes": [
+            {
+              "on": true,
+              "value": "search-layout-wrapper",
+              "mode": "精确"
+            }
+          ],
+          "nth": {
+            "on": false,
+            "value": ""
+          }
+        },
+        {
+          "tag": "div",
+          "included": true,
+          "id": {
+            "on": false,
+            "value": ""
+          },
+          "classes": [
+            {
+              "on": true,
+              "value": "search-layout",
+              "mode": "精确"
+            }
+          ],
+          "nth": {
+            "on": false,
+            "value": ""
+          }
+        },
+        {
+          "tag": "div",
+          "included": true,
+          "id": {
+            "on": false,
+            "value": ""
+          },
+          "classes": [
+            {
+              "on": true,
+              "value": "search-layout__top",
+              "mode": "精确"
+            }
+          ],
+          "nth": {
+            "on": false,
+            "value": ""
+          }
+        },
+        {
+          "tag": "div",
+          "included": true,
+          "id": {
+            "on": false,
+            "value": ""
+          },
+          "classes": [
+            {
+              "on": true,
+              "value": "filter",
+              "mode": "精确"
+            }
+          ],
+          "nth": {
+            "on": false,
+            "value": ""
+          }
+        }
+      ]
+    }
+  },
+  "verifyCount": 1,
+  "name": "筛选按钮（无删选条件）",
+  "group": null,
+  "framework": null,
+  "processName": null,
+  "winTitle": null,
+  "screenshot": "shots/2446b2537c5ad0a9.png",
+  "lastVerifiedAt": null,
+  "lastVerifyError": null,
+  "metadata": {
+    "tag": "div",
+    "id": null,
+    "classes": [
+      "filter"
+    ],
+    "text": "筛选排序依据综合综合最新最新最多点赞最多点赞最多评论最多评论最多收藏最多收藏笔记类型不限视频视频图文图文发布时间不限一天内一天内一周内一周内半年内半年内搜索范围",
+    "rect": {
+      "left": 1149,
+      "top": 116,
+      "width": 84,
+      "height": 40
+    },
+    "role": null,
+    "accessibleName": "筛选  排序依据 综合  最新  最多点赞  最多评论  最多收藏 笔记类型 不限  视频  图文 发布时间 不限  一天内  一周内  半年内 搜索范围 不限  已看过  未看过  已关注 位置距离 不限  同城  附近  重置  收起",
+    "placeholder": null,
+    "label": null,
+    "containerText": "笔记 用户 问点点 ai 筛选 排序依据 综合 综合 最新 最新 最多点赞 最多点赞 最多评论 最多评论 最多收藏 最多收藏 笔记类型 不限 视频 视频 图文 图文 发布时间 不限 一天内 一天内 一周内 一周内 半年内 半年内 搜索范围 不限 已看过 已看过 未看过 未看过 已关注 已关注 位置距离 不限 不限 同城 同城 附近 附近 重置 重置 收起 收起",
+    "url": "https://www.xiaohongshu.com/search_result_ai?keyword=%25E4%25B8%259C%25E6%2596%25B9%25E8%25B4%25A2%25E5%25AF%258C&source=web_explore_feed",
+    "title": "东方财富 - 小红书搜索"
+  },
+  "capturedAt": "2026-11-19T07:02:01.347666Z"
+}

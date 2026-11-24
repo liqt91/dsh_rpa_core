@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>RPA Probe · PPX</title>
+</head>
+<body>
+  <div id="app">
+    <header id="bar">
+      <span class="brand">RPA Probe</span>
+      <span id="status" class="status">正在连接 Python…</span>
+      <span class="spacer"></span>
+      <select id="flowPicker" aria-label="选择流程"></select>
+      <button id="compileBtn" type="button">编译校验</button>
+      <button id="runBtn" type="button" class="primary">▶ 运行</button>
+      <button id="stopBtn" type="button" disabled>■ 停止</button>
+    </header>
+    <main>
+      <aside id="left">
+        <div class="paneHead">
+          <input id="search" type="search" placeholder="搜索指令" autocomplete="off" />
+          <div id="cmdCount" class="count"></div>
+        </div>
+        <div id="cmds" class="cmdList"></div>
+      </aside>
+      <section id="mid">
+        <div id="flowTitle" class="flowTitle">未打开流程</div>
+        <div id="cards" class="cardList"></div>
+      </section>
+      <aside id="right">
+        <div class="paneHead">
+          <span class="paneTitle">节点详情</span>
+          <span id="dirty" class="dirty"></span>
+          <span id="unset" class="unsetCount"></span>
+          <span id="rpcMs" class="count"></span>
+        </div>
+        <div id="paramForm" class="paramForm">
+          <div class="hint">点击中间卡片查看参数</div>
+        </div>
+        <div class="formBar">
+          <button id="saveBtn" type="button" disabled>保存</button>
+          <button id="revertBtn" type="button" disabled>撤销</button>
+        </div>
+        <details class="astBox">
+          <summary>节点 AST</summary>
+          <pre id="detail" class="detail"></pre>
+        </details>
+        <div id="compileOut" class="compileOut"></div>
+      </aside>
+
+      <!-- 底部三模块：元素资产 / 全局参数 / 运行日志。原本两个折叠 details 缩在
+           右栏与中栏，全局参数压根没有界面；现在整块收进横跨三列的底栏。
+           id 一个不改，main.js 里 renderElementsPanel / setRunTitle / runLog
+           的既有写入路径原样有效，只是父节点换了。 -->
+      <section id="bottomDock">
+        <!-- M94：顶边拖拽条。放在 tab 之前但不占 flex 高度（CSS 绝对定位），
+             所以静态按钮白名单与三个 tab/panel 的 key 都不受影响。 -->
+        <div id="dockResize" class="dockResize" title="拖动调整底栏高度"></div>
+        <div class="dockTabs">
+          <button type="button" class="dockTab" data-tab="elements">元素资产 <span id="elemCount" class="count"></span></button>
+          <button type="button" class="dockTab" data-tab="images">图像资产</button>
+          <button type="button" class="dockTab active" data-tab="globals">全局参数 <span id="globalsCount" class="count"></span></button>
+          <button type="button" class="dockTab" data-tab="log">运行日志 <span id="runTitle"></span></button>
+          <span class="dockSpacer"></span>
+          <button type="button" class="dockFold">收起</button>
+        </div>
+        <div class="dockPanels">
+          <div class="dockPanel" data-panel="elements">
+            <div class="elemFilter">
+              <input id="elemSearch" type="search" autocomplete="off" placeholder="搜索元素名称 / 选择器" aria-label="搜索元素" />
+              <!-- 点一下就抓：名字抓完在弹窗里填，网页/桌面由后端判断，不提供手写选择器入库。 -->
+              <button type="button" id="elemCapture" class="elemCapture">捕获元素</button>
+              <button type="button" id="elemVerifyAll">全部校验</button>
+            </div>
+            <!-- M102 S2：左列表 + 右详情。底栏宽度富余、高度稀缺，所以详情常驻在
+                 右侧而不是弹窗：连续核对多个元素时不必开框关框。窄窗口（<1100px）
+                 由 CSS 回落成单列，DOM 不动、不写两套渲染。 -->
+            <div class="elemSplit" id="elemSplit">
+              <details class="elemBox" id="elemBox" open>
+                <summary></summary>
+                <div id="elemBody" class="elemBody"></div>
+              </details>
+              <!-- 内容全部由 main.js 建：静态按钮白名单是等值集合，这里不放 <button>。 -->
+              <aside id="elemDetail" class="elemDetail" hidden></aside>
+            </div>
+            <!-- M93：右键菜单 / 文本输入浮层 / 多选批量条的动态宿主。
+                 不是按钮，不占捕获按钮白名单；不嵌在 elemBody 里，刷新清单不会清掉它。 -->
+            <div id="elemLibLayer" class="elemLibLayer"></div>
+          </div>
+          <!-- 图像资产先占一个 tab：只放按图捕获入口，列表/分组等功能本轮不做。 -->
+          <div class="dockPanel" data-panel="images">
+            <div class="imageAssetsPanel">
+              <button type="button" id="elemCaptureImage" class="elemCapture">按图捕获</button>
+              <div class="imageAssetsPlaceholder">图像资产列表暂未开放</div>
+            </div>
+          </div>
+          <div class="dockPanel active" data-panel="globals">
+            <div class="globalsPanel">
+              <div class="globalsHint">全局参数 = 流程的 inputs 声明；在节点参数里用 ${inputs.名称} 引用。默认值按 JSON 保存，「文本」类型会自动加引号。</div>
+              <div class="globalsScroll">
+                <div class="globalsHead"><span>参数名</span><span>类型</span><span>默认值</span><span></span></div>
+                <div id="globalsRows" class="globalsRows"></div>
+              </div>
+              <div class="globalsBar">
+                <button type="button" id="globalsAdd">+ 添加参数</button>
+                <button type="button" class="primary" id="globalsSave">保存</button>
+                <button type="button" id="globalsRevert">撤销</button>
+                <span class="globalsNote" id="globalsNote"></span>
+              </div>
+            </div>
+          </div>
+          <div class="dockPanel" data-panel="log">
+            <details id="runBox" class="runBox" open>
+              <summary></summary>
+              <div id="runLog" class="runLog"></div>
+            </details>
+          </div>
+        </div>
+      </section>
+    </main>
+    <!-- 元素编辑框：抓完确认（名字可改、可中文）与资产详情改名共用这一个框。
+         只在用户点保存时才入库；点取消就把这次捕获的暂存描述符丢掉。 -->
+    <div id="elemDialog" class="modal" hidden>
+      <div class="modalBox" role="dialog" aria-modal="true" aria-labelledby="elemDialogTitle">
+        <div class="modalHead">
+          <span id="elemDialogTitle" class="modalTitle">确认这个元素</span>
+          <button type="button" id="elemDialogClose" class="modalClose" aria-label="关闭">×</button>
+        </div>
+        <div class="modalBody">
+          <label class="modalField">
+            <span class="modalLabel">资产名称</span>
+            <input id="elemDialogName" class="modalInput" type="text" autocomplete="off" spellcheck="false" />
+          </label>
+          <div id="elemDialogEditor" class="elemEditor" hidden>
+            <div class="elemPane elemTreePane" id="elemTreePane" hidden>
+              <div class="elemPaneHead">层级（勾选参与定位）</div>
+              <div id="elemDialogLevels" class="elemLevels"></div>
+            </div>
+            <div class="elemPane elemAttrPane" id="elemAttrPane" hidden>
+              <div class="elemPaneHead">属性（勾选参与本层定位）</div>
+              <div id="elemDialogAttrs" class="elemAttrs"></div>
+            </div>
+            <div class="elemPane elemSimplePane" id="elemSimplePane">
+              <div class="elemPaneHead">定位</div>
+              <textarea id="elemDialogSelector" class="modalInput elemSelector" rows="3" spellcheck="false"></textarea>
+            </div>
+          </div>
+          <label class="modalField" id="elemDialogPreviewField" hidden>
+            <span class="modalLabel">组合选择器</span>
+            <input id="elemDialogPreview" class="modalInput" type="text" readonly />
+          </label>
+          <div id="elemDialogMeta" class="modalMeta"></div>
+          <div id="elemDialogNote" class="modalNote" role="status" aria-live="polite"></div>
+          <div id="elemDialogShot" class="elemShot" hidden>
+            <img id="elemDialogShotImg" alt="目标元素截图预览" />
+          </div>
+        </div>
+        <div class="modalBar">
+          <button type="button" id="elemDialogRecapture">重新捕获</button>
+          <button type="button" id="elemDialogValidate" title="也可以悬停到目标页面后按 F10 校验">校验元素（F10）</button>
+          <span id="elemHotkeyHint" class="hotkeyHint" title="F10 全局监听：鼠标悬停在目标页面上也能触发" hidden></span>
+          <span class="barSpacer"></span>
+          <button type="button" id="elemDialogCancel">取消</button>
+          <button type="button" id="elemDialogSaveContinue">保存并继续</button>
+          <button type="button" id="elemDialogSave" class="primary">保存</button>
+        </div>
+      </div>
+    </div>
+  </div>
+  <!-- 校验期间屏幕中间的提示条：编辑框整层收起，只留这一句，用户才知道在等什么 -->
+  <div id="elemToast" class="toast" role="status" aria-live="polite" hidden></div>
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>

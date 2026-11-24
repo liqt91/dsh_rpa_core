@@ -1,7 +1,7 @@
 """子进程环境（M83）：让 ``python -m rpa_core.*`` 在**任何宿主**里都能 import。
 
 为什么需要这一层：``sys.path`` 不出进程。宿主若用 ``sys.path.insert`` 把 ``src/``
-挂进来（PPX 工作台就是这么做的，见 ``.harness/demo/ppx_probe/app/api/api.py``），
+挂进来（PPX 工作台就是这么做的，见 ``apps/editor/api/api.py``），
 父进程里 ``import rpa_core`` 一切正常，而 ``subprocess.Popen([sys.executable, "-m",
 "rpa_core.capture.desktop_agent"])`` 会在子进程里 ``ModuleNotFoundError`` 秒退。
 

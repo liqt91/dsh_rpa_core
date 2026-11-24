@@ -5,6 +5,31 @@
 
 ## 当前任务
 
+- [ ] **分支治理同步：`apps/editor` 迁移要在另两条分支重做一遍**（`planned`，2026-11-24）——
+  ADR 0021 把编辑器从 `.harness/demo/ppx_probe/app` 迁到 `apps/editor`，同时把
+  `branch-scope.json` 改成「编辑器整棵共享 + `ppx-only` 独占收窄为 `apps/editor/build/`」。
+  该文件在 `must_match_across_branches` 里 ⇒ `ppx-only` / `plugin-only` 必须同步到逐字节一致，
+  而它们的树还是老结构（`apps/editor` 不存在，`shared_runtime` 的目录前缀存在性检查会红）。
+  **在同步完成前，本分支的门禁只证明「不是本分支改坏的」。** 主分支 `main` 同理（它不在
+  `branches` 里、走 `inactive` 分支只跑契约校验，但一旦合回去就得跟上）。
+  ★ 同步时**必须另外跑一次 `grep -rn "demo/ppx_probe"`**：住址判据只查目录，查不出文档与
+  代码字符串里的旧地址（本分支就漏了 11 个文件，其中 `main.js` 的 `DEMO_FLOW` 与
+  `_layout/probe.html` 的默认 `?flow=` 是可执行路径）。详见 ADR 0021 §3「门禁盲区」。
+
+- [x] **编辑器端转正**（`done`，2026-11-24）——维护者「ppx 这个端可以转正了」。编辑器物理迁到
+  `apps/editor`（`ppx.toml` + `api/` + `gui/` + `ppx/` + `tools/run_probe.py`），探针归
+  `.harness/spike/ppx/`；`api.py` 首次进 ruff（修 14 条：12 E501 / 1 I001 / 1 B018，仅 I001
+  豁免）；`check_host_boundary.py` 改判「i18n 冻结 + 编辑器隔离 + 编辑器住址」，新增住址判据
+  负向 4/4（含元验证）；收尾补扫掉 12 个文件的旧路径引用（门禁查不出，见上一条 ★）。细则见
+  `adr/0021-editor-graduation.md`。**欠**：托盘（`ppx_py` 无原生
+  支持，需 `Shell_NotifyIcon`）、Inno 安装包、`gui.i18n` 位置债、`gui/_layout/mock.json` 待重生。
+
+- [ ] **PPX i18n 副本落后主源一条命令名**（`planned`）——顺手发现：`src/rpa_core/gui/i18n.js` 有
+  `"desktop.imageLocate": "图像定位控件（显式）"`（11-18 提交 `1820bcf` 加的），而 PPX 的
+  `apps/editor/api/resources/i18n.js` 副本没有；整文件 diff 只这一行，`branchLabels` 段一致，故不影响
+  本次分支标签改动。未在本轮清：改副本会碰构建产物同步链路，且与本轮 UI 展示无关；等下次
+  PPX 资源同步时一并从主源重拷。
+
 - [x] **M87 无障碍唤醒要能反复唤醒**（`done`，2026-11-17）——用户报「有几秒钟可以捕获微信
   控件，之后又失效，只能捕获外框」。trace 里 18:20 那次 `reason=activated before=0` 证明
   **微信自己把 gate 关回去了**，而 M86 的 `_WAKE_ATTEMPTED` 是「每进程只写一次」⇒ 之后永久

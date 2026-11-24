@@ -454,7 +454,7 @@
     },
     {
       "id": "ppx-canvas-layout",
-      "title": "PPX canvas reads nesting: depth indent + rails, rows don't collapse, cards focusable · 23 invariants · DnD",
+      "title": "PPX canvas reads nesting: depth indent + rails, rows don't collapse, cards focusable · 23 invariants · DnD · 行首拖拽把手",
       "passes": true
     },
     {
@@ -485,6 +485,16 @@
     {
       "id": "xhs-element-capture-single-button",
       "title": "One-button capture; float for capture, web for delete; Chinese names; elementRefs visible/unbindable; save-hook 2 args",
+      "passes": true
+    },
+    {
+      "id": "element-verify-hotkey",
+      "title": "F10 hotkey in win32 ElementEditDialog: rising-edge GetAsyncKeyState watch thread + on-screen hint",
+      "passes": true
+    },
+    {
+      "id": "editor-graduation",
+      "title": "Editor client graduated: .harness/demo/ppx_probe/app → apps/editor, ruff-gated, branch scope shared",
       "passes": true
     }
   ]

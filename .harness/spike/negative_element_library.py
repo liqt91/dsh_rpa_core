@@ -25,9 +25,9 @@ ROOT = Path(__file__).resolve().parents[2]
 PY = ROOT / ".venv" / "Scripts" / "python.exe"
 SENTINEL = "NV-M68-INJECTED"
 
-API = ".harness/demo/ppx_probe/app/api/api.py"
-JS = ".harness/demo/ppx_probe/app/gui/src/main.js"
-HTML = ".harness/demo/ppx_probe/app/gui/index.html"
+API = "apps/editor/api/api.py"
+JS = "apps/editor/gui/src/main.js"
+HTML = "apps/editor/gui/index.html"
 FLOAT = "src/rpa_core/capture_kit/float_window.py"
 PICK_UI = "scripts/check_element_pick_ui.mjs"
 LIBRARY = "scripts/check_element_library.mjs"

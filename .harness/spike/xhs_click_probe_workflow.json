@@ -1,0 +1,112 @@
+{
+  "schema_version": "1.0",
+  "id": "xhs-click-probe",
+  "name": "xhs-click-probe",
+  "inputs": {},
+  "root": {
+    "type": "sequence",
+    "id": "root",
+    "children": [
+      {
+        "type": "action",
+        "id": "d1",
+        "command": "browser.navigate",
+        "with": {
+          "browserType": "chrome",
+          "action": "goto",
+          "url": "https://www.xiaohongshu.com/explore"
+        }
+      },
+      {
+        "type": "action",
+        "id": "d2",
+        "command": "browser.input",
+        "with": {
+          "selector": "div.feeds-content > div.search-area > div.input-box #search-input-in-feeds",
+          "text": "东方财富",
+          "mode": "fill",
+          "pressEnter": true,
+          "clickBeforeInput": true,
+          "postDelayMs": 1500
+        }
+      },
+      {
+        "type": "action",
+        "id": "d3",
+        "command": "browser.executeScript",
+        "with": {
+          "script": "return (function () {\n  var sel = \"div.main-content > div.ai-feeds-page > div.search-layout-wrapper > div.search-layout > div.search-layout__top > div.filter\";\n  var el = document.querySelector(sel);\n  if (!el) return {ok: false, why: 'filter element missing'};\n  window.__xhs = {events: [], htmlLen: document.body.innerHTML.length};\n  var push = function (e, prefix) {\n    var t = e.target;\n    window.__xhs.events.push({\n      t: prefix + e.type,\n      trusted: e.isTrusted,\n      x: e.clientX, y: e.clientY,\n      button: e.button,\n      target: (t && t.tagName ? t.tagName + '.' : '') + String((t && t.className) || '').slice(0, 60),\n      ts: Math.round(performance.now())\n    });\n  };\n  ['mouseover', 'mouseenter', 'mousedown', 'mouseup', 'click', 'focusin', 'focusout', 'mouseleave', 'mouseout']\n    .forEach(function (typ) { el.addEventListener(typ, function (e) { push(e, ''); }, true); });\n  ['mousedown', 'mouseup', 'click', 'focusin', 'focusout']\n    .forEach(function (typ) { document.addEventListener(typ, function (e) { push(e, 'doc:'); }, true); });\n  var r = el.getBoundingClientRect();\n  return {ok: true, rect: {x: r.x, y: r.y, w: r.width, h: r.height},\n          viewport: {w: window.innerWidth, h: window.innerHeight}};\n})()"
+        }
+      },
+      {
+        "type": "action",
+        "id": "d4",
+        "command": "browser.click",
+        "with": {
+          "selector": "div.main-content > div.ai-feeds-page > div.search-layout-wrapper > div.search-layout > div.search-layout__top > div.filter",
+          "clickPosition": "center",
+          "injection": "dom",
+          "postDelayMs": 600
+        }
+      },
+      {
+        "type": "action",
+        "id": "d5",
+        "command": "browser.executeScript",
+        "with": {
+          "script": "return (function () {\n  var p = window.__xhs || {events: [], htmlLen: 0};\n  return {\n    events: p.events,\n    htmlDelta: document.body.innerHTML.length - p.htmlLen,\n    visiblePanels: Array.from(document.querySelectorAll(\n      '[class*=\"dropdown\"],[class*=\"popup\"],[class*=\"popover\"],[class*=\"filter-panel\"],[class*=\"filter-panel\"]'\n    )).filter(function (e) {\n      var r = e.getBoundingClientRect(); return r.width > 0 && r.height > 0;\n    }).slice(0, 12).map(function (e) {\n      return {tag: e.tagName, cls: String(e.className || '').slice(0, 80)};\n    })\n  };\n})()"
+        }
+      },
+      {
+        "type": "action",
+        "id": "d6",
+        "command": "browser.navigate",
+        "with": {
+          "browserType": "chrome",
+          "action": "goto",
+          "url": "https://www.xiaohongshu.com/explore"
+        }
+      },
+      {
+        "type": "action",
+        "id": "d7",
+        "command": "browser.input",
+        "with": {
+          "selector": "div.feeds-content > div.search-area > div.input-box #search-input-in-feeds",
+          "text": "东方财富",
+          "mode": "fill",
+          "pressEnter": true,
+          "clickBeforeInput": true,
+          "postDelayMs": 1500
+        }
+      },
+      {
+        "type": "action",
+        "id": "d8",
+        "command": "browser.executeScript",
+        "with": {
+          "script": "return (function () {\n  var sel = \"div.main-content > div.ai-feeds-page > div.search-layout-wrapper > div.search-layout > div.search-layout__top > div.filter\";\n  var el = document.querySelector(sel);\n  if (!el) return {ok: false, why: 'filter element missing'};\n  window.__xhs = {events: [], htmlLen: document.body.innerHTML.length};\n  var push = function (e, prefix) {\n    var t = e.target;\n    window.__xhs.events.push({\n      t: prefix + e.type,\n      trusted: e.isTrusted,\n      x: e.clientX, y: e.clientY,\n      button: e.button,\n      target: (t && t.tagName ? t.tagName + '.' : '') + String((t && t.className) || '').slice(0, 60),\n      ts: Math.round(performance.now())\n    });\n  };\n  ['mouseover', 'mouseenter', 'mousedown', 'mouseup', 'click', 'focusin', 'focusout', 'mouseleave', 'mouseout']\n    .forEach(function (typ) { el.addEventListener(typ, function (e) { push(e, ''); }, true); });\n  ['mousedown', 'mouseup', 'click', 'focusin', 'focusout']\n    .forEach(function (typ) { document.addEventListener(typ, function (e) { push(e, 'doc:'); }, true); });\n  var r = el.getBoundingClientRect();\n  return {ok: true, rect: {x: r.x, y: r.y, w: r.width, h: r.height},\n          viewport: {w: window.innerWidth, h: window.innerHeight}};\n})()"
+        }
+      },
+      {
+        "type": "action",
+        "id": "d9",
+        "command": "browser.click",
+        "with": {
+          "selector": "div.main-content > div.ai-feeds-page > div.search-layout-wrapper > div.search-layout > div.search-layout__top > div.filter",
+          "clickPosition": "center",
+          "injection": "cdp",
+          "postDelayMs": 600
+        }
+      },
+      {
+        "type": "action",
+        "id": "d10",
+        "command": "browser.executeScript",
+        "with": {
+          "script": "return (function () {\n  var p = window.__xhs || {events: [], htmlLen: 0};\n  return {\n    events: p.events,\n    htmlDelta: document.body.innerHTML.length - p.htmlLen,\n    visiblePanels: Array.from(document.querySelectorAll(\n      '[class*=\"dropdown\"],[class*=\"popup\"],[class*=\"popover\"],[class*=\"filter-panel\"],[class*=\"filter-panel\"]'\n    )).filter(function (e) {\n      var r = e.getBoundingClientRect(); return r.width > 0 && r.height > 0;\n    }).slice(0, 12).map(function (e) {\n      return {tag: e.tagName, cls: String(e.className || '').slice(0, 80)};\n    })\n  };\n})()"
+        }
+      }
+    ]
+  }
+}

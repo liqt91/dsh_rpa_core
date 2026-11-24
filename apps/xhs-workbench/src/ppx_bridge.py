@@ -40,8 +40,8 @@ LOGGER = logging.getLogger(__name__)
 
 APP_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = APP_ROOT.parents[1]
-PPX_API_PATH = REPO_ROOT / ".harness" / "demo" / "ppx_probe" / "app" / "api" / "api.py"
-PPX_DIST = REPO_ROOT / ".harness" / "demo" / "ppx_probe" / "app" / "gui" / "dist"
+PPX_API_PATH = REPO_ROOT / "apps" / "editor" / "api" / "api.py"
+PPX_DIST = REPO_ROOT / "apps" / "editor" / "gui" / "dist"
 XHS_WORKFLOWS = APP_ROOT / "workflows"
 
 

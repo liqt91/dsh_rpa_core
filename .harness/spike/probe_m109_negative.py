@@ -72,7 +72,7 @@ CASES = [
         "label": "桌面节点手写回勾",
     },
     {
-        "file": ".harness/demo/ppx_probe/app/gui/src/main.js",
+        "file": "apps/editor/gui/src/main.js",
         "anchor": (
             "      obj.on = on.checked\n"
             "      // 只改「这层用哪些字段」，不改「这层参不参与」（M109）。\n"
@@ -86,7 +86,7 @@ CASES = [
         "label": "Web 属性勾选回勾层级",
     },
     {
-        "file": ".harness/demo/ppx_probe/app/gui/src/main.js",
+        "file": "apps/editor/gui/src/main.js",
         "anchor": "    on.disabled = !levelOn\n",
         "replace": "    on.disabled = false\n",
         "runner": "node",

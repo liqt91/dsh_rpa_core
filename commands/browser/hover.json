@@ -9,13 +9,13 @@
   "resources": ["browser.session"],
   "stability": "stable",
   "effect": {"kind": "unsafe-write", "replay": "unsafe", "idempotency": "none"},
-  "input_schema": {"type": "object", "required": ["selector"], "properties": {"sessionId": {"type": "string"}, "selector": {"type": "string", "minLength": 1}, "timeoutMs": {"type": "integer", "minimum": 1}}, "additionalProperties": false},
+  "input_schema": {"type": "object", "required": ["selector"], "properties": {"sessionId": {"type": "string"}, "selector": {"type": "string", "minLength": 1}, "timeoutMs": {"type": "integer", "minimum": 1}, "injection": {"type": "string", "enum": ["dom", "cdp"], "x-enum-labels": {"dom": "页面内合成事件", "cdp": "调试协议真事件"}, "description": "悬停事件的注入通道。dom=扩展在页面内 dispatchEvent 派发 mouseover/mouseenter/mousemove 合成事件（isTrusted=false，默认）；cdp=经 chrome.debugger 的 Input.dispatchMouseEvent 只派发 mouseMoved（isTrusted=true），能触发 CSS :hover 与真事件监听。需要扩展 0.9.7 及以上", "default": "dom"}, "postDelayMs": {"type": "integer", "minimum": 0, "description": "执行后延迟（毫秒）", "default": 0}}, "additionalProperties": false},
   "output_schema": {"type": "object", "required": ["matchedCount", "sessionId"], "properties": {"matchedCount": {"type": "integer", "minimum": 1}, "sessionId": {"type": "string"}}, "additionalProperties": false},
   "x-outputs": {
     "matchedCount": {"label": "匹配数量"},
     "sessionId": {"label": "浏览器实例"}
   },
-  "errors": ["ELEMENT_NOT_FOUND", "SESSION_NOT_FOUND", "TIMEOUT", "CANCELLED", "EXECUTOR_FAILED", "ELEMENT_COVERED", "ELEMENT_DISABLED", "ELEMENT_NOT_VISIBLE"],
+  "errors": ["ELEMENT_NOT_FOUND", "SESSION_NOT_FOUND", "TIMEOUT", "CANCELLED", "EXECUTOR_FAILED", "ELEMENT_COVERED", "ELEMENT_DISABLED", "ELEMENT_NOT_VISIBLE", "EXTENSION_OUTDATED"],
   "implementation": {"handler": "browser.playwright:hover"},
   "default_timeout_seconds": 15,
   "retryable": false

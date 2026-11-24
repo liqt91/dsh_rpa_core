@@ -30,7 +30,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 REPO = next(p for p in HERE.parents if (p / "src" / "rpa_core").is_dir())
-PROBE_DIR = REPO / ".harness" / "demo" / "ppx_probe"
+PROBE_DIR = REPO / "apps" / "editor"
 API = PROBE_DIR / "app" / "api" / "api.py"
 PROBE = PROBE_DIR / "exec_probe.py"
 PYTHON = PROBE_DIR / ".venv" / "Scripts" / "python.exe"

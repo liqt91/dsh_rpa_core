@@ -45,8 +45,9 @@ R2 的做法是精确放行 `api.py` / `main.js` 两个文件。补拖拽时立�
 
 R3（维护者 2026-11-12 拍板）改为：契约的 `shared_runtime` 收一条目录前缀
 `.harness/demo/ppx_probe/`，整棵原型目录不再归任何分支独占；`owner_of()` 扩展为
-支持「以 `/` 结尾的条目按前缀共享」，优先级是**精确声明 > 目录前缀**，
-所以 `ppx.toml` 等客户端打包配置仍能用精确的 `exclusive` 条目留在 `ppx-only`。
+支持「以 `/` 结尾的条目按前缀共享」，优先级是**精确声明 > 目录前缀**。
+ADR 0021 转正后该前缀从 `.harness/demo/ppx_probe/` 改为 `apps/editor/`，`ppx-only` 的
+`exclusive` 收窄成 `apps/editor/build/` —— 编辑面整棵共享，只有打包产物归桌面客户端分支。
 `check_scope_sanity()` 会检查目录前缀真实存在——路径写错不会报错，只会让本该独占的
 路径悄悄变成无人认领。
 

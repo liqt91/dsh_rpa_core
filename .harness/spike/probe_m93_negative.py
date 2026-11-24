@@ -18,8 +18,8 @@ import sys
 from pathlib import Path
 
 ROOT = Path(r"D:\Users\Administrator\Documents\代码\rpa_core")
-API = ROOT / ".harness/demo/ppx_probe/app/api/api.py"
-MAIN = ROOT / ".harness/demo/ppx_probe/app/gui/src/main.js"
+API = ROOT / "apps/editor/api/api.py"
+MAIN = ROOT / "apps/editor/gui/src/main.js"
 PY = ROOT / ".venv/Scripts/python.exe"
 SENTINEL = "M93-INJECT-SENTINEL"
 

@@ -24,10 +24,10 @@ from src import ppx_bridge as pb
 
 APP = Path(__file__).resolve().parents[1]
 ROOT = APP.parents[1]
-MAIN_JS = ROOT / ".harness" / "demo" / "ppx_probe" / "app" / "gui" / "src" / "main.js"
-INDEX_HTML = ROOT / ".harness" / "demo" / "ppx_probe" / "app" / "gui" / "index.html"
-STYLE_CSS = ROOT / ".harness" / "demo" / "ppx_probe" / "app" / "gui" / "src" / "style.css"
-DIST_DIR = ROOT / ".harness" / "demo" / "ppx_probe" / "app" / "gui" / "dist" / "assets"
+MAIN_JS = ROOT / "apps" / "editor" / "gui" / "src" / "main.js"
+INDEX_HTML = ROOT / "apps" / "editor" / "gui" / "index.html"
+STYLE_CSS = ROOT / "apps" / "editor" / "gui" / "src" / "style.css"
+DIST_DIR = ROOT / "apps" / "editor" / "gui" / "dist" / "assets"
 CHECK_ALL = ROOT / ".harness" / "scripts" / "check_all.py"
 UI_SCRIPT = ROOT / "scripts" / "check_element_library.mjs"
 

@@ -17,7 +17,7 @@ from pathlib import Path
 
 ROOT = Path(r"D:\Users\Administrator\Documents\代码\rpa_core")
 CONTROLLER = ROOT / "src/rpa_core/capture_kit/controller.py"
-API = ROOT / ".harness/demo/ppx_probe/app/api/api.py"
+API = ROOT / "apps/editor/api/api.py"
 DIALOG = ROOT / "src/rpa_core/capture_kit/edit_dialog.py"
 PY = ROOT / ".venv/Scripts/python.exe"
 SENTINEL = "M91-INJECT-SENTINEL"

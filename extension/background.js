@@ -643,11 +643,25 @@ async function cdpSend(tabId, method, params) {
   }
 }
 
+// [cdp-human-helpers:start]
+// 纯函数区：scripts/check_click_helpers.mjs 按标记抽取求值（与 click-helpers 同机制）。
+// 把 CDP 拟人参数钉死成可测决策，避免「manifest 声明了、executor 转发了、扩展却没读」。
+// hover 决策：默认 before（兼容依赖 mouseover 才展开的菜单），只有显式 none 才跳过。
+const cdpHoverFirst = (options) =>
+  String(options == null || options.hoverMode == null ? "before" : options.hoverMode)
+    .trim().toLowerCase() !== "none";
+// 按键间隔：非法/负值归零，上限 2000ms（误填天数不能把流程挂死）。
+const cdpPressDelay = (options) => {
+  const raw = Number(options == null ? 0 : options.pressDelayMs);
+  return Number.isFinite(raw) && raw > 0 ? Math.min(raw, 2000) : 0;
+};
+// [cdp-human-helpers:end]
+
 // 按下与抬起之间留一点人手间隔（同毫秒内 press/release 是典型脚本特征）
-async function cdpPressGap(ms) {
-  const value = Number(ms);
-  if (!Number.isFinite(value) || value <= 0) return;
-  await new Promise((resolve) => setTimeout(resolve, Math.min(value, 2000)));
+async function cdpPressGap(options) {
+  const ms = cdpPressDelay(options);
+  if (!ms) return;
+  await new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 async function cdpClickAt(tabId, point, options) {
@@ -658,20 +672,29 @@ async function cdpClickAt(tabId, point, options) {
       : 1;
   const modifiers = cdpModifierMask(options.modifiers);
   const buttons = CDP_BUTTON_BITS[button] || 1;
-  // 先 hover 到位：很多菜单/下拉依赖 mouseover 才出现，直接 press 会点在「还没展开」的位置
-  await cdpSend(tabId, "Input.dispatchMouseEvent", {
-    type: "mouseMoved", x: point.x, y: point.y, button: "none", buttons: 0, modifiers,
-  });
+  // hoverMode=none：跳过 mouseMoved，避免 hover 和 click 都触发同一动作的组件
+  // （popover/toggle 类）出现「hover 展开 → click 又关掉」的双触发。
+  // 默认 before 保持历史行为：很多菜单依赖 mouseover 才出现，直接 press 会点空。
+  const hoverFirst = cdpHoverFirst(options);
+  let dispatched = 0;
+  if (hoverFirst) {
+    await cdpSend(tabId, "Input.dispatchMouseEvent", {
+      type: "mouseMoved", x: point.x, y: point.y, button: "none", buttons: 0, modifiers,
+    });
+    dispatched += 1;
+  }
   for (let round = 1; round <= clickCount; round += 1) {
     await cdpSend(tabId, "Input.dispatchMouseEvent", {
       type: "mousePressed", x: point.x, y: point.y, button, buttons, modifiers, clickCount: round,
     });
-    await cdpPressGap(options.pressDelayMs);
+    dispatched += 1;
+    await cdpPressGap(options);
     await cdpSend(tabId, "Input.dispatchMouseEvent", {
       type: "mouseReleased", x: point.x, y: point.y, button, buttons: 0, modifiers, clickCount: round,
     });
+    dispatched += 1;
   }
-  return { dispatched: 1 + clickCount * 2, clickCount, button };
+  return { dispatched, clickCount, button, hoverFirst };
 }
 
 async function cdpClick(args) {
@@ -702,6 +725,46 @@ async function cdpClick(args) {
       matchedCount: count,
       result: {
         ...hit,
+        x: point.x,
+        y: point.y,
+        attached: !!state.attached,
+        reusedSession: !!state.reused,
+        cdpVersion: CDP_VERSION,
+      },
+    };
+  } finally {
+    if (args.detachAfter !== false) await cdpDetach(tabId);
+  }
+}
+
+async function cdpHover(args) {
+  const tabId = Number(args.tabId);
+  if (!args.tabId || !Number.isFinite(tabId)) throw new Error("cdp.hover 需要 tabId");
+  if (!args.selector) throw new Error("cdp.hover 需要 selector");
+  const state = await cdpAttach(tabId);
+  try {
+    // 与 cdpClick 同源：坐标与遮挡预检都走页面侧 actionPoint，绝不各算一套
+    const probe = await pageCall({
+      tabId,
+      selector: args.selector,
+      method: "actionPoint",
+      args: { clickPosition: args.clickPosition },
+    });
+    if (probe && probe.precheck && probe.precheck.code) {
+      return { matchedCount: 0, precheck: probe.precheck };
+    }
+    const count = Number((probe && probe.matchedCount) || 0);
+    if (count <= 0 || !probe.result) return { matchedCount: count, result: null };
+    const point = { x: Number(probe.result.x), y: Number(probe.result.y) };
+    if (!Number.isFinite(point.x) || !Number.isFinite(point.y)) {
+      throw new Error(`cdp.hover 拿到非法坐标 ${JSON.stringify(probe.result)}`);
+    }
+    await cdpSend(tabId, "Input.dispatchMouseEvent", {
+      type: "mouseMoved", x: point.x, y: point.y, button: "none", buttons: 0, modifiers: 0,
+    });
+    return {
+      matchedCount: count,
+      result: {
         x: point.x,
         y: point.y,
         attached: !!state.attached,
@@ -989,6 +1052,9 @@ async function executeCommand(cmd) {
       // 真事件点击：浏览器自己生成 mousedown/mouseup/click（isTrusted=true），
       // 不经过 OS 输入队列 ⇒ 不受 EDR 对合成输入的拦截影响。
       return await cdpClick(args);
+    case "cdp.hover":
+      // 真事件悬停：只派发 mouseMoved，触发 CSS :hover / mouseover（isTrusted=true）。
+      return await cdpHover(args);
     case "cookies.getAll": {
       const filter = {};
       for (const key of ["url", "name", "domain", "path"]) {
