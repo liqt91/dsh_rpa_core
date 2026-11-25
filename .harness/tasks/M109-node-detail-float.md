@@ -67,7 +67,7 @@ fx 变量菜单一开就贴边、`x-multiline` 的 textarea 只剩两行高。
 `bindNodeFloatDrag()` **不能**放在 `bindBottomDock()` 里：后者有「tab/panel 数量对不上就
 整体 return」的守卫，浮层拖动会被底栏 DOM 连坐。改成顶层与 `bindBottomDock()` 并列。
 
-## 三、判据（`scripts/check_param_form_ui.mjs`，7 → 12 条）
+## 三、判据（`scripts/check_param_form_ui.mjs`，7 → 14 条）
 
 | 用例 | 钉住什么 |
 |---|---|
@@ -76,9 +76,12 @@ fx 变量菜单一开就贴边、`x-multiline` 的 textarea 只剩两行高。
 | 浮层：拖到视口外会被夹回来 | `floatBounds` 四边界 + 窄窗口下 max<min |
 | 浮层：保存成功关窗，保存失败必须留着 | 两条路径的真实分支 |
 | 浮层：删掉正在看的节点会一并关窗 | 防 `NODE_NOT_FOUND` |
+| 结构层：右栏已退役、参数区挂在浮层里 | `index.html` 里 `#nodeFloat` 真的存在且内含六个 id |
+| 结构层：fixed / 460px / grab / `[open]` 限高 | `style.css` 的四条关键声明（行为判据看不见 CSS）|
 
-负向验证 **6 个注入全命中、各只红一条、md5 还原一致**：selectCard 不调用 / 每次都落位 /
-去掉 clamp / 保存后不关窗 / 保存失败也关窗 / 删节点不关窗。
+负向验证 **9 个注入全命中、各只红一条、md5 还原一致**：selectCard 不调用 / 每次都落位 /
+去掉 clamp / 保存后不关窗 / 保存失败也关窗 / 删节点不关窗 / 不再是 fixed / 右栏 aside 加回来 /
+`paramForm` 的 id 留在浮层外。
 
 ## 四、踩坑（两个都是「看起来红/绿，其实没打中」）
 
@@ -87,6 +90,9 @@ fx 变量菜单一开就贴边、`x-multiline` 的 textarea 只剩两行高。
    12 条判据全绿。负向验证当场打回，改成 `await run('selectCard({...})')`。
 2. **注入写成「在调用上一行插 `// NEG`」不生效**：`//` 只注释自己那一行，下一行的调用
    照样执行 ⇒ 判据全绿，看着像判据不灵，其实是注入没打中。必须**改掉那句调用本身**。
+3. **shim 会凭空造节点**：`doc.querySelector('#nodeFloat')` 走的是 `nodeById` 自动建节点，
+   所以行为判据证明不了「浮层在 HTML 里」——把 `#nodeFloat` 整段删掉，7 条行为判据照样绿。
+   结构层（读 `index.html` / `style.css` 原文）是必须单列的一层。
 
 ## 五、遗留
 
@@ -94,4 +100,8 @@ fx 变量菜单一开就贴边、`x-multiline` 的 textarea 只剩两行高。
   里已有 `rpa.dockHeight` 一个键；加键要连带「窗口尺寸变化后落位越界」的迁移，先不做。
 - 浮层与画布重叠时没有「吸附/靠边收起」；窄窗下 460px 宽会盖住大半个画布，此时依赖
   × 关闭。
-- 本次改动**尚未在真实窗口里截图核验**（只过了 DOM shim 判据 + 全量门禁）。
+- 本次改动**没能在真实窗口里核验**：`ppx dev` 起窗口时写
+  `%APPDATA%\com.example.rpa-probe\.instance.lock` 被拒（`[Errno 13] Permission denied`），
+  `dangerouslyDisableSandbox` 只对当前进程生效、写 AppData 仍失败 ⇒ 本会话起不来 GUI。
+  当前只有 DOM shim 行为判据 + 源码结构层判据 + 全量门禁；**真窗口首跑要重点看**：浮层是否
+  压住画布中央、460px 在 1280 宽下是否合适、fx 变量菜单是否被浮层 `overflow: hidden` 裁掉。

@@ -20,6 +20,8 @@ import path from 'node:path'
 
 const ROOT = path.resolve(import.meta.dirname, '..')
 const MAIN = path.join(ROOT, 'apps/editor/gui/src/main.js')
+const HTML = path.join(ROOT, 'apps/editor/gui/index.html')
+const CSS = path.join(ROOT, 'apps/editor/gui/src/style.css')
 const mainSrc = fs.readFileSync(MAIN, 'utf8')
 
 const results = []
@@ -613,6 +615,43 @@ checkAsync('浮层：删掉正在看的节点会一并关窗', async () => {
   assert(
     run('el.float.hidden') === true,
     '节点已删、浮层还挂着旧参数：下一次「保存」就是 NODE_NOT_FOUND',
+  )
+})
+
+// ---------- 8. 结构层（浮层是 CSS/DOM 定的，行为判据看不见） ----------
+// 前面 7 条都跑在 shim 里：shim 的 `querySelector('#nodeFloat')` 会**凭空造一个节点**，
+// 所以「浮层到底在不在 HTML 里」它证明不了 —— 把 `#nodeFloat` 整段删掉，行为判据照样绿。
+// 这一层只看源码结构，钉住「右栏已退役 / 参数区确实挂在浮层里 / 浮层是 fixed」。
+check('结构层：右栏已退役，参数区挂在浮层里（不是 body 直属）', () => {
+  const html = fs.readFileSync(HTML, 'utf8')
+  assert(!/id="right"/.test(html), 'id="right" 又回来了：右栏与浮层两套入口会互相打架')
+  assert(!/<aside[^>]*id="right"/.test(html), '右栏 aside 还在')
+
+  const at = html.indexOf('id="nodeFloat"')
+  assert(at > -1, 'index.html 里没有 #nodeFloat')
+  const close = html.indexOf('</section>', at)
+  assert(close > at, '#nodeFloat 没有收尾的 </section>')
+  const block = html.slice(at, close)
+  for (const id of ['paramForm', 'saveBtn', 'revertBtn', 'detail', 'compileOut', 'nodeFloatClose']) {
+    assert(block.includes(`id="${id}"`), `浮层里缺 #${id}：搬漏了，界面就少一块`)
+  }
+})
+
+check('结构层：浮层是 fixed 定位、比原右栏宽、带拖动手柄', () => {
+  const css = fs.readFileSync(CSS, 'utf8')
+  const block = /\.nodeFloat\s*\{([^}]*)\}/.exec(css)
+  assert(block, 'style.css 里没有 .nodeFloat 主规则')
+  const body = block[1]
+  assert(/position:\s*fixed/.test(body), '浮层不是 fixed：会挤进 grid，把画布压窄')
+  assert(/z-index:\s*30/.test(body), '浮层层级变了：要么盖住元素编辑弹窗，要么被画布吃掉')
+  assert(/width:\s*min\(460px/.test(body), '浮层宽度不再是 460：宽一档正是拆右栏的理由')
+  assert(
+    /\.nodeFloatHead[\s\S]*?cursor:\s*grab/.test(css),
+    '头部没有 grab 光标：用户不知道这块能拖',
+  )
+  assert(
+    /\.nodeFloat\s*>\s*\.astBox\[open\]/.test(css),
+    'AST 限高规则缺 [open]：会被更靠后的 .astBox[open]{flex:1} 覆盖，参数区被挤没',
   )
 })
 
