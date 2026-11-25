@@ -13,7 +13,7 @@ import path from 'node:path'
 const ROOT = path.resolve(import.meta.dirname, '..')
 const MAIN = path.join(ROOT, 'apps/editor/gui/src/main.js')
 const CSS = path.join(ROOT, 'apps/editor/gui/src/style.css')
-const API = path.join(ROOT, '.harness/demo/ppx_probe/app/api/api.py')
+const API = path.join(ROOT, 'apps/editor/api/api.py')
 
 const results = []
 function check(name, fn) {
