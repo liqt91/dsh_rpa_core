@@ -6,7 +6,7 @@
 
 | # | 产物 | 目录 | 作用 |
 |---|---|---|---|
-| 1 | 工作流编辑窗口（PPX 桌面应用） | `apps/editor/` | **复用 M65 的可视化编排器**：卡片拼流程、参数编辑、编译校验、真跑 `rpa-core run`；本轮给它接上会话通道（Agent 推文件 → 窗口打开 → 回 opened/心跳） |
+| 1 | 工作流编辑窗口（PPX 桌面应用） | `.harness/demo/ppx_probe/app/` | **复用 M65 的可视化编排器**：卡片拼流程、参数编辑、编译校验、真跑 `rpa-core run`；本轮给它接上会话通道（Agent 推文件 → 窗口打开 → 回 opened/心跳） |
 | 2 | 能力连接器（CLI + Skill） | `connector/` | 把仓里 **89 条**原子能力整理成 WorkBuddy 能读懂、能触发的接口；**不重写执行器** |
 | 3 | 浏览器扩展（MV3） | `extension/` | 点一下页面元素，算出稳定选择器（含 Shadow DOM 宿主与退化路径）并回传 Agent |
 | — | 桥接技能 `workflow-studio` | `skills/workflow-studio/` | 1 与 3 的 Agent 侧入口：起会话、推文件、等打开、等拾取 |
@@ -20,7 +20,7 @@
 ```bash
 # 开发态：先起会话服务，再起 PPX 窗口（前端走 vite dev，改 main.js 热更新）
 python skills/workflow-studio/scripts/studio.py serve --root .
-cd ../apps/editor && ppx dev
+cd ../.harness/demo/ppx_probe/app && ppx dev
 
 # 发布态：先在 ppx_probe/app 里 ppx build，产物 build/RPA Probe/
 ```
@@ -80,7 +80,7 @@ rpa-core run my-flow.json            # 跑，输出 RunResult
 
 ```
 workbuddy-suite/
-├── (编辑窗口不在本目录：apps/editor/ —— PPX 应用，ADR 0021 已转正)
+├── (编辑窗口不在本目录：.harness/demo/ppx_probe/app/ —— PPX 应用，M65 宿主实验)
 │   ├── ppx.toml                # 应用配置；dev 端口 5173
 │   ├── api/api.py              # 能力层接线 + studio.* 会话胶水（本轮加）
 │   └── gui/src/main.js         # 可视化编排 + 会话轮询（本轮加 pollSession/heartbeat）
@@ -131,7 +131,7 @@ $PY connector/tools/pack_connector.py --check   # 7) 连接器字段 / 权限 / 
 要开真窗口）：
 
 ```bash
-cd ../.harness/spike/ppx
+cd ../.harness/demo/ppx_probe
 ./.venv/Scripts/python.exe launcher_probe.py     # 启动器不谎报（20 条）
 ./.venv/Scripts/python.exe ui_probe.py           # 界面端到端（26 条）
 ./.venv/Scripts/python.exe exec_probe.py         # 运行接线（30 条）

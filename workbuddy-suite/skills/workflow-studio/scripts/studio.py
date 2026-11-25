@@ -720,7 +720,7 @@ def _editor_dir() -> Path | None:
     """编辑窗口工程目录（一个 PPX 应用），找不到返回 None。
 
     窗口从来不在 wheel 与 npm 包里 —— 它是仓库内的 PPX 工程
-    （`apps/editor`，ADR 0021 已转正），起它还要装 PPX 与前端依赖。
+    （`.harness/demo/ppx_probe/app`，M65 宿主实验），起它还要装 PPX 与前端依赖。
     所以「没有窗口」是这套安装的正常形态，不是坏了；doctor 据此标 SKIP 而不是 FAIL。
 
     先找源码根，再认历史上放过窗口的老路径 `workbuddy-suite/editor`
@@ -733,7 +733,7 @@ def _editor_dir() -> Path | None:
         candidates.append(Path(override).expanduser())
     root = _runtime.find_source_root()
     if root:
-        candidates.append(root / "apps/editor")
+        candidates.append(root / ".harness/demo/ppx_probe/app")
         candidates.append(root / "workbuddy-suite/editor")
     for path in candidates:
         if (path / "ppx.toml").is_file():

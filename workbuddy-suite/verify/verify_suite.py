@@ -7,7 +7,7 @@
   · 安全边界拦不拦得住（伪造 Origin、越界路径）。
 
 跑法：python verify/verify_suite.py
-编辑窗口（apps/editor）的真机探针在它自己的目录：launcher_probe / ui_probe /
+编辑窗口（.harness/demo/ppx_probe）的真机探针在它自己的目录：launcher_probe / ui_probe /
 exec_probe / run_probe 等；插件真机测试在 extension_test.mjs。
 """
 
@@ -32,7 +32,7 @@ SKILL_DIR = SUITE / "skills" / "workflow-studio"
 SKILL_MD = SKILL_DIR / "SKILL.md"
 STUDIO = SKILL_DIR / "scripts" / "studio.py"
 EXT = SUITE / "extension"
-PROBE_APP = SUITE.parent / "apps" / "editor"
+PROBE_APP = SUITE.parent / ".harness" / "demo" / "ppx_probe" / "app"
 PY = sys.executable
 OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
