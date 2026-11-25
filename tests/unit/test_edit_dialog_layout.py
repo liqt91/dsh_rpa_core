@@ -49,3 +49,18 @@ def test_height_constants_stay_consistent():
         edition._DESKTOP_H
         == edition._DESKTOP_BASE_H + edition._SHOT_H + edition._SHOT_GAP
     )
+
+
+def test_window_height_tracks_visible_rows():
+    """A 档：4 层只占 4 行的高度，不为不存在的 6 层留白（视觉「土」的主因）。"""
+    assert edition._base_height_for(4, False) == edition._TREE_BASE_H - 6 * 32
+    assert edition._base_height_for(3, True) == edition._DESKTOP_BASE_H - 7 * 32
+    assert edition._visible_rows(4, False) == 4
+    assert edition._content_shift(4, False) == 6 * 32
+
+
+def test_row_count_beyond_page_keeps_full_height():
+    """超过一屏的行靠滚动，窗口不再长高（否则 30 层会把保存按钮顶出屏幕）。"""
+    assert edition._base_height_for(30, False) == edition._TREE_BASE_H
+    assert edition._base_height_for(30, True) == edition._DESKTOP_BASE_H
+    assert edition._base_height_for(0, False) == edition._TREE_BASE_H - 9 * 32

@@ -24,6 +24,7 @@
 
 from __future__ import annotations
 
+import ctypes
 import json
 import sys
 import threading
@@ -72,6 +73,39 @@ _COLOR_ERROR = (192, 0, 0)
 _COLOR_PLAIN = (96, 96, 96)
 # 热键提示那行灰字（比正文浅一档，别跟校验结果抢注意力）
 _COLOR_FAINT = (128, 128, 128)
+# 状态条：左侧留白 + 结果色文字（含圆点前缀），交给 STATIC 自己画——父窗口自绘
+# 在 WM_PRINT 下 HDC 原点与客户区不一致，圆点会错位（2026-11-25 真机实测）。
+_STATUS_INSET = 16
+_COLOR_TEXT = (38, 42, 48)
+
+# A 档皮肤：STATIC 一律透明底（原生默认在某些主题下给灰块），按钮用 BS_FLAT
+# 去 Win95 立体感。两者都不改控件行为（Tab/Enter/Esc 仍走 IsDialogMessage）。
+_BS_FLAT = 0x8000
+_BS_AUTOCHECKBOX = 0x8
+_BS_DEFPUSHBUTTON = 0x1
+
+# 层级行 tooltip（全文在悬停时显示，控件本身仍按固定宽度省略）。win32con 没这两个常量。
+_TTS_ALWAYSTIP = 0x01
+_TTS_NOPREFIX = 0x80
+_TTM_ADDTOOL = 0x0400 + 50
+_TTM_SETMAXTIPWIDTH = 0x0400 + 104
+_TTF_SUBCLASS = 0x0010
+_TTF_CENTERTIP = 0x0004
+
+
+class _TOOLINFO(ctypes.Structure):
+    """TTM_ADDTOOL 要的 TOOLINFOW（pywin32 没封装，只能自己按布局声明）。"""
+
+    _fields_ = [
+        ("cbSize", ctypes.c_uint),
+        ("uFlags", ctypes.c_uint),
+        ("hwnd", ctypes.c_void_p),
+        ("uId", ctypes.c_size_t),
+        ("rect", _win32._RECT),
+        ("hinst", ctypes.c_void_p),
+        ("lpszText", ctypes.c_void_p),
+        ("lParam", ctypes.c_ssize_t),
+    ]
 # 固定控件 id：保存/取消沿对话框惯例（IsDialogMessage 会把 Enter/Esc 映到这两个 id）
 _ID_NAME = 201
 _ID_META = 202
@@ -137,6 +171,24 @@ def _fit_shot_height(base_h: int) -> int:
     if room < _SHOT_MIN:
         return 0
     return min(_SHOT_H, room)
+
+
+def _visible_rows(count: int, desktop: bool) -> int:
+    """窗口只给 ``min(实际层数, 满屏行数)`` 行的高度，不为不存在的层留白。"""
+    rows = _NODE_ROWS if desktop else _LEVEL_ROWS
+    return max(1, min(int(count or 0), rows))
+
+
+def _content_shift(count: int, desktop: bool) -> int:
+    """相对于满屏基准，下方控件整体上移的像素数（行高 32）。"""
+    rows = _NODE_ROWS if desktop else _LEVEL_ROWS
+    return (rows - _visible_rows(count, desktop)) * 32
+
+
+def _base_height_for(count: int, desktop: bool) -> int:
+    """按实际层数算出的客户区固定高度（不含截图区）。"""
+    base = _DESKTOP_BASE_H if desktop else _TREE_BASE_H
+    return base - _content_shift(count, desktop)
 
 
 def _clamp_node_scroll(scroll: int, total: int) -> int:
@@ -279,6 +331,8 @@ class ElementEditDialog:
         self._check_btn = None
         self._hotkey_hint = None
         self._shot_view = None
+        self._tooltip = None
+        self._tooltip_buffers = []
         self._toast = None
         self._hotkey_stop = None
         self._selected = 0
@@ -319,27 +373,29 @@ class ElementEditDialog:
         desktop_mode = bool(self._nodes)
         tree_mode = bool(self._levels) and not desktop_mode
         client_w = _DESKTOP_W if desktop_mode else (_TREE_W if tree_mode else _SIMPLE_W)
-        # 截图区按屏幕余量伸缩：小屏上宁可矮一点，也不能让底部按钮掉出屏幕。
-        # 简式形态本来就窄，不放截图（它的提示行与保存错误共用一行）。
+        # A 档：窗口按**实际层数**收缩（4 层不再为不存在的 6 层留白）；截图区默认
+        # 折叠，等校验真拿到截图才展开。展开走 _ensure_shot_view，不改校验逻辑。
+        count = len(self._nodes) if desktop_mode else len(self._levels)
+        layered = desktop_mode or tree_mode
+        self._shift = _content_shift(count, desktop_mode) if layered else 0
+        base_h = (
+            _base_height_for(count, desktop_mode) if layered else _SIMPLE_H
+        )
         if desktop_mode:
-            self._shot_y = _DESKTOP_BASE_H
+            self._shot_y = base_h
             self._shot_x = _SHOT_MARGIN
             self._shot_w = _DESKTOP_W - 2 * _SHOT_MARGIN
         elif tree_mode:
-            self._shot_y = _TREE_BASE_H
+            self._shot_y = base_h
             self._shot_x = _SHOT_MARGIN
             self._shot_w = _TREE_W - 2 * _SHOT_MARGIN
         else:
-            self._shot_y = _SIMPLE_H
+            self._shot_y = base_h
             self._shot_x = self._shot_w = 0
-        self._shot_h = (
-            _fit_shot_height(self._shot_y) if (desktop_mode or tree_mode) else 0
-        )
-        client_h = self._shot_y + (
-            self._shot_h + _SHOT_GAP if self._shot_h else 0
-        )
-        if not (desktop_mode or tree_mode):
-            client_h = _SIMPLE_H
+        self._shot_h = 0
+        self._base_h = base_h
+        self._client_w = client_w
+        client_h = base_h
         _win32.register_class(_CLASS)
         ex_style = win32con.WS_EX_TOPMOST | win32con.WS_EX_DLGMODALFRAME
         style = (
@@ -371,6 +427,8 @@ class ElementEditDialog:
             None,
         )
         self._hwnd = hwnd
+        self._style = style
+        self._ex_style = ex_style
         _win32._INSTANCES[int(hwnd)] = self
         if desktop_mode:
             self._build_desktop_children(hwnd)
@@ -454,6 +512,9 @@ class ElementEditDialog:
         import win32con
         import win32gui
 
+        # A 档皮肤：普通按钮去 Win95 立体边框；复选框保留系统画法（勾框要清晰）。
+        if cls == "BUTTON" and not style & _BS_AUTOCHECKBOX:
+            style |= _BS_FLAT
         handle = win32gui.CreateWindowEx(
             0, cls, text,
             style | win32con.WS_CHILD | win32con.WS_VISIBLE | win32con.WS_TABSTOP,
@@ -462,6 +523,50 @@ class ElementEditDialog:
         if handle and self._hfont:
             win32gui.SendMessage(handle, win32con.WM_SETFONT, self._hfont, True)
         return handle
+
+    def _attach_tooltip(self, target: int, text: str) -> None:
+        """悬停显示层级行全文；省略号仍由控件自己画，两者不冲突。
+
+        ★ TOOLINFO.lpszText 是裸指针，指向的缓冲区必须活到窗口销毁；用实例列表
+        持有，不能是局部变量。tooltip 是父窗口的 owned popup，随父窗口一起销毁。
+        """
+        import win32con
+        import win32gui
+
+        if not target or not text:
+            return
+        # ★ WinDLL 每次调用返回**新的**包装对象：argtypes 必须在这次调用里设，
+        # 不能只在第一次建 tooltip 时设（第二次 SendMessageW 会把 byref 当整数）。
+        user32 = ctypes.WinDLL("user32", use_last_error=True)
+        user32.SendMessageW.argtypes = [
+            ctypes.c_void_p, ctypes.c_uint, ctypes.c_size_t, ctypes.c_void_p,
+        ]
+        user32.SendMessageW.restype = ctypes.c_ssize_t
+        if not getattr(self, "_tooltip", None):
+            self._tooltip = win32gui.CreateWindowEx(
+                0, "tooltips_class32", "",
+                win32con.WS_POPUP | _TTS_ALWAYSTIP | _TTS_NOPREFIX,
+                0, 0, 0, 0, self._hwnd, 0,
+                win32gui.GetModuleHandle(None), None,
+            )
+            if not self._tooltip:
+                return
+            win32gui.ShowWindow(self._tooltip, win32con.SW_SHOW)
+            user32.SendMessageW(
+                ctypes.c_void_p(self._tooltip), _TTM_SETMAXTIPWIDTH,
+                0, ctypes.c_void_p(420),
+            )
+        buffer = ctypes.create_unicode_buffer(text)
+        self._tooltip_buffers.append(buffer)
+        info = _TOOLINFO(
+            ctypes.sizeof(_TOOLINFO), _TTF_SUBCLASS,
+            ctypes.c_void_p(target), 0, _win32._RECT(0, 0, 0, 0),
+            None, ctypes.c_void_p(ctypes.addressof(buffer)), 0,
+        )
+        user32.SendMessageW(
+            ctypes.c_void_p(self._tooltip), _TTM_ADDTOOL,
+            0, ctypes.byref(info),
+        )
 
     # -- 简式形态（desktop / 无 path 旧资产） ------------------------------------
     def _build_simple_children(self, hwnd) -> None:
@@ -490,12 +595,15 @@ class ElementEditDialog:
             | win32con.WS_BORDER,
             16, 248, 528, 122, _ID_META,
         )
-        self._error_static = control("STATIC", "", 0, 16, 378, 528, 20, _ID_ERROR)
+        self._error_static = control(
+            "STATIC", "", 0, 16 + _STATUS_INSET, 378,
+            528 - _STATUS_INSET, 20, _ID_ERROR,
+        )
         # 简式只有一行提示位，校验结果与保存错误复用（颜色由 _result_color 决定）
         self._result_static = self._error_static
-        self._check_btn = control("BUTTON", "校验元素", 0, 16, 406, 100, 30, _ID_CHECK)
+        self._check_btn = control("BUTTON", "校验元素", 0, 232, 406, 100, 30, _ID_CHECK)
         self._hotkey_hint = control(
-            "STATIC", _HOTKEY_HINT_TEXT, 0, 126, 412, 230, 20, _ID_HOTKEY_HINT,
+            "STATIC", _HOTKEY_HINT_TEXT, 0, 16, 412, 200, 20, _ID_HOTKEY_HINT,
         )
         control(
             "BUTTON", self._save_label, win32con.BS_DEFPUSHBUTTON,
@@ -544,33 +652,37 @@ class ElementEditDialog:
             self._control_map[_ID_LEVEL_CHECK_BASE + index] = ("level_check", index)
             self._level_boxes.append(row)
             self._level_check_boxes.append(box)
+            self._attach_tooltip(row, selector_tree.summary(level))
         self._setup_level_scroll(hwnd)
         self._rebuild_attr_pane(hwnd)
-        control("STATIC", "组合选择器", 0, 16, 402, 200, 20, 209)
+        shift = self._shift
+        control("STATIC", "组合选择器", 0, 16, 402 - shift, 200, 20, 209)
         self._preview_edit = control(
             "EDIT", "",
             win32con.ES_AUTOHSCROLL | win32con.ES_READONLY | win32con.WS_BORDER,
-            16, 424, 748, 28, _ID_PREVIEW,
+            16, 424 - shift, 748, 28, _ID_PREVIEW,
         )
-        # 结果条复用 info 行：平时灰字说明，校验后按结果换色（影刀「找到 N 个」同位置）
-        self._result_static = control("STATIC", self._info, 0, 16, 460, 748, 18, _ID_INFO)
-        self._error_static = control("STATIC", "", 0, 16, 484, 748, 18, _ID_ERROR)
+        # 结果条复用 info 行：状态色只落在左侧圆点，文字不再整行染色。
+        self._result_static = control(
+            "STATIC", self._info, 0, 16 + _STATUS_INSET, 460 - shift,
+            748 - _STATUS_INSET, 18, _ID_INFO,
+        )
+        self._error_static = control(
+            "STATIC", "", 0, 16 + _STATUS_INSET, 484 - shift,
+            748 - _STATUS_INSET, 18, _ID_ERROR,
+        )
         self._check_btn = control(
-            "BUTTON", "校验元素", 0, 16, 512, 120, 30, _ID_CHECK,
+            "BUTTON", "校验元素", 0, 452, 512 - shift, 120, 30, _ID_CHECK,
         )
         self._hotkey_hint = control(
-            "STATIC", _HOTKEY_HINT_TEXT, 0, 146, 518, 420, 20, _ID_HOTKEY_HINT,
+            "STATIC", _HOTKEY_HINT_TEXT, 0, 16, 518 - shift, 420, 20, _ID_HOTKEY_HINT,
         )
         control(
             "BUTTON", self._save_label, win32con.BS_DEFPUSHBUTTON,
-            580, 512, 88, 30, win32con.IDOK,
+            580, 512 - shift, 88, 30, win32con.IDOK,
         )
-        control("BUTTON", "取消", 0, 676, 512, 88, 30, win32con.IDCANCEL)
-        if self._shot_h:
-            self._shot_view = ShotView()
-            self._shot_view.create(
-                hwnd, self._shot_x, self._shot_y, self._shot_w, self._shot_h
-            )
+        control("BUTTON", "取消", 0, 676, 512 - shift, 88, 30, win32con.IDCANCEL)
+        # 截图区默认折叠：校验拿到图后由 _ensure_shot_view 展开（A 档）
         win32gui.SendMessage(self._name_edit, win32con.EM_SETSEL, 0, -1)
         self._refresh_preview()
 
@@ -830,7 +942,8 @@ class ElementEditDialog:
                 self._control_map[base + 2] = ("mode", kind, state)
                 self._attr_controls.append(combo)
                 win32gui.EnableWindow(combo, level_on)
-            value_x = 480 if has_mode else 396
+            # 两栏统一列：有没有模式下拉，值框都从同一 x 起（参差是「土」的主因）
+            value_x = 480
             value_w = 764 - value_x
             edit = self._control(
                 hwnd, "EDIT", state["value"],
@@ -893,33 +1006,40 @@ class ElementEditDialog:
             )
             self._desktop_control_map[_ID_NODE_BASE + index] = ("node", index)
             self._node_boxes.append(box)
+            self._attach_tooltip(box, label)
         self._setup_node_scroll(hwnd)
         self._rebuild_desktop_attr_pane(hwnd)
-        control("STATIC", "组合选择器（完整 JSON，保留捕获候选）", 0, 16, 402, 500, 20, 209)
+        shift = self._shift
+        control(
+            "STATIC", "组合选择器（完整 JSON，保留捕获候选）",
+            0, 16, 402 - shift, 500, 20, 209,
+        )
         self._preview_edit = control(
             "EDIT", "",
             win32con.ES_MULTILINE | win32con.ES_READONLY | win32con.ES_AUTOVSCROLL
             | win32con.WS_VSCROLL | win32con.WS_BORDER,
-            16, 424, 908, 96, _ID_PREVIEW,
+            16, 424 - shift, 908, 96, _ID_PREVIEW,
         )
-        self._result_static = control("STATIC", self._info, 0, 16, 526, 908, 18, _ID_INFO)
-        self._error_static = control("STATIC", "", 0, 16, 548, 908, 18, _ID_ERROR)
+        self._result_static = control(
+            "STATIC", self._info, 0, 16 + _STATUS_INSET, 526 - shift,
+            908 - _STATUS_INSET, 18, _ID_INFO,
+        )
+        self._error_static = control(
+            "STATIC", "", 0, 16 + _STATUS_INSET, 548 - shift,
+            908 - _STATUS_INSET, 18, _ID_ERROR,
+        )
         self._check_btn = control(
-            "BUTTON", "校验元素", 0, 16, 574, 120, 30, _ID_CHECK,
+            "BUTTON", "校验元素", 0, 620, 574 - shift, 120, 30, _ID_CHECK,
         )
         self._hotkey_hint = control(
-            "STATIC", _HOTKEY_HINT_TEXT, 0, 146, 580, 580, 20, _ID_HOTKEY_HINT,
+            "STATIC", _HOTKEY_HINT_TEXT, 0, 16, 580 - shift, 580, 20, _ID_HOTKEY_HINT,
         )
         control(
             "BUTTON", self._save_label, win32con.BS_DEFPUSHBUTTON,
-            748, 574, 84, 30, win32con.IDOK,
+            748, 574 - shift, 84, 30, win32con.IDOK,
         )
-        control("BUTTON", "取消", 0, 840, 574, 84, 30, win32con.IDCANCEL)
-        if self._shot_h:
-            self._shot_view = ShotView()
-            self._shot_view.create(
-                hwnd, self._shot_x, self._shot_y, self._shot_w, self._shot_h
-            )
+        control("BUTTON", "取消", 0, 840, 574 - shift, 84, 30, win32con.IDCANCEL)
+        # 截图区默认折叠：校验拿到图后由 _ensure_shot_view 展开（A 档）
         win32gui.SendMessage(self._name_edit, win32con.EM_SETSEL, 0, -1)
         self._refresh_desktop_preview()
 
@@ -1023,11 +1143,12 @@ class ElementEditDialog:
                 label += "（只读）"
             elif not node_on:
                 label += "（该层未参与定位）"
-            self._control(hwnd, "STATIC", label, 0, 448, y + 3, 96, 20, base + 1)
+            # 标签列放宽，容纳「（该层未参与定位）」这类状态后缀，不再被截半截
+            self._control(hwnd, "STATIC", label, 0, 448, y + 3, 150, 20, base + 1)
             combo = self._control(
                 hwnd, "COMBOBOX", "",
                 win32con.CBS_DROPDOWNLIST | win32con.WS_VSCROLL,
-                552, y, 84, 120, base + 2,
+                606, y, 84, 120, base + 2,
             )
             for mode in _DESKTOP_MODES:
                 win32gui.SendMessage(combo, win32con.CB_ADDSTRING, 0, mode)
@@ -1044,7 +1165,7 @@ class ElementEditDialog:
                 hwnd, "EDIT", str(row.get("value") or ""),
                 win32con.ES_AUTOHSCROLL | win32con.WS_BORDER
                 | (0 if editable else win32con.ES_READONLY),
-                644, y, 280, 26, base + 3,
+                698, y, 226, 26, base + 3,
             )
             self._desktop_control_map[base] = ("attr_check", row_index)
             self._desktop_control_map[base + 2] = ("attr_mode", row_index)
@@ -1156,20 +1277,23 @@ class ElementEditDialog:
             import win32api
 
             target = int(lparam)
-            # 结果条优先：简式形态把这两行合成同一个控件，得让校验结果的颜色生效
+            # ★ 所有 STATIC 一律透明底：原生默认主题会在标签后面画灰块（截图里
+            # 「资产名称」那种），是「土」的直接来源。白刷只作背景兜底。
+            win32gui.SetBkMode(wparam, win32con.TRANSPARENT)
+            win32gui.SetTextColor(wparam, win32api.RGB(*_COLOR_TEXT))
+            brush = win32gui.GetStockObject(win32con.WHITE_BRUSH)
+            # 结果条整行染色（含 ● 前缀）：原来灰字看不出校验成功
             if target == int(self._result_static or 0) and self._result_color:
                 win32gui.SetTextColor(wparam, win32api.RGB(*self._result_color))
-                win32gui.SetBkMode(wparam, win32con.TRANSPARENT)
-                return win32gui.GetStockObject(win32con.WHITE_BRUSH)
+                return brush
             if target == int(self._error_static or 0):
-                # 错误行画红：返回画刷前先把文字颜色设上
+                # 保存错误仍整行红（简式与结果条共用控件，_show_error 会清 result_color）
                 win32gui.SetTextColor(wparam, win32api.RGB(*_COLOR_ERROR))
-                win32gui.SetBkMode(wparam, win32con.TRANSPARENT)
-                return win32gui.GetStockObject(win32con.WHITE_BRUSH)
+                return brush
             if target == int(self._hotkey_hint or 0):
                 win32gui.SetTextColor(wparam, win32api.RGB(*_COLOR_FAINT))
-                win32gui.SetBkMode(wparam, win32con.TRANSPARENT)
-                return win32gui.GetStockObject(win32con.WHITE_BRUSH)
+                return brush
+            return brush
         if msg == win32con.WM_CLOSE:
             self._close(saved=False)
             return 0
@@ -1250,12 +1374,12 @@ class ElementEditDialog:
         return ""
 
     def _set_result(self, text: str, color: tuple[int, int, int]) -> None:
-        """写结果条（复用 info 行）；颜色在 ``WM_CTLCOLORSTATIC`` 里落地。"""
+        """写结果条（复用 info 行）；● 前缀和颜色都由 STATIC 自己画。"""
         import win32gui
 
         self._result_color = color
         if self._result_static:
-            win32gui.SetWindowText(self._result_static, text)
+            win32gui.SetWindowText(self._result_static, "●  " + text)
             win32gui.InvalidateRect(self._result_static, None, True)
 
     def _restore_ui(self, hwnd) -> None:
@@ -1360,9 +1484,31 @@ class ElementEditDialog:
             return
         self._checking = False
         self._restore_ui(hwnd)
-        self._render_result(result)
+        self._render_result(hwnd, result)
 
-    def _render_result(self, result: EditCheckResult) -> None:
+    def _ensure_shot_view(self, hwnd, shot: Any) -> None:
+        """校验拿到截图才展开预览区：默认紧凑，不为「可能有的图」先留 280px。"""
+        import win32con
+        import win32gui
+
+        if self._shot_view is None:
+            self._shot_h = _fit_shot_height(self._base_h)
+            if self._shot_h <= 0:
+                return
+            view = ShotView()
+            if not view.create(hwnd, self._shot_x, self._shot_y, self._shot_w, self._shot_h):
+                return
+            self._shot_view = view
+            # 外框加高「截图高度 + 间距」，顶部保持原位（不重新居中，免得框跳走）
+            left, top, right, bottom = win32gui.GetWindowRect(hwnd)
+            win32gui.SetWindowPos(
+                hwnd, 0, 0, 0,
+                right - left, (bottom - top) + self._shot_h + _SHOT_GAP,
+                win32con.SWP_NOMOVE | win32con.SWP_NOZORDER | win32con.SWP_NOACTIVATE,
+            )
+        self._shot_view.set_shot(shot)
+
+    def _render_result(self, hwnd, result: EditCheckResult) -> None:
         if result.error_code and result.error_code != "tree-missing":
             color = _COLOR_ERROR
         elif result.success:
@@ -1370,8 +1516,8 @@ class ElementEditDialog:
         else:
             color = _COLOR_WARN
         self._set_result(result.message, color)
-        if self._shot_view is not None and result.shot:
-            self._shot_view.set_shot(result.shot)
+        if result.shot:
+            self._ensure_shot_view(hwnd, result.shot)
 
     # -- 保存 / 关闭 ------------------------------------------------------------
     def _try_save(self) -> None:

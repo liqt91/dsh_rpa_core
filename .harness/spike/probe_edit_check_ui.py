@@ -17,6 +17,7 @@ sys.path.insert(0, str(ROOT / "src"))
 from PIL import Image, ImageDraw  # noqa: E402
 
 from rpa_core.capture_kit import ElementEditDialog  # noqa: E402
+from rpa_core.capture_kit.edit_check import EditCheckResult  # noqa: E402
 from rpa_core.capture_kit.selector_tree import levels_from_path  # noqa: E402
 
 _PRINT_CHILDREN = 0x1 | 0x4 | 0x8 | 0x10 | 0x20
@@ -96,14 +97,35 @@ def main() -> int:
         print("FAIL: 窗口没建起来")
         return 1
     time.sleep(0.8)
+    import win32gui
+
+    wl, wt, _, _ = win32gui.GetWindowRect(hwnd)
+    print("shift", dialog._shift, "base_h", dialog._base_h)
+    import win32api
+
+    print("tooltip hwnd:", dialog._tooltip, "buffers:", len(dialog._tooltip_buffers))
+    left, top, right, bottom = win32gui.GetWindowRect(dialog._level_boxes[-1])
+    try:/n        win32api.SetCursorPos(((left + right) // 2, (top + bottom) // 2))
+    except Exception:/n        pass
+    time.sleep(1.5)
+    visible: list[int] = []
+
+    def collect(hwnd, _acc):
+        if win32gui.GetClassName(hwnd) == "tooltips_class32" and win32gui.IsWindowVisible(hwnd):
+            visible.append(hwnd)
+
+    win32gui.EnumWindows(collect, None)
+    print("visible tooltips on hover:", len(visible))
     save(grab(int(hwnd)), "out_edit_ui_empty.png")
 
-    # 伪装一次「找到 1 个」：结果条 + 截图都要动
-    dialog._set_result("找到 1 个元素", (22, 132, 74))
-    if dialog._shot_view is not None:
-        dialog._shot_view.set_shot(fake_shot())
-    time.sleep(0.5)
+    # 伪装一次「找到 1 个」：走 _render_result，截图区按需展开（A 档折叠）
+    dialog._render_result(
+        int(hwnd),
+        EditCheckResult(success=True, count=1, message="找到 1 个元素", shot=fake_shot()),
+    )
+    time.sleep(0.6)
     save(grab(int(hwnd)), "out_edit_ui_shot.png")
+    print("expanded:", dialog._shot_view is not None, "shot_h:", dialog._shot_h)
 
     dialog.close()
     time.sleep(0.3)

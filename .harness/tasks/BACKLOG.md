@@ -5,6 +5,8 @@
 
 ## 当前任务
 
+- [x] **捕获框界面 A 档改造（M107）**（`done`，2026-11-25）——维护者反馈「原生快但界面土」，给 A/B/C 三档后选 A。窗口按实际层数收缩（4 层 552→360）、截图区折叠到校验拿到图才展开、属性值框统一列、STATIC 去灰底、结果条 `●  找到 N 个` 染色、按钮聚拢右下、层级行挂全文 tooltip。不动模型/消息流/校验逻辑。B 自绘皮肤与 C 换栈明确不做。负向 2/2+元验证、md5 还原；FULL GATE PASSED（1189 passed）。细则 `M107-capture-dialog-skin.md`。
+
 - [x] **影刀筛选器对标收口（M106 / ADR 0023 §5）**（`done`，2026-11-25）——按 B 档落地：属性名降级、`index-of-type` 候选、`svg` 特化进 `content.js` 纯函数层；勾选态经 `selector_tree.preferred_candidates` 在 `element_editing.apply_selector` 回喂候选顺序（原生/Web 同内核，UI 门禁 44/44 成对）；运行期 `matchedCount>1` 走候选唯一化，救援失败写 `resolved:false` 不静默当唯一，不改 `page.call` 签名。EXT_BUILD 三方 `0.11.0`（须重载扩展）。负向 5 注入 + 1 元验证全命中、md5 还原；FULL GATE PASSED（1187 passed）。细则 `M106-selector-optimizer-followup.md`。
 
 - [x] **网页元素筛选器优化（M105 / ADR 0023）**（`done`，2026-11-25）——按维护者「全量复刻」拍板：生成侧补齐影刀的属性过滤/优先级、逐属性贪心试到唯一、class 累加与状态类/哈希清洗、文本剥动态数字、URL 去 query、冗余层级剪枝、shadow 分段；主 CSS 改选「最能消歧 class」，不稳定 id 不主锚（`usedClasses` 与编辑器勾选同步）。运行期 `domOp.query` 按 `xpath:` / `shadow:` 前缀分派，**不改 page.call 签名**。新门禁 `check_selector_query_kinds.mjs` + 负向 5 注入/元验证全命中；FULL GATE PASSED（1183 passed）。★ 用户必须**重新加载扩展**（版本 0.9.7 → 0.10.0），Load unpacked 是快照。

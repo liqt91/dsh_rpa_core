@@ -506,6 +506,11 @@
       "id": "selector-optimizer-followup",
       "title": "影刀筛选器对标收口：属性名降级、index-of-type 候选、勾选优先两轮、运行期唯一性 Stats（M106）",
       "passes": true
+    },
+    {
+      "id": "capture-dialog-skin",
+      "title": "捕获框界面 A 档：按内容收缩、截图区折叠、统一对齐、去灰底、状态条与悬停全文（M107）",
+      "passes": true
     }
   ]
 }
