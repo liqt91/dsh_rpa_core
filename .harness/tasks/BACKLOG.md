@@ -5,6 +5,8 @@
 
 ## 当前任务
 
+- [x] **网页元素筛选器优化（M105 / ADR 0023）**（`done`，2026-11-25）——按维护者「全量复刻」拍板：生成侧补齐影刀的属性过滤/优先级、逐属性贪心试到唯一、class 累加与状态类/哈希清洗、文本剥动态数字、URL 去 query、冗余层级剪枝、shadow 分段；主 CSS 改选「最能消歧 class」，不稳定 id 不主锚（`usedClasses` 与编辑器勾选同步）。运行期 `domOp.query` 按 `xpath:` / `shadow:` 前缀分派，**不改 page.call 签名**。新门禁 `check_selector_query_kinds.mjs` + 负向 5 注入/元验证全命中；FULL GATE PASSED（1183 passed）。★ 用户必须**重新加载扩展**（版本 0.9.7 → 0.10.0），Load unpacked 是快照。
+
 - [x] **分支治理同步：`apps/editor` 迁移要在另两条分支重做一遍**（`done`，2026-11-25）——
   ADR 0021 把编辑器从 `.harness/demo/ppx_probe/app` 迁到 `apps/editor`，同时把
   `branch-scope.json` 改成「编辑器整棵共享 + `ppx-only` 独占收窄为 `apps/editor/build/`」。

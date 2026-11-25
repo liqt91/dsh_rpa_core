@@ -55,7 +55,8 @@ FILES = {
 
 JS_SUITE = "scripts/check_capture_helpers.mjs"
 PY_SUITES = {
-    "contract": ["tests/contract/test_capture_extension.py"],
+    # 历史 test_capture_extension.py 已删；三方一致判据现由 test_extension_build_marker.py 承担。
+    "contract": ["tests/contract/test_extension_build_marker.py"],
 }
 
 _SENTINEL_JS = "// [M52-NTH-NEGATIVE]"
@@ -202,7 +203,7 @@ def main() -> int:
 
     content = "content"
     helpers = "helpers"  # noqa: F841  （预留：本次无 helpers 侧注入）
-    gating = "        if (same.length > 1 && ambiguous) {"
+    gating = "      if (same.length > 1 && ambiguous) {"
 
     # 末元素 = 期望失败集：js 为**判据 label 的子串集合**（断言每条 FAIL 都落在期望内且非空）；
     # py 为**用例名集合**（断言「实际红 ⊆ 期望红」且非空）。
@@ -212,16 +213,16 @@ def main() -> int:
             "js",
             content,
             gating,
-            "        if (same.length > 1) {",
-            {"无 id", "祖先链每级可展示", "特征 class 唯一"},
+            "      if (same.length > 1) {",
+            {"无 id", "祖先链每级可展示", "特征 class 唯一", "次位特征 class"},
         ),
         (
             "I2 content：gating 恒假 ⇒ 永远不补号（过度去号）",
             "js",
             content,
             gating,
-            "        if (false) {",
-            {"同构列表", "首类不足以唯一化时", "祖先链收缩候选"},
+            "      if (false) {",
+            {"同构列表", "祖先链收缩候选"},
         ),
         (
             "I3 content：classListOf 恒空 ⇒ 片段丢 class（首类不再参与唯一化判断）",
@@ -231,7 +232,8 @@ def main() -> int:
             "  const classListOf = (node) => (false",
             {
                 "无 id", "祖先链每级可展示", "特征 class 唯一",
-                "同构列表", "首类不足以唯一化时", "祖先链收缩候选",
+                "同构列表", "祖先链收缩候选", "次位特征 class",
+                "stableClassesOf", "shadowCssFor",
             },
         ),
         (

@@ -54,7 +54,8 @@ JS_SUITE = "scripts/check_capture_helpers.mjs"
 
 PY_SUITES = {
     "ranking": ["tests/contract/test_web_candidate_ranking.py"],
-    "contract": ["tests/contract/test_capture_extension.py"],
+    # 历史 test_capture_extension.py 已删；三方一致判据现由 test_extension_build_marker.py 承担。
+    "contract": ["tests/contract/test_extension_build_marker.py"],
 }
 
 ALL_PY = PY_SUITES["ranking"] + PY_SUITES["contract"]
@@ -269,7 +270,11 @@ def main() -> int:
             helpers,
             "    return true;\n  }\n  return false;\n};",
             "    return false;\n  }\n  return false;\n};",
-            {"祖先链收缩候选", "只有 class 的元素"},
+            {
+                "祖先链收缩候选", "只有 class 的元素",
+                # M105 新判据也吃桩 DOM 的 class 分支（级联失败合理，补进期望集）：
+                "pruneCssFor", "countFor 按 shadow",
+            },
         ),
     ]
 

@@ -496,6 +496,11 @@
       "id": "editor-graduation",
       "title": "Editor client graduated: .harness/demo/ppx_probe/app → apps/editor, ruff-gated, branch scope shared",
       "passes": true
+    },
+    {
+      "id": "selector-optimizer",
+      "title": "影刀式网页筛选器优化：稳定属性过滤、贪心唯一化、class/text/link 特化、shadow/xpath 候选（M105）",
+      "passes": true
     }
   ]
 }

@@ -15,7 +15,7 @@ const HOST_NAME = "com.rpa_core.ext_bridge";
 // 快照（2026-09-29 真机排障：仓库已修好「已开网页无红框」，但浏览器还跑着旧 background，
 // 表现成「修复无效」）。把标识随 ack/进度/结果回传，host 侧对账即可判「扩展过期」，
 // 不用再靠症状猜。
-const EXT_BUILD = "0.9.7";
+const EXT_BUILD = "0.10.0";
 const RECONNECT_MS = 3000;      // 断开后的重连退避
 const ALARM_NAME = "rpa-bridge-reconnect";  // SW 被回收时的兜底拉起（MV3 alarm 最小 30s）
 const PERMISSION_KEY = "rpaExecPermission";
@@ -1121,7 +1121,44 @@ async function pageCall(args) {
 
 async function domOp(payload) {
   const { selector, method, args } = payload;
-  const query = (sel) => (sel ? Array.from(document.querySelectorAll(sel)) : []);
+  // M105：选择器前缀是协议的一部分（不扩 page.call 参数面，测试桩保持可用）：
+  //   `xpath:` → document.evaluate；`shadow:` → 按 ::shadow 逐 shadowRoot 穿透；
+  //   其它（含主 css）仍走 querySelectorAll。未知前缀按原样进 CSS 查询，由浏览器报错。
+  const query = (sel) => {
+    if (!sel) return [];
+    if (sel.startsWith("xpath:")) {
+      try {
+        const snapshot = document.evaluate(
+          sel.replace(/^xpath:/, ""), document, null, 5 /* ORDERED_NODE_SNAPSHOT_TYPE */, null,
+        );
+        const out = [];
+        for (let i = 0; i < snapshot.snapshotLength; i += 1) out.push(snapshot.snapshotItem(i));
+        return out;
+      } catch {
+        return [];
+      }
+    }
+    if (sel.startsWith("shadow:")) {
+      const parts = sel.replace(/^shadow:/, "").split("::shadow")
+        .map((part) => part.trim()).filter(Boolean);
+      let roots = [document];
+      for (let i = 0; i < parts.length; i += 1) {
+        const found = [];
+        for (const scope of roots) {
+          for (const node of scope.querySelectorAll(parts[i])) {
+            // 最后一段取目标本身；前面各段只负责穿透到下一层 shadowRoot。
+            if (i === parts.length - 1 || node.shadowRoot) {
+              found.push(i === parts.length - 1 ? node : node.shadowRoot);
+            }
+          }
+        }
+        roots = found;
+        if (!roots.length) return [];
+      }
+      return roots;
+    }
+    return Array.from(document.querySelectorAll(sel));
+  };
   const fire = (el, type, init) => {
     el.dispatchEvent(new (type.startsWith("key") ? KeyboardEvent : MouseEvent)(type, init));
   };
@@ -1400,7 +1437,7 @@ async function domOp(payload) {
     return { matchedCount: list.length, result: list.length };
   }
   if (method === "scroll") {
-    const target = selector ? document.querySelector(selector) : null;
+    const target = selector ? query(selector)[0] || null : null;
     if (selector && !target) return { matchedCount: 0, result: null };
     const behavior = args.smooth ? "smooth" : "auto";
     const position = args.position || "bottom";
@@ -1416,7 +1453,7 @@ async function domOp(payload) {
     };
   }
   if (method === "queryAll") {
-    const list = selector ? Array.from(document.querySelectorAll(selector)) : [];
+    const list = selector ? query(selector) : [];
     const items = list.map((n) => (n.innerText == null ? n.textContent : n.innerText) || "");
     return { matchedCount: items.length, result: items };
   }
@@ -1424,7 +1461,7 @@ async function domOp(payload) {
     // M53：除当前位置外，额外如实回带**可滚动内容总长**（scrollWidth/scrollHeight），
     // 供「底部位置（即滚动条长度）」口径使用。轴向与口径的选取**不在这里做**——
     // 扩展只报数，host 侧 `browser.py::_scroll_position_value` 是唯一权威（两套算法会漂移）。
-    const target = selector ? document.querySelector(selector) : null;
+    const target = selector ? query(selector)[0] || null : null;
     if (selector && !target) return { matchedCount: 0, result: null };
     if (target) {
       return {
@@ -1452,8 +1489,9 @@ async function domOp(payload) {
     };
   }
 
-  const el = selector ? document.querySelector(selector) : null;
-  const matchedCount = selector ? document.querySelectorAll(selector).length : 0;
+  const list = selector ? query(selector) : [];
+  const el = list[0] || null;
+  const matchedCount = list.length;
   if (!el || matchedCount === 0) return { matchedCount: 0, result: null };
 
   // 可操作动作先让元素进入视口：预检的「在视口内 / 未被遮挡」必须在滚动后再判，

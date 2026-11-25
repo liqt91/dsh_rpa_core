@@ -33,19 +33,51 @@ const unescape = (value) => String(value).replace(/\\(.)/g, "$1");
 const registry = new Map();
 let page = [];
 
+const unquoteXPath = (literal) => String(literal).replace(/^'|'$/g, "").replace(/', "'", '/g, "'");
+
+// M105：桩 XPath 只覆盖我们生成的三种谓词（contains / starts-with / substring 等价 ends-with）。
 const document = {
   getElementById: (id) => registry.get(id) || null,
   querySelectorAll: (selector) => page.filter((node) => matches(node, selector)),
+  evaluate: (expr) => {
+    const parsed = String(expr).match(/^\/\/([a-z0-9]+)\[([\s\S]+)\]$/i);
+    if (!parsed) throw new Error(`桩 XPath 不支持：${expr}`);
+    const predicate = parsed[2];
+    const textOf = (node) => String(node.innerText ?? node.textContent ?? "")
+      .replace(/\s+/g, " ").trim();
+    let test = null;
+    let hit = predicate.match(/^contains\(normalize-space\(\.\), ([\s\S]+)\)$/);
+    if (hit) test = (node) => textOf(node).includes(unquoteXPath(hit[1]));
+    hit = hit || predicate.match(/^starts-with\(normalize-space\(\.\), ([\s\S]+)\)$/);
+    if (test === null && hit) test = (node) => textOf(node).startsWith(unquoteXPath(hit[1]));
+    hit = hit || predicate.match(
+      /^substring\(normalize-space\(\.\), string-length\(normalize-space\(\.\)\) - (\d+)\) = ([\s\S]+)$/,
+    );
+    if (test === null && hit) {
+      const value = unquoteXPath(hit[2]);
+      // 谓词里的数是「值长-1」，XPath substring 从 1 起算 ⇒ JS 取末 (数+1) 个字符。
+      test = (node) => textOf(node).slice(-(Number(hit[1]) + 1)) === value;
+    }
+    if (!test) throw new Error(`桩 XPath 谓词不支持：${predicate}`);
+    const out = page.filter((node) => node.tagName.toLowerCase() === parsed[1].toLowerCase() && test(node));
+    return { snapshotLength: out.length, snapshotItem: (index) => out[index] };
+  },
 };
 
 // 单段：`#id` / `tag[attr="v"]` / `tag.class.class` / `tag…:nth-of-type(n)`。
 const matchesSimple = (node, segment) => {
   const byId = segment.match(/^#(.+)$/);
   if (byId) return node.id === unescape(byId[1]);
-  const byAttr = segment.match(/^([a-z0-9]+)\[([a-z-]+)="([\s\S]*)"\]$/);
+  const byAttr = segment.match(/^([a-z0-9]+)\[([a-z-]+)([*^$]?)="([\s\S]*)"\]$/);
   if (byAttr) {
     if (node.tagName.toLowerCase() !== byAttr[1]) return false;
-    return node.getAttribute(byAttr[2]) === unescape(byAttr[3]).replace(/\\\\/g, "\\");
+    const actual = node.getAttribute(byAttr[2]);
+    if (actual == null) return false;
+    const want = unescape(byAttr[4]).replace(/\\\\/g, "\\");
+    if (byAttr[3] === "*") return String(actual).includes(want);
+    if (byAttr[3] === "^") return String(actual).startsWith(want);
+    if (byAttr[3] === "$") return String(actual).endsWith(want);
+    return String(actual) === want;
   }
   const byClass = segment.match(/^([a-z0-9]+)((?:\.[^.:>\s]+)*)(?::nth-of-type\((\d+)\))?$/);
   if (byClass) {
@@ -64,17 +96,31 @@ const matchesSimple = (node, segment) => {
   return false;
 };
 
-// 后代组合 `A > B`（pathEntryFor 产的就是逐级 `>`）：末段匹 B，再**逐级**沿 parentElement 上溯匹前面各级。
-// （注：朴素 split 对属性值里含 " > " 的极端选择器不成立——桩 DOM 只求覆盖被测形态。）
+// 组合选择器：`A > B` 与 `A B`（pruneCssFor 删中间层后会用后代连接符）。
+// 桩 DOM 统一按「逐级上溯」处理两种连接符——只求覆盖被测形态，不模拟浏览器优先级差异。
+// （注：朴素 split 对属性值里含 " > " 的极端选择器不成立。）
 const matches = (node, selector) => {
-  const parts = selector.split(" > ");
-  if (!matchesSimple(node, parts[parts.length - 1])) return false;
-  let current = node.parentElement;
-  for (let i = parts.length - 2; i >= 0; i -= 1) {
-    if (!current || !matchesSimple(current, parts[i])) return false;
-    current = current.parentElement;
+  const tokens = selector.trim().split(/\s+/).filter(Boolean);
+  const steps = [];
+  let combinator = " ";
+  for (const token of tokens) {
+    if (token === ">") { combinator = ">"; continue; }
+    steps.push({ selector: token, combinator });
+    combinator = " ";
   }
-  return true;
+  if (!steps.length) return false;
+  const walk = (current, index) => {
+    if (!current || !matchesSimple(current, steps[index].selector)) return false;
+    if (index === 0) return true;
+    if (steps[index].combinator === ">") return walk(current.parentElement, index - 1);
+    let ancestor = current.parentElement;
+    while (ancestor) {
+      if (walk(ancestor, index - 1)) return true;
+      ancestor = ancestor.parentElement;
+    }
+    return false;
+  };
+  return walk(node, steps.length - 1);
 };
 
 const textNode = (text) => ({ nodeType: 3, textContent: text });
@@ -94,6 +140,7 @@ const makeEl = (spec = {}) => {
     textContent: spec.text || "",
     innerText: spec.innerText || spec.text || "",
     attributes: spec.attrs || {},
+    shadowRoot: spec.shadowRoot || null,
     parentElement: null,
     children: [],
     getAttribute(name) {
@@ -120,9 +167,13 @@ const parentOf = (parent, children) => {
 const {
   roleOf, accessibleName, cssSelectorFor, pathFor, candidatesFor, labelTextOf, containerTextOf,
   isCaptureModifier, isSecondaryClick, cursorKeyOf, cursorStyleText,
+  isStableValue, stableIdOf, stableClassesOf, extractAttributes, attributeOrderFor,
+  textXpathFor, linkFragmentFor, greedyCssFor, pruneCssFor, countFor, shadowCssFor,
 } = new Function("document", "CSS", `${slice}
 return { roleOf, accessibleName, cssSelectorFor, pathFor, candidatesFor, labelTextOf,
-  containerTextOf, isCaptureModifier, isSecondaryClick, cursorKeyOf, cursorStyleText };`)(
+  containerTextOf, isCaptureModifier, isSecondaryClick, cursorKeyOf, cursorStyleText,
+  isStableValue, stableIdOf, stableClassesOf, extractAttributes, attributeOrderFor,
+  textXpathFor, linkFragmentFor, greedyCssFor, pruneCssFor, countFor, shadowCssFor };`)(
   document, CSS,
 );
 
@@ -223,13 +274,12 @@ check("同构列表取第 2 项 ⇒ 补 :nth-of-type(2)（class 分不开，位�
   cssSelectorFor(hot2), "#hotsearch-content-wrapper > li.hotsearch-item:nth-of-type(2)");
 check("同构列表取第 1 项 ⇒ :nth-of-type(1)",
   cssSelectorFor(hot1), "#hotsearch-content-wrapper > li.hotsearch-item:nth-of-type(1)");
-// 已知取舍：片段只取**首类**，特征 class 若排在次位则首类不足以唯一化、仍会补序号。
-// 要根治需让片段按「最能消歧的 class」选——那会改动 fragment 语义与界面「首类勾选」口径，
-// 属另一处切片，此处如实钉住现状（防止被当成已修）。
+// M105：不再固定「首类」——按最能消歧的 class 累加；同时「含数字的 id」按影刀
+// isStableValue 判为不稳定，不当主锚点（等价临时摘掉 id 再构建）。
 const pinned = makeEl({ tag: "LI", classes: ["hotsearch-item", "pinned"] });
 parentOf(makeEl({ tag: "UL", id: "list2" }), [hot1, pinned, hot3]);
-check("首类不足以唯一化时（特征 class 在次位）仍补序号——现状，见上方注释",
-  cssSelectorFor(pinned), "#list2 > li.hotsearch-item:nth-of-type(2)");
+check("次位特征 class 参与判别 ⇒ 不补序号；不稳定 id(list2) 不进主 css",
+  cssSelectorFor(pinned), "ul > li.hotsearch-item.pinned");
 
 // 捕获光标（按下 Ctrl/⌘ 未点击时的就绪反馈）：纯函数层只判「哪个键算修饰键」与样式文本，
 // 真正的 DOM 开关在 check_capture_lifecycle.mjs 里用桩真求值。
@@ -304,6 +354,70 @@ check("只有 class 的元素也拿得到候选（补属性候选恒空的位）
 page = [makeEl({ tag: "INPUT", id: "kw" })];
 check("有 id 的元素不产祖先链候选（单级链没有更短写法）",
   candidatesFor(page[0], "#kw").filter((c) => c.kind === "path"), []);
+
+// ---- M105：影刀式筛选器优化（S1 过滤 / S2 稳定化 / S3 特化） ------------------
+check("isStableValue：纯字母与连字符稳定，含数字判生成值",
+  [isStableValue("search-area"), isStableValue("btn-a1b2c3"), isStableValue("ember123")],
+  [true, false, false]);
+const messy = makeEl({
+  tag: "BUTTON",
+  classes: ["btn", "btn--a1b2c3", "hover", "is-open", "active"],
+  attrs: {
+    style: "color:red", count: "123", both: `'"`,
+    "data-testid": "save", title: "x".repeat(60),
+  },
+});
+check("extractAttributes 剔 style / 纯数字 / 双引号混用 / 超长值",
+  extractAttributes(messy).map((entry) => entry.name), ["data-testid"]);
+check("stableClassesOf 剔状态类并裁构建哈希后缀",
+  stableClassesOf(messy).map((entry) => entry.value), ["btn"]);
+check("attributeOrderFor：a 优先 href、role 元素优先 role、默认从 type 起",
+  [attributeOrderFor(makeEl({ tag: "A" }))[0],
+    attributeOrderFor(makeEl({ tag: "DIV", attrs: { role: "tab" } }))[0],
+    attributeOrderFor(makeEl({ tag: "DIV" }))[0]],
+  ["href", "role", "type"]);
+
+const numbered = makeEl({ tag: "DIV", innerText: "12345 详情" });
+const textXpath = textXpathFor(numbered);
+check("textXpathFor 剥动态数字，XPath 1.0 用 substring 模拟 ends-with",
+  textXpath,
+  "xpath://div[substring(normalize-space(.), string-length(normalize-space(.)) - 1) = '详情']");
+page = [numbered];
+check("countFor 按 xpath 分派到 document.evaluate", countFor("xpath", textXpath), 1);
+check("linkFragmentFor 去 query/fragment 后用子串匹配",
+  linkFragmentFor(makeEl({ tag: "A", attrs: { href: "https://x.test/search?a=1#top" } }), "href"),
+  'a[href*="https://x.test/search"]');
+
+page = [
+  makeEl({ tag: "INPUT", attrs: { "data-testid": "target" } }),
+  makeEl({ tag: "INPUT", attrs: { "data-testid": "other" } }),
+];
+check("greedyCssFor 按测试属性优先级试到唯一",
+  greedyCssFor(page[0]), 'input[data-testid="target"]');
+
+const pruned = makeEl({ tag: "SPAN", classes: ["target"] });
+const wrap = makeEl({ tag: "DIV", classes: ["wrap"] });
+const hostRoot = makeEl({ tag: "DIV", id: "root" });
+parentOf(hostRoot, [wrap]);
+parentOf(wrap, [pruned]);
+page = [hostRoot, wrap, pruned];
+check("pruneCssFor 贪心删掉命中集不变的中间层（改成后代连接符）",
+  pruneCssFor("#root > div.wrap > span.target", pruned), "#root span.target");
+
+const shadowTarget = makeEl({ tag: "SPAN", classes: ["target"] });
+const shadowRootStub = {
+  host: null,
+  querySelectorAll: (selector) => page.filter((node) => matches(node, selector)),
+};
+const shadowHost = makeEl({ tag: "DIV", id: "host", shadowRoot: shadowRootStub });
+shadowRootStub.host = shadowHost;
+shadowTarget.getRootNode = () => shadowRootStub;
+shadowHost.getRootNode = () => document;
+page = [shadowHost, shadowTarget];
+check("shadowCssFor 用 ::shadow 分段（host 在主文档，目标在 shadowRoot）",
+  shadowCssFor(shadowTarget), "shadow:#host ::shadow span.target");
+check("countFor 按 shadow 分派逐层穿透，最后一段取目标本身",
+  countFor("shadow", "shadow:#host ::shadow span.target"), 1);
 
 // 捕获手势（回归：macOS 的 Ctrl+Click 只派发 contextmenu，不派发 ctrlKey 的 click）
 check("Ctrl+左键（Windows/Linux）算捕获手势",

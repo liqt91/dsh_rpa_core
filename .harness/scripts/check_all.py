@@ -63,6 +63,9 @@ PURE_FUNCTION_SCRIPTS = (
     "check_param_groups.mjs",
     "check_retry_policy.mjs",
     "check_capture_helpers.mjs",
+    # M105 运行期选择器分派（xpath/shadow 前缀）：不扩 page.call 参数面，
+    # 所以必须有门禁用真切片证明 domOp.query 真按前缀取到了目标，而不是只写了 if。
+    "check_selector_query_kinds.mjs",
     # 元素捕获 UI 判据（M68）：文案禁词 / 样式命中区 / 结构单按钮 /
     # 最小 DOM shim 真跑「点一下→弹编辑框→确认才入库→取消就丢弃→详情改名」。
     "check_element_pick_ui.mjs",

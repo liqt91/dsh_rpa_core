@@ -23,7 +23,7 @@
   // 构建标识：与 background.js 的 EXT_BUILD、manifest.json 的 version 三方一致（契约测试钉住）。
   // 随捕获结果回传——诊断「页面里跑的脚本是哪个年代的」（Load unpacked 不自动重载，
   // 补注入前已开页面里的可能还是旧快照；见 background.js 顶部的完整说明）。
-  const EXT_BUILD = "0.9.7";
+  const EXT_BUILD = "0.10.0";
 
   // ---- 实例接管守卫（M42）----------------------------------------------------
   // 声明式 content_scripts **只在页面加载时**注入：扩展装载/重载后，已经打开的标签页
@@ -147,34 +147,44 @@
     : []);
 
   const pathEntryFor = (node) => {
-    const id = node.id || "";
+    // M105：id 只有「稳定」（影刀 isStableValue）才当锚点；含数字/哈希的 id 与构建哈希
+    // class 一样属于运行期值，改走 class 判别。等价影刀「临时摘掉不稳定 id 再构建」，
+    // 但不真改 DOM（真改会踩到站点自己的脚本）。
+    const id = stableIdOf(node);
     const classes = classListOf(node);
     let nthOfType = null;
     let fragment;
+    const usedClasses = [];
     if (id) {
-      // 带 id 即终止上溯（唯一标识，再往上写路径只会变脆）——与升级前同口径
       fragment = "#" + CSS.escape(id);
     } else {
       fragment = node.tagName.toLowerCase();
-      if (classes.length) fragment += "." + CSS.escape(classes[0]);
       const parent = node.parentElement;
-      if (parent) {
-        const same = Array.from(parent.children).filter((c) => c.tagName === node.tagName);
-        // 「同标签兄弟不止一个」只是补 :nth-of-type 的**必要**条件，不是**充分**条件：
-        // 本层片段是 `tag + 首类`，若该片段在同标签兄弟间已唯一，位置序号纯属多余——
-        // 父节点多几个同标签兄弟就跟着变号，页面一重排 / 插入兄弟即失效。仅当片段
-        // **仍不唯一**时才补序号：同构列表（每个 li.hotsearch-item 一模一样）靠它才分得开，
-        // 而 div.search-area 这类特征 class 不再被硬塞序号。
-        const cls = classes[0];
-        const ambiguous = !cls
-          || same.filter((c) => classListOf(c).includes(cls)).length > 1;
-        if (same.length > 1 && ambiguous) {
-          nthOfType = same.indexOf(node) + 1;
-          fragment += ":nth-of-type(" + nthOfType + ")";
-        }
+      const same = parent
+        ? Array.from(parent.children).filter((c) => c.tagName === node.tagName) : [];
+      // 影刀 handleClassAttr：剔状态类/哈希后缀后逐个 class 累加，先看哪个组合把本层
+      // 从同标签兄弟里分出来；不再固定「首类」。裁过哈希的 class 用 [class*="base"]。
+      let ambiguous = true;
+      for (const cls of stableClassesOf(node)) {
+        const piece = cls.trimmed
+          ? `[class*="${attrValue(cls.value)}"]` : "." + CSS.escape(cls.value);
+        fragment += piece;
+        // 勾选态用原始 class 名（哈希被裁掉时编辑器仍勾得到那一类）；fragment 用 base。
+        usedClasses.push(cls.original);
+        const hits = same.filter((c) => cls.trimmed
+          ? String(c.className || "").includes(cls.value)
+          : classListOf(c).includes(cls.value)).length;
+        if (hits <= 1) { ambiguous = false; break; }
+      }
+      // 只有 class 组合仍分不开时才补位置序号（同构列表靠它区分，特征 class 不再被塞号）。
+      if (same.length > 1 && ambiguous) {
+        nthOfType = same.indexOf(node) + 1;
+        fragment += ":nth-of-type(" + nthOfType + ")";
       }
     }
-    return { tag: node.tagName.toLowerCase(), id: id || null, classes, nthOfType, fragment };
+    return {
+      tag: node.tagName.toLowerCase(), id: id || null, classes, usedClasses, nthOfType, fragment,
+    };
   };
 
   /** 目标 → 页面根的**完整**祖先链（每级一个 pathEntryFor 结果）。
@@ -222,6 +232,331 @@
     return el.tagName.toLowerCase() + "[" + name + '="' + attrValue(raw) + '"]';
   };
 
+  // ---- M105：影刀式筛选器优化（纯函数层） -----------------------------------
+  // 信源：影刀网页元素筛选器优化报告 §1~§6（ADR 0023）。原则：过滤易变原料 →
+  // 按属性优先级贪心试到唯一 → 删冗余节点 → 清洗哈希/状态值。所有新写法都实测
+  // matchedCount，交给 M52 的排序引擎择优；主 CSS 仍由 pathEntryFor 生成，保证
+  // 编辑器层级勾选模型可表达（XPath / shadow 只做候选）。
+  const HTML_NS = "http://www.w3.org/1999/xhtml";
+  const ATTR_NAME_RE = /^[A-Za-z_][A-Za-z0-9_.-]*$/;
+  const STATE_CLASS_RE = /hover|[^a-zA-Z]+(?:on|open|active)|active/i;
+  const HASH_SUFFIX_RE = /(-{2,}|_{2,})[a-zA-Z\d]{5,}$/;
+
+  // 影刀 isStableValue：按 -/_ 切分后每段必须全字母；含数字即视为运行期生成。
+  const isStableValue = (value) => {
+    const text = String(value || "").trim();
+    if (!text) return true;
+    return text.split(/[-_]+/).every((token) => /^[a-zA-Z]+$/.test(token));
+  };
+
+  // 不稳定 id 不进候选、也不当主锚点（等价影刀「临时摘掉再构建」，但不真改 DOM）。
+  const stableIdOf = (node) => {
+    const id = node.id || "";
+    return id && isStableValue(id) ? id : "";
+  };
+
+  // 去状态 class 与构建哈希后缀；哈希被裁掉的 class 改用 [class*="base"] 描述。
+  const stableClassesOf = (node) => {
+    const out = [];
+    for (const cls of classListOf(node)) {
+      if (STATE_CLASS_RE.test(cls)) continue;
+      const base = cls.replace(HASH_SUFFIX_RE, "");
+      if (!base || out.some((entry) => entry.value === base)) continue;
+      out.push({ value: base, original: cls, trimmed: base !== cls });
+    }
+    return out.sort((a, b) => a.value.localeCompare(b.value));
+  };
+
+  // 影刀 extractAttributes：style / 纯数字 / 超长 / 双引号混用 / 内部 uid 全剔。
+  const extractAttributes = (el) => {
+    const out = [];
+    const names = typeof el.getAttributeNames === "function"
+      ? el.getAttributeNames()
+      : Object.keys(el.attributes || {});
+    for (const name of names) {
+      if (name === "style" || name === "uia-uid" || !ATTR_NAME_RE.test(name)) continue;
+      const value = el.getAttribute(name);
+      if (!value || (value.includes('"') && value.includes("'"))) continue;
+      if (/^\s*\d+\s*$/.test(value) || value.length >= 50) continue;
+      out.push({ name, value });
+    }
+    return out;
+  };
+
+  // 影刀 getTagNameOrder：测试属性在前、id 中后、位置兜底；按标签/角色调整。
+  const DEFAULT_ATTR_ORDER = [
+    "type", "data-cy", "data-testid", "data-test-id", "data-e2e", "data-test",
+    "aria-label", "name", "id", "title", "innerText", "class", "index-of-type",
+  ];
+  const TEXT_ATTR_ORDER = [
+    "data-cy", "data-testid", "data-test-id", "data-e2e", "data-test", "aria-label",
+    "innerText", "title", "type", "name", "id", "class", "index-of-type",
+  ];
+  const TAG_ATTR_ORDER = {
+    iframe: ["src", ...DEFAULT_ATTR_ORDER],
+    frame: ["src", ...DEFAULT_ATTR_ORDER],
+    a: ["href", ...TEXT_ATTR_ORDER],
+    label: TEXT_ATTR_ORDER,
+    button: TEXT_ATTR_ORDER,
+    th: TEXT_ATTR_ORDER,
+    li: TEXT_ATTR_ORDER,
+  };
+  const attributeOrderFor = (el) => {
+    const tag = el.tagName.toLowerCase();
+    if (TAG_ATTR_ORDER[tag]) return TAG_ATTR_ORDER[tag];
+    if (el.getAttribute && el.getAttribute("role")) return ["role", ...TEXT_ATTR_ORDER];
+    return DEFAULT_ATTR_ORDER;
+  };
+
+  // 影刀 liftFromNamespace：SVG 等非 HTML 命名空间上溯到 HTML 祖先再产 XPath。
+  const liftFromNamespace = (el) => {
+    let node = el;
+    while (node && node.namespaceURI && node.namespaceURI !== HTML_NS) node = node.parentElement;
+    return node || el;
+  };
+
+  const xpathLiteral = (value) => "'" + String(value).replace(/'/g, `', "'", '`) + "'";
+
+  // XPath 1.0（Chrome document.evaluate）没有 ends-with：用 substring 等价式。
+  const textXpathFor = (el) => {
+    const raw = String(el.innerText || el.textContent || "").replace(/\s+/g, " ").trim();
+    if (!raw || raw.length >= 50) return null;
+    const leading = raw.match(/^([\d., ()]+)[\s\S]+/);
+    const trailing = raw.match(/[\s\S]+?([\d., ()]+)$/);
+    let value = raw;
+    let op = "contains";
+    if (leading) {
+      value = value.slice(leading[1].length);
+      op = "ends";
+    }
+    if (trailing) {
+      value = value.slice(0, Math.max(0, value.length - trailing[1].length));
+      if (!leading) op = "starts";
+    }
+    value = value.trim();
+    if (!value || /\d/.test(value)) return null;  // 动态数字没剥干净 ⇒ 不拿它当条件
+    const target = "normalize-space(.)";
+    let predicate;
+    if (op === "starts") predicate = `starts-with(${target}, ${xpathLiteral(value)})`;
+    else if (op === "ends") {
+      predicate = `substring(${target}, string-length(${target}) - ${value.length - 1}) = ${xpathLiteral(value)}`;
+    } else predicate = `contains(${target}, ${xpathLiteral(value)})`;
+    // 前缀是协议的一部分：运行期 domOp 按它分派到 document.evaluate，不碰 page.call 签名。
+    return "xpath://" + liftFromNamespace(el).tagName.toLowerCase() + "[" + predicate + "]";
+  };
+
+  // href/src 去 query / fragment，用 CSS 子串匹配（影刀 handleLinkAttr）。
+  const linkFragmentFor = (el, name) => {
+    const raw = el.getAttribute(name);
+    if (!raw) return null;
+    const path = raw.split(/[?#]/)[0];
+    return path ? el.tagName.toLowerCase() + `[${name}*="${attrValue(path)}"]` : null;
+  };
+
+  const countFor = (kind, selector, root = document) => {
+    try {
+      if (kind === "xpath") {
+        if (!root.evaluate) return 0;
+        const expression = selector.replace(/^xpath:/, "");
+        return root.evaluate(expression, root, null, 5 /* ORDERED_NODE_SNAPSHOT_TYPE */, null).snapshotLength;
+      }
+      if (kind === "shadow") {
+        const parts = selector.replace(/^shadow:/, "").split("::shadow")
+          .map((part) => part.trim()).filter(Boolean);
+        let roots = [root];
+        for (let i = 0; i < parts.length; i += 1) {
+          const found = [];
+          for (const scope of roots) {
+            for (const node of scope.querySelectorAll(parts[i])) {
+              // 最后一段取目标本身；前面各段只负责穿透到下一层 shadowRoot。
+              if (i === parts.length - 1 || node.shadowRoot) {
+                found.push(i === parts.length - 1 ? node : node.shadowRoot);
+              }
+            }
+          }
+          roots = found;
+          if (!roots.length) return 0;
+        }
+        return roots.length;
+      }
+      return root.querySelectorAll(selector).length;
+    } catch {
+      return 0;
+    }
+  };
+
+  const uniqueFor = (selector, target, root = document) => {
+    const found = [];
+    try {
+      if (selector.startsWith("xpath:")) {
+        if (!root.evaluate) return false;
+        const snapshot = root.evaluate(selector.replace(/^xpath:/, ""), root, null, 5, null);
+        for (let i = 0; i < snapshot.snapshotLength; i += 1) found.push(snapshot.snapshotItem(i));
+      } else found.push(...root.querySelectorAll(selector));
+    } catch {
+      return false;
+    }
+    return found.length === 1 && found[0] === target;
+  };
+
+  // class 特化：剔状态类/哈希后逐个累加，命中唯一即停（影刀 handleClassAttr）。
+  const classFragmentsFor = (node) => {
+    const tag = node.tagName.toLowerCase();
+    const classes = stableClassesOf(node);
+    const out = [];
+    let exact = tag;
+    let substring = "";
+    for (const cls of classes) {
+      exact += "." + CSS.escape(cls.value);
+      out.push(exact);
+      substring += `[class*="${attrValue(cls.value)}"]`;
+      if (cls.trimmed) out.push(tag + substring);
+    }
+    return out;
+  };
+
+  const nodeChainOf = (el) => {
+    const out = [];
+    let node = el;
+    while (node && node.nodeType === 1 && out.length < MAX_TREE_DEPTH) {
+      out.unshift(node);
+      node = node.parentElement;
+    }
+    return out;
+  };
+
+  // 从叶到根逐节点按优先级加属性，命中唯一即返回（影刀 makePathUnique）。
+  const greedyCssFor = (el) => {
+    const chain = nodeChainOf(el);
+    let tail = "";
+    for (let i = chain.length - 1; i >= 0; i -= 1) {
+      const node = chain[i];
+      const tag = node.tagName.toLowerCase();
+      const base = tag;
+      const head = tail ? base + " > " + tail : base;
+      if (uniqueFor(head, el)) return head;
+      const id = stableIdOf(node);
+      const attrs = extractAttributes(node);
+      const names = attributeOrderFor(node);
+      for (const name of names) {
+        const variants = [];
+        if (name === "class") variants.push(...classFragmentsFor(node));
+        else if (name === "id" && id) variants.push("#" + CSS.escape(id));
+        else if (name === "innerText") {
+          const xp = textXpathFor(node);
+          if (xp && uniqueFor(xp, node)) return xp;
+          continue;
+        } else if (name === "href" || name === "src") {
+          const link = linkFragmentFor(node, name);
+          if (link) variants.push(link);
+        } else {
+          const attr = attrs.find((entry) => entry.name === name);
+          if (attr) variants.push(tag + "[" + name + '="' + attrValue(attr.value) + '"]');
+        }
+        for (const variant of variants) {
+          const candidate = tail ? variant + " > " + tail : variant;
+          if (uniqueFor(candidate, el)) return candidate;
+        }
+      }
+      tail = head;
+    }
+    return cssSelectorFor(el);
+  };
+
+  // 影刀 handleSkipNodes：唯一后逐个删中间层，命中集不变就永久删（语义标签保留）。
+  const ARIA_TAG_NAMES = new Set([
+    "table", "form", "button", "tr", "td", "ul", "li", "img", "a", "textarea", "select", "input",
+  ]);
+  const pruneCssFor = (css, target) => {
+    if (css.startsWith("xpath:") || css.startsWith("shadow:") || !css.includes(" > ")) return css;
+    const parts = css.split(" > ");
+    let removed = false;
+    for (let i = 1; i < parts.length - 1; i += 1) {
+      const tag = parts[i].match(/^([a-z0-9]+)/i)?.[1]?.toLowerCase() || "";
+      if (ARIA_TAG_NAMES.has(tag)) continue;
+      // 删中间层后剩下两级不再是父子：必须用后代连接符（与 selector_tree.compose 同口径）。
+      const trial = parts.filter((_, index) => index !== i).join(" ");
+      if (uniqueFor(trial, target)) {
+        parts.splice(i, 1);
+        removed = true;
+        i -= 1;
+      }
+    }
+    return removed ? parts.join(" ") : css;
+  };
+
+  const shadowHostsOf = (el) => {
+    const out = [];
+    let node = el;
+    while (node) {
+      const root = typeof node.getRootNode === "function" ? node.getRootNode() : document;
+      if (root && root !== document && root.host) {
+        out.push(root.host);
+        node = root.host;
+      } else node = node.parentElement;
+    }
+    return out;
+  };
+
+  // shadow DOM 分段：每段单独生成 CSS，用 ::shadow 串接（运行期按段逐 shadowRoot 查）。
+  const shadowCssFor = (el) => {
+    const hosts = shadowHostsOf(el);
+    if (!hosts.length) return null;
+    const fragmentOf = (node) => {
+      const id = stableIdOf(node);
+      if (id) return "#" + CSS.escape(id);
+      const classes = stableClassesOf(node);
+      return node.tagName.toLowerCase() + (classes.length ? "." + CSS.escape(classes[0].value) : "");
+    };
+    // 从内到外收集「shadowRoot 内部」的段；每段不含 host 本身。
+    const inner = [];
+    let node = el;
+    for (const host of hosts) {
+      const local = [];
+      let current = node;
+      while (current && current !== host && current.nodeType === 1) {
+        local.unshift(fragmentOf(current));
+        current = current.parentElement;
+      }
+      inner.unshift(local.join(" > ") || fragmentOf(host));
+      node = host;
+    }
+    // 最外层 host 本身在主文档里，作为第一段；后续每段在上一层 shadowRoot 里查。
+    const outer = hosts[hosts.length - 1];
+    return "shadow:" + [fragmentOf(outer), ...inner].join(" ::shadow ");
+  };
+
+  const optimizedCandidatesFor = (el, primary) => {
+    const out = [];
+    // 稳定 id 已唯一时主 css 就是最优解：优化器再产一条裸 tag 只会污染候选列表。
+    if (primary && primary.startsWith("#") && countFor("css", primary) === 1) return out;
+    const push = (kind, selector) => {
+      if (!selector || selector === primary) return;
+      const matched = countFor(kind, selector);
+      if (!matched) return;
+      out.push({ kind, selector, matchedCount: matched });
+    };
+    const greedy = greedyCssFor(el);
+    push(greedy.startsWith("xpath:") ? "xpath" : "css-optimized", greedy);
+    if (!greedy.startsWith("xpath:")) push("pruned", pruneCssFor(greedy, el));
+    const text = textXpathFor(el);
+    if (text) push("xpath", text);
+    for (const name of attributeOrderFor(el)) {
+      if (name === "href" || name === "src") {
+        push("link", linkFragmentFor(el, name));
+      } else if (name === "innerText" || name === "class" || name === "index-of-type") {
+        continue;
+      } else {
+        const raw = el.getAttribute && el.getAttribute(name);
+        if (!raw || name === "id" && !isStableValue(raw)) continue;
+        push("attribute", el.tagName.toLowerCase() + "[" + name + '="' + attrValue(raw) + '"]');
+      }
+    }
+    const shadow = shadowCssFor(el);
+    if (shadow) push("shadow", shadow);
+    return out;
+  };
+
   // 备选定位：只收 CSS 可解析的形式（将来 resolver 复用现有 querySelectorAll 机制即可），
   // 全部实测 matchedCount；捕获时就不命中或与主 css 重复的不留。
   const CANDIDATE_ATTRS = [
@@ -264,12 +599,8 @@
     const seenValues = new Set(primary ? [primary] : []);
     const push = (kind, selector) => {
       if (!selector || seenValues.has(selector)) return;
-      let matched = 0;
-      try {
-        matched = document.querySelectorAll(selector).length;
-      } catch {
-        return;  // 非法选择器（罕见字符）不值得冒险回传
-      }
+      // xpath / shadow 不能交给 querySelectorAll：按 kind 分派实测（M105）。
+      const matched = countFor(kind, selector);
       if (!matched) return;
       seenValues.add(selector);
       out.push({ kind, selector, matchedCount: matched });
@@ -277,6 +608,10 @@
     if (el.id) push("id", "#" + CSS.escape(el.id));
     for (const name of CANDIDATE_ATTRS) push("attribute", attrSelectorFor(el, name));
     for (const selector of pathSuffixSelectorsFor(el)) push("path", selector);
+    // 影刀式优化器产出的候选（贪心唯一化 / class 累加 / 文本 / 链接 / 剪枝 / shadow）。
+    for (const candidate of optimizedCandidatesFor(el, primary)) {
+      push(candidate.kind, candidate.selector);
+    }
     return out;
   };
 

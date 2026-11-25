@@ -62,19 +62,35 @@ WEB_KIND_PENALTIES: dict[str, int] = {
     "placeholder": 5,
     "title": 6,
     "attribute": 10,     # 通用属性槽：按 selector 里的属性名细分（见下表）
+    # M105（影刀式优化器）：贪心唯一化 / 剪枝结果仍是 CSS 路径，比泛化属性略弱；
+    # 文本 XPath 与跨 shadowRoot 需要更重的运行期能力，排在普通 CSS 候选之后。
+    "css-optimized": 12,
+    "pruned": 14,
+    "link": 16,
     "path": 20,          # 祖先链的收缩写法（tag.class / 后代组合）：比属性弱、比裸 tag 强
+    "xpath": 25,
     "role": 30,          # 角色定位较泛，容易命中一类而不止一个
+    "shadow": 35,
 }
 
-# ``kind == "attribute"`` 时从 selector 抽出属性名再查这张表（content.js 收的 7 个属性）。
+# ``kind == "attribute"`` 时从 selector 抽出属性名再查这张表（M51 的 7 个 + M105 的优先级表扩充）。
 WEB_ATTRIBUTE_PENALTIES: dict[str, int] = {
+    "data-cy": 1,
     "data-testid": 1,
+    "data-test-id": 1,
+    "data-e2e": 1,
     "data-test": 2,
     "data-qa": 2,
     "name": 3,
     "aria-label": 4,
     "placeholder": 5,
     "title": 6,
+    "type": 7,
+    "id": 8,
+    "role": 30,
+    "class": 14,
+    "href": 16,
+    "src": 16,
 }
 
 WEB_HASHY_ID_PENALTY = 70           # kind=="id" 但值像框架生成哈希 → 比语义属性还脆

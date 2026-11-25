@@ -94,7 +94,7 @@ def test_generated_id_candidate_is_penalized():
 
 
 def test_attribute_kind_looks_up_attribute_penalty():
-    """kind=="attribute" 时按 selector 里的属性名细分（content.js 收的 7 属性）。"""
+    """kind=="attribute" 时按 selector 里的属性名细分（M51 的 7 个 + M105 的优先级表）。"""
     testid = _candidate("attribute", 'div[data-testid="x"]')
     placeholder = _candidate("attribute", "input[placeholder='q']")
     assert web_candidate_penalty(testid) < web_candidate_penalty(placeholder)
@@ -112,6 +112,32 @@ def test_path_kind_is_registered_below_unknown():
     unknown = web_candidate_penalty(_candidate("weird", "div.foo"))
     assert path_kind < unknown
     assert path_kind < WEB_UNKNOWN_KIND_PENALTY
+
+
+def test_m105_optimizer_kinds_are_registered_and_ordered():
+    """M105 的五种新候选必须登记，且重能力（xpath/shadow）排在普通 CSS 之后。"""
+    from rpa_core.model.selector_ranking import WEB_UNKNOWN_KIND_PENALTY
+
+    optimized = web_candidate_penalty(_candidate("css-optimized", "input[data-testid=q]"))
+    pruned = web_candidate_penalty(_candidate("pruned", "div > input"))
+    xpath = web_candidate_penalty(_candidate("xpath", "xpath://div[contains(., 'x')]"))
+    shadow = web_candidate_penalty(_candidate("shadow", "shadow:#host ::shadow span"))
+    assert optimized < pruned < xpath < shadow < WEB_UNKNOWN_KIND_PENALTY
+    # 同命中数时，影刀式优化结果必须排在老的「祖先链截断」之前。
+    ranked = _selectors(rank_web_candidates([
+        _candidate("path", "div > input", 1),
+        _candidate("css-optimized", "input[data-testid=q]", 1),
+    ]))
+    assert ranked == ["input[data-testid=q]", "div > input"]
+
+
+def test_m105_attribute_priority_table_covers_new_sources():
+    """影刀优先级表里的测试属性须压过 name/id，链接与 class 有独立档位。"""
+    testid = web_candidate_penalty(_candidate("attribute", 'button[data-cy="save"]'))
+    named = web_candidate_penalty(_candidate("attribute", 'button[name="save"]'))
+    ident = web_candidate_penalty(_candidate("attribute", 'button[id="save"]'))
+    link = web_candidate_penalty(_candidate("attribute", 'a[href*="/search"]'))
+    assert testid < named < ident < link
 
 
 def test_capture_script_kinds_are_all_registered_in_table():

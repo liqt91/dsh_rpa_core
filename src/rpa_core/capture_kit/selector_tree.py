@@ -50,15 +50,17 @@ def levels_from_path(path: list[dict[str, Any]]) -> list[dict[str, Any]]:
         ident = entry.get("id")
         classes = list(entry.get("classes") or [])
         nth = entry.get("nthOfType")
+        # M105：捕获侧按「最能消歧的 class」累加，不再固定首类。usedClasses 是进
+        # fragment 的类名，初始勾选必须与它一致；旧资产缺这个键时回退首类（硬切不迁移）。
+        used = set(entry.get("usedClasses") or (classes[:1] if classes else []))
         levels.append(
             {
                 "tag": str(entry.get("tag") or "*"),
                 "included": bool(entry.get("inCss", True)),
                 "id": {"on": bool(ident), "value": str(ident or "")},
                 "classes": [
-                    # 捕获侧片段只取首类：初始勾选与它一致，其余类默认不勾
-                    {"on": index == 0, "value": cls, "mode": "精确"}
-                    for index, cls in enumerate(classes)
+                    {"on": cls in used, "value": cls, "mode": "精确"}
+                    for cls in classes
                 ],
                 "nth": {"on": nth is not None, "value": str(nth or "")},
             }

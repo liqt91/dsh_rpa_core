@@ -37,6 +37,21 @@ def test_levels_from_path_mirrors_capture_fragments() -> None:
     assert levels[1]["id"]["on"] is False and levels[0]["id"]["on"] is True
 
 
+def test_used_classes_drive_initial_checks_when_present() -> None:
+    """M105：捕获侧按「最能消歧的 class」累加，勾选态必须跟着 usedClasses 走。
+
+    旧资产没有 usedClasses 时仍回退首类（上面那条测试钉住），开发期硬切不做迁移。
+    """
+    path = [
+        {"tag": "li", "id": None, "classes": ["hotsearch-item", "pinned"],
+         "nthOfType": None, "fragment": "li.hotsearch-item.pinned",
+         "usedClasses": ["hotsearch-item", "pinned"]},
+    ]
+    levels = levels_from_path(path)
+    assert [entry["on"] for entry in levels[0]["classes"]] == [True, True]
+    assert compose(levels) == "li.hotsearch-item.pinned"
+
+
 def test_incgs_marks_only_css_chain_included() -> None:
     """全链 path（目标 → 根）：只有 inCss 的层初始参与重组，与主 css 逐字一致。"""
     full = [
