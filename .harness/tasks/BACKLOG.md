@@ -5,7 +5,7 @@
 
 ## 当前任务
 
-- [ ] **分支治理同步：`apps/editor` 迁移要在另两条分支重做一遍**（`planned`，2026-11-24）——
+- [x] **分支治理同步：`apps/editor` 迁移要在另两条分支重做一遍**（`done`，2026-11-25）——
   ADR 0021 把编辑器从 `.harness/demo/ppx_probe/app` 迁到 `apps/editor`，同时把
   `branch-scope.json` 改成「编辑器整棵共享 + `ppx-only` 独占收窄为 `apps/editor/build/`」。
   该文件在 `must_match_across_branches` 里 ⇒ `ppx-only` / `plugin-only` 必须同步到逐字节一致，
@@ -15,6 +15,12 @@
   ★ 同步时**必须另外跑一次 `grep -rn "demo/ppx_probe"`**：住址判据只查目录，查不出文档与
   代码字符串里的旧地址（本分支就漏了 11 个文件，其中 `main.js` 的 `DEMO_FLOW` 与
   `_layout/probe.html` 的默认 `?flow=` 是可执行路径）。详见 ADR 0021 §3「门禁盲区」。
+  ★ 这里的 `grep` 要用 `git grep`（含隐藏目录）—— 实际还有第 13 处 `.github/workflows/
+  editor-release.yml`，第一次用编辑器 Grep 工具搜时被隐藏目录规则跳过了。
+  **2026-11-25 收口**：`ppx-only`（`e560318`）与 `plugin-only`（`eea4c95`/`11ac347`）已各自完成
+  迁移并 `FULL GATE PASSED`，三分支 `branch-scope.json` blob 一致（`ed220b5b`）。
+  另分支**保留本分支编辑器版本**（能力层函数名与 xhs 不同，整棵覆盖会让 `api.py` import 失败），
+  只做路径搬迁 + E501/闪测阈值修复；`workbuddy-suite/` 由 plugin-only 独占域自行修正。
 
 - [x] **编辑器端转正**（`done`，2026-11-24）——维护者「ppx 这个端可以转正了」。编辑器物理迁到
   `apps/editor`（`ppx.toml` + `api/` + `gui/` + `ppx/` + `tools/run_probe.py`），探针归
