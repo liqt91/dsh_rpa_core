@@ -134,9 +134,20 @@ def adjust_window_size(
         ctypes.c_void_p, ctypes.c_uint, ctypes.c_int, ctypes.c_uint,
     ]
     user32.AdjustWindowRectEx.restype = ctypes.c_int
+    user32.GetSystemMetrics.argtypes = [ctypes.c_int]
+    user32.GetSystemMetrics.restype = ctypes.c_int
     rect = _RECT(0, 0, client_w, client_h)
     user32.AdjustWindowRectEx(ctypes.byref(rect), style, False, ex_style)
-    return rect.right - rect.left, rect.bottom - rect.top
+    width = rect.right - rect.left
+    height = rect.bottom - rect.top
+    # ★ MSDN 明文：AdjustWindowRectEx **不**把 WS_VSCROLL/WS_HSCROLL 算进客户区。
+    # 漏了这两行，滚动条会从右侧吃掉 17px，按满宽摆的属性值框/取消按钮全被
+    # 窗口边缘裁掉（2026-11-25 用户截图 + 探针实测：client 763 vs 布局 780）。
+    if style & 0x00200000:  # WS_VSCROLL
+        width += user32.GetSystemMetrics(2)  # SM_CXVSCROLL
+    if style & 0x00100000:  # WS_HSCROLL
+        height += user32.GetSystemMetrics(3)  # SM_CYHSCROLL
+    return width, height
 
 
 # -- 实例分派 ------------------------------------------------------------------
@@ -282,3 +293,33 @@ def make_font() -> int:
         return int(handle or 0)
     except Exception:  # noqa: BLE001 - 字体失败不该拖死窗口
         return 0
+
+
+class _SIZE(ctypes.Structure):
+    _fields_ = [("cx", ctypes.c_long), ("cy", ctypes.c_long)]
+
+
+def text_width(hdc: int, hfont: int, text: str) -> int:
+    """按指定字体量文字像素宽。``win32gui`` 没有这个函数，只能走 gdi32。
+
+    用途：按钮/复选框的文字由系统绘制、**不支持** ``DT_END_ELLIPSIS``，宽度不够
+    就硬切（看起来像被右边的灰块压住）。要自己截断就得先能按像素量。
+    """
+    if not text:
+        return 0
+    import win32gui
+
+    gdi32 = ctypes.WinDLL("gdi32", use_last_error=True)
+    gdi32.GetTextExtentPoint32W.argtypes = [
+        ctypes.c_void_p, ctypes.c_wchar_p, ctypes.c_int, ctypes.POINTER(_SIZE),
+    ]
+    gdi32.GetTextExtentPoint32W.restype = ctypes.c_int
+    old = win32gui.SelectObject(hdc, hfont)
+    try:
+        size = _SIZE()
+        gdi32.GetTextExtentPoint32W(
+            ctypes.c_void_p(int(hdc)), text, len(text), ctypes.byref(size)
+        )
+        return int(size.cx)
+    finally:
+        win32gui.SelectObject(hdc, old)

@@ -46,3 +46,53 @@ F10 热键、截图自绘整条重接，与「原生快」的诉求冲突。
 
 B 档自绘皮肤（owner-draw 扁平按钮、分区卡片、选中行高亮、截图空态插画）与 C 档换栈
 均未做；原生按钮面仍是系统灰底，但已无立体边框（`BS_FLAT`）。
+
+## 后续修复（2026-11-25，用户真机截图反馈）
+
+维护者发来截图说「显示上有点问题」。逐项取证后修 **2 处真 bug**、排除 2 处环境伪影。
+
+### 真 bug 1：行文字硬切，看着像被灰块压掉一截
+
+BUTTON 的文字由系统绘制、**不认** `DT_END_ELLIPSIS`，宽度不够就硬切在边框上。
+实测 10 层样例里 `<div class="main-content with-sidebar">` 要 300px、
+`textarea-container…` 要 413px，而行控件只有 252px。
+
+- 新增模块级纯函数 `_clip_to_width(text, width, measure)`：二分出「补 `…` 后仍放得下」
+  的最长前缀；`measure` 由调用方给（真机 `_win32.text_width`，单测传 `len`）。
+- 新增 `_win32.text_width(hdc, hfont, text)`（走 gdi32 `GetTextExtentPoint32W`，
+  `win32gui` 没有这个 API）。
+- 树行与桌面节点行建控件前都过 `_fit_text`；全文仍由既有 tooltip 给。
+- 常量 `_LEVEL_ROW_W` / `_NODE_ROW_W` / `_ROW_TEXT_PAD` / `_CHECK_TEXT_PAD` 收口，
+  不再写裸数字。
+
+### 真 bug 2：滚动条吃掉客户区 17px，右侧控件被窗口边缘裁掉
+
+`AdjustWindowRectEx` 的文档明文：**不**把 `WS_VSCROLL`/`WS_HSCROLL` 算进客户区。
+11 层触发滚动条时客户区实测 **763** 而布局按 `_TREE_W=780` 摆 ⇒ 属性值框、
+「取消」按钮被右边缘裁掉（探针 `client=763x552` 取证）。10 层（无滚动条）正常，
+所以只在长链路上暴露。
+
+在 `_win32.adjust_window_size` 里按 `SM_CXVSCROLL` / `SM_CYHSCROLL` 补回，
+修复后 `client=780x552`。
+
+### 排除的伪影（不是代码问题，记下来免得下次再追）
+
+- 截图里「资产名称 / 组合选择器」像缺了中间的字：用户图是 95.5% 缩放后的裁切，
+  「产 / 合」这类细笔画字在缩小时丢笔画；本机 15px 雅黑原图完整。像素扫描确认过
+  那两处没有覆盖控件。
+- 顶部「捕获到元素」只剩半截：那是窗口标题栏，用户截图框选的上边界落在标题栏中间。
+- 抓图里的浅绿横带只是这台机器的 accent 色（名称框全选高亮），不是界面底色。
+
+### 验证
+
+- 诊断探针 `.harness/spike/probe_dialog_geom.py`：dump 每个子控件的 rect + 文字实测
+  像素宽，直接看出「文字比控件宽」；按层数产图（10 层无滚动条 / 11 层有滚动条）。
+- 四张真机截图核对：10 层、11 层、桌面 3 层、简式，右侧控件均完整、行文字均以 `…` 收尾。
+- 新增判据 2 条：`test_clip_adds_ellipsis_only_when_too_wide`、
+  `test_scrollbar_width_is_added_back_to_frame`。
+- 负向探针 `.harness/spike/probe_edit_textclip_negative.py`：基线 13 passed →
+  注入「不再补省略号」1 failed、注入「宽度 += 0」1 failed（各自打中的测试名已校验）→
+  两个注入 + 关掉新判据回 11 passed（元验证）→ 三文件逐字节 md5 还原。
+- 全门禁 **FULL GATE PASSED + rc=0，1191 passed / 20 skipped / 2 xfailed**，ruff 全绿。
+- 顺手修了上一轮提交里 `probe_edit_check_ui.py` 被脚本替换写坏的 `\n` → `/n`
+  （语法错误，探针本身不进门禁所以没被拦住）。

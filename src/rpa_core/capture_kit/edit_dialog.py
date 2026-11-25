@@ -137,6 +137,13 @@ _ID_DESKTOP_ATTR_BASE = 4000
 # 窗口右侧给 WS_VSCROLL 滚动条，checkbox 按偏移重排（M69：目标→根的完整链）。
 _LEVEL_ROWS = 10
 _NODE_ROWS = 10
+# 行控件宽度。BUTTON 的文字由系统画、不支持 DT_END_ELLIPSIS，宽度不够就硬切——
+# 长 class 串看起来像被右边的灰缝削掉一截（2026-11-25 用户截图取证）。
+# 所以建行时先用 _fit_text 截到「可用像素宽」并补省略号，全文交给 tooltip。
+_LEVEL_ROW_W = 252
+_NODE_ROW_W = 380
+_ROW_TEXT_PAD = 12  # BS_LEFT 的左边距 + 边框 + 右余量
+_CHECK_TEXT_PAD = 24  # BS_AUTOCHECKBOX 的勾框（16px）再让一点
 # 滚动只滚左栏这一块（客户坐标 l/t/r/b）：`ScrollWindowEx` 会连带移动与区域相交
 # 的子窗口，右栏属性控件从 x=312（网页）/ 420（桌面）起，不能被卷进来。
 _LEVEL_AREA = (0, 64, 302, 70 + _LEVEL_ROWS * 32)
@@ -149,6 +156,28 @@ _MATCH_MODES = ("精确", "包含")
 _DESKTOP_MODES = ("精确", "包含", "正则")
 # 标题栏 + 边框 + 任务栏留出来的余量（估大一点，宁可窄不可挤出屏幕）
 _WINDOW_CHROME = 96
+
+
+def _clip_to_width(text: str, width: int, measure) -> str:
+    """二分出「补上省略号后仍放得下」的最长前缀。
+
+    ★ BUTTON 的文字由系统绘制、**不认** ``DT_END_ELLIPSIS``：宽度不够就硬切，
+    右端紧贴边框，看起来像被旁边的灰块压住（2026-11-25 用户截图取证）。
+    ``measure`` 负责把字符串换算成像素宽（真机走 ``_win32.text_width``，
+    单测传 ``len`` 就是等宽模型）。
+    """
+    if not text or width <= 0:
+        return ""
+    if measure(text) <= width:
+        return text
+    low, high = 0, len(text)
+    while low < high:
+        mid = (low + high + 1) // 2
+        if measure(text[:mid] + "…") <= width:
+            low = mid
+        else:
+            high = mid - 1
+    return text[:low] + "…"
 
 
 def _work_area_height() -> int:
@@ -508,6 +537,21 @@ class ElementEditDialog:
             self._hfont = win32gui.GetStockObject(win32con.DEFAULT_GUI_FONT)
         return self._hfont
 
+    def _fit_text(self, hwnd, text: str, width: int) -> str:
+        """按像素宽截断并补 ``…``；全文仍由 tooltip 给。"""
+        import win32gui
+
+        if not text or width <= 0:
+            return ""
+        hdc = win32gui.GetDC(hwnd)
+        try:
+            return _clip_to_width(
+                text, width,
+                lambda value: _win32.text_width(hdc, self._hfont, value),
+            )
+        finally:
+            win32gui.ReleaseDC(hwnd, hdc)
+
     def _control(self, hwnd, cls, text, style, x, y, w, h, cid):
         import win32con
         import win32gui
@@ -636,10 +680,11 @@ class ElementEditDialog:
             # 与 BS_AUTOCHECKBOX 小方框完全重叠；行那个勾框从没设过状态（恒空），
             # 鼠标扫过时 Windows 重绘 hot 态，空框盖住小方框的勾看起来像“勾没了”。
             # 现在行是纯文字按钮（无勾框），从 x=44 起；只有 x=16 的 box 表示 included。
+            raw = selector_tree.summary(level)
             row = control(
-                "BUTTON", selector_tree.summary(level),
+                "BUTTON", self._fit_text(hwnd, raw, _LEVEL_ROW_W - _ROW_TEXT_PAD),
                 win32con.BS_LEFT | win32con.BS_FLAT,  # 只选中看属性，不画勾框
-                44, 70 + index * 32, 252, 26, _ID_LEVEL_BASE + index,
+                44, 70 + index * 32, _LEVEL_ROW_W, 26, _ID_LEVEL_BASE + index,
             )
             box = control(
                 "BUTTON", "", win32con.BS_AUTOCHECKBOX,
@@ -652,7 +697,7 @@ class ElementEditDialog:
             self._control_map[_ID_LEVEL_CHECK_BASE + index] = ("level_check", index)
             self._level_boxes.append(row)
             self._level_check_boxes.append(box)
-            self._attach_tooltip(row, selector_tree.summary(level))
+            self._attach_tooltip(row, raw)
         self._setup_level_scroll(hwnd)
         self._rebuild_attr_pane(hwnd)
         shift = self._shift
@@ -996,17 +1041,18 @@ class ElementEditDialog:
         control("STATIC", "属性（勾选参与本层定位）", 0, 420, 46, 460, 20, 208)
         self._node_boxes = []
         for index, node in enumerate(self._nodes):
-            label = f"{node.get('type') or '节点'} · {node.get('name') or '(无名)'}"
+            raw = f"{node.get('type') or '节点'} · {node.get('name') or '(无名)'}"
             box = control(
-                "BUTTON", label, win32con.BS_AUTOCHECKBOX,
-                16, 70 + index * 32, 380, 26, _ID_NODE_BASE + index,
+                "BUTTON", self._fit_text(hwnd, raw, _NODE_ROW_W - _CHECK_TEXT_PAD),
+                win32con.BS_AUTOCHECKBOX,
+                16, 70 + index * 32, _NODE_ROW_W, 26, _ID_NODE_BASE + index,
             )
             win32gui.SendMessage(
                 box, win32con.BM_SETCHECK, 1 if node.get("selected") else 0, 0
             )
             self._desktop_control_map[_ID_NODE_BASE + index] = ("node", index)
             self._node_boxes.append(box)
-            self._attach_tooltip(box, label)
+            self._attach_tooltip(box, raw)
         self._setup_node_scroll(hwnd)
         self._rebuild_desktop_attr_pane(hwnd)
         shift = self._shift

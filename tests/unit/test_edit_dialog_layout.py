@@ -64,3 +64,33 @@ def test_row_count_beyond_page_keeps_full_height():
     assert edition._base_height_for(30, False) == edition._TREE_BASE_H
     assert edition._base_height_for(30, True) == edition._DESKTOP_BASE_H
     assert edition._base_height_for(0, False) == edition._TREE_BASE_H - 9 * 32
+
+
+def test_clip_adds_ellipsis_only_when_too_wide():
+    """行文字放不下时必须补省略号。
+
+    真机事故（2026-11-25 用户截图）：BUTTON 不认 DT_END_ELLIPSIS，长 class 串
+    被硬切在边框上，看着像被右边的灰块压掉一截。
+    """
+    measure = len  # 等宽模型：一个字符算一像素
+    assert edition._clip_to_width("short", 10, measure) == "short"
+    assert edition._clip_to_width("abcdefghij", 6, measure) == "abcde…"
+    assert edition._clip_to_width("abc", 0, measure) == ""
+    assert edition._clip_to_width("", 10, measure) == ""
+
+
+def test_scrollbar_width_is_added_back_to_frame():
+    """WS_VSCROLL 会从客户区吃掉滚动条宽度，外框必须补回来。
+
+    AdjustWindowRectEx 明文不算 WS_VSCROLL/WS_HSCROLL；漏了这段，按客户区满宽
+    摆的属性值框和「取消」按钮就被窗口右边缘裁掉（探针实测 client 763 vs 780）。
+    """
+    win32con = pytest.importorskip("win32con")
+    win32api = pytest.importorskip("win32api")
+
+    style = win32con.WS_POPUP | win32con.WS_CAPTION | win32con.WS_SYSMENU
+    plain, _ = edition._win32.adjust_window_size(780, 552, style, 0)
+    scrolled, _ = edition._win32.adjust_window_size(
+        780, 552, style | win32con.WS_VSCROLL, 0
+    )
+    assert scrolled - plain == win32api.GetSystemMetrics(win32con.SM_CXVSCROLL)

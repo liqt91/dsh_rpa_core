@@ -105,8 +105,10 @@ def main() -> int:
 
     print("tooltip hwnd:", dialog._tooltip, "buffers:", len(dialog._tooltip_buffers))
     left, top, right, bottom = win32gui.GetWindowRect(dialog._level_boxes[-1])
-    try:/n        win32api.SetCursorPos(((left + right) // 2, (top + bottom) // 2))
-    except Exception:/n        pass
+    try:
+        win32api.SetCursorPos(((left + right) // 2, (top + bottom) // 2))
+    except Exception:
+        pass
     time.sleep(1.5)
     visible: list[int] = []
 
