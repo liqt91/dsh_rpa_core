@@ -9,7 +9,7 @@
 | 技能包 | `dist/workflow-studio-skill.zip` | 发布管理 → 技能 | **folder 布局**：`workflow-studio/SKILL.md`（官方「技能基础结构」要求套一层）；唯一的编排技能，含 89 条能力参考 |
 | 连接器 | `dist/rpa-core-connector.zip` | 发布管理 → 连接器（CLI + Skill） | `connector-meta.json` + `cli.json` + `icon.svg` + `skills/rpa-core-cli/`（必带的接线配件，不编排） |
 | 浏览器扩展 | `dist/workbuddy-studio-extension.zip` | 扩展分发（Chrome / Edge 商店，或内部分发） | MV3，解压后「加载已解压的扩展」也能用 |
-| 编辑窗口 | `.harness/demo/ppx_probe/app/`（PPX 工程）→ `ppx build` | 技能附件 / 官网下载 | 便携版 `ppx_probe/app/build/RPA Probe/`；本机没装 Inno Setup 6，未出安装包 |
+| 编辑窗口 | `apps/editor/`（PPX 工程）→ `ppx build` | 技能附件 / 官网下载 | 便携版 `apps/editor/build/RPA Probe/`；本机没装 Inno Setup 6，未出安装包 |
 
 > 生成命令：`python tools/pack.py`（一条命令同步版本、打三个 zip，并断言包内结构）。
 > 技能包默认 folder 布局；`--layout flat` 只在控制台亲测要求 flat 时用。
@@ -170,7 +170,7 @@
 - [x] 商店描述 ≤ 132 字符
 - [x] 三张截图 + 配文
 - [x] 隐私政策（`listing/privacy.md`）
-- [x] 头像 512×512（`ppx_probe/app/ppx/assets/logo.png`，PNG，< 500 KB）
+- [x] 头像 512×512（`apps/editor/ppx/assets/logo.png`，PNG，< 500 KB）
 
 ## 八、已知限制（主动写出来，比被问出来好）
 
@@ -183,7 +183,7 @@
    编辑器；改任意文本文件请用 IDE。
 4. **窗口暂不回传「保存 diff」**：会话协议里有 `save` 事件，ppx_probe 的保存链路已带
    sha 冲突检测与编译校验，但 diff 级回传还没接（登记 BACKLOG）。
-5. **只提供便携版，且未做代码签名**：`ppx_probe/app/build/RPA Probe/` 双击即用；首次运行
+5. **只提供便携版，且未做代码签名**：`apps/editor/build/RPA Probe/` 双击即用；首次运行
    Windows SmartScreen 会提示「未知发布者」，点「更多信息 → 仍要运行」即可。要安装包与签名，
    需要 Inno Setup 6 + 一张代码签名证书。
 

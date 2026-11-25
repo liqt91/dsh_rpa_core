@@ -466,6 +466,11 @@
       "id": "branch-artifacts-inbox",
       "title": "Workflow assets split by branch: drafts dropped on all three, xhs flows tracked only on xhs-workbench",
       "passes": true
+    },
+    {
+      "id": "editor-graduation",
+      "title": "PPX editor graduated to apps/editor (ADR 0021 synced from xhs-workbench)",
+      "passes": true
     }
   ]
 }

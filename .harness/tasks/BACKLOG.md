@@ -5,6 +5,8 @@
 
 ## 当前任务
 
+- [x] **编辑器端转正同步（ADR 0021）**（`done`，2026-11-25）——从 xhs-workbench 同步：编辑器迁到 `apps/editor/`、探针归 `.harness/spike/ppx/`；`branch-scope.json` 与另两分支逐字节一致（编辑器整棵共享，`ppx-only` 独占收窄为 `apps/editor/build/`）；`workbuddy-suite/` 独占域内的旧路径由本分支修正；旧目录删除、全量门禁 PASSED。
+
 - [ ] **M66 元素拾取交互重设计**（`wip`，2026-11-06）——
   起因：维护者「一个好的 AI 产品，是怎么定义这两条线的交互逻辑的」。细则见
   `M66-element-pick-interaction.md`。核心：技术两条线（CLI / 会话、browser / desktop）

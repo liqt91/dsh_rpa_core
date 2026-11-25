@@ -211,12 +211,15 @@ def test_retry_backoff_cannot_exceed_workflow_deadline(tmp_path):
     executor = ScriptedExecutor(
         [CommandResult.failure(ErrorCode.EXECUTOR_FAILED, "retry", retryable=True)]
     )
+    # 时间预算要有足够 headroom 让「第一次调用确实发生」不是机器负载抽奖：
+    # deadline 0.5s 远小于 backoff 2s，语义仍是「退避不得越过工作流 deadline」，
+    # 但不再把文件/事件写入的几十毫秒算进同一个 50ms 窗口（M79 收口实测易 flaky）。
     workflow = action_workflow(
         retry_count=1,
-        retry_backoff_seconds=0.2,
-        retry_backoff_max_seconds=0.2,
+        retry_backoff_seconds=2.0,
+        retry_backoff_max_seconds=2.0,
     )
-    workflow["timeout_seconds"] = 0.05
+    workflow["timeout_seconds"] = 0.5
     runner, plan = build(tmp_path, workflow, executor, manifest(retryable=True))
     result = asyncio.run(runner.run(plan))
     assert result.error["code"] == "TIMEOUT"

@@ -6,7 +6,7 @@
 
 | # | 产物 | 目录 | 作用 |
 |---|---|---|---|
-| 1 | 工作流编辑窗口（PPX 桌面应用） | `.harness/demo/ppx_probe/app/` | **复用 M65 的可视化编排器**：卡片拼流程、参数编辑、编译校验、真跑 `rpa-core run`；本轮给它接上会话通道（Agent 推文件 → 窗口打开 → 回 opened/心跳） |
+| 1 | 工作流编辑窗口（PPX 桌面应用） | `apps/editor/` | **复用 M65 的可视化编排器**：卡片拼流程、参数编辑、编译校验、真跑 `rpa-core run`；本轮给它接上会话通道（Agent 推文件 → 窗口打开 → 回 opened/心跳） |
 | 2 | 能力连接器（CLI + Skill） | `connector/` | 把仓里 **89 条**原子能力整理成 WorkBuddy 能读懂、能触发的接口；**不重写执行器** |
 | 3 | 浏览器扩展（MV3） | `extension/` | 点一下页面元素，算出稳定选择器（含 Shadow DOM 宿主与退化路径）并回传 Agent |
 | — | 桥接技能 `workflow-studio` | `skills/workflow-studio/` | 1 与 3 的 Agent 侧入口：起会话、推文件、等打开、等拾取 |
@@ -20,9 +20,9 @@
 ```bash
 # 开发态：先起会话服务，再起 PPX 窗口（前端走 vite dev，改 main.js 热更新）
 python skills/workflow-studio/scripts/studio.py serve --root .
-cd ../.harness/demo/ppx_probe/app && ppx dev
+cd ../apps/editor && ppx dev
 
-# 发布态：先在 ppx_probe/app 里 ppx build，产物 build/RPA Probe/
+# 发布态：先在 apps/editor 里 ppx build，产物 build/RPA Probe/
 ```
 
 只想起服务（Agent 侧、CI、或已经手动开了窗口）：
@@ -80,7 +80,7 @@ rpa-core run my-flow.json            # 跑，输出 RunResult
 
 ```
 workbuddy-suite/
-├── (编辑窗口不在本目录：.harness/demo/ppx_probe/app/ —— PPX 应用，M65 宿主实验)
+├── (编辑窗口不在本目录：apps/editor/ —— PPX 应用，M65 宿主实验)
 │   ├── ppx.toml                # 应用配置；dev 端口 5173
 │   ├── api/api.py              # 能力层接线 + studio.* 会话胶水（本轮加）
 │   └── gui/src/main.js         # 可视化编排 + 会话轮询（本轮加 pollSession/heartbeat）
@@ -131,7 +131,7 @@ $PY connector/tools/pack_connector.py --check   # 7) 连接器字段 / 权限 / 
 要开真窗口）：
 
 ```bash
-cd ../.harness/demo/ppx_probe
+cd ../apps/editor
 ./.venv/Scripts/python.exe launcher_probe.py     # 启动器不谎报（20 条）
 ./.venv/Scripts/python.exe ui_probe.py           # 界面端到端（26 条）
 ./.venv/Scripts/python.exe exec_probe.py         # 运行接线（30 条）
@@ -158,7 +158,7 @@ node ../workbuddy-suite/verify/popup_shot.mjs    # 扩展弹窗截图（328×373
 
 | 问题 | 症状 | 修法 |
 |---|---|---|
-| 编辑器跑偏 | 上轮从零写了个代码编辑器，而用户要的是 ppx_probe 的可视化编排器 | 整个退役（git 历史可找回），编辑窗口回归 `.harness/demo/ppx_probe` 并补上会话胶水 |
+| 编辑器跑偏 | 上轮从零写了个代码编辑器，而用户要的是 ppx_probe 的可视化编排器 | 整个退役（git 历史可找回），编辑窗口回归 `apps/editor` 并补上会话胶水 |
 | Agent 推不开文件 | ppx_probe 不认识会话协议，`open` 排队永远没人取 | `api.py` 加 `studio.pollSession/notify`，`main.js` 加 1.4s 轮询 + opened/心跳 |
 | 脱管后台服务被杀 | `( serve & )` 在宿主 shell 退出后死掉，`open` 报 `SESSION_DOWN` | 长命服务走受管后台任务 |
 | `chrome.alarms` 未声明 | 徽标不刷新，看着像扩展没连上 | 补权限，并加一条「API ↔ 权限」门禁 |
@@ -213,4 +213,4 @@ $PY connector/tools/pack_connector.py               # 校验 + 打包
 | 失败项 | 原因 | 怎么办 |
 |---|---|---|
 | `pnpm: 12.15.0` | PPX 6.0.1 的 doctor 只认 `>=11.0.0, <12.0.0` | 实测 12.15 下 `dev` 与 `build` 都正常；要消掉这行就 `corepack prepare pnpm@11.25.0 --activate` |
-| `Inno Setup 6: 未安装` | 打 Windows 安装包要 ISCC | 便携版已经能跑（`ppx_probe/app/build/RPA Probe/`，`ppx build` 产出）；要 `.exe` 安装包就装 Inno Setup 6 再 `ppx build` |
+| `Inno Setup 6: 未安装` | 打 Windows 安装包要 ISCC | 便携版已经能跑（`apps/editor/build/RPA Probe/`，`ppx build` 产出）；要 `.exe` 安装包就装 Inno Setup 6 再 `ppx build` |

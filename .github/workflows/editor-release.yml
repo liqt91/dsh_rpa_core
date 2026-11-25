@@ -6,7 +6,7 @@
 #
 # 发版：
 #   git tag editor-v<version> && git push origin editor-v<version>
-# （<version> 取自 .harness/demo/ppx_probe/app/ppx.toml；tag 必须与它一致，
+# （<version> 取自 apps/editor/ppx.toml；tag 必须与它一致，
 #   verify_editor_artifact.py 会拦住不一致的 tag。首次 0.1.0 的 tag 用过且未发版，
 #   不要 force 改它，直接 bump ppx.toml 并用新 tag。）
 name: Editor Release
@@ -23,7 +23,7 @@ on:
       - ".github/workflows/editor-release.yml"
       - ".harness/scripts/build_editor.py"
       - ".harness/scripts/verify_editor_artifact.py"
-      - ".harness/demo/ppx_probe/app/**"
+      - "apps/editor/**"
       - "commands/**"
       - "src/rpa_core/gui/i18n.js"
   workflow_dispatch:
@@ -84,7 +84,7 @@ jobs:
       # 前端单独构建：build_editor.py 加 --skip-frontend 后就不需要 pnpm 在 PATH 上，
       # CI 的职责边界更清楚（这一步产 gui/dist，下一步只做 PyInstaller + 打 zip）。
       - name: Build frontend
-        working-directory: .harness/demo/ppx_probe/app/gui
+        working-directory: apps/editor/gui
         shell: pwsh
         run: |
           pnpm install --no-frozen-lockfile

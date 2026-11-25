@@ -24,7 +24,7 @@ ROOT = Path(__file__).resolve().parents[2]
 DIST = ROOT / "dist"
 ZIP = DIST / "RPA-Editor-win64.zip"
 SIDECAR = Path(str(ZIP) + ".sha256")
-TOML = ROOT / ".harness" / "demo" / "ppx_probe" / "app" / "ppx.toml"
+TOML = ROOT / "apps" / "editor" / "ppx.toml"
 
 
 def toml_version() -> str:

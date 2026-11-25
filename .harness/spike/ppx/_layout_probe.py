@@ -115,7 +115,7 @@ def _deep_cards() -> list[dict[str, Any]]:
 def build() -> None:
     OUT.mkdir(parents=True, exist_ok=True)
     boot = api.bootstrap()
-    struct_path = ".harness/demo/ppx_probe/_sandbox/struct.json"
+    struct_path = ".harness/spike/ppx/_sandbox/struct.json"
     struct = api.open_flow(struct_path)
     deep_path = "workflows/xiaohongshu/workflow.json"
     deep = api.open_flow(deep_path)

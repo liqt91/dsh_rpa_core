@@ -124,7 +124,7 @@ try {
       deviceScaleFactor: 1,
       mobile: false,
     })
-    const url = `${BASE}?flow=${encodeURIComponent(c.flow || '.harness/demo/ppx_probe/_sandbox/struct.json')}&click=${c.clickFirst === false ? '0' : '1'}`
+    const url = `${BASE}?flow=${encodeURIComponent(c.flow || '.harness/spike/ppx/_sandbox/struct.json')}&click=${c.clickFirst === false ? '0' : '1'}`
     // 连续导航时偶发「页面还停在上一份文档」→ 卡在白等。重试一次比调大超时可靠。
     for (let attempt = 1; attempt <= 2; attempt++) {
       await cdp.send('Page.navigate', { url })

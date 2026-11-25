@@ -424,3 +424,4 @@ un-control-advanced 翻 true——M21 于 2026-09-19 完成后已连续多轮 FU
 2026-11-11 | branch-scope-split | done | 以 ff36ed2 为拆分点建 plugin-only，两分支树一致；落 branch-scope.json 契约 + check_branch_scope.py 闸门（接线哨兵/跨分支比对/越界）；7 注负向全红且 md5 还原、1 对照绿；两分支共享治理文件逐字节相同。
 2026-11-11 | branch-scope-xhs | done | 从 cd74295 新建 xhs-workbench（独占 apps/xhs-workbench/），契约/闸门泛化为三分支；负向 10 红 + 2 绿 + md5 还原；P0 落配置化调度、collector、小红书采集 workflow。
 2026-11-11 | branch-artifacts-inbox | done | 收口拆分遗留的 4 笔在制品：两笔 workbuddy-suite 改动只提交到 plugin-only，workflows/test 草稿三分支同步删除；小红书流程只在 xhs-workbench 入库，ai-baidu-news 与其余未跟踪文件原样保留。闸门四层全绿，治理文件三分支同 blob。
+2026-11-25 | editor-graduation | done | 同步 ADR 0021 编辑器转正：apps/editor + .harness/spike/ppx，branch-scope 与另两分支逐字节一致，旧目录清除；workbuddy-suite 独占域内的旧路径一并修；git grep 复核含隐藏目录；FULL GATE PASSED。

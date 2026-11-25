@@ -271,7 +271,7 @@ rpa-skill install --force --rpa-core-dir <rpa_core 仓库根>
 
 ### 编辑窗口（可选，只有 Windows）
 
-窗口是仓库里的 PPX 应用（`.harness/demo/ppx_probe/app`），wheel 与 npm 包都不带。
+窗口是仓库里的 PPX 应用（`apps/editor`），wheel 与 npm 包都不带。
 它单独打成便携包放在 GitHub Release，安装时按需下载（约 16MB）：
 
 ```bash
@@ -301,7 +301,7 @@ git tag editor-v<版本>
 git push origin editor-v<版本>
 ```
 
-> tag 必须与 `.harness/demo/ppx_probe/app/ppx.toml` 的 `version` 一致 ——
+> tag 必须与 `apps/editor/ppx.toml` 的 `version` 一致 ——
 > `verify_editor_artifact.py` 会在上传前对齐 tag / 包内版本 / exe / sha256，不一致直接失败。
 
 改了构建链（构建脚本 / 前端 / 命令清单 / workflow 本身）推到 `ppx-only` 时，会先跑一遍
