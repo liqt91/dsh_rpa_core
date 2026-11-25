@@ -63,7 +63,7 @@
   <script>
     // 假 PPX 桥：契约照 ppx-js 的 call()（返回 {ok, data}），数据全部来自真实后端探针。
     const params = new URLSearchParams(location.search)
-    const flowPath = params.get('flow') || '.harness/demo/ppx_probe/_sandbox/struct.json'
+    const flowPath = params.get('flow') || '.harness/spike/ppx/_sandbox/struct.json'
     const clickFirst = params.get('click') !== '0'
     window.__MOCK__ = { calls: [] }
 

@@ -14,9 +14,9 @@ work `(0,-1080,1920,-40)`，虚拟桌面 `1920x2160`、原点 `(0,-1080)`。PPX 
 - `--primary` 显式要求放主屏（用户说「我要它在主屏」时才用）。
 
 用法：
-    ./.venv/Scripts/python.exe run_probe.py            # 不干预多屏布局
-    ./.venv/Scripts/python.exe run_probe.py --primary  # 强制放主屏中央
-    ./.venv/Scripts/python.exe run_probe.py --reuse    # 端口上已有前端时复用它
+    ./.venv/Scripts/python.exe apps/editor/tools/run_probe.py            # 不干预多屏布局
+    ./.venv/Scripts/python.exe apps/editor/tools/run_probe.py --primary  # 强制放主屏中央
+    ./.venv/Scripts/python.exe apps/editor/tools/run_probe.py --reuse    # 端口上已有前端时复用它
 
 Ctrl-C 退出；窗口关掉后脚本随之结束。
 
@@ -29,6 +29,7 @@ Ctrl-C 退出；窗口关掉后脚本随之结束。
 from __future__ import annotations
 
 import ctypes
+import shutil
 import socket
 import subprocess
 import sys
@@ -38,10 +39,12 @@ from ctypes import wintypes as wt
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-APP = HERE / "app"
+# 2026-11-24：编辑器从 .harness/demo/ppx_probe/app 转正到 apps/editor/，
+# 启动器随之挪到 tools/ 下 —— ppx 项目根（含 ppx.toml）是 HERE 的上一级。
+APP = HERE.parent
 TITLE = "RPA Probe"
 PORT = 5173
-LOG = HERE / "_ppx_run.log"
+LOG = APP / "_ppx_run.log"
 
 user32 = ctypes.WinDLL("user32", use_last_error=True)
 # 不设 restype 的话 hwnd 会按 c_int 处理，超过 2^31 就被截断
@@ -322,12 +325,30 @@ def watch(hwnd: int, proc: subprocess.Popen, force_primary: bool, interval: floa
     return 0
 
 
+def find_ppx() -> Path | None:
+    """按「本地 venv → uv tool → PATH」找 ppx。
+
+    转正前这里硬编码 `HERE/.venv/Scripts/ppx.exe`（原型自带 74M venv）；现在编辑器
+    跟主仓共用环境，ppx-py 装在 uv tool 里就够，不再要求仓内另建 venv。
+    """
+    candidates = [
+        HERE / ".venv" / "Scripts" / "ppx.exe",
+        APP / ".venv" / "Scripts" / "ppx.exe",
+        Path.home() / ".local" / "bin" / "ppx.exe",
+    ]
+    for cand in candidates:
+        if cand.is_file():
+            return cand
+    found = shutil.which("ppx")
+    return Path(found) if found else None
+
+
 def main() -> int:
     force_primary = "--primary" in sys.argv[1:]
     reuse = "--reuse" in sys.argv[1:]
-    ppx = HERE / ".venv" / "Scripts" / "ppx.exe"
-    if not ppx.is_file():
-        print(f"找不到 {ppx}，先在 ppx_probe 目录建 venv 并装 ppx-py", flush=True)
+    ppx = find_ppx()
+    if ppx is None:
+        print("找不到 ppx —— 先 `uv tool install ppx-py==6.0.1`", flush=True)
         return 1
 
     args = [str(ppx), "dev"]

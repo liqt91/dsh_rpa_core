@@ -378,7 +378,9 @@ def _coerce(declared: str, text: str) -> Any:
     try:
         value = json.loads(text)
     except json.JSONDecodeError as exc:
-        raise ValueError(f"不是合法 JSON（{declared} 类型需要字面量，如 5 / true / [1,2]）") from exc
+        raise ValueError(
+            f"不是合法 JSON（{declared} 类型需要字面量，如 5 / true / [1,2]）"
+        ) from exc
     check = _TYPE_CHECKS.get(declared)
     if check is not None and not check(value):
         raise ValueError(f"类型不符：声明 {declared}，输入解析成 {type(value).__name__}")
@@ -395,7 +397,9 @@ def _is_reserved(key: str) -> bool:
 _HIDDEN_FLAGS = ("hidden", "x-hidden")
 
 
-def _field_order(schema: dict[str, Any]) -> tuple[list[tuple[str, str | None]], list[dict[str, str]]]:
+def _field_order(
+    schema: dict[str, Any],
+) -> tuple[list[tuple[str, str | None]], list[dict[str, str]]]:
     """字段渲染顺序 + 分组定义。
 
     返回 ([(key, group_label|None), ...], [{label, collapsed}, ...])。
@@ -849,8 +853,11 @@ def save_node_params(path: str, node_id: str, params: dict[str, str]) -> dict[st
             rejected.append(
                 {
                     "key": key,
-                    "reason": f"类型变了：原值 {_infer_type(with_map[key])}，输入 {_infer_type(value)}"
-                    "（manifest 未声明该参数，只能沿用原类型）",
+                    "reason": (
+                        f"类型变了：原值 {_infer_type(with_map[key])}，"
+                        f"输入 {_infer_type(value)}"
+                        "（manifest 未声明该参数，只能沿用原类型）"
+                    ),
                 }
             )
             continue
@@ -859,7 +866,8 @@ def save_node_params(path: str, node_id: str, params: dict[str, str]) -> dict[st
         return {
             "ok": False,
             "code": "INVALID_VALUE",
-            "error": "参数不合法，未写盘：" + "；".join(f"{r['key']} — {r['reason']}" for r in rejected),
+            "error": "参数不合法，未写盘："
+            + "；".join(f"{r['key']} — {r['reason']}" for r in rejected),
             "rejected": rejected,
             "saved": False,
             "ms": round((time.perf_counter() - started) * 1000, 1),
@@ -1209,8 +1217,11 @@ def _structural_fields(node: dict[str, Any]) -> list[dict[str, Any]]:
             _sf("op", "条件操作符", "enum", cond.get("op"), enum=_op_options(), required=True),
             _sf("left", "左值", "literal", cond.get("left"), required=True,
                 description="`${steps.x.outputs.y}` 或字面量"),
-            _sf("right", "右值", "literal", cond.get("right"),
-                description="引用 `${...}` 或 JSON 字面量；留空则不设右值（op=truthy 时本就该留空）"),
+            _sf(
+                "right", "右值", "literal", cond.get("right"),
+                description="引用 `${...}` 或 JSON 字面量；"
+                "留空则不设右值（op=truthy 时本就该留空）",
+            ),
         ]
     if kind == "forEach":
         return [
@@ -1220,7 +1231,10 @@ def _structural_fields(node: dict[str, Any]) -> list[dict[str, Any]]:
                 description="循环体内用 ${loop.<变量名>} 引用当前项，${loop.index} 是下标"),
         ]
     if kind == "try":
-        return [_sf("error_var", "错误变量名", "name", node.get("error_var") or "error", required=True)]
+        return [
+            _sf("error_var", "错误变量名", "name",
+                node.get("error_var") or "error", required=True)
+        ]
     if kind == "return":
         return [
             _sf("value", "返回值", "json", node.get("value"),
@@ -1711,7 +1725,10 @@ def run_poll(run_id: str, since: int = 0) -> dict[str, Any]:
         "result": _result_summary(result) if result else None,
     }
     # 被用户停掉的 run 也会「没有 result 就非零退出」——那是我们干的，不是启动失败
-    if result is None and not running and not entry["cancelled"] and proc.returncode not in (0, None):
+    # 先算三条件再碰 returncode：桩进程可能根本没有这个属性，
+    # 顺序反过来会破坏短路求值（与主分支 ADR 0021 同一处坑）。
+    stalled = result is None and not running and not entry["cancelled"]
+    if stalled and proc.returncode not in (0, None):
         payload["startupError"] = _startup_error(entry)
     if not running:
         payload["stderrTail"] = [line for line in entry["stderr"] if line.strip()][-8:]
@@ -2248,7 +2265,13 @@ def _studio_http(
 def studio_poll_session(since: int = 0) -> dict[str, Any]:
     inbox = _studio_http("GET", f"/inbox?since={int(since)}&client=editor", timeout=1.0)
     if inbox is None:
-        return {"ok": True, "online": False, "port": _studio_endpoint(), "cursor": since, "requests": []}
+        return {
+            "ok": True,
+            "online": False,
+            "port": _studio_endpoint(),
+            "cursor": since,
+            "requests": [],
+        }
     return {
         "ok": True,
         "online": True,

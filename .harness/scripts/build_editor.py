@@ -44,7 +44,7 @@ for _stream in (sys.stdout, sys.stderr):
         _stream.reconfigure(errors="replace")
 
 ROOT = Path(__file__).resolve().parents[2]
-APP = ROOT / ".harness" / "demo" / "ppx_probe" / "app"
+APP = ROOT / "apps" / "editor"
 RESOURCES = APP / "api" / "resources"
 BUILD = APP / "build"
 DIST = ROOT / "dist"

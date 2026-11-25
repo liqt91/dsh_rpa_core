@@ -72,7 +72,14 @@ line-length = 100
 # scripts/ 是一次性调研抓取脚本（非产品代码），不入 lint 门禁
 # .harness/demo/ 是 ADR 0014 的 GUI 技术选型实证脚手架，同样不入门禁
 # .harness/spike/ 是 ADR 0015 的 native messaging 真机实证脚手架，同样不入门禁
+# apps/editor/ 曾住在这两个脚手架目录里，ADR 0021 转正后**不再排除**（要进 lint）
 exclude = ["scripts/", ".harness/demo/", ".harness/spike/"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "ASYNC"]
+
+[tool.ruff.lint.per-file-ignores]
+# 编辑器后端把能力层入口用别名一次性重导出（`apply_selector as _kernel_apply_selector`…），
+# 聚在一个 from-import 里才看得出「这就是那组内核函数」；isort 会拆成二十来个独立语句，
+# 纯噪声。只豁免这一条，其余规则照查。
+"apps/editor/api/api.py" = ["I001"]

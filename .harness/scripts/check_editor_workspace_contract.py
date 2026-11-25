@@ -30,8 +30,8 @@ import uuid
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-API = ROOT / ".harness" / "demo" / "ppx_probe" / "app" / "api" / "api.py"
-MAIN_JS = ROOT / ".harness" / "demo" / "ppx_probe" / "app" / "gui" / "src" / "main.js"
+API = ROOT / "apps" / "editor" / "api" / "api.py"
+MAIN_JS = ROOT / "apps" / "editor" / "gui" / "src" / "main.js"
 STUDIO = ROOT / "workbuddy-suite" / "skills" / "workflow-studio" / "scripts" / "studio.py"
 TMP = ROOT / ".harness" / "spike" / "_m67_contract"
 

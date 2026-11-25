@@ -3,9 +3,11 @@ import './style.css'
 
 const DEPTH = ['#0969da', '#1a7f37', '#9a6700', '#8250df', '#bc4c00', '#0598bc']
 // 默认打开试验台副本，不碰 examples/ 里的既有流程。
-// 选 struct.json 而不是 baidu 的副本：它同时含 action / if / forEach / try / return，
-// 四种节点形态都能在界面上点到（`struct_probe.py` 每次运行都会重建这份夹具）。
-const DEMO_FLOW = '.harness/demo/ppx_probe/_sandbox/struct.json'
+// 想看的夹具叫 struct.json（同时含 action / if / forEach / try / return，四种节点形态都能点到）。
+// 但**不能写死仓库内绝对路径**：后端 bootstrap 只扫 `examples/`、`workflows/`、`_sandbox/`，
+// 写死的旧路径（`.harness/demo/ppx_probe/_sandbox/struct.json`）永远匹配不上列表，
+// 编辑器一转正（ADR 0021）那条路就彻底死了 —— 所以按文件名认，认不出就退回列表首项。
+const DEMO_FLOW_NAME = 'struct.json'
 
 const el = {
   status: document.querySelector('#status'),
@@ -1338,7 +1340,7 @@ async function boot() {
       }),
     )
     el.picker.addEventListener('change', () => openFlow(el.picker.value))
-    const demo = flows.find((f) => f.path === DEMO_FLOW)
+    const demo = flows.find((f) => f.path.endsWith(DEMO_FLOW_NAME))
     if (demo) {
       el.picker.value = demo.path
       await openFlow(demo.path)

@@ -16,9 +16,9 @@
 
 | 分支 | 职责 | 独占域（只有它能改） | 不许碰 |
 |---|---|---|---|
-| `ppx-only` | PPX 桌面客户端：窗口、画布、会话、构建分发 | `.harness/demo/ppx_probe/` | `workbuddy-suite/`、`apps/xhs-workbench/` 等 |
-| `plugin-only` | WorkBuddy 插件套件：connector / skill / extension / 上架资产 | `workbuddy-suite/`、`tests/contract/test_workbuddy_connector.py` | `.harness/demo/ppx_probe/`、`apps/xhs-workbench/` |
-| `xhs-workbench` | 小红书专用工作台：调度 / 快照 / 告警 / 本地 Web 台 | `apps/xhs-workbench/` | `.harness/demo/ppx_probe/`、`workbuddy-suite/` |
+| `ppx-only` | PPX 桌面客户端：窗口、画布、会话、构建分发 | `apps/editor/` | `workbuddy-suite/`、`apps/xhs-workbench/` 等 |
+| `plugin-only` | WorkBuddy 插件套件：connector / skill / extension / 上架资产 | `workbuddy-suite/`、`tests/contract/test_workbuddy_connector.py` | `apps/editor/`、`apps/xhs-workbench/` |
+| `xhs-workbench` | 小红书专用工作台：调度 / 快照 / 告警 / 本地 Web 台 | `apps/xhs-workbench/` | `apps/editor/`、`workbuddy-suite/` |
 
 工作台的**采集执行不自己写**：只经 `rpa-core run <workflow.json>` 调用能力层，
 不 import `src/rpa_core` 内部模块。因此 README 的 `scope.out`（排除调度器 / 数据库 /

@@ -19,7 +19,7 @@ import types
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-API = ROOT / ".harness" / "demo" / "ppx_probe" / "app" / "api" / "api.py"
+API = ROOT / "apps" / "editor" / "api" / "api.py"
 
 results: list[tuple[str, bool, str]] = []
 
