@@ -19,7 +19,7 @@ import json
 from typing import Any
 
 from . import desktop_editing
-from .selector_tree import compose, levels_from_path
+from .selector_tree import compose, levels_from_path, preferred_candidates
 
 NAME_BAD_CHARS = frozenset('/\\:*?"<>|.')
 RESERVED_NAMES = frozenset(
@@ -116,6 +116,12 @@ def apply_selector(
     if descriptor.get("kind") == "browser":
         selector = dict(descriptor.get("selector") or {})
         selector["css"] = text
+        # M106 S3：勾选态回喂候选层——用户勾中的属性对应的写法排到前面，
+        # 运行期自愈按此顺序 try（第一轮=偏好候选，第二轮=其余）。原生框与
+        # Web 框都调本函数，勾选偏好只有这一份权威，不在控件里各写一份。
+        levels = edit_state.get("levels") if isinstance(edit_state, dict) else None
+        if isinstance(levels, list) and isinstance(selector.get("candidates"), list):
+            selector["candidates"] = preferred_candidates(selector["candidates"], levels)
         result["selector"] = selector
     else:
         result["selector"] = json.loads(text)

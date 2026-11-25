@@ -622,6 +622,28 @@ check('契约层：确认框保存接线收三参并透传 selector 与勾选快
   )
 })
 
+// M106 S3：勾选态回喂候选的接线两条产出路径都要成立——原生框走
+// _commit_from_dialog → _apply_selector_edit，Web 框走 confirmElemDialog → dialogSave。
+// 只查「函数存在」会恒绿，这里查的是**调用点真的把 edit_state 传到内核**。
+check('契约层：原生框与 Web 框都把勾选快照交给候选排序内核', () => {
+  const region = apiSrc.slice(
+    apiSrc.indexOf('def _apply_selector_edit'), apiSrc.indexOf('def _elements_dir'),
+  )
+  assert(
+    /_kernel_apply_selector\(doc, text, edit_state=edit_state\)/.test(region),
+    '_apply_selector_edit 没把 edit_state 交给能力层',
+  )
+  assert(
+    /_apply_selector_edit\(captured, selector, edit_state\)/.test(region),
+    '原生确认框没走带勾选快照的写入口',
+  )
+  const web = mainSrc.slice(
+    mainSrc.indexOf('async function confirmElemDialog'),
+    mainSrc.indexOf('async function cancelElemDialog'),
+  )
+  assert(/dialogSave\(name, selector, editState\)/.test(web), 'Web 确认框没把 editState 交给保存回调')
+})
+
 // ---------- 6. kit 边界：只管捕获/编辑，删除与引用检查归网页端 ----------
 check('契约层：删前引用检查在网页端，删除不借桌面浮窗', () => {
   const head = apiSrc.indexOf('def delete_element(')

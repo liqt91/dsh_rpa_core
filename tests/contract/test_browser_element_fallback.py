@@ -157,3 +157,46 @@ def test_no_flow_dir_keeps_behavior_unchanged():
 
     assert result.status == "error"
     assert ext.calls == ["#kw"]
+
+
+def test_uniqueness_rescue_uses_candidate_with_exactly_one_match(tmp_path):
+    """M106 S5：主选择器命中多个 → 找「恰好一条」的候选，证据记 not-unique。"""
+    flow_dir = tmp_path / "flows" / "demo"
+    _write_element(flow_dir, "searchBox", "#kw", [
+        {"kind": "attribute", "selector": 'button[data-testid="save"]', "matchedCount": 1},
+    ])
+    ext = _ScriptedExt({
+        "#kw": {"matchedCount": 2, "result": "ambiguous"},
+        'button[data-testid="save"]': {"matchedCount": 1, "result": "ok"},
+    })
+    executor = PlaywrightExecutor(ext_session=ext, flow_dir=flow_dir)
+
+    result = _run(executor, _invocation("browser.click", selector="#kw", sessionId="s"))
+
+    assert result.status == "success", result.error
+    assert ext.calls == ["#kw", 'button[data-testid="save"]']
+    fallback = result.effects[0].details["fallback"]
+    assert fallback["reason"] == "not-unique"
+    assert fallback["usedSelector"] == 'button[data-testid="save"]'
+
+
+def test_unresolved_ambiguity_is_reported_in_evidence(tmp_path):
+    """候选自己仍歧义时不接受；行为照旧，但 fallback 暴露 resolved=False。"""
+    flow_dir = tmp_path / "flows" / "demo"
+    _write_element(flow_dir, "searchBox", "#kw", [
+        {"kind": "attribute", "selector": "button.a", "matchedCount": 2},
+    ])
+    ext = _ScriptedExt({
+        "#kw": {"matchedCount": 3, "result": "x"},
+        "button.a": {"matchedCount": 2, "result": "y"},
+    })
+    executor = PlaywrightExecutor(ext_session=ext, flow_dir=flow_dir)
+
+    result = _run(executor, _invocation("browser.click", selector="#kw", sessionId="s"))
+
+    assert result.status == "success"
+    assert ext.calls == ["#kw", "button.a"]
+    fallback = result.effects[0].details["fallback"]
+    assert fallback["reason"] == "not-unique"
+    assert fallback["resolved"] is False
+    assert fallback["matchedCount"] == 3

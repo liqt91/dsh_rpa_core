@@ -23,7 +23,7 @@
   // 构建标识：与 background.js 的 EXT_BUILD、manifest.json 的 version 三方一致（契约测试钉住）。
   // 随捕获结果回传——诊断「页面里跑的脚本是哪个年代的」（Load unpacked 不自动重载，
   // 补注入前已开页面里的可能还是旧快照；见 background.js 顶部的完整说明）。
-  const EXT_BUILD = "0.10.0";
+  const EXT_BUILD = "0.11.0";
 
   // ---- 实例接管守卫（M42）----------------------------------------------------
   // 声明式 content_scripts **只在页面加载时**注入：扩展装载/重载后，已经打开的标签页
@@ -295,6 +295,7 @@
   const TAG_ATTR_ORDER = {
     iframe: ["src", ...DEFAULT_ATTR_ORDER],
     frame: ["src", ...DEFAULT_ATTR_ORDER],
+    svg: ["viewBox", ...TEXT_ATTR_ORDER],
     a: ["href", ...TEXT_ATTR_ORDER],
     label: TEXT_ATTR_ORDER,
     button: TEXT_ATTR_ORDER,
@@ -385,6 +386,29 @@
     }
   };
 
+  // 影刀 handleDefaultAttr：完整「名=值」过度收窄（连本元素都命中不了）时，
+  // 降级为「属性名存在」再试；两者都落空就不产候选，不往自愈列表里塞噪声。
+  const defaultAttrVariantsFor = (el, name, attr) => {
+    const value = attr ? attr.value : (el.getAttribute && el.getAttribute(name));
+    if (!value || (name === "id" && !isStableValue(value))) return [];
+    const tag = el.tagName.toLowerCase();
+    const full = tag + "[" + name + '="' + attrValue(value) + '"]';
+    const out = [full];
+    const presence = tag + "[" + name + "]";
+    if (!countFor("css", full) && countFor("css", presence)) out.push(presence);
+    return out;
+  };
+
+  // 影刀 getRoleIndex：同类兄弟序号，作为合成属性候选。不替代主 css 的
+  // nth-of-type 兜底——主 css 是层级勾选模型，这里是运行期自愈的备选写法。
+  const indexOfTypeFor = (el) => {
+    const parent = el.parentElement;
+    if (!parent || !parent.children) return null;
+    const same = Array.from(parent.children).filter((c) => c.tagName === el.tagName);
+    const index = same.indexOf(el) + 1;
+    return index ? el.tagName.toLowerCase() + ":nth-of-type(" + index + ")" : null;
+  };
+
   const uniqueFor = (selector, target, root = document) => {
     const found = [];
     try {
@@ -451,7 +475,7 @@
           if (link) variants.push(link);
         } else {
           const attr = attrs.find((entry) => entry.name === name);
-          if (attr) variants.push(tag + "[" + name + '="' + attrValue(attr.value) + '"]');
+          for (const variant of defaultAttrVariantsFor(node, name, attr)) variants.push(variant);
         }
         for (const variant of variants) {
           const candidate = tail ? variant + " > " + tail : variant;
@@ -547,11 +571,11 @@
       } else if (name === "innerText" || name === "class" || name === "index-of-type") {
         continue;
       } else {
-        const raw = el.getAttribute && el.getAttribute(name);
-        if (!raw || name === "id" && !isStableValue(raw)) continue;
-        push("attribute", el.tagName.toLowerCase() + "[" + name + '="' + attrValue(raw) + '"]');
+        for (const variant of defaultAttrVariantsFor(el, name)) push("attribute", variant);
       }
     }
+    const index = indexOfTypeFor(el);
+    if (index) push("attribute", index);
     const shadow = shadowCssFor(el);
     if (shadow) push("shadow", shadow);
     return out;

@@ -68,10 +68,18 @@ const document = {
 const matchesSimple = (node, segment) => {
   const byId = segment.match(/^#(.+)$/);
   if (byId) return node.id === unescape(byId[1]);
+  const byPresence = segment.match(/^([a-z0-9]+)\[([a-z-]+)\]$/);
+  if (byPresence) {
+    if (node.tagName.toLowerCase() !== byPresence[1]) return false;
+    return byPresence[2] in (node.liveAttrs || node.attributes);
+  }
   const byAttr = segment.match(/^([a-z0-9]+)\[([a-z-]+)([*^$]?)="([\s\S]*)"\]$/);
   if (byAttr) {
     if (node.tagName.toLowerCase() !== byAttr[1]) return false;
-    const actual = node.getAttribute(byAttr[2]);
+    // M106 S1：liveAttrs 模拟「运行期值已漂移」——捕获时记下的值仍可作候选，
+    // 但当前页面上的完整名值命不中，正是 handleDefaultAttr 要降级的场景。
+    const source = node.liveAttrs || node.attributes;
+    const actual = byAttr[2] in source ? source[byAttr[2]] : null;
     if (actual == null) return false;
     const want = unescape(byAttr[4]).replace(/\\\\/g, "\\");
     if (byAttr[3] === "*") return String(actual).includes(want);
@@ -140,6 +148,7 @@ const makeEl = (spec = {}) => {
     textContent: spec.text || "",
     innerText: spec.innerText || spec.text || "",
     attributes: spec.attrs || {},
+    liveAttrs: spec.liveAttrs || null,
     shadowRoot: spec.shadowRoot || null,
     parentElement: null,
     children: [],
@@ -147,7 +156,7 @@ const makeEl = (spec = {}) => {
       return name in this.attributes ? this.attributes[name] : null;
     },
     hasAttribute(name) {
-      return name in this.attributes;
+      return name in (this.liveAttrs || this.attributes);
     },
     closest() {
       return spec.scope || null;
@@ -169,11 +178,13 @@ const {
   isCaptureModifier, isSecondaryClick, cursorKeyOf, cursorStyleText,
   isStableValue, stableIdOf, stableClassesOf, extractAttributes, attributeOrderFor,
   textXpathFor, linkFragmentFor, greedyCssFor, pruneCssFor, countFor, shadowCssFor,
+  defaultAttrVariantsFor, indexOfTypeFor, optimizedCandidatesFor,
 } = new Function("document", "CSS", `${slice}
 return { roleOf, accessibleName, cssSelectorFor, pathFor, candidatesFor, labelTextOf,
   containerTextOf, isCaptureModifier, isSecondaryClick, cursorKeyOf, cursorStyleText,
   isStableValue, stableIdOf, stableClassesOf, extractAttributes, attributeOrderFor,
-  textXpathFor, linkFragmentFor, greedyCssFor, pruneCssFor, countFor, shadowCssFor };`)(
+  textXpathFor, linkFragmentFor, greedyCssFor, pruneCssFor, countFor, shadowCssFor,
+  defaultAttrVariantsFor, indexOfTypeFor, optimizedCandidatesFor };`)(
   document, CSS,
 );
 
@@ -418,6 +429,33 @@ check("shadowCssFor 用 ::shadow 分段（host 在主文档，目标在 shadowRo
   shadowCssFor(shadowTarget), "shadow:#host ::shadow span.target");
 check("countFor 按 shadow 分派逐层穿透，最后一段取目标本身",
   countFor("shadow", "shadow:#host ::shadow span.target"), 1);
+
+// ---- M106：属性化候选补齐（S1 降级 / S2 index-of-type / S4 svg） ---------------
+const drifted = makeEl({
+  tag: "BUTTON",
+  attrs: { title: "captured" },
+  liveAttrs: { title: "current" },  // 运行期值已漂移 ⇒ 完整名值命中不了
+});
+page = [drifted];
+check("handleDefaultAttr：完整名值过度收窄时降级为属性名存在候选",
+  defaultAttrVariantsFor(drifted, "title"),
+  ['button[title="captured"]', "button[title]"]);
+check("值漂移后仍能从候选层拿到存在性写法",
+  candidatesFor(drifted, "button").filter((c) => c.selector === "button[title]").length, 1);
+
+const listParent = makeEl({ tag: "UL" });
+const item1 = makeEl({ tag: "LI" });
+const item2 = makeEl({ tag: "LI" });
+parentOf(listParent, [item1, item2]);
+page = [listParent, item1, item2];
+check("index-of-type：同类兄弟序号作为合成属性候选",
+  indexOfTypeFor(item2), "li:nth-of-type(2)");
+check("index-of-type 以 attribute 候选身份进优化器且实测命中数",
+  optimizedCandidatesFor(item2, "ul > li:nth-of-type(1)").some(
+    (c) => c.kind === "attribute" && c.selector === "li:nth-of-type(2)"
+      && c.matchedCount === 1), true);
+check("svg 属性特化顺序并入 tagOrderMap",
+  attributeOrderFor(makeEl({ tag: "svg" }))[0], "viewBox");
 
 // 捕获手势（回归：macOS 的 Ctrl+Click 只派发 contextmenu，不派发 ctrlKey 的 click）
 check("Ctrl+左键（Windows/Linux）算捕获手势",

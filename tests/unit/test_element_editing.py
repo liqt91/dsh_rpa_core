@@ -134,6 +134,34 @@ def test_web_edit_state_survives_save_and_reopens_exactly():
     assert model["selector"] == "div.a2 > span.b"
 
 
+def test_apply_selector_feeds_checked_attrs_back_into_candidates():
+    """M106 S3：原生框与 Web 框共用的写入口，把勾选偏好带进自愈顺序。"""
+    descriptor = {
+        "kind": "browser",
+        "selector": {
+            "css": "div > span",
+            "candidates": [
+                {"kind": "attribute", "selector": 'span[name="kw"]'},
+                {"kind": "path", "selector": "div.layout > #kw"},
+            ],
+        },
+    }
+    levels = [
+        {"tag": "div", "included": True, "id": {"on": False, "value": ""},
+         "classes": [{"on": True, "value": "layout", "mode": "精确"}],
+         "nth": {"on": False, "value": ""}},
+        {"tag": "span", "included": True, "id": {"on": True, "value": "kw"},
+         "classes": [], "nth": {"on": False, "value": ""}},
+    ]
+    updated = ee.apply_selector(descriptor, "div > span", {"levels": levels})
+    assert [c["selector"] for c in updated["selector"]["candidates"]] == [
+        "div.layout > #kw", 'span[name="kw"]',
+    ]
+    assert updated["selector"]["editState"] == {"levels": levels}
+    # 原对象不能被就地改写（apply_selector 的既有契约）
+    assert descriptor["selector"]["candidates"][0]["selector"] == 'span[name="kw"]'
+
+
 def test_old_asset_without_edit_state_falls_back_to_path_inference():
     """旧资产没有 editState ⇒ 回退现有推断，不因新字段打不开详情。"""
     descriptor = {

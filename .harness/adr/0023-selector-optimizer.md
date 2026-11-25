@@ -98,3 +98,40 @@ M51-B（候选供给扩容）、M52（选择器优选）、M69（完整祖先链
 本改动落在 `extension/`（共享运行面），不独占：`xhs-workbench` / `ppx-only` / `plugin-only`
 三分支都消费扩展。`branch-scope.json` 不改；另两分支没有各自的扩展改动，
 本轮只在本分支落地，是否同步由维护者另拍（同 ADR 0021 的迁移教训）。
+
+## 5. 后续拍板（2026-11-25 13:19）：B 档收口 + 运行期唯一性
+
+维护者复看报告 §1.1 后确认两条路径的事实：
+
+| 报告路径 | 影刀 | 我们（M105 后） |
+|---|---|---|
+| 纯 CSS 路径 `buildCSSPath` | 不捕属性，纯标签链，shadow 插 `xbotShadowRoot` | **无等价物**；主 css 是带稳定 id/class/nth 的可编辑短链，且独立落盘 |
+| 属性化选择器 `SelectorNode.buildFromElement` | `extractAttributes` → `getTagNameOrder` → `getAttrHandler` → `selector2XPath` 统一 XPath | 机制已复刻，但**落在候选层**，产 CSS/XPath 混合字符串，不落 `SelectorNode` AST |
+
+拍板：**选 B 档**，且**运行期唯一性要做**；本轮只记录、不动代码，实施落 M106。
+M105 保持 `done`，不重写历史任务单。
+
+纳入 M106 的四项生成侧补齐 + 一项运行期能力：
+
+1. 属性名降级（`handleDefaultAttr`：名=值过度收窄时降级为「属性名存在」再试）；
+2. `index-of-type` 合成属性候选（影刀永远追加，我们目前只做 `nth-of-type` 主 css 兜底）；
+3. 用户勾选属性优先两轮（`aiSelectedAttrs` 先试、失败退回全候选）——须把编辑器勾选态
+   **回喂**候选生成，牵动 `selector_tree.py` 与原生/Web 两条产出路径，成对判据；
+4. `svg` 属性特化顺序；
+5. **运行期唯一性 Stats**：报告 §8 的 `QuerySelectorAll + Stats` 回路——命中数 >1 时
+   触发加属性/锚点，不只是捕获时实测一次 `matchedCount`。
+
+边界不变（重申 §1.3）：XPath 仍不做主选择器、不落 `SelectorNode` AST、不改 iframe
+跨文档、不动桌面腿 locator；相似元素/表格列的 `makePathMinimal` 仍不在本轮范围。
+运行期回路不得改 `page.call` 签名（既有测试桩按旧签名伪造 session），仍走选择器前缀分派。
+
+验收沿用 §2：全量门禁末行 `FULL GATE PASSED` + rc=0；新判据负向验证 + 元验证 +
+逐字节 md5 还原；跨端双显示/双查询成对。
+
+**实施状态（2026-11-25）：M106 已完成。** 五项全部落地：属性名降级 / `index-of-type`
+候选 / `svg` 顺序在 `content.js` 纯函数层；勾选态经 `selector_tree.preferred_candidates`
+在 `element_editing.apply_selector` 回喂候选顺序（原生框与 Web 框共用这一处）；运行期
+`matchedCount > 1` 走候选唯一化（只接受恰好 1 命中），救援失败也在证据里写
+`reason: not-unique / resolved: false`，不静默当唯一。扩展版本三方 bump 到 `0.11.0`
+（用户必须重新加载扩展）。负向 5 注入 + 1 元验证全命中、逐字节 md5 还原；全门禁
+`FULL GATE PASSED`（1187 passed / 20 skipped / 2 xfailed）。

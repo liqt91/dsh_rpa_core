@@ -501,6 +501,11 @@
       "id": "selector-optimizer",
       "title": "影刀式网页筛选器优化：稳定属性过滤、贪心唯一化、class/text/link 特化、shadow/xpath 候选（M105）",
       "passes": true
+    },
+    {
+      "id": "selector-optimizer-followup",
+      "title": "影刀筛选器对标收口：属性名降级、index-of-type 候选、勾选优先两轮、运行期唯一性 Stats（M106）",
+      "passes": true
     }
   ]
 }

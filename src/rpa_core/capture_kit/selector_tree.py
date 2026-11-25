@@ -113,6 +113,55 @@ def compose(levels: list[dict[str, Any]]) -> str:
     return "".join(parts)
 
 
+def preferred_tokens(levels: list[dict[str, Any]]) -> list[str]:
+    """勾选态 → 候选选择器里应当优先出现的片段（影刀 ``aiSelectedAttrs`` 的本地形态）。
+
+    只取**参与层级**（``included``）的勾选字段：层没勾，层里的 id/class/序号一律不算
+    用户偏好——这是 M109 已拍板的「层级是唯一参与门禁」在候选层的同一口径。
+    """
+    tokens: list[str] = []
+    for level in levels or []:
+        if not isinstance(level, dict) or not level.get("included"):
+            continue
+        ident = level.get("id") or {}
+        if isinstance(ident, dict) and ident.get("on") and ident.get("value"):
+            tokens.append("#" + str(ident["value"]))
+        for cls in level.get("classes") or []:
+            if not isinstance(cls, dict) or not cls.get("on") or not cls.get("value"):
+                continue
+            value = str(cls["value"])
+            if cls.get("mode") == "包含":
+                tokens.append(f'[class*="{attr_escape(value)}"]')
+            else:
+                tokens.append("." + css_escape(value))
+        nth = level.get("nth") or {}
+        if isinstance(nth, dict) and nth.get("on") and nth.get("value"):
+            tokens.append(f':nth-of-type({nth["value"]})')
+    return tokens
+
+
+def preferred_candidates(
+    candidates: list[dict[str, Any]], levels: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """按勾选偏好把候选重排：**偏好多的在前，其余保持原稳定序**。
+
+    这就是影刀「先用勾选属性唯一化、失败再退回全部候选」的两轮策略：运行期
+    ``_page_call_with_fallback`` 按列表顺序逐个 try，排前面的就是第一轮；后面的
+    候选一条不删，仍是第二轮。偏好为空时原样返回，不改捕获期的排序结果。
+    """
+    items = [item for item in (candidates or []) if isinstance(item, dict)]
+    tokens = preferred_tokens(levels)
+    if not tokens:
+        return items
+    return sorted(
+        items,
+        key=lambda item: sum(
+            1 for token in tokens if token in str(item.get("selector") or "")
+        ),
+        reverse=True,  # sorted 稳定：同分保持捕获期 / penalty 排序的原有顺序
+    )
+
+
 def summary(level: dict[str, Any]) -> str:
     """层级在树里的展示文案：<tag id="x" class="a b" index="2">。"""
     bits = [level["tag"]]

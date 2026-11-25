@@ -496,10 +496,15 @@ class PlaywrightExecutor(CommandExecutor):
         timeout_s: float,
         target_host: str,
     ) -> tuple[dict[str, Any], dict[str, Any] | None]:
-        """先按 selector 定位；未命中时按元素资产候选依次重试（元素自愈）。
+        """先按 selector 定位；未命中或**命中多个**时按元素资产候选依次重试（元素自愈）。
 
-        返回 `(payload, fallback)`；`fallback` 非空表示靠候选救回，含所用候选与顺位
+        返回 `(payload, fallback)`；`fallback` 非空表示发生过候选救援，含所用候选与顺位
         （写进执行证据，便于事后判断「这次是哪条候选生效」）。
+
+        M106 S5（影刀报告 §8 的运行期唯一性 Stats）：`matchedCount > 1` 不再当成
+        唯一命中直接返回——先按候选顺序找「恰好一条命中」的写法；找不到时**不静默
+        当唯一**，仍返回原 payload，但 fallback 里记 `resolved: False`，让执行证据
+        如实暴露歧义。候选全部保留两条路径：偏好候选在前（S3）、其余在后。
 
         两处「不重试」的判定（M28 S2）：
         - 主选择器**命中但预检不过**（被遮挡/隐藏/禁用）→ 直接返回该 payload：元素找到了，
@@ -512,8 +517,10 @@ class PlaywrightExecutor(CommandExecutor):
             self._ext.page_call, tab_id, selector, method,
             args=args, timeout_seconds=timeout_s, target_host=target_host,
         )
-        if int(payload.get("matchedCount") or 0) > 0:
+        count = int(payload.get("matchedCount") or 0)
+        if count == 1:
             return payload, None
+        not_unique = count > 1  # M106 S5：歧义也要走 Stats + 候选唯一化
         candidates = self._element_candidates(selector)
         last_precheck = payload
         for index, candidate in enumerate(candidates, start=1):
@@ -532,7 +539,12 @@ class PlaywrightExecutor(CommandExecutor):
                     }
                     continue
                 raise
-            if int(retry.get("matchedCount") or 0) > 0:
+            retry_count = int(retry.get("matchedCount") or 0)
+            # 唯一性救援只接受「恰好一条」：候选自己还歧义就继续找下一条，
+            # 不能把主选择器的歧义换成候选的歧义还当成功。
+            if retry_count != 1 and not_unique:
+                continue
+            if retry_count > 0:
                 if isinstance(retry.get("precheck"), dict):
                     last_precheck = retry
                     continue
@@ -542,7 +554,20 @@ class PlaywrightExecutor(CommandExecutor):
                     "kind": candidate.get("kind"),
                     "index": index,
                     "candidateCount": len(candidates),
+                    **({"reason": "not-unique"} if not_unique else {}),
                 }
+        if not_unique:
+            # 歧义没救回来：行为照旧（不凭空报新错误码），但证据必须说出来。
+            return payload, {
+                "mainSelector": selector,
+                "usedSelector": "",
+                "kind": None,
+                "index": 0,
+                "candidateCount": len(candidates),
+                "reason": "not-unique",
+                "resolved": False,
+                "matchedCount": count,
+            }
         return last_precheck, None
 
     async def execute(

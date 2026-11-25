@@ -12,6 +12,7 @@ from rpa_core.capture_kit.selector_tree import (
     css_escape,
     level_included_after_toggle,
     levels_from_path,
+    preferred_candidates,
     summary,
 )
 
@@ -147,3 +148,27 @@ def test_unchecked_level_contributes_nothing_even_with_attributes_on() -> None:
 
 def test_compose_empty_path() -> None:
     assert compose([]) == ""
+
+
+def test_preferred_candidates_puts_checked_attrs_first() -> None:
+    """M106 S3：勾选态回喂候选顺序，取消的层级不贡献偏好（两层一轮）。"""
+    candidates = [
+        {"kind": "attribute", "selector": 'span[name="kw"]'},
+        {"kind": "css-optimized", "selector": "div.layout > #kw"},
+        {"kind": "path", "selector": "div.layout > span.target"},
+        {"kind": "attribute", "selector": "span#kw"},
+    ]
+    levels = [
+        {"tag": "div", "included": True, "id": {"on": False, "value": ""},
+         "classes": [{"on": True, "value": "layout", "mode": "精确"}],
+         "nth": {"on": False, "value": ""}},
+        {"tag": "span", "included": True, "id": {"on": True, "value": "kw"},
+         "classes": [], "nth": {"on": False, "value": ""}},
+    ]
+    assert [c["selector"] for c in preferred_candidates(candidates, levels)] == [
+        "div.layout > #kw", "div.layout > span.target", "span#kw", 'span[name="kw"]',
+    ]
+    levels[0]["included"] = False
+    assert [c["selector"] for c in preferred_candidates(candidates, levels)] == [
+        "div.layout > #kw", "span#kw", 'span[name="kw"]', "div.layout > span.target",
+    ]
