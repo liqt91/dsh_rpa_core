@@ -110,9 +110,12 @@ ADR 0022-R3 原本把「客户端打包配置」5 个文件（`ppx.toml`、`pack
 **门禁盲区（本次实测撞上）**
 
 `check_editor_location` 只判「`apps/editor/ppx.toml` 在不在、旧目录有没有复活」，**判不出
-文档与代码字符串里指向旧地址的引用**。迁移后第一次全量门禁是绿的，但仓库里仍有 12 个文件
-写着 `.harness/demo/ppx_probe`（另有 1 处是新写的迁移注记，本就该留），其中两处是**可执行**的：
-`gui/src/main.js` 的 `DEMO_FLOW` 与 `gui/_layout/probe.html` 的默认 `?flow=`。前者更阴——那个常量**从来就没匹配上过**流程
+文档与代码字符串里指向旧地址的引用**。迁移后第一次全量门禁是绿的，但 `git grep -l
+demo/ppx_probe` 查到 **31 个文件**命中（多数是 ADR / PROGRESS / 任务单里的历史记录，
+本就该留），真正要改的是 **13 个**。其中三处是**可执行**的：`gui/src/main.js` 的
+`DEMO_FLOW`、`gui/_layout/probe.html` 的默认 `?flow=`、以及 `.github/workflows/
+editor-release.yml` 的 `paths` 与 `working-directory`（后者会让 tag 发版直接失败）。
+`DEMO_FLOW` 更阴——那个常量**从来就没匹配上过**流程
 列表（后端 `rpa.bootstrap` 只扫 `examples/`、`workflows/`、`_sandbox/` 三处），一直是靠
 `flows[0]` 兜底，所以它坏了也「看起来正常」。已改成按文件名 `struct.json` 认、认不出退回
 列表首项；探针默认值改指 `.harness/spike/ppx/_sandbox/struct.json`。
@@ -120,7 +123,9 @@ ADR 0022-R3 原本把「客户端打包配置」5 个文件（`ppx.toml`、`pack
 没有加「全仓禁出现旧路径」的门禁：旧地址在 ADR、PROGRESS、历史教训表、负向探针里
 **本来就该留着**（它们记的是「当时发生过什么」），要放行就得维护一张豁免名单，而豁免名单
 本身就是新的漂移源。折中做法是**只把可执行入口收进判据**（`check_editor_location` 已覆盖
-宿主目录本身），文档口径靠人工复核 —— 这次是靠 `grep` 兜住的，不是靠门禁。
+宿主目录本身），文档口径靠人工复核 —— 这次是靠 `git grep` 兜住的，不是靠门禁。
+★ 复核必须用 `git grep -l <旧路径>`（含 `.github/` / `.harness/` 这类点开头目录），
+**别用编辑器自带的 Grep 工具**：它默认跳过隐藏目录，第一次就因此漏掉发版 workflow。
 
 ## 4. 遗留债（按优先级）
 
