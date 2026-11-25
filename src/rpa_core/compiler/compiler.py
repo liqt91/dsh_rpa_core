@@ -1,3 +1,4 @@
+import ast
 import re
 from dataclasses import dataclass
 from typing import Any
@@ -6,6 +7,10 @@ from jsonschema import Draft202012Validator
 
 from rpa_core.catalog import CommandCatalog
 from rpa_core.model.command import ReplayPolicy
+
+# 只借**语法定义**（fx 标签正则），不求值：两处各写一份正则就会出现
+# 「菜单说这个变量能用、编译说不行」。
+from rpa_core.model.expr_tags import iter_tags
 from rpa_core.model.inputs import InputDeclarationError, validate_declaration
 from rpa_core.model.workflow import (
     ActionNode,
@@ -24,7 +29,10 @@ _REFERENCE = re.compile(r"^\$\{([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)\}$")
 _CONTROL_TYPES = {"sequence", "if", "forEach", "try", "return"}
 
 # 内置作用域根名：用户别名不得占用，否则 resolver 的 variables 优先查找会静默遮蔽它们。
-_RESERVED_ALIAS_ROOTS = {"inputs", "steps", "loop"}
+# 公开一份不带头下划线的名字：编辑器保存别名时要用**同一套**保留名做前置校验
+# （等编译器报错时文件已经写下去了，用户看到的是一份存不进也跑不动的流程）。
+RESERVED_ALIAS_ROOTS = frozenset({"inputs", "steps", "loop"})
+_RESERVED_ALIAS_ROOTS = set(RESERVED_ALIAS_ROOTS)
 
 
 class WorkflowCompileError(ValueError):
@@ -145,8 +153,7 @@ def _validate_alias_declarations(root: WorkflowNode, catalog: CommandCatalog) ->
             previous = seen.get(alias)
             if previous is not None:
                 raise WorkflowCompileError(
-                    f"Duplicate alias: {alias!r} declared by node {previous} "
-                    f"and node {node.id}"
+                    f"Duplicate alias: {alias!r} declared by node {previous} and node {node.id}"
                 )
             seen[alias] = node.id
 
@@ -157,8 +164,50 @@ def _is_var_write_node(node: ActionNode, catalog: CommandCatalog) -> bool:
     return bool(manifest and manifest.x_var_write)
 
 
+def _target_names(target: ast.expr) -> list[str]:
+    """赋值目标里的变量名（含解包 ``a, b = ...``）。属性/下标赋值不算声明新变量。"""
+    if isinstance(target, ast.Name):
+        return [target.id]
+    if isinstance(target, ast.Tuple | ast.List):
+        names: list[str] = []
+        for element in target.elts:
+            names.extend(_target_names(element))
+        return names
+    return []
+
+
+def _python_assigned_names(source: str) -> list[str]:
+    """python 模式字段源码里**会被写回流程变量**的名字。
+
+    运行期 ``_evaluate_python_fields`` 把 worker 回传的 ``assignedVariables`` 合并进
+    ``scopes.variables``，所以「py 字段里写 ``total = sum(nums)``」等价于该节点声明了
+    变量 ``total``，后面的 fx 字段可以 ``[total]`` 引用（``tests/unit/test_python_expr.py``
+    就是这么用的）。
+
+    编译器过去完全不知道这条通道：`_iter_references` 只认 ``${}``，而 fx 标签当时根本
+    不校验。现在 fx 标签也要校验，就必须把这条声明也认进来——否则会把**正确工作**的流程
+    判红（假红比假绿更消耗信任）。
+
+    只解析不执行（``ast``，不违反 ``FORBIDDEN_CALLS``）。语法错返回空表：运行期会报
+    ``SCRIPT_FAILED``，编译期不抢那个错。
+    """
+    try:
+        tree = ast.parse(source)
+    except (SyntaxError, ValueError):
+        return []
+    names: list[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                names.extend(_target_names(target))
+        elif isinstance(node, ast.AnnAssign | ast.AugAssign | ast.NamedExpr):
+            names.extend(_target_names(node.target))
+    return names
+
+
 def _declared_names(node: ActionNode, catalog: CommandCatalog) -> list[str]:
-    """**单个节点自己**声明的变量名，按声明顺序：output_aliases + x-var-write 目标。
+    """**单个节点自己**声明的变量名，按声明顺序：output_aliases + x-var-write 目标 +
+    python 模式字段的赋值目标。
 
     动态变量名（varName 是引用）静态无法确定，与前向引用判定同口径地跳过。
     """
@@ -169,6 +218,10 @@ def _declared_names(node: ActionNode, catalog: CommandCatalog) -> list[str]:
         target = node.with_.get(var_write["field"])
         if isinstance(target, str) and target and not target.startswith("${"):
             names.append(target)
+    modes = node.expr_modes or {}
+    for key, value in node.with_.items():
+        if modes.get(key) == "python" and isinstance(value, str) and value.strip():
+            names.extend(_python_assigned_names(value))
     return names
 
 
@@ -179,11 +232,16 @@ class VisibleScope:
     ``variables`` 是**严格在该节点之前**声明的用户变量名（声明顺序、去重）；
     它**不含**该节点自身声明的名字——这正是编译器的口径：``walk()`` 先
     ``validate_refs(node.with_, …)``、之后才登记本节点的别名。
+
+    ``sources`` 是 ``(变量名, 声明它的节点 id)``，只为**界面展示来源**而存在
+    （「alpha · 来自 n3」）。它不参与任何判定：可见性只由前三组决定——多一个
+    来源条目不会让一个不可见的变量变可见，少一个也不会让它消失。
     """
 
     variables: tuple[str, ...]
     loop_vars: tuple[str, ...]
     error_vars: tuple[str, ...]
+    sources: tuple[tuple[str, str], ...] = ()
 
 
 def visible_scope(root: WorkflowNode, catalog: CommandCatalog, node_id: str) -> VisibleScope | None:
@@ -202,6 +260,7 @@ def visible_scope(root: WorkflowNode, catalog: CommandCatalog, node_id: str) -> 
     2026-10-14 拍板「菜单 ⊆ 编译通过，两端口径必须一致」。
     """
     seen: list[str] = []
+    sources: list[tuple[str, str]] = []
     hit: VisibleScope | None = None
 
     def visit(node: WorkflowNode, loop_vars: set[str], error_vars: set[str]) -> None:
@@ -214,10 +273,13 @@ def visible_scope(root: WorkflowNode, catalog: CommandCatalog, node_id: str) -> 
                 tuple(ordered),
                 tuple(dict.fromkeys(loop_vars)),
                 tuple(dict.fromkeys(error_vars)),
+                tuple(dict.fromkeys(sources)),
             )
             return
         if isinstance(node, ActionNode):
-            seen.extend(_declared_names(node, catalog))
+            for name in _declared_names(node, catalog):
+                seen.append(name)
+                sources.append((name, node.id))
             return
         if isinstance(node, SequenceNode):
             for child in node.children:
@@ -294,52 +356,88 @@ class WorkflowCompiler:
         except InputDeclarationError as exc:
             raise WorkflowCompileError(f"Invalid workflow inputs declaration: {exc}") from exc
 
-        def validate_refs(
-            value: Any,
+        def check_reference(
+            reference: str,
             loop_vars: set[str],
             error_vars: set[str],
             own_names: set[str],
         ) -> None:
-            """校验一处引用。``own_names`` = 当前节点自己声明的变量名。
+            """校验**一个**引用路径。``own_names`` = 当前节点自己声明的变量名。
 
             判定次序（改动前请先读 `visible_scope` 的说明）：
             已可见 → **自身声明** → 更靠后声明 → 词法可见的 error_var → 不可用。
             「自身声明」必须排在「更靠后声明」**之前**，否则自引用会报成
             「declared later」（文案误导）；又必须排在「已可见」**之后**，
             否则 ``v = ${v}``（读自己写入目标的旧值）这类合法写法会被误判。
+
+            ★ `${...}` 与 fx 标签 `[...]` 共用本函数：两种语法的作用域口径必须完全一致，
+            否则「[x] 能编译过、${x} 不能」这种事没有道理可讲，只能挨个打补丁。
             """
+            root, *parts = reference.split(".")
+            if root == "inputs":
+                if not parts or parts[0] not in workflow.inputs:
+                    raise WorkflowCompileError(f"Unknown workflow input reference: {reference}")
+            elif root == "steps":
+                if len(parts) < 2 or parts[0] not in step_ids:
+                    raise WorkflowCompileError(f"Unknown or forward step reference: {reference}")
+            elif root == "loop":
+                if not parts or parts[0] not in loop_vars:
+                    raise WorkflowCompileError(f"Unknown loop reference: {reference}")
+            elif root in output_aliases:
+                # ${alias} 或 ${alias.field} — 前序已声明的 output_alias 变量
+                pass
+            elif root in own_names:
+                # 变量就由**当前节点自己**声明 → 引用它必然取不到（赋值还没发生）
+                raise WorkflowCompileError(
+                    f"Self variable reference (declared by this node): {reference}"
+                )
+            elif root in all_output_aliases:
+                # 变量在流程更靠后节点才声明 → 前向引用
+                raise WorkflowCompileError(
+                    f"Forward variable reference (declared later): {reference}"
+                )
+            elif root in error_vars:
+                # 词法可见的 catch error_var：${err} 或 ${err.field}
+                pass
+            else:
+                # 作用域外的裸变量名 / error_var 越界 / 未声明变量 / 未知根
+                raise WorkflowCompileError(f"Unsupported reference root: {reference}")
+
+        def validate_refs(
+            value: Any,
+            loop_vars: set[str],
+            error_vars: set[str],
+            own_names: set[str],
+        ) -> None:
+            """校验一处输入里的全部 ``${...}`` 引用。"""
             for reference in _iter_references(value):
-                root, *parts = reference.split(".")
-                if root == "inputs":
-                    if not parts or parts[0] not in workflow.inputs:
-                        raise WorkflowCompileError(f"Unknown workflow input reference: {reference}")
-                elif root == "steps":
-                    if len(parts) < 2 or parts[0] not in step_ids:
+                check_reference(reference, loop_vars, error_vars, own_names)
+
+        def validate_tags(
+            node: ActionNode,
+            loop_vars: set[str],
+            error_vars: set[str],
+            own_names: set[str],
+        ) -> None:
+            """fx 模式字段里的 ``[标签]`` 校验：与 ``${}`` 同一套判定。
+
+            ★ 这是「菜单 ⊆ 编译通过」的另一半。变量菜单只列可见作用域里的名字，但用户
+            可以手打 ``[随便写]``——过去编译期**完全不看** fx 标签（`_iter_references`
+            只认 `${}`），这种错误要等流程跑到那个节点才变成运行期
+            `INVALID_REFERENCE`。M108 起编辑器正式给出 fx 入口，手打成了主路径之一，
+            编译期再不校验就是把错误推给最贵的时刻。
+            """
+            modes = node.expr_modes or {}
+            for key, value in node.with_.items():
+                if modes.get(key) != "fx":
+                    continue
+                for tag in iter_tags(value):
+                    try:
+                        check_reference(tag, loop_vars, error_vars, own_names)
+                    except WorkflowCompileError as exc:
                         raise WorkflowCompileError(
-                            f"Unknown or forward step reference: {reference}"
-                        )
-                elif root == "loop":
-                    if not parts or parts[0] not in loop_vars:
-                        raise WorkflowCompileError(f"Unknown loop reference: {reference}")
-                elif root in output_aliases:
-                    # ${alias} 或 ${alias.field} — 前序已声明的 output_alias 变量
-                    pass
-                elif root in own_names:
-                    # 变量就由**当前节点自己**声明 → 引用它必然取不到（赋值还没发生）
-                    raise WorkflowCompileError(
-                        f"Self variable reference (declared by this node): {reference}"
-                    )
-                elif root in all_output_aliases:
-                    # 变量在流程更靠后节点才声明 → 前向引用
-                    raise WorkflowCompileError(
-                        f"Forward variable reference (declared later): {reference}"
-                    )
-                elif root in error_vars:
-                    # 词法可见的 catch error_var：${err} 或 ${err.field}
-                    pass
-                else:
-                    # 作用域外的裸变量名 / error_var 越界 / 未声明变量 / 未知根
-                    raise WorkflowCompileError(f"Unsupported reference root: {reference}")
+                            f"fx field `{key}` of node {node.id}: [{tag}] — {exc}"
+                        ) from exc
 
         def walk(
             node: WorkflowNode, loop_vars: set[str], error_vars: set[str] | None = None
@@ -355,12 +453,9 @@ class WorkflowCompiler:
                 manifest = self.catalog.get(node.command)
                 if manifest is None:
                     raise WorkflowCompileError(f"Unknown command: {node.command}")
-                validate_refs(
-                    node.with_,
-                    loop_vars,
-                    error_vars,
-                    set(_declared_names(node, self.catalog)),
-                )
+                own_names = set(_declared_names(node, self.catalog))
+                validate_refs(node.with_, loop_vars, error_vars, own_names)
+                validate_tags(node, loop_vars, error_vars, own_names)
                 if node.retry_count > 0 and manifest.effect.replay == ReplayPolicy.UNSAFE:
                     raise WorkflowCompileError(
                         f"Unsafe replay command cannot be retried: {manifest.id}"

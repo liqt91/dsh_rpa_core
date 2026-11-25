@@ -2,11 +2,22 @@ import json
 import re
 from typing import Any
 
+from rpa_core.model.expr_tags import TAG_PATTERN, has_tags, iter_tags
 from rpa_core.model.workflow import Condition
 
 _REFERENCE = re.compile(r"^\$\{([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)\}$")
-# fx 模式标签：[name] / [name.field]，可与普通文本混排拼接
-_TAG = re.compile(r"\[([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)\]")
+# fx 模式标签的语法与解析都在 model/expr_tags.py（编译期也要用同一份）。
+_TAG = re.compile(TAG_PATTERN)
+
+__all__ = [
+    "ReferenceError",
+    "evaluate",
+    "has_tags",
+    "iter_tags",
+    "resolve",
+    "resolve_tags",
+    "resolve_with_modes",
+]
 
 
 class ReferenceError(ValueError):
@@ -88,16 +99,6 @@ def resolve_tags(value: Any, scopes: dict[str, Any]) -> Any:
     if isinstance(value, dict):
         return {key: resolve_tags(item, scopes) for key, item in value.items()}
     return value
-
-
-def has_tags(value: Any) -> bool:
-    """文本里是否含 fx 标签（``[name]`` / ``[name.field]``）。
-
-    fx 模式与自带语法的判据只允许有一个事实源：GUI 靠它决定「字段是否仍处于标签
-    模式」（最后一个标签被删 ⇒ 撤销 ``fx`` 态），运行期靠它把 ``[name]`` 就地替换。
-    两边共用同一个 ``_TAG``，避免各写一份正则后悄悄漂移。
-    """
-    return isinstance(value, str) and _TAG.search(value) is not None
 
 
 def resolve_with_modes(

@@ -5,6 +5,8 @@
 
 ## 当前任务
 
+- [x] **参数机制接线（M108，B+C 档 + 改名联动）**（`done`，2026-11-25）——维护者拍板「B 和 C 一起做，改名联动也补上」。四层全接线：标签走 `i18n.field_label`、fx/Py 双缓冲（标签删光自动撤 fx）、变量菜单接 `visible_scope`、参数与输出变量**同一次写盘**。改名联动覆盖全部引用站点（`${}` / fx `[]` / py 标识符 / 条件 / items / return），py 语法错只报不改。`x-param-groups` 1→11、`x-depends` 1→7 并落地置灰（置灰不隐藏：隐藏会让全量提交缺 `INCOMPLETE_SUBMIT`）。负向 8 注入 + 每条钉一条期望绿、md5 还原；FULL GATE PASSED（1226 passed）。细则 `M108-param-wiring.md`。遗留：47 条命令未分组、`x-depends` 仍只支持等值、`x-widget` 未落地。
+
 - [x] **捕获框界面 A 档改造（M107）**（`done`，2026-11-25）——维护者反馈「原生快但界面土」，给 A/B/C 三档后选 A。窗口按实际层数收缩（4 层 552→360）、截图区折叠到校验拿到图才展开、属性值框统一列、STATIC 去灰底、结果条 `●  找到 N 个` 染色、按钮聚拢右下、层级行挂全文 tooltip。不动模型/消息流/校验逻辑。B 自绘皮肤与 C 换栈明确不做。负向 2/2+元验证、md5 还原；FULL GATE PASSED（1189 passed）。细则 `M107-capture-dialog-skin.md`。
 
 - [x] **影刀筛选器对标收口（M106 / ADR 0023 §5）**（`done`，2026-11-25）——按 B 档落地：属性名降级、`index-of-type` 候选、`svg` 特化进 `content.js` 纯函数层；勾选态经 `selector_tree.preferred_candidates` 在 `element_editing.apply_selector` 回喂候选顺序（原生/Web 同内核，UI 门禁 44/44 成对）；运行期 `matchedCount>1` 走候选唯一化，救援失败写 `resolved:false` 不静默当唯一，不改 `page.call` 签名。EXT_BUILD 三方 `0.11.0`（须重载扩展）。负向 5 注入 + 1 元验证全命中、md5 还原；FULL GATE PASSED（1187 passed）。细则 `M106-selector-optimizer-followup.md`。

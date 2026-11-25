@@ -53,8 +53,8 @@ manifest 的参数配置分四层：**能力骨架已具备，但除 `x-outputs`
 | manifest 顶层 | `retryable` | 11/65 | 有数据、无 UI 契约（本次修复） |
 | manifest 顶层 | `x-outputs` | 34/65 | 已铺开（label 57 / primary 26 / hidden 6） |
 | manifest 顶层 | `x-var-write` | 1/65 | 只 `data.setVar` |
-| input_schema 根 | `x-param-groups` | **1/65** | 只 `browser.navigate` |
-| input_schema 根 | `x-depends` | **1/65** | 只 navigate，且只支持「单字段等值」 |
+| input_schema 根 | `x-param-groups` | **11/84** | M108 起铺到 click / input / scroll / getText / navigate / attachWindow（含 win32 后端）|
+| input_schema 根 | `x-depends` | **7/84** | 只支持「单字段等值」；M108 起有前端消费者（置灰）|
 | 字段级 | `x-enum-labels` | **4 / 32 个 enum 字段** | 28 个枚举值在 UI 里仍是英文 |
 | 字段级 | `x-fx` / `x-python` | 4 / 2（共 241 字段） | 变量/表达式入口几乎没声明 |
 | 字段级 | 控件类型 | **无此关键字** | 前端按 key 名硬编码 |
@@ -83,8 +83,8 @@ manifest 的参数配置分四层：**能力骨架已具备，但除 `x-outputs`
 
 | 关键字 | 语义 | 覆盖 |
 |---|---|---|
-| `x-param-groups` | 参数分区：`[{label, fields[], collapsed?}]`，对标影刀「常规/高级」 | 1/65 |
-| `x-depends` | 字段联动：`{field: {控制字段: 期望值}}`，不满足时置灰并归入「其他通道参数」折叠区 | 1/65 |
+| `x-param-groups` | 参数分区：`[{label, fields[], collapsed?, auto?}]`，对标影刀「常规/高级」 | 11/84 |
+| `x-depends` | 字段联动：`{field: {控制字段: 期望值}}`，不满足时**置灰但保留值**（隐藏会让全量提交缺键）| 7/84 |
 | `oneOf` | 标准 JSON Schema 分支 | 1/65 |
 
 ### 3. 字段级（`properties.<name>`）
@@ -117,11 +117,11 @@ manifest 的参数配置分四层：**能力骨架已具备，但除 `x-outputs`
 - 后果：**9 个 safe + 6 个 idempotent（共 15 条）命令声明 `retryable=false`，用户填了重试次数却永不生效**（静默失效）；
 - 修复：`retryable` 成为唯一事实源，`retryable !== true` 时**不渲染**「重试次数」；详见第四节。
 
-**P0-2　参数分组只覆盖 1/65**
+**P0-2　参数分组只覆盖 11/84（M108 已铺开关面板最长的那批）**
 除 navigate 外的 64 条命令，参数平铺在「输入参数」下（如 `browser.click` 有 8 个字段、`desktop.click` 有 7 个），
 无法对标影刀的「常规/高级」折叠，长表单难扫读。
 
-**P0-3　字段联动只覆盖 1/65，且表达能力单一**
+**P0-3　字段联动只覆盖 7/84，且表达能力单一（M108 已接通前端：置灰 + 提示）**
 `x-depends` 只支持「某控制字段 == 某值」一种条件（如 `{browserType: "msedge"}`），
 不支持 `in`、`!=`、多条件与/或，也不支持「当前值不满足时清空」。联动类命令尤其需要。
 
@@ -229,7 +229,7 @@ manifest 的参数配置分四层：**能力骨架已具备，但除 `x-outputs`
       { "label": "常规", "auto": true },            // auto：非 advanced 字段自动归入，免手写 fields
       { "label": "高级", "fields": ["timeoutMs"], "collapsed": true }
     ],
-    "x-depends": { "userDataDir": { "action": { "in": ["launch"] } } }  // 条件联动
+    "x-depends": { "userDataDir": { "action": "launch" } }  // 条件联动：只支持等值
   }
 }
 ```

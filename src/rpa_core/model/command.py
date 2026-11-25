@@ -120,7 +120,11 @@ class CommandManifest(BaseModel):
     )
     x_fx: list[str] | None = Field(default=None, alias="x-fx")
     x_python: list[str] | None = Field(default=None, alias="x-python")
-    x_depends: dict[str, dict[str, Any]] | None = Field(default=None, alias="x-depends")
+    # ★ `x-depends` / `x-param-groups` 刻意**不在这里**声明：它们属于 `input_schema`
+    #   根（JSON Schema 的扩展关键字），消费者 `_field_descriptors` / `_field_order`
+    #   读的就是 `input_schema`。原先这里有个顶层 `x-depends` 字段，但全仓没有读者——
+    #   写在顶层会被 pydantic 收下、然后被界面**静默忽略**（联动永远不生效）。
+    #   删掉之后顶层再写 `x-depends` 就是 `extra="forbid"` 的加载错误，错得早也错得响。
     x_var_write: dict[str, Any] | None = Field(
         default=None,
         alias="x-var-write",

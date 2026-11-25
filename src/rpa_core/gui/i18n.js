@@ -228,6 +228,19 @@ window.RPA_I18N = {
     operationTimeoutMs: "操作超时（毫秒）",
     flowDir: "流程目录",
     table: "数据表格名称",
+    // M108：参数面板真正开始消费中文标签后暴露的裸键。此前编辑器写死 `label = key`，
+    // 这一层中文标签没有任何 UI 消费者，于是「缺标签」无症状——现在缺一条就裸显示英文。
+    // 判据是**等值断言**（tests/contract/test_param_meta.py）：
+    // 每个非 hidden 字段都必须有标签，新增字段忘配立刻红。
+    injection: "事件注入方式",
+    hoverMode: "点击前先悬停",
+    pressDelayMs: "按下保持（毫秒）",
+    detachAfter: "点击后断开调试会话",
+    windowHandle: "窗口句柄",
+    imageTemplate: "模板图（Base64）",
+    imageKeyword: "目标文本关键词",
+    templateSize: "模板图尺寸",
+    minConfidence: "最低置信度",
   },
   // 按命令覆盖的字段标签：同名参数在不同命令下含义不同（如 args）
   commandFields: {

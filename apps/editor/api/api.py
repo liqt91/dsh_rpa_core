@@ -88,15 +88,26 @@ from rpa_core.capture_kit import (  # noqa: E402
     MaximizedAwareHost,
 )
 from rpa_core.catalog import load_catalog  # noqa: E402
-from rpa_core.compiler.compiler import WorkflowCompileError, WorkflowCompiler  # noqa: E402
+from rpa_core.compiler.compiler import (  # noqa: E402
+    RESERVED_ALIAS_ROOTS,
+    WorkflowCompileError,
+    WorkflowCompiler,
+    visible_scope,
+)
 from rpa_core.gui.i18n import _I18N_PATH, _block  # noqa: E402  分支文案（原型侧解析，冻结区不改）
-from rpa_core.gui.i18n import load_command_display_names, load_op_labels  # noqa: E402
+from rpa_core.gui.i18n import (  # noqa: E402
+    field_label,
+    load_command_display_names,
+    load_op_labels,
+)
 from rpa_core.model.capture import ElementDescriptor  # noqa: E402
+from rpa_core.model.expr_tags import has_tags  # noqa: E402
 from rpa_core.model.inputs import (  # noqa: E402
     InputDeclarationError,
     InputEntry,
     declaration_from_entries,
 )
+from rpa_core.model.ref_rename import rename_python, rename_value  # noqa: E402
 from rpa_core.model.workflow import Condition, Workflow  # noqa: E402
 from rpa_core.runtime.element_refs import (  # noqa: E402
     element_capable_keys,
@@ -433,39 +444,119 @@ def _is_reserved(key: str) -> bool:
 # 让用户手填等于给他一个改了也没用的假入口。
 _HIDDEN_FLAGS = ("hidden", "x-hidden")
 
+# 字段表达式模式：fx = `[变量]` 标签（可混排拼接），python = 子进程求值的表达式。
+# 声明与运行期口径都在 manifest 字段级（`x-fx` / `x-python`）；这里只做白名单与落盘。
+_EXPR_MODES = {"fx": "x-fx", "python": "x-python"}
+
+# 输出别名 = 流程里可见的变量名，运行期按 `${名}` 解析，所以只认 ASCII 标识符。
+# 与 compiler 的保留名常量共用一份（不是抄一份）：抄了就会有一边先改、另一边静默放过。
+_ALIAS_NAME = re.compile(r"[A-Za-z_]\w*")
+
+
+def _clean_expr_modes(
+    modes: dict[str, Any],
+    values: dict[str, Any],
+    properties: dict[str, Any],
+) -> tuple[dict[str, str], list[dict[str, str]], list[str]]:
+    """把前端提交的模式整理成「可以落盘的那一份」。
+
+    返回 ``(要写的模式, 拒绝项, 被撤销的字段)``。三条规则各有理由：
+
+    1. **只允许 fx / python**。别的字符串在运行期会被当成普通模式（`resolve_with_modes`
+       只认这两个），于是「我明明开了变量模式」变成一句无从查证的话。
+    2. **必须被字段声明**（`x-fx` / `x-python`）。入口的能力由 manifest 决定，
+       前端不该能造出一个声明里没有的模式；这条同时挡住手改 workflow.json。
+    3. **值里没有标签的 fx ⇒ 撤销**。这是「用户把最后一个标签删掉」的正常操作序列，
+       不该报错；但也绝不能留一个空 fx 态——运行期对没有标签的字符串原样返回，
+       看着能跑，下次打开面板却显示「fx 开着」，没人解释得清。
+    """
+    accepted: dict[str, str] = {}
+    rejected: list[dict[str, str]] = []
+    revoked: list[str] = []
+    for key, raw in modes.items():
+        key, mode = str(key), str(raw or "")
+        if not mode:
+            revoked.append(key)
+            continue
+        if mode not in _EXPR_MODES:
+            rejected.append({"key": key, "reason": f"未知的表达式模式 {mode!r}"})
+            continue
+        declared = dict(properties.get(key) or {})
+        if not declared.get(_EXPR_MODES[mode]):
+            rejected.append(
+                {"key": key, "reason": f"该字段没有声明 {_EXPR_MODES[mode]}，不能用 {mode} 模式"}
+            )
+            continue
+        if key not in values:
+            revoked.append(key)  # 值被清空 ⇒ 模式无处可挂
+            continue
+        if mode == "fx" and not has_tags(values[key]):
+            revoked.append(key)
+            continue
+        accepted[key] = mode
+    return accepted, rejected, revoked
+
+
+
 
 def _field_order(
     schema: dict[str, Any],
-) -> tuple[list[tuple[str, str | None]], list[dict[str, str]]]:
+) -> tuple[list[tuple[str, str | None]], list[dict[str, Any]]]:
     """字段渲染顺序 + 分组定义。
 
     返回 ([(key, group_label|None), ...], [{label, collapsed}, ...])。
     顺序以 manifest 声明为准——**不是**以节点里已有的键为准：Qt 的 `ParamForm`
     遍历的就是 `properties`，「空 = 未设置」。只渲染已有键会让「可以设但还没设」
     的参数根本没有入口。
+
+    分组声明允许一条 ``{"label": "常规", "auto": true}``：它的字段集是「所有显式组
+    没认领的字段」，位置按它**在声明里的次序**算（通常放第一个）。这样给一条命令加
+    分区只需写出「哪几个算高级」，不必把常规字段再抄一遍——抄一遍必然漏，漏了就掉进
+    「其他」，而「其他」这个词用户读不懂是分组、还是警告。
     """
     properties = dict(schema.get("properties") or {})
     groups = schema.get("x-param-groups")
-    plan: list[tuple[str, str | None]] = []
-    group_defs: list[dict[str, str]] = []
+    if not (isinstance(groups, list) and groups):
+        return [(key, None) for key in properties], []
+
     claimed: set[str] = set()
-    if isinstance(groups, list) and groups:
-        for group in groups:
-            fields = [
-                k for k in (group.get("fields") or []) if k in properties and k not in claimed
-            ]
-            if not fields:
-                continue
-            label = str(group.get("label") or "参数")
-            claimed.update(fields)
-            group_defs.append({"label": label, "collapsed": bool(group.get("collapsed"))})
-            plan.extend((k, label) for k in fields)
-        rest = [k for k in properties if k not in claimed]
-        if rest:
-            group_defs.append({"label": "其他", "collapsed": False})
-            plan.extend((k, "其他") for k in rest)
-    else:
-        plan.extend((k, None) for k in properties)
+    slots: list[dict[str, Any]] = []
+    for group in groups:
+        is_auto = bool(group.get("auto"))
+        label = str(group.get("label") or ("常规" if is_auto else "参数"))
+        # 不认识的键**静默丢**是刻意的：`fields` 写错一个键名不该让整张表单渲染不出来。
+        # 但那是声明错误，`tests/contract/test_param_meta.py` 会把它判红。
+        fields = (
+            []
+            if is_auto
+            else [k for k in (group.get("fields") or []) if k in properties and k not in claimed]
+        )
+        claimed.update(fields)
+        slots.append(
+            {
+                "label": label,
+                "collapsed": bool(group.get("collapsed")),
+                "auto": is_auto,
+                "fields": fields,
+            }
+        )
+
+    rest = [key for key in properties if key not in claimed]
+    auto_slot = next((slot for slot in slots if slot["auto"]), None)
+    if auto_slot is not None:
+        auto_slot["fields"] = rest
+        rest = []
+
+    plan: list[tuple[str, str | None]] = []
+    group_defs: list[dict[str, Any]] = []
+    for slot in slots:
+        if not slot["fields"]:
+            continue  # 空组不渲染一个点开也没东西的折叠条
+        group_defs.append({"label": slot["label"], "collapsed": slot["collapsed"]})
+        plan.extend((key, slot["label"]) for key in slot["fields"])
+    if rest:
+        group_defs.append({"label": "其他", "collapsed": False})
+        plan.extend((key, "其他") for key in rest)
     return plan, group_defs
 
 
@@ -475,12 +566,23 @@ def _field_descriptors(command: str, node: dict[str, Any]) -> dict[str, Any]:
     覆盖**声明了但节点里没写**的参数（`set=False`），前端据此渲染「未设置」态。
     反过来，节点里有、manifest 没声明的键也保留（归入「未声明」组）——它们是既有
     文件里的真实内容，藏起来用户就改不了，也看不见自己踩了什么。
+
+    字段标签走 ``gui.i18n.field_label``（命令级覆盖 → 公共键 → 键名原文）。此前这里
+    写死 ``label = key``，于是「中文标签层」在整个仓库里**没有任何 UI 消费者**——
+    i18n.js 的 fields/commandFields 块只有生成脚本在读，缺一条标签完全无症状。
     """
     manifest = _catalog_snapshot().get(command)
     schema = dict(getattr(manifest, "input_schema", None) or {})
     properties = dict(schema.get("properties") or {})
     required = set(schema.get("required") or ())
     current = {k: v for k, v in dict(node.get("with") or {}).items() if not _is_reserved(k)}
+    modes = {
+        str(k): str(v)
+        for k, v in dict(node.get("_exprModes") or {}).items()
+        if not _is_reserved(str(k)) and v not in (None, "")
+    }
+    depends = dict(schema.get("x-depends") or {})
+    var_write_field = str(((getattr(manifest, "x_var_write", None) or {}).get("field")) or "")
     plan, group_defs = _field_order(schema)
 
     fields: list[dict[str, Any]] = []
@@ -494,7 +596,7 @@ def _field_descriptors(command: str, node: dict[str, Any]) -> dict[str, Any]:
         fields.append(
             {
                 "key": key,
-                "label": key,
+                "label": field_label(key, command),
                 "type": contract,
                 "typeSource": source,
                 "semantic": "param",
@@ -511,6 +613,15 @@ def _field_descriptors(command: str, node: dict[str, Any]) -> dict[str, Any]:
                 ],
                 "description": str(declared.get("description") or ""),
                 "multiline": bool(declared.get("x-multiline")),
+                # 表达式能力只认字段级声明：顶层 x-fx/x-python 是历史死字段（0 使用），
+                # 这里刻意不读它们——读了就等于承认「声明位置可以随便写」。
+                "fx": bool(declared.get("x-fx")),
+                "python": bool(declared.get("x-python")),
+                "mode": modes.get(key, ""),
+                # 「这个字段是变量写入目标」的唯一判据是 manifest 的 x-var-write，
+                # 不许在界面上按命令 id 硬编码（data.setVar 换个 id 就失效）。
+                "varWrite": bool(var_write_field) and key == var_write_field,
+                "depends": _depends_of(depends, key),
                 "group": group,
                 "hidden": False,
             }
@@ -539,6 +650,11 @@ def _field_descriptors(command: str, node: dict[str, Any]) -> dict[str, Any]:
                 "enum": [],
                 "description": "该参数不在命令声明里：类型按文件里的现有值推断，改动请谨慎",
                 "multiline": False,
+                "fx": False,
+                "python": False,
+                "mode": modes.get(key, ""),
+                "varWrite": False,
+                "depends": [],
                 "group": "未声明",
                 "hidden": False,
             }
@@ -547,6 +663,19 @@ def _field_descriptors(command: str, node: dict[str, Any]) -> dict[str, Any]:
         group_defs.append({"label": "未声明", "collapsed": False})
 
     return {"fields": fields, "groups": group_defs}
+
+
+def _depends_of(depends: dict[str, Any], key: str) -> list[dict[str, Any]]:
+    """``x-depends`` 里属于 ``key`` 的条件，摊成 ``[{key, value}]``（空表 = 无条件）。
+
+    声明形态是 ``{受控字段: {控制字段: 期望值}}``，只支持「控制字段 == 期望值」这一种。
+    不放宽成 ``in`` / ``!=`` / 多条件与或：一个没人用的扩展语法比没有更糟——真正需要
+    复杂联动时应该改 schema，而不是让前端猜。
+    """
+    condition = depends.get(key)
+    if not isinstance(condition, dict):
+        return []
+    return [{"key": str(k), "value": v} for k, v in condition.items()]
 
 
 def _summarize(with_: dict[str, Any]) -> str:
@@ -846,15 +975,90 @@ def node_detail(path: str, node_id: str) -> dict[str, Any]:
         entry = _flows[path]
     node = entry["nodes"].get(node_id)
     described: dict[str, Any] = {"fields": [], "groups": []}
+    outputs: list[dict[str, Any]] = []
     if node and node.get("type") == "action":
         described = _field_descriptors(node.get("command", ""), node)
+        outputs = _output_descriptors(str(node.get("command") or ""), node)
     return {
         "id": node_id,
         "node": node,
         "fields": described["fields"],
         "groups": described["groups"],
+        # 输出变量列与参数列一起回来：两者是同一张表单的两半，分两个 RPC 就会
+        # 「参数先到、别名后到」，面板先画一次再抖一下。
+        "outputs": outputs,
         "editable": bool(described["fields"]),
         "rpcMs": round((time.perf_counter() - started) * 1000, 2),
+    }
+
+
+@api_method("rpa.variableScopes")
+def variable_scopes(path: str, node_id: str) -> dict[str, Any]:
+    """该节点上能插入的变量清单。唯一权威是 `compiler.visible_scope`。
+
+    插入文本的**语法口径**必须与编译器逐字一致，否则「点一下就插入」会立刻编译红：
+
+    - 流程参数 → ``inputs.<名>``；
+    - 用户变量 → 裸 ``<名>``（output_aliases 与 x-var-write 目标都算）；
+    - 循环变量 → **只有** ``loop.<名>`` 这一种形态。编译器的 ``root == "loop"`` 分支
+      才去 ``loop_vars`` 里找下一段，裸 ``<名>`` 会报 ``Unsupported reference root``。
+      这一点极容易写错（本仓第一版判据就写错过）；
+    - 错误变量 → 裸 ``<名>``（只在 catch 的词法范围内可见）。
+
+    刻意**不列** ``steps.<节点 id>.outputs.<字段>``：那是自动路径，用户在菜单里点了也
+    记不住节点 id；跨节点取输出应当给它起别名——别名可改、可联动（见
+    ``rpa.saveNodeAliases``），自动路径两者都不行。
+
+    每条只带 ``ref``（如 ``loop.row``），**不带**美元花括号或方括号：同一份清单要被
+    普通模式与 fx 模式两种语法消费，语法由前端按当前模式决定。分组顺序固定为
+    流程参数 → 变量 → 循环/错误变量，空组不返回。
+    """
+    target = _flow_path(path)
+    document, _raw = _read_document(target)
+    workflow = Workflow.model_validate(document)
+    scope = visible_scope(workflow.root, _catalog_snapshot(), node_id)
+    if scope is None:
+        return {
+            "ok": False,
+            "code": "NODE_NOT_FOUND",
+            "error": f"节点不存在：{node_id}",
+            "nodeId": node_id,
+            "groups": [],
+        }
+    origins = dict(scope.sources)
+    candidates: list[tuple[str, list[dict[str, str]]]] = [
+        (
+            "流程参数",
+            [
+                {"name": name, "ref": f"inputs.{name}", "origin": "流程输入"}
+                for name in workflow.inputs
+            ],
+        ),
+        (
+            "变量",
+            [
+                {"name": name, "ref": name, "origin": origins.get(name, "")}
+                for name in scope.variables
+            ],
+        ),
+        (
+            "循环变量",
+            [
+                {"name": name, "ref": f"loop.{name}", "origin": "循环"}
+                for name in scope.loop_vars
+            ],
+        ),
+        (
+            "错误变量",
+            [{"name": name, "ref": name, "origin": "catch"} for name in scope.error_vars],
+        ),
+    ]
+    groups = [{"label": label, "items": items} for label, items in candidates if items]
+    return {
+        "ok": True,
+        "nodeId": node_id,
+        "groups": groups,
+        "total": sum(len(group["items"]) for group in groups),
     }
 
 
@@ -876,7 +1080,12 @@ def _compile(document: dict[str, Any]) -> dict[str, Any]:
 
 @api_method("rpa.saveNodeParams")
 def save_node_params(
-    path: str, node_id: str, params: dict[str, str], element_refs: dict[str, str] | None = None
+    path: str,
+    node_id: str,
+    params: dict[str, str],
+    element_refs: dict[str, str] | None = None,
+    expr_modes: dict[str, str] | None = None,
+    aliases: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """把参数表单的**全量**内容写成节点的 `with`。
 
@@ -893,8 +1102,19 @@ def save_node_params(
     不在 `with` 里，解除后若没补上值，编译会如实报缺参数——这是该有的结果，不替
     用户猜一个选择器。
 
-    顺序：SHA 闸门 → 定位 → 完整性校验 → 逐键转换 → 引用写回 → 全量模型复校 →
-    编码比对 → 落盘 → 编译。任一步不过就**不写盘**。
+    `expr_modes` 同样是**全量**（`{字段: "fx"|"python"}`）：传 None 表示不碰，传空
+    dict 表示该节点不再有任何表达式模式。整理规则见 `_clean_expr_modes`——无标签的
+    fx 与值被清空的字段一律**撤销**（并回报在 `modesCleared` 里），不给用户留一个
+    看着开着、实际不生效的模式。
+
+    `aliases` 是**同一张表单**上的输出变量列（同样全量，空串 = 删别名）：传 None
+    表示不碰 `output_aliases`。它与参数走同一次写盘、同一次编译——分成两个 RPC
+    就会出现「参数存进去了、别名被拒了」的半成功状态，用户既不知道文件到了哪一步，
+    也没法撤销。改名联动也在这一条路径里（见 `_rename_refs`）。
+
+    顺序：SHA 闸门 → 定位 → 完整性校验 → 逐键转换 → 引用写回 → 模式整理 →
+    别名闸门（含改名联动）→ 全量模型复校 → 编码比对 → 落盘 → 编译。任一步不过就
+    **不写盘**。
     """
     started = time.perf_counter()
     target = _flow_path(path)
@@ -1003,7 +1223,35 @@ def save_node_params(
             "ms": round((time.perf_counter() - started) * 1000, 1),
         }
 
+    # 表达式模式：整理放在写回之前——它可能整条拒绝（声明里没有这个能力），
+    # 那种情况下 node 必须还是原样，不能改了一半才发现不合法。
+    clean_modes: dict[str, str] | None = None
+    modes_cleared: list[str] = []
+    if expr_modes is not None:
+        clean_modes, mode_rejected, modes_cleared = _clean_expr_modes(
+            expr_modes, next_with, properties
+        )
+        if mode_rejected:
+            return {
+                "ok": False,
+                "code": "INVALID_VALUE",
+                "error": "表达式模式不合法，未写盘："
+                + "；".join(f"{r['key']} — {r['reason']}" for r in mode_rejected),
+                "rejected": mode_rejected,
+                "saved": False,
+                "ms": round((time.perf_counter() - started) * 1000, 1),
+            }
+
     node["with"] = {**reserved, **{k: with_map[k] for k in hidden_keys}, **next_with}
+    if clean_modes is not None:
+        # ★ `_exprModes` 是 **action 节点自己的字段**（`ActionNode.expr_modes`，alias
+        # `_exprModes`），与 `with` 平级——不是 `with` 里的键。放错层会立刻编译红：
+        # 运行期校验按 `additionalProperties: false` 把它当未知参数
+        # （"Unknown parameter(s) _exprModes for command data.log"）。
+        if clean_modes:
+            node["_exprModes"] = clean_modes
+        else:
+            node.pop("_exprModes", None)
     if element_refs is not None:
         cleaned: dict[str, str] = {}
         for key, ref in dict(element_refs).items():
@@ -1023,8 +1271,66 @@ def save_node_params(
             node["elementRefs"] = cleaned
         else:
             node.pop("elementRefs", None)
+    aliases_added: list[str] = []
+    aliases_removed: list[str] = []
+    renames: dict[str, str] = {}
+    ref_hits: list[dict[str, Any]] = []
+    py_skipped: list[dict[str, str]] = []
+    if aliases is not None:
+        previous_aliases = dict(node.get("output_aliases") or {})
+        clean_aliases, alias_problems, renames = _prepare_aliases(document, node, aliases)
+        if alias_problems:
+            return {
+                "ok": False,
+                "code": "INVALID_VALUE",
+                "error": "输出别名不合法，未写盘：" + "；".join(alias_problems),
+                "saved": False,
+                "ms": round((time.perf_counter() - started) * 1000, 1),
+            }
+        if clean_aliases:
+            node["output_aliases"] = clean_aliases
+        else:
+            node.pop("output_aliases", None)
+        aliases_added = sorted(set(clean_aliases) - set(previous_aliases))
+        aliases_removed = sorted(set(previous_aliases) - set(clean_aliases))
+        ref_hits, py_skipped = _rename_refs(document, renames)
+
     added = sorted(set(next_with) - set(with_map))
     removed = sorted(set(with_map) - set(next_with))
+    finished = _finish_save(document, raw, target, path, started)
+    if not finished["ok"]:
+        return finished
+    finished.update({"added": added, "removed": removed, "modesCleared": modes_cleared})
+    if aliases is not None:
+        finished.update(
+            {
+                "aliases": clean_aliases,
+                "aliasesAdded": aliases_added,
+                "aliasesRemoved": aliases_removed,
+                "renamed": renames,
+                "refs": ref_hits,
+                "pySkipped": py_skipped,
+            }
+        )
+    return finished
+
+
+def _finish_save(
+    document: dict[str, Any],
+    raw: bytes,
+    target: Path,
+    path: str,
+    started: float,
+) -> dict[str, Any]:
+    """保存流水线的公共尾段：模型复校 → 编码比对 → 落盘 → 编译 → 重开流程。
+
+    参数表单、输出别名、改名联动三个入口共用这一条。**必须共用**：编码口径
+    （UTF-8 / indent=2 / ensure_ascii=False / 末尾换行）与「编译结论一定回传」这两件事
+    只该有一份实现，两份就会漂；漂了的表现是「另一个入口存出来的文件多一个空行」这种
+    查不出源头的事，以及「这个入口存完没有编译结果」这种前端要分叉处理的事。
+
+    失败时返回 ``{"ok": False, ...}``（此时**没有写盘**），成功时返回完整回执。
+    """
     try:
         Workflow.model_validate(document)
     except Exception as exc:  # noqa: BLE001 - 校验失败按「不写盘」处理，把原因带回去
@@ -1040,9 +1346,6 @@ def save_node_params(
     changed = encoded != raw
     if changed:
         target.write_bytes(encoded)
-
-    compile_result = _compile(document)
-    flow = open_flow(path)
     return {
         "ok": True,
         "saved": changed,
@@ -1050,11 +1353,310 @@ def save_node_params(
         "bytes": [len(raw), len(encoded)],
         "sha": _sha256(encoded)[:12],
         "ms": round((time.perf_counter() - started) * 1000, 1),
-        "added": added,
-        "removed": removed,
-        "compile": compile_result,
-        "flow": flow,
+        "compile": _compile(document),
+        "flow": open_flow(path),
     }
+
+
+def _iter_actions(node: dict[str, Any]):
+    """按流程顺序遍历所有 action 节点（与 compiler 的遍历次序一致）。"""
+    if not isinstance(node, dict):
+        return
+    if node.get("type") == "action":
+        yield node
+    for key in _NESTED:
+        for child in node.get(key) or []:
+            yield from _iter_actions(child)
+
+
+def _alias_owners(document: dict[str, Any], exclude: str) -> dict[str, str]:
+    """全流程已被占用的变量名 → 声明它的节点 id（``exclude`` = 当前节点，不算占用）。
+
+    两类来源与 compiler 的 `_declared_names` 同口径：`output_aliases` 的值，以及
+    `x-var-write` 命令里 varName 的字面量（引用形态静态无法确定，跳过）。
+    """
+    owners: dict[str, str] = {}
+    for action in _iter_actions(document.get("root") or {}):
+        action_id = str(action.get("id") or "")
+        if action_id == exclude:
+            continue
+        for alias in (action.get("output_aliases") or {}).values():
+            if alias:
+                owners[str(alias)] = action_id
+        manifest = _catalog_snapshot().get(str(action.get("command") or ""))
+        field = ((getattr(manifest, "x_var_write", None) or {}).get("field")) or ""
+        if not field:
+            continue
+        target = (action.get("with") or {}).get(field)
+        if isinstance(target, str) and target and not target.startswith("${"):
+            owners.setdefault(target, action_id)
+    return owners
+
+
+def _lexical_var_owners(document: dict[str, Any]) -> dict[str, str]:
+    """循环变量 / 错误变量名 → 声明它的控制流节点 id。
+
+    它们不是 `output_aliases`，但落在**同一条查找链**上：`resolver._lookup` 先查
+    `scopes["variables"]`、查不到才看作用域根，所以一个与循环变量同名的别名会
+    **静默遮蔽**循环变量——循环体里写 `[item]` 拿到的是别名值，不是当前元素。
+    这种错不报异常、只是结果不对，因此与「别名重名」同等对待：写盘前拒掉。
+    """
+    owners: dict[str, str] = {}
+
+    def walk(node: Any) -> None:
+        if not isinstance(node, dict):
+            return
+        node_id = str(node.get("id") or "")
+        if node.get("type") == "forEach":
+            name = node.get("item_var")
+            if isinstance(name, str) and name:
+                owners.setdefault(name, node_id)
+        elif node.get("type") == "try":
+            name = node.get("error_var")
+            if isinstance(name, str) and name:
+                owners.setdefault(name, node_id)
+        for key in _NESTED:
+            for child in node.get(key) or []:
+                walk(child)
+
+    walk(document.get("root") or {})
+    return owners
+
+
+def _rename_refs(
+    document: dict[str, Any], renames: dict[str, str]
+) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
+    """把 ``renames``（旧名→新名）落到全流程的引用上，返回 ``(命中清单, 跳过的 py 字段)``。
+
+    ★ 覆盖的是**所有**会产生引用的位置，少一处就是「改名成功、流程一跑就
+    `Unknown reference`」：action 的 `with`、if 的 `condition.left/right`、
+    forEach 的 `items`、return 的 `value`。这四处是模型里全部吃表达式的字段
+    （见 `model/workflow.py`）——新增吃表达式的字段时必须回到这里补一条，
+    判据 `test_editor_rename.py` 按同一张表逐格验证。
+
+    语法按模式分：普通字段只改 `${...}`（`[..]` 在普通模式是**字面文本**，改了就是
+    篡改数据）；fx 字段两种都改；python 字段按 NAME token 改裸标识符。
+    """
+    if not renames:
+        return [], []
+    hits: list[dict[str, Any]] = []
+    skipped: list[dict[str, str]] = []
+
+    def record(node_id: str, field: str, count: int) -> None:
+        if count:
+            hits.append({"nodeId": node_id, "field": field, "count": count})
+
+    def walk(node: Any) -> None:
+        if not isinstance(node, dict):
+            return
+        node_id = str(node.get("id") or "")
+        kind = node.get("type")
+        if kind == "action":
+            modes = node.get("_exprModes") or {}
+            with_map = node.get("with")
+            if isinstance(with_map, dict):
+                for key, value in list(with_map.items()):
+                    mode = modes.get(key) if isinstance(modes, dict) else None
+                    if mode == "python" and isinstance(value, str):
+                        renamed = rename_python(value, renames)
+                        if renamed is None:
+                            # 语法读不出来就无法保证改对：不猜，如实报「这一格没改」。
+                            skipped.append({"nodeId": node_id, "field": key})
+                            continue
+                        with_map[key], count = renamed
+                    else:
+                        with_map[key], count = rename_value(value, renames, tags=mode == "fx")
+                    record(node_id, key, count)
+        elif kind == "if":
+            condition = node.get("condition")
+            if isinstance(condition, dict):
+                for side in ("left", "right"):
+                    condition[side], count = rename_value(
+                        condition.get(side), renames, tags=False
+                    )
+                    record(node_id, f"condition.{side}", count)
+        elif kind == "forEach":
+            node["items"], count = rename_value(node.get("items"), renames, tags=False)
+            record(node_id, "items", count)
+        elif kind == "return":
+            node["value"], count = rename_value(node.get("value"), renames, tags=False)
+            record(node_id, "value", count)
+        for key in _NESTED:
+            for child in node.get(key) or []:
+                walk(child)
+
+    walk(document.get("root") or {})
+    return hits, skipped
+
+
+def _prepare_aliases(
+    document: dict[str, Any], node: dict[str, Any], aliases: dict[str, str]
+) -> tuple[dict[str, str], list[str], dict[str, str]]:
+    """校验一份全量别名提交，返回 ``(清理后的别名表, 问题列表, 改名对)``。
+
+    「校验」和「算改名对」必须一起做：改名对是从**校验通过**的那份里算出来的，
+    否则「名字非法被拒」和「已经按它改了一半引用」会同时发生。三条入口
+    （`rpa.saveNodeAliases` / `rpa.saveNodeParams` 的别名通道）共用这一份。
+    """
+    node_id = str(node.get("id") or "")
+    manifest = _catalog_snapshot().get(str(node.get("command") or ""))
+    declared = dict(getattr(manifest, "x_outputs", None) or {})
+    owners = _alias_owners(document, exclude=node_id)
+    lexical = _lexical_var_owners(document)
+    previous = dict(node.get("output_aliases") or {})
+
+    cleaned: dict[str, str] = {}
+    problems: list[str] = []
+    for key, raw_name in dict(aliases or {}).items():
+        key, name = str(key), str(raw_name or "").strip()
+        meta = dict(declared.get(key) or {})
+        if key not in declared:
+            problems.append(f"{key} — 不是这条命令声明的输出（x-outputs 里没有）")
+            continue
+        if meta.get("hidden"):
+            problems.append(f"{key} — 内部输出（x-outputs.hidden），不给别名入口")
+            continue
+        if not name:
+            continue  # 空 = 删除该别名
+        if not _ALIAS_NAME.fullmatch(name):
+            problems.append(
+                f"{key} — `{name}` 不是合法变量名（ASCII 字母/数字/下划线，不能以数字开头）"
+            )
+            continue
+        if name in RESERVED_ALIAS_ROOTS:
+            problems.append(f"{key} — `{name}` 是内置作用域根名（inputs/steps/loop）")
+            continue
+        owner = owners.get(name)
+        if owner:
+            problems.append(f"{key} — `{name}` 已被节点 {owner} 声明（别名在流程内必须唯一）")
+            continue
+        lexical_owner = lexical.get(name)
+        if lexical_owner:
+            problems.append(
+                f"{key} — `{name}` 与节点 {lexical_owner} 的循环/错误变量同名"
+                "（同名会静默遮蔽那个变量）"
+            )
+            continue
+        cleaned[key] = name
+
+    renames: dict[str, str] = {}
+    for key, name in cleaned.items():
+        old = str(previous.get(key) or "")
+        if old and old != name:
+            renames[old] = name
+    return cleaned, problems, renames
+
+
+def _output_descriptors(command: str, node: dict[str, Any]) -> list[dict[str, Any]]:
+    """输出字段 → 别名输入框。`x-outputs` 是「这条命令有哪些输出」的唯一声明。
+
+    `hidden: true` 的输出**不给别名框**：它们是内部字段（tabId / resourceType 之类），
+    改了也没人会引用，给入口只会让面板变长。节点里手写的、声明里没有的别名照参数表单
+    的口径兜底露出来——藏起来用户就既看不见、也改不掉自己踩了什么。
+    """
+    manifest = _catalog_snapshot().get(command)
+    declared = dict(getattr(manifest, "x_outputs", None) or {})
+    aliases = dict(node.get("output_aliases") or {})
+    rows: list[dict[str, Any]] = []
+    for key, meta in declared.items():
+        meta = dict(meta or {})
+        if meta.get("hidden"):
+            continue
+        rows.append(
+            {
+                "key": key,
+                "label": str(meta.get("label") or key),
+                "primary": bool(meta.get("primary")),
+                "alias": str(aliases.get(key) or ""),
+                "declared": True,
+            }
+        )
+    for key, alias in aliases.items():
+        if key in declared:
+            continue
+        rows.append(
+            {"key": key, "label": key, "primary": False, "alias": str(alias), "declared": False}
+        )
+    return rows
+
+
+@api_method("rpa.saveNodeAliases")
+def save_node_aliases(path: str, node_id: str, aliases: dict[str, str]) -> dict[str, Any]:
+    """保存一个节点的**输出别名**（`output_aliases`）。这是「输出变量」的唯一入口。
+
+    表单语义与参数一致：**全量**提交 `{输出字段: 变量名}`，空串 = 删除该别名。
+
+    五类闸门全部在写盘前做完，任何一条不过就一个字不写：
+
+    - 键必须是 manifest `x-outputs` 里声明过、且**非 `hidden`** 的输出；
+    - 名字必须是 ASCII 标识符——运行期按 `${名}` / `[名]` 解析，中文名根本无法引用；
+    - 不得占用内置作用域根名（inputs / steps / loop，与编译器同一份常量）；
+    - 全流程不得重名。编译器也会拒重复别名，但那时文件已经写下去了：用户点完保存
+      看到一句 `Duplicate alias`，还得自己回想刚才改的是哪一格。
+    - 不得与循环/错误变量同名（`_lexical_var_owners`）：同名不报错，只是静默遮蔽。
+
+    ★ **改名联动**：某个输出字段的别名从旧值改成新值时，全流程里指向旧名的引用
+    （`${旧}` / `[旧]` / py 源码里的裸标识符）跟着改，回执里 `renamed` 是改名对、
+    `refs` 是逐字段命中表。不联动的话「改个变量名」= 一片 `Unknown reference`，
+    而用户根本没有「我得手改十处引用」这个心智负担。
+    """
+    started = time.perf_counter()
+    target = _flow_path(path)
+    document, raw = _read_document(target)
+
+    entry = _flows.get(path)
+    if entry is not None and entry["sha"] != _sha256(raw):
+        return {
+            "ok": False,
+            "code": "FLOW_CHANGED",
+            "error": "文件在打开后被其他程序改过，已拒绝覆盖（重新打开流程再改）",
+            "saved": False,
+            "ms": round((time.perf_counter() - started) * 1000, 1),
+        }
+
+    node = _find_node(document, node_id)
+    if node is None:
+        return {
+            "ok": False,
+            "code": "NODE_NOT_FOUND",
+            "error": f"节点不存在：{node_id}",
+            "saved": False,
+            "ms": round((time.perf_counter() - started) * 1000, 1),
+        }
+    if node.get("type") != "action":
+        return {
+            "ok": False,
+            "code": "NODE_NOT_EDITABLE",
+            "error": f"输出别名只属于 action 节点，{node.get('type')} 节点没有输出",
+            "saved": False,
+            "ms": round((time.perf_counter() - started) * 1000, 1),
+        }
+
+    previous = dict(node.get("output_aliases") or {})
+    cleaned, problems, renames = _prepare_aliases(document, node, aliases)
+    if problems:
+        return {
+            "ok": False,
+            "code": "INVALID_VALUE",
+            "error": "输出别名不合法，未写盘：" + "；".join(problems),
+            "saved": False,
+            "ms": round((time.perf_counter() - started) * 1000, 1),
+        }
+
+    if cleaned:
+        node["output_aliases"] = cleaned
+    else:
+        node.pop("output_aliases", None)
+    hits, skipped = _rename_refs(document, renames)
+
+    finished = _finish_save(document, raw, target, path, started)
+    if not finished["ok"]:
+        return finished
+    finished["added"] = sorted(set(cleaned) - set(previous))
+    finished["removed"] = sorted(set(previous) - set(cleaned))
+    finished["aliases"] = cleaned
+    finished.update({"renamed": renames, "refs": hits, "pySkipped": skipped})
+    return finished
 
 
 @api_method("rpa.saveFlowInputs")

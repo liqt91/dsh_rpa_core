@@ -58,11 +58,21 @@ if "--with-desktop-e2e" in sys.argv:
     gate_env["RPA_DESKTOP_E2E"] = "1"
 
 # 前端纯函数一致性校验（编辑器渲染逻辑与后端语义共用同一份源码）。
-# node 不在时跳过，避免门禁在无 node 的机器上硬失败。
+#
+# ★ 2026-11-25 清理：清单里曾有 5 条指向 `src/rpa_core/devserver/static/app.js` 的判据
+# （param_groups / retry_policy / element_display_helpers / element_name /
+# scope_visibility）。那个前端随 Qt 退役（ADR 0021）整体删除，于是这 5 个脚本文件也
+# 不在了，而 `if path.exists()` 让它们被静默跳过——一年多里门禁一直在报 PASSED。
+# 现在：不存在的登记一律**硬失败**（见文件末尾），这 5 条按「对象已消失」删除登记。
+# 参数分组 / 标签 / 表达式模式的判据改由 pytest 承担（tests/contract/test_param_meta.py
+# 等），因为它们的事实源在 manifest 与 Python 侧解析，不需要浏览器语义。
 PURE_FUNCTION_SCRIPTS = (
-    "check_param_groups.mjs",
-    "check_retry_policy.mjs",
     "check_capture_helpers.mjs",
+    # 参数表单的表达式模式（M108）：fx 按钮只在声明 x-fx 的字段出现、点一下真的
+    # 走 rpa.variableScopes（键名与桥层签名逐字一致）、菜单项真的把 [ref] 插进光标处、
+    # 标签删光真的撤销 fx 态、保存真的提交整份 expr_modes。
+    # 这四段只在浏览器里跑——Python 侧读源码只能证明「写了 addEventListener」。
+    "check_param_form_ui.mjs",
     # M105 运行期选择器分派（xpath/shadow 前缀）：不扩 page.call 参数面，
     # 所以必须有门禁用真切片证明 domOp.query 真按前缀取到了目标，而不是只写了 if。
     "check_selector_query_kinds.mjs",
@@ -109,34 +119,35 @@ PURE_FUNCTION_SCRIPTS = (
     # 扩展侧能证明——Python 桩测的是接口形状，一个把 Promise.all 当成功的实现
     # 也能过 Python 测试，却会在真机上把「关了 2/3」报成「全关了」。
     "check_close_ops.mjs",
-    # 编辑器确认框的「只读区块」纯函数区（app.js）：把已捕获的候选定位与语义特征
-    # 如实渲染出来。这一段**只在浏览器里跑**——Python 侧读源码只能证明「写了这行字」，
-    # 证明不了「渲染出哪几行」，而它的唯一职责就是渲染对。
-    "check_element_display_helpers.mjs",
-    # 默认元素名生成器（A3，app.js）：与 Python 侧同一份用例表
-    # （tests/contract/data/element_name_cases.json）切片求值——两份实现
-    # （零构建双端）输出分叉时至少一侧红。
-    "check_element_name.mjs",
     # 活体校验（M47）：content.js verify-helpers 纯求值 + background runVerify
     # 调用矩阵（只发活跃页/补注入重试/结构化报错）+ content 应答接线断言。
     "check_verify.mjs",
-    # 变量可见范围（app.js 的 visibleScopeAt，2026-10-14）：与 Python 侧
-    # tests/contract/test_variable_scope_visibility.py 跑**同一份用例表**
-    # （tests/contract/data/scope_visibility_cases.json）。桌面端菜单读 Python 的
-    # compiler.visible_scope，Web 属性面板是另一份 JS 实现——Python 侧读源码只能
-    # 证明「写了 visibleScopeAt」，证明不了它对每个节点的判定与编译器一致。
-    "check_scope_visibility.mjs",
     # 工作台「商品库」渲染层（帖子详情采集）：流程逐帖抓 赞/藏/评 + 逐条评论，
     # 数据层存得住不等于页面看得见。切出 renderProducts 真跑一遍，并把 Python
     # Product.to_json 的键与前端 it.<key> 双向对账（任一侧漂移都红）。
     "check_xhs_products_view.mjs",
 )
 node = shutil.which("node")
-if node:
-    for script in PURE_FUNCTION_SCRIPTS:
-        path = ROOT / "scripts" / script
-        if path.exists():
-            commands.append([node, str(path)])
+if node is None:
+    # 以前是「node 不在就整段跳过」，于是清单里的脚本一条都没跑、门禁照样 PASSED。
+    # 这与 `if path.exists()` 是同一类盲区（清单是承诺，跳过了却不说），故改硬失败：
+    # 跑门禁的机器必须能跑前端纯函数判据，跑不了就别报绿。
+    print(f"[gate] 找不到 node —— 前端纯函数判据（{len(PURE_FUNCTION_SCRIPTS)} 条）无法执行")
+    raise SystemExit(127)
+missing_scripts = []
+for script in PURE_FUNCTION_SCRIPTS:
+    path = ROOT / "scripts" / script
+    if path.exists():
+        commands.append([node, str(path)])
+    else:
+        # ★ 静默跳过是「门禁绿但判据不存在」的根源：本清单曾有 5 条指向已随 Qt 退役
+        # 删掉的 app.js 判据，一年多里一直打印 PASSED。清单里登记却不存在的脚本，
+        # 只能有两种处理：重建它，或从清单里删掉。不许 `if exists` 假装没看见。
+        missing_scripts.append(script)
+if missing_scripts:
+    print("[gate] 清单登记的脚本不存在：" + "、".join(missing_scripts))
+    print("[gate] 要么补上脚本，要么从 PURE_FUNCTION_SCRIPTS 删掉这条登记")
+    raise SystemExit(1)
 
 for command in commands:
     print("$", " ".join(command))

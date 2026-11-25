@@ -412,6 +412,9 @@ let cards = []
 let selected = null // 当前选中的卡片
 let fields = [] // 该节点的可编辑字段（服务端算的，含未设置的声明字段）
 let groups = [] // 分组定义（顺序 + 折叠），服务端给
+// 输出变量列：与参数列是同一张表单的两半。`x-outputs` 声明「有哪些输出」，
+// 值就是 node.output_aliases（跨节点引用的唯一稳定入口）。
+let outputs = []
 let panelMode = 'param' // param | struct —— 决定保存走哪个 RPC
 let formError = null
 // ★ ref-only：被引用参数故意不进 with，参数表里就是「未设置」。真值只在
@@ -420,6 +423,16 @@ let nodeRefs = {} // 当前节点的 elementRefs 全量快照（param → 资产
 let elemCapableKeys = null // null=还没问过后端；不猜参数键，事实源在内核 element_refs
 let elemCapableLoading = false
 let pendingUnbinds = new Set() // 待随「保存参数」一起提交的解除项
+// 表达式模式（fx / Py）：与 manifest 字段级 `x-fx` / `x-python` 一一对应。
+// ★ 编辑态双缓冲：普通与 fx 共用 text 槽、python 单独一槽；切模式时「先存当前槽、
+//   再取目标槽」，缓冲只在内存里，落盘仍是「一个模式 + 一份值」（`_exprModes`）。
+//   共用 text 槽是刻意的：fx 只是在普通文本里插几段 `[变量]`，把它当成第三种内容
+//   反而会让「切到 fx 再切回来」丢掉刚打的字。
+let exprModes = {} // 当前节点 _exprModes 的编辑副本（field → 'fx' | 'python'）
+let savedModes = {} // 打开该节点时的快照，脏判定与撤销都以它为基准
+let exprSlots = {} // field → { text, python }
+let scopeCache = null // 本节点的作用域清单（菜单首次打开时取一次）
+let scopeMenuEl = null // 打开中的变量菜单浮层
 // 待补元素所在的节点 id 集合：AI 生成的工作流把交互元素写成 elementRefs 占位，
 // 这些节点在卡片上标「⚠ 待补」，并在元素面板里给出捕获入口。
 let missingNodeIds = new Set()
@@ -767,12 +780,52 @@ function currentValues() {
   return values
 }
 
+/** 切节点 / 撤销 / 保存成功后重置表达式状态：槽与菜单都属于「当前这个节点」。 */
+function resetExprState(nodeModes) {
+  const modes = nodeModes || {}
+  savedModes = { ...modes }
+  exprModes = { ...modes }
+  exprSlots = {}
+  scopeCache = null
+  closeScopeMenu()
+}
+
+function modesDirty() {
+  // 只比较「有值的模式」：撤销后 exprModes 里会留下空串键（不删键是为了保住槽位），
+  // 拿它跟快照比会把「什么都没改」误判成脏。
+  const live = Object.entries(exprModes)
+    .filter(([, mode]) => mode)
+    .sort()
+  const base = Object.entries(savedModes)
+    .filter(([, mode]) => mode)
+    .sort()
+  return JSON.stringify(live) !== JSON.stringify(base)
+}
+
 function isDirty() {
   // 「解除引用」不落在任何控件里，得单独算脏，否则保存按钮是灰的、解除白点了。
   if (pendingUnbinds.size) return true
+  if (modesDirty()) return true
+  if (aliasDirty()) return true
   if (!fields.length) return false
   const values = currentValues()
   return fields.some((field) => (values[field.key] ?? '') !== field.valueText)
+}
+
+/** 输出变量列的全量提交内容（与参数同一次写盘，见 rpa.saveNodeParams 的 aliases）。 */
+function currentAliases() {
+  const values = {}
+  for (const row of outputs) {
+    const input = el.form.querySelector(`[data-alias="${CSS.escape(row.key)}"]`)
+    // 控件缺失时回落到落盘值：与 currentValues 同口径，漏一个键不该算成「删掉别名」。
+    values[row.key] = (input ? input.value : row.alias || '').trim()
+  }
+  return values
+}
+
+function aliasDirty() {
+  const live = currentAliases()
+  return outputs.some((row) => (live[row.key] || '') !== (row.alias || ''))
 }
 
 function unsetCount() {
@@ -842,8 +895,185 @@ function defaultHint(field) {
   return `默认 ${text}`
 }
 
+/* ---- 表达式模式（fx / Py） ----------------------------------------------
+ * 与 manifest 的字段级声明一一对应：声明了 `x-fx` 才有 fx 按钮，声明了 `x-python`
+ * 才有 Py。**不给「所有字符串字段都挂一个按钮」的宽松入口**——那正是 M57 之前被
+ * 废除的行为：能点一个不该点的按钮，比没有按钮更让人困惑。
+ *
+ * 两种语法：
+ *   fx     → `[变量]`，可与普通文本混排拼接（运行期 `resolve_tags`）；
+ *   普通   → `${变量}`，只认整串（运行期 `resolve`）；
+ *   python → 字段内容整段按 Python 求值，在 worker 子进程里跑。
+ */
+const TAG_RE = /\[([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)\]/
+
+/** 文本里是否还有 fx 标签——与后端 `model/expr_tags.has_tags` 同一份正则口径。 */
+function hasTags(text) {
+  return typeof text === 'string' && TAG_RE.test(text)
+}
+
+/** 把「当前显示值」记进对应槽（切模式与插入标签都要同步，否则切回去会丢字）。 */
+function syncSlot(key, value, mode) {
+  const slot = exprSlots[key] || (exprSlots[key] = { text: value, python: value })
+  if (mode === 'python') slot.python = value
+  else slot.text = value
+}
+
+function closeScopeMenu() {
+  if (scopeMenuEl && scopeMenuEl.parentNode) scopeMenuEl.parentNode.removeChild(scopeMenuEl)
+  scopeMenuEl = null
+}
+
+/** 点菜单外面就关掉：菜单是临时浮层，留着会挡住下一次点选。 */
+function onScopeOutside(event) {
+  if (scopeMenuEl && !scopeMenuEl.contains(event.target)) closeScopeMenu()
+}
+
+/** 在光标处插入 `[ref]`，并把字段切进 fx 态（插入即 fx，与后端「有标签就算 fx」同口径）。 */
+function insertTag(control, ref) {
+  const key = control.dataset ? control.dataset.key : ''
+  if (key && typeof control._setExprMode === 'function') control._setExprMode('fx')
+  const tag = `[${ref}]`
+  const start = typeof control.selectionStart === 'number' ? control.selectionStart : control.value.length
+  const end = typeof control.selectionEnd === 'number' ? control.selectionEnd : start
+  control.value = control.value.slice(0, start) + tag + control.value.slice(end)
+  const caret = start + tag.length
+  if (typeof control.setSelectionRange === 'function') control.setSelectionRange(caret, caret)
+  if (typeof control.focus === 'function') control.focus()
+  if (key) syncSlot(key, control.value, exprModes[key] || '')
+}
+
+/**
+ * 变量菜单：内容**全部来自后端** `rpa.variableScopes`（唯一权威是编译器的
+ * `visible_scope`）。前端绝不自算一遍作用域——两份实现漂移的代价是「菜单里有、
+ * 编译不过」，用户点了保存才看到红字。
+ */
+async function openScopeMenu(anchor, field, control) {
+  if (scopeMenuEl) {
+    closeScopeMenu()
+    return
+  }
+  if (!scopeCache) {
+    try {
+      scopeCache = await ppx.call('rpa.variableScopes', {
+        path: currentPath,
+        node_id: selected.id,
+      })
+    } catch (error) {
+      setStatus(`变量清单取不到：${error.code || ''} ${error.message || error}`.trim())
+      return
+    }
+  }
+  const groups = (scopeCache && scopeCache.groups) || []
+  const menu = mk('div', 'scopeMenu')
+  menu.setAttribute('role', 'listbox')
+  if (!groups.length) {
+    menu.append(
+      mk(
+        'div',
+        'scopeEmpty',
+        '这里还没有可引用的变量：在前面用「设置变量」建一个，或在本节点的接收变量里起个名',
+      ),
+    )
+  }
+  for (const group of groups) {
+    menu.append(mk('div', 'scopeGroup', group.label))
+    for (const item of group.items) {
+      const row = mk('button', 'scopeItem')
+      row.type = 'button'
+      row.setAttribute('role', 'option')
+      row.append(mk('span', 'scopeName', item.name))
+      if (item.origin) row.append(mk('span', 'scopeOrigin', item.origin))
+      row.title = `插入 [${item.ref}]`
+      row.addEventListener('click', () => {
+        insertTag(control, item.ref)
+        closeScopeMenu()
+        refreshDirty()
+      })
+      menu.append(row)
+    }
+  }
+  const rect = anchor.getBoundingClientRect ? anchor.getBoundingClientRect() : { left: 0, bottom: 0 }
+  menu.style.position = 'fixed'
+  menu.style.left = `${Math.max(8, Math.min(rect.left, (window.innerWidth || 1280) - 268))}px`
+  menu.style.top = `${rect.bottom + 4}px`
+  const host = document.body || el.form
+  host.append(menu)
+  scopeMenuEl = menu
+  setTimeout(() => document.addEventListener('mousedown', onScopeOutside, { once: true }), 0)
+}
+
+/** 字段右上角的模式按钮组（不是所有字段都有；没有声明就返回 null）。 */
+function buildExprBar(field) {
+  if (!field.fx && !field.python) return null
+  const bar = mk('div', 'exprBar')
+  const mode = exprModes[field.key] || ''
+  let pyBtn = null
+  let fxBtn = null
+  if (field.python) {
+    pyBtn = mk('button', 'exprBtn py' + (mode === 'python' ? ' on' : ''), 'Py')
+    pyBtn.type = 'button'
+    pyBtn.title = 'Python 表达式模式：这一格的内容按 Python 求值（在子进程里跑，不碰编辑器进程）'
+    bar.append(pyBtn)
+  }
+  if (field.fx) {
+    fxBtn = mk('button', 'exprBtn fx', 'fx')
+    fxBtn.type = 'button'
+    fxBtn.title = '插入变量：点一下列出这个位置能引用的变量，选中即插入到光标处'
+    bar.append(fxBtn)
+  }
+  return { bar, fxBtn, pyBtn }
+}
+
+function bindExprBehaviour(field, control, parts) {
+  const key = field.key
+  const paint = () => {
+    if (parts.pyBtn) parts.pyBtn.classList.toggle('on', (exprModes[key] || '') === 'python')
+  }
+  const setMode = (next) => {
+    const current = exprModes[key] || ''
+    if (current === next) return
+    syncSlot(key, control.value, current)
+    if (next === 'python') {
+      exprModes[key] = 'python'
+      control.value = (exprSlots[key] || {}).python ?? ''
+    } else {
+      if (next === 'fx') exprModes[key] = 'fx'
+      else delete exprModes[key]
+      control.value = (exprSlots[key] || {}).text ?? ''
+    }
+    paint()
+    refreshDirty()
+  }
+  control._setExprMode = setMode
+  if (parts.pyBtn) {
+    parts.pyBtn.addEventListener('click', () => {
+      setMode((exprModes[key] || '') === 'python' ? '' : 'python')
+    })
+  }
+  if (parts.fxBtn) {
+    parts.fxBtn.addEventListener('click', () => {
+      // Py 与 fx 互斥：在 Py 模式下点 fx，先把 Py 的内容存回、切回普通槽，再插标签
+      if ((exprModes[key] || '') === 'python') setMode('')
+      openScopeMenu(parts.fxBtn, field, control)
+    })
+  }
+  control.addEventListener('input', () => {
+    // ★ 标签删光 ⇒ 自动撤销 fx 态。留一个「fx 开着但一个标签都没有」的字段不会让
+    //   运行期报错（`resolve_tags` 对无标签字符串原样返回），但下次打开面板没人解释
+    //   得清这是什么状态。后端 `_clean_expr_modes` 是同一条规则的兜底。
+    if ((exprModes[key] || '') === 'fx' && !hasTags(control.value)) {
+      delete exprModes[key]
+      paint()
+    }
+    syncSlot(key, control.value, exprModes[key] || '')
+  })
+}
+
 function buildControl(field) {
   const wrap = mk('div', 'field' + (field.set ? '' : ' unset'))
+  // applyDepends 按 data-field 找回整行（要同时改控件的 disabled 与整行的灰态）
+  wrap.dataset.field = field.key
   const row = mk('div', 'labelRow')
   // 结构字段（if/forEach/return）有中文标签，指令参数的标签就是参数名——统一走 label，
   // 参数名降级进 tooltip，这样两种节点在同一个侧栏里排版一致。
@@ -857,6 +1087,9 @@ function buildControl(field) {
     row.append(warn)
   }
   if (field.required) row.append(mk('span', 'req', '必填'))
+  // 模式按钮贴在标签行最右：影刀把 fx 放在字段右上角，视线不用离开这一行。
+  const exprParts = buildExprBar(field)
+  if (exprParts) row.append(exprParts.bar)
   wrap.append(row)
 
   // ★ 被引用参数本来就不在 with 里：给一个空输入框 +「必填但当前未设置」是假报警。
@@ -914,7 +1147,15 @@ function buildControl(field) {
   control.dataset.key = field.key
   control.addEventListener('input', refreshDirty)
   control.addEventListener('change', refreshDirty)
+  // 自己也可能是别人的「控制字段」：改完要重算谁该置灰（x-depends）
+  if (fields.some((other) => (other.depends || []).some((dep) => dep.key === field.key))) {
+    control.addEventListener('input', applyDepends)
+    control.addEventListener('change', applyDepends)
+  }
   wrap.append(control)
+  // 模式按钮的行为要拿到控件本身（切模式=换内容槽、插标签=按光标切分），所以绑定
+  // 放在控件建好之后。没有声明的字段 exprParts 为 null，一条都不绑。
+  if (exprParts) bindExprBehaviour(field, control, exprParts)
   const note = refName
     ? `已由元素引用「${refName}」提供，运行期从资产库解析；这里不用填`
     : field.description || (!field.set && field.required ? '必填但当前未设置' : '')
@@ -928,6 +1169,12 @@ function buildControl(field) {
   if (!refName) {
     const pick = buildElemPick(field, refName)
     if (pick) wrap.append(pick)
+  }
+  if ((field.depends || []).length) {
+    // 文案留给 applyDepends 填：它要拿控制字段的中文标签与枚举标签，这里拿不到。
+    const hint = mk('div', 'depHint')
+    hint.title = '该参数只在控制参数取特定值时生效：条件不满足时置灰，但已填的值会保留'
+    wrap.append(hint)
   }
   return wrap
 }
@@ -974,6 +1221,97 @@ function buildRefPanel() {
   return box
 }
 
+/** 输出变量列：把 `x-outputs` 声明的输出变成「一行一个变量名」。
+ *
+ * 与参数列同一次保存（同一份全量提交、同一次编译）。改名不是换个标签：后端会把
+ * 全流程指向旧名的引用一起改（`${旧}` / `[旧]` / py 里的裸标识符），回执里的
+ * `refs` 就是「改了几处」。不清空输入框 = 保留原别名，清空 = 删掉这个别名。
+ */
+function buildOutputPanel() {
+  const box = mk('div', 'outPanel')
+  const title = mk('div', 'outTitle', '输出变量')
+  title.title = '给这个节点的输出起个名字，后续节点用 [名字] 或 ${名字} 引用；改名会同步流程里已有的引用'
+  box.append(title)
+  for (const row of outputs) {
+    const line = mk('div', 'outRow')
+    const label = mk('span', 'outLabel', row.label || row.key)
+    label.title = row.declared ? row.key : `${row.key}（不是这条命令声明的输出）`
+    const input = document.createElement('input')
+    input.type = 'text'
+    input.className = 'aliasInput'
+    input.spellcheck = false
+    input.placeholder = row.primary ? '起个名字，如 web' : '留空 = 不起名'
+    input.value = row.alias || ''
+    input.dataset.alias = row.key
+    input.addEventListener('input', refreshDirty)
+    line.append(label, input)
+    if (!row.declared) line.append(mk('span', 'type warn', '未声明'))
+    box.append(line)
+  }
+  return box
+}
+
+/* ---- 参数联动（x-depends） ----------------------------------------------
+ * 声明形态只有「控制字段 == 某值」这一种（后端 `_depends_of` 同口径）。条件不成立时
+ * **置灰而不隐藏**：隐藏会让 `currentValues()` 少一个键，服务端按 INCOMPLETE_SUBMIT
+ * 整单拒收；而且用户会以为「这个参数被删了」。置灰保留值，运行期由命令自己忽略它。
+ */
+
+/** 控件的**生效值**：没填就按声明默认值算——条件是「等于某值」，未设置不等于任何值。 */
+function effectiveValue(field) {
+  const node = el.form.querySelector(`[data-key="${CSS.escape(field.key)}"]`)
+  if (node && node.value !== '') return node.value
+  if (field.set) return field.valueText
+  if (field.hasDefault) return field.default
+  return undefined
+}
+
+/** 值是不是「运行期才知道」的引用：是就别置灰，静态条件判不了它。 */
+function isDynamic(value) {
+  const text = String(value ?? '')
+  // 引用语法就是 TAG_RE / `${...}`（与后端 expr_tags 同一形状）；普通文本里的
+  // `div[title]` 这类选择器不会命中——TAG_RE 要求方括号内是完整标识符路径。
+  return text.startsWith('${') || TAG_RE.test(text)
+}
+
+function applyDepends() {
+  if (!fields.length) return
+  const index = new Map(fields.map((field) => [field.key, field]))
+  for (const field of fields) {
+    if (!field.depends || !field.depends.length) continue
+    const wrap = el.form.querySelector(`.field[data-field="${CSS.escape(field.key)}"]`)
+    const control = el.form.querySelector(`[data-key="${CSS.escape(field.key)}"]`)
+    if (!wrap || !control) continue
+    let blocked = false
+    const why = []
+    for (const dep of field.depends) {
+      const other = index.get(dep.key)
+      const value = other ? effectiveValue(other) : undefined
+      const expected = dep.value
+      const label = other ? other.label || other.key : dep.key
+      const shown = other && other.enum?.length
+        ? other.enum.find((o) => String(o.value) === String(expected))?.label ?? expected
+        : expected
+      if (value === undefined || value === null || value === '' || isDynamic(value)) {
+        // 未设置或引用了变量：条件成立与否要到运行期才知道，不置灰（宁可多给入口）
+        blocked = blocked || value === undefined || value === null || value === ''
+        why.push(`${label} = ${shown}`)
+        continue
+      }
+      if (String(value) !== String(expected)) {
+        blocked = true
+        why.push(`${label} = ${shown}`)
+      }
+    }
+    // fx / Py 模式的这一格内容由求值决定，静态条件管不到它
+    const off = blocked && !field.mode
+    control.disabled = off
+    wrap.classList.toggle('depOff', off)
+    const hint = wrap.querySelector('.depHint')
+    if (hint) hint.textContent = `仅当 ${why.join(' 且 ')} 时生效`
+  }
+}
+
 function renderForm() {
   // 能引用元素的参数集合只在内核定义；异步取一次，回来再重画一次表单。
   // 成功/失败都赋值，避免 RPC 一直失败时每次 renderForm 都发起新请求。
@@ -996,7 +1334,7 @@ function renderForm() {
   if (Object.keys(nodeRefs).length) el.form.append(buildRefPanel())
   if (!selected) {
     el.form.append(mk('div', 'hint', '点击中间卡片查看参数'))
-  } else if (!fields.length) {
+  } else if (!fields.length && !outputs.length) {
     el.form.append(
       mk(
         'div',
@@ -1023,6 +1361,9 @@ function renderForm() {
       el.form.append(details)
     }
   }
+  // 输出变量列排在参数之后：参数决定「这一步做什么」，输出变量决定「后面怎么接」。
+  if (outputs.length) el.form.append(buildOutputPanel())
+  applyDepends()
   refreshDirty()
 }
 
@@ -1033,8 +1374,10 @@ async function selectCard(card) {
     selected = card
     fields = []
     groups = []
+    outputs = []
     nodeRefs = {}
     pendingUnbinds.clear()
+    resetExprState(null)
     renderCards()
     renderForm()
     el.detail.textContent =
@@ -1059,22 +1402,27 @@ async function selectCard(card) {
     el.rpcMs.textContent = `${(performance.now() - t0).toFixed(1)} ms`
     fields = res.fields || []
     groups = res.groups || []
+    outputs = res.outputs || []
     nodeRefs = { ...((res.node && res.node.elementRefs) || {}) }
     pendingUnbinds.clear()
+    resetExprState(res.node && res.node._exprModes)
     renderForm()
     el.detail.textContent = JSON.stringify(res.node ?? res, null, 2)
   } catch (error) {
     fields = []
     groups = []
+    outputs = []
     nodeRefs = {}
     pendingUnbinds.clear()
+    resetExprState(null)
     renderForm()
     el.detail.textContent = `${error.code}: ${error.message}`
   }
 }
 
 async function saveParams() {
-  if (!selected || !fields.length) return
+  // 只有输出变量、没有参数的节点也要能存（命令可以只产不改）
+  if (!selected || (!fields.length && !outputs.length)) return
   const params = currentValues()
   el.save.disabled = true
   el.revert.disabled = true
@@ -1090,6 +1438,12 @@ async function saveParams() {
           element_refs: Object.fromEntries(
             Object.entries(nodeRefs).filter(([key]) => !pendingUnbinds.has(key)),
           ),
+          // 模式也是全量提交（空 dict = 该节点不再有任何表达式模式）。结构表单没有
+          // 这条通道，同样不塞——桥层严格绑定签名，多一个键就是 INVALID_PARAMS。
+          expr_modes: { ...exprModes },
+          // 输出变量与参数同一次写盘、同一次编译：分两个 RPC 会留下「参数存了、别名
+          // 被拒」的半成功状态，用户既不知道文件到哪一步，也没法撤销。
+          aliases: currentAliases(),
         }
     const res = await ppx.call(rpc, {
       path: currentPath,
@@ -1110,8 +1464,12 @@ async function saveParams() {
     const detail = await ppx.call(detailRpc, { path: currentPath, node_id: keepId })
     fields = detail.fields || []
     groups = detail.groups || []
+    outputs = detail.outputs || []
     nodeRefs = { ...((detail.node && detail.node.elementRefs) || {}) }
     pendingUnbinds.clear()
+    // 保存成功后以**落盘值**为新基准：服务端可能撤销了无标签的 fx（modesCleared），
+    // 那之后前端还留着旧模式就会显示成「改了但没保存」。
+    resetExprState(detail.node && detail.node._exprModes)
     renderCards()
     renderForm()
     renderCompile(res.compile)
@@ -1125,7 +1483,24 @@ async function saveParams() {
     const warned = (res.warnings || []).length
       ? ` · ⚠ ${res.warnings.map((w) => `${w.key}：${w.reason}`).join('；')}`
       : ''
-    setStatus(`保存 ${selected ? selected.label : keepId} · ${bytes}${delta}${warned} · sha ${res.sha} · ${(performance.now() - t0).toFixed(0)} ms`)
+    // 服务端撤销了模式（标签被删光 / 值被清空）要说出来：否则用户会以为「我明明开了 fx」。
+    const cleared = (res.modesCleared || []).length
+      ? ` · 已撤销模式：${res.modesCleared.join(',')}`
+      : ''
+    // 改名联动要说清楚改了几处引用：不说，用户会以为「只改了个名字」，直到运行才
+    // 发现（或没发现）别的节点也变了。py 表达式改不动的，得明确让他自己去改。
+    const renamePairs = Object.entries(res.renamed || {})
+    const refCount = (res.refs || []).reduce((sum, hit) => sum + (hit.count || 0), 0)
+    const renamed = renamePairs.length
+      ? ` · 改名 ${renamePairs.map(([from, to]) => `${from}→${to}`).join(',')}，同步 ${refCount} 处引用`
+      : ''
+    const aliasDelta = (res.aliasesAdded || []).length || (res.aliasesRemoved || []).length
+      ? ` · 别名 +${(res.aliasesAdded || []).length} −${(res.aliasesRemoved || []).length}`
+      : ''
+    const pySkipped = (res.pySkipped || []).length
+      ? ` · ⚠ ${res.pySkipped.map((s) => `${s.nodeId}.${s.field}`).join(',')} 的 Python 表达式语法错，未跟着改名，请手动改`
+      : ''
+    setStatus(`保存 ${selected ? selected.label : keepId} · ${bytes}${delta}${aliasDelta}${renamed}${warned}${cleared}${pySkipped} · sha ${res.sha} · ${(performance.now() - t0).toFixed(0)} ms`)
   } catch (error) {
     formError = `${error.code}：${error.message}`
     renderForm()
@@ -1137,6 +1512,8 @@ async function saveParams() {
 function revertParams() {
   // 解除标记也算一次编辑，撤销要把它一起撤掉——重建表单用 field.valueText 回填。
   pendingUnbinds.clear()
+  // 模式与编辑槽也回到打开节点时的样子：撤销是「回到保存时」，不是「回到上次切换模式」。
+  resetExprState(savedModes)
   renderForm()
 }
 
@@ -1156,6 +1533,7 @@ async function openFlow(path) {
     selected = null
     fields = []
     groups = []
+    outputs = []
     formError = null
     renderForm()
     el.detail.textContent = ''

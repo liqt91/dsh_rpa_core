@@ -61,7 +61,15 @@
         "minimum": 1
       }
     },
-    "additionalProperties": false
+    "additionalProperties": false,
+    "x-param-groups": [
+      {"label": "常规", "auto": true},
+      {"label": "高级", "collapsed": true, "fields": ["smooth", "timeoutMs"]}
+    ],
+    "x-depends": {
+      "x": {"position": "point"},
+      "y": {"position": "point"}
+    }
   },
   "output_schema": {
     "type": "object",

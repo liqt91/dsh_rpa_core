@@ -103,7 +103,8 @@
         ],
         "collapsed": true
       }
-    ]
+    ],
+    "x-depends": {"url": {"action": "goto"}}
   },
   "output_schema": {
     "type": "object",

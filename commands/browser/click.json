@@ -138,7 +138,17 @@
         "default": 0
       }
     },
-    "additionalProperties": false
+    "additionalProperties": false,
+    "x-param-groups": [
+      {"label": "常规", "auto": true},
+      {"label": "拟人化", "collapsed": true, "fields": ["injection", "simulateHuman", "hoverMode", "pressDelayMs", "detachAfter"]}
+    ],
+    "x-depends": {
+      "simulateHuman": {"injection": "dom"},
+      "hoverMode": {"injection": "cdp"},
+      "pressDelayMs": {"injection": "cdp"},
+      "detachAfter": {"injection": "cdp"}
+    }
   },
   "output_schema": {
     "type": "object",

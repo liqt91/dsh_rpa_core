@@ -193,8 +193,16 @@ def test_non_ascii_bracket_text_is_left_untouched():
     assert result.outputs["values"] == {"text": "值=[不存在]"}
 
 
-def test_unknown_tag_reference_fails_the_run(tmp_path):
-    """fx 标签引用未定义变量时运行失败（不静默写入字面量）。"""
+def test_unknown_tag_reference_fails_compile(tmp_path):
+    """fx 标签引用未定义变量时**编译期**就失败（M108 起）。
+
+    在 M108 之前编译期完全不看 fx 标签（`_iter_references` 只认 `${}`），于是
+    `[nope]` 这种错要等流程跑到那个节点才变成运行期 `INVALID_REFERENCE`。现在编辑器
+    正式给出 fx 插入入口，手打标签成了主路径之一，编译期必须挡在最前面——报错里
+    带上字段名与标签原文，用户才知道是哪一条。
+    """
+    from rpa_core.compiler.compiler import WorkflowCompileError
+
     catalog = load_catalog(COMMANDS)
     workflow = {
         "id": "fx-bad",
@@ -207,19 +215,22 @@ def test_unknown_tag_reference_fails_the_run(tmp_path):
             "_exprModes": {"text": "fx"},
         },
     }
-    plan = WorkflowCompiler(catalog).compile(
-        Workflow.model_validate(workflow), {"workspace.write"}
-    )
+    with pytest.raises(WorkflowCompileError) as exc:
+        WorkflowCompiler(catalog).compile(Workflow.model_validate(workflow), {"workspace.write"})
+    message = str(exc.value)
+    assert "[nope]" in message and "text" in message and "n1" in message
 
-    async def run():
-        runner = Orchestrator(
-            catalog, ExecutorRegistry({"python.worker": PythonWorkerExecutor()}), tmp_path / "runs"
-        )
-        return await runner.run(plan)
 
-    result = asyncio.run(run())
-    assert result.status.value == "failed"
-    assert result.error["code"] == "INVALID_REFERENCE"
+def test_unknown_tag_reference_also_fails_at_runtime():
+    """运行期防线仍在：编译被绕过（手改 plan / 旧文件）时也不静默写字面量。
+
+    编译期校验只是把错误提前，不能成为唯一防线——`resolve_tags` 遇到取不到的变量
+    必须抛 `ReferenceError`，而不是把 `[nope]` 原样写进文件。
+    """
+    from rpa_core.runtime.resolver import ReferenceError, resolve_tags
+
+    with pytest.raises(ReferenceError):
+        resolve_tags("值=[nope]", {"variables": {}})
 
 
 @pytest.mark.parametrize("missing", ["__builtins__"])
