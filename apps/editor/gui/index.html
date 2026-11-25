@@ -28,29 +28,9 @@
         <div id="flowTitle" class="flowTitle">未打开流程</div>
         <div id="cards" class="cardList"></div>
       </section>
-      <aside id="right">
-        <div class="paneHead">
-          <span class="paneTitle">节点详情</span>
-          <span id="dirty" class="dirty"></span>
-          <span id="unset" class="unsetCount"></span>
-          <span id="rpcMs" class="count"></span>
-        </div>
-        <div id="paramForm" class="paramForm">
-          <div class="hint">点击中间卡片查看参数</div>
-        </div>
-        <div class="formBar">
-          <button id="saveBtn" type="button" disabled>保存</button>
-          <button id="revertBtn" type="button" disabled>撤销</button>
-        </div>
-        <details class="astBox">
-          <summary>节点 AST</summary>
-          <pre id="detail" class="detail"></pre>
-        </details>
-        <div id="compileOut" class="compileOut"></div>
-      </aside>
-
       <!-- 底部三模块：元素资产 / 全局参数 / 运行日志。原本两个折叠 details 缩在
-           右栏与中栏，全局参数压根没有界面；现在整块收进横跨三列的底栏。
+           右栏与中栏，全局参数压根没有界面；现在整块收进横跨两列的底栏（M109 拆掉
+           右栏后只剩左栏 + 画布，`grid-column: 1 / -1` 自动跟着变）。
            id 一个不改，main.js 里 renderElementsPanel / setRunTitle / runLog
            的既有写入路径原样有效，只是父节点换了。 -->
       <section id="bottomDock">
@@ -119,6 +99,34 @@
         </div>
       </section>
     </main>
+
+    <!-- 节点详情浮层（M109）：原来右栏 340px 里塞着参数 + 引用面板 + 输出变量 +
+         fx 菜单 + AST + 编译回显，`browser.click` 的 13 个字段扣掉标签列后控件只剩
+         ~180px。改成**非模态可拖浮层**：不遮画布，能边看流程边填；中栏吃满宽度。
+         id 一个不改（paramForm / saveBtn / revertBtn / dirty / unset / rpcMs /
+         detail / compileOut），main.js 里十几处写入路径原样有效。 -->
+    <section id="nodeFloat" class="nodeFloat" hidden aria-labelledby="nodeFloatTitle">
+      <div id="nodeFloatHead" class="nodeFloatHead" title="按住拖动浮层">
+        <span id="nodeFloatTitle" class="nodeFloatTitle">节点详情</span>
+        <span id="dirty" class="dirty"></span>
+        <span id="unset" class="unsetCount"></span>
+        <span id="rpcMs" class="count"></span>
+        <span class="barSpacer"></span>
+        <button type="button" id="nodeFloatClose" class="nodeFloatClose" aria-label="关闭节点详情">×</button>
+      </div>
+      <div id="paramForm" class="paramForm">
+        <div class="hint">点击中间卡片查看参数</div>
+      </div>
+      <div class="formBar">
+        <button id="saveBtn" type="button" disabled>保存</button>
+        <button id="revertBtn" type="button" disabled>撤销</button>
+      </div>
+      <details class="astBox">
+        <summary>节点 AST</summary>
+        <pre id="detail" class="detail"></pre>
+      </details>
+      <div id="compileOut" class="compileOut"></div>
+    </section>
     <!-- 元素编辑框：抓完确认（名字可改、可中文）与资产详情改名共用这一个框。
          只在用户点保存时才入库；点取消就把这次捕获的暂存描述符丢掉。 -->
     <div id="elemDialog" class="modal" hidden>

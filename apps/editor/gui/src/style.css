@@ -51,29 +51,74 @@ body {
 #bar > button, #bar > select { flex: 0 0 auto; }
 .spacer { flex: 1; }
 
-/* 第二行给横跨三列的底部 dock；第一行吃余高，三栏不许被 auto 行挤走。 */
+/* 第二行给横跨两列的底部 dock；第一行吃余高，两栏不许被 auto 行挤走。
+   M109：原右栏（340px 固定）拆掉，节点详情改成浮层 ⇒ 画布吃满剩余宽度。 */
 main {
   flex: 1; display: grid;
-  grid-template-columns: 216px minmax(0, 1fr) 340px;
+  grid-template-columns: 216px minmax(0, 1fr);
   grid-template-rows: minmax(0, 1fr) auto;
   min-height: 0;
 }
-#left, #mid, #right { grid-row: 1; }
-/* 窗口能被拖到 960 宽（minWidthRatio .5）。三栏都是定宽时中栏会被压到 400 出头，
-   摘要全变省略号。窄窗口收左右栏，把宽度让给画布。 */
+#left, #mid { grid-row: 1; }
+/* 窗口能被拖到 960 宽（minWidthRatio .5）。窄窗口收左栏，把宽度让给画布。 */
 @media (max-width: 1180px) {
-  main { grid-template-columns: 196px minmax(0, 1fr) 300px; }
+  main { grid-template-columns: 196px minmax(0, 1fr); }
 }
 @media (max-width: 1000px) {
-  main { grid-template-columns: 172px minmax(0, 1fr) 264px; }
+  main { grid-template-columns: 172px minmax(0, 1fr); }
 }
 aside, section { min-height: 0; overflow: auto; background: var(--surface); }
 #left { border-right: 1px solid var(--border); }
-#right { border-left: 1px solid var(--border); display: flex; flex-direction: column; overflow: hidden; }
-/* 中栏改成「流程列表 + 底部运行日志」两段：日志贴着它描述的那张流程图，
-   比塞进右栏更有意义（右栏已放参数、AST、编译回显，再塞第三块就都是缩着的） */
+/* 中栏 = 流程列表；运行日志在底栏，不再和参数抢右栏那点高度。 */
 #mid { background: var(--sunken); display: flex; flex-direction: column; overflow: hidden; }
 #mid > .cardList { flex: 1 1 auto; min-height: 0; overflow: auto; }
+
+/* ---- 节点详情浮层（M109）--------------------------------------------------
+ * 非模态：不遮画布、可拖、可关。z-index 压在 modal(40) 之下、画布之上；
+ * 与 fx 变量菜单(60)、toast(60) 也不抢层。
+ * 宽度取 460：比原右栏 340 宽一档，够放「标签 + 控件」而不用把说明挤成两行；
+ * 窄窗口回落成视口宽减边距。高度上限留出顶栏与底部 dock，超了内部滚动。 */
+.nodeFloat {
+  position: fixed; z-index: 30;
+  top: 64px; left: 12px; /* 真实落位由 main.js 的 setFloatPos 算，这里只是兜底 */
+  width: min(460px, calc(100vw - 24px));
+  max-height: calc(100vh - 96px);
+  display: flex; flex-direction: column; overflow: hidden;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  box-shadow: 0 14px 36px rgba(25, 35, 45, .20);
+}
+.nodeFloat[hidden] { display: none; }
+.nodeFloatHead {
+  flex: 0 0 auto;
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  cursor: grab; user-select: none;
+}
+.nodeFloatHead.dragging { cursor: grabbing; }
+.nodeFloatTitle {
+  font-weight: 500; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+/* `.count` 自带 margin-left:auto（在 paneHead 里把计数推到右端）。浮层头部有
+   barSpacer 干这件事，再留 auto 会把 rpcMs 顶到关闭按钮旁边。 */
+.nodeFloatHead .count { margin-left: 0; }
+.nodeFloatClose {
+  flex: 0 0 auto;
+  width: 24px; height: 24px; padding: 0; line-height: 1;
+  border: 1px solid transparent; border-radius: 6px;
+  background: transparent; color: var(--muted); font-size: 17px; cursor: pointer;
+}
+.nodeFloatClose:hover { border-color: var(--border); color: var(--text); }
+/* 浮层里的 AST / 编译回显限高：它们原本靠右栏余高撑着，这里不能把参数区挤没。
+   AST 那条要带 `[open]` 才压得住 451 行的 `.astBox[open] { flex: 1 1 auto }`
+   （同 specificity 时后写的赢，而那条在本文件更靠后）。 */
+.nodeFloat > .astBox,
+.nodeFloat > .astBox[open] { flex: 0 0 auto; max-height: 34vh; overflow: auto; }
+.nodeFloat > .compileOut { flex: 0 0 auto; max-height: 22vh; overflow: auto; }
+
 
 .paneHead {
   position: sticky; top: 0; z-index: 2;

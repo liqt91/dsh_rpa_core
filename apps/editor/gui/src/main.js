@@ -44,6 +44,13 @@ const el = {
   detail: document.querySelector('#detail'),
   rpcMs: document.querySelector('#rpcMs'),
   compileOut: document.querySelector('#compileOut'),
+  // M109：右栏拆成浮层。form / save / revert / dirty / unset / rpcMs / detail /
+  // compileOut 的 id 一个没改（只是父节点从 aside#right 换成 section#nodeFloat），
+  // 所以下面十几处写入路径全都不用动。
+  float: document.querySelector('#nodeFloat'),
+  floatHead: document.querySelector('#nodeFloatHead'),
+  floatClose: document.querySelector('#nodeFloatClose'),
+  floatTitle: document.querySelector('#nodeFloatTitle'),
   form: document.querySelector('#paramForm'),
   save: document.querySelector('#saveBtn'),
   revert: document.querySelector('#revertBtn'),
@@ -192,6 +199,100 @@ function bindDockResize() {
     document.addEventListener?.('mouseup', onUp)
     event.preventDefault?.()
   })
+}
+
+/* ---- 节点详情浮层：非模态、可拖、可关（M109）-------------------------------
+ * 右栏 340px 装不下 click 的 13 个字段 + 分组 + 输出变量，改成浮层后中栏吃满宽度。
+ * 不遮罩：点卡片即开、点别的卡片就地换内容（位置不动），能边看流程边填。
+ * 关闭只是 hidden，不动 fields / exprModes —— 再点同一张卡片会重新走 RPC 拉一份，
+ * 所以不存在「关了还偷偷脏着」的中间态。
+ */
+const FLOAT_MARGIN = 12   // 离视口边缘的最小距离，贴边会点不到边框
+const FLOAT_TOP = 64      // 顶栏高度 + 余量：默认别盖住「编译校验 / 运行」
+const FLOAT_DEFAULT_W = 460
+
+/* 浮层必须**完整**留在视口里：能拖到屏幕外就再也抓不回来了（它是 fixed，
+ * 不属于任何可滚动容器，也没有任务栏图标可点）。窗口比浮层还窄时 max < min，
+ * 用 Math.max 让 min 赢 —— 宁可右边被裁一点，也不能把左上角拖出屏幕。 */
+function floatBounds(vw, vh, width, height) {
+  const minLeft = FLOAT_MARGIN
+  const minTop = FLOAT_MARGIN
+  return {
+    minLeft,
+    minTop,
+    maxLeft: Math.max(minLeft, vw - width - FLOAT_MARGIN),
+    maxTop: Math.max(minTop, vh - height - FLOAT_MARGIN),
+  }
+}
+
+function setFloatPos(left, top) {
+  if (!el.float) return { left: 0, top: 0 }
+  const box = el.float.getBoundingClientRect?.()
+  const width = box && Number.isFinite(box.width) && box.width > 0 ? box.width : FLOAT_DEFAULT_W
+  const height = box && Number.isFinite(box.height) && box.height > 0 ? box.height : 0
+  const vw = Number.isFinite(window.innerWidth) ? window.innerWidth : 1280
+  const vh = Number.isFinite(window.innerHeight) ? window.innerHeight : 900
+  const bounds = floatBounds(vw, vh, width, height)
+  const x = Math.round(Math.min(bounds.maxLeft, Math.max(bounds.minLeft, Number(left) || 0)))
+  const y = Math.round(Math.min(bounds.maxTop, Math.max(bounds.minTop, Number(top) || 0)))
+  el.float.style.left = `${x}px`
+  el.float.style.top = `${y}px`
+  return { left: x, top: y }
+}
+
+function openNodeFloat(card) {
+  if (!el.float) return
+  // hidden 的（或从没显示过的）才落位：切换节点时保留用户拖到的位置，
+  // 每点一下就跳回右上角的话，连续核对几个节点会一直拽同一块地方。
+  if (el.float.hidden !== false) {
+    el.float.hidden = false
+    const box = el.float.getBoundingClientRect?.()
+    const width = box && Number.isFinite(box.width) && box.width > 0 ? box.width : FLOAT_DEFAULT_W
+    const vw = Number.isFinite(window.innerWidth) ? window.innerWidth : 1280
+    // 默认贴右上——就是原来右栏待的位置，肌肉记忆不用改
+    setFloatPos(vw - width - 20, FLOAT_TOP)
+  }
+  if (el.floatTitle) el.floatTitle.textContent = (card && card.label) || '节点详情'
+}
+
+function closeNodeFloat() {
+  if (!el.float) return
+  el.float.hidden = true
+}
+
+function bindNodeFloatDrag() {
+  const head = el.floatHead
+  if (!head || !el.float) return
+  let startX = 0
+  let startY = 0
+  let startLeft = 0
+  let startTop = 0
+  let onMove = null
+  let onUp = null
+  head.addEventListener('mousedown', (event) => {
+    // 关闭按钮长在头部：在它上面按下不该开始拖，否则松手时会顺手关掉
+    if (event.target === el.floatClose) return
+    const box = el.float.getBoundingClientRect?.()
+    startLeft = box && Number.isFinite(box.left) ? box.left : parseFloat(el.float.style.left) || FLOAT_MARGIN
+    startTop = box && Number.isFinite(box.top) ? box.top : parseFloat(el.float.style.top) || FLOAT_TOP
+    startX = Number.isFinite(event.clientX) ? event.clientX : 0
+    startY = Number.isFinite(event.clientY) ? event.clientY : 0
+    head.classList.add('dragging')
+    onMove = (move) => {
+      if (!Number.isFinite(move.clientX)) return
+      setFloatPos(startLeft + (move.clientX - startX), startTop + (move.clientY - startY))
+    }
+    onUp = () => {
+      head.classList.remove('dragging')
+      document.removeEventListener?.('mousemove', onMove)
+      document.removeEventListener?.('mouseup', onUp)
+      onMove = onUp = null
+    }
+    document.addEventListener?.('mousemove', onMove)
+    document.addEventListener?.('mouseup', onUp)
+    event.preventDefault?.()
+  })
+  el.floatClose?.addEventListener('click', closeNodeFloat)
 }
 
 function bindBottomDock() {
@@ -404,6 +505,9 @@ async function saveGlobals() {
 }
 
 bindBottomDock()
+// 浮层的拖动与关闭单独绑：它不依赖底栏，也不该被 bindBottomDock 的
+// 「tab/panel 数量对不上就整体 return」守卫连坐。
+bindNodeFloatDrag()
 
 let commands = []
 let flows = []
@@ -655,6 +759,8 @@ async function removeCard(card) {
       fields = []
       groups = []
       renderForm()
+      // 浮层里挂的是已被删掉的节点：留着它，下一次「保存」就是 NODE_NOT_FOUND
+      closeNodeFloat()
     }
     renderCards()
     renderCompile(res.compile)
@@ -1369,6 +1475,9 @@ function renderForm() {
 
 async function selectCard(card) {
   if (isDirty() && !window.confirm('当前改动还没保存，切换会丢弃。继续？')) return
+  // 先开浮层再填内容：`hidden=false` 之后才量得到真实宽度，落位才不会算错。
+  // 分支锚点（group）也开——它没有参数，但要在同一个地方说清「下一条插哪」。
+  openNodeFloat(card)
   if (card.kind === 'group') {
     // 虚拟组行没有节点详情可查，它的作用只是给下一次插入指定 branch。
     selected = card
@@ -1500,6 +1609,9 @@ async function saveParams() {
     const pySkipped = (res.pySkipped || []).length
       ? ` · ⚠ ${res.pySkipped.map((s) => `${s.nodeId}.${s.field}`).join(',')} 的 Python 表达式语法错，未跟着改名，请手动改`
       : ''
+    // 保存后关窗：改动已落盘、状态栏有回执，画布上接着干下一个。失败路径在上面
+    // 提前 return 了，不会走到这里 —— 报错时窗口必须留着，否则用户连改哪一格都不知道。
+    closeNodeFloat()
     setStatus(`保存 ${selected ? selected.label : keepId} · ${bytes}${delta}${aliasDelta}${renamed}${warned}${cleared}${pySkipped} · sha ${res.sha} · ${(performance.now() - t0).toFixed(0)} ms`)
   } catch (error) {
     formError = `${error.code}：${error.message}`
@@ -1534,6 +1646,9 @@ async function openFlow(path) {
     fields = []
     groups = []
     outputs = []
+    // 换流程 = 换了一整套节点：上一份浮层内容一个字段都不再适用。
+    // 后面落到第一张可编辑卡片时会重新打开。
+    closeNodeFloat()
     formError = null
     renderForm()
     el.detail.textContent = ''
@@ -1549,7 +1664,7 @@ async function openFlow(path) {
     el.run.disabled = RUN.running || !currentPath
     // 打开即刷新元素资产：摊开「AI 生成的占位元素」并给出捕获入口
     await refreshElements()
-    // 打开流程后直接落到第一张可编辑卡片：右栏空着会让用户以为「这东西没参数」
+    // 打开流程后直接落到第一张可编辑卡片：浮层不弹出来，用户会以为「这东西没参数」
     const firstEditable = cards.find((card) => card.kind !== 'group' && card.id)
     if (firstEditable) await selectCard(firstEditable)
     return flow
@@ -1571,6 +1686,10 @@ async function openFlow(path) {
 function renderCompile(result) {
   el.compileOut.replaceChildren()
   if (!result) return
+  // 回显住在浮层里，浮层关着时它谁也看不见 ⇒ 同时写一句到状态栏。
+  // 编译是顶栏按钮触发的，结果落在顶栏附近才对得上「我刚才点了什么」。
+  const ms = result.ms != null ? ` · ${result.ms} ms` : ''
+  setStatus(result.ok ? `编译通过${ms}` : `编译失败${ms}：${String(result.error || '').split('\n')[0]}`)
   if (result.ok) {
     el.compileOut.append(mk('div', 'ok', `编译通过 · ${result.ms ?? ''} ${result.ms != null ? 'ms' : ''}`.trim()))
     const caps = (result.capabilities || []).join(', ') || '（无）'

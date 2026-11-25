@@ -165,6 +165,7 @@ function nodeById(id) {
 }
 const calls = []
 let saveResponse = null
+let deleteResponse = null
 const doc = {
   createElement: (tag) => new El(tag),
   querySelector: (sel) => (sel.startsWith('#') ? nodeById(sel.slice(1)) : null),
@@ -191,6 +192,7 @@ const sandbox = {
         }
       }
       if (name === 'rpa.saveNodeParams') return saveResponse
+      if (name === 'rpa.deleteNode') return deleteResponse
       return { ok: true, missing: [], resolved: [], elements: [] }
     },
   },
@@ -514,6 +516,103 @@ check('联动层：引用型控制值不置灰（静态判不了运行期的值�
   assert(
     control.disabled === false,
     '控制值是引用（运行期才知道）却把这一格置灰了——用户会以为参数不能用',
+  )
+})
+
+
+// ---------- 7. 浮层（M109：右栏拆成非模态浮层） ----------
+// 判据分两层：纯函数（clamp 关系）与行为（开合/标题/落位/关窗时机）。
+// 位置断言里的 1160 / 768 来自 shim 固定的 rect(100x20)，测的是「算出来的关系」，
+// 不是真实像素——真实宽度由 CSS 给，测试不该硬编码 460。
+// ★ 这条必须走 selectCard：直接调 openNodeFloat 只能证明「函数本身会开」，
+//   证明不了「点卡片真的会调到它」——注入掉 selectCard 里那行调用，判据照样绿。
+//   M109 第一版就是这么写的，负向验证当场把它打回原形。
+checkAsync('浮层：点卡片就打开（走 selectCard 真实入口）', async () => {
+  run('closeNodeFloat()')
+  await run('selectCard({ id: "log1", kind: "action", label: "记录日志" })')
+  assert(run('el.float.hidden') === false, '浮层没打开：右栏拆了，参数就没入口了')
+  assert(run('el.floatTitle.textContent') === '记录日志', `标题没跟随节点：${run('el.floatTitle.textContent')}`)
+  assert(run('el.float.style.left') === '1160px', `初始没贴右：${run('el.float.style.left')}`)
+  assert(run('el.float.style.top') === '64px', `初始压到顶栏上了：${run('el.float.style.top')}`)
+})
+
+check('浮层：切换节点只换标题，不把用户拖到的位置弹回去', () => {
+  run('openNodeFloat({ id: "a", label: "甲" })')
+  run('setFloatPos(200, 240)')
+  run('openNodeFloat({ id: "b", label: "乙" })')
+  assert(
+    run('el.float.style.left') === '200px' && run('el.float.style.top') === '240px',
+    `换了个节点就把浮层挪走了（${run('el.float.style.left')},${run('el.float.style.top')}）——连续核对要反复拽`,
+  )
+  assert(run('el.floatTitle.textContent') === '乙', '换了节点，标题还是上一个')
+})
+
+check('浮层：拖到视口外会被夹回来（fixed 元素拖出去就再也抓不到）', () => {
+  const b = run('floatBounds(1280, 800, 460, 600)')
+  assert(b.maxLeft === 808 && b.maxTop === 188, `边界算错：${JSON.stringify(b)}`)
+
+  run('setFloatPos(-9999, 9999)')
+  assert(run('el.float.style.left') === '12px', `左边界没夹住：${run('el.float.style.left')}`)
+  assert(run('el.float.style.top') === '768px', `下边界没夹住：${run('el.float.style.top')}`)
+
+  run('setFloatPos(99999, -9999)')
+  assert(run('el.float.style.left') === '1168px', `右边界没夹住：${run('el.float.style.left')}`)
+  assert(run('el.float.style.top') === '12px', `上边界没夹住：${run('el.float.style.top')}`)
+
+  // 窗口比浮层还窄：max < min，必须让 min 赢，否则左上角被推出去、整个框不可见
+  const tiny = run('floatBounds(300, 100, 460, 600)')
+  assert(tiny.maxLeft === 12 && tiny.maxTop === 12, `窄窗口下边界反了：${JSON.stringify(tiny)}`)
+})
+
+checkAsync('浮层：保存成功关窗，保存失败必须留着', async () => {
+  primeForm(FIELD)
+  run('openNodeFloat({ id: "log1", label: "记录日志" })')
+  saveResponse = { ok: false, code: 'INVALID_VALUE', error: '取值不合法' }
+  await run('saveParams()')
+  assert(
+    run('el.float.hidden') !== true,
+    '保存失败了却把窗口关掉——用户既看不到报错，也不知道该改哪一格',
+  )
+
+  primeForm(FIELD)
+  run('openNodeFloat({ id: "log1", label: "记录日志" })')
+  saveResponse = {
+    ok: true,
+    saved: true,
+    changed: true,
+    bytes: [10, 20],
+    sha: 'abcdef123456',
+    added: [],
+    removed: [],
+    modesCleared: [],
+    aliasesAdded: [],
+    aliasesRemoved: [],
+    renamed: {},
+    refs: [],
+    pySkipped: [],
+    compile: { ok: true },
+    flow: { cards: [] },
+  }
+  await run('saveParams()')
+  assert(run('el.float.hidden') === true, '保存成功后没关窗（用户还得自己点 ×）')
+})
+
+checkAsync('浮层：删掉正在看的节点会一并关窗', async () => {
+  primeForm(FIELD)
+  run('cards = [{ id: "log1", kind: "action", label: "记录日志" }]')
+  run('openNodeFloat({ id: "log1", label: "记录日志" })')
+  deleteResponse = {
+    ok: true,
+    bytes: [10, 5],
+    ms: 3,
+    removed: { id: 'log1', ids: ['log1'] },
+    flow: { cards: [] },
+    compile: { ok: true },
+  }
+  await run('removeCard({ id: "log1" })')
+  assert(
+    run('el.float.hidden') === true,
+    '节点已删、浮层还挂着旧参数：下一次「保存」就是 NODE_NOT_FOUND',
   )
 })
 

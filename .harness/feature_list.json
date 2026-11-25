@@ -516,6 +516,11 @@
       "id": "param-wiring",
       "title": "参数机制接线（M108，B+C 档）：标签走 i18n、fx/Py 双缓冲、输出变量列 + saveNodeAliases、改名联动改写全流程引用、分组/联动铺开",
       "passes": true
+    },
+    {
+      "id": "node-detail-float",
+      "title": "节点详情拆成非模态浮层（M109）：右栏退役、画布吃宽、可拖不挡画布、保存后关窗",
+      "passes": true
     }
   ]
 }
